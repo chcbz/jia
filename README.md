@@ -1,0 +1,1 @@
+Spring Cloud微服务DevOps云服务管理框架，其中包含后台管理+服务接口+门户首页，涉及到SpringBoot、Spring Cloud、Spring Security、mybatis、vue、html、javascript等技术。 框架中包含了服务器域名管理、微信公众号管理、短信管理、工作流管理、自定义表单等服务。
