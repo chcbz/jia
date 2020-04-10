@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.dao.DnsRecordHistoryMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.DnsRecordHistory" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="zone_id" property="zoneId" jdbcType="INTEGER" />
+    <result column="domain" property="domain" jdbcType="VARCHAR" />
+    <result column="ttl" property="ttl" jdbcType="INTEGER" />
+    <result column="type" property="type" jdbcType="VARCHAR" />
+    <result column="ip" property="ip" jdbcType="VARCHAR" />
+    <result column="record_time" property="recordTime" jdbcType="TIMESTAMP" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, zone_id, domain, ttl, type, ip, record_time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from dns_record_history
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from dns_record_history
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.DnsRecordHistory" >
+    insert into dns_record_history (id, zone_id, domain, 
+      ttl, type, ip, record_time
+      )
+    values (#{id,jdbcType=INTEGER}, #{zoneId,jdbcType=INTEGER}, #{domain,jdbcType=VARCHAR}, 
+      #{ttl,jdbcType=INTEGER}, #{type,jdbcType=VARCHAR}, #{ip,jdbcType=VARCHAR}, #{recordTime,jdbcType=TIMESTAMP}
+      )
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.DnsRecordHistory" >
+    insert into dns_record_history
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="id != null" >
+        id,
+      </if>
+      <if test="zoneId != null" >
+        zone_id,
+      </if>
+      <if test="domain != null" >
+        domain,
+      </if>
+      <if test="ttl != null" >
+        ttl,
+      </if>
+      <if test="type != null" >
+        type,
+      </if>
+      <if test="ip != null" >
+        ip,
+      </if>
+      <if test="recordTime != null" >
+        record_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="id != null" >
+        #{id,jdbcType=INTEGER},
+      </if>
+      <if test="zoneId != null" >
+        #{zoneId,jdbcType=INTEGER},
+      </if>
+      <if test="domain != null" >
+        #{domain,jdbcType=VARCHAR},
+      </if>
+      <if test="ttl != null" >
+        #{ttl,jdbcType=INTEGER},
+      </if>
+      <if test="type != null" >
+        #{type,jdbcType=VARCHAR},
+      </if>
+      <if test="ip != null" >
+        #{ip,jdbcType=VARCHAR},
+      </if>
+      <if test="recordTime != null" >
+        #{recordTime,jdbcType=TIMESTAMP},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.DnsRecordHistory" >
+    update dns_record_history
+    <set >
+      <if test="zoneId != null" >
+        zone_id = #{zoneId,jdbcType=INTEGER},
+      </if>
+      <if test="domain != null" >
+        domain = #{domain,jdbcType=VARCHAR},
+      </if>
+      <if test="ttl != null" >
+        ttl = #{ttl,jdbcType=INTEGER},
+      </if>
+      <if test="type != null" >
+        type = #{type,jdbcType=VARCHAR},
+      </if>
+      <if test="ip != null" >
+        ip = #{ip,jdbcType=VARCHAR},
+      </if>
+      <if test="recordTime != null" >
+        record_time = #{recordTime,jdbcType=TIMESTAMP},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.DnsRecordHistory" >
+    update dns_record_history
+    set zone_id = #{zoneId,jdbcType=INTEGER},
+      domain = #{domain,jdbcType=VARCHAR},
+      ttl = #{ttl,jdbcType=INTEGER},
+      type = #{type,jdbcType=VARCHAR},
+      ip = #{ip,jdbcType=VARCHAR},
+      record_time = #{recordTime,jdbcType=TIMESTAMP}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+</mapper>

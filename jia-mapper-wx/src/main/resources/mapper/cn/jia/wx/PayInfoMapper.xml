@@ -1,0 +1,319 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.wx.dao.PayInfoMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.wx.entity.PayInfo">
+    <id column="acid" jdbcType="INTEGER" property="acid" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="name" jdbcType="VARCHAR" property="name" />
+    <result column="account" jdbcType="VARCHAR" property="account" />
+    <result column="country" jdbcType="VARCHAR" property="country" />
+    <result column="province" jdbcType="VARCHAR" property="province" />
+    <result column="city" jdbcType="VARCHAR" property="city" />
+    <result column="username" jdbcType="VARCHAR" property="username" />
+    <result column="password" jdbcType="VARCHAR" property="password" />
+    <result column="create_time" jdbcType="BIGINT" property="createTime" />
+    <result column="update_time" jdbcType="BIGINT" property="updateTime" />
+    <result column="status" jdbcType="INTEGER" property="status" />
+    <result column="app_id" jdbcType="VARCHAR" property="appId" />
+    <result column="sub_app_id" jdbcType="VARCHAR" property="subAppId" />
+    <result column="mch_id" jdbcType="VARCHAR" property="mchId" />
+    <result column="mch_key" jdbcType="VARCHAR" property="mchKey" />
+    <result column="sub_mch_id" jdbcType="VARCHAR" property="subMchId" />
+    <result column="notify_url" jdbcType="VARCHAR" property="notifyUrl" />
+    <result column="trade_type" jdbcType="VARCHAR" property="tradeType" />
+    <result column="sign_type" jdbcType="VARCHAR" property="signType" />
+    <result column="key_path" jdbcType="VARCHAR" property="keyPath" />
+    <result column="key_content" jdbcType="VARCHAR" property="keyContent" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    acid, client_id, name, account, country, province, city, username, password, create_time, 
+    update_time, status, app_id, sub_app_id, mch_id, mch_key, sub_mch_id, notify_url, 
+    trade_type, sign_type, key_path, key_content
+  </sql>
+  <select id="selectByPrimaryKey" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_pay_info
+    where acid = #{acid,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer">
+    delete from wx_pay_info
+    where acid = #{acid,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.wx.entity.PayInfo">
+    insert into wx_pay_info (acid, client_id, name, 
+      account, country, province, 
+      city, username, password, 
+      create_time, update_time, status, 
+      app_id, sub_app_id, mch_id, 
+      mch_key, sub_mch_id, notify_url, 
+      trade_type, sign_type, key_path, 
+      key_content)
+    values (#{acid,jdbcType=INTEGER}, #{clientId,jdbcType=VARCHAR}, #{name,jdbcType=VARCHAR}, 
+      #{account,jdbcType=VARCHAR}, #{country,jdbcType=VARCHAR}, #{province,jdbcType=VARCHAR}, 
+      #{city,jdbcType=VARCHAR}, #{username,jdbcType=VARCHAR}, #{password,jdbcType=VARCHAR}, 
+      #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT}, #{status,jdbcType=INTEGER}, 
+      #{appId,jdbcType=VARCHAR}, #{subAppId,jdbcType=VARCHAR}, #{mchId,jdbcType=VARCHAR}, 
+      #{mchKey,jdbcType=VARCHAR}, #{subMchId,jdbcType=VARCHAR}, #{notifyUrl,jdbcType=VARCHAR}, 
+      #{tradeType,jdbcType=VARCHAR}, #{signType,jdbcType=VARCHAR}, #{keyPath,jdbcType=VARCHAR}, 
+      #{keyContent,jdbcType=VARCHAR})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.wx.entity.PayInfo">
+    insert into wx_pay_info
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="acid != null">
+        acid,
+      </if>
+      <if test="clientId != null">
+        client_id,
+      </if>
+      <if test="name != null">
+        name,
+      </if>
+      <if test="account != null">
+        account,
+      </if>
+      <if test="country != null">
+        country,
+      </if>
+      <if test="province != null">
+        province,
+      </if>
+      <if test="city != null">
+        city,
+      </if>
+      <if test="username != null">
+        username,
+      </if>
+      <if test="password != null">
+        password,
+      </if>
+      <if test="createTime != null">
+        create_time,
+      </if>
+      <if test="updateTime != null">
+        update_time,
+      </if>
+      <if test="status != null">
+        status,
+      </if>
+      <if test="appId != null">
+        app_id,
+      </if>
+      <if test="subAppId != null">
+        sub_app_id,
+      </if>
+      <if test="mchId != null">
+        mch_id,
+      </if>
+      <if test="mchKey != null">
+        mch_key,
+      </if>
+      <if test="subMchId != null">
+        sub_mch_id,
+      </if>
+      <if test="notifyUrl != null">
+        notify_url,
+      </if>
+      <if test="tradeType != null">
+        trade_type,
+      </if>
+      <if test="signType != null">
+        sign_type,
+      </if>
+      <if test="keyPath != null">
+        key_path,
+      </if>
+      <if test="keyContent != null">
+        key_content,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="acid != null">
+        #{acid,jdbcType=INTEGER},
+      </if>
+      <if test="clientId != null">
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null">
+        #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="account != null">
+        #{account,jdbcType=VARCHAR},
+      </if>
+      <if test="country != null">
+        #{country,jdbcType=VARCHAR},
+      </if>
+      <if test="province != null">
+        #{province,jdbcType=VARCHAR},
+      </if>
+      <if test="city != null">
+        #{city,jdbcType=VARCHAR},
+      </if>
+      <if test="username != null">
+        #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="password != null">
+        #{password,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null">
+        #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null">
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+      <if test="status != null">
+        #{status,jdbcType=INTEGER},
+      </if>
+      <if test="appId != null">
+        #{appId,jdbcType=VARCHAR},
+      </if>
+      <if test="subAppId != null">
+        #{subAppId,jdbcType=VARCHAR},
+      </if>
+      <if test="mchId != null">
+        #{mchId,jdbcType=VARCHAR},
+      </if>
+      <if test="mchKey != null">
+        #{mchKey,jdbcType=VARCHAR},
+      </if>
+      <if test="subMchId != null">
+        #{subMchId,jdbcType=VARCHAR},
+      </if>
+      <if test="notifyUrl != null">
+        #{notifyUrl,jdbcType=VARCHAR},
+      </if>
+      <if test="tradeType != null">
+        #{tradeType,jdbcType=VARCHAR},
+      </if>
+      <if test="signType != null">
+        #{signType,jdbcType=VARCHAR},
+      </if>
+      <if test="keyPath != null">
+        #{keyPath,jdbcType=VARCHAR},
+      </if>
+      <if test="keyContent != null">
+        #{keyContent,jdbcType=VARCHAR},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.wx.entity.PayInfo">
+    update wx_pay_info
+    <set>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null">
+        name = #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="account != null">
+        account = #{account,jdbcType=VARCHAR},
+      </if>
+      <if test="country != null">
+        country = #{country,jdbcType=VARCHAR},
+      </if>
+      <if test="province != null">
+        province = #{province,jdbcType=VARCHAR},
+      </if>
+      <if test="city != null">
+        city = #{city,jdbcType=VARCHAR},
+      </if>
+      <if test="username != null">
+        username = #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="password != null">
+        password = #{password,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null">
+        create_time = #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null">
+        update_time = #{updateTime,jdbcType=BIGINT},
+      </if>
+      <if test="status != null">
+        status = #{status,jdbcType=INTEGER},
+      </if>
+      <if test="appId != null">
+        app_id = #{appId,jdbcType=VARCHAR},
+      </if>
+      <if test="subAppId != null">
+        sub_app_id = #{subAppId,jdbcType=VARCHAR},
+      </if>
+      <if test="mchId != null">
+        mch_id = #{mchId,jdbcType=VARCHAR},
+      </if>
+      <if test="mchKey != null">
+        mch_key = #{mchKey,jdbcType=VARCHAR},
+      </if>
+      <if test="subMchId != null">
+        sub_mch_id = #{subMchId,jdbcType=VARCHAR},
+      </if>
+      <if test="notifyUrl != null">
+        notify_url = #{notifyUrl,jdbcType=VARCHAR},
+      </if>
+      <if test="tradeType != null">
+        trade_type = #{tradeType,jdbcType=VARCHAR},
+      </if>
+      <if test="signType != null">
+        sign_type = #{signType,jdbcType=VARCHAR},
+      </if>
+      <if test="keyPath != null">
+        key_path = #{keyPath,jdbcType=VARCHAR},
+      </if>
+      <if test="keyContent != null">
+        key_content = #{keyContent,jdbcType=VARCHAR},
+      </if>
+    </set>
+    where acid = #{acid,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.wx.entity.PayInfo">
+    update wx_pay_info
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      name = #{name,jdbcType=VARCHAR},
+      account = #{account,jdbcType=VARCHAR},
+      country = #{country,jdbcType=VARCHAR},
+      province = #{province,jdbcType=VARCHAR},
+      city = #{city,jdbcType=VARCHAR},
+      username = #{username,jdbcType=VARCHAR},
+      password = #{password,jdbcType=VARCHAR},
+      create_time = #{createTime,jdbcType=BIGINT},
+      update_time = #{updateTime,jdbcType=BIGINT},
+      status = #{status,jdbcType=INTEGER},
+      app_id = #{appId,jdbcType=VARCHAR},
+      sub_app_id = #{subAppId,jdbcType=VARCHAR},
+      mch_id = #{mchId,jdbcType=VARCHAR},
+      mch_key = #{mchKey,jdbcType=VARCHAR},
+      sub_mch_id = #{subMchId,jdbcType=VARCHAR},
+      notify_url = #{notifyUrl,jdbcType=VARCHAR},
+      trade_type = #{tradeType,jdbcType=VARCHAR},
+      sign_type = #{signType,jdbcType=VARCHAR},
+      key_path = #{keyPath,jdbcType=VARCHAR},
+      key_content = #{keyContent,jdbcType=VARCHAR}
+    where acid = #{acid,jdbcType=INTEGER}
+  </update>
+  
+  <select id="selectAll" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_pay_info
+  </select>
+  <select id="selectByExample" parameterType="cn.jia.wx.entity.PayInfo" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_pay_info
+    <where>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR}
+      </if>
+      <if test="appId != null">
+        and app_id = #{appId,jdbcType=VARCHAR}
+      </if>
+    </where>
+  </select>
+  <select id="selectByKey" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_pay_info
+    where app_id = #{key,jdbcType=VARCHAR}
+  </select>
+</mapper>

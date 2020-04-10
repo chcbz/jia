@@ -1,0 +1,323 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.dao.IspServerMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspServer" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="server_name" property="serverName" jdbcType="VARCHAR" />
+    <result column="server_description" property="serverDescription" jdbcType="VARCHAR" />
+    <result column="ip" property="ip" jdbcType="VARCHAR" />
+    <result column="ssh_port" property="sshPort" jdbcType="INTEGER" />
+    <result column="ssh_user" property="sshUser" jdbcType="VARCHAR" />
+    <result column="ssh_password" property="sshPassword" jdbcType="VARCHAR" />
+    <result column="console_port" property="consolePort" jdbcType="INTEGER" />
+    <result column="console_token" property="consoleToken" jdbcType="VARCHAR" />
+    <result column="ldap_service" property="ldapService" jdbcType="INTEGER" />
+    <result column="ldap_port" property="ldapPort" jdbcType="INTEGER" />
+    <result column="ldap_user" property="ldapUser" jdbcType="VARCHAR" />
+    <result column="ldap_password" property="ldapPassword" jdbcType="VARCHAR" />
+    <result column="ldap_base" property="ldapBase" jdbcType="VARCHAR" />
+    <result column="smb_service" property="smbService" jdbcType="INTEGER" />
+    <result column="smb_ldap_base" property="smbLdapBase" jdbcType="VARCHAR" />
+    <result column="smb_ldap_user" property="smbLdapUser" jdbcType="VARCHAR" />
+    <result column="smb_ldap_password" property="smbLdapPassword" jdbcType="VARCHAR" />
+    <result column="smb_ldap_url" property="smbLdapUrl" jdbcType="VARCHAR" />
+    <result column="status" property="status" jdbcType="INTEGER" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, client_id, server_name, server_description, ip, ssh_port, ssh_user, ssh_password, 
+    console_port, console_token, ldap_service, ldap_port, ldap_user, ldap_password, ldap_base, 
+    smb_service, smb_ldap_base, smb_ldap_user, smb_ldap_password, smb_ldap_url, status, 
+    create_time, update_time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from isp_server
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from isp_server
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.IspServer" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into isp_server (client_id, server_name, server_description, 
+      ip, ssh_port, ssh_user, 
+      ssh_password, console_port, console_token, 
+      ldap_service, ldap_port, ldap_user, 
+      ldap_password, ldap_base, smb_service, 
+      smb_ldap_base, smb_ldap_user, smb_ldap_password, 
+      smb_ldap_url, status, create_time, 
+      update_time)
+    values (#{clientId,jdbcType=VARCHAR}, #{serverName,jdbcType=VARCHAR}, #{serverDescription,jdbcType=VARCHAR}, 
+      #{ip,jdbcType=VARCHAR}, #{sshPort,jdbcType=INTEGER}, #{sshUser,jdbcType=VARCHAR}, 
+      #{sshPassword,jdbcType=VARCHAR}, #{consolePort,jdbcType=INTEGER}, #{consoleToken,jdbcType=VARCHAR}, 
+      #{ldapService,jdbcType=INTEGER}, #{ldapPort,jdbcType=INTEGER}, #{ldapUser,jdbcType=VARCHAR}, 
+      #{ldapPassword,jdbcType=VARCHAR}, #{ldapBase,jdbcType=VARCHAR}, #{smbService,jdbcType=INTEGER}, 
+      #{smbLdapBase,jdbcType=VARCHAR}, #{smbLdapUser,jdbcType=VARCHAR}, #{smbLdapPassword,jdbcType=VARCHAR}, 
+      #{smbLdapUrl,jdbcType=VARCHAR}, #{status,jdbcType=INTEGER}, #{createTime,jdbcType=BIGINT}, 
+      #{updateTime,jdbcType=BIGINT})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.IspServer" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into isp_server
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="clientId != null" >
+        client_id,
+      </if>
+      <if test="serverName != null" >
+        server_name,
+      </if>
+      <if test="serverDescription != null" >
+        server_description,
+      </if>
+      <if test="ip != null" >
+        ip,
+      </if>
+      <if test="sshPort != null" >
+        ssh_port,
+      </if>
+      <if test="sshUser != null" >
+        ssh_user,
+      </if>
+      <if test="sshPassword != null" >
+        ssh_password,
+      </if>
+      <if test="consolePort != null" >
+        console_port,
+      </if>
+      <if test="consoleToken != null" >
+        console_token,
+      </if>
+      <if test="ldapService != null" >
+        ldap_service,
+      </if>
+      <if test="ldapPort != null" >
+        ldap_port,
+      </if>
+      <if test="ldapUser != null" >
+        ldap_user,
+      </if>
+      <if test="ldapPassword != null" >
+        ldap_password,
+      </if>
+      <if test="ldapBase != null" >
+        ldap_base,
+      </if>
+      <if test="smbService != null" >
+        smb_service,
+      </if>
+      <if test="smbLdapBase != null" >
+        smb_ldap_base,
+      </if>
+      <if test="smbLdapUser != null" >
+        smb_ldap_user,
+      </if>
+      <if test="smbLdapPassword != null" >
+        smb_ldap_password,
+      </if>
+      <if test="smbLdapUrl != null" >
+        smb_ldap_url,
+      </if>
+      <if test="status != null" >
+        status,
+      </if>
+      <if test="createTime != null" >
+        create_time,
+      </if>
+      <if test="updateTime != null" >
+        update_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="clientId != null" >
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="serverName != null" >
+        #{serverName,jdbcType=VARCHAR},
+      </if>
+      <if test="serverDescription != null" >
+        #{serverDescription,jdbcType=VARCHAR},
+      </if>
+      <if test="ip != null" >
+        #{ip,jdbcType=VARCHAR},
+      </if>
+      <if test="sshPort != null" >
+        #{sshPort,jdbcType=INTEGER},
+      </if>
+      <if test="sshUser != null" >
+        #{sshUser,jdbcType=VARCHAR},
+      </if>
+      <if test="sshPassword != null" >
+        #{sshPassword,jdbcType=VARCHAR},
+      </if>
+      <if test="consolePort != null" >
+        #{consolePort,jdbcType=INTEGER},
+      </if>
+      <if test="consoleToken != null" >
+        #{consoleToken,jdbcType=VARCHAR},
+      </if>
+      <if test="ldapService != null" >
+        #{ldapService,jdbcType=INTEGER},
+      </if>
+      <if test="ldapPort != null" >
+        #{ldapPort,jdbcType=INTEGER},
+      </if>
+      <if test="ldapUser != null" >
+        #{ldapUser,jdbcType=VARCHAR},
+      </if>
+      <if test="ldapPassword != null" >
+        #{ldapPassword,jdbcType=VARCHAR},
+      </if>
+      <if test="ldapBase != null" >
+        #{ldapBase,jdbcType=VARCHAR},
+      </if>
+      <if test="smbService != null" >
+        #{smbService,jdbcType=INTEGER},
+      </if>
+      <if test="smbLdapBase != null" >
+        #{smbLdapBase,jdbcType=VARCHAR},
+      </if>
+      <if test="smbLdapUser != null" >
+        #{smbLdapUser,jdbcType=VARCHAR},
+      </if>
+      <if test="smbLdapPassword != null" >
+        #{smbLdapPassword,jdbcType=VARCHAR},
+      </if>
+      <if test="smbLdapUrl != null" >
+        #{smbLdapUrl,jdbcType=VARCHAR},
+      </if>
+      <if test="status != null" >
+        #{status,jdbcType=INTEGER},
+      </if>
+      <if test="createTime != null" >
+        #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.IspServer" >
+    update isp_server
+    <set >
+      <if test="clientId != null" >
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="serverName != null" >
+        server_name = #{serverName,jdbcType=VARCHAR},
+      </if>
+      <if test="serverDescription != null" >
+        server_description = #{serverDescription,jdbcType=VARCHAR},
+      </if>
+      <if test="ip != null" >
+        ip = #{ip,jdbcType=VARCHAR},
+      </if>
+      <if test="sshPort != null" >
+        ssh_port = #{sshPort,jdbcType=INTEGER},
+      </if>
+      <if test="sshUser != null" >
+        ssh_user = #{sshUser,jdbcType=VARCHAR},
+      </if>
+      <if test="sshPassword != null" >
+        ssh_password = #{sshPassword,jdbcType=VARCHAR},
+      </if>
+      <if test="consolePort != null" >
+        console_port = #{consolePort,jdbcType=INTEGER},
+      </if>
+      <if test="consoleToken != null" >
+        console_token = #{consoleToken,jdbcType=VARCHAR},
+      </if>
+      <if test="ldapService != null" >
+        ldap_service = #{ldapService,jdbcType=INTEGER},
+      </if>
+      <if test="ldapPort != null" >
+        ldap_port = #{ldapPort,jdbcType=INTEGER},
+      </if>
+      <if test="ldapUser != null" >
+        ldap_user = #{ldapUser,jdbcType=VARCHAR},
+      </if>
+      <if test="ldapPassword != null" >
+        ldap_password = #{ldapPassword,jdbcType=VARCHAR},
+      </if>
+      <if test="ldapBase != null" >
+        ldap_base = #{ldapBase,jdbcType=VARCHAR},
+      </if>
+      <if test="smbService != null" >
+        smb_service = #{smbService,jdbcType=INTEGER},
+      </if>
+      <if test="smbLdapBase != null" >
+        smb_ldap_base = #{smbLdapBase,jdbcType=VARCHAR},
+      </if>
+      <if test="smbLdapUser != null" >
+        smb_ldap_user = #{smbLdapUser,jdbcType=VARCHAR},
+      </if>
+      <if test="smbLdapPassword != null" >
+        smb_ldap_password = #{smbLdapPassword,jdbcType=VARCHAR},
+      </if>
+      <if test="smbLdapUrl != null" >
+        smb_ldap_url = #{smbLdapUrl,jdbcType=VARCHAR},
+      </if>
+      <if test="status != null" >
+        status = #{status,jdbcType=INTEGER},
+      </if>
+      <if test="createTime != null" >
+        create_time = #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        update_time = #{updateTime,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.IspServer" >
+    update isp_server
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      server_name = #{serverName,jdbcType=VARCHAR},
+      server_description = #{serverDescription,jdbcType=VARCHAR},
+      ip = #{ip,jdbcType=VARCHAR},
+      ssh_port = #{sshPort,jdbcType=INTEGER},
+      ssh_user = #{sshUser,jdbcType=VARCHAR},
+      ssh_password = #{sshPassword,jdbcType=VARCHAR},
+      console_port = #{consolePort,jdbcType=INTEGER},
+      console_token = #{consoleToken,jdbcType=VARCHAR},
+      ldap_service = #{ldapService,jdbcType=INTEGER},
+      ldap_port = #{ldapPort,jdbcType=INTEGER},
+      ldap_user = #{ldapUser,jdbcType=VARCHAR},
+      ldap_password = #{ldapPassword,jdbcType=VARCHAR},
+      ldap_base = #{ldapBase,jdbcType=VARCHAR},
+      smb_service = #{smbService,jdbcType=INTEGER},
+      smb_ldap_base = #{smbLdapBase,jdbcType=VARCHAR},
+      smb_ldap_user = #{smbLdapUser,jdbcType=VARCHAR},
+      smb_ldap_password = #{smbLdapPassword,jdbcType=VARCHAR},
+      smb_ldap_url = #{smbLdapUrl,jdbcType=VARCHAR},
+      status = #{status,jdbcType=INTEGER},
+      create_time = #{createTime,jdbcType=BIGINT},
+      update_time = #{updateTime,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.IspServer" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from isp_server
+    <where>
+      <if test="serverName != null">
+        server_name LIKE CONCAT('%',#{serverName,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="status != null">
+        and status = #{status,jdbcType=INTEGER}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

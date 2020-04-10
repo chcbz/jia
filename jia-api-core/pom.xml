@@ -1,0 +1,432 @@
+﻿<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>cn.jia</groupId>
+	<artifactId>jia-api-core</artifactId>
+	<version>1.0.7</version>
+	<packaging>jar</packaging>
+
+	<name>jia-api-core</name>
+	<url>http://maven.apache.org</url>
+
+	<build>
+		<finalName>jia-api-core</finalName>
+		<plugins>
+			<!-- 默认部署JDK1.8 -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.1</version>
+				<configuration>
+					<source>1.8</source>
+					<target>1.8</target>
+					<encoding>UTF-8</encoding>
+					<compilerArguments>
+						<verbose />
+						<bootclasspath>${java.home}/lib/rt.jar;${java.home}/lib/jce.jar</bootclasspath>
+					</compilerArguments>
+				</configuration>
+			</plugin>
+			<!-- Mybatis generator代码生成插件 配置 -->
+			<!-- <plugin> <groupId>org.mybatis.generator</groupId> <artifactId>mybatis-generator-maven-plugin</artifactId> <version>${mybatis.generator.version}</version> 
+				<configuration> <configurationFile>${mybatis.generator.generatorConfig.xml}</configurationFile> <overwrite>true</overwrite> 
+				<verbose>true</verbose> </configuration> </plugin> -->
+		</plugins>
+	</build>
+
+	<properties>
+		<!-- plugin setting -->
+		<mybatis.generator.generatorConfig.xml>${basedir}/src/test/resources/generatorConfig.xml</mybatis.generator.generatorConfig.xml>
+		<!-- lib versions -->
+		<junit.version>3.8.1</junit.version>
+		<spring.version>4.3.13.RELEASE</spring.version>
+		<springsecurity.version>4.2.3.RELEASE</springsecurity.version>
+		<springsecurityoath.version>2.0.14.RELEASE</springsecurityoath.version>
+		<springcloud.version>1.3.3.RELEASE</springcloud.version>
+		<mybatis.version>3.4.5</mybatis.version>
+		<mybatis.spring.version>1.3.1</mybatis.spring.version>
+		<mysql.connector.version>5.1.20</mysql.connector.version>
+		<log4j.version>1.2.17</log4j.version>
+		<slf4j.version>1.7.5</slf4j.version>
+		<jstl.version>1.2</jstl.version>
+		<commons.fileupload.version>1.2</commons.fileupload.version>
+		<httpclient.version>4.5.1</httpclient.version>
+		<commons.codec.version>1.6</commons.codec.version>
+		<commons.net.version>3.3</commons.net.version>
+		<commons.logging.version>1.1.1</commons.logging.version>
+		<commons.collections.version>3.2.1</commons.collections.version>
+		<commons.io.version>1.4</commons.io.version>
+		<cglib.version>2.2.2</cglib.version>
+		<shiro.version>1.2.3</shiro.version>
+		<hibernate.validator.version>5.1.1.Final</hibernate.validator.version>
+		<mybatis.generator.version>1.3.2</mybatis.generator.version>
+		<jedis.version>2.6.2</jedis.version>
+		<jpush.version>3.2.9</jpush.version>
+	</properties>
+	<!-- 添加Amazon AWS的依赖管理 -->
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>com.amazonaws</groupId>
+				<artifactId>aws-java-sdk-bom</artifactId>
+				<version>1.11.98</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<dependencies>
+		<dependency>
+			<groupId>cn.jia</groupId>
+			<artifactId>jia-core</artifactId>
+			<version>1.0.7</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>cn.jia</groupId>
+			<artifactId>jia-mapper-core</artifactId>
+			<version>1.0.1</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- Amazon AWS相应配置 -->
+		<dependency>
+			<artifactId>aws-java-sdk-sns</artifactId>
+			<groupId>com.amazonaws</groupId>
+			<optional>true</optional>
+			<exclusions>
+				<exclusion>
+					<artifactId>httpclient</artifactId>
+					<groupId>org.apache.httpcomponents</groupId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>org.codehaus.jackson</groupId>
+			<artifactId>jackson-mapper-asl</artifactId>
+			<version>1.9.13</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- 单元测试 -->
+		<dependency>
+			<groupId>junit</groupId>
+			<artifactId>junit</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+
+		<!-- springframe start -->
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-webmvc</artifactId>
+			<version>${spring.version}</version>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-websocket</artifactId>
+			<version>${spring.version}</version>
+			<optional>true</optional>
+		</dependency>
+		
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-core</artifactId>
+			<version>${springsecurity.version}</version>
+			<optional>true</optional>
+		</dependency>
+		
+		<dependency>
+			<groupId>org.springframework.security.oauth</groupId>
+			<artifactId>spring-security-oauth2</artifactId>
+			<version>${springsecurityoath.version}</version>
+			<optional>true</optional>
+		</dependency>
+		
+		<dependency>
+		    <groupId>org.springframework.cloud</groupId>
+		    <artifactId>spring-cloud-commons</artifactId>
+		    <version>${springcloud.version}</version>
+		    <optional>true</optional>
+		</dependency>
+
+		<!-- springframe end -->
+
+		<!-- mybatis start -->
+		<dependency>
+			<groupId>com.github.pagehelper</groupId>
+			<artifactId>pagehelper</artifactId>
+			<version>5.0.1</version>
+			<optional>true</optional>
+		</dependency>
+		<!--mybatis end -->
+
+		<!-- Ldap start -->
+		<dependency>
+			<groupId>org.springframework.ldap</groupId>
+			<artifactId>spring-ldap-core</artifactId>
+			<version>2.3.2.RELEASE</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- Ldap end -->
+
+		<!-- json工具类 -->
+		<!-- <dependency> <groupId>net.sf.json-lib</groupId> <artifactId>json-lib</artifactId> <version>2.4</version> <classifier>jdk15</classifier> 
+			<optional>true</optional> </dependency> -->
+		<dependency>
+			<groupId>org.json</groupId>
+			<artifactId>json</artifactId>
+			<version>20140107</version>
+		</dependency>
+
+		<!-- log start -->
+		<dependency>
+			<groupId>log4j</groupId>
+			<artifactId>log4j</artifactId>
+			<version>${log4j.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>${slf4j.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-log4j12</artifactId>
+			<version>${slf4j.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- log end -->
+
+		<dependency>
+			<groupId>dom4j</groupId>
+			<artifactId>dom4j</artifactId>
+			<version>1.6.1</version>
+			<optional>true</optional>
+			<exclusions>
+				<exclusion>
+					<artifactId>xml-apis</artifactId>
+					<groupId>xml-apis</groupId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- javax -->
+		<dependency>
+			<groupId>javax.inject</groupId>
+			<artifactId>javax.inject</artifactId>
+			<version>1</version>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- servlet api -->
+		<dependency>
+			<groupId>javax.servlet</groupId>
+			<artifactId>javax.servlet-api</artifactId>
+			<version>3.1.0</version>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- start apache -->
+		<dependency>
+			<groupId>commons-fileupload</groupId>
+			<artifactId>commons-fileupload</artifactId>
+			<version>${commons.fileupload.version}</version>
+			<optional>true</optional>
+		</dependency>
+
+
+		<dependency>
+			<groupId>commons-codec</groupId>
+			<artifactId>commons-codec</artifactId>
+			<version>${commons.codec.version}</version>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>commons-net</groupId>
+			<artifactId>commons-net</artifactId>
+			<version>${commons.net.version}</version>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>commons-logging</groupId>
+			<artifactId>commons-logging</artifactId>
+			<version>${commons.logging.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>commons-collections</groupId>
+			<artifactId>commons-collections</artifactId>
+			<version>${commons.collections.version}</version>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>commons-io</groupId>
+			<artifactId>commons-io</artifactId>
+			<version>${commons.io.version}</version>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>3.3.2</version>
+			<optional>true</optional>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.httpcomponents</groupId>
+			<artifactId>httpclient</artifactId>
+			<version>4.5.3</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- end apache -->
+
+		<!-- shiro -->
+		<dependency>
+			<groupId>org.apache.shiro</groupId>
+			<artifactId>shiro-spring</artifactId>
+			<version>${shiro.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.shiro</groupId>
+			<artifactId>shiro-ehcache</artifactId>
+			<version>${shiro.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.shiro</groupId>
+			<artifactId>shiro-core</artifactId>
+			<version>${shiro.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.shiro</groupId>
+			<artifactId>shiro-web</artifactId>
+			<version>${shiro.version}</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.shiro</groupId>
+			<artifactId>shiro-quartz</artifactId>
+			<version>${shiro.version}</version>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- redis服务端 -->
+		<dependency>
+			<groupId>org.springframework.data</groupId>
+			<artifactId>spring-data-redis</artifactId>
+			<version>1.8.9.RELEASE</version>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- redis客户端 -->
+		<dependency>
+			<groupId>redis.clients</groupId>
+			<artifactId>jedis</artifactId>
+			<version>${jedis.version}</version>
+			<type>jar</type>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- JWT工具 -->
+		<dependency>
+			<groupId>com.auth0</groupId>
+			<artifactId>java-jwt</artifactId>
+			<version>3.2.0</version>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- jodd工具包 -->
+		<dependency>
+			<groupId>org.jodd</groupId>
+			<artifactId>jodd</artifactId>
+			<version>3.3.8</version>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- zing二维码生成工具 -->
+		<dependency>
+			<groupId>com.google.zxing</groupId>
+			<artifactId>core</artifactId>
+			<version>3.2.1</version>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>com.google.zxing</groupId>
+			<artifactId>javase</artifactId>
+			<version>3.2.1</version>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- 邮件发送 -->
+		<dependency>
+			<groupId>javax.mail</groupId>
+			<artifactId>mail</artifactId>
+			<version>1.4</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- stripe支付 -->
+		<dependency>
+			<groupId>com.stripe</groupId>
+			<artifactId>stripe-java</artifactId>
+			<version>4.4.0</version>
+			<optional>true</optional>
+		</dependency>
+		<!-- 图片文字识别 -->
+		<dependency>
+		    <groupId>com.sun.media</groupId>
+		    <artifactId>jai_imageio</artifactId>
+		    <version>1.1</version>
+		    <optional>true</optional>
+		</dependency>
+		<!-- 工作流 -->
+		<dependency>
+		    <groupId>org.activiti</groupId>
+		    <artifactId>activiti-engine</artifactId>
+		    <version>6.0.0</version>
+		    <optional>true</optional>
+		</dependency>
+		<!-- Excel导入导出工具 -->
+		<dependency>
+            <groupId>cn.afterturn</groupId>
+            <artifactId>easypoi-base</artifactId>
+            <version>3.0.3</version>
+            <optional>true</optional>
+        </dependency>
+        <!-- HTML转图片 -->
+        <dependency> 
+			<groupId>com.github.xuwei-k</groupId>
+			<artifactId>html2image</artifactId>
+			<version>0.1.0</version>
+			<optional>true</optional>
+		</dependency>
+		
+		<dependency>
+		    <groupId>org.projectlombok</groupId>
+		    <artifactId>lombok</artifactId>
+		    <version>1.16.18</version>
+		    <optional>true</optional>
+		</dependency>
+	</dependencies>
+
+	<distributionManagement>
+		<snapshotRepository>
+			<id>nexus-snapshots</id>
+			<url>http://maven.wydiy.com/repository/maven-snapshots/</url>
+		</snapshotRepository>
+		<repository>
+			<id>nexus-releases</id>
+			<url>http://maven.wydiy.com/repository/maven-releases/</url>
+		</repository>
+	</distributionManagement>
+</project>

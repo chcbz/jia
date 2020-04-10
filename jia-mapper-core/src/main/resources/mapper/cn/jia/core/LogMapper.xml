@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.core.dao.LogMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.core.entity.Log" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="jiacn" property="jiacn" jdbcType="VARCHAR" />
+    <result column="username" property="username" jdbcType="VARCHAR" />
+    <result column="ip" property="ip" jdbcType="VARCHAR" />
+    <result column="uri" property="uri" jdbcType="VARCHAR" />
+    <result column="method" property="method" jdbcType="VARCHAR" />
+    <result column="param" property="param" jdbcType="VARCHAR" />
+    <result column="user_agent" property="userAgent" jdbcType="VARCHAR" />
+    <result column="header" property="header" jdbcType="VARCHAR" />
+    <result column="time" property="time" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, jiacn, username, ip, uri, method, param, user_agent, header, time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from core_log
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from core_log
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.core.entity.Log" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into core_log (jiacn, username, ip, 
+      uri, method, param, 
+      user_agent, header, time
+      )
+    values (#{jiacn,jdbcType=VARCHAR}, #{username,jdbcType=VARCHAR}, #{ip,jdbcType=VARCHAR}, 
+      #{uri,jdbcType=VARCHAR}, #{method,jdbcType=VARCHAR}, #{param,jdbcType=VARCHAR}, 
+      #{userAgent,jdbcType=VARCHAR}, #{header,jdbcType=VARCHAR}, #{time,jdbcType=BIGINT}
+      )
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.core.entity.Log" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into core_log
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="jiacn != null" >
+        jiacn,
+      </if>
+      <if test="username != null" >
+        username,
+      </if>
+      <if test="ip != null" >
+        ip,
+      </if>
+      <if test="uri != null" >
+        uri,
+      </if>
+      <if test="method != null" >
+        method,
+      </if>
+      <if test="param != null" >
+        param,
+      </if>
+      <if test="userAgent != null" >
+        user_agent,
+      </if>
+      <if test="header != null" >
+        header,
+      </if>
+      <if test="time != null" >
+        time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="jiacn != null" >
+        #{jiacn,jdbcType=VARCHAR},
+      </if>
+      <if test="username != null" >
+        #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="ip != null" >
+        #{ip,jdbcType=VARCHAR},
+      </if>
+      <if test="uri != null" >
+        #{uri,jdbcType=VARCHAR},
+      </if>
+      <if test="method != null" >
+        #{method,jdbcType=VARCHAR},
+      </if>
+      <if test="param != null" >
+        #{param,jdbcType=VARCHAR},
+      </if>
+      <if test="userAgent != null" >
+        #{userAgent,jdbcType=VARCHAR},
+      </if>
+      <if test="header != null" >
+        #{header,jdbcType=VARCHAR},
+      </if>
+      <if test="time != null" >
+        #{time,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.core.entity.Log" >
+    update core_log
+    <set >
+      <if test="jiacn != null" >
+        jiacn = #{jiacn,jdbcType=VARCHAR},
+      </if>
+      <if test="username != null" >
+        username = #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="ip != null" >
+        ip = #{ip,jdbcType=VARCHAR},
+      </if>
+      <if test="uri != null" >
+        uri = #{uri,jdbcType=VARCHAR},
+      </if>
+      <if test="method != null" >
+        method = #{method,jdbcType=VARCHAR},
+      </if>
+      <if test="param != null" >
+        param = #{param,jdbcType=VARCHAR},
+      </if>
+      <if test="userAgent != null" >
+        user_agent = #{userAgent,jdbcType=VARCHAR},
+      </if>
+      <if test="header != null" >
+        header = #{header,jdbcType=VARCHAR},
+      </if>
+      <if test="time != null" >
+        time = #{time,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.core.entity.Log" >
+    update core_log
+    set jiacn = #{jiacn,jdbcType=VARCHAR},
+      username = #{username,jdbcType=VARCHAR},
+      ip = #{ip,jdbcType=VARCHAR},
+      uri = #{uri,jdbcType=VARCHAR},
+      method = #{method,jdbcType=VARCHAR},
+      param = #{param,jdbcType=VARCHAR},
+      user_agent = #{userAgent,jdbcType=VARCHAR},
+      header = #{header,jdbcType=VARCHAR},
+      time = #{time,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+</mapper>

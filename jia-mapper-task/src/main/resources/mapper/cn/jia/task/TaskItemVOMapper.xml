@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.task.dao.TaskItemVOMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.task.entity.TaskItemVO" >
+    <result column="id" property="id" jdbcType="INTEGER" />
+    <result column="plan_id" property="planId" jdbcType="INTEGER" />
+    <result column="jiacn" property="jiacn" jdbcType="VARCHAR" />
+    <result column="type" property="type" jdbcType="INTEGER" />
+    <result column="period" property="period" jdbcType="INTEGER" />
+    <result column="crond" property="crond" jdbcType="VARCHAR" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="description" property="description" jdbcType="VARCHAR" />
+    <result column="amount" property="amount" jdbcType="DECIMAL" />
+    <result column="remind" property="remind" jdbcType="INTEGER" />
+    <result column="remind_phone" property="remindPhone" jdbcType="VARCHAR" />
+    <result column="remind_msg" property="remindMsg" jdbcType="VARCHAR" />
+    <result column="status" property="status" jdbcType="INTEGER" />
+    <result column="time" property="time" jdbcType="BIGINT" />
+  </resultMap>
+
+  <sql id="Base_Column_List" >
+    id, plan_id, jiacn, type, period, crond, name, description, amount, remind, remind_phone, 
+    remind_msg, status, time
+  </sql>
+  <select id="selectByExample" parameterType="cn.jia.task.entity.TaskItemVOExample" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from v_task_item
+    <where>
+      <if test="jiacn != null">
+        jiacn = #{jiacn,jdbcType=VARCHAR}
+      </if>
+      <if test="type != null">
+        and type = #{type,jdbcType=INTEGER}
+      </if>
+      <if test="remind != null">
+        and remind = #{remind,jdbcType=INTEGER}
+      </if>
+      <if test="status != null">
+        and status = #{status,jdbcType=INTEGER}
+      </if>
+      <if test="timeStart != null">
+        and time >= #{timeStart,jdbcType=INTEGER}
+      </if>
+      <if test="timeEnd != null">
+        and #{timeEnd,jdbcType=INTEGER} >= time
+      </if>
+    </where>
+  </select>
+</mapper>

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.dao.RoleRelMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.user.entity.RoleRel">
+    <result column="user_id" jdbcType="INTEGER" property="userId" />
+    <result column="group_id" jdbcType="INTEGER" property="groupId" />
+    <result column="role_id" jdbcType="INTEGER" property="roleId" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="update_time" jdbcType="INTEGER" property="updateTime" />
+    <result column="create_time" jdbcType="INTEGER" property="createTime" />
+  </resultMap>
+  <insert id="insert" parameterType="cn.jia.user.entity.RoleRel">
+    insert into user_role_rel (user_id, group_id, role_id, 
+      client_id, update_time, create_time
+      )
+    values (#{userId,jdbcType=INTEGER}, #{groupId,jdbcType=INTEGER}, #{roleId,jdbcType=INTEGER}, 
+      #{clientId,jdbcType=VARCHAR}, #{updateTime,jdbcType=INTEGER}, #{createTime,jdbcType=INTEGER}
+      )
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.user.entity.RoleRel">
+    insert into user_role_rel
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="userId != null">
+        user_id,
+      </if>
+      <if test="groupId != null">
+        group_id,
+      </if>
+      <if test="roleId != null">
+        role_id,
+      </if>
+      <if test="clientId != null">
+        client_id,
+      </if>
+      <if test="updateTime != null">
+        update_time,
+      </if>
+      <if test="createTime != null">
+        create_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="userId != null">
+        #{userId,jdbcType=INTEGER},
+      </if>
+      <if test="groupId != null">
+        #{groupId,jdbcType=INTEGER},
+      </if>
+      <if test="roleId != null">
+        #{roleId,jdbcType=INTEGER},
+      </if>
+      <if test="clientId != null">
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="updateTime != null">
+        #{updateTime,jdbcType=INTEGER},
+      </if>
+      <if test="createTime != null">
+        #{createTime,jdbcType=INTEGER},
+      </if>
+    </trim>
+  </insert>
+  
+  <select id="selectByUserId" resultMap="BaseResultMap">
+    select * from user_role_rel
+    where user_id = #{userId,jdbcType=INTEGER}
+      and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+  </select>
+  <select id="selectByGroupId" resultMap="BaseResultMap">
+    select * from user_role_rel
+    where group_id = #{groupId,jdbcType=INTEGER}
+    and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+  </select>
+  <select id="selectByRoleId" resultMap="BaseResultMap">
+    select * from user_role_rel
+    where role_id = #{roleId,jdbcType=INTEGER}
+      and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+  </select>
+  <insert id="batchAdd">
+    INSERT INTO user_role_rel(user_id,group_id,role_id,client_id,update_time,create_time)
+      VALUES 
+      <foreach collection="roleRelList" item="roleRel" separator=",">
+            (#{roleRel.userId,jdbcType=INTEGER},#{roleRel.groupId,jdbcType=INTEGER},#{roleRel.roleId,jdbcType=INTEGER},#{roleRel.clientId,jdbcType=VARCHAR},#{roleRel.updateTime},#{roleRel.createTime})
+      </foreach>
+  </insert>
+  <delete id="batchDel" parameterType="java.util.List">
+    delete from user_role_rel where
+      <foreach collection="roleRelList" item="roleRel" index="index" separator="or">
+      	(role_id = #{roleRel.roleId,jdbcType=INTEGER} and client_id = #{roleRel.clientId,jdbcType=VARCHAR}
+	      	<if test="roleRel.userId != null">
+	        	and user_id = #{roleRel.userId,jdbcType=INTEGER}
+	      	</if>
+	        <if test="roleRel.groupId != null">
+	        	and group_id = #{roleRel.groupId,jdbcType=INTEGER}
+	      	</if>
+        )
+      </foreach>
+  </delete>
+</mapper>

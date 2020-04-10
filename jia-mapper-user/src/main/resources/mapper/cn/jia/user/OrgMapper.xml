@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.user.dao.OrgMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.user.entity.Org" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="p_id" property="pId" jdbcType="INTEGER" />
+    <result column="type" property="type" jdbcType="INTEGER" />
+    <result column="code" property="code" jdbcType="VARCHAR" />
+    <result column="remark" property="remark" jdbcType="VARCHAR" />
+    <result column="director" property="director" jdbcType="VARCHAR" />
+    <result column="logo" property="logo" jdbcType="VARCHAR" />
+    <result column="logo_icon" property="logoIcon" jdbcType="VARCHAR" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="status" property="status" jdbcType="INTEGER" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, client_id, name, p_id, type, code, remark, director, logo, logo_icon, update_time, create_time,
+    status
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from user_org
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from user_org
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.user.entity.Org" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into user_org (client_id, name, p_id, 
+      type, code, remark, 
+      director, logo, logo_icon, update_time,
+      create_time, status)
+    values (#{clientId,jdbcType=VARCHAR}, #{name,jdbcType=VARCHAR}, #{pId,jdbcType=INTEGER}, 
+      #{type,jdbcType=INTEGER}, #{code,jdbcType=VARCHAR}, #{remark,jdbcType=VARCHAR}, 
+      #{director,jdbcType=VARCHAR}, #{logo,jdbcType=VARCHAR}, , #{logoIcon,jdbcType=VARCHAR}, #{updateTime,jdbcType=BIGINT},
+      #{createTime,jdbcType=BIGINT}, #{status,jdbcType=INTEGER})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.user.entity.Org" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into user_org
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="clientId != null" >
+        client_id,
+      </if>
+      <if test="name != null" >
+        name,
+      </if>
+      <if test="pId != null" >
+        p_id,
+      </if>
+      <if test="type != null" >
+        type,
+      </if>
+      <if test="code != null" >
+        code,
+      </if>
+      <if test="remark != null" >
+        remark,
+      </if>
+      <if test="director != null" >
+        director,
+      </if>
+      <if test="logo != null" >
+        logo,
+      </if>
+      <if test="logoIcon != null" >
+        logo_icon,
+      </if>
+      <if test="updateTime != null" >
+        update_time,
+      </if>
+      <if test="createTime != null" >
+        create_time,
+      </if>
+      <if test="status != null" >
+        status,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="clientId != null" >
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null" >
+        #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="pId != null" >
+        #{pId,jdbcType=INTEGER},
+      </if>
+      <if test="type != null" >
+        #{type,jdbcType=INTEGER},
+      </if>
+      <if test="code != null" >
+        #{code,jdbcType=VARCHAR},
+      </if>
+      <if test="remark != null" >
+        #{remark,jdbcType=VARCHAR},
+      </if>
+      <if test="director != null" >
+        #{director,jdbcType=VARCHAR},
+      </if>
+      <if test="logo != null" >
+        #{logo,jdbcType=VARCHAR},
+      </if>
+      <if test="logoIcon != null" >
+        #{logoIcon,jdbcType=VARCHAR},
+      </if>
+      <if test="updateTime != null" >
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+      <if test="createTime != null" >
+        #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="status != null" >
+        #{status,jdbcType=INTEGER},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.user.entity.Org" >
+    update user_org
+    <set >
+      <if test="clientId != null" >
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null" >
+        name = #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="pId != null" >
+        p_id = #{pId,jdbcType=INTEGER},
+      </if>
+      <if test="type != null" >
+        type = #{type,jdbcType=INTEGER},
+      </if>
+      <if test="code != null" >
+        code = #{code,jdbcType=VARCHAR},
+      </if>
+      <if test="remark != null" >
+        remark = #{remark,jdbcType=VARCHAR},
+      </if>
+      <if test="director != null" >
+        director = #{director,jdbcType=VARCHAR},
+      </if>
+      <if test="logo != null" >
+        logo = #{logo,jdbcType=VARCHAR},
+      </if>
+      <if test="logoIcon != null" >
+        logo_icon = #{logoIcon,jdbcType=VARCHAR},
+      </if>
+      <if test="updateTime != null" >
+        update_time = #{updateTime,jdbcType=BIGINT},
+      </if>
+      <if test="createTime != null" >
+        create_time = #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="status != null" >
+        status = #{status,jdbcType=INTEGER},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.user.entity.Org" >
+    update user_org
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      name = #{name,jdbcType=VARCHAR},
+      p_id = #{pId,jdbcType=INTEGER},
+      type = #{type,jdbcType=INTEGER},
+      code = #{code,jdbcType=VARCHAR},
+      remark = #{remark,jdbcType=VARCHAR},
+      director = #{director,jdbcType=VARCHAR},
+      logo = #{logo,jdbcType=VARCHAR},
+      logo_icon = #{logoIcon,jdbcType=VARCHAR},
+      update_time = #{updateTime,jdbcType=BIGINT},
+      create_time = #{createTime,jdbcType=BIGINT},
+      status = #{status,jdbcType=INTEGER}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectAll" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_org
+  </select>
+  <select id="selectByExample" parameterType="cn.jia.user.entity.Org" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_org
+    <where>
+      <if test="clientId != null">
+        (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+      <if test="name != null">
+        and name LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="code != null">
+        and code LIKE CONCAT('%',#{code,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="pId != null">
+        and p_id = #{pId,jdbcType=INTEGER}
+      </if>
+      <if test="type != null">
+        and type = #{type,jdbcType=INTEGER}
+      </if>
+      <if test="remark != null">
+        and remark LIKE CONCAT('%',#{remark,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="status != null">
+        and status = #{status,jdbcType=INTEGER}
+      </if>
+    </where>
+  </select>
+  <select id="findByClientId" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_org
+    where client_id = #{clientId}
+  </select>
+  <select id="findByCode" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_org
+    where code = #{code}
+  </select>
+  <select id="selectByParentId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_org where p_id = #{pId,jdbcType=INTEGER}
+  </select>
+  <select id="selectByUserId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select r.* from user_org r, user_org_rel rr
+    where r.id = rr.org_id and rr.user_id = #{userId,jdbcType=INTEGER}
+  </select>
+  <select id="findFirstChild" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_org where p_id = #{pId,jdbcType=INTEGER} and type in (0,1,2) order by id LIMIT 1
+  </select>
+  <select id="findDirector" resultType="java.lang.String">
+    select director from user_org where p_id = #{orgId,jdbcType=INTEGER} and find_in_set(#{roleId,jdbcType=INTEGER}, role)
+  </select>
+  <select id="findPreOrg" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_org where #{orgId,jdbcType=INTEGER} > id and type in (0,1,2) and
+    p_id = (select p_id from user_org where id = #{orgId,jdbcType=INTEGER}) order by id desc limit 1
+  </select>
+  <select id="findNextOrg" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_org where id > #{orgId,jdbcType=INTEGER} and type in (0,1,2) and
+    p_id = (select p_id from user_org where id = #{orgId,jdbcType=INTEGER}) order by id limit 1
+  </select>
+  <select id="findParentOrg" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_org where id = (select p_id from user_org where id = #{orgId,jdbcType=INTEGER}) and type in (0,1,2)
+  </select>
+</mapper>

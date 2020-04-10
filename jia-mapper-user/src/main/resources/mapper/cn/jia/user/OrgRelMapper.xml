@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.dao.OrgRelMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.user.entity.OrgRel">
+    <result column="user_id" jdbcType="INTEGER" property="userId" />
+    <result column="org_id" jdbcType="INTEGER" property="orgId" />
+    <result column="update_time" jdbcType="INTEGER" property="updateTime" />
+    <result column="create_time" jdbcType="INTEGER" property="createTime" />
+  </resultMap>
+  <insert id="insert" parameterType="cn.jia.user.entity.OrgRel">
+    insert into user_org_rel (user_id, org_id, update_time, 
+      create_time)
+    values (#{userId,jdbcType=INTEGER}, #{orgId,jdbcType=INTEGER}, #{updateTime,jdbcType=INTEGER}, 
+      #{createTime,jdbcType=INTEGER})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.user.entity.OrgRel">
+    insert into user_org_rel
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="userId != null">
+        user_id,
+      </if>
+      <if test="orgId != null">
+        org_id,
+      </if>
+      <if test="updateTime != null">
+        update_time,
+      </if>
+      <if test="createTime != null">
+        create_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="userId != null">
+        #{userId,jdbcType=INTEGER},
+      </if>
+      <if test="orgId != null">
+        #{orgId,jdbcType=INTEGER},
+      </if>
+      <if test="updateTime != null">
+        #{updateTime,jdbcType=INTEGER},
+      </if>
+      <if test="createTime != null">
+        #{createTime,jdbcType=INTEGER},
+      </if>
+    </trim>
+  </insert>
+  
+  <select id="selectByUserId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_org_rel
+    where user_id = #{userId,jdbcType=INTEGER}
+  </select>
+  <select id="selectByOrgId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_org_rel
+    where org_id = #{orgId,jdbcType=INTEGER}
+  </select>
+  <insert id="batchAdd">
+    INSERT INTO user_org_rel(user_id,org_id,update_time,create_time)
+      VALUES 
+      <foreach collection="orgRelList" item="orgRel" separator=",">
+            (#{orgRel.userId},#{orgRel.orgId},#{orgRel.updateTime},#{orgRel.createTime})
+      </foreach>
+  </insert>
+  <delete id="batchDel" parameterType="java.util.List">
+    delete from user_org_rel where
+      <foreach collection="orgRelList" item="orgRel" index="index" separator="or">
+           (user_id = #{orgRel.userId} and org_id = #{orgRel.orgId})
+      </foreach>
+  </delete>
+</mapper>

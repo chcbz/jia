@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Type" content="text/html;charset=UTF-8" />
+    <meta name="renderer" content="webkit" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+    <title>验证</title>
+<!--    <link rel="stylesheet" type="text/css" href="css/themes/default/easyui.css" />-->
+<!--    <link rel="stylesheet" type="text/css" href="css/themes/icon.css" />-->
+    <link rel="stylesheet" type="text/css" href="css/common.css" />
+    <style></style>
+</head>
+
+<body>
+<div>
+    <!-- <div class="footer_wrap">-->
+    <!-- <p><a>联系社会救助公示及查询项目组</a>&nbsp;&nbsp;技术支持：e2tt </p>-->
+    <!-- </div>--></div>
+<script type="text/javascript" src="js/jquery.min.js"></script>
+<!--<script type="text/javascript" src="js/jquery.easyui.min.js"></script>-->
+<!--<script type="text/javascript" src="js/easyui-lang-zh_CN.js"></script>-->
+<script type="text/javascript" src="js/app.js"></script>
+<script type="text/javascript">
+       $(function() {
+            getToken()
+         });
+         /*<![CDATA[*/
+         function getToken(){
+          var code = app.getQueryString('code')
+          var appid = 'wxa2251bed81af2c56'
+          var secret = 'a270b060f3ba92ae55a13a122bafe100'
+          var grant_type = 'authorization_code'
+          var target = 'https://api.weixin.qq.com/sns/oauth2/access_token?appid='+appid+'&secret='+secret+'&code='+code+'&grant_type='+grant_type+''
+         $.ajax({
+          type: "get",
+          url: 'http://query.yahooapis.com/v1/public/yql',
+          dataType: "jsonp",
+          data: {
+          q:"select * from json where url=\'"+target+"'",
+          format:"json"
+          },
+          success: function(msg) {
+            console.log(msg)
+          },
+          error: function() {
+          alert('token获取失败')
+          }
+        });
+         }
+         /*]]>*/
+<!--      var Url = 'https://api.weixin.qq.com'-->
+<!--      function getToken() {-->
+<!--        var code = app.getQueryString('code')-->
+<!--        if(code){-->
+<!--           var appid = 'wxa2251bed81af2c56'-->
+<!--        var secret = 'a270b060f3ba92ae55a13a122bafe100'-->
+<!--        var grant_type = 'authorization_code'-->
+<!--        var data = {-->
+<!--          "code": code,-->
+<!--          "appid": appid,-->
+<!--          "secret": secret,-->
+<!--          "grant_type": grant_type-->
+<!--        }-->
+<!--        $.ajax({-->
+<!--          type: "get",-->
+<!--          url: Url + "/sns/oauth2/access_token",-->
+<!--          dataType: "text",-->
+<!--          data: data,-->
+<!--          success: function(msg) {-->
+<!--            console.log(msg)-->
+<!--            var access_token = msg.access_token-->
+<!--            var openid = msg.openid-->
+<!--            var res = {-->
+<!--              "access_token": access_token,-->
+<!--              "openid": openid-->
+<!--            }-->
+<!--            getPersonInfo(res)-->
+<!--          },-->
+<!--          error: function() {-->
+<!--          alert('token获取失败')-->
+<!--          }-->
+<!--        });-->
+<!--        }-->
+<!--        else{-->
+<!--        alert('未授权')-->
+<!--         window.location.href="http://api.jia.uat.wydiy.com/oauth/login"-->
+<!--        }-->
+<!--      }-->
+<!--      function getPersonInfo(data) {-->
+<!--        $.ajax({-->
+<!--          type: "get",-->
+<!--          url: Url + "/sns/userinfo",-->
+<!--          dataType: "json",-->
+<!--          data: data,-->
+<!--          success: function(msg) {-->
+<!--            console.log(msg)-->
+<!--          },-->
+<!--          error: function() {-->
+<!--           alert('用户信息获取失败')-->
+<!--          }-->
+<!--        });-->
+<!--      }-->
+</script>
+</body>
+
+</html>

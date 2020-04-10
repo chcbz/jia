@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.isp.dao.CmsRowMapper">
+  <select id="selectByPrimaryKey" parameterType="cn.jia.isp.entity.CmsRowDTO" resultType="java.util.HashMap">
+    select *
+    from ${tableName}
+    where id = #{id}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="cn.jia.isp.entity.CmsRowDTO">
+    delete from ${tableName}
+    where id = #{id}
+  </delete>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.CmsRowDTO">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into ${tableName}
+    <foreach collection="rows" index="index" item="item" open="(" separator="," close=")">
+	  ${item.name}       
+    </foreach>
+    <foreach collection="rows" index="index" item="item" open="values (" separator="," close=")">
+	  #{item.value}       
+    </foreach>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.CmsRowDTO">
+    update ${tableName}
+    <set>
+      <foreach collection="rows" index="index" item="item" separator=",">
+		${item.name} = #{item.value}
+      </foreach>
+    </set>
+    where id = #{id}
+  </update>
+  
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.CmsRowExample" resultType="java.util.HashMap">
+     select *
+    from ${name}
+    <where>
+      <foreach collection="rows" index="index" item="item" separator=" and ">
+		${item.name} = #{item.value}
+      </foreach>
+    </where>
+    <if test="orderBy != null">
+      order by ${orderBy}
+    </if>
+  </select>
+  <update id="dropTable" parameterType="cn.jia.isp.entity.CmsTable">  
+	DROP TABLE IF EXISTS ${name} 
+  </update>
+  <update id="createTable" parameterType="cn.jia.isp.entity.CmsTableDTO">
+	CREATE TABLE ${name} (
+	  id int(11) NOT NULL AUTO_INCREMENT,
+	<foreach collection="columns" index="index" item="item">
+	  ${item.name} ${item.dbType}<if test="item.dbPrecision != null">(${item.dbPrecision}</if><if test="item.scale != null">,${item.scale}</if><if test="item.dbPrecision != null">)</if> <if test="item.notnull == 1">NOT NULL</if> <if test="item.defaultValue != null">DEFAULT #{item.defaultValue}</if> COMMENT #{item.remark},
+    </foreach>
+	  PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT=#{remark}
+  </update>
+    <update id="addColumn" parameterType="cn.jia.isp.entity.CmsColumnDTO">
+        ALTER TABLE ${tableName} ADD COLUMN ${name} ${dbType}<if test="dbPrecision != null">(${dbPrecision}</if><if test="scale != null">,${scale}</if><if test="dbPrecision != null">)</if> <if test="notnull == 1">NOT NULL</if> <if test="defaultValue != null">DEFAULT #{defaultValue}</if> COMMENT #{remark}
+    </update>
+    <update id="modifyColumn" parameterType="cn.jia.isp.entity.CmsColumnDTO">
+        ALTER TABLE ${tableName} MODIFY COLUMN ${name} ${dbType}<if test="dbPrecision != null">(${dbPrecision}</if><if test="scale != null">,${scale}</if><if test="dbPrecision != null">)</if> <if test="notnull == 1">NOT NULL</if> <if test="defaultValue != null">DEFAULT #{defaultValue}</if> COMMENT #{remark}
+    </update>
+    <update id="dropColumn" parameterType="cn.jia.isp.entity.CmsColumnDTO">
+        ALTER TABLE ${tableName} DROP COLUMN ${name}
+    </update>
+</mapper>

@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.sms.dao.SmsMessageMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.sms.entity.SmsMessage">
+    <id column="id" jdbcType="INTEGER" property="id" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="template_id" jdbcType="VARCHAR" property="templateId" />
+    <result column="sender" jdbcType="VARCHAR" property="sender" />
+    <result column="receiver" jdbcType="VARCHAR" property="receiver" />
+    <result column="title" jdbcType="VARCHAR" property="title" />
+    <result column="content" jdbcType="VARCHAR" property="content" />
+    <result column="url" jdbcType="VARCHAR" property="url" />
+    <result column="msg_type" jdbcType="INTEGER" property="msgType" />
+    <result column="status" jdbcType="INTEGER" property="status" />
+    <result column="time" jdbcType="BIGINT" property="time" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    id, client_id, template_id, sender, receiver, title, content, url, msg_type, status, 
+    time
+  </sql>
+  <select id="selectByPrimaryKey" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from sms_message
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer">
+    delete from sms_message
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.sms.entity.SmsMessage">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into sms_message (client_id, template_id, sender, 
+      receiver, title, content, 
+      url, msg_type, status, 
+      time)
+    values (#{clientId,jdbcType=VARCHAR}, #{templateId,jdbcType=VARCHAR}, #{sender,jdbcType=VARCHAR}, 
+      #{receiver,jdbcType=VARCHAR}, #{title,jdbcType=VARCHAR}, #{content,jdbcType=VARCHAR}, 
+      #{url,jdbcType=VARCHAR}, #{msgType,jdbcType=INTEGER}, #{status,jdbcType=INTEGER}, 
+      #{time,jdbcType=BIGINT})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.sms.entity.SmsMessage">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into sms_message
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        client_id,
+      </if>
+      <if test="templateId != null">
+        template_id,
+      </if>
+      <if test="sender != null">
+        sender,
+      </if>
+      <if test="receiver != null">
+        receiver,
+      </if>
+      <if test="title != null">
+        title,
+      </if>
+      <if test="content != null">
+        content,
+      </if>
+      <if test="url != null">
+        url,
+      </if>
+      <if test="msgType != null">
+        msg_type,
+      </if>
+      <if test="status != null">
+        status,
+      </if>
+      <if test="time != null">
+        time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="templateId != null">
+        #{templateId,jdbcType=VARCHAR},
+      </if>
+      <if test="sender != null">
+        #{sender,jdbcType=VARCHAR},
+      </if>
+      <if test="receiver != null">
+        #{receiver,jdbcType=VARCHAR},
+      </if>
+      <if test="title != null">
+        #{title,jdbcType=VARCHAR},
+      </if>
+      <if test="content != null">
+        #{content,jdbcType=VARCHAR},
+      </if>
+      <if test="url != null">
+        #{url,jdbcType=VARCHAR},
+      </if>
+      <if test="msgType != null">
+        #{msgType,jdbcType=INTEGER},
+      </if>
+      <if test="status != null">
+        #{status,jdbcType=INTEGER},
+      </if>
+      <if test="time != null">
+        #{time,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.sms.entity.SmsMessage">
+    update sms_message
+    <set>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="templateId != null">
+        template_id = #{templateId,jdbcType=VARCHAR},
+      </if>
+      <if test="sender != null">
+        sender = #{sender,jdbcType=VARCHAR},
+      </if>
+      <if test="receiver != null">
+        receiver = #{receiver,jdbcType=VARCHAR},
+      </if>
+      <if test="title != null">
+        title = #{title,jdbcType=VARCHAR},
+      </if>
+      <if test="content != null">
+        content = #{content,jdbcType=VARCHAR},
+      </if>
+      <if test="url != null">
+        url = #{url,jdbcType=VARCHAR},
+      </if>
+      <if test="msgType != null">
+        msg_type = #{msgType,jdbcType=INTEGER},
+      </if>
+      <if test="status != null">
+        status = #{status,jdbcType=INTEGER},
+      </if>
+      <if test="time != null">
+        time = #{time,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.sms.entity.SmsMessage">
+    update sms_message
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      template_id = #{templateId,jdbcType=VARCHAR},
+      sender = #{sender,jdbcType=VARCHAR},
+      receiver = #{receiver,jdbcType=VARCHAR},
+      title = #{title,jdbcType=VARCHAR},
+      content = #{content,jdbcType=VARCHAR},
+      url = #{url,jdbcType=VARCHAR},
+      msg_type = #{msgType,jdbcType=INTEGER},
+      status = #{status,jdbcType=INTEGER},
+      time = #{time,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+</mapper>

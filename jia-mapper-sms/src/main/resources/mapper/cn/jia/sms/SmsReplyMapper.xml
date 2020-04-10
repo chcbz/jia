@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.sms.dao.SmsReplyMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.sms.entity.SmsReply">
+    <id column="id" jdbcType="INTEGER" property="id" />
+    <result column="msgid" jdbcType="VARCHAR" property="msgid" />
+    <result column="mobile" jdbcType="VARCHAR" property="mobile" />
+    <result column="xh" jdbcType="VARCHAR" property="xh" />
+    <result column="content" jdbcType="VARCHAR" property="content" />
+    <result column="time" jdbcType="BIGINT" property="time" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    id, msgid, mobile, xh, content, time
+  </sql>
+  <select id="selectByPrimaryKey" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from sms_reply
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer">
+    delete from sms_reply
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.sms.entity.SmsReply">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into sms_reply (msgid, mobile, xh, 
+      content, time)
+    values (#{msgid,jdbcType=VARCHAR}, #{mobile,jdbcType=VARCHAR}, #{xh,jdbcType=VARCHAR}, 
+      #{content,jdbcType=VARCHAR}, #{time,jdbcType=BIGINT})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.sms.entity.SmsReply">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into sms_reply
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="msgid != null">
+        msgid,
+      </if>
+      <if test="mobile != null">
+        mobile,
+      </if>
+      <if test="xh != null">
+        xh,
+      </if>
+      <if test="content != null">
+        content,
+      </if>
+      <if test="time != null">
+        time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="msgid != null">
+        #{msgid,jdbcType=VARCHAR},
+      </if>
+      <if test="mobile != null">
+        #{mobile,jdbcType=VARCHAR},
+      </if>
+      <if test="xh != null">
+        #{xh,jdbcType=VARCHAR},
+      </if>
+      <if test="content != null">
+        #{content,jdbcType=VARCHAR},
+      </if>
+      <if test="time != null">
+        #{time,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.sms.entity.SmsReply">
+    update sms_reply
+    <set>
+      <if test="msgid != null">
+        msgid = #{msgid,jdbcType=VARCHAR},
+      </if>
+      <if test="mobile != null">
+        mobile = #{mobile,jdbcType=VARCHAR},
+      </if>
+      <if test="xh != null">
+        xh = #{xh,jdbcType=VARCHAR},
+      </if>
+      <if test="content != null">
+        content = #{content,jdbcType=VARCHAR},
+      </if>
+      <if test="time != null">
+        time = #{time,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.sms.entity.SmsReply">
+    update sms_reply
+    set msgid = #{msgid,jdbcType=VARCHAR},
+      mobile = #{mobile,jdbcType=VARCHAR},
+      xh = #{xh,jdbcType=VARCHAR},
+      content = #{content,jdbcType=VARCHAR},
+      time = #{time,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  
+  <select id="selectByExamplePage" parameterType="cn.jia.sms.entity.SmsReply" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from sms_reply
+    <where>
+      <if test="msgid != null">
+        msgid = #{msgid,jdbcType=VARCHAR}
+      </if>
+      <if test="mobile != null">
+        and mobile = #{mobile,jdbcType=VARCHAR}
+      </if>
+    </where>
+    order by time desc
+  </select>
+</mapper>

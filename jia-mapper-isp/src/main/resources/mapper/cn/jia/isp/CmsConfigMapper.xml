@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.isp.dao.CmsConfigMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.CmsConfig">
+    <id column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="table_prefix" jdbcType="VARCHAR" property="tablePrefix" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    client_id, table_prefix
+  </sql>
+  <select id="selectByPrimaryKey" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from cms_config
+    where client_id = #{clientId,jdbcType=VARCHAR}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.String">
+    delete from cms_config
+    where client_id = #{clientId,jdbcType=VARCHAR}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.CmsConfig">
+    insert into cms_config (client_id, table_prefix)
+    values (#{clientId,jdbcType=VARCHAR}, #{tablePrefix,jdbcType=VARCHAR})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.CmsConfig">
+    insert into cms_config
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        client_id,
+      </if>
+      <if test="tablePrefix != null">
+        table_prefix,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="tablePrefix != null">
+        #{tablePrefix,jdbcType=VARCHAR},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.CmsConfig">
+    update cms_config
+    <set>
+      <if test="tablePrefix != null">
+        table_prefix = #{tablePrefix,jdbcType=VARCHAR},
+      </if>
+    </set>
+    where client_id = #{clientId,jdbcType=VARCHAR}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.CmsConfig">
+    update cms_config
+    set table_prefix = #{tablePrefix,jdbcType=VARCHAR}
+    where client_id = #{clientId,jdbcType=VARCHAR}
+  </update>
+</mapper>

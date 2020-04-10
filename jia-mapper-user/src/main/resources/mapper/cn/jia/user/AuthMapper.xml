@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.dao.AuthMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.user.entity.Auth">
+    <result column="role_id" jdbcType="INTEGER" property="roleId" />
+    <result column="perms_id" jdbcType="INTEGER" property="permsId" />
+    <result column="update_time" jdbcType="INTEGER" property="updateTime" />
+    <result column="create_time" jdbcType="INTEGER" property="createTime" />
+  </resultMap>
+  <insert id="insert" parameterType="cn.jia.user.entity.Auth">
+    insert into user_auth (role_id, perms_id, update_time, 
+      create_time)
+    values (#{roleId,jdbcType=INTEGER}, #{permsId,jdbcType=INTEGER}, #{updateTime,jdbcType=INTEGER}, 
+      #{createTime,jdbcType=INTEGER})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.user.entity.Auth">
+    insert into user_auth
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="roleId != null">
+        role_id,
+      </if>
+      <if test="permsId != null">
+        perms_id,
+      </if>
+      <if test="updateTime != null">
+        update_time,
+      </if>
+      <if test="createTime != null">
+        create_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="roleId != null">
+        #{roleId,jdbcType=INTEGER},
+      </if>
+      <if test="permsId != null">
+        #{permsId,jdbcType=INTEGER},
+      </if>
+      <if test="updateTime != null">
+        #{updateTime,jdbcType=INTEGER},
+      </if>
+      <if test="createTime != null">
+        #{createTime,jdbcType=INTEGER},
+      </if>
+    </trim>
+  </insert>
+  
+  <select id="selectByRoleId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_auth
+    where role_id = #{roleId,jdbcType=INTEGER}
+  </select>
+  <select id="selectPermsByRole" parameterType="java.lang.Integer" resultType="cn.jia.core.entity.Action">
+    select u.*
+    from core_action u left join user_auth r on u.id = r.perms_id
+    where r.role_id = #{roleId,jdbcType=INTEGER}
+  </select>
+  <select id="selectPermsByUser" resultType="cn.jia.core.entity.Action">
+    select DISTINCT u.*
+    from core_action u left join user_auth r on u.id = r.perms_id
+    left join user_role_rel rr on r.role_id = rr.role_id
+    where (rr.user_id = #{userId,jdbcType=INTEGER} or
+    rr.group_id in (select group_id from user_group_rel where user_id = #{userId,jdbcType=INTEGER}))
+    and (rr.client_id = #{clientId,jdbcType=VARCHAR} or rr.client_id is null)
+  </select>
+  <insert id="batchAdd">
+    INSERT INTO user_auth(role_id, perms_id,update_time,create_time)
+      VALUES 
+      <foreach collection="authList" item="auth" separator=",">
+            (#{auth.roleId},#{auth.permsId},#{auth.updateTime},#{auth.createTime})
+      </foreach>
+  </insert>
+  <delete id="batchDel" parameterType="java.util.List">
+    delete from user_auth where
+      <foreach collection="authList" item="auth" index="index" separator="or">
+           (role_id = #{auth.roleId} and perms_id = #{auth.permsId})
+      </foreach>
+  </delete>
+</mapper>

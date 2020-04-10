@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE generatorConfiguration
+  PUBLIC "-//mybatis.org//DTD MyBatis Generator Configuration 1.0//EN"
+  "http://mybatis.org/dtd/mybatis-generator-config_1_0.dtd">
+
+<generatorConfiguration>
+  
+  <!-- 配置mysql 驱动jar包路径.用了绝对路径 -->
+  <classPathEntry location="C:\WorkSpace\project\myBatisGenerator\WebContent\WEB-INF\lib\mysql-connector-java-5.1.22-bin.jar" />
+
+  <context id="zytexpress_mysql_tables" targetRuntime="MyBatis3">
+  
+    <!-- 为了防止生成的代码中有很多注释，比较难看，加入下面的配置控制 -->
+    <commentGenerator>
+      <property name="suppressAllComments" value="true" />
+      <property name="suppressDate" value="true" />
+    </commentGenerator>
+    <!-- 注释控制完毕 -->
+  
+    <!-- 数据库连接 -->
+    <jdbcConnection driverClass="com.mysql.jdbc.Driver"
+        connectionURL="jdbc:mysql://demo.jia.cn:3306/zytexpress?characterEncoding=utf8"
+        userId="zytexpress"
+        password="hHNTdiwxHQ">
+    </jdbcConnection>
+
+    <javaTypeResolver >
+      <property name="forceBigDecimals" value="false" />
+    </javaTypeResolver>
+    
+    <!-- 数据表对应的model 层  -->
+    <javaModelGenerator targetPackage="cn.jia.core.entity" targetProject="jia-core/src/main/java">
+      <property name="enableSubPackages" value="true" />
+      <property name="trimStrings" value="true" />
+    </javaModelGenerator>
+    
+    <!-- sql mapper 隐射配置文件 -->
+    <sqlMapGenerator targetPackage="cn.jia.core.mapper"  targetProject="jia-core/src/main/java">
+      <property name="enableSubPackages" value="true" />
+    </sqlMapGenerator>
+    
+    <!-- 在ibatis2 中是dao层，但在mybatis3中，其实就是mapper接口 -->
+    <javaClientGenerator type="XMLMAPPER" targetPackage="cn.jia.core.dao"  targetProject="jia-core/src/main/java">
+      <property name="enableSubPackages" value="true" />
+    </javaClientGenerator>
+    <!-- 
+    <table schema="zytexpress" tableName="c_coupon" domainObjectName="Coupon">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>
+    </table>
+     
+    <table schema="zytexpress" tableName="c_coupon_channel" domainObjectName="CouponChannel">     
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>
+    </table>
+    
+    <table schema="zytexpress" tableName="c_coupon_species" domainObjectName="CouponSpecies">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="d_assessment" domainObjectName="Assessment">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="d_car" domainObjectName="Car">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="d_car_type" domainObjectName="CarType">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="d_express_type" domainObjectName="ExpressType">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="d_driver" domainObjectName="Driver">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="d_driver_level" domainObjectName="DriverLevel">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="f_finance" domainObjectName="Finance">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="o_orders_user" domainObjectName="OrdersUser">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="s_admin" domainObjectName="Admin">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_auth" domainObjectName="Auth">     
+    </table>
+    <table schema="zytexpress" tableName="s_img" domainObjectName="Img">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="s_logs" domainObjectName="Logs">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_menu" domainObjectName="Menu">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_message_driver" domainObjectName="MessageDriver">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_message_user" domainObjectName="MessageUser">     
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>
+    </table>
+    
+    <table schema="zytexpress" tableName="s_role" domainObjectName="Role">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_rule" domainObjectName="Rule">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_share" domainObjectName="Share">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_sms_code" domainObjectName="SmsCode">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_suggestions" domainObjectName="Suggestions">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_ver" domainObjectName="Ver">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="s_way" domainObjectName="Way">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    
+    <table schema="zytexpress" tableName="u_address" domainObjectName="Address">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>     
+    </table>
+    <table schema="zytexpress" tableName="u_user" domainObjectName="User">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="s_dict" domainObjectName="Dict">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="d_driver_track" domainObjectName="DriverTrack">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="o_order_track" domainObjectName="OrderTrack">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="s_perms" domainObjectName="Perms">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="u_company" domainObjectName="Company">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="u_pay_account" domainObjectName="PayAccount">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="s_referral" domainObjectName="Referral">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+    <table schema="zytexpress" tableName="s_menu_fav" domainObjectName="MenuFav">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+     <table schema="zytexpress" tableName="order_user_driver" domainObjectName="OrderUserDriver">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+     -->
+	<table schema="zytexpress" tableName="order_driver_car" domainObjectName="OrderDriverCar">
+      <generatedKey column="id" sqlStatement="Mysql" identity="true"/>    
+    </table>
+  </context>
+</generatorConfiguration>

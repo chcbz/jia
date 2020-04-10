@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.dao.IspSmbVDirMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspSmbVDir" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="server_id" property="serverId" jdbcType="INTEGER" />
+    <result column="user" property="user" jdbcType="VARCHAR" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="path" property="path" jdbcType="VARCHAR" />
+    <result column="available" property="available" jdbcType="VARCHAR" />
+    <result column="writable" property="writable" jdbcType="VARCHAR" />
+    <result column="browseable" property="browseable" jdbcType="VARCHAR" />
+    <result column="printable" property="printable" jdbcType="VARCHAR" />
+    <result column="comment" property="comment" jdbcType="VARCHAR" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, client_id, server_id, user, name, path, available, writable, browseable, printable, 
+    comment, create_time, update_time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from isp_smb_vdir
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from isp_smb_vdir
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.IspSmbVDir" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into isp_smb_vdir (client_id, server_id, user, 
+      name, path, available, 
+      writable, browseable, printable, 
+      comment, create_time, update_time
+      )
+    values (#{clientId,jdbcType=VARCHAR}, #{serverId,jdbcType=INTEGER}, #{user,jdbcType=VARCHAR}, 
+      #{name,jdbcType=VARCHAR}, #{path,jdbcType=VARCHAR}, #{available,jdbcType=VARCHAR}, 
+      #{writable,jdbcType=VARCHAR}, #{browseable,jdbcType=VARCHAR}, #{printable,jdbcType=VARCHAR}, 
+      #{comment,jdbcType=VARCHAR}, #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT}
+      )
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.IspSmbVDir" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into isp_smb_vdir
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="clientId != null" >
+        client_id,
+      </if>
+      <if test="serverId != null" >
+        server_id,
+      </if>
+      <if test="user != null" >
+        user,
+      </if>
+      <if test="name != null" >
+        name,
+      </if>
+      <if test="path != null" >
+        path,
+      </if>
+      <if test="available != null" >
+        available,
+      </if>
+      <if test="writable != null" >
+        writable,
+      </if>
+      <if test="browseable != null" >
+        browseable,
+      </if>
+      <if test="printable != null" >
+        printable,
+      </if>
+      <if test="comment != null" >
+        comment,
+      </if>
+      <if test="createTime != null" >
+        create_time,
+      </if>
+      <if test="updateTime != null" >
+        update_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="clientId != null" >
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="serverId != null" >
+        #{serverId,jdbcType=INTEGER},
+      </if>
+      <if test="user != null" >
+        #{user,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null" >
+        #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="path != null" >
+        #{path,jdbcType=VARCHAR},
+      </if>
+      <if test="available != null" >
+        #{available,jdbcType=VARCHAR},
+      </if>
+      <if test="writable != null" >
+        #{writable,jdbcType=VARCHAR},
+      </if>
+      <if test="browseable != null" >
+        #{browseable,jdbcType=VARCHAR},
+      </if>
+      <if test="printable != null" >
+        #{printable,jdbcType=VARCHAR},
+      </if>
+      <if test="comment != null" >
+        #{comment,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null" >
+        #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.IspSmbVDir" >
+    update isp_smb_vdir
+    <set >
+      <if test="clientId != null" >
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="serverId != null" >
+        server_id = #{serverId,jdbcType=INTEGER},
+      </if>
+      <if test="user != null" >
+        user = #{user,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null" >
+        name = #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="path != null" >
+        path = #{path,jdbcType=VARCHAR},
+      </if>
+      <if test="available != null" >
+        available = #{available,jdbcType=VARCHAR},
+      </if>
+      <if test="writable != null" >
+        writable = #{writable,jdbcType=VARCHAR},
+      </if>
+      <if test="browseable != null" >
+        browseable = #{browseable,jdbcType=VARCHAR},
+      </if>
+      <if test="printable != null" >
+        printable = #{printable,jdbcType=VARCHAR},
+      </if>
+      <if test="comment != null" >
+        comment = #{comment,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null" >
+        create_time = #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        update_time = #{updateTime,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.IspSmbVDir" >
+    update isp_smb_vdir
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      server_id = #{serverId,jdbcType=INTEGER},
+      user = #{user,jdbcType=VARCHAR},
+      name = #{name,jdbcType=VARCHAR},
+      path = #{path,jdbcType=VARCHAR},
+      available = #{available,jdbcType=VARCHAR},
+      writable = #{writable,jdbcType=VARCHAR},
+      browseable = #{browseable,jdbcType=VARCHAR},
+      printable = #{printable,jdbcType=VARCHAR},
+      comment = #{comment,jdbcType=VARCHAR},
+      create_time = #{createTime,jdbcType=BIGINT},
+      update_time = #{updateTime,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.IspSmbVDir" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from isp_smb_vdir
+    <where>
+      <if test="user != null">
+        user LIKE CONCAT('%',#{user,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="name != null">
+        and name LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="serverId != null">
+        and server_id = #{serverId,jdbcType=INTEGER}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

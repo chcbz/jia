@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.isp.dao.CarBrandAudiMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.CarBrandAudi">
+    <id column="id" jdbcType="INTEGER" property="id" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="brand_mf" jdbcType="INTEGER" property="brandMf" />
+    <result column="car_series" jdbcType="VARCHAR" property="carSeries" />
+    <result column="abbr" jdbcType="VARCHAR" property="abbr" />
+    <result column="initials" jdbcType="VARCHAR" property="initials" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    id, client_id, brand_mf, car_series, abbr, initials
+  </sql>
+  <select id="selectByPrimaryKey" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from car_brand_audi
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer">
+    delete from car_brand_audi
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.CarBrandAudi">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into car_brand_audi (client_id, brand_mf, car_series, 
+      abbr, initials)
+    values (#{clientId,jdbcType=VARCHAR}, #{brandMf,jdbcType=INTEGER}, #{carSeries,jdbcType=VARCHAR}, 
+      #{abbr,jdbcType=VARCHAR}, #{initials,jdbcType=VARCHAR})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.CarBrandAudi">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into car_brand_audi
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        client_id,
+      </if>
+      <if test="brandMf != null">
+        brand_mf,
+      </if>
+      <if test="carSeries != null">
+        car_series,
+      </if>
+      <if test="abbr != null">
+        abbr,
+      </if>
+      <if test="initials != null">
+        initials,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="brandMf != null">
+        #{brandMf,jdbcType=INTEGER},
+      </if>
+      <if test="carSeries != null">
+        #{carSeries,jdbcType=VARCHAR},
+      </if>
+      <if test="abbr != null">
+        #{abbr,jdbcType=VARCHAR},
+      </if>
+      <if test="initials != null">
+        #{initials,jdbcType=VARCHAR},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.CarBrandAudi">
+    update car_brand_audi
+    <set>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="brandMf != null">
+        brand_mf = #{brandMf,jdbcType=INTEGER},
+      </if>
+      <if test="carSeries != null">
+        car_series = #{carSeries,jdbcType=VARCHAR},
+      </if>
+      <if test="abbr != null">
+        abbr = #{abbr,jdbcType=VARCHAR},
+      </if>
+      <if test="initials != null">
+        initials = #{initials,jdbcType=VARCHAR},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.CarBrandAudi">
+    update car_brand_audi
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      brand_mf = #{brandMf,jdbcType=INTEGER},
+      car_series = #{carSeries,jdbcType=VARCHAR},
+      abbr = #{abbr,jdbcType=VARCHAR},
+      initials = #{initials,jdbcType=VARCHAR}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.CarBrandAudi" resultMap="BaseResultMap">
+     select 
+    <include refid="Base_Column_List" />
+    from car_brand_audi
+    <where>
+      <if test="brandMf != null">
+        brand_mf = #{brandMf,jdbcType=INTEGER}
+      </if>
+      <if test="carSeries != null">
+        and car_series LIKE CONCAT('%',#{carSeries,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="abbr != null">
+        and abbr LIKE CONCAT('%',#{abbr,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="initials != null">
+        and initials = #{initials,jdbcType=CHAR}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=CHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.material.dao.VoteQuestionMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.material.entity.VoteQuestion" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="vote_id" property="voteId" jdbcType="INTEGER" />
+    <result column="title" property="title" jdbcType="VARCHAR" />
+    <result column="multi" property="multi" jdbcType="INTEGER" />
+    <result column="point" property="point" jdbcType="INTEGER" />
+    <result column="opt" property="opt" jdbcType="VARCHAR" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, vote_id, title, multi, point, opt
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from mat_vote_question
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from mat_vote_question
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.material.entity.VoteQuestion" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into mat_vote_question (vote_id, title, multi, 
+      point, opt)
+    values (#{voteId,jdbcType=INTEGER}, #{title,jdbcType=VARCHAR}, #{multi,jdbcType=INTEGER}, 
+      #{point,jdbcType=INTEGER}, #{opt,jdbcType=VARCHAR})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.material.entity.VoteQuestion" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into mat_vote_question
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="voteId != null" >
+        vote_id,
+      </if>
+      <if test="title != null" >
+        title,
+      </if>
+      <if test="multi != null" >
+        multi,
+      </if>
+      <if test="point != null" >
+        point,
+      </if>
+      <if test="opt != null" >
+        opt,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="voteId != null" >
+        #{voteId,jdbcType=INTEGER},
+      </if>
+      <if test="title != null" >
+        #{title,jdbcType=VARCHAR},
+      </if>
+      <if test="multi != null" >
+        #{multi,jdbcType=INTEGER},
+      </if>
+      <if test="point != null" >
+        #{point,jdbcType=INTEGER},
+      </if>
+      <if test="opt != null" >
+        #{opt,jdbcType=VARCHAR},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.material.entity.VoteQuestion" >
+    update mat_vote_question
+    <set >
+      <if test="voteId != null" >
+        vote_id = #{voteId,jdbcType=INTEGER},
+      </if>
+      <if test="title != null" >
+        title = #{title,jdbcType=VARCHAR},
+      </if>
+      <if test="multi != null" >
+        multi = #{multi,jdbcType=INTEGER},
+      </if>
+      <if test="point != null" >
+        point = #{point,jdbcType=INTEGER},
+      </if>
+      <if test="opt != null" >
+        opt = #{opt,jdbcType=VARCHAR},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.material.entity.VoteQuestion" >
+    update mat_vote_question
+    set vote_id = #{voteId,jdbcType=INTEGER},
+      title = #{title,jdbcType=VARCHAR},
+      multi = #{multi,jdbcType=INTEGER},
+      point = #{point,jdbcType=INTEGER},
+      opt = #{opt,jdbcType=VARCHAR}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectByVoteId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from mat_vote_question
+    where vote_id = #{voteId,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByVoteId" parameterType="java.lang.Integer">
+    delete from mat_vote_question
+    where vote_id = #{voteId,jdbcType=INTEGER}
+  </delete>
+  <select id="selectNoTick" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from mat_vote_question
+    where id not in (select question_id from mat_vote_tick where jiacn = #{jiacn})
+    limit 1
+  </select>
+</mapper>

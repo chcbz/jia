@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.dao.DnsZoneMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.DnsZone" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="zone" property="zone" jdbcType="VARCHAR" />
+    <result column="key_name" property="keyName" jdbcType="VARCHAR" />
+    <result column="key_value" property="keyValue" jdbcType="VARCHAR" />
+    <result column="create_time" property="createTime" jdbcType="TIMESTAMP" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, zone, key_name, key_value, create_time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from dns_zone
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <select id="selectByExample" resultMap="BaseResultMap" parameterType="cn.jia.isp.entity.DnsZone" >
+    select 
+    <include refid="Base_Column_List" />
+    from dns_zone
+    <where>
+      <if test="id != null" >
+        and id = #{id,jdbcType=INTEGER}
+      </if>
+      <if test="zone != null" >
+        and zone = #{zone,jdbcType=VARCHAR}
+      </if>
+      <if test="keyName != null" >
+        and key_name = #{keyName,jdbcType=VARCHAR}
+      </if>
+      <if test="keyValue != null" >
+        and key_value = #{keyValue,jdbcType=VARCHAR}
+      </if>
+    </where>
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from dns_zone
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.DnsZone" >
+    insert into dns_zone (id, zone, key_name, 
+      key_value, create_time)
+    values (#{id,jdbcType=INTEGER}, #{zone,jdbcType=VARCHAR}, #{keyName,jdbcType=VARCHAR}, 
+      #{keyValue,jdbcType=VARCHAR}, #{createTime,jdbcType=TIMESTAMP})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.DnsZone" >
+    insert into dns_zone
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="id != null" >
+        id,
+      </if>
+      <if test="zone != null" >
+        zone,
+      </if>
+      <if test="keyName != null" >
+        key_name,
+      </if>
+      <if test="keyValue != null" >
+        key_value,
+      </if>
+      <if test="createTime != null" >
+        create_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="id != null" >
+        #{id,jdbcType=INTEGER},
+      </if>
+      <if test="zone != null" >
+        #{zone,jdbcType=VARCHAR},
+      </if>
+      <if test="keyName != null" >
+        #{keyName,jdbcType=VARCHAR},
+      </if>
+      <if test="keyValue != null" >
+        #{keyValue,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null" >
+        #{createTime,jdbcType=TIMESTAMP},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.DnsZone" >
+    update dns_zone
+    <set >
+      <if test="zone != null" >
+        zone = #{zone,jdbcType=VARCHAR},
+      </if>
+      <if test="keyName != null" >
+        key_name = #{keyName,jdbcType=VARCHAR},
+      </if>
+      <if test="keyValue != null" >
+        key_value = #{keyValue,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null" >
+        create_time = #{createTime,jdbcType=TIMESTAMP},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.DnsZone" >
+    update dns_zone
+    set zone = #{zone,jdbcType=VARCHAR},
+      key_name = #{keyName,jdbcType=VARCHAR},
+      key_value = #{keyValue,jdbcType=VARCHAR},
+      create_time = #{createTime,jdbcType=TIMESTAMP}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+</mapper>

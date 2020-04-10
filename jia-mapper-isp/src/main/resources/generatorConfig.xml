@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE generatorConfiguration PUBLIC "-//mybatis.org//DTD MyBatis Generator Configuration 1.0//EN" "http://mybatis.org/dtd/mybatis-generator-config_1_0.dtd">
+
+<generatorConfiguration>
+
+	<!-- 配置mysql 驱动jar包路径.用了绝对路径 -->
+	<classPathEntry location="D:\workspace\project\mysql-connector-java-5.1.26.jar" />
+
+	<context id="jia-mapper-isp_mysql_tables" targetRuntime="MyBatis3">
+
+		<!-- 为了防止生成的代码中有很多注释，比较难看，加入下面的配置控制 -->
+		<commentGenerator>
+			<property name="suppressAllComments" value="true" />
+			<property name="suppressDate" value="true" />
+		</commentGenerator>
+		<!-- 注释控制完毕 -->
+
+		<!-- 数据库连接 -->
+		<jdbcConnection driverClass="com.mysql.jdbc.Driver" connectionURL="jdbc:mysql://wydiy.com:3306/isp?characterEncoding=utf8"
+			userId="isp" password="mymail321">
+		</jdbcConnection>
+
+		<javaTypeResolver>
+			<property name="forceBigDecimals" value="false" />
+		</javaTypeResolver>
+
+		<!-- 数据表对应的model 层 -->
+		<javaModelGenerator targetPackage="cn.jia.isp.entity" targetProject="src/main/java">
+			<property name="enableSubPackages" value="true" />
+			<property name="trimStrings" value="true" />
+		</javaModelGenerator>
+
+		<!-- sql mapper 隐射配置文件 -->
+		<sqlMapGenerator targetPackage="mapper.cn.jia.isp" targetProject="src/main/resources">
+			<property name="enableSubPackages" value="true" />
+		</sqlMapGenerator>
+
+		<!-- 在ibatis2 中是dao层，但在mybatis3中，其实就是mapper接口 -->
+		<javaClientGenerator type="XMLMAPPER" targetPackage="cn.jia.isp.dao" targetProject="src/main/java">
+			<property name="enableSubPackages" value="true" />
+		</javaClientGenerator>
+		<!-- 
+		<table schema="isp" tableName="car_brand" domainObjectName="CarBrand" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<table schema="isp" tableName="car_brand_audi" domainObjectName="CarBrandAudi" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<table schema="isp" tableName="car_brand_mf" domainObjectName="CarBrandMf" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<table schema="isp" tableName="car_brand_version" domainObjectName="CarBrandVersion" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<table schema="isp" tableName="cms_config" domainObjectName="CmsConfig" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+		</table>
+		<table schema="isp" tableName="cms_table" domainObjectName="CmsTable" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		-->
+		<table schema="isp" tableName="cms_column" domainObjectName="CmsColumn" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<!--
+		<table schema="isp" tableName="isp_server" domainObjectName="IspServer" enableCountByExample="false"
+			   enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<table schema="isp" tableName="isp_domain" domainObjectName="IspDomain" enableCountByExample="false"
+			   enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<table schema="isp" tableName="isp_smb_vdir" domainObjectName="IspSmbVDir" enableCountByExample="false"
+			   enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		-->
+	</context>
+</generatorConfiguration>

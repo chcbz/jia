@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:th="http://www.thymeleaf.org" xmlns:wb="http://open.weibo.com/wb">
+<head>
+    <meta charset="utf-8"/>
+    <meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/>
+    <meta name="renderer" content="webkit"/>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=0"/>
+    <title>登录</title>
+    <link rel="stylesheet" type="text/css" href="css/themes/default/easyui.css"/>
+    <link rel="stylesheet" type="text/css" href="css/themes/icon.css"/>
+    <link rel="stylesheet" type="text/css" href="css/common.css"/>
+    <link rel="stylesheet" type="text/css" href="css/icon.css"/>
+    <link rel="stylesheet" type="text/css" href="css/login.css"/>
+    <style></style>
+</head>
+<body>
+<!--<img style="height: 50px; position: absolute; left: 20px; top: 20px;" th:src="'data:image/jpeg;base64,'+${orgLogo}" />-->
+<div id="wrapper">
+    <div class="aw-login-box">
+        <div class="mod-body clearfix">
+            <div class="content " id="content_wrap">
+                <p class="title">用户登录</p>
+                <ul>
+                    <li>
+                        <form name="login_form_password" class="s_form" method="post" action="login" onkeydown="if(event.keyCode=='13') return login();">
+                            <input type="hidden" name="loginType" value="password" />
+                            <table>
+                                <tr>
+                                    <td class="s_form_title">
+                                        <span>用户名</span>
+                                    </td>
+                                    <td class="s_form_content">
+                                        <input type="text" name="username" class="easyui-textbox" placeholder="用户名"/>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="s_form_title">
+                                        <span>密码</span>
+                                    </td>
+                                    <td class="s_form_content">
+                                        <input type="password" name="password" class="easyui-textbox" placeholder="密码"/>
+                                    </td>
+                                </tr>
+                            </table>
+                        </form>
+                        <form style="display:none;" name="login_form_phone" class="s_form" method="post" action="login" onkeydown="if(event.keyCode=='13') return login();">
+                            <input type="hidden" name="loginType" value="phone" />
+                            <table>
+                                <tr>
+                                    <td class="s_form_title">
+                                        <span>手机号码</span>
+                                    </td>
+                                    <td class="s_form_content">
+                                        <input id="telephoneNumber" type="text" name="username" class="easyui-textbox" placeholder="手机号码"/>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="s_form_title">
+                                        <span>验证码</span>
+                                    </td>
+                                    <td class="s_form_content">
+                                        <input type="text" name="password" id="telephoneNumberV" class="easyui-textbox" placeholder="手机号码"/>
+                                        <button type="button" class="btn btn-large btn-danger" id="phoneCode" onclick="app.createsmsCode()">获取验证码</button>
+                                    </td>
+                                </tr>
+                            </table>
+                        </form>
+                    </li>
+                    <li class="last">
+                        <!--  <wb:login-button type="3,2" onlogin="login" onlogout="logout">登录按钮</wb:login-button>-->
+                        <div id="errorDiv" th:inline="text" style="height: 30px; text-align: left; color: red; margin: -20px 0 10px;">[[${error == null ? '' : error}]]</div>
+                        <button type="button" class="pull-left btn btn-large btn-primary" onclick="return login()">登录 </button>
+                        <a id="loginTypeA" href="javascript:void(0);" style="float: left;" rel="phone" onclick="changeLoginType()">手机登录</a>
+                        <!--	<label><input type="checkbox" value="1" name="net_auto_login" />记住我</label>-->
+                        <a href="resetPassword" style="float: right;">忘记密码</a>
+                    </li>
+                    <li style="display: grid;text-align: left;">
+                        <div style="height: 60px; line-height: 60px; text-align: center;">
+<!--                            <span style="display: inline-block; width: 58px; border-top: 1px solid #ccc ;"></span>-->
+                            <span style="color: #686868; vertical-align: -5px;">第三方账号登录</span>
+<!--                            <span style="display: inline-block; width: 58px; border-top: 1px solid #ccc ;"></span>-->
+                        </div>
+                        <div>
+                            <div class="other_login textCenter" onclick="otherLogin('weChat')">
+                                <img th:src="@{'image/wechat.png'}"/>
+                            </div>
+                            <!--  <div class="other_login">-->
+                            <!--  <img th:src="@{'image/qq.png'}" />-->
+                            <!--  </div>-->
+                            <div class="other_login textCenter" onclick="otherLogin('weibo')">
+                                <img th:src="@{'image/weibo.png'}"/>
+                            </div>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+            <div id="oLogin" class="displayNone">
+                <div class="ologin_wrap" id="weChat_wrap">
+                </div>
+                <div class="ologin_wrap" id="wb_wrap">
+                </div>
+                <div class="backLogin"><span onclick="otherLogin('other')">>>返回其他登录</span></div>
+            </div>
+        </div>
+        <div class="mod-footer">
+            <span>还没有账号?</span>
+            <a href="register">立即注册</a>
+            <!-- 	<a href="javascript:;">游客访问</a>&nbsp;&nbsp;		 -->
+        </div>
+    </div>
+    <div class="footer_wrap">
+        <p th:inline="text">[[${org.name}]] &copy;技术支持：e2tt </p>
+    </div>
+</div>
+
+<script type="text/javascript" src="js/jquery.min.js"></script>
+<script type="text/javascript" src="js/jquery.easyui.min.js"></script>
+<script type="text/javascript" src="js/easyui-lang-zh_CN.js"></script>
+<script type="text/javascript" src="js/app.js"></script>
+<script type="text/javascript">
+/*<![CDATA[*/
+$(function() {
+    $("input[name='username']").prev().focus();
+})
+function login() {
+    var loginForm = $(".s_form:visible");
+    var username = loginForm.find("[name='username']");
+    var password = loginForm.find("[name='password']");
+    var loginType = loginForm.find("[name='loginType']");
+    if(loginType.val() == "password") {
+        if (!username.val()) {
+            $("#errorDiv").text('用户名不能为空!');
+            username.prev().focus();
+            return false;
+        } else if(!password.val()) {
+            $("#errorDiv").text('密码不能为空!');
+            password.prev().focus();
+            return false;
+        }
+        loginForm.submit();
+    } else if(loginType.val() == "phone") {
+        if (!username.val()) {
+            $("#errorDiv").text('手机号码不能为空!');
+            username.prev().focus();
+            return false;
+        } else if(!password.val()) {
+            $("#errorDiv").text('验证码不能为空!');
+            password.focus();
+            return false;
+        }
+        loginForm.submit();
+    }
+    return false;
+}
+function otherLogin(type) {
+    var baseUrl = "https://api.jia.wydiy.com";
+    if (type == 'weChat') {
+        var appid = "wxa2251bed81af2c56"
+        var scope = "snsapi_login,snsapi_userinfo"
+        var redirect_uri = encodeURIComponent(baseUrl+"/oauth/third-party/weixin")
+        var state = Math.ceil(Math.random() * 1000)
+        var url="https://open.weixin.qq.com/connect/qrconnect?appid="+appid+"&redirect_uri="+redirect_uri+"&response_type=code&scope="+scope+"&state="+state+"#wechat_redirect"
+        window.location.href=url
+<!--        $("#oLogin").fadeIn()-->
+<!--        $("#weChat_wrap").show()-->
+<!--        $("#content_wrap").hide()-->
+    } else if (type == 'weibo') {
+        var appKey = "888001371";
+        var redirectUri = encodeURIComponent(baseUrl+"/oauth/third-party/weibo")
+        var url = "https://api.weibo.com/oauth2/authorize?client_id="+appKey+"&response_type=code&redirect_uri="+redirectUri;
+        window.location.href=url;
+    } else if (type == 'other') {
+        <!-- $("#oLogin").hide()-->
+        <!-- $("#weChat_wrap").hide()-->
+        <!-- $("#content_wrap").fadeIn()-->
+    } else {}
+}
+function changeLoginType() {
+    var loginTypeA = $("#loginTypeA");
+    var loginType = loginTypeA.attr("rel");
+    $(".s_form").hide();
+    $("form[name='login_form_"+loginType+"']").show();
+    if(loginType == "phone") {
+        loginTypeA.text("账号密码登录");
+        loginTypeA.attr("rel", "password");
+    } else {
+        loginTypeA.text("手机号码登录");
+        loginTypeA.attr("rel", "phone");
+    }
+}
+/*]]>*/
+</script>
+</body>
+</html>

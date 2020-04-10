@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.dao.GroupRelMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.user.entity.GroupRel">
+    <result column="user_id" jdbcType="INTEGER" property="userId" />
+    <result column="group_id" jdbcType="INTEGER" property="groupId" />
+    <result column="update_time" jdbcType="BIGINT" property="updateTime" />
+    <result column="create_time" jdbcType="BIGINT" property="createTime" />
+  </resultMap>
+  <insert id="insert" parameterType="cn.jia.user.entity.GroupRel">
+    insert into user_group_rel (user_id, group_id, update_time, 
+      create_time)
+    values (#{userId,jdbcType=INTEGER}, #{groupId,jdbcType=INTEGER}, #{updateTime,jdbcType=BIGINT}, 
+      #{createTime,jdbcType=BIGINT})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.user.entity.GroupRel">
+    insert into user_group_rel
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="userId != null">
+        user_id,
+      </if>
+      <if test="groupId != null">
+        group_id,
+      </if>
+      <if test="updateTime != null">
+        update_time,
+      </if>
+      <if test="createTime != null">
+        create_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="userId != null">
+        #{userId,jdbcType=INTEGER},
+      </if>
+      <if test="groupId != null">
+        #{groupId,jdbcType=INTEGER},
+      </if>
+      <if test="updateTime != null">
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+      <if test="createTime != null">
+        #{createTime,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  
+  <select id="selectByUserId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_group_rel
+    where user_id = #{userId,jdbcType=INTEGER}
+  </select>
+  <select id="selectByGroupId" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select * from user_group_rel
+    where group_id = #{groupId,jdbcType=INTEGER}
+  </select>
+  <insert id="batchAdd">
+    INSERT INTO user_group_rel(user_id,group_id,update_time,create_time)
+      VALUES 
+      <foreach collection="groupRelList" item="groupRel" separator=",">
+            (#{groupRel.userId},#{groupRel.groupId},#{groupRel.updateTime},#{groupRel.createTime})
+      </foreach>
+  </insert>
+  <delete id="batchDel" parameterType="java.util.List">
+    delete from user_group_rel where
+      <foreach collection="groupRelList" item="groupRel" index="index" separator="or">
+           (user_id = #{groupRel.userId} and group_id = #{groupRel.groupId})
+      </foreach>
+  </delete>
+</mapper>

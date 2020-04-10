@@ -1,0 +1,68 @@
+/*body{zoom :0.8;}*/
+.ivu-table table th{
+  border-top: 1px solid #e8eaec;
+}
+.table_operate button{
+  margin: 2px;
+}
+.s_icon_div{
+  text-align: center;
+  margin-top: 10px
+}
+.s_icon_div i:hover{
+  color: #9e9d9d;
+}
+.s_icon_div i:active{
+  border: 0.1rem solid #57a3f3;
+  color: #9e9d9d;
+}
+li{
+  margin: 5px;
+  list-style: none;
+}
+.search_operate{
+  margin: 5px;
+}
+.search_operate button{
+  margin: 2px;
+}
+.search_form{
+  display: grid
+}
+.search_div{
+  min-width: 600px;
+}
+.search_chil_div{
+  float: left;
+}
+.search_chil_div input{
+  width: 200px;
+}
+.search_select{
+  width: 200px;
+}
+/*只显示一行*/
+.show_line{
+  overflow: hidden;/*超出部分隐藏*/
+  white-space: nowrap;/*不换行*/
+  text-overflow:ellipsis;/*超出部分文字以...显示*/
+}
+.show_s{
+  /*overflow: hidden;*/
+  /*text-overflow: ellipsis;*/
+  /*display: -webkit-box;*/
+  /*-webkit-line-clamp: 2;*/
+  /*-webkit-box-orient: vertical;*/
+}
+.tofu_wrap{
+  display: flow-root;
+}
+.tofu{
+  cursor: pointer;
+  text-align: center;
+  background-color: #defaff;
+  height: 120px;
+  width: 150px;
+  margin: 8px;
+  float: left;
+}

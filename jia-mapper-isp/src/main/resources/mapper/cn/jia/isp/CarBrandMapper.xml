@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.isp.dao.CarBrandMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.CarBrand">
+    <id column="id" jdbcType="INTEGER" property="id" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="brand" jdbcType="VARCHAR" property="brand" />
+    <result column="abbr" jdbcType="VARCHAR" property="abbr" />
+    <result column="initials" jdbcType="CHAR" property="initials" />
+    <result column="add_time" jdbcType="BIGINT" property="addTime" />
+    <result column="up_time" jdbcType="BIGINT" property="upTime" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    id, client_id, brand, abbr, initials, add_time, up_time
+  </sql>
+  <select id="selectByPrimaryKey" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from car_brand
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer">
+    delete from car_brand
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.CarBrand">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into car_brand (client_id, brand, abbr, 
+      initials, add_time, up_time
+      )
+    values (#{clientId,jdbcType=VARCHAR}, #{brand,jdbcType=VARCHAR}, #{abbr,jdbcType=VARCHAR}, 
+      #{initials,jdbcType=CHAR}, #{addTime,jdbcType=BIGINT}, #{upTime,jdbcType=BIGINT}
+      )
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.CarBrand">
+    <selectKey keyProperty="id" order="AFTER" resultType="java.lang.Integer">
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into car_brand
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        client_id,
+      </if>
+      <if test="brand != null">
+        brand,
+      </if>
+      <if test="abbr != null">
+        abbr,
+      </if>
+      <if test="initials != null">
+        initials,
+      </if>
+      <if test="addTime != null">
+        add_time,
+      </if>
+      <if test="upTime != null">
+        up_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="clientId != null">
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="brand != null">
+        #{brand,jdbcType=VARCHAR},
+      </if>
+      <if test="abbr != null">
+        #{abbr,jdbcType=VARCHAR},
+      </if>
+      <if test="initials != null">
+        #{initials,jdbcType=CHAR},
+      </if>
+      <if test="addTime != null">
+        #{addTime,jdbcType=BIGINT},
+      </if>
+      <if test="upTime != null">
+        #{upTime,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.CarBrand">
+    update car_brand
+    <set>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="brand != null">
+        brand = #{brand,jdbcType=VARCHAR},
+      </if>
+      <if test="abbr != null">
+        abbr = #{abbr,jdbcType=VARCHAR},
+      </if>
+      <if test="initials != null">
+        initials = #{initials,jdbcType=CHAR},
+      </if>
+      <if test="addTime != null">
+        add_time = #{addTime,jdbcType=BIGINT},
+      </if>
+      <if test="upTime != null">
+        up_time = #{upTime,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.CarBrand">
+    update car_brand
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      brand = #{brand,jdbcType=VARCHAR},
+      abbr = #{abbr,jdbcType=VARCHAR},
+      initials = #{initials,jdbcType=CHAR},
+      add_time = #{addTime,jdbcType=BIGINT},
+      up_time = #{upTime,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.CarBrand" resultMap="BaseResultMap">
+     select 
+    <include refid="Base_Column_List" />
+    from car_brand
+    <where>
+      <if test="brand != null">
+        brand LIKE CONCAT('%',#{brand,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="abbr != null">
+        and abbr LIKE CONCAT('%',#{abbr,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="initials != null">
+        and initials = #{initials,jdbcType=CHAR}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=CHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

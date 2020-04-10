@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.dao.CmsColumnMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.CmsColumn" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="table_id" property="tableId" jdbcType="INTEGER" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="type" property="type" jdbcType="VARCHAR" />
+    <result column="precision" property="precision" jdbcType="INTEGER" />
+    <result column="scale" property="scale" jdbcType="INTEGER" />
+    <result column="notnull" property="notnull" jdbcType="INTEGER" />
+    <result column="default_value" property="defaultValue" jdbcType="VARCHAR" />
+    <result column="select_range" property="selectRange" jdbcType="VARCHAR" />
+    <result column="is_search" property="isSearch" jdbcType="INTEGER" />
+    <result column="is_list" property="isList" jdbcType="INTEGER" />
+    <result column="remark" property="remark" jdbcType="VARCHAR" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, table_id, name, type, `precision`, scale, notnull, default_value, select_range,
+    is_search, is_list, remark
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from cms_column
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from cms_column
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.CmsColumn" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into cms_column (table_id, name, type, 
+      `precision`, scale, notnull,
+      default_value, select_range, is_search, 
+      is_list, remark)
+    values (#{tableId,jdbcType=INTEGER}, #{name,jdbcType=VARCHAR}, #{type,jdbcType=VARCHAR}, 
+      #{precision,jdbcType=INTEGER}, #{scale,jdbcType=INTEGER}, #{notnull,jdbcType=INTEGER}, 
+      #{defaultValue,jdbcType=VARCHAR}, #{selectRange,jdbcType=VARCHAR}, #{isSearch,jdbcType=INTEGER}, 
+      #{isList,jdbcType=INTEGER}, #{remark,jdbcType=VARCHAR})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.CmsColumn" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into cms_column
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="tableId != null" >
+        table_id,
+      </if>
+      <if test="name != null" >
+        name,
+      </if>
+      <if test="type != null" >
+        type,
+      </if>
+      <if test="precision != null" >
+        `precision`,
+      </if>
+      <if test="scale != null" >
+        scale,
+      </if>
+      <if test="notnull != null" >
+        notnull,
+      </if>
+      <if test="defaultValue != null" >
+        default_value,
+      </if>
+      <if test="selectRange != null" >
+        select_range,
+      </if>
+      <if test="isSearch != null" >
+        is_search,
+      </if>
+      <if test="isList != null" >
+        is_list,
+      </if>
+      <if test="remark != null" >
+        remark,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="tableId != null" >
+        #{tableId,jdbcType=INTEGER},
+      </if>
+      <if test="name != null" >
+        #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="type != null" >
+        #{type,jdbcType=VARCHAR},
+      </if>
+      <if test="precision != null" >
+        #{precision,jdbcType=INTEGER},
+      </if>
+      <if test="scale != null" >
+        #{scale,jdbcType=INTEGER},
+      </if>
+      <if test="notnull != null" >
+        #{notnull,jdbcType=INTEGER},
+      </if>
+      <if test="defaultValue != null" >
+        #{defaultValue,jdbcType=VARCHAR},
+      </if>
+      <if test="selectRange != null" >
+        #{selectRange,jdbcType=VARCHAR},
+      </if>
+      <if test="isSearch != null" >
+        #{isSearch,jdbcType=INTEGER},
+      </if>
+      <if test="isList != null" >
+        #{isList,jdbcType=INTEGER},
+      </if>
+      <if test="remark != null" >
+        #{remark,jdbcType=VARCHAR},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.CmsColumn" >
+    update cms_column
+    <set >
+      <if test="tableId != null" >
+        table_id = #{tableId,jdbcType=INTEGER},
+      </if>
+      <if test="name != null" >
+        name = #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="type != null" >
+        type = #{type,jdbcType=VARCHAR},
+      </if>
+      <if test="precision != null" >
+        `precision` = #{precision,jdbcType=INTEGER},
+      </if>
+      <if test="scale != null" >
+        scale = #{scale,jdbcType=INTEGER},
+      </if>
+      <if test="notnull != null" >
+        notnull = #{notnull,jdbcType=INTEGER},
+      </if>
+      <if test="defaultValue != null" >
+        default_value = #{defaultValue,jdbcType=VARCHAR},
+      </if>
+      <if test="selectRange != null" >
+        select_range = #{selectRange,jdbcType=VARCHAR},
+      </if>
+      <if test="isSearch != null" >
+        is_search = #{isSearch,jdbcType=INTEGER},
+      </if>
+      <if test="isList != null" >
+        is_list = #{isList,jdbcType=INTEGER},
+      </if>
+      <if test="remark != null" >
+        remark = #{remark,jdbcType=VARCHAR},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.CmsColumn" >
+    update cms_column
+    set table_id = #{tableId,jdbcType=INTEGER},
+      name = #{name,jdbcType=VARCHAR},
+      type = #{type,jdbcType=VARCHAR},
+      `precision` = #{precision,jdbcType=INTEGER},
+      scale = #{scale,jdbcType=INTEGER},
+      notnull = #{notnull,jdbcType=INTEGER},
+      default_value = #{defaultValue,jdbcType=VARCHAR},
+      select_range = #{selectRange,jdbcType=VARCHAR},
+      is_search = #{isSearch,jdbcType=INTEGER},
+      is_list = #{isList,jdbcType=INTEGER},
+      remark = #{remark,jdbcType=VARCHAR}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.CmsColumn" resultMap="BaseResultMap">
+     select
+    <include refid="Base_Column_List" />
+    from cms_column
+    <where>
+      <if test="tableId != null">
+        table_id = #{tableId,jdbcType=INTEGER}
+      </if>
+      <if test="notnull != null">
+        notnull = #{notnull,jdbcType=INTEGER}
+      </if>
+      <if test="name != null">
+        and `name` LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="type != null">
+        and type LIKE CONCAT('%',#{type,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="defaultValue != null">
+        and default_value LIKE CONCAT('%',#{defaultValue,jdbcType=VARCHAR},'%')
+      </if>
+    </where>
+  </select>
+</mapper>

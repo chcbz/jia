@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE generatorConfiguration PUBLIC "-//mybatis.org//DTD MyBatis Generator Configuration 1.0//EN" "http://mybatis.org/dtd/mybatis-generator-config_1_0.dtd">
+
+<generatorConfiguration>
+
+	<!-- 配置mysql 驱动jar包路径.用了绝对路径 -->
+	<classPathEntry location="D:\workspace\project\mysql-connector-java-5.1.26.jar" />
+
+	<context id="jia-mapper-task_mysql_tables" targetRuntime="MyBatis3">
+
+		<!-- 为了防止生成的代码中有很多注释，比较难看，加入下面的配置控制 -->
+		<commentGenerator>
+			<property name="suppressAllComments" value="true" />
+			<property name="suppressDate" value="true" />
+		</commentGenerator>
+		<!-- 注释控制完毕 -->
+
+		<!-- 数据库连接 -->
+		<jdbcConnection driverClass="com.mysql.jdbc.Driver" connectionURL="jdbc:mysql://chaoyoufan.net:3306/jia?characterEncoding=utf8"
+			userId="root" password="comeongogogo">
+		</jdbcConnection>
+
+		<javaTypeResolver>
+			<property name="forceBigDecimals" value="false" />
+		</javaTypeResolver>
+
+		<!-- 数据表对应的model 层 -->
+		<javaModelGenerator targetPackage="cn.jia.task.entity" targetProject="src/main/java">
+			<property name="enableSubPackages" value="true" />
+			<property name="trimStrings" value="true" />
+		</javaModelGenerator>
+
+		<!-- sql mapper 隐射配置文件 -->
+		<sqlMapGenerator targetPackage="mapper.cn.jia.task" targetProject="src/main/resources">
+			<property name="enableSubPackages" value="true" />
+		</sqlMapGenerator>
+
+		<!-- 在ibatis2 中是dao层，但在mybatis3中，其实就是mapper接口 -->
+		<javaClientGenerator type="XMLMAPPER" targetPackage="cn.jia.task.dao" targetProject="src/main/java">
+			<property name="enableSubPackages" value="true" />
+		</javaClientGenerator>
+		
+		<!--
+		<table schema="jia" tableName="task_plan" domainObjectName="TaskPlan" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		<table schema="jia" tableName="task_item" domainObjectName="TaskItem" enableCountByExample="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
+		</table>
+		-->
+		<table schema="jia" tableName="v_task_item" domainObjectName="TaskItemVO" enableCountByExample="false" enableInsert="false"
+			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
+		</table>
+	</context>
+</generatorConfiguration>

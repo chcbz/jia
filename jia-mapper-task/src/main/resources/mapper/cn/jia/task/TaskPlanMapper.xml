@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.task.dao.TaskPlanMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.task.entity.TaskPlan" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="jiacn" property="jiacn" jdbcType="VARCHAR" />
+    <result column="type" property="type" jdbcType="INTEGER" />
+    <result column="period" property="period" jdbcType="INTEGER" />
+    <result column="crond" property="crond" jdbcType="VARCHAR" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="description" property="description" jdbcType="VARCHAR" />
+    <result column="lunar" property="lunar" jdbcType="INTEGER" />
+    <result column="start_time" property="startTime" jdbcType="BIGINT" />
+    <result column="end_time" property="endTime" jdbcType="BIGINT" />
+    <result column="amount" property="amount" jdbcType="DECIMAL" />
+    <result column="remind" property="remind" jdbcType="INTEGER" />
+    <result column="remind_phone" property="remindPhone" jdbcType="VARCHAR" />
+    <result column="remind_msg" property="remindMsg" jdbcType="VARCHAR" />
+    <result column="status" property="status" jdbcType="INTEGER" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, jiacn, type, period, crond, name, description, lunar, start_time, end_time, amount, 
+    remind, remind_phone, remind_msg, status, create_time, update_time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from task_plan
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from task_plan
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.task.entity.TaskPlan" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into task_plan (jiacn, type, period, 
+      crond, name, description, 
+      lunar, start_time, end_time, 
+      amount, remind, remind_phone, 
+      remind_msg, status, create_time, 
+      update_time)
+    values (#{jiacn,jdbcType=VARCHAR}, #{type,jdbcType=INTEGER}, #{period,jdbcType=INTEGER}, 
+      #{crond,jdbcType=VARCHAR}, #{name,jdbcType=VARCHAR}, #{description,jdbcType=VARCHAR}, 
+      #{lunar,jdbcType=INTEGER}, #{startTime,jdbcType=BIGINT}, #{endTime,jdbcType=BIGINT}, 
+      #{amount,jdbcType=DECIMAL}, #{remind,jdbcType=INTEGER}, #{remindPhone,jdbcType=VARCHAR}, 
+      #{remindMsg,jdbcType=VARCHAR}, #{status,jdbcType=INTEGER}, #{createTime,jdbcType=BIGINT}, 
+      #{updateTime,jdbcType=BIGINT})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.task.entity.TaskPlan" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into task_plan
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="jiacn != null" >
+        jiacn,
+      </if>
+      <if test="type != null" >
+        type,
+      </if>
+      <if test="period != null" >
+        period,
+      </if>
+      <if test="crond != null" >
+        crond,
+      </if>
+      <if test="name != null" >
+        name,
+      </if>
+      <if test="description != null" >
+        description,
+      </if>
+      <if test="lunar != null" >
+        lunar,
+      </if>
+      <if test="startTime != null" >
+        start_time,
+      </if>
+      <if test="endTime != null" >
+        end_time,
+      </if>
+      <if test="amount != null" >
+        amount,
+      </if>
+      <if test="remind != null" >
+        remind,
+      </if>
+      <if test="remindPhone != null" >
+        remind_phone,
+      </if>
+      <if test="remindMsg != null" >
+        remind_msg,
+      </if>
+      <if test="status != null" >
+        status,
+      </if>
+      <if test="createTime != null" >
+        create_time,
+      </if>
+      <if test="updateTime != null" >
+        update_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="jiacn != null" >
+        #{jiacn,jdbcType=VARCHAR},
+      </if>
+      <if test="type != null" >
+        #{type,jdbcType=INTEGER},
+      </if>
+      <if test="period != null" >
+        #{period,jdbcType=INTEGER},
+      </if>
+      <if test="crond != null" >
+        #{crond,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null" >
+        #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="description != null" >
+        #{description,jdbcType=VARCHAR},
+      </if>
+      <if test="lunar != null" >
+        #{lunar,jdbcType=INTEGER},
+      </if>
+      <if test="startTime != null" >
+        #{startTime,jdbcType=BIGINT},
+      </if>
+      <if test="endTime != null" >
+        #{endTime,jdbcType=BIGINT},
+      </if>
+      <if test="amount != null" >
+        #{amount,jdbcType=DECIMAL},
+      </if>
+      <if test="remind != null" >
+        #{remind,jdbcType=INTEGER},
+      </if>
+      <if test="remindPhone != null" >
+        #{remindPhone,jdbcType=VARCHAR},
+      </if>
+      <if test="remindMsg != null" >
+        #{remindMsg,jdbcType=VARCHAR},
+      </if>
+      <if test="status != null" >
+        #{status,jdbcType=INTEGER},
+      </if>
+      <if test="createTime != null" >
+        #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.task.entity.TaskPlan" >
+    update task_plan
+    <set >
+      <if test="jiacn != null" >
+        jiacn = #{jiacn,jdbcType=VARCHAR},
+      </if>
+      <if test="type != null" >
+        type = #{type,jdbcType=INTEGER},
+      </if>
+      <if test="period != null" >
+        period = #{period,jdbcType=INTEGER},
+      </if>
+      <if test="crond != null" >
+        crond = #{crond,jdbcType=VARCHAR},
+      </if>
+      <if test="name != null" >
+        name = #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="description != null" >
+        description = #{description,jdbcType=VARCHAR},
+      </if>
+      <if test="lunar != null" >
+        lunar = #{lunar,jdbcType=INTEGER},
+      </if>
+      <if test="startTime != null" >
+        start_time = #{startTime,jdbcType=BIGINT},
+      </if>
+      <if test="endTime != null" >
+        end_time = #{endTime,jdbcType=BIGINT},
+      </if>
+      <if test="amount != null" >
+        amount = #{amount,jdbcType=DECIMAL},
+      </if>
+      <if test="remind != null" >
+        remind = #{remind,jdbcType=INTEGER},
+      </if>
+      <if test="remindPhone != null" >
+        remind_phone = #{remindPhone,jdbcType=VARCHAR},
+      </if>
+      <if test="remindMsg != null" >
+        remind_msg = #{remindMsg,jdbcType=VARCHAR},
+      </if>
+      <if test="status != null" >
+        status = #{status,jdbcType=INTEGER},
+      </if>
+      <if test="createTime != null" >
+        create_time = #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        update_time = #{updateTime,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.task.entity.TaskPlan" >
+    update task_plan
+    set jiacn = #{jiacn,jdbcType=VARCHAR},
+      type = #{type,jdbcType=INTEGER},
+      period = #{period,jdbcType=INTEGER},
+      crond = #{crond,jdbcType=VARCHAR},
+      name = #{name,jdbcType=VARCHAR},
+      description = #{description,jdbcType=VARCHAR},
+      lunar = #{lunar,jdbcType=INTEGER},
+      start_time = #{startTime,jdbcType=BIGINT},
+      end_time = #{endTime,jdbcType=BIGINT},
+      amount = #{amount,jdbcType=DECIMAL},
+      remind = #{remind,jdbcType=INTEGER},
+      remind_phone = #{remindPhone,jdbcType=VARCHAR},
+      remind_msg = #{remindMsg,jdbcType=VARCHAR},
+      status = #{status,jdbcType=INTEGER},
+      create_time = #{createTime,jdbcType=BIGINT},
+      update_time = #{updateTime,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectByExample" parameterType="cn.jia.task.entity.TaskPlanExample" resultMap="BaseResultMap">
+     select
+    <include refid="Base_Column_List" />
+    from task_plan
+    where 1=1
+      <if test="jiacn != null">
+        and jiacn = #{jiacn,jdbcType=VARCHAR}
+      </if>
+      <if test="type != null">
+        and type = #{type,jdbcType=INTEGER}
+      </if>
+      <if test="status != null">
+        and status = #{status,jdbcType=INTEGER}
+      </if>
+      <if test="startTimeStart != null">
+        and start_time &gt;= #{startTimeStart,jdbcType=INTEGER}
+      </if>
+      <if test="startTimeEnd != null">
+        and #{startTimeEnd,jdbcType=INTEGER} &gt; start_time
+      </if>
+      <if test="endTimeStart != null">
+        and end_time &gt;= #{endTimeStart,jdbcType=INTEGER}
+      </if>
+      <if test="endTimeEnd != null">
+        and #{endTimeEnd,jdbcType=INTEGER} &gt; end_time
+      </if>
+      <if test="historyFlag != null">
+        and (status = 0 or UNIX_TIMESTAMP() &gt; end_time)
+      </if>
+  </select>
+</mapper>

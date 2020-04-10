@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.material.dao.MediaMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.material.entity.Media" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="resource_id" property="resourceId" jdbcType="VARCHAR" />
+    <result column="entity_id" property="entityId" jdbcType="INTEGER" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="title" property="title" jdbcType="VARCHAR" />
+    <result column="type" property="type" jdbcType="INTEGER" />
+    <result column="url" property="url" jdbcType="VARCHAR" />
+    <result column="time" property="time" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, resource_id, entity_id, client_id, title, type, url, time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from mat_media
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from mat_media
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.material.entity.Media" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into mat_media (resource_id, entity_id, client_id, 
+      title, type, url, time
+      )
+    values (#{resourceId,jdbcType=VARCHAR}, #{entityId,jdbcType=INTEGER}, #{clientId,jdbcType=VARCHAR}, 
+      #{title,jdbcType=VARCHAR}, #{type,jdbcType=INTEGER}, #{url,jdbcType=VARCHAR}, #{time,jdbcType=BIGINT}
+      )
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.material.entity.Media" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into mat_media
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="resourceId != null" >
+        resource_id,
+      </if>
+      <if test="entityId != null" >
+        entity_id,
+      </if>
+      <if test="clientId != null" >
+        client_id,
+      </if>
+      <if test="title != null" >
+        title,
+      </if>
+      <if test="type != null" >
+        type,
+      </if>
+      <if test="url != null" >
+        url,
+      </if>
+      <if test="time != null" >
+        time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="resourceId != null" >
+        #{resourceId,jdbcType=VARCHAR},
+      </if>
+      <if test="entityId != null" >
+        #{entityId,jdbcType=INTEGER},
+      </if>
+      <if test="clientId != null" >
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="title != null" >
+        #{title,jdbcType=VARCHAR},
+      </if>
+      <if test="type != null" >
+        #{type,jdbcType=INTEGER},
+      </if>
+      <if test="url != null" >
+        #{url,jdbcType=VARCHAR},
+      </if>
+      <if test="time != null" >
+        #{time,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.material.entity.Media" >
+    update mat_media
+    <set >
+      <if test="resourceId != null" >
+        resource_id = #{resourceId,jdbcType=VARCHAR},
+      </if>
+      <if test="entityId != null" >
+        entity_id = #{entityId,jdbcType=INTEGER},
+      </if>
+      <if test="clientId != null" >
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="title != null" >
+        title = #{title,jdbcType=VARCHAR},
+      </if>
+      <if test="type != null" >
+        type = #{type,jdbcType=INTEGER},
+      </if>
+      <if test="url != null" >
+        url = #{url,jdbcType=VARCHAR},
+      </if>
+      <if test="time != null" >
+        time = #{time,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.material.entity.Media" >
+    update mat_media
+    set resource_id = #{resourceId,jdbcType=VARCHAR},
+      entity_id = #{entityId,jdbcType=INTEGER},
+      client_id = #{clientId,jdbcType=VARCHAR},
+      title = #{title,jdbcType=VARCHAR},
+      type = #{type,jdbcType=INTEGER},
+      url = #{url,jdbcType=VARCHAR},
+      time = #{time,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectAll" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from mat_media
+  </select>
+  <select id="selectByExample" parameterType="cn.jia.material.entity.MediaExample" resultMap="BaseResultMap">
+     select
+    <include refid="Base_Column_List" />
+    from mat_media
+    <where>
+      <if test="clientId != null and clientStrictFlag != 1">
+        (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+      <if test="clientId != null and clientStrictFlag == 1">
+        client_id = #{clientId,jdbcType=VARCHAR}
+      </if>
+      <if test="clientId == null and clientStrictFlag == 1">
+        client_id is null
+      </if>
+      <if test="resourceId != null">
+        and resource_id = #{resourceId,jdbcType=VARCHAR}
+      </if>
+      <if test="entityId != null">
+        and entity_id = #{entityId,jdbcType=INTEGER}
+      </if>
+      <if test="type != null">
+        and type = #{type,jdbcType=INTEGER}
+      </if>
+      <if test="title != null">
+        and title LIKE CONCAT('%',#{title,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="timeStart != null">
+        and time >= #{timeStart,jdbcType=BIGINT}
+      </if>
+      <if test="timeEnd != null">
+        and #{timeEnd,jdbcType=BIGINT} >= time
+      </if>
+    </where>
+  </select>
+</mapper>

@@ -1,0 +1,333 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.wx.dao.MpInfoMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.wx.entity.MpInfo">
+    <id column="acid" jdbcType="INTEGER" property="acid" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="token" jdbcType="VARCHAR" property="token" />
+    <result column="access_token" jdbcType="VARCHAR" property="accessToken" />
+    <result column="encodingaeskey" jdbcType="VARCHAR" property="encodingaeskey" />
+    <result column="level" jdbcType="TINYINT" property="level" />
+    <result column="name" jdbcType="VARCHAR" property="name" />
+    <result column="account" jdbcType="VARCHAR" property="account" />
+    <result column="original" jdbcType="VARCHAR" property="original" />
+    <result column="signature" jdbcType="VARCHAR" property="signature" />
+    <result column="country" jdbcType="VARCHAR" property="country" />
+    <result column="province" jdbcType="VARCHAR" property="province" />
+    <result column="city" jdbcType="VARCHAR" property="city" />
+    <result column="username" jdbcType="VARCHAR" property="username" />
+    <result column="password" jdbcType="VARCHAR" property="password" />
+    <result column="create_time" jdbcType="BIGINT" property="createTime" />
+    <result column="update_time" jdbcType="BIGINT" property="updateTime" />
+    <result column="status" jdbcType="INTEGER" property="status" />
+    <result column="appid" jdbcType="VARCHAR" property="appid" />
+    <result column="secret" jdbcType="VARCHAR" property="secret" />
+    <result column="styleid" jdbcType="INTEGER" property="styleid" />
+    <result column="subscribeurl" jdbcType="VARCHAR" property="subscribeurl" />
+    <result column="auth_refresh_token" jdbcType="VARCHAR" property="authRefreshToken" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    acid, client_id, token, access_token, encodingaeskey, level, name, account, original, 
+    signature, country, province, city, username, password, create_time, update_time, 
+    status, appid, secret, styleid, subscribeurl, auth_refresh_token
+  </sql>
+  <select id="selectByPrimaryKey" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_mp_info
+    where acid = #{acid,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer">
+    delete from wx_mp_info
+    where acid = #{acid,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.wx.entity.MpInfo">
+    insert into wx_mp_info (acid, client_id, token, 
+      access_token, encodingaeskey, level, 
+      name, account, original, 
+      signature, country, province, 
+      city, username, password, 
+      create_time, update_time, status, 
+      appid, secret, styleid, 
+      subscribeurl, auth_refresh_token)
+    values (#{acid,jdbcType=INTEGER}, #{clientId,jdbcType=VARCHAR}, #{token,jdbcType=VARCHAR}, 
+      #{accessToken,jdbcType=VARCHAR}, #{encodingaeskey,jdbcType=VARCHAR}, #{level,jdbcType=TINYINT}, 
+      #{name,jdbcType=VARCHAR}, #{account,jdbcType=VARCHAR}, #{original,jdbcType=VARCHAR}, 
+      #{signature,jdbcType=VARCHAR}, #{country,jdbcType=VARCHAR}, #{province,jdbcType=VARCHAR}, 
+      #{city,jdbcType=VARCHAR}, #{username,jdbcType=VARCHAR}, #{password,jdbcType=VARCHAR}, 
+      #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT}, #{status,jdbcType=INTEGER}, 
+      #{appid,jdbcType=VARCHAR}, #{secret,jdbcType=VARCHAR}, #{styleid,jdbcType=INTEGER}, 
+      #{subscribeurl,jdbcType=VARCHAR}, #{authRefreshToken,jdbcType=VARCHAR})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.wx.entity.MpInfo">
+    insert into wx_mp_info
+    <trim prefix="(" suffix=")" suffixOverrides=",">
+      <if test="acid != null">
+        acid,
+      </if>
+      <if test="clientId != null">
+        client_id,
+      </if>
+      <if test="token != null">
+        token,
+      </if>
+      <if test="accessToken != null">
+        access_token,
+      </if>
+      <if test="encodingaeskey != null">
+        encodingaeskey,
+      </if>
+      <if test="level != null">
+        level,
+      </if>
+      <if test="name != null">
+        name,
+      </if>
+      <if test="account != null">
+        account,
+      </if>
+      <if test="original != null">
+        original,
+      </if>
+      <if test="signature != null">
+        signature,
+      </if>
+      <if test="country != null">
+        country,
+      </if>
+      <if test="province != null">
+        province,
+      </if>
+      <if test="city != null">
+        city,
+      </if>
+      <if test="username != null">
+        username,
+      </if>
+      <if test="password != null">
+        password,
+      </if>
+      <if test="createTime != null">
+        create_time,
+      </if>
+      <if test="updateTime != null">
+        update_time,
+      </if>
+      <if test="status != null">
+        status,
+      </if>
+      <if test="appid != null">
+        appid,
+      </if>
+      <if test="secret != null">
+        secret,
+      </if>
+      <if test="styleid != null">
+        styleid,
+      </if>
+      <if test="subscribeurl != null">
+        subscribeurl,
+      </if>
+      <if test="authRefreshToken != null">
+        auth_refresh_token,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides=",">
+      <if test="acid != null">
+        #{acid,jdbcType=INTEGER},
+      </if>
+      <if test="clientId != null">
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="token != null">
+        #{token,jdbcType=VARCHAR},
+      </if>
+      <if test="accessToken != null">
+        #{accessToken,jdbcType=VARCHAR},
+      </if>
+      <if test="encodingaeskey != null">
+        #{encodingaeskey,jdbcType=VARCHAR},
+      </if>
+      <if test="level != null">
+        #{level,jdbcType=TINYINT},
+      </if>
+      <if test="name != null">
+        #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="account != null">
+        #{account,jdbcType=VARCHAR},
+      </if>
+      <if test="original != null">
+        #{original,jdbcType=VARCHAR},
+      </if>
+      <if test="signature != null">
+        #{signature,jdbcType=VARCHAR},
+      </if>
+      <if test="country != null">
+        #{country,jdbcType=VARCHAR},
+      </if>
+      <if test="province != null">
+        #{province,jdbcType=VARCHAR},
+      </if>
+      <if test="city != null">
+        #{city,jdbcType=VARCHAR},
+      </if>
+      <if test="username != null">
+        #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="password != null">
+        #{password,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null">
+        #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null">
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+      <if test="status != null">
+        #{status,jdbcType=INTEGER},
+      </if>
+      <if test="appid != null">
+        #{appid,jdbcType=VARCHAR},
+      </if>
+      <if test="secret != null">
+        #{secret,jdbcType=VARCHAR},
+      </if>
+      <if test="styleid != null">
+        #{styleid,jdbcType=INTEGER},
+      </if>
+      <if test="subscribeurl != null">
+        #{subscribeurl,jdbcType=VARCHAR},
+      </if>
+      <if test="authRefreshToken != null">
+        #{authRefreshToken,jdbcType=VARCHAR},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.wx.entity.MpInfo">
+    update wx_mp_info
+    <set>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="token != null">
+        token = #{token,jdbcType=VARCHAR},
+      </if>
+      <if test="accessToken != null">
+        access_token = #{accessToken,jdbcType=VARCHAR},
+      </if>
+      <if test="encodingaeskey != null">
+        encodingaeskey = #{encodingaeskey,jdbcType=VARCHAR},
+      </if>
+      <if test="level != null">
+        level = #{level,jdbcType=TINYINT},
+      </if>
+      <if test="name != null">
+        name = #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="account != null">
+        account = #{account,jdbcType=VARCHAR},
+      </if>
+      <if test="original != null">
+        original = #{original,jdbcType=VARCHAR},
+      </if>
+      <if test="signature != null">
+        signature = #{signature,jdbcType=VARCHAR},
+      </if>
+      <if test="country != null">
+        country = #{country,jdbcType=VARCHAR},
+      </if>
+      <if test="province != null">
+        province = #{province,jdbcType=VARCHAR},
+      </if>
+      <if test="city != null">
+        city = #{city,jdbcType=VARCHAR},
+      </if>
+      <if test="username != null">
+        username = #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="password != null">
+        password = #{password,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null">
+        create_time = #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null">
+        update_time = #{updateTime,jdbcType=BIGINT},
+      </if>
+      <if test="status != null">
+        status = #{status,jdbcType=INTEGER},
+      </if>
+      <if test="appid != null">
+        appid = #{appid,jdbcType=VARCHAR},
+      </if>
+      <if test="secret != null">
+        secret = #{secret,jdbcType=VARCHAR},
+      </if>
+      <if test="styleid != null">
+        styleid = #{styleid,jdbcType=INTEGER},
+      </if>
+      <if test="subscribeurl != null">
+        subscribeurl = #{subscribeurl,jdbcType=VARCHAR},
+      </if>
+      <if test="authRefreshToken != null">
+        auth_refresh_token = #{authRefreshToken,jdbcType=VARCHAR},
+      </if>
+    </set>
+    where acid = #{acid,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.wx.entity.MpInfo">
+    update wx_mp_info
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      token = #{token,jdbcType=VARCHAR},
+      access_token = #{accessToken,jdbcType=VARCHAR},
+      encodingaeskey = #{encodingaeskey,jdbcType=VARCHAR},
+      level = #{level,jdbcType=TINYINT},
+      name = #{name,jdbcType=VARCHAR},
+      account = #{account,jdbcType=VARCHAR},
+      original = #{original,jdbcType=VARCHAR},
+      signature = #{signature,jdbcType=VARCHAR},
+      country = #{country,jdbcType=VARCHAR},
+      province = #{province,jdbcType=VARCHAR},
+      city = #{city,jdbcType=VARCHAR},
+      username = #{username,jdbcType=VARCHAR},
+      password = #{password,jdbcType=VARCHAR},
+      create_time = #{createTime,jdbcType=BIGINT},
+      update_time = #{updateTime,jdbcType=BIGINT},
+      status = #{status,jdbcType=INTEGER},
+      appid = #{appid,jdbcType=VARCHAR},
+      secret = #{secret,jdbcType=VARCHAR},
+      styleid = #{styleid,jdbcType=INTEGER},
+      subscribeurl = #{subscribeurl,jdbcType=VARCHAR},
+      auth_refresh_token = #{authRefreshToken,jdbcType=VARCHAR}
+    where acid = #{acid,jdbcType=INTEGER}
+  </update>
+  
+  <select id="selectAll" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_mp_info
+  </select>
+  <select id="selectByExample" parameterType="cn.jia.wx.entity.MpInfo" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_mp_info
+    <where>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR}
+      </if>
+      <if test="original != null">
+        and original = #{original,jdbcType=VARCHAR}
+      </if>
+      <if test="appid != null">
+        and appid = #{appid,jdbcType=VARCHAR}
+      </if>
+    </where>
+  </select>
+  <select id="selectByKey" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select 
+    <include refid="Base_Column_List" />
+    from wx_mp_info
+    where original = #{key,jdbcType=VARCHAR} or appid = #{key,jdbcType=VARCHAR}
+  </select>
+</mapper>

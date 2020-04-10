@@ -1,0 +1,311 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.dao.IspDomainMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspDomain" >
+    <id column="no" property="no" jdbcType="INTEGER" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="server_id" property="serverId" jdbcType="INTEGER" />
+    <result column="domain_name" property="domainName" jdbcType="VARCHAR" />
+    <result column="dns_type" property="dnsType" jdbcType="VARCHAR" />
+    <result column="dns_key" property="dnsKey" jdbcType="VARCHAR" />
+    <result column="dns_token" property="dnsToken" jdbcType="VARCHAR" />
+    <result column="ssl_flag" property="sslFlag" jdbcType="INTEGER" />
+    <result column="admin_passwd" property="adminPasswd" jdbcType="VARCHAR" />
+    <result column="admin_flag" property="adminFlag" jdbcType="INTEGER" />
+    <result column="mailbox_service" property="mailboxService" jdbcType="INTEGER" />
+    <result column="mailbox_count" property="mailboxCount" jdbcType="INTEGER" />
+    <result column="mailbox_quota" property="mailboxQuota" jdbcType="INTEGER" />
+    <result column="host_service" property="hostService" jdbcType="INTEGER" />
+    <result column="host_type" property="hostType" jdbcType="VARCHAR" />
+    <result column="host_passwd" property="hostPasswd" jdbcType="VARCHAR" />
+    <result column="host_quota" property="hostQuota" jdbcType="INTEGER" />
+    <result column="sql_service" property="sqlService" jdbcType="INTEGER" />
+    <result column="sql_passwd" property="sqlPasswd" jdbcType="VARCHAR" />
+    <result column="sql_quota" property="sqlQuota" jdbcType="INTEGER" />
+    <result column="ftp_dir" property="ftpDir" jdbcType="VARCHAR" />
+    <result column="cms_flag" property="cmsFlag" jdbcType="INTEGER" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    no, client_id, server_id, domain_name, dns_type, dns_key, dns_token, ssl_flag, admin_passwd, 
+    admin_flag, mailbox_service, mailbox_count, mailbox_quota, host_service, host_type, 
+    host_passwd, host_quota, sql_service, sql_passwd, sql_quota, ftp_dir, cms_flag
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from isp_domain
+    where no = #{no,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from isp_domain
+    where no = #{no,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.isp.entity.IspDomain" >
+    insert into isp_domain (no, client_id, server_id, 
+      domain_name, dns_type, dns_key, 
+      dns_token, ssl_flag, admin_passwd, 
+      admin_flag, mailbox_service, mailbox_count, 
+      mailbox_quota, host_service, host_type, 
+      host_passwd, host_quota, sql_service, 
+      sql_passwd, sql_quota, ftp_dir, 
+      cms_flag)
+    values (#{no,jdbcType=INTEGER}, #{clientId,jdbcType=VARCHAR}, #{serverId,jdbcType=INTEGER}, 
+      #{domainName,jdbcType=VARCHAR}, #{dnsType,jdbcType=VARCHAR}, #{dnsKey,jdbcType=VARCHAR}, 
+      #{dnsToken,jdbcType=VARCHAR}, #{sslFlag,jdbcType=INTEGER}, #{adminPasswd,jdbcType=VARCHAR}, 
+      #{adminFlag,jdbcType=INTEGER}, #{mailboxService,jdbcType=INTEGER}, #{mailboxCount,jdbcType=INTEGER}, 
+      #{mailboxQuota,jdbcType=INTEGER}, #{hostService,jdbcType=INTEGER}, #{hostType,jdbcType=VARCHAR}, 
+      #{hostPasswd,jdbcType=VARCHAR}, #{hostQuota,jdbcType=INTEGER}, #{sqlService,jdbcType=INTEGER}, 
+      #{sqlPasswd,jdbcType=VARCHAR}, #{sqlQuota,jdbcType=INTEGER}, #{ftpDir,jdbcType=VARCHAR}, 
+      #{cmsFlag,jdbcType=INTEGER})
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.isp.entity.IspDomain" >
+    insert into isp_domain
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="no != null" >
+        no,
+      </if>
+      <if test="clientId != null" >
+        client_id,
+      </if>
+      <if test="serverId != null" >
+        server_id,
+      </if>
+      <if test="domainName != null" >
+        domain_name,
+      </if>
+      <if test="dnsType != null" >
+        dns_type,
+      </if>
+      <if test="dnsKey != null" >
+        dns_key,
+      </if>
+      <if test="dnsToken != null" >
+        dns_token,
+      </if>
+      <if test="sslFlag != null" >
+        ssl_flag,
+      </if>
+      <if test="adminPasswd != null" >
+        admin_passwd,
+      </if>
+      <if test="adminFlag != null" >
+        admin_flag,
+      </if>
+      <if test="mailboxService != null" >
+        mailbox_service,
+      </if>
+      <if test="mailboxCount != null" >
+        mailbox_count,
+      </if>
+      <if test="mailboxQuota != null" >
+        mailbox_quota,
+      </if>
+      <if test="hostService != null" >
+        host_service,
+      </if>
+      <if test="hostType != null" >
+        host_type,
+      </if>
+      <if test="hostPasswd != null" >
+        host_passwd,
+      </if>
+      <if test="hostQuota != null" >
+        host_quota,
+      </if>
+      <if test="sqlService != null" >
+        sql_service,
+      </if>
+      <if test="sqlPasswd != null" >
+        sql_passwd,
+      </if>
+      <if test="sqlQuota != null" >
+        sql_quota,
+      </if>
+      <if test="ftpDir != null" >
+        ftp_dir,
+      </if>
+      <if test="cmsFlag != null" >
+        cms_flag,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="no != null" >
+        #{no,jdbcType=INTEGER},
+      </if>
+      <if test="clientId != null" >
+        #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="serverId != null" >
+        #{serverId,jdbcType=INTEGER},
+      </if>
+      <if test="domainName != null" >
+        #{domainName,jdbcType=VARCHAR},
+      </if>
+      <if test="dnsType != null" >
+        #{dnsType,jdbcType=VARCHAR},
+      </if>
+      <if test="dnsKey != null" >
+        #{dnsKey,jdbcType=VARCHAR},
+      </if>
+      <if test="dnsToken != null" >
+        #{dnsToken,jdbcType=VARCHAR},
+      </if>
+      <if test="sslFlag != null" >
+        #{sslFlag,jdbcType=INTEGER},
+      </if>
+      <if test="adminPasswd != null" >
+        #{adminPasswd,jdbcType=VARCHAR},
+      </if>
+      <if test="adminFlag != null" >
+        #{adminFlag,jdbcType=INTEGER},
+      </if>
+      <if test="mailboxService != null" >
+        #{mailboxService,jdbcType=INTEGER},
+      </if>
+      <if test="mailboxCount != null" >
+        #{mailboxCount,jdbcType=INTEGER},
+      </if>
+      <if test="mailboxQuota != null" >
+        #{mailboxQuota,jdbcType=INTEGER},
+      </if>
+      <if test="hostService != null" >
+        #{hostService,jdbcType=INTEGER},
+      </if>
+      <if test="hostType != null" >
+        #{hostType,jdbcType=VARCHAR},
+      </if>
+      <if test="hostPasswd != null" >
+        #{hostPasswd,jdbcType=VARCHAR},
+      </if>
+      <if test="hostQuota != null" >
+        #{hostQuota,jdbcType=INTEGER},
+      </if>
+      <if test="sqlService != null" >
+        #{sqlService,jdbcType=INTEGER},
+      </if>
+      <if test="sqlPasswd != null" >
+        #{sqlPasswd,jdbcType=VARCHAR},
+      </if>
+      <if test="sqlQuota != null" >
+        #{sqlQuota,jdbcType=INTEGER},
+      </if>
+      <if test="ftpDir != null" >
+        #{ftpDir,jdbcType=VARCHAR},
+      </if>
+      <if test="cmsFlag != null" >
+        #{cmsFlag,jdbcType=INTEGER},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.isp.entity.IspDomain" >
+    update isp_domain
+    <set >
+      <if test="clientId != null" >
+        client_id = #{clientId,jdbcType=VARCHAR},
+      </if>
+      <if test="serverId != null" >
+        server_id = #{serverId,jdbcType=INTEGER},
+      </if>
+      <if test="domainName != null" >
+        domain_name = #{domainName,jdbcType=VARCHAR},
+      </if>
+      <if test="dnsType != null" >
+        dns_type = #{dnsType,jdbcType=VARCHAR},
+      </if>
+      <if test="dnsKey != null" >
+        dns_key = #{dnsKey,jdbcType=VARCHAR},
+      </if>
+      <if test="dnsToken != null" >
+        dns_token = #{dnsToken,jdbcType=VARCHAR},
+      </if>
+      <if test="sslFlag != null" >
+        ssl_flag = #{sslFlag,jdbcType=INTEGER},
+      </if>
+      <if test="adminPasswd != null" >
+        admin_passwd = #{adminPasswd,jdbcType=VARCHAR},
+      </if>
+      <if test="adminFlag != null" >
+        admin_flag = #{adminFlag,jdbcType=INTEGER},
+      </if>
+      <if test="mailboxService != null" >
+        mailbox_service = #{mailboxService,jdbcType=INTEGER},
+      </if>
+      <if test="mailboxCount != null" >
+        mailbox_count = #{mailboxCount,jdbcType=INTEGER},
+      </if>
+      <if test="mailboxQuota != null" >
+        mailbox_quota = #{mailboxQuota,jdbcType=INTEGER},
+      </if>
+      <if test="hostService != null" >
+        host_service = #{hostService,jdbcType=INTEGER},
+      </if>
+      <if test="hostType != null" >
+        host_type = #{hostType,jdbcType=VARCHAR},
+      </if>
+      <if test="hostPasswd != null" >
+        host_passwd = #{hostPasswd,jdbcType=VARCHAR},
+      </if>
+      <if test="hostQuota != null" >
+        host_quota = #{hostQuota,jdbcType=INTEGER},
+      </if>
+      <if test="sqlService != null" >
+        sql_service = #{sqlService,jdbcType=INTEGER},
+      </if>
+      <if test="sqlPasswd != null" >
+        sql_passwd = #{sqlPasswd,jdbcType=VARCHAR},
+      </if>
+      <if test="sqlQuota != null" >
+        sql_quota = #{sqlQuota,jdbcType=INTEGER},
+      </if>
+      <if test="ftpDir != null" >
+        ftp_dir = #{ftpDir,jdbcType=VARCHAR},
+      </if>
+      <if test="cmsFlag != null" >
+        cms_flag = #{cmsFlag,jdbcType=INTEGER},
+      </if>
+    </set>
+    where no = #{no,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.isp.entity.IspDomain" >
+    update isp_domain
+    set client_id = #{clientId,jdbcType=VARCHAR},
+      server_id = #{serverId,jdbcType=INTEGER},
+      domain_name = #{domainName,jdbcType=VARCHAR},
+      dns_type = #{dnsType,jdbcType=VARCHAR},
+      dns_key = #{dnsKey,jdbcType=VARCHAR},
+      dns_token = #{dnsToken,jdbcType=VARCHAR},
+      ssl_flag = #{sslFlag,jdbcType=INTEGER},
+      admin_passwd = #{adminPasswd,jdbcType=VARCHAR},
+      admin_flag = #{adminFlag,jdbcType=INTEGER},
+      mailbox_service = #{mailboxService,jdbcType=INTEGER},
+      mailbox_count = #{mailboxCount,jdbcType=INTEGER},
+      mailbox_quota = #{mailboxQuota,jdbcType=INTEGER},
+      host_service = #{hostService,jdbcType=INTEGER},
+      host_type = #{hostType,jdbcType=VARCHAR},
+      host_passwd = #{hostPasswd,jdbcType=VARCHAR},
+      host_quota = #{hostQuota,jdbcType=INTEGER},
+      sql_service = #{sqlService,jdbcType=INTEGER},
+      sql_passwd = #{sqlPasswd,jdbcType=VARCHAR},
+      sql_quota = #{sqlQuota,jdbcType=INTEGER},
+      ftp_dir = #{ftpDir,jdbcType=VARCHAR},
+      cms_flag = #{cmsFlag,jdbcType=INTEGER}
+    where no = #{no,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.IspDomain" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from isp_domain
+    <where>
+      <if test="domainName != null">
+        domain_name LIKE CONCAT('%',#{domainName,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="serverId != null">
+        and server_id = #{serverId,jdbcType=INTEGER}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

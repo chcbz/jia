@@ -1,0 +1,536 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.user.dao.UserMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.user.entity.User" >
+    <id column="id" property="id" jdbcType="INTEGER" />
+    <result column="username" property="username" jdbcType="VARCHAR" />
+    <result column="password" property="password" jdbcType="VARCHAR" />
+    <result column="openid" property="openid" jdbcType="VARCHAR" />
+    <result column="jiacn" property="jiacn" jdbcType="VARCHAR" />
+    <result column="phone" property="phone" jdbcType="VARCHAR" />
+    <result column="email" property="email" jdbcType="VARCHAR" />
+    <result column="sex" property="sex" jdbcType="INTEGER" />
+    <result column="nickname" property="nickname" jdbcType="VARCHAR" />
+    <result column="avatar" property="avatar" jdbcType="VARCHAR" />
+    <result column="city" property="city" jdbcType="VARCHAR" />
+    <result column="country" property="country" jdbcType="VARCHAR" />
+    <result column="province" property="province" jdbcType="VARCHAR" />
+    <result column="latitude" property="latitude" jdbcType="VARCHAR" />
+    <result column="longitude" property="longitude" jdbcType="VARCHAR" />
+    <result column="point" property="point" jdbcType="INTEGER" />
+    <result column="referrer" property="referrer" jdbcType="VARCHAR" />
+    <result column="birthday" property="birthday" jdbcType="DATE" />
+    <result column="tel" property="tel" jdbcType="VARCHAR" />
+    <result column="weixin" property="weixin" jdbcType="VARCHAR" />
+    <result column="qq" property="qq" jdbcType="VARCHAR" />
+    <result column="position" property="position" jdbcType="INTEGER" />
+    <result column="status" property="status" jdbcType="INTEGER" />
+    <result column="remark" property="remark" jdbcType="VARCHAR" />
+    <result column="msg_type" property="msgType" jdbcType="VARCHAR" />
+    <result column="subscribe" property="subscribe" jdbcType="VARCHAR" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, username, password, openid, jiacn, phone, email, sex, nickname, avatar, city, 
+    country, province, latitude, longitude, point, referrer, birthday, tel, weixin, qq, 
+    position, status, remark, msg_type, subscribe, create_time, update_time
+  </sql>
+  <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
+    select 
+    <include refid="Base_Column_List" />
+    from user_info
+    where id = #{id,jdbcType=INTEGER}
+  </select>
+  <delete id="deleteByPrimaryKey" parameterType="java.lang.Integer" >
+    delete from user_info
+    where id = #{id,jdbcType=INTEGER}
+  </delete>
+  <insert id="insert" parameterType="cn.jia.user.entity.User" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into user_info (username, password, openid, 
+      jiacn, phone, email, 
+      sex, nickname, avatar, 
+      city, country, province, 
+      latitude, longitude, point, 
+      referrer, birthday, tel, 
+      weixin, qq, position, 
+      status, remark, msg_type, 
+      subscribe, create_time, update_time
+      )
+    values (#{username,jdbcType=VARCHAR}, #{password,jdbcType=VARCHAR}, #{openid,jdbcType=VARCHAR}, 
+      #{jiacn,jdbcType=VARCHAR}, #{phone,jdbcType=VARCHAR}, #{email,jdbcType=VARCHAR}, 
+      #{sex,jdbcType=INTEGER}, #{nickname,jdbcType=VARCHAR}, #{avatar,jdbcType=VARCHAR}, 
+      #{city,jdbcType=VARCHAR}, #{country,jdbcType=VARCHAR}, #{province,jdbcType=VARCHAR}, 
+      #{latitude,jdbcType=VARCHAR}, #{longitude,jdbcType=VARCHAR}, #{point,jdbcType=INTEGER}, 
+      #{referrer,jdbcType=VARCHAR}, #{birthday,jdbcType=DATE}, #{tel,jdbcType=VARCHAR}, 
+      #{weixin,jdbcType=VARCHAR}, #{qq,jdbcType=VARCHAR}, #{position,jdbcType=INTEGER}, 
+      #{status,jdbcType=INTEGER}, #{remark,jdbcType=VARCHAR}, #{msgType,jdbcType=VARCHAR}, 
+      #{subscribe,jdbcType=VARCHAR}, #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT}
+      )
+  </insert>
+  <insert id="insertSelective" parameterType="cn.jia.user.entity.User" >
+    <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
+      SELECT LAST_INSERT_ID()
+    </selectKey>
+    insert into user_info
+    <trim prefix="(" suffix=")" suffixOverrides="," >
+      <if test="username != null" >
+        username,
+      </if>
+      <if test="password != null" >
+        password,
+      </if>
+      <if test="openid != null" >
+        openid,
+      </if>
+      <if test="jiacn != null" >
+        jiacn,
+      </if>
+      <if test="phone != null" >
+        phone,
+      </if>
+      <if test="email != null" >
+        email,
+      </if>
+      <if test="sex != null" >
+        sex,
+      </if>
+      <if test="nickname != null" >
+        nickname,
+      </if>
+      <if test="avatar != null" >
+        avatar,
+      </if>
+      <if test="city != null" >
+        city,
+      </if>
+      <if test="country != null" >
+        country,
+      </if>
+      <if test="province != null" >
+        province,
+      </if>
+      <if test="latitude != null" >
+        latitude,
+      </if>
+      <if test="longitude != null" >
+        longitude,
+      </if>
+      <if test="point != null" >
+        point,
+      </if>
+      <if test="referrer != null" >
+        referrer,
+      </if>
+      <if test="birthday != null" >
+        birthday,
+      </if>
+      <if test="tel != null" >
+        tel,
+      </if>
+      <if test="weixin != null" >
+        weixin,
+      </if>
+      <if test="qq != null" >
+        qq,
+      </if>
+      <if test="position != null" >
+        position,
+      </if>
+      <if test="status != null" >
+        status,
+      </if>
+      <if test="remark != null" >
+        remark,
+      </if>
+      <if test="msgType != null" >
+        msg_type,
+      </if>
+      <if test="subscribe != null" >
+        subscribe,
+      </if>
+      <if test="createTime != null" >
+        create_time,
+      </if>
+      <if test="updateTime != null" >
+        update_time,
+      </if>
+    </trim>
+    <trim prefix="values (" suffix=")" suffixOverrides="," >
+      <if test="username != null" >
+        #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="password != null" >
+        #{password,jdbcType=VARCHAR},
+      </if>
+      <if test="openid != null" >
+        #{openid,jdbcType=VARCHAR},
+      </if>
+      <if test="jiacn != null" >
+        #{jiacn,jdbcType=VARCHAR},
+      </if>
+      <if test="phone != null" >
+        #{phone,jdbcType=VARCHAR},
+      </if>
+      <if test="email != null" >
+        #{email,jdbcType=VARCHAR},
+      </if>
+      <if test="sex != null" >
+        #{sex,jdbcType=INTEGER},
+      </if>
+      <if test="nickname != null" >
+        #{nickname,jdbcType=VARCHAR},
+      </if>
+      <if test="avatar != null" >
+        #{avatar,jdbcType=VARCHAR},
+      </if>
+      <if test="city != null" >
+        #{city,jdbcType=VARCHAR},
+      </if>
+      <if test="country != null" >
+        #{country,jdbcType=VARCHAR},
+      </if>
+      <if test="province != null" >
+        #{province,jdbcType=VARCHAR},
+      </if>
+      <if test="latitude != null" >
+        #{latitude,jdbcType=VARCHAR},
+      </if>
+      <if test="longitude != null" >
+        #{longitude,jdbcType=VARCHAR},
+      </if>
+      <if test="point != null" >
+        #{point,jdbcType=INTEGER},
+      </if>
+      <if test="referrer != null" >
+        #{referrer,jdbcType=VARCHAR},
+      </if>
+      <if test="birthday != null" >
+        #{birthday,jdbcType=DATE},
+      </if>
+      <if test="tel != null" >
+        #{tel,jdbcType=VARCHAR},
+      </if>
+      <if test="weixin != null" >
+        #{weixin,jdbcType=VARCHAR},
+      </if>
+      <if test="qq != null" >
+        #{qq,jdbcType=VARCHAR},
+      </if>
+      <if test="position != null" >
+        #{position,jdbcType=INTEGER},
+      </if>
+      <if test="status != null" >
+        #{status,jdbcType=INTEGER},
+      </if>
+      <if test="remark != null" >
+        #{remark,jdbcType=VARCHAR},
+      </if>
+      <if test="msgType != null" >
+        #{msgType,jdbcType=VARCHAR},
+      </if>
+      <if test="subscribe != null" >
+        #{subscribe,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null" >
+        #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        #{updateTime,jdbcType=BIGINT},
+      </if>
+    </trim>
+  </insert>
+  <update id="updateByPrimaryKeySelective" parameterType="cn.jia.user.entity.User" >
+    update user_info
+    <set >
+      <if test="username != null" >
+        username = #{username,jdbcType=VARCHAR},
+      </if>
+      <if test="password != null" >
+        password = #{password,jdbcType=VARCHAR},
+      </if>
+      <if test="openid != null" >
+        openid = #{openid,jdbcType=VARCHAR},
+      </if>
+      <if test="jiacn != null" >
+        jiacn = #{jiacn,jdbcType=VARCHAR},
+      </if>
+      <if test="phone != null" >
+        phone = #{phone,jdbcType=VARCHAR},
+      </if>
+      <if test="email != null" >
+        email = #{email,jdbcType=VARCHAR},
+      </if>
+      <if test="sex != null" >
+        sex = #{sex,jdbcType=INTEGER},
+      </if>
+      <if test="nickname != null" >
+        nickname = #{nickname,jdbcType=VARCHAR},
+      </if>
+      <if test="avatar != null" >
+        avatar = #{avatar,jdbcType=VARCHAR},
+      </if>
+      <if test="city != null" >
+        city = #{city,jdbcType=VARCHAR},
+      </if>
+      <if test="country != null" >
+        country = #{country,jdbcType=VARCHAR},
+      </if>
+      <if test="province != null" >
+        province = #{province,jdbcType=VARCHAR},
+      </if>
+      <if test="latitude != null" >
+        latitude = #{latitude,jdbcType=VARCHAR},
+      </if>
+      <if test="longitude != null" >
+        longitude = #{longitude,jdbcType=VARCHAR},
+      </if>
+      <if test="point != null" >
+        point = #{point,jdbcType=INTEGER},
+      </if>
+      <if test="referrer != null" >
+        referrer = #{referrer,jdbcType=VARCHAR},
+      </if>
+      <if test="birthday != null" >
+        birthday = #{birthday,jdbcType=DATE},
+      </if>
+      <if test="tel != null" >
+        tel = #{tel,jdbcType=VARCHAR},
+      </if>
+      <if test="weixin != null" >
+        weixin = #{weixin,jdbcType=VARCHAR},
+      </if>
+      <if test="qq != null" >
+        qq = #{qq,jdbcType=VARCHAR},
+      </if>
+      <if test="position != null" >
+        position = #{position,jdbcType=INTEGER},
+      </if>
+      <if test="status != null" >
+        status = #{status,jdbcType=INTEGER},
+      </if>
+      <if test="remark != null" >
+        remark = #{remark,jdbcType=VARCHAR},
+      </if>
+      <if test="msgType != null" >
+        msg_type = #{msgType,jdbcType=VARCHAR},
+      </if>
+      <if test="subscribe != null" >
+        subscribe = #{subscribe,jdbcType=VARCHAR},
+      </if>
+      <if test="createTime != null" >
+        create_time = #{createTime,jdbcType=BIGINT},
+      </if>
+      <if test="updateTime != null" >
+        update_time = #{updateTime,jdbcType=BIGINT},
+      </if>
+    </set>
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+  <update id="updateByPrimaryKey" parameterType="cn.jia.user.entity.User" >
+    update user_info
+    set username = #{username,jdbcType=VARCHAR},
+      password = #{password,jdbcType=VARCHAR},
+      openid = #{openid,jdbcType=VARCHAR},
+      jiacn = #{jiacn,jdbcType=VARCHAR},
+      phone = #{phone,jdbcType=VARCHAR},
+      email = #{email,jdbcType=VARCHAR},
+      sex = #{sex,jdbcType=INTEGER},
+      nickname = #{nickname,jdbcType=VARCHAR},
+      avatar = #{avatar,jdbcType=VARCHAR},
+      city = #{city,jdbcType=VARCHAR},
+      country = #{country,jdbcType=VARCHAR},
+      province = #{province,jdbcType=VARCHAR},
+      latitude = #{latitude,jdbcType=VARCHAR},
+      longitude = #{longitude,jdbcType=VARCHAR},
+      point = #{point,jdbcType=INTEGER},
+      referrer = #{referrer,jdbcType=VARCHAR},
+      birthday = #{birthday,jdbcType=DATE},
+      tel = #{tel,jdbcType=VARCHAR},
+      weixin = #{weixin,jdbcType=VARCHAR},
+      qq = #{qq,jdbcType=VARCHAR},
+      position = #{position,jdbcType=INTEGER},
+      status = #{status,jdbcType=INTEGER},
+      remark = #{remark,jdbcType=VARCHAR},
+      msg_type = #{msgType,jdbcType=VARCHAR},
+      subscribe = #{subscribe,jdbcType=VARCHAR},
+      create_time = #{createTime,jdbcType=BIGINT},
+      update_time = #{updateTime,jdbcType=BIGINT}
+    where id = #{id,jdbcType=INTEGER}
+  </update>
+
+  <select id="selectAll" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_info
+  </select>
+  <select id="selectByJiacn" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_info
+    where jiacn = #{jiacn,jdbcType=VARCHAR}
+  </select>
+  <select id="selectByUsername" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_info
+    where username = #{username,jdbcType=VARCHAR}
+  </select>
+  <select id="selectByOpenid" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_info
+    where openid = #{openid,jdbcType=VARCHAR}
+  </select>
+  <select id="selectByPhone" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_info
+    where phone = #{phone,jdbcType=VARCHAR}
+  </select>
+  <select id="selectByRole" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select u.*
+    from user_info u left join user_role_rel r on u.id = r.user_id
+    where r.role_id = #{roleId,jdbcType=INTEGER}
+  </select>
+  <select id="selectByGroup" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select u.*
+    from user_info u left join user_group_rel r on u.id = r.user_id
+    where r.group_id = #{groupId,jdbcType=INTEGER}
+  </select>
+  <select id="selectByOrg" parameterType="java.lang.Integer" resultMap="BaseResultMap">
+    select u.*
+    from user_info u left join user_org_rel r on u.id = r.user_id
+    where r.org_id = #{orgId,jdbcType=INTEGER}
+  </select>
+  <select id="selectByExample" parameterType="cn.jia.user.entity.UserExample" resultMap="BaseResultMap">
+     select
+    <include refid="Base_Column_List" />
+    from user_info
+    <where>
+      <if test="username != null">
+        username LIKE CONCAT('%',#{username,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="openid != null">
+        and openid LIKE CONCAT('%',#{openid,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="jiacn != null">
+        and jiacn LIKE CONCAT('%',#{jiacn,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="phone != null">
+        and phone LIKE CONCAT('%',#{phone,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="email != null">
+        and email LIKE CONCAT('%',#{email,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="sex != null">
+        and sex = #{sex,jdbcType=INTEGER}
+      </if>
+      <if test="nickname != null">
+        and nickname LIKE CONCAT('%',#{nickname,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="city != null">
+        and city LIKE CONCAT('%',#{city,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="country != null">
+        and country LIKE CONCAT('%',#{country,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="province != null">
+        and province LIKE CONCAT('%',#{province,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="latitude != null">
+        and latitude = #{latitude,jdbcType=VARCHAR}
+      </if>
+      <if test="longitude != null">
+        and longitude = #{longitude,jdbcType=VARCHAR}
+      </if>
+      <if test="point != null">
+        and point = #{point,jdbcType=INTEGER}
+      </if>
+      <if test="referrer != null">
+        and referrer LIKE CONCAT('%',#{referrer,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="birthday != null">
+        and birthday = #{birthday,jdbcType=DATE}
+      </if>
+      <if test="createTimeStart != null">
+        and create_time >= #{createTimeStart,jdbcType=BIGINT}
+      </if>
+      <if test="createTimeEnd != null">
+        and #{createTimeEnd,jdbcType=BIGINT} >= create_time
+      </if>
+      <if test="updateTimeStart != null">
+        and update_time >= #{updateTimeStart,jdbcType=BIGINT}
+      </if>
+      <if test="updateTimeEnd != null">
+        and #{updateTimeEnd,jdbcType=BIGINT} >= update_time
+      </if>
+      <if test="orgId != null">
+        and id in (select o.user_id from user_org_rel o where o.org_id = #{orgId,jdbcType=INTEGER})
+      </if>
+      <if test="roleId != null">
+        and id in (select r.user_id from user_role_rel r where r.role_id = #{roleId,jdbcType=INTEGER})
+      </if>
+      <if test="groupId != null">
+        and id in (select g.user_id from user_group_rel g where g.group_id = #{groupId,jdbcType=INTEGER})
+      </if>
+    </where>
+  </select>
+  <select id="searchByExample" parameterType="cn.jia.user.entity.User" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from user_info
+    where 1 = 2
+    <if test="openid != null">
+      or openid LIKE CONCAT('%',#{openid,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="jiacn != null">
+      or jiacn LIKE CONCAT('%',#{jiacn,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="phone != null">
+      or phone LIKE CONCAT('%',#{phone,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="email != null">
+      or email LIKE CONCAT('%',#{email,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="sex != null">
+      or sex = #{sex,jdbcType=INTEGER}
+    </if>
+    <if test="nickname != null">
+      or nickname LIKE CONCAT('%',#{nickname,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="city != null">
+      or city LIKE CONCAT('%',#{city,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="country != null">
+      or country LIKE CONCAT('%',#{country,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="province != null">
+      or province LIKE CONCAT('%',#{province,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="latitude != null">
+      or latitude = #{latitude,jdbcType=VARCHAR}
+    </if>
+    <if test="longitude != null">
+      or longitude = #{longitude,jdbcType=VARCHAR}
+    </if>
+    <if test="point != null">
+      or point = #{point,jdbcType=INTEGER}
+    </if>
+    <if test="referrer != null">
+      or referrer LIKE CONCAT('%',#{referrer,jdbcType=VARCHAR},'%')
+    </if>
+    <if test="birthday != null">
+      or birthday = #{birthday,jdbcType=DATE}
+    </if>
+    <if test="createTime != null">
+      or create_time = #{createTime,jdbcType=INTEGER}
+    </if>
+    <if test="updateTime != null">
+      or update_time = #{updateTime,jdbcType=INTEGER}
+    </if>
+  </select>
+</mapper>
