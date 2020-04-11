@@ -41,7 +41,7 @@
 		<!-- lib versions -->
 		<junit.version>3.8.1</junit.version>
 		<spring.version>4.3.13.RELEASE</spring.version>
-		<springsecurity.version>4.2.3.RELEASE</springsecurity.version>
+		<springsecurity.version>4.2.14.RELEASE</springsecurity.version>
 		<springsecurityoath.version>2.0.18.RELEASE</springsecurityoath.version>
 		<springcloud.version>1.3.3.RELEASE</springcloud.version>
 		<mybatis.version>3.4.5</mybatis.version>
