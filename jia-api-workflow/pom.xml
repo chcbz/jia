@@ -137,12 +137,12 @@
 
 	<distributionManagement>
 		<snapshotRepository>
-			<id>nexus-snapshots</id>
-			<url>http://maven.wydiy.com/repository/maven-snapshots/</url>
+			<id>rdc-snapshots</id>
+			<url>https://repo.rdc.aliyun.com/repository/129198-snapshot-rBWP3V/</url>
 		</snapshotRepository>
 		<repository>
-			<id>nexus-releases</id>
-			<url>http://maven.wydiy.com/repository/maven-releases/</url>
+			<id>rdc-releases</id>
+			<url>https://repo.rdc.aliyun.com/repository/129198-release-e6bGka/</url>
 		</repository>
 		<!-- <repository> <id>ftp-repository</id> <url>ftp://jia.wydiy.com</url> </repository> -->
 	</distributionManagement>
