@@ -16,8 +16,8 @@
 		<!-- 注释控制完毕 -->
 
 		<!-- 数据库连接 -->
-		<jdbcConnection driverClass="com.mysql.jdbc.Driver" connectionURL="jdbc:mysql://wydiy.com:3306/12349_e2tt_com?characterEncoding=utf8"
-			userId="isp" password="mymail321">
+		<jdbcConnection driverClass="com.mysql.jdbc.Driver" connectionURL="jdbc:mysql://chaoyoufan.net:3306/jia?characterEncoding=utf8"
+			userId="root" password="comeongogogo">
 		</jdbcConnection>
 
 		<javaTypeResolver>
@@ -40,10 +40,10 @@
 			<property name="enableSubPackages" value="true" />
 		</javaClientGenerator>
 
-		<table schema="jia_point" tableName="point_gift" domainObjectName="Gift" enableCountByExample="false"
+		<!--<table schema="jia_point" tableName="point_gift" domainObjectName="Gift" enableCountByExample="false"
 			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
 			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
-		</table>
+		</table>-->
 		<table schema="jia_point" tableName="point_gift_usage" domainObjectName="GiftUsage" enableCountByExample="false"
 			enableDeleteByExample="false" enableSelectByExample="false" enableUpdateByExample="false" selectByExampleQueryId="false">
 			<generatedKey column="id" sqlStatement="Mysql" identity="true" />
