@@ -1,0 +1,104 @@
+en:
+  app:
+    start_date: Start Date
+    total: Total
+    title: Wait Task
+    manage: Manage
+    add: Add
+    del: Del
+    cancel: Cancel
+    save: Save
+    task_list: TaskList
+    task_add: TaskAdd
+    task_history: TaskHistory
+    alert: Alert
+    notify: Notify
+zh-CN:
+  app:
+    start_date: 开始日期
+    total: 合计
+    title: 待办事务
+    manage: 管理
+    add: 添加
+    del: 删除
+    cancel: 取消
+    save: 保存
+    submit: 提交
+    task_list: 任务列表
+    task_history: 历史任务
+    task_add: 添加任务
+    alert: 警告
+    notify: 通知
+    read: 阅读
+    copy: 复制
+  task:
+    type: 任务类型
+    type_notify: 常规提醒
+    type_pay: 支出
+    period: 任务周期
+    crond: 周期表达式
+    name: 任务名称
+    description: 任务描述
+    lunar: 农历周期
+    start_time: 开始时间
+    end_time: 结束时间
+    amount: 数量/金额
+    remind: 是否提醒
+    del_alert: 确定删除任务？
+    history: 历史任务
+    cancel_alert: 确定取消任务？
+    add: 添加任务
+    del: 删除任务
+    cancel: 取消任务
+  gift:
+    title: 礼品兑换
+    pay: 直接支付
+    qrcode: 二维码
+    consignee: 收货人
+    consignee_tips: 请填写收货人姓名
+    phone: 联系电话
+    phone_tips: 请填写收货人手机号码
+    address: 收货地址
+    address_tips: 请填写收货人详细收货地址
+    point: 积分
+    pay_notify: 支付完成，稍后会有售后人员联系您，请保持电话畅通！
+    pay_cancel: 已取消支付！
+    subscribe_notify: 该礼品只对公众号成员开放，请先关注公众号！
+  vote:
+    title: 每日一题
+    right_alert: 恭喜你，答案正确，增加{point}积分！
+    wrong_alert: 很遗憾，回答错误，正确答案是{opt},下次继续努力！
+    pub_author: 共{totalNum}人答题，{rightNum}人答对
+  phrase:
+    title: 每日一句
+    title_sub: 每日一句毒鸡汤，生活营养又健康
+    up: 赞
+    down: 踩
+    tips: 赏
+    say: 呻
+    others: ↙↘说吧，你还想怎样↙↘
+    copy: 剽窃
+    copy_success: 拿好，不谢！
+    next: 继续
+    add: 我来
+    close: 再见
+    pay_notify: 支付完成，您的支持是我们的强大动力！
+    pay_cancel: 已取消支付！
+    subscribe_notify: 该功能只对公众号成员开放，请先关注公众号！
+    add_success: 同时天涯沦落人，相逢何必曾相识！
+    pub_author: '阅读{num} {author} <a style="color: #576b95;" href="{copyrightLink}">{copyright}</a> 发布于{time}'
+    content_placeholder: 来吧...
+    feedback_title_placeholder: 反馈内容，要填
+    feedback_content_placeholder: 详细描述，可不填
+    feedback_name_placeholder: 您的大名，可不填
+    feedback_phone_placeholder: 您的手机号码，填吧
+    feedback_email_placeholder: 您的邮箱，可不填
+    feedback_success: 是的，大佬说得对！
+  dwz:
+    title: 短网址
+    short: 缩短网址
+    restore: 还原网址
+    long_url_placeholder: 请输入长网址
+    short_url_placeholder: 请输入短网址（如：https://dwz.chaoyoufan.net/xxx）或者直接输入后缀（如：xxx）
+    expire: 有效期
+    subscribe_notify: 该礼品只对公众号成员开放，请先关注公众号！

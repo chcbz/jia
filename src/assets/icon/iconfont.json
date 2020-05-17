@@ -1,0 +1,65 @@
+{
+  "id": "1594883",
+  "name": "cyf-web-task",
+  "font_family": "iconfont",
+  "css_prefix_text": "icon-",
+  "description": "",
+  "glyphs": [
+    {
+      "icon_id": "827617",
+      "name": "打赏",
+      "font_class": "dashang",
+      "unicode": "e647",
+      "unicode_decimal": 58951
+    },
+    {
+      "icon_id": "1546593",
+      "name": "退出",
+      "font_class": "tuichu",
+      "unicode": "e698",
+      "unicode_decimal": 59032
+    },
+    {
+      "icon_id": "2668368",
+      "name": "下一步",
+      "font_class": "xiayibu",
+      "unicode": "e62f",
+      "unicode_decimal": 58927
+    },
+    {
+      "icon_id": "4266145",
+      "name": "踩",
+      "font_class": "cai",
+      "unicode": "e70e",
+      "unicode_decimal": 59150
+    },
+    {
+      "icon_id": "4266193",
+      "name": "赞",
+      "font_class": "zan",
+      "unicode": "e720",
+      "unicode_decimal": 59168
+    },
+    {
+      "icon_id": "6010896",
+      "name": "复制",
+      "font_class": "fuzhi",
+      "unicode": "e60c",
+      "unicode_decimal": 58892
+    },
+    {
+      "icon_id": "6560987",
+      "name": "添加",
+      "font_class": "tianjia",
+      "unicode": "e614",
+      "unicode_decimal": 58900
+    },
+    {
+      "icon_id": "7383193",
+      "name": "吐槽",
+      "font_class": "taolun",
+      "unicode": "e6d4",
+      "unicode_decimal": 59092
+    }
+  ]
+}
