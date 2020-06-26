@@ -4,7 +4,7 @@
 <generatorConfiguration>
 
 	<!-- 配置mysql 驱动jar包路径.用了绝对路径 -->
-	<classPathEntry location="D:\workspace\project\mysql-connector-java-5.1.12-bin.jar" />
+	<classPathEntry location="D:\workspace\project\mysql-connector-java-5.1.26.jar" />
 
 	<context id="jia-mapper-wx_mysql_tables" targetRuntime="MyBatis3">
 
@@ -16,8 +16,8 @@
 		<!-- 注释控制完毕 -->
 
 		<!-- 数据库连接 -->
-		<jdbcConnection driverClass="com.mysql.jdbc.Driver" connectionURL="jdbc:mysql://wydiy.com:3306/isp?characterEncoding=utf8"
-			userId="isp" password="mymail321">
+		<jdbcConnection driverClass="com.mysql.jdbc.Driver" connectionURL="jdbc:mysql://chaoyoufan.net:3306/jia?characterEncoding=utf8"
+			userId="root" password="comeongogogo">
 		</jdbcConnection>
 
 		<javaTypeResolver>

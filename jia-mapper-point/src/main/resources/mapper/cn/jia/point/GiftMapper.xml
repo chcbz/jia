@@ -10,13 +10,14 @@
     <result column="point" property="point" jdbcType="INTEGER" />
     <result column="price" property="price" jdbcType="INTEGER" />
     <result column="quantity" property="quantity" jdbcType="INTEGER" />
+    <result column="virtual" property="virtual" jdbcType="INTEGER" />
     <result column="status" property="status" jdbcType="INTEGER" />
     <result column="create_time" property="createTime" jdbcType="BIGINT" />
     <result column="update_time" property="updateTime" jdbcType="BIGINT" />
   </resultMap>
   <sql id="Base_Column_List" >
-    id, client_id, name, description, pic_url, point, price, quantity, status, create_time, 
-    update_time
+    id, client_id, name, description, pic_url, point, price, quantity, virtual, status, 
+    create_time, update_time
   </sql>
   <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
     select 
@@ -34,12 +35,12 @@
     </selectKey>
     insert into point_gift (client_id, name, description, 
       pic_url, point, price, 
-      quantity, status, create_time, 
-      update_time)
+      quantity, virtual, status, 
+      create_time, update_time)
     values (#{clientId,jdbcType=VARCHAR}, #{name,jdbcType=VARCHAR}, #{description,jdbcType=VARCHAR}, 
       #{picUrl,jdbcType=VARCHAR}, #{point,jdbcType=INTEGER}, #{price,jdbcType=INTEGER}, 
-      #{quantity,jdbcType=INTEGER}, #{status,jdbcType=INTEGER}, #{createTime,jdbcType=BIGINT}, 
-      #{updateTime,jdbcType=BIGINT})
+      #{quantity,jdbcType=INTEGER}, #{virtual,jdbcType=INTEGER}, #{status,jdbcType=INTEGER}, 
+      #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT})
   </insert>
   <insert id="insertSelective" parameterType="cn.jia.point.entity.Gift" >
     <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
@@ -67,6 +68,9 @@
       </if>
       <if test="quantity != null" >
         quantity,
+      </if>
+      <if test="virtual != null" >
+        virtual,
       </if>
       <if test="status != null" >
         status,
@@ -99,6 +103,9 @@
       </if>
       <if test="quantity != null" >
         #{quantity,jdbcType=INTEGER},
+      </if>
+      <if test="virtual != null" >
+        #{virtual,jdbcType=INTEGER},
       </if>
       <if test="status != null" >
         #{status,jdbcType=INTEGER},
@@ -135,6 +142,9 @@
       <if test="quantity != null" >
         quantity = #{quantity,jdbcType=INTEGER},
       </if>
+      <if test="virtual != null" >
+        virtual = #{virtual,jdbcType=INTEGER},
+      </if>
       <if test="status != null" >
         status = #{status,jdbcType=INTEGER},
       </if>
@@ -156,6 +166,7 @@
       point = #{point,jdbcType=INTEGER},
       price = #{price,jdbcType=INTEGER},
       quantity = #{quantity,jdbcType=INTEGER},
+      virtual = #{virtual,jdbcType=INTEGER},
       status = #{status,jdbcType=INTEGER},
       create_time = #{createTime,jdbcType=BIGINT},
       update_time = #{updateTime,jdbcType=BIGINT}
@@ -167,22 +178,40 @@
     <include refid="Base_Column_List" />
     from point_gift
   </select>
-  <select id="selectByExample" parameterType="cn.jia.point.entity.Gift" resultMap="BaseResultMap">
+  <select id="selectByExample" parameterType="cn.jia.point.entity.GiftExample" resultMap="BaseResultMap">
     select
     <include refid="Base_Column_List" />
     from point_gift
     <where>
-      <if test="name != null">
-        name LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
+      <if test="clientId != null and clientStrictFlag != 1">
+        (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
       </if>
-      <if test="clientId != null">
-        and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      <if test="clientId != null and clientStrictFlag == 1">
+        client_id = #{clientId,jdbcType=VARCHAR}
+      </if>
+      <if test="clientId == null and clientStrictFlag == 1">
+        client_id is null
+      </if>
+      <if test="name != null">
+        and name LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
       </if>
       <if test="description != null">
         and description LIKE CONCAT('%',#{description,jdbcType=VARCHAR},'%')
       </if>
       <if test="status != null">
         and status = #{status,jdbcType=INTEGER}
+      </if>
+      <if test="createTimeStart != null">
+        and create_time >= #{createTimeStart,jdbcType=BIGINT}
+      </if>
+      <if test="createTimeEnd != null">
+        and #{createTimeEnd,jdbcType=BIGINT} >= create_time
+      </if>
+      <if test="updateTimeStart != null">
+        and update_time >= #{updateTimeStart,jdbcType=BIGINT}
+      </if>
+      <if test="updateTimeEnd != null">
+        and #{updateTimeEnd,jdbcType=BIGINT} >= update_time
       </if>
     </where>
   </select>

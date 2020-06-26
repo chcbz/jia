@@ -5,7 +5,7 @@
 
 	<groupId>cn.jia</groupId>
 	<artifactId>jia-mapper-core</artifactId>
-	<version>1.0.1</version>
+	<version>1.0.2</version>
 	<packaging>jar</packaging>
 
 	<name>jia-mapper-core</name>
@@ -42,7 +42,7 @@
 		<dependency>
 			<groupId>org.mybatis</groupId>
 			<artifactId>mybatis</artifactId>
-			<version>3.4.5</version>
+			<version>3.5.4</version>
 			<optional>true</optional>
 		</dependency>
 		<dependency>

@@ -1,8 +1,5 @@
 package cn.jia.core.ldap;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonInclude.Include;
-
 import java.io.Serializable;
 
 /**
@@ -11,7 +8,6 @@ import java.io.Serializable;
  * @date 2016年8月25日 下午4:57:43
  * @param <T>
  */
-@JsonInclude(value=Include.NON_NULL)
 public class LdapRequestPage<T> implements Serializable{
     private static final long serialVersionUID = -7995644969484016692L;
     /** 请求的序列，用来跟客户端保持同步 */
