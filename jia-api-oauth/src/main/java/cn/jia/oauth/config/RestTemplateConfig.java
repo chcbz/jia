@@ -1,11 +1,6 @@
-package cn.jia.core.configuration;
+package cn.jia.oauth.config;
 
-import java.io.IOException;
-import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,7 +15,10 @@ import org.springframework.http.converter.support.AllEncompassingFormHttpMessage
 import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestTemplate;
 
-import lombok.extern.slf4j.Slf4j;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 @Slf4j
 @Configuration
@@ -31,19 +29,17 @@ public class RestTemplateConfig {
     public RestTemplate restTemplate(ClientHttpRequestFactory factory){
     	RestTemplate template = new RestTemplate(factory);
     	// 使用 utf-8 编码集的 conver 替换默认的 conver（默认的 string conver 的编码集为 "ISO-8859-1"） 
-        List<HttpMessageConverter<?>> messageConverters = template.getMessageConverters(); 
-        Iterator<HttpMessageConverter<?>> iterator = messageConverters.iterator(); 
-        while (iterator.hasNext()) { 
-            HttpMessageConverter<?> converter = iterator.next(); 
-            if (converter instanceof StringHttpMessageConverter) { 
-                ((StringHttpMessageConverter)converter).setDefaultCharset(Charset.forName("utf-8"));
-            } else if(converter instanceof AllEncompassingFormHttpMessageConverter) {
-            	StringHttpMessageConverter stringHttpMessageConverter=new StringHttpMessageConverter(Charset.forName("utf-8"));
-                List<HttpMessageConverter<?>> cos2=new ArrayList<>();  
-                cos2.add(stringHttpMessageConverter);  
-                cos2.add(new ByteArrayHttpMessageConverter());  
-                cos2.add(new ResourceHttpMessageConverter());  
-                ((AllEncompassingFormHttpMessageConverter)converter).setPartConverters(cos2);
+        List<HttpMessageConverter<?>> messageConverters = template.getMessageConverters();
+        for (HttpMessageConverter<?> converter : messageConverters) {
+            if (converter instanceof StringHttpMessageConverter) {
+                ((StringHttpMessageConverter) converter).setDefaultCharset(StandardCharsets.UTF_8);
+            } else if (converter instanceof AllEncompassingFormHttpMessageConverter) {
+                StringHttpMessageConverter stringHttpMessageConverter = new StringHttpMessageConverter(StandardCharsets.UTF_8);
+                List<HttpMessageConverter<?>> cos2 = new ArrayList<>();
+                cos2.add(stringHttpMessageConverter);
+                cos2.add(new ByteArrayHttpMessageConverter());
+                cos2.add(new ResourceHttpMessageConverter());
+                ((AllEncompassingFormHttpMessageConverter) converter).setPartConverters(cos2);
             }
         }
         //异常处理
@@ -55,19 +51,17 @@ public class RestTemplateConfig {
     public RestTemplate singleRestTemplate(ClientHttpRequestFactory factory){
     	RestTemplate template = new RestTemplate(factory);
     	// 使用 utf-8 编码集的 conver 替换默认的 conver（默认的 string conver 的编码集为 "ISO-8859-1"） 
-        List<HttpMessageConverter<?>> messageConverters = template.getMessageConverters(); 
-        Iterator<HttpMessageConverter<?>> iterator = messageConverters.iterator(); 
-        while (iterator.hasNext()) { 
-            HttpMessageConverter<?> converter = iterator.next(); 
-            if (converter instanceof StringHttpMessageConverter) { 
-                ((StringHttpMessageConverter)converter).setDefaultCharset(Charset.forName("utf-8"));
-            } else if(converter instanceof AllEncompassingFormHttpMessageConverter) {
-            	StringHttpMessageConverter stringHttpMessageConverter=new StringHttpMessageConverter(Charset.forName("utf-8"));
-                List<HttpMessageConverter<?>> cos2=new ArrayList<>();  
-                cos2.add(stringHttpMessageConverter);  
-                cos2.add(new ByteArrayHttpMessageConverter());  
-                cos2.add(new ResourceHttpMessageConverter());  
-                ((AllEncompassingFormHttpMessageConverter)converter).setPartConverters(cos2);
+        List<HttpMessageConverter<?>> messageConverters = template.getMessageConverters();
+        for (HttpMessageConverter<?> converter : messageConverters) {
+            if (converter instanceof StringHttpMessageConverter) {
+                ((StringHttpMessageConverter) converter).setDefaultCharset(StandardCharsets.UTF_8);
+            } else if (converter instanceof AllEncompassingFormHttpMessageConverter) {
+                StringHttpMessageConverter stringHttpMessageConverter = new StringHttpMessageConverter(StandardCharsets.UTF_8);
+                List<HttpMessageConverter<?>> cos2 = new ArrayList<>();
+                cos2.add(stringHttpMessageConverter);
+                cos2.add(new ByteArrayHttpMessageConverter());
+                cos2.add(new ResourceHttpMessageConverter());
+                ((AllEncompassingFormHttpMessageConverter) converter).setPartConverters(cos2);
             }
         }
         //异常处理
