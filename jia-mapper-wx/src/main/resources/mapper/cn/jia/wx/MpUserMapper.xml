@@ -22,6 +22,7 @@
     <result column="subscribe_scene" property="subscribeScene" jdbcType="VARCHAR" />
     <result column="qr_scene" property="qrScene" jdbcType="VARCHAR" />
     <result column="qr_scene_str" property="qrSceneStr" jdbcType="VARCHAR" />
+    <result column="subscribe_items" property="subscribeItems" jdbcType="VARCHAR" />
     <result column="status" property="status" jdbcType="INTEGER" />
     <result column="remark" property="remark" jdbcType="VARCHAR" />
     <result column="create_time" property="createTime" jdbcType="BIGINT" />
@@ -30,7 +31,7 @@
   <sql id="Base_Column_List" >
     id, client_id, appid, subscribe, open_id, jiacn, subscribe_time, email, sex, language, 
     nickname, head_img_url, city, country, province, union_id, group_id, subscribe_scene, 
-    qr_scene, qr_scene_str, status, remark, create_time, update_time
+    qr_scene, qr_scene_str, subscribe_items, status, remark, create_time, update_time
   </sql>
   <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
     select 
@@ -52,16 +53,18 @@
       nickname, head_img_url, city, 
       country, province, union_id, 
       group_id, subscribe_scene, qr_scene, 
-      qr_scene_str, status, remark, 
-      create_time, update_time)
+      qr_scene_str, subscribe_items, status, 
+      remark, create_time, update_time
+      )
     values (#{clientId,jdbcType=VARCHAR}, #{appid,jdbcType=VARCHAR}, #{subscribe,jdbcType=BIT}, 
       #{openId,jdbcType=VARCHAR}, #{jiacn,jdbcType=VARCHAR}, #{subscribeTime,jdbcType=BIGINT}, 
       #{email,jdbcType=VARCHAR}, #{sex,jdbcType=INTEGER}, #{language,jdbcType=VARCHAR}, 
       #{nickname,jdbcType=VARCHAR}, #{headImgUrl,jdbcType=VARCHAR}, #{city,jdbcType=VARCHAR}, 
       #{country,jdbcType=VARCHAR}, #{province,jdbcType=VARCHAR}, #{unionId,jdbcType=VARCHAR}, 
       #{groupId,jdbcType=INTEGER}, #{subscribeScene,jdbcType=VARCHAR}, #{qrScene,jdbcType=VARCHAR}, 
-      #{qrSceneStr,jdbcType=VARCHAR}, #{status,jdbcType=INTEGER}, #{remark,jdbcType=VARCHAR}, 
-      #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT})
+      #{qrSceneStr,jdbcType=VARCHAR}, #{subscribeItems,jdbcType=VARCHAR}, #{status,jdbcType=INTEGER}, 
+      #{remark,jdbcType=VARCHAR}, #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT}
+      )
   </insert>
   <insert id="insertSelective" parameterType="cn.jia.wx.entity.MpUser" >
     <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
@@ -125,6 +128,9 @@
       </if>
       <if test="qrSceneStr != null" >
         qr_scene_str,
+      </if>
+      <if test="subscribeItems != null" >
+        subscribe_items,
       </if>
       <if test="status != null" >
         status,
@@ -196,6 +202,9 @@
       </if>
       <if test="qrSceneStr != null" >
         #{qrSceneStr,jdbcType=VARCHAR},
+      </if>
+      <if test="subscribeItems != null" >
+        #{subscribeItems,jdbcType=VARCHAR},
       </if>
       <if test="status != null" >
         #{status,jdbcType=INTEGER},
@@ -271,6 +280,9 @@
       <if test="qrSceneStr != null" >
         qr_scene_str = #{qrSceneStr,jdbcType=VARCHAR},
       </if>
+      <if test="subscribeItems != null" >
+        subscribe_items = #{subscribeItems,jdbcType=VARCHAR},
+      </if>
       <if test="status != null" >
         status = #{status,jdbcType=INTEGER},
       </if>
@@ -307,6 +319,7 @@
       subscribe_scene = #{subscribeScene,jdbcType=VARCHAR},
       qr_scene = #{qrScene,jdbcType=VARCHAR},
       qr_scene_str = #{qrSceneStr,jdbcType=VARCHAR},
+      subscribe_items = #{subscribeItems,jdbcType=VARCHAR},
       status = #{status,jdbcType=INTEGER},
       remark = #{remark,jdbcType=VARCHAR},
       create_time = #{createTime,jdbcType=BIGINT},
