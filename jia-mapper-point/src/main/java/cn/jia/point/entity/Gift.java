@@ -17,6 +17,8 @@ public class Gift {
 
     private Integer quantity;
 
+    private Integer virtual;
+
     private Integer status;
 
     private Long createTime;
@@ -85,6 +87,14 @@ public class Gift {
 
     public void setQuantity(Integer quantity) {
         this.quantity = quantity;
+    }
+
+    public Integer getVirtual() {
+        return virtual;
+    }
+
+    public void setVirtual(Integer virtual) {
+        this.virtual = virtual;
     }
 
     public Integer getStatus() {

@@ -41,6 +41,8 @@ public class MpUser {
 
     private String qrSceneStr;
 
+    private String subscribeItems;
+
     private Integer status;
 
     private String remark;
@@ -207,6 +209,14 @@ public class MpUser {
 
     public void setQrSceneStr(String qrSceneStr) {
         this.qrSceneStr = qrSceneStr == null ? null : qrSceneStr.trim();
+    }
+
+    public String getSubscribeItems() {
+        return subscribeItems;
+    }
+
+    public void setSubscribeItems(String subscribeItems) {
+        this.subscribeItems = subscribeItems == null ? null : subscribeItems.trim();
     }
 
     public Integer getStatus() {

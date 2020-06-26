@@ -1,6 +1,7 @@
 package cn.jia.point.dao;
 
 import cn.jia.point.entity.Gift;
+import cn.jia.point.entity.GiftExample;
 import com.github.pagehelper.Page;
 
 public interface GiftMapper {
@@ -18,5 +19,5 @@ public interface GiftMapper {
 
     Page<Gift> selectAll();
 
-    Page<Gift> selectByExample(Gift example);
+    Page<Gift> selectByExample(GiftExample example);
 }

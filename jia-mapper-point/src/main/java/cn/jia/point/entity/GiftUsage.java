@@ -21,6 +21,8 @@ public class GiftUsage {
 
     private String address;
 
+    private String cardNo;
+
     private Integer status;
 
     private Long time;
@@ -103,6 +105,14 @@ public class GiftUsage {
 
     public void setAddress(String address) {
         this.address = address == null ? null : address.trim();
+    }
+
+    public String getCardNo() {
+        return cardNo;
+    }
+
+    public void setCardNo(String cardNo) {
+        this.cardNo = cardNo == null ? null : cardNo.trim();
     }
 
     public Integer getStatus() {

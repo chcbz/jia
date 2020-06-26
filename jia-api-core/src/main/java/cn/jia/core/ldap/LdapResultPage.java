@@ -3,8 +3,6 @@ package cn.jia.core.ldap;
 import cn.jia.core.common.EsHandler;
 import cn.jia.core.entity.JSONResult;
 import cn.jia.core.exception.EsErrorConstants;
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonInclude.Include;
 
 import javax.servlet.http.HttpServletRequest;
 
@@ -15,7 +13,6 @@ import javax.servlet.http.HttpServletRequest;
  * @date 2016年8月25日 下午4:57:43
  * @param <T>
  */
-@JsonInclude(value=Include.NON_NULL)
 public class LdapResultPage<T> extends JSONResult<T> {
     private static final long serialVersionUID = 7880907731807860636L;
 

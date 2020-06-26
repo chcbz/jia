@@ -1,6 +1,7 @@
 package cn.jia.point.dao;
 
 import cn.jia.point.entity.GiftUsage;
+import cn.jia.point.entity.GiftUsageExample;
 import com.github.pagehelper.Page;
 
 public interface GiftUsageMapper {
@@ -20,5 +21,5 @@ public interface GiftUsageMapper {
 
     Page<GiftUsage> selectByUser(String jiacn);
 
-    Page<GiftUsage> selectByExample(GiftUsage example);
+    Page<GiftUsage> selectByExample(GiftUsageExample example);
 }

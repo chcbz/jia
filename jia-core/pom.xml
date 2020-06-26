@@ -4,7 +4,7 @@
 
 	<groupId>cn.jia</groupId>
 	<artifactId>jia-core</artifactId>
-	<version>1.0.15</version>
+	<version>1.0.16</version>
 	<packaging>jar</packaging>
 
 	<name>jia-core</name>
@@ -28,10 +28,6 @@
 					</compilerArguments>
 				</configuration>
 			</plugin>
-			<!-- Mybatis generator代码生成插件 配置 -->
-			<!-- <plugin> <groupId>org.mybatis.generator</groupId> <artifactId>mybatis-generator-maven-plugin</artifactId> <version>${mybatis.generator.version}</version> 
-				<configuration> <configurationFile>${mybatis.generator.generatorConfig.xml}</configurationFile> <overwrite>true</overwrite> 
-				<verbose>true</verbose> </configuration> </plugin> -->
 		</plugins>
 	</build>
 
@@ -40,11 +36,8 @@
 		<mybatis.generator.generatorConfig.xml>${basedir}/src/test/resources/generatorConfig.xml</mybatis.generator.generatorConfig.xml>
 		<!-- lib versions -->
 		<junit.version>3.8.1</junit.version>
-		<spring.version>4.3.13.RELEASE</spring.version>
-		<springsecurity.version>4.2.3.RELEASE</springsecurity.version>
-		<springsecurityoath.version>2.0.14.RELEASE</springsecurityoath.version>
-		<springcloud.version>1.3.3.RELEASE</springcloud.version>
-		<mybatis.version>3.4.5</mybatis.version>
+		<spring.version>5.2.6.RELEASE</spring.version>
+		<mybatis.version>3.5.4</mybatis.version>
 		<mybatis.spring.version>1.3.1</mybatis.spring.version>
 		<mysql.connector.version>5.1.20</mysql.connector.version>
 		<log4j.version>1.2.17</log4j.version>

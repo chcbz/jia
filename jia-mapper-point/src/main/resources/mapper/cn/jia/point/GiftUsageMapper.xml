@@ -12,12 +12,13 @@
     <result column="consignee" property="consignee" jdbcType="VARCHAR" />
     <result column="phone" property="phone" jdbcType="VARCHAR" />
     <result column="address" property="address" jdbcType="VARCHAR" />
+    <result column="card_no" property="cardNo" jdbcType="VARCHAR" />
     <result column="status" property="status" jdbcType="INTEGER" />
     <result column="time" property="time" jdbcType="BIGINT" />
   </resultMap>
   <sql id="Base_Column_List" >
     id, client_id, gift_id, jiacn, quantity, point, price, consignee, phone, address, 
-    status, time
+    card_no, status, time
   </sql>
   <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
     select 
@@ -36,11 +37,13 @@
     insert into point_gift_usage (client_id, gift_id, jiacn, 
       quantity, point, price, 
       consignee, phone, address, 
-      status, time)
+      card_no, status, time
+      )
     values (#{clientId,jdbcType=VARCHAR}, #{giftId,jdbcType=INTEGER}, #{jiacn,jdbcType=VARCHAR}, 
       #{quantity,jdbcType=INTEGER}, #{point,jdbcType=INTEGER}, #{price,jdbcType=INTEGER}, 
       #{consignee,jdbcType=VARCHAR}, #{phone,jdbcType=VARCHAR}, #{address,jdbcType=VARCHAR}, 
-      #{status,jdbcType=INTEGER}, #{time,jdbcType=BIGINT})
+      #{cardNo,jdbcType=VARCHAR}, #{status,jdbcType=INTEGER}, #{time,jdbcType=BIGINT}
+      )
   </insert>
   <insert id="insertSelective" parameterType="cn.jia.point.entity.GiftUsage" >
     <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
@@ -74,6 +77,9 @@
       </if>
       <if test="address != null" >
         address,
+      </if>
+      <if test="cardNo != null" >
+        card_no,
       </if>
       <if test="status != null" >
         status,
@@ -109,6 +115,9 @@
       </if>
       <if test="address != null" >
         #{address,jdbcType=VARCHAR},
+      </if>
+      <if test="cardNo != null" >
+        #{cardNo,jdbcType=VARCHAR},
       </if>
       <if test="status != null" >
         #{status,jdbcType=INTEGER},
@@ -148,6 +157,9 @@
       <if test="address != null" >
         address = #{address,jdbcType=VARCHAR},
       </if>
+      <if test="cardNo != null" >
+        card_no = #{cardNo,jdbcType=VARCHAR},
+      </if>
       <if test="status != null" >
         status = #{status,jdbcType=INTEGER},
       </if>
@@ -168,6 +180,7 @@
       consignee = #{consignee,jdbcType=VARCHAR},
       phone = #{phone,jdbcType=VARCHAR},
       address = #{address,jdbcType=VARCHAR},
+      card_no = #{cardNo,jdbcType=VARCHAR},
       status = #{status,jdbcType=INTEGER},
       time = #{time,jdbcType=BIGINT}
     where id = #{id,jdbcType=INTEGER}
@@ -185,19 +198,25 @@
     from point_gift_usage
     where jiacn = #{jiacn,jdbcType=VARCHAR}
   </select>
-  <select id="selectByExample" parameterType="cn.jia.point.entity.GiftUsage" resultMap="BaseResultMap">
+  <select id="selectByExample" parameterType="cn.jia.point.entity.GiftUsageExample" resultMap="BaseResultMap">
     select
     <include refid="Base_Column_List" />
     from point_gift
     <where>
+      <if test="clientId != null and clientStrictFlag != 1">
+        (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+      <if test="clientId != null and clientStrictFlag == 1">
+        client_id = #{clientId,jdbcType=VARCHAR}
+      </if>
+      <if test="clientId == null and clientStrictFlag == 1">
+        client_id is null
+      </if>
       <if test="consignee != null">
-        consignee LIKE CONCAT('%',#{consignee,jdbcType=VARCHAR},'%')
+        and consignee LIKE CONCAT('%',#{consignee,jdbcType=VARCHAR},'%')
       </if>
       <if test="address != null">
         and address LIKE CONCAT('%',#{address,jdbcType=VARCHAR},'%')
-      </if>
-      <if test="clientId != null">
-        and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
       </if>
       <if test="jiacn != null">
         and jiacn = #{jiacn,jdbcType=VARCHAR}
@@ -210,6 +229,12 @@
       </if>
       <if test="status != null">
         and status = #{status,jdbcType=INTEGER}
+      </if>
+      <if test="timeStart != null">
+        and time >= #{timeStart,jdbcType=BIGINT}
+      </if>
+      <if test="timeEnd != null">
+        and #{timeEnd,jdbcType=BIGINT} >= time
       </if>
     </where>
   </select>
