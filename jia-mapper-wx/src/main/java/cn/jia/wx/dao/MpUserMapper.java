@@ -15,9 +15,13 @@ public interface MpUserMapper {
 
     MpUser selectByOpenId(String openId);
 
+    MpUser selectByJiacn(String jiacn);
+
     int updateByPrimaryKeySelective(MpUser record);
 
     int updateByPrimaryKey(MpUser record);
 
     Page<MpUser> selectByExample(MpUser record);
+
+    int unsubscribeByExample(MpUser record);
 }

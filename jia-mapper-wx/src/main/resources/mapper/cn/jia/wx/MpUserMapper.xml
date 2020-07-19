@@ -327,10 +327,7 @@
     where id = #{id,jdbcType=INTEGER}
   </update>
 
-  <select id="selectByExample" parameterType="cn.jia.wx.entity.MpUser" resultMap="BaseResultMap">
-    select
-    <include refid="Base_Column_List" />
-    from wx_mp_user
+  <sql id="queryCondition">
     <where>
       <if test="clientId != null">
         client_id = #{clientId,jdbcType=VARCHAR}
@@ -354,11 +351,29 @@
         and subscribe = #{subscribe,jdbcType=BIT}
       </if>
     </where>
+  </sql>
+
+  <select id="selectByExample" parameterType="cn.jia.wx.entity.MpUser" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from wx_mp_user
+    <include refid="queryCondition"/>
   </select>
-  <select id="selectByOpenId" resultMap="BaseResultMap" parameterType="java.lang.String" >
+  <select id="selectByOpenId" resultMap="BaseResultMap" parameterType="java.lang.String">
     select
     <include refid="Base_Column_List" />
     from wx_mp_user
     where open_id = #{openId,jdbcType=VARCHAR}
+  </select>
+  <update id="unsubscribeByExample" parameterType="cn.jia.wx.entity.MpUser">
+    update wx_mp_user
+    set subscribe = 0, update_time = now()
+    <include refid="queryCondition"/>
+  </update>
+  <select id="selectByJiacn" resultMap="BaseResultMap" parameterType="java.lang.String">
+    select
+    <include refid="Base_Column_List" />
+    from wx_mp_user
+    where jiacn = #{jiacn,jdbcType=VARCHAR}
   </select>
 </mapper>
