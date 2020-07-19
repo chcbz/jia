@@ -5,7 +5,7 @@
 
     <groupId>cn.jia</groupId>
     <artifactId>jia-mapper-wx</artifactId>
-    <version>1.0.2-SNAPSHOT</version>
+    <version>1.0.2</version>
     <packaging>jar</packaging>
 
     <name>jia-mapper-wx</name>
