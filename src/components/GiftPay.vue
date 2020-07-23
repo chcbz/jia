@@ -37,7 +37,8 @@
           <x-textarea :title="$t('gift.address')" v-model="address"
                       :placeholder="$t('gift.address_tips')"
                       :show-counter="false"
-                      :rows="2"></x-textarea>
+                      :rows="2"
+                      v-show="virtual != 1"></x-textarea>
           <x-button action-type="button" style="width:92%;"
                     type="primary"
                     @click.native="toPay">{{$t('app.submit')}}</x-button>
@@ -80,6 +81,7 @@ export default {
       this.point = data.point
       this.price = data.price / 100
       this.quantity = data.quantity
+      this.virtual = data.virtual
       document.title = this.name + ' - ' + this.$store.state.global.title
     }).catch(error => {
       if (error.response.status === 401) {
@@ -115,6 +117,24 @@ export default {
           onHide () {
             window.location.href = 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect'
           }
+        })
+      }
+      if (!this.consignee) {
+        AlertModule.show({
+          title: _this.$t('app.notify'),
+          content: _this.$t('gift.consignee_tips')
+        })
+      }
+      if (!this.phone) {
+        AlertModule.show({
+          title: _this.$t('app.notify'),
+          content: _this.$t('gift.phone_tips')
+        })
+      }
+      if (this.virtual !== 1 && !this.address) {
+        AlertModule.show({
+          title: _this.$t('app.notify'),
+          content: _this.$t('gift.address_tips')
         })
       }
       this.$http.post(baseUrl + '/gift/usage/add', {
@@ -237,6 +257,7 @@ export default {
       consignee: '',
       phone: '',
       address: '',
+      virtual: 1,
       payMoney: '0'
     }
   },

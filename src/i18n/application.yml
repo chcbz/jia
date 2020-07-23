@@ -54,12 +54,12 @@ zh-CN:
     title: 礼品兑换
     pay: 直接支付
     qrcode: 二维码
-    consignee: 收货人
-    consignee_tips: 请填写收货人姓名
+    consignee: 联系人
+    consignee_tips: 请填写联系人姓名
     phone: 联系电话
-    phone_tips: 请填写收货人手机号码
+    phone_tips: 请填写联系人手机号码
     address: 收货地址
-    address_tips: 请填写收货人详细收货地址
+    address_tips: 请填写联系人详细收货地址
     point: 积分
     pay_notify: 支付完成，稍后会有售后人员联系您，请保持电话畅通！
     pay_cancel: 已取消支付！
