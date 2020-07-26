@@ -118,24 +118,28 @@ export default {
             window.location.href = 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect'
           }
         })
+        return
       }
       if (!this.consignee) {
         AlertModule.show({
           title: _this.$t('app.notify'),
           content: _this.$t('gift.consignee_tips')
         })
+        return
       }
       if (!this.phone) {
         AlertModule.show({
           title: _this.$t('app.notify'),
           content: _this.$t('gift.phone_tips')
         })
+        return
       }
       if (this.virtual !== 1 && !this.address) {
         AlertModule.show({
           title: _this.$t('app.notify'),
           content: _this.$t('gift.address_tips')
         })
+        return
       }
       this.$http.post(baseUrl + '/gift/usage/add', {
         jiacn: jiacn,
