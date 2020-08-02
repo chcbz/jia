@@ -5,6 +5,9 @@
     <id column="id" property="id" jdbcType="INTEGER" />
     <result column="client_id" property="clientId" jdbcType="VARCHAR" />
     <result column="gift_id" property="giftId" jdbcType="INTEGER" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="description" property="description" jdbcType="VARCHAR" />
+    <result column="pic_url" property="picUrl" jdbcType="VARCHAR" />
     <result column="jiacn" property="jiacn" jdbcType="VARCHAR" />
     <result column="quantity" property="quantity" jdbcType="INTEGER" />
     <result column="point" property="point" jdbcType="INTEGER" />
@@ -17,8 +20,8 @@
     <result column="time" property="time" jdbcType="BIGINT" />
   </resultMap>
   <sql id="Base_Column_List" >
-    id, client_id, gift_id, jiacn, quantity, point, price, consignee, phone, address, 
-    card_no, status, time
+    id, client_id, gift_id, name, description, pic_url, jiacn, quantity, point, price, 
+    consignee, phone, address, card_no, status, time
   </sql>
   <select id="selectByPrimaryKey" resultMap="BaseResultMap" parameterType="java.lang.Integer" >
     select 
@@ -34,12 +37,14 @@
     <selectKey resultType="java.lang.Integer" keyProperty="id" order="AFTER" >
       SELECT LAST_INSERT_ID()
     </selectKey>
-    insert into point_gift_usage (client_id, gift_id, jiacn, 
+    insert into point_gift_usage (client_id, gift_id, name, 
+      description, pic_url, jiacn, 
       quantity, point, price, 
       consignee, phone, address, 
       card_no, status, time
       )
-    values (#{clientId,jdbcType=VARCHAR}, #{giftId,jdbcType=INTEGER}, #{jiacn,jdbcType=VARCHAR}, 
+    values (#{clientId,jdbcType=VARCHAR}, #{giftId,jdbcType=INTEGER}, #{name,jdbcType=VARCHAR}, 
+      #{description,jdbcType=VARCHAR}, #{picUrl,jdbcType=VARCHAR}, #{jiacn,jdbcType=VARCHAR}, 
       #{quantity,jdbcType=INTEGER}, #{point,jdbcType=INTEGER}, #{price,jdbcType=INTEGER}, 
       #{consignee,jdbcType=VARCHAR}, #{phone,jdbcType=VARCHAR}, #{address,jdbcType=VARCHAR}, 
       #{cardNo,jdbcType=VARCHAR}, #{status,jdbcType=INTEGER}, #{time,jdbcType=BIGINT}
@@ -56,6 +61,15 @@
       </if>
       <if test="giftId != null" >
         gift_id,
+      </if>
+      <if test="name != null" >
+        name,
+      </if>
+      <if test="description != null" >
+        description,
+      </if>
+      <if test="picUrl != null" >
+        pic_url,
       </if>
       <if test="jiacn != null" >
         jiacn,
@@ -94,6 +108,15 @@
       </if>
       <if test="giftId != null" >
         #{giftId,jdbcType=INTEGER},
+      </if>
+      <if test="name != null" >
+        #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="description != null" >
+        #{description,jdbcType=VARCHAR},
+      </if>
+      <if test="picUrl != null" >
+        #{picUrl,jdbcType=VARCHAR},
       </if>
       <if test="jiacn != null" >
         #{jiacn,jdbcType=VARCHAR},
@@ -136,6 +159,15 @@
       <if test="giftId != null" >
         gift_id = #{giftId,jdbcType=INTEGER},
       </if>
+      <if test="name != null" >
+        name = #{name,jdbcType=VARCHAR},
+      </if>
+      <if test="description != null" >
+        description = #{description,jdbcType=VARCHAR},
+      </if>
+      <if test="picUrl != null" >
+        pic_url = #{picUrl,jdbcType=VARCHAR},
+      </if>
       <if test="jiacn != null" >
         jiacn = #{jiacn,jdbcType=VARCHAR},
       </if>
@@ -173,6 +205,9 @@
     update point_gift_usage
     set client_id = #{clientId,jdbcType=VARCHAR},
       gift_id = #{giftId,jdbcType=INTEGER},
+      name = #{name,jdbcType=VARCHAR},
+      description = #{description,jdbcType=VARCHAR},
+      pic_url = #{picUrl,jdbcType=VARCHAR},
       jiacn = #{jiacn,jdbcType=VARCHAR},
       quantity = #{quantity,jdbcType=INTEGER},
       point = #{point,jdbcType=INTEGER},

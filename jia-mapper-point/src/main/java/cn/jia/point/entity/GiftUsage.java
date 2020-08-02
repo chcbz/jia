@@ -7,6 +7,12 @@ public class GiftUsage {
 
     private Integer giftId;
 
+    private String name;
+
+    private String description;
+
+    private String picUrl;
+
     private String jiacn;
 
     private Integer quantity;
@@ -49,6 +55,30 @@ public class GiftUsage {
 
     public void setGiftId(Integer giftId) {
         this.giftId = giftId;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name == null ? null : name.trim();
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description == null ? null : description.trim();
+    }
+
+    public String getPicUrl() {
+        return picUrl;
+    }
+
+    public void setPicUrl(String picUrl) {
+        this.picUrl = picUrl == null ? null : picUrl.trim();
     }
 
     public String getJiacn() {
