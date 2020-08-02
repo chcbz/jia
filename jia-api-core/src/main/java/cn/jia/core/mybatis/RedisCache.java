@@ -1,20 +1,17 @@
 package cn.jia.core.mybatis;
 
+import cn.jia.core.configuration.SpringContextHolder;
+import org.apache.ibatis.cache.Cache;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.connection.RedisServerCommands;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.util.CollectionUtils;
+
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import org.apache.ibatis.cache.Cache;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessException;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.util.CollectionUtils;
-
-import cn.jia.core.configuration.SpringContextHolder;
 
 /**
  * 使用Redis来做Mybatis的二级缓存
@@ -44,8 +41,8 @@ public class RedisCache implements Cache {
 
     /**
      * Put query result to redis
-     * @param key
-     * @param value
+     * @param key 键
+     * @param value 值
      */
     @Override
     public void putObject(Object key, Object value) {
@@ -59,11 +56,10 @@ public class RedisCache implements Cache {
         redisTemplate = getRedisTemplate();
         try {
             if (key != null) {
-                Object obj = redisTemplate.opsForValue().get(key.toString());
-                return obj;
+                return redisTemplate.opsForValue().get(key.toString());
             }
         } catch (Exception e) {
-            logger.error("redis ");
+            logger.error("[RedisCache]getObject error", e);
         }
         return null;
     }
@@ -76,6 +72,7 @@ public class RedisCache implements Cache {
                 redisTemplate.delete(key.toString());
             }
         } catch (Exception e) {
+            logger.error("[RedisCache]removeObject error", e);
         }
         return null;
     }
@@ -90,18 +87,15 @@ public class RedisCache implements Cache {
                 redisTemplate.delete(keys);
             }
         } catch (Exception e) {
+            logger.error("[RedisCache]clear error", e);
         }
     }
 
     @Override
     public int getSize() {
         redisTemplate = getRedisTemplate();
-        Long size = (Long) redisTemplate.execute(new RedisCallback<Long>() {
-            @Override
-            public Long doInRedis(RedisConnection connection) throws DataAccessException {
-                return connection.dbSize();
-            }
-        });
+        Long size = redisTemplate.execute(RedisServerCommands::dbSize);
+        assert size != null;
         return size.intValue();
     }
 
