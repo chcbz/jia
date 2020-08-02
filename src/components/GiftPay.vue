@@ -90,6 +90,7 @@ export default {
       this.description = data.description
       this.point = data.point
       this.price = data.price / 100
+      this.payMoney = '0'
       this.quantity = data.quantity
       this.virtual = data.virtual
       document.title = this.name + ' - ' + this.$store.state.global.title
@@ -272,7 +273,7 @@ export default {
       phone: '',
       address: '',
       virtual: 1,
-      payMoney: '0'
+      payMoney: '-1'
     }
   },
   directives: {
