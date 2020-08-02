@@ -64,6 +64,12 @@ zh-CN:
     pay_notify: 支付完成，稍后会有售后人员联系您，请保持电话畅通！
     pay_cancel: 已取消支付！
     subscribe_notify: 该礼品只对公众号成员开放，请先关注公众号！
+    order_list: 购买清单
+    quantity_title: 共{quantity}件
+    del_alert: 确定删除订单？
+    cancel_alert: 确定取消订单？
+    del: 删除订单
+    cancel: 取消订单
   vote:
     title: 每日一题
     right_alert: 恭喜你，答案正确，增加{point}积分！

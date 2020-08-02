@@ -40,6 +40,14 @@ export default [
     }
   },
   {
+    path: '/order/list',
+    name: 'OrderList',
+    component: resolve => require(['@/components/OrderList'], resolve),
+    meta: {
+      title: 'gift.order_list'
+    }
+  },
+  {
     path: '/vote',
     name: 'VoteTick',
     component: resolve => require(['@/components/VoteTick'], resolve),

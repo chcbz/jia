@@ -60,9 +60,19 @@ import { Card, Tab, TabItem, Swiper, SwiperItem, Qrcode, dateFormat, TransferDom
 
 export default {
   created: function () {
+    this.$store.commit('global/setMenu', {
+      menus: [{
+        key: 'list',
+        value: this.$t('gift.order_list'),
+        fn: function () {
+          this.$router.push({name: 'OrderList'})
+        }
+      }],
+      event: this
+    })
     this.$store.commit('global/setTitle', this.$t('gift.title'))
     this.$store.commit('global/setShowBack', false)
-    this.$store.commit('global/setShowMore', false)
+    this.$store.commit('global/setShowMore', true)
     var baseUrl = this.$store.state.api.baseUrl
     var appid = this.$store.state.global.user.appid
     var token = this.$store.state.api.token()
