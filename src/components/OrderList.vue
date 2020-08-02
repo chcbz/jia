@@ -40,7 +40,7 @@ export default {
           meta: {
             source: element.point ? element.point + _this.$t('gift.point') : '￥' + element.price,
             date: dateFormat(this.$store.state.util.fromTimeStamp(element.time), 'YYYY-MM-DD'),
-            other: _this.$t('gift.quantity_title', {'quantity': element.quantity})
+            other: _this.$t('gift.quantity_title', {'quantity': element.quantity}) + '　' + _this.statusMap[element.status]
           }
         }
         this.list.push(orderItem)
@@ -125,7 +125,12 @@ export default {
       list: [],
       opMenu: {},
       showOpMenu: false,
-      selectId: 0
+      selectId: 0,
+      statusMap: {
+        '0': '未支付',
+        '1': '已支付',
+        '5': '已取消'
+      }
     }
   },
   directives: {
