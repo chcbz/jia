@@ -104,6 +104,7 @@ public class ClassUtil {
                         childFilePath = childFilePath.substring(childFilePath.indexOf(File.separator + "classes") + 9,
                                 childFilePath.lastIndexOf("."));
                         childFilePath = childFilePath.replace(File.separator, ".");
+                        childFilePath = childFilePath.startsWith("java.main") ? childFilePath.substring(10) : childFilePath;
                         myClassName.add(childFilePath);
                     }
                 }
