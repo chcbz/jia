@@ -5,6 +5,8 @@ import java.math.BigDecimal;
 public class TaskPlan {
     private Integer id;
 
+    private String clientId;
+
     private String jiacn;
 
     private Integer type;
@@ -171,5 +173,13 @@ public class TaskPlan {
 
     public void setUpdateTime(Long updateTime) {
         this.updateTime = updateTime;
+    }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public void setClientId(String clientId) {
+        this.clientId = clientId;
     }
 }
