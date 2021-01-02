@@ -1,0 +1,43 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+dependencies {
+    implementation 'org.mybatis:mybatis:3.5.4'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.8.0'
+    implementation 'com.github.pagehelper:pagehelper:5.0.1'
+    implementation 'com.baomidou:mybatis-plus:3.3.0'
+    compileOnly 'org.projectlombok:lombok:1.16.18'
+    testImplementation 'cn.jia:jia-core-test:1.0.0-SNAPSHOT'
+}
+
+group = 'cn.jia'
+version = '1.0.3-SNAPSHOT'
+description = 'jia-mapper-wx'
+sourceCompatibility = '1.8'
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            url = version.endsWith('SNAPSHOT') ? rootProject.ext.snapshotsRepoUrl : rootProject.ext.releasesRepoUrl
+            credentials {
+                username rootProject.ext.repoUsername
+                password rootProject.ext.repoPassword
+            }
+        }
+    }
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+test {
+    useJUnitPlatform()
+}

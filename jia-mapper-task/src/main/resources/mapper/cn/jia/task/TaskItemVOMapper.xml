@@ -4,6 +4,7 @@
   <resultMap id="BaseResultMap" type="cn.jia.task.entity.TaskItemVO" >
     <result column="id" property="id" jdbcType="INTEGER" />
     <result column="plan_id" property="planId" jdbcType="INTEGER" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
     <result column="jiacn" property="jiacn" jdbcType="VARCHAR" />
     <result column="type" property="type" jdbcType="INTEGER" />
     <result column="period" property="period" jdbcType="INTEGER" />
@@ -19,7 +20,7 @@
   </resultMap>
 
   <sql id="Base_Column_List" >
-    id, plan_id, jiacn, type, period, crond, name, description, amount, remind, remind_phone, 
+    id, plan_id, client_id, jiacn, type, period, crond, name, description, amount, remind, remind_phone,
     remind_msg, status, time
   </sql>
   <select id="selectByExample" parameterType="cn.jia.task.entity.TaskItemVOExample" resultMap="BaseResultMap">
@@ -27,8 +28,11 @@
     <include refid="Base_Column_List" />
     from v_task_item
     <where>
+      <if test="clientId != null">
+        client_id = #{clientId,jdbcType=VARCHAR}
+      </if>
       <if test="jiacn != null">
-        jiacn = #{jiacn,jdbcType=VARCHAR}
+        and jiacn = #{jiacn,jdbcType=VARCHAR}
       </if>
       <if test="type != null">
         and type = #{type,jdbcType=INTEGER}

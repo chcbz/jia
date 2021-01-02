@@ -1,26 +1,17 @@
 package cn.jia.wx.dao;
 
 import cn.jia.wx.entity.MpInfo;
+import cn.jia.wx.entity.MpInfoExample;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.github.pagehelper.Page;
 
 import java.util.List;
 
-public interface MpInfoMapper {
-    int deleteByPrimaryKey(Integer acid);
+public interface MpInfoMapper extends BaseMapper<MpInfo> {
 
-    int insert(MpInfo record);
-
-    int insertSelective(MpInfo record);
-
-    MpInfo selectByPrimaryKey(Integer acid);
-
-    int updateByPrimaryKeySelective(MpInfo record);
-
-    int updateByPrimaryKey(MpInfo record);
-    
     List<MpInfo> selectAll();
     
-    Page<MpInfo> selectByExample(MpInfo record);
+    Page<MpInfo> selectByExample(MpInfoExample record);
     
     MpInfo selectByKey(String key);
 }

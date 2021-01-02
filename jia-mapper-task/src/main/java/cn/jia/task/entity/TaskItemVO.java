@@ -7,6 +7,8 @@ public class TaskItemVO {
 
     private Integer planId;
 
+    private String clientId;
+
     private String jiacn;
 
     private Integer type;
@@ -141,5 +143,13 @@ public class TaskItemVO {
 
     public void setTime(Long time) {
         this.time = time;
+    }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public void setClientId(String clientId) {
+        this.clientId = clientId;
     }
 }

@@ -477,6 +477,12 @@
       <if test="groupId != null">
         and id in (select g.user_id from user_group_rel g where g.group_id = #{groupId,jdbcType=INTEGER})
       </if>
+      <if test="jiacnList != null">
+        and jiacn in
+        <foreach collection="jiacnList" item="jiacn" open="(" close=")" separator=",">
+          #{jiacn, jdbcType=VARCHAR}
+        </foreach>
+      </if>
     </where>
   </select>
   <select id="searchByExample" parameterType="cn.jia.user.entity.User" resultMap="BaseResultMap">
