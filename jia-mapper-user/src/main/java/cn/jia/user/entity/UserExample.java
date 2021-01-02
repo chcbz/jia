@@ -1,7 +1,11 @@
 package cn.jia.user.entity;
 
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
+import java.util.List;
+
+@EqualsAndHashCode(callSuper = true)
 @Data
 public class UserExample extends User {
     private Long createTimeStart;
@@ -11,4 +15,5 @@ public class UserExample extends User {
     private Integer orgId;
     private Integer roleId;
     private Integer groupId;
+    private List<String> jiacnList;
 }

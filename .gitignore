@@ -24,3 +24,10 @@ hs_err_pid*
 /.idea/
 /*/target/
 *.iml
+
+# Gradle File
+/*/.gradle/
+/*/gradle/
+/*/build/
+/*/gradlew
+/*/gradlew.bat
