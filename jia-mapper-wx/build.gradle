@@ -8,7 +8,8 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-annotations:2.8.0'
     implementation 'com.github.pagehelper:pagehelper:5.0.1'
     implementation 'com.baomidou:mybatis-plus:3.3.0'
-    compileOnly 'org.projectlombok:lombok:1.16.18'
+    annotationProcessor 'org.projectlombok:lombok:1.18.12'
+    compileOnly 'org.projectlombok:lombok:1.18.12'
     testImplementation 'cn.jia:jia-core-test:1.0.0-SNAPSHOT'
 }
 
