@@ -1,153 +1,67 @@
 package cn.jia.wx.entity;
 
-public class PayOrder {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-01-09
+ */
+@Data
+@EqualsAndHashCode(callSuper = false)
+@Accessors(chain = true)
+@TableName("wx_pay_order")
+@ApiModel(value="PayOrder对象")
+public class PayOrder extends BaseEntity {
+
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
+    @ApiModelProperty(value = "公众账号ID")
     private String appid;
 
+    @ApiModelProperty(value = "商户号")
     private String mchId;
 
+    @ApiModelProperty(value = "用户标识")
     private String openid;
 
+    @ApiModelProperty(value = "商户订单号")
     private String outTradeNo;
 
+    @ApiModelProperty(value = "商品ID")
     private String productId;
 
+    @ApiModelProperty(value = "预支付ID")
     private String prepayId;
 
+    @ApiModelProperty(value = "商品描述")
     private String body;
 
+    @ApiModelProperty(value = "商品详情")
     private String detail;
 
+    @ApiModelProperty(value = "标价金额")
     private Integer totalFee;
 
+    @ApiModelProperty(value = "交易类型")
     private String tradeType;
 
+    @ApiModelProperty(value = "终端IP")
     private String spbillCreateIp;
 
+    @ApiModelProperty(value = "微信支付订单号")
     private String transactionId;
 
-    private Long createTime;
-
-    private Long updateTime;
-
-    public Integer getId() {
-        return id;
-    }
-
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public String getAppid() {
-        return appid;
-    }
-
-    public void setAppid(String appid) {
-        this.appid = appid == null ? null : appid.trim();
-    }
-
-    public String getMchId() {
-        return mchId;
-    }
-
-    public void setMchId(String mchId) {
-        this.mchId = mchId == null ? null : mchId.trim();
-    }
-
-    public String getOpenid() {
-        return openid;
-    }
-
-    public void setOpenid(String openid) {
-        this.openid = openid == null ? null : openid.trim();
-    }
-
-    public String getOutTradeNo() {
-        return outTradeNo;
-    }
-
-    public void setOutTradeNo(String outTradeNo) {
-        this.outTradeNo = outTradeNo == null ? null : outTradeNo.trim();
-    }
-
-    public String getProductId() {
-        return productId;
-    }
-
-    public void setProductId(String productId) {
-        this.productId = productId == null ? null : productId.trim();
-    }
-
-    public String getPrepayId() {
-        return prepayId;
-    }
-
-    public void setPrepayId(String prepayId) {
-        this.prepayId = prepayId == null ? null : prepayId.trim();
-    }
-
-    public String getBody() {
-        return body;
-    }
-
-    public void setBody(String body) {
-        this.body = body == null ? null : body.trim();
-    }
-
-    public String getDetail() {
-        return detail;
-    }
-
-    public void setDetail(String detail) {
-        this.detail = detail == null ? null : detail.trim();
-    }
-
-    public Integer getTotalFee() {
-        return totalFee;
-    }
-
-    public void setTotalFee(Integer totalFee) {
-        this.totalFee = totalFee;
-    }
-
-    public String getTradeType() {
-        return tradeType;
-    }
-
-    public void setTradeType(String tradeType) {
-        this.tradeType = tradeType == null ? null : tradeType.trim();
-    }
-
-    public String getSpbillCreateIp() {
-        return spbillCreateIp;
-    }
-
-    public void setSpbillCreateIp(String spbillCreateIp) {
-        this.spbillCreateIp = spbillCreateIp == null ? null : spbillCreateIp.trim();
-    }
-
-    public String getTransactionId() {
-        return transactionId;
-    }
-
-    public void setTransactionId(String transactionId) {
-        this.transactionId = transactionId == null ? null : transactionId.trim();
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
 }

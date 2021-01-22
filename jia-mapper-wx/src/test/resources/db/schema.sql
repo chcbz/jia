@@ -23,5 +23,95 @@ CREATE TABLE wx_mp_info (
   subscribeurl varchar(120) DEFAULT NULL,
   auth_refresh_token varchar(255) DEFAULT NULL,
   PRIMARY KEY (acid),
-  KEY idx_key (appid) USING BTREE
-);
+  KEY wx_mp_info_idx_key (appid) USING BTREE
+) COMMENT='微信公众号信息';
+
+CREATE TABLE wx_mp_template (
+  template_id varchar(50) NOT NULL COMMENT '模板ID',
+  client_id varchar(50) DEFAULT NULL COMMENT '应用标识码',
+  appid varchar(50) DEFAULT NULL COMMENT '开发者ID',
+  title varchar(50) DEFAULT NULL COMMENT '标题',
+  primary_industry varchar(30) DEFAULT NULL COMMENT '主要行业',
+  deputy_industry varchar(30) DEFAULT NULL COMMENT '子行业',
+  content varchar(500) DEFAULT NULL COMMENT '模板内容',
+  example varchar(500) DEFAULT NULL COMMENT '示例',
+  status int DEFAULT '1' COMMENT '状态 1有效 0无效',
+  create_time bigint DEFAULT NULL COMMENT '创建日期',
+  update_time bigint DEFAULT NULL COMMENT '更新日期',
+  PRIMARY KEY (template_id)
+) COMMENT='微信公众号消息模板表';
+
+CREATE TABLE wx_mp_user (
+  id int NOT NULL AUTO_INCREMENT COMMENT '用户ID',
+  client_id varchar(50) DEFAULT NULL COMMENT '应用标识码',
+  appid varchar(50) DEFAULT NULL COMMENT '开发者ID',
+  subscribe tinyint(1) DEFAULT NULL COMMENT '是否订阅',
+  open_id varchar(32) DEFAULT NULL COMMENT '微信openid',
+  jiacn varchar(32) DEFAULT NULL COMMENT 'Jia账号',
+  subscribe_time bigint DEFAULT NULL COMMENT '电话',
+  email varchar(50) DEFAULT NULL COMMENT '邮箱',
+  sex int DEFAULT '0' COMMENT '性别 1男性 2女性 0未知',
+  language varchar(10) DEFAULT NULL COMMENT '语言',
+  nickname varchar(50) DEFAULT NULL COMMENT '昵称',
+  head_img_url varchar(200) DEFAULT NULL COMMENT '头像',
+  city varchar(50) DEFAULT NULL COMMENT '城市',
+  country varchar(50) DEFAULT NULL COMMENT '国家',
+  province varchar(50) DEFAULT NULL COMMENT '省份',
+  union_id varchar(255) DEFAULT NULL COMMENT '开放平台帐号',
+  group_id int DEFAULT NULL COMMENT '组ID',
+  subscribe_scene varchar(50) DEFAULT NULL COMMENT '关注的渠道来源',
+  qr_scene varchar(100) DEFAULT NULL COMMENT '二维码扫码场景',
+  qr_scene_str varchar(200) DEFAULT NULL COMMENT '二维码扫码场景描述',
+  subscribe_items varchar(2000) DEFAULT NULL COMMENT '订阅服务明细',
+  status int DEFAULT '1' COMMENT '状态 1有效 0无效',
+  remark varchar(200) DEFAULT NULL COMMENT '简短说明',
+  create_time bigint DEFAULT NULL COMMENT '创建日期',
+  update_time bigint DEFAULT NULL COMMENT '更新日期',
+  PRIMARY KEY (id)
+) COMMENT='微信公众号用户信息';
+
+CREATE TABLE wx_pay_info (
+  acid int unsigned NOT NULL AUTO_INCREMENT,
+  client_id varchar(50) DEFAULT NULL COMMENT '应用标识码',
+  name varchar(30) NOT NULL COMMENT '公众号名称',
+  account varchar(30) NOT NULL COMMENT '公众号帐号',
+  country varchar(10) DEFAULT NULL COMMENT '国家',
+  province varchar(3) DEFAULT NULL COMMENT '省份',
+  city varchar(15) DEFAULT NULL COMMENT '城市',
+  username varchar(30) NOT NULL COMMENT '登录账号',
+  password varchar(32) NOT NULL COMMENT '登录密码',
+  create_time bigint DEFAULT NULL,
+  update_time bigint unsigned DEFAULT NULL,
+  status int DEFAULT '1' COMMENT '状态 1有效 0无效',
+  app_id varchar(50) NOT NULL COMMENT '开发者ID',
+  sub_app_id varchar(50) DEFAULT NULL COMMENT '子商户公众账号ID',
+  mch_id varchar(50) NOT NULL COMMENT '商户号',
+  mch_key varchar(32) NOT NULL COMMENT '商户密钥',
+  sub_mch_id varchar(50) DEFAULT NULL COMMENT '子商户号',
+  notify_url varchar(100) DEFAULT NULL COMMENT '回调地址',
+  trade_type varchar(20) DEFAULT NULL COMMENT '交易类型 JSAPI--公众号支付 NATIVE--原生扫码支付 APP--app支付',
+  sign_type varchar(20) DEFAULT NULL COMMENT '签名方式 HMAC_SHA256和MD5',
+  key_path varchar(200) DEFAULT NULL COMMENT '证书文件路径',
+  key_content varchar(200) DEFAULT NULL COMMENT '证书文件内容',
+  PRIMARY KEY (acid),
+  KEY wx_pay_info_idx_key (app_id) USING BTREE
+) COMMENT='微信支付信息';
+
+CREATE TABLE wx_pay_order (
+  id int NOT NULL AUTO_INCREMENT,
+  appid varchar(32) DEFAULT NULL COMMENT '公众账号ID',
+  mch_id varchar(32) DEFAULT NULL COMMENT '商户号',
+  openid varchar(128) DEFAULT NULL COMMENT '用户标识',
+  out_trade_no varchar(32) DEFAULT NULL COMMENT '商户订单号',
+  product_id varchar(32) DEFAULT NULL COMMENT '商品ID',
+  prepay_id varchar(64) DEFAULT NULL COMMENT '预支付ID',
+  body varchar(128) DEFAULT NULL COMMENT '商品描述',
+  detail varchar(6000) DEFAULT NULL COMMENT '商品详情',
+  total_fee int DEFAULT NULL COMMENT '标价金额',
+  trade_type varchar(16) DEFAULT NULL COMMENT '交易类型',
+  spbill_create_ip varchar(64) DEFAULT NULL COMMENT '终端IP',
+  transaction_id varchar(32) DEFAULT NULL COMMENT '微信支付订单号',
+  create_time bigint DEFAULT NULL COMMENT '创建时间',
+  update_time bigint DEFAULT NULL COMMENT '最后更新时间',
+  PRIMARY KEY (id)
+) COMMENT='微信支付情况表';
