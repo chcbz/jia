@@ -6,10 +6,14 @@ plugins {
 dependencies {
     api 'cn.jia:jia-core:1.0.18'
     api 'com.h2database:h2:1.4.195'
-    api 'org.mybatis.spring.boot:mybatis-spring-boot-starter:2.1.2'
-    api 'org.springframework.boot:spring-boot-starter-web:2.2.7.RELEASE'
+    api 'com.baomidou:mybatis-plus-boot-starter:3.3.0'
+    api ('org.springframework.boot:spring-boot-starter-web:2.2.7.RELEASE') {
+        exclude module: 'spring-boot-starter-tomcat'
+    }
+    api 'org.springframework.boot:spring-boot-starter-undertow:2.2.7.RELEASE'
     api ('org.springframework.boot:spring-boot-starter-test:2.2.7.RELEASE') {
         exclude module: 'junit-vintage-engine'
+        exclude module: 'android-json'
     }
     api ('org.dbunit:dbunit:2.5.3') {
         exclude module: 'junit'
@@ -19,6 +23,8 @@ dependencies {
     api 'com.github.kstyrc:embedded-redis:0.6'
     annotationProcessor 'org.projectlombok:lombok:1.18.12'
     compileOnly 'org.projectlombok:lombok:1.18.12'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.12'
+    testImplementation 'org.projectlombok:lombok:1.18.12'
 }
 
 group = 'cn.jia'

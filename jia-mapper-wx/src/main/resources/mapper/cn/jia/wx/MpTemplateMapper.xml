@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.jia.wx.mapper.PayOrderMapper">
+<mapper namespace="cn.jia.wx.mapper.MpTemplateMapper">
 
     <!-- 通用查询结果列 -->
     <sql id="Base_Column_List">
-        id, appid, mch_id, openid, out_trade_no, product_id, prepay_id, body, detail, total_fee, trade_type, spbill_create_ip, transaction_id, create_time, update_time
+        template_id, client_id, appid, title, primary_industry, deputy_industry, content, example, status, create_time, update_time
     </sql>
 
 </mapper>

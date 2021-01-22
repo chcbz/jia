@@ -1,43 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.jia.wx.dao.MpInfoMapper">
-  <sql id="Base_Column_List">
-    acid, client_id, token, access_token, encodingaeskey, level, name, account, original, 
-    signature, country, province, city, username, password, create_time, update_time, 
-    status, appid, secret, styleid, subscribeurl, auth_refresh_token
-  </sql>
-  
-  <select id="selectAll" resultType="cn.jia.wx.entity.MpInfo">
-    select 
-    <include refid="Base_Column_List" />
-    from wx_mp_info
-  </select>
-  <select id="selectByExample" parameterType="cn.jia.wx.entity.MpInfoExample" resultType="cn.jia.wx.entity.MpInfo">
-    select 
-    <include refid="Base_Column_List" />
-    from wx_mp_info
-    <where>
-      <if test="clientId != null">
-        client_id = #{clientId,jdbcType=VARCHAR}
-      </if>
-      <if test="original != null">
-        and original = #{original,jdbcType=VARCHAR}
-      </if>
-      <if test="appid != null">
-        and appid = #{appid,jdbcType=VARCHAR}
-      </if>
-      <if test="clientIdList != null">
-        and client_id in
-        <foreach collection="clientIdList" item="clientId" open="(" close=")" separator=",">
-          #{clientId, jdbcType=VARCHAR}
-        </foreach>
-      </if>
-    </where>
-  </select>
-  <select id="selectByKey" parameterType="java.lang.String" resultType="cn.jia.wx.entity.MpInfo">
-    select 
-    <include refid="Base_Column_List" />
-    from wx_mp_info
-    where original = #{key,jdbcType=VARCHAR} or appid = #{key,jdbcType=VARCHAR}
-  </select>
+<mapper namespace="cn.jia.wx.mapper.MpInfoMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        acid, client_id, token, access_token, encodingaeskey, level, name, account, original, signature, country, province, city, username, password, create_time, update_time, status, appid, secret, styleid, subscribeurl, auth_refresh_token
+    </sql>
+
 </mapper>

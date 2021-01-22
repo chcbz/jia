@@ -1,253 +1,98 @@
 package cn.jia.wx.entity;
 
-public class MpUser {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-01-09
+ */
+@Data
+@EqualsAndHashCode(callSuper = false)
+@Accessors(chain = true)
+@TableName("wx_mp_user")
+@ApiModel(value="MpUser对象")
+public class MpUser extends BaseEntity {
+
+    @ApiModelProperty(value = "用户ID")
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
+    @ApiModelProperty(value = "应用标识码")
     private String clientId;
 
+    @ApiModelProperty(value = "开发者ID")
     private String appid;
 
-    private Boolean subscribe;
+    @ApiModelProperty(value = "是否订阅")
+    private Integer subscribe;
 
+    @ApiModelProperty(value = "微信openid")
     private String openId;
 
+    @ApiModelProperty(value = "Jia账号")
     private String jiacn;
 
+    @ApiModelProperty(value = "电话")
     private Long subscribeTime;
 
+    @ApiModelProperty(value = "邮箱")
     private String email;
 
+    @ApiModelProperty(value = "性别 1男性 2女性 0未知")
     private Integer sex;
 
+    @ApiModelProperty(value = "语言")
     private String language;
 
+    @ApiModelProperty(value = "昵称")
     private String nickname;
 
+    @ApiModelProperty(value = "头像")
     private String headImgUrl;
 
+    @ApiModelProperty(value = "城市")
     private String city;
 
+    @ApiModelProperty(value = "国家")
     private String country;
 
+    @ApiModelProperty(value = "省份")
     private String province;
 
+    @ApiModelProperty(value = "开放平台帐号")
     private String unionId;
 
+    @ApiModelProperty(value = "组ID")
     private Integer groupId;
 
+    @ApiModelProperty(value = "关注的渠道来源")
     private String subscribeScene;
 
+    @ApiModelProperty(value = "二维码扫码场景")
     private String qrScene;
 
+    @ApiModelProperty(value = "二维码扫码场景描述")
     private String qrSceneStr;
 
+    @ApiModelProperty(value = "订阅服务明细")
     private String subscribeItems;
 
+    @ApiModelProperty(value = "状态 1有效 0无效")
     private Integer status;
 
+    @ApiModelProperty(value = "简短说明")
     private String remark;
 
-    private Long createTime;
-
-    private Long updateTime;
-
-    public Integer getId() {
-        return id;
-    }
-
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public String getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(String clientId) {
-        this.clientId = clientId == null ? null : clientId.trim();
-    }
-
-    public String getAppid() {
-        return appid;
-    }
-
-    public void setAppid(String appid) {
-        this.appid = appid == null ? null : appid.trim();
-    }
-
-    public Boolean getSubscribe() {
-        return subscribe;
-    }
-
-    public void setSubscribe(Boolean subscribe) {
-        this.subscribe = subscribe;
-    }
-
-    public String getOpenId() {
-        return openId;
-    }
-
-    public void setOpenId(String openId) {
-        this.openId = openId == null ? null : openId.trim();
-    }
-
-    public String getJiacn() {
-        return jiacn;
-    }
-
-    public void setJiacn(String jiacn) {
-        this.jiacn = jiacn == null ? null : jiacn.trim();
-    }
-
-    public Long getSubscribeTime() {
-        return subscribeTime;
-    }
-
-    public void setSubscribeTime(Long subscribeTime) {
-        this.subscribeTime = subscribeTime;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public void setEmail(String email) {
-        this.email = email == null ? null : email.trim();
-    }
-
-    public Integer getSex() {
-        return sex;
-    }
-
-    public void setSex(Integer sex) {
-        this.sex = sex;
-    }
-
-    public String getLanguage() {
-        return language;
-    }
-
-    public void setLanguage(String language) {
-        this.language = language == null ? null : language.trim();
-    }
-
-    public String getNickname() {
-        return nickname;
-    }
-
-    public void setNickname(String nickname) {
-        this.nickname = nickname == null ? null : nickname.trim();
-    }
-
-    public String getHeadImgUrl() {
-        return headImgUrl;
-    }
-
-    public void setHeadImgUrl(String headImgUrl) {
-        this.headImgUrl = headImgUrl == null ? null : headImgUrl.trim();
-    }
-
-    public String getCity() {
-        return city;
-    }
-
-    public void setCity(String city) {
-        this.city = city == null ? null : city.trim();
-    }
-
-    public String getCountry() {
-        return country;
-    }
-
-    public void setCountry(String country) {
-        this.country = country == null ? null : country.trim();
-    }
-
-    public String getProvince() {
-        return province;
-    }
-
-    public void setProvince(String province) {
-        this.province = province == null ? null : province.trim();
-    }
-
-    public String getUnionId() {
-        return unionId;
-    }
-
-    public void setUnionId(String unionId) {
-        this.unionId = unionId == null ? null : unionId.trim();
-    }
-
-    public Integer getGroupId() {
-        return groupId;
-    }
-
-    public void setGroupId(Integer groupId) {
-        this.groupId = groupId;
-    }
-
-    public String getSubscribeScene() {
-        return subscribeScene;
-    }
-
-    public void setSubscribeScene(String subscribeScene) {
-        this.subscribeScene = subscribeScene == null ? null : subscribeScene.trim();
-    }
-
-    public String getQrScene() {
-        return qrScene;
-    }
-
-    public void setQrScene(String qrScene) {
-        this.qrScene = qrScene == null ? null : qrScene.trim();
-    }
-
-    public String getQrSceneStr() {
-        return qrSceneStr;
-    }
-
-    public void setQrSceneStr(String qrSceneStr) {
-        this.qrSceneStr = qrSceneStr == null ? null : qrSceneStr.trim();
-    }
-
-    public String getSubscribeItems() {
-        return subscribeItems;
-    }
-
-    public void setSubscribeItems(String subscribeItems) {
-        this.subscribeItems = subscribeItems == null ? null : subscribeItems.trim();
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
-
-    public String getRemark() {
-        return remark;
-    }
-
-    public void setRemark(String remark) {
-        this.remark = remark == null ? null : remark.trim();
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
 }

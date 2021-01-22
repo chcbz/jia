@@ -1,5 +1,6 @@
 package cn.jia.test;
 
+import cn.jia.JiaTestApplication;
 import com.github.springtestdbunit.DbUnitTestExecutionListener;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockitoTestExecutionListener;
