@@ -21,38 +21,40 @@ import lombok.experimental.Accessors;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
-@TableName("kefu_msg_type")
-@ApiModel(value="KefuMsgType对象", description="")
-public class KefuMsgType extends BaseEntity {
+@TableName("kefu_faq")
+@ApiModel(value="KefuFaq对象", description="")
+public class KefuFaq extends BaseEntity {
 
     private static final long serialVersionUID=1L;
 
-    @ApiModelProperty(value = "ID")
     @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
+
+    @ApiModelProperty(value = "类型")
+    private String type;
+
+    @ApiModelProperty(value = "资源ID")
+    private String resourceId;
 
     @ApiModelProperty(value = "应用标识符")
     private String clientId;
 
-    @ApiModelProperty(value = "类型编码")
-    private String typeCode;
+    @ApiModelProperty(value = "标题")
+    private String title;
 
-    @ApiModelProperty(value = "类型名称")
-    private String typeName;
+    @ApiModelProperty(value = "内容")
+    private String content;
 
-    @ApiModelProperty(value = "父类型")
-    private String parentType;
+    @ApiModelProperty(value = "点击量")
+    private Integer click;
 
-    @ApiModelProperty(value = "类别")
-    private String typeCategory;
+    @ApiModelProperty(value = "点赞数量")
+    private Integer useful;
 
-    @ApiModelProperty(value = "微信模板ID")
-    private String wxTemplateId;
+    @ApiModelProperty(value = "点踩数量")
+    private Integer useless;
 
-    @ApiModelProperty(value = "短信模板ID")
-    private String smsTemplateId;
-
-    @ApiModelProperty(value = "状态 0失效 1有效")
+    @ApiModelProperty(value = "状态 0无效 1有效")
     private Integer status;
 
 

@@ -1,0 +1,49 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+dependencies {
+    implementation 'cn.jia:jia-mapper-common:1.0.0-SNAPSHOT'
+    implementation 'com.github.pagehelper:pagehelper:5.0.1'
+    implementation 'com.baomidou:mybatis-plus:3.3.0'
+    implementation 'com.baomidou:mybatis-plus-generator:3.3.0'
+    implementation 'org.apache.velocity:velocity-engine-core:2.2'
+    implementation 'org.springframework:spring-context:5.2.6.RELEASE'
+    implementation 'io.swagger:swagger-annotations:1.5.20'
+    annotationProcessor 'org.projectlombok:lombok:1.18.12'
+    compileOnly 'org.projectlombok:lombok:1.18.12'
+    testImplementation 'cn.jia:jia-core-test:1.0.0-SNAPSHOT'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.12'
+    testImplementation 'org.projectlombok:lombok:1.18.12'
+}
+
+group = 'cn.jia'
+version = '1.0.6-SNAPSHOT'
+description = 'jia-mapper-kefu'
+sourceCompatibility = '1.8'
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            url = version.endsWith('SNAPSHOT') ? rootProject.ext.snapshotsRepoUrl : rootProject.ext.releasesRepoUrl
+            credentials {
+                username rootProject.ext.repoUsername
+                password rootProject.ext.repoPassword
+            }
+        }
+    }
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+test {
+    useJUnitPlatform()
+}
