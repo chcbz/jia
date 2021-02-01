@@ -1,20 +1,51 @@
 package cn.jia.kefu.entity;
 
-public class KefuMessage {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-01-29
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("kefu_message")
+@ApiModel(value="KefuMessage对象", description="")
+public class KefuMessage extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
+    @ApiModelProperty(value = "资源ID")
     private String resourceId;
 
-    private Integer entityId;
-
+    @ApiModelProperty(value = "应用标识符")
     private String clientId;
 
+    @ApiModelProperty(value = "Jia账号")
     private String jiacn;
 
+    @ApiModelProperty(value = "姓名")
     private String name;
 
+    @ApiModelProperty(value = "电话号码")
     private String phone;
 
+    @ApiModelProperty(value = "邮箱地址")
     private String email;
 
     private String title;
@@ -23,131 +54,11 @@ public class KefuMessage {
 
     private String attachment;
 
+    @ApiModelProperty(value = "回复内容")
     private String reply;
 
+    @ApiModelProperty(value = "状态 0待回复 1已回复")
     private Integer status;
 
-    private Long createTime;
 
-    private Long updateTime;
-
-    public Integer getId() {
-        return id;
-    }
-
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public String getResourceId() {
-        return resourceId;
-    }
-
-    public void setResourceId(String resourceId) {
-        this.resourceId = resourceId == null ? null : resourceId.trim();
-    }
-
-    public Integer getEntityId() {
-        return entityId;
-    }
-
-    public void setEntityId(Integer entityId) {
-        this.entityId = entityId;
-    }
-
-    public String getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(String clientId) {
-        this.clientId = clientId == null ? null : clientId.trim();
-    }
-
-    public String getJiacn() {
-        return jiacn;
-    }
-
-    public void setJiacn(String jiacn) {
-        this.jiacn = jiacn == null ? null : jiacn.trim();
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name == null ? null : name.trim();
-    }
-
-    public String getPhone() {
-        return phone;
-    }
-
-    public void setPhone(String phone) {
-        this.phone = phone == null ? null : phone.trim();
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public void setEmail(String email) {
-        this.email = email == null ? null : email.trim();
-    }
-
-    public String getTitle() {
-        return title;
-    }
-
-    public void setTitle(String title) {
-        this.title = title == null ? null : title.trim();
-    }
-
-    public String getContent() {
-        return content;
-    }
-
-    public void setContent(String content) {
-        this.content = content == null ? null : content.trim();
-    }
-
-    public String getAttachment() {
-        return attachment;
-    }
-
-    public void setAttachment(String attachment) {
-        this.attachment = attachment == null ? null : attachment.trim();
-    }
-
-    public String getReply() {
-        return reply;
-    }
-
-    public void setReply(String reply) {
-        this.reply = reply == null ? null : reply.trim();
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
 }
