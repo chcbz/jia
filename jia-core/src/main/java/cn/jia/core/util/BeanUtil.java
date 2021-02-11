@@ -58,6 +58,7 @@ public class BeanUtil {
 	 * @throws InvocationTargetException
 	 *             如果调用属性的 setter 方法失败
 	 */
+	@SuppressWarnings("rawtypes")
 	public static Map<String, Object> convertBean(Object bean)
 			throws IntrospectionException, IllegalAccessException, InvocationTargetException {
 		Class type = bean.getClass();
@@ -82,8 +83,9 @@ public class BeanUtil {
 	
 	/**
 	 * 获取对象中的空属性
-	 * @param source
-	 * @return
+	 *
+	 * @param source 对象
+	 * @return 空属性的字段
 	 */
 	public static String[] getNullPropertyNames (Object source) {
         final BeanWrapper src = new BeanWrapperImpl(source);
@@ -98,6 +100,12 @@ public class BeanUtil {
         return emptyNames.toArray(result);
     }
 
+	/**
+	 * 获取对象中的空属性或者空字符
+	 *
+	 * @param source 对象
+	 * @return 空属性和空字符的字段
+	 */
 	public static String[] getEmptyPropertyNames (Object source) {
 		final BeanWrapper src = new BeanWrapperImpl(source);
 		java.beans.PropertyDescriptor[] pds = src.getPropertyDescriptors();
@@ -114,8 +122,9 @@ public class BeanUtil {
 
 	/**
 	 * 复制对象，排除空属性
-	 * @param src
-	 * @param target
+	 *
+	 * @param src 源对象
+	 * @param target 目标对象
 	 */
     public static void copyPropertiesIgnoreNull(Object src, Object target){
 		BeanUtils.copyProperties(src, target, getNullPropertyNames(src));
@@ -123,8 +132,9 @@ public class BeanUtil {
 
 	/**
 	 * 复制对象，排除空字符
-	 * @param src
-	 * @param target
+	 *
+	 * @param src 源对象
+	 * @param target 目标对象
 	 */
 	public static void copyPropertiesIgnoreEmpty(Object src, Object target){
 		BeanUtils.copyProperties(src, target, getEmptyPropertyNames(src));
@@ -132,9 +142,10 @@ public class BeanUtil {
     
     /**
      * 复制对象，排除空属性和指定属性
-     * @param src
-     * @param target
-     * @param ignoreProperties
+	 *
+     * @param src 源对象
+     * @param target 目标对象
+     * @param ignoreProperties 排除的字段
      */
     public static void copyPropertiesIgnoreNull(Object src, Object target, String... ignoreProperties){
     	String[] nullPropertys = getNullPropertyNames(src);

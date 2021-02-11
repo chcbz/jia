@@ -5,7 +5,7 @@ import java.util.Map;
 
 public class RunnableRequest implements Runnable {
 	
-	private ThreadRequestContent rc;// 请求主体
+	private final ThreadRequestContent rc;// 请求主体
 
 	public RunnableRequest(ThreadRequestContent rc) {
 		this.rc = rc;
@@ -27,7 +27,7 @@ public class RunnableRequest implements Runnable {
 		Map<String, Object> m = new HashMap<>();
 		m.put("attr1", "val1");
 		new Thread(new RunnableRequest(new ThreadRequestContent(m) {
-			String val = String.valueOf(attr.get("attr1"));
+			final String val = String.valueOf(attr.get("attr1"));
 			public void doSomeThing() {
 				System.out.println("doSomething="+val);
 			}
