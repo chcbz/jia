@@ -1,23 +1,21 @@
 package cn.jia.core.util.thread;
 
 public class ThreadRequest {
-	private ThreadRequestContent rc;// 请求主体
+	private final ThreadRequestContent rc;// 请求主体
 
 	public ThreadRequest(ThreadRequestContent rc) {
 		this.rc = rc;
 	}
 
 	public void start() { // 开始请求
-		final Thread t = new Thread(new Runnable() {
-			public void run() {
-				try {
-					rc.doSomeThing();// 响应请求
-				} catch (Exception e) {
-					e.printStackTrace();
-					rc.onFailure(); // 如果执行失败
-				}
-				rc.onSuccess();// 如果执行成功
+		final Thread t = new Thread(() -> {
+			try {
+				rc.doSomeThing();// 响应请求
+			} catch (Exception e) {
+				e.printStackTrace();
+				rc.onFailure(); // 如果执行失败
 			}
+			rc.onSuccess();// 如果执行成功
 		});
 		t.start();
 	}
