@@ -12,18 +12,18 @@ import lombok.experimental.Accessors;
 
 /**
  * <p>
- * 客服消息类型
+ * 客服消息订阅
  * </p>
  *
  * @author chc
- * @since 2021-01-29
+ * @since 2021-02-18
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
-@TableName("kefu_msg_type")
-@ApiModel(value="KefuMsgType对象", description="")
-public class KefuMsgType extends BaseEntity {
+@TableName("kefu_msg_subscribe")
+@ApiModel(value="客服消息订阅", description="")
+public class KefuMsgSubscribe extends BaseEntity {
 
     private static final long serialVersionUID=1L;
 
@@ -37,23 +37,15 @@ public class KefuMsgType extends BaseEntity {
     @ApiModelProperty(value = "类型编码")
     private String typeCode;
 
-    @ApiModelProperty(value = "类型名称")
-    private String typeName;
-
-    @ApiModelProperty(value = "父类型")
-    private String parentType;
-
-    @ApiModelProperty(value = "类别")
-    private String typeCategory;
-
-    @ApiModelProperty(value = "微信模板ID")
-    private String wxTemplateId;
-
-    @ApiModelProperty(value = "短信模板ID")
-    private String smsTemplateId;
+    @ApiModelProperty(value = "Jia账号")
+    private String jiacn;
 
     @ApiModelProperty(value = "状态 0失效 1有效")
     private Integer status;
 
+    @ApiModelProperty(value = "微信接收")
+    private Integer wxRxFlag;
 
+    @ApiModelProperty(value = "短信接收")
+    private Integer smsRxFlag;
 }
