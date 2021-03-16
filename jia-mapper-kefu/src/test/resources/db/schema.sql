@@ -46,3 +46,16 @@ CREATE TABLE kefu_msg_type (
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   PRIMARY KEY (id)
 ) COMMENT='留言类型';
+
+CREATE TABLE kefu_msg_subscribe (
+  id int NOT NULL AUTO_INCREMENT COMMENT 'ID',
+  client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
+  type_code varchar(50) NOT NULL COMMENT '类型编码',
+  jiacn varchar(32) NOT NULL COMMENT 'Jia账号',
+  wx_rx_flag int DEFAULT '0' COMMENT '微信接收',
+  sms_rx_flag int DEFAULT '0' COMMENT '短信接收',
+  status int DEFAULT '1' COMMENT '状态 0失效 1有效',
+  create_time bigint DEFAULT NULL COMMENT '创建时间',
+  update_time bigint DEFAULT NULL COMMENT '最后更新时间',
+  PRIMARY KEY (id) USING BTREE
+) COMMENT='客户消息订阅';

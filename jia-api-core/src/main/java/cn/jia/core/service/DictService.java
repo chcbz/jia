@@ -1,36 +1,41 @@
 package cn.jia.core.service;
 
-import java.util.List;
-
+import cn.jia.core.entity.Dict;
 import com.github.pagehelper.Page;
 
-import cn.jia.core.entity.Dict;
+import java.util.List;
 
 public interface DictService {
 
-	public Dict selectById(Integer id);
+	Dict selectById(Integer id);
 
-	public void insert(Dict dict);
+	void insert(Dict dict);
 
-	public void update(Dict dict);
+	void update(Dict dict);
 
-	public void delete(Integer id);
+	void delete(Integer id);
 
-	public List<Dict> selectAll(String lang);
+	List<Dict> selectAll();
 
-	public List<Dict> selectByDictType(String dictType, String lang);
+	List<Dict> selectAll(String lang);
 
-	public List<Dict> selectByParentId(String parentId, String lang);
+	List<Dict> selectByType(String dictType, String lang);
 
-	public Dict selectByDictTypeAndDictValue(String dictType, String dictValue, String lang);
+	List<Dict> selectByParentId(String parentId, String lang);
+
+	Dict selectByTypeAndValue(String dictType, String dictValue, String lang);
 	
-	public Dict selectByDictTypeAndDictValue(String dictType, String dictValue);
+	Dict selectByTypeAndValue(String dictType, String dictValue);
 
-	public List<Dict> selectByDictTypeAndParentId(String dictType, String parentId, String lang);
+	String getValue(String dictType, String dictValue, String lang);
 
-	public List<Dict> selectByParentIdAndDictValue(String parentId, String dictValue, String lang);
+	String getValue(String dictType, String dictValue);
+
+	List<Dict> selectByTypeAndParentId(String dictType, String parentId, String lang);
+
+	List<Dict> selectByParentIdAndValue(String parentId, String dictValue, String lang);
 	
-	public Page<Dict> findByExamplePage(Dict dict, int pageNo, int pageSize);
+	Page<Dict> findByExamplePage(Dict dict, int pageNo, int pageSize);
 	
-	public void upsert(Dict dict);
+	void upsert(Dict dict);
 }

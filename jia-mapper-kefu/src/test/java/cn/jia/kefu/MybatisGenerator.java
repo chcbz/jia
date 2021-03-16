@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.generator.InjectionConfig;
 import com.baomidou.mybatisplus.generator.config.*;
 import com.baomidou.mybatisplus.generator.config.po.TableInfo;
 import com.baomidou.mybatisplus.generator.config.rules.NamingStrategy;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -19,7 +20,7 @@ import java.util.List;
 public class MybatisGenerator extends BaseTest {
     private final static String PARENT_PACKAGE = "cn.jia";
     private final static String MODULE_NAME = "kefu";
-    private final static String[] TABLES = new String[]{"kefu_faq", "kefu_message", "kefu_msg_type"};
+    private final static String[] TABLES = new String[]{"kefu_faq", "kefu_message", "kefu_msg_type", "kefu_msg_subscribe"};
 
     @Value("${spring.datasource.driverClassName}")
     String driverClassName;
@@ -31,7 +32,7 @@ public class MybatisGenerator extends BaseTest {
     String password;
 
     @Test
-//    @Disabled
+    @Disabled
     void testGenerator() {
         AutoGenerator generator = new AutoGenerator();
 
