@@ -40,7 +40,9 @@ CREATE TABLE kefu_msg_type (
   parent_type varchar(50) DEFAULT NULL COMMENT '父类型',
   type_category varchar(50) DEFAULT NULL COMMENT '类别',
   wx_template_id varchar(50) DEFAULT NULL COMMENT '微信模板ID',
+  wx_template varchar(2000) DEFAULT NULL COMMENT '微信模板',
   sms_template_id varchar(50) DEFAULT NULL COMMENT '短信模板ID',
+  sms_template varchar(2000) DEFAULT NULL COMMENT '短信模板',
   status int DEFAULT '1' COMMENT '状态 0失效 1有效',
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
@@ -57,5 +59,5 @@ CREATE TABLE kefu_msg_subscribe (
   status int DEFAULT '1' COMMENT '状态 0失效 1有效',
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
-  PRIMARY KEY (id) USING BTREE
+  PRIMARY KEY (id)
 ) COMMENT='客户消息订阅';
