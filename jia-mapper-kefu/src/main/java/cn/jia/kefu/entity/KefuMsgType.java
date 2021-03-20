@@ -12,11 +12,11 @@ import lombok.experimental.Accessors;
 
 /**
  * <p>
- * 客服消息类型
+ * 
  * </p>
  *
  * @author chc
- * @since 2021-01-29
+ * @since 2021-03-20
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -49,8 +49,14 @@ public class KefuMsgType extends BaseEntity {
     @ApiModelProperty(value = "微信模板ID")
     private String wxTemplateId;
 
+    @ApiModelProperty(value = "微信模板")
+    private String wxTemplate;
+
     @ApiModelProperty(value = "短信模板ID")
     private String smsTemplateId;
+
+    @ApiModelProperty(value = "短信模板")
+    private String smsTemplate;
 
     @ApiModelProperty(value = "状态 0失效 1有效")
     private Integer status;

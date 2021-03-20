@@ -6,7 +6,7 @@
     <sql id="Base_Column_List">
         create_time,
         update_time,
-        id, client_id, type_code, type_name, parent_type, type_category, wx_template_id, sms_template_id, status
+        id, client_id, type_code, type_name, parent_type, type_category, wx_template_id, wx_template, sms_template_id, sms_template, status
     </sql>
 
 </mapper>
