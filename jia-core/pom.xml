@@ -4,7 +4,7 @@
 
 	<groupId>cn.jia</groupId>
 	<artifactId>jia-core</artifactId>
-	<version>1.0.19</version>
+	<version>1.0.20-SNAPSHOT</version>
 	<packaging>jar</packaging>
 
 	<name>jia-core</name>

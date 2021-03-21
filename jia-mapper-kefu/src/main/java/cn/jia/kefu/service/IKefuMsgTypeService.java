@@ -9,7 +9,7 @@ import cn.jia.common.service.IBaseService;
  * </p>
  *
  * @author chc
- * @since 2021-03-20
+ * @since 2021-03-21
  */
 public interface IKefuMsgTypeService extends IBaseService<KefuMsgType> {
 

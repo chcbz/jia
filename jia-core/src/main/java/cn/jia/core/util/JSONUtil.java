@@ -8,6 +8,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.lang.reflect.Type;
 import java.util.*;
 
 
@@ -67,9 +68,8 @@ public class JSONUtil {
 	 * 将json字符串转换成list对象
 	 * @param jsonString json字符串
 	 * @param type 对象类型
-	 * @return
+	 * @return 对象列表
 	 */
-	@SuppressWarnings("hiding")
 	public static <T> List<T> jsonToList(String jsonString, TypeReference<List<T>> type) {
 		
 		if(StringUtils.isEmpty(jsonString)) {
@@ -85,12 +85,27 @@ public class JSONUtil {
 		}
 		return null;
 	}
+
+	/**
+	 * 将json字符串转换成list对象
+	 * @param jsonString json字符串
+	 * @param clazz 对象类型
+	 * @return 对象列表
+	 */
+	public static <T> List<T> jsonToList(String jsonString, Class<T> clazz) {
+		return jsonToList(jsonString, new TypeReference<List<T>>() {
+			@Override
+			public Type getType() {
+				return clazz;
+			}
+		});
+	}
 	
 	/**
 	 * 将json字符串转换成list集合
 	 * 
-	 * @param json
-	 * @return
+	 * @param json 字符串
+	 * @return 对象列表
 	 */
 	public static List<Object> jsonToList(String json) {
 		JSONArray obj = new JSONArray(json);
@@ -100,8 +115,8 @@ public class JSONUtil {
 	/**
 	 * 将JSONArray对象转换成list集合
 	 * 
-	 * @param jsonArr
-	 * @return
+	 * @param jsonArr json列表
+	 * @return 对象列表
 	 */
 	public static List<Object> jsonToList(JSONArray jsonArr) {
 		List<Object> list = new ArrayList<>();
@@ -121,8 +136,8 @@ public class JSONUtil {
 	/**
 	 * 将json字符串转换成map对象
 	 * 
-	 * @param json
-	 * @return
+	 * @param json 字符串
+	 * @return map
 	 */
 	public static Map<String, Object> jsonToMap(String json) {
 		if(StringUtils.isEmpty(json)) {
@@ -135,8 +150,8 @@ public class JSONUtil {
 	/**
 	 * 将JSONObject转换成map对象
 	 * 
-	 * @param obj
-	 * @return
+	 * @param obj 对象
+	 * @return map
 	 */
 	public static Map<String, Object> jsonToMap(JSONObject obj) {
 		Set<?> set = obj.keySet();
@@ -159,19 +174,5 @@ public class JSONUtil {
 	
 	public static Object[] getArray(String str) {
 		return jsonToList(str).toArray();
-	}
-	
-	public static void main(String[] args) {
-		/*Result result = new Result();
-		result.setCode("o");
-		result.setMsg("ok");
-		String str = toJson(result);
-		System.out.println(str);
-		result = fromJson(str, Result.class);
-		System.out.println(result);*/
-		System.out.println(jsonToList("[{'a':'b'},{'a':'c'}]"));
-		String ss = null;
-		Map map = jsonToMap("{\"ss\":null, \"sa\": \"abc\"}");
-		System.out.println(Objects.requireNonNull(map).get("ss") == null);
 	}
 }
