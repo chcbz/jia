@@ -12,7 +12,7 @@ import org.springframework.stereotype.Service;
  * </p>
  *
  * @author chc
- * @since 2021-03-20
+ * @since 2021-03-21
  */
 @Service
 public class KefuMsgTypeServiceImpl extends BaseServiceImpl<KefuMsgTypeMapper, KefuMsgType> implements IKefuMsgTypeService {
