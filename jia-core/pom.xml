@@ -49,7 +49,7 @@
 		<commons.net.version>3.3</commons.net.version>
 		<commons.logging.version>1.1.1</commons.logging.version>
 		<commons.collections.version>3.2.1</commons.collections.version>
-		<commons.io.version>1.4</commons.io.version>
+		<commons.io.version>2.7</commons.io.version>
 		<cglib.version>2.2.2</cglib.version>
 		<shiro.version>1.2.3</shiro.version>
 		<hibernate.validator.version>5.1.1.Final</hibernate.validator.version>
