@@ -3,12 +3,12 @@ package cn.jia.core.util;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.lang.reflect.Type;
 import java.util.*;
 
 
@@ -20,6 +20,13 @@ import java.util.*;
  * @date 2014-04-04
  */
 public class JSONUtil {
+	private static final ObjectMapper mapper;
+
+	static {
+		mapper = new ObjectMapper();
+		//设置输入时忽略JSON字符串中存在而Java对象实际没有的属性
+		mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+	}
 
 	/**
 	 * 对象转换成JSON字符串
@@ -29,8 +36,6 @@ public class JSONUtil {
 	 * @return 对象的string字符
 	 */
 	public static String toJson(Object obj) {
-		ObjectMapper mapper = new ObjectMapper();
-
         try {
 			return mapper.writeValueAsString(obj);
 		} catch (JsonProcessingException e) {
@@ -53,9 +58,6 @@ public class JSONUtil {
 		if(StringUtils.isEmpty(jsonString)) {
 			return null;
 		}
-		ObjectMapper mapper = new ObjectMapper();
-		//设置输入时忽略JSON字符串中存在而Java对象实际没有的属性
-		mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 		try {
 			return mapper.readValue(jsonString, type);
 		} catch (IOException e) {
@@ -71,13 +73,9 @@ public class JSONUtil {
 	 * @return 对象列表
 	 */
 	public static <T> List<T> jsonToList(String jsonString, TypeReference<List<T>> type) {
-		
 		if(StringUtils.isEmpty(jsonString)) {
 			return null;
 		}
-		ObjectMapper mapper = new ObjectMapper();
-		//设置输入时忽略JSON字符串中存在而Java对象实际没有的属性
-		mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 		try {
 			return mapper.readValue(jsonString, type);
 		} catch (IOException e) {
@@ -93,14 +91,15 @@ public class JSONUtil {
 	 * @return 对象列表
 	 */
 	public static <T> List<T> jsonToList(String jsonString, Class<T> clazz) {
-		return jsonToList(jsonString, new TypeReference<List<T>>() {
-			@Override
-			public Type getType() {
-				return clazz;
-			}
-		});
+		JavaType javaType = mapper.getTypeFactory().constructParametricType(List.class, clazz);
+		try {
+			return mapper.readValue(jsonString, javaType);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return null;
 	}
-	
+
 	/**
 	 * 将json字符串转换成list集合
 	 * 

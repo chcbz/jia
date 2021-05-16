@@ -9,7 +9,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * </p>
  *
  * @author chc
- * @since 2021-03-21
+ * @since 2021-03-23
  */
 public interface KefuMsgTypeMapper extends BaseMapper<KefuMsgType> {
 
