@@ -13,6 +13,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
+import javax.annotation.Resource;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -25,7 +26,7 @@ public class DictServiceImpl implements DictService {
 	
 	@Autowired
 	private DictMapper dictMapper;
-	@Autowired
+	@Resource
 	private RedisTemplate<String, List<Dict>> redisTemplate;
 	@Value("${dict.cache.time:300}")
 	private Long cacheTime;
