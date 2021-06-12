@@ -1,14 +1,16 @@
 package cn.jia.task.entity;
 
-import java.math.BigDecimal;
-
 import lombok.Data;
+
+import java.math.BigDecimal;
 
 @Data
 public class TaskItemVOExample {
 	private Integer id;
 
     private Integer planId;
+
+    private String clientId;
 
     private String jiacn;
 
