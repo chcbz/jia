@@ -20,7 +20,7 @@ import java.util.List;
 public class MybatisGenerator extends BaseTest {
     private final static String PARENT_PACKAGE = "cn.jia";
     private final static String MODULE_NAME = "kefu";
-    private final static String[] TABLES = new String[]{"kefu_faq", "kefu_message", "kefu_msg_type", "kefu_msg_subscribe"};
+    private final static String[] TABLES = new String[]{"kefu_faq", "kefu_message", "kefu_msg_type", "kefu_msg_subscribe", "kefu_msg_log"};
 
     @Value("${spring.datasource.driverClassName}")
     String driverClassName;

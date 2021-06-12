@@ -232,27 +232,37 @@ public class DateUtil {
 	public static String getFormatDate(int insuranceTime, String format){
 		Date date = new Date(insuranceTime*1000L);
 		SimpleDateFormat sdf = new SimpleDateFormat(format);
-		String formatDate = sdf.format(date);
-		return formatDate;
+		return sdf.format(date);
 	}
 	
 	/**
 	 * 将时间转化成时间戳
-	 * @param date
-	 * @return
+	 *
+	 * @param date 日期
+	 * @return 时间戳
 	 */
 	public static Long genTime(Date date) {
 		String timeStr = String.valueOf(date.getTime());
 		return Long.valueOf(timeStr.substring(0, timeStr.length() - 3));
 	}
+
+	/**
+	 * 获取当前时间戳
+	 *
+	 * @return 当前时间戳
+	 */
+	public static Long genTime() {
+		return genTime(new Date());
+	}
 	
 	/**
 	 * 时间戳转换成日期
-	 * @param time
-	 * @return
+	 *
+	 * @param time 时间戳
+	 * @return 日期
 	 */
 	public static Date genDate(Long time) {
-		return new Date(Long.valueOf(time + "000"));
+		return new Date(Long.parseLong(time + "000"));
 	}
 	
 	public static void main(String[] args){

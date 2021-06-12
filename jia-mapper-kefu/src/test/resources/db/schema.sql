@@ -62,3 +62,17 @@ CREATE TABLE kefu_msg_subscribe (
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   PRIMARY KEY (id)
 ) COMMENT='客户消息订阅';
+
+CREATE TABLE kefu_msg_log (
+  id int NOT NULL AUTO_INCREMENT,
+  client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
+  title varchar(100) DEFAULT NULL COMMENT '标题',
+  content varchar(2000) DEFAULT NULL COMMENT '内容',
+  url varchar(200) DEFAULT NULL COMMENT '地址',
+  type varchar(20) DEFAULT NULL COMMENT '类型',
+  jiacn varchar(32) DEFAULT NULL COMMENT 'Jia账号',
+  status int DEFAULT '1' COMMENT '状态 1未读 2已读 0已删除',
+  create_time bigint DEFAULT NULL COMMENT '创建时间',
+  update_time bigint DEFAULT NULL COMMENT '最后更新时间',
+  PRIMARY KEY (id)
+) COMMENT='消息内容';
