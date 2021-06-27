@@ -16,7 +16,7 @@ import lombok.experimental.Accessors;
  * </p>
  *
  * @author chc
- * @since 2021-03-23
+ * @since 2021-06-27
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -51,6 +51,9 @@ public class KefuMsgType extends BaseEntity {
 
     @ApiModelProperty(value = "微信模板")
     private String wxTemplate;
+
+    @ApiModelProperty(value = "微信文本模板")
+    private String wxTemplateTxt;
 
     @ApiModelProperty(value = "短信模板ID")
     private String smsTemplateId;
