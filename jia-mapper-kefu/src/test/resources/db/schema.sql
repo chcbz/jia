@@ -41,6 +41,7 @@ CREATE TABLE kefu_msg_type (
   type_category varchar(50) DEFAULT NULL COMMENT '类别',
   wx_template_id varchar(50) DEFAULT NULL COMMENT '微信模板ID',
   wx_template varchar(2000) DEFAULT NULL COMMENT '微信模板',
+  wx_template_txt varchar(2000) DEFAULT NULL COMMENT '微信文本模板',
   sms_template_id varchar(50) DEFAULT NULL COMMENT '短信模板ID',
   sms_template varchar(2000) DEFAULT NULL COMMENT '短信模板',
   url varchar(500) DEFAULT NULL COMMENT '链接地址',
