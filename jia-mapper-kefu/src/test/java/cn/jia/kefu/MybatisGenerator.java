@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.generator.InjectionConfig;
 import com.baomidou.mybatisplus.generator.config.*;
 import com.baomidou.mybatisplus.generator.config.po.TableInfo;
 import com.baomidou.mybatisplus.generator.config.rules.NamingStrategy;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -31,7 +32,7 @@ public class MybatisGenerator extends BaseTest {
     String password;
 
     @Test
-//    @Disabled
+    @Disabled
     void testGenerator() {
         AutoGenerator generator = new AutoGenerator();
 
