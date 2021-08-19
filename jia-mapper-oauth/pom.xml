@@ -42,7 +42,7 @@
 		<dependency>
 			<groupId>cn.jia</groupId>
 			<artifactId>jia-mapper-core</artifactId>
-			<version>1.0.0</version>
+			<version>1.0.2</version>
 			<optional>true</optional>
 		</dependency>
 		<dependency>
