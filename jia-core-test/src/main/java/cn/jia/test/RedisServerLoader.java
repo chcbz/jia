@@ -27,8 +27,7 @@ public class RedisServerLoader {
     @PostConstruct
     public void startRedis() {
         log.info("redis server is starting...");
-        redisServer = RedisServer.builder().setting("maxheap 200m").port(redisPort).setting("bind localhost")
-                .setting("tcp-keepalive 1").build();
+        redisServer = RedisServer.builder().setting("maxheap 200m").port(redisPort).setting("bind localhost").build();
         redisServer.start();
         log.info("redis server has started");
     }
