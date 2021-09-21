@@ -19,9 +19,7 @@
         <tab-item>{{ $t('gift.qrcode') }}</tab-item>
       </tab>
     </div>
-    <swiper v-model="index"
-            :show-dots="false"
-            height="280px">
+    <swiper v-model="index" :show-dots="false" height="280px">
       <swiper-item>
         <div style="padding-top:15px;padding-left:3px;text-align:center;">
           <checker v-model="payMoney" default-item-class="checker-item" selected-item-class="checker-item-selected">
@@ -31,7 +29,9 @@
         </div>
         <group label-width="4.5em" label-margin-right="1em" label-align="right">
           <x-input :title="$t('gift.consignee')" is-type="china-name"
-                   :placeholder="$t('gift.consignee_tips')" v-model="consignee"></x-input>
+                   :placeholder="$t('gift.consignee_tips')" v-model="consignee">
+            <x-button slot="right" type="primary" @click.native="wxAddress" mini>{{$t('app.select')}}</x-button>
+          </x-input>
           <x-input :title="$t('gift.phone')" keyboard="number" is-type="china-mobile"
                    :placeholder="$t('gift.phone_tips')" v-model="phone"></x-input>
           <x-textarea :title="$t('gift.address')" v-model="address"
@@ -90,7 +90,6 @@ export default {
       this.description = data.description
       this.point = data.point
       this.price = data.price / 100
-      this.payMoney = '0'
       this.quantity = data.quantity
       this.virtual = data.virtual
       document.title = this.name + ' - ' + this.$store.state.global.title
@@ -207,6 +206,19 @@ export default {
         }
       })
     },
+    wxAddress: function (data) {
+      var _this = this
+      _this.$wechat.openAddress({
+        success: function (res) {
+          _this.consignee = res.userName
+          _this.phone = res.telNumber
+          _this.address = res.detailInfo
+        },
+        cancel: function (res) {
+          console.log('cancel weixin address selecting')
+        }
+      })
+    },
     weixinPay: function (data) {
       var vm = this
       if (typeof WeixinJSBridge === 'undefined') { // 微信浏览器内置对象。参考微信官方文档
@@ -273,7 +285,7 @@ export default {
       phone: '',
       address: '',
       virtual: 1,
-      payMoney: '-1'
+      payMoney: '0'
     }
   },
   directives: {
