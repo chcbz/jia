@@ -156,6 +156,14 @@ router.beforeEach(function (to, from, next) {
     } else if (store.state.global.user.openid === null) {
       window.location.href = 'https://open.weixin.qq.com/connect/oauth2/authorize?appid=' + store.state.global.user.appid + '&redirect_uri=' + encodeURIComponent(window.location.href) + '&response_type=code&scope=snsapi_base&state=wx_snsapi#wechat_redirect'
     }
+    // 设置jsapi配置信息
+    debugger
+    var wxJsToken = store.state.api.wxJsToken(window.location.href.split('#')[0])
+    if (wxJsToken) {
+      wxJsToken.jsApiList = ['openAddress']
+      wxJsToken.debug = true
+      Vue.wechat.config(wxJsToken)
+    }
   }
   store.commit('updateLoadingStatus', { isLoading: true })
 

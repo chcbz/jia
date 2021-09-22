@@ -58,6 +58,19 @@ const utilStore = {
         return date
       }
     },
+    getHashCode: function (str, caseSensitive) {
+      if (!caseSensitive) {
+        str = str.toLowerCase()
+      }
+      var hash = 1315423911
+      var i
+      var ch
+      for (i = str.length - 1; i >= 0; i--) {
+        ch = str.charCodeAt(i)
+        hash ^= ((hash << 5) + ch + (hash >> 2))
+      }
+      return (hash & 0x7FFFFFFF)
+    },
     closeWindow: function () {
       if (window.WeixinJSBridge) { // 微信中关闭
         window.WeixinJSBridge.call('closeWindow')
@@ -113,6 +126,21 @@ const apiStore = {
         var data = JSON.parse(xhr.responseText)
         accessToken = data.access_token
         utilStore.state.setLocalStorage('api_token', accessToken, new Date().getTime() + data.expires_in * 1000 - 60000)
+      }
+      return accessToken
+    },
+    wxJsToken: function (url) {
+      debugger
+      var wxJsTokenKey = 'wx_js_token_' + utilStore.state.getHashCode(url)
+      var accessToken = utilStore.state.getLocalStorage(wxJsTokenKey)
+      if (!accessToken) {
+        var xhr = new XMLHttpRequest()
+        xhr.open('GET', apiStore.state.baseUrl + '/wx/mp/jsapi/signature?url=' + url, false)
+        xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8')
+        xhr.send(null)
+        var data = JSON.parse(xhr.responseText)
+        accessToken = data.signature
+        utilStore.state.setLocalStorage(wxJsTokenKey, accessToken, new Date().getTime() + 6000000)
       }
       return accessToken
     }
