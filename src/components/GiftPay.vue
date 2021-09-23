@@ -212,7 +212,7 @@ export default {
         success: function (res) {
           _this.consignee = res.userName
           _this.phone = res.telNumber
-          _this.address = res.detailInfo
+          _this.address = res.provinceName + res.cityName + res.countryName + res.detailInfo
         },
         cancel: function (res) {
           console.log('cancel weixin address selecting')
