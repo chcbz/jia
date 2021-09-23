@@ -135,7 +135,7 @@ const apiStore = {
       var accessToken = utilStore.state.getLocalStorage(wxJsTokenKey)
       if (!accessToken) {
         var xhr = new XMLHttpRequest()
-        xhr.open('GET', apiStore.state.baseUrl + '/wx/mp/jsapi/signature?url=' + url, false)
+        xhr.open('GET', apiStore.state.baseUrl + '/wx/mp/jsapi/signature?appid=' + globalStore.state.user.appid + '&url=' + url, false)
         xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8')
         xhr.send(null)
         var data = JSON.parse(xhr.responseText)
