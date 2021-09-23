@@ -130,7 +130,6 @@ const apiStore = {
       return accessToken
     },
     wxJsToken: function (url) {
-      debugger
       var wxJsTokenKey = 'wx_js_token_' + utilStore.state.getHashCode(url)
       var accessToken = utilStore.state.getLocalStorage(wxJsTokenKey)
       if (!accessToken) {
@@ -139,8 +138,10 @@ const apiStore = {
         xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8')
         xhr.send(null)
         var data = JSON.parse(xhr.responseText)
-        accessToken = data.signature
-        utilStore.state.setLocalStorage(wxJsTokenKey, accessToken, new Date().getTime() + 6000000)
+        if (data && data.data) {
+          accessToken = data.data
+          utilStore.state.setLocalStorage(wxJsTokenKey, accessToken, new Date().getTime() + 6000000)
+        }
       }
       return accessToken
     }
