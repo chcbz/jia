@@ -3,7 +3,11 @@ package cn.jia.test;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import redis.embedded.RedisExecProvider;
 import redis.embedded.RedisServer;
+import redis.embedded.RedisServerBuilder;
+import redis.embedded.util.OS;
+import redis.embedded.util.OSDetector;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -27,7 +31,13 @@ public class RedisServerLoader {
     @PostConstruct
     public void startRedis() {
         log.info("redis server is starting...");
-        redisServer = RedisServer.builder().setting("maxheap 200m").port(redisPort).setting("bind localhost").build();
+        RedisExecProvider customProvider = RedisExecProvider.defaultProvider();
+        RedisServerBuilder builder = RedisServer.builder().redisExecProvider(customProvider)
+                .port(redisPort).setting("daemonize no").setting("appendonly no");
+        if (OS.WINDOWS.equals(OSDetector.getOS())) {
+            builder.setting("maxheap 200m");
+        }
+        redisServer = builder.build();
         redisServer.start();
         log.info("redis server has started");
     }
