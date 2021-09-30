@@ -3,8 +3,8 @@ package cn.jia.core.util;
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import java.util.Base64;
 
-import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
 
 /**
  * 3DES加密解密
@@ -23,7 +23,7 @@ public class ThreeDESUtil {
 	 */
 	public static String Decrypt3DES(String value){
 		try {
-			byte[] b = decryptMode(GetKeyBytes(key), Base64.decode(value));
+			byte[] b = decryptMode(GetKeyBytes(key), Base64.getDecoder().decode(value));
 			return new String(b);
 		} catch (Exception e) {
 			return null;
@@ -113,12 +113,6 @@ public class ThreeDESUtil {
 	}
 	// 转换成base64编码
 	private static String byte2Base64(byte[] b) {
-		return Base64.encode(b);
+		return Base64.getEncoder().encodeToString(b);
 	}
-	
-	public static void main(String [] args){
-		String s = "3XQgDrNlpjtzT4Orq8uSLQ==";
-		System.out.println(Decrypt3DES(s));
-	}
-	
 }

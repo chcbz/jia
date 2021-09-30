@@ -1,10 +1,6 @@
 package cn.jia.core.util;
 
-import com.sun.image.codec.jpeg.JPEGCodec;
-import com.sun.image.codec.jpeg.JPEGImageEncoder;
 import gui.ava.html.image.generator.HtmlImageGenerator;
-import sun.misc.BASE64Decoder;
-import sun.misc.BASE64Encoder;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -14,7 +10,7 @@ import java.awt.image.PixelGrabber;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.Objects;
+import java.util.Base64;
 
 /**
  * 图片操作工具类
@@ -68,14 +64,14 @@ public class ImgUtil {
                 int newWidth;
                 int newHeight;
                 // 判断是否是等比缩放
-                if (gp == true) {
+                if (gp) {
                     // 为等比缩放计算输出的图片宽度及高度
                     double rate1 = ((double) img.getWidth(null))
                             / (double) width + 0.1;
                     double rate2 = ((double) img.getHeight(null))
                             / (double) height + 0.1;
                     // 根据缩放比率大的进行缩放控制
-                    double rate = rate1 > rate2 ? rate1 : rate2;
+                    double rate = Math.max(rate1, rate2);
                     newWidth = (int) (((double) img.getWidth(null)) / rate);
                     newHeight = (int) (((double) img.getHeight(null)) / rate);
                 } else {
@@ -91,11 +87,13 @@ public class ImgUtil {
                 tag.getGraphics().drawImage(
                         img.getScaledInstance(newWidth, newHeight,
                                 Image.SCALE_SMOOTH), 0, 0, null);
-                FileOutputStream out = new FileOutputStream(outputFileName);
                 // JPEGImageEncoder可适用于其他图片类型的转换
-                JPEGImageEncoder encoder = JPEGCodec.createJPEGEncoder(out);
-                encoder.encode(tag);
-                out.close();
+//                FileOutputStream out = new FileOutputStream(outputFileName);
+//                JPEGImageEncoder encoder = JPEGCodec.createJPEGEncoder(out);
+//                encoder.encode(tag);
+//                out.close();
+                String formatName = outputFileName.substring(outputFileName.lastIndexOf(".") + 1);
+                ImageIO.write(tag, formatName, new File(outputFileName));
             }
         } catch (IOException ex) {
             ex.printStackTrace();
@@ -115,8 +113,8 @@ public class ImgUtil {
             e.printStackTrace();
         }
         // 对字节数组Base64编码
-        BASE64Encoder encoder = new BASE64Encoder();
-        return encoder.encode(data);// 返回Base64编码过的字节数组字符串
+        Base64.Encoder encoder = Base64.getEncoder();
+        return encoder.encodeToString(data);// 返回Base64编码过的字节数组字符串
     }
 
     /**
@@ -128,8 +126,8 @@ public class ImgUtil {
 	public static String GetImageStr(URL url) {
 		byte[] data = fromURL(url);
 		//对字节数组Base64编码
-		BASE64Encoder encoder = new BASE64Encoder();
-		String base64 = encoder.encode(data);
+        Base64.Encoder encoder = Base64.getEncoder();
+		String base64 = encoder.encodeToString(data);
 		System.out.println("网络文件[{}]编码成base64字符串:[{}]" + url.toString() + base64);
 		return base64;//返回Base64编码过的字节数组字符串
 	}
@@ -137,10 +135,10 @@ public class ImgUtil {
     public static boolean GenerateImage(String imgStr, String imgFilePath) {// 对字节数组字符串进行Base64解码并生成图片
         if (imgStr == null) // 图像数据为空
             return false;
-        BASE64Decoder decoder = new BASE64Decoder();
+        Base64.Decoder decoder = Base64.getDecoder();
         try {
             // Base64解码
-            byte[] bytes = decoder.decodeBuffer(imgStr);
+            byte[] bytes = decoder.decode(imgStr);
             // 生成jpeg图片
             OutputStream out = new FileOutputStream(imgFilePath);
             out.write(bytes);
@@ -395,22 +393,5 @@ public class ImgUtil {
         BufferedImage buf = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);//如果要转换成别的位图，改这个常量即可
         buf.createGraphics().drawImage(img, 0, 0, null);
         return buf;
-    }
-
-    public static void main(String[] args) throws Exception {
-		byte[] img = fromURL(new URL("http://thirdwx.qlogo.cn/mmopen/vi_32/PiajxSqBRaELwreASwe7C5JuocHNHSlia5XibNw5u0kdZX94X0l0gYVUApKelElBBaVNZZTQiblJnQ53wu68UvyNicg/132"));
-//        String imgstr = StreamUtil.readText(new URL("http://thirdwx.qlogo.cn/mmopen/vi_32/PiajxSqBRaELwreASwe7C5JuocHNHSlia5XibNw5u0kdZX94X0l0gYVUApKelElBBaVNZZTQiblJnQ53wu68UvyNicg/132"));
-//        byte[] img = imgstr.getBytes();
-		int data[] = new int[img.length];
-		for(int i=0;i<img.length;i++) {
-			data[i] = img[i] & 0xff;
-		}
-		String hexStr = StringUtils.byteToHex(img);
-		String b = StringUtils.fromHexString(hexStr);
-        FileOutputStream out = new FileOutputStream("D:/tmp/test.jpeg");
-        out.write(Objects.requireNonNull(img));
-        out.flush();
-        out.close();
-        System.out.println(GetImageStr(new URL("http://thirdwx.qlogo.cn/mmopen/vi_32/PiajxSqBRaELwreASwe7C5JuocHNHSlia5XibNw5u0kdZX94X0l0gYVUApKelElBBaVNZZTQiblJnQ53wu68UvyNicg/132")));
     }
 }
