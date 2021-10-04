@@ -49,9 +49,10 @@ public class SpringContextHolder implements ApplicationContextAware{
 	
 	/**
 	 * 获取配置信息
-	 * @param key
-	 * @param targetType
-	 * @return
+	 *
+	 * @param key 属性key
+	 * @param targetType 属性类型
+	 * @return 属性值
 	 */
 	public static <T> T getProperty(String key, Class<T> targetType) {
 		checkApplicationContext();

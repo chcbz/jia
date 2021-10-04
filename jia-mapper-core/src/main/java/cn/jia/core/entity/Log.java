@@ -1,103 +1,59 @@
 package cn.jia.core.entity;
 
-public class Log {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-10-02
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("core_log")
+@ApiModel(value="Log对象", description="")
+public class Log extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
+    @ApiModelProperty(value = "Jia账号")
     private String jiacn;
 
     private String username;
 
+    @ApiModelProperty(value = "IP地址")
     private String ip;
 
+    @ApiModelProperty(value = "访问地址")
     private String uri;
 
     private String method;
 
+    @ApiModelProperty(value = "请求参数")
     private String param;
 
+    @ApiModelProperty(value = "客户端信息")
     private String userAgent;
 
+    @ApiModelProperty(value = "请求头信息")
     private String header;
 
+    @ApiModelProperty(value = "记录时间")
     private Long time;
 
-    public Integer getId() {
-        return id;
-    }
 
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public String getJiacn() {
-        return jiacn;
-    }
-
-    public void setJiacn(String jiacn) {
-        this.jiacn = jiacn == null ? null : jiacn.trim();
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public void setUsername(String username) {
-        this.username = username == null ? null : username.trim();
-    }
-
-    public String getIp() {
-        return ip;
-    }
-
-    public void setIp(String ip) {
-        this.ip = ip == null ? null : ip.trim();
-    }
-
-    public String getUri() {
-        return uri;
-    }
-
-    public void setUri(String uri) {
-        this.uri = uri == null ? null : uri.trim();
-    }
-
-    public String getMethod() {
-        return method;
-    }
-
-    public void setMethod(String method) {
-        this.method = method == null ? null : method.trim();
-    }
-
-    public String getParam() {
-        return param;
-    }
-
-    public void setParam(String param) {
-        this.param = param == null ? null : param.trim();
-    }
-
-    public String getUserAgent() {
-        return userAgent;
-    }
-
-    public void setUserAgent(String userAgent) {
-        this.userAgent = userAgent == null ? null : userAgent.trim();
-    }
-
-    public String getHeader() {
-        return header;
-    }
-
-    public void setHeader(String header) {
-        this.header = header == null ? null : header.trim();
-    }
-
-    public Long getTime() {
-        return time;
-    }
-
-    public void setTime(Long time) {
-        this.time = time;
-    }
 }
