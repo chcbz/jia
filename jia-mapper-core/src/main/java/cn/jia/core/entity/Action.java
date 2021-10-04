@@ -1,126 +1,58 @@
 package cn.jia.core.entity;
 
-import java.util.Objects;
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
 
-public class Action {
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-10-02
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("core_action")
+@ApiModel(value="Action对象", description="")
+public class Action extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
+    @ApiModelProperty(value = "应用标识符")
     private String resourceId;
 
+    @ApiModelProperty(value = "模块")
     private String module;
 
+    @ApiModelProperty(value = "方法")
     private String func;
 
+    @ApiModelProperty(value = "服务地址")
     private String url;
 
+    @ApiModelProperty(value = "备注")
     private String description;
 
+    @ApiModelProperty(value = "数据来源 1系统生成 2手动创建")
     private Integer source;
 
+    @ApiModelProperty(value = "权限级别 1总后台 2企业后台")
     private Integer level;
 
-    private Long updateTime;
-
-    private Long createTime;
-
+    @ApiModelProperty(value = "状态(1:正常,0:停用)")
     private Integer status;
 
-    public Integer getId() {
-        return id;
-    }
 
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public String getResourceId() {
-        return resourceId;
-    }
-
-    public void setResourceId(String resourceId) {
-        this.resourceId = resourceId == null ? null : resourceId.trim();
-    }
-
-    public String getModule() {
-        return module;
-    }
-
-    public void setModule(String module) {
-        this.module = module == null ? null : module.trim();
-    }
-
-    public String getFunc() {
-        return func;
-    }
-
-    public void setFunc(String func) {
-        this.func = func == null ? null : func.trim();
-    }
-
-    public String getUrl() {
-        return url;
-    }
-
-    public void setUrl(String url) {
-        this.url = url == null ? null : url.trim();
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description == null ? null : description.trim();
-    }
-
-    public Integer getSource() {
-        return source;
-    }
-
-    public void setSource(Integer source) {
-        this.source = source;
-    }
-
-    public Integer getLevel() {
-        return level;
-    }
-
-    public void setLevel(Integer level) {
-        this.level = level;
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
-
-    @Override
-    public int hashCode() {
-        return (id + module + func + resourceId).hashCode();
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        Action action = (Action) obj;
-        return Objects.equals(this.id, action.id) || (Objects.equals(this.getResourceId(), action.getResourceId()) && Objects.equals(this.getModule(), action.getModule()) && Objects.equals(this.getFunc(), action.getFunc()));
-    }
 }

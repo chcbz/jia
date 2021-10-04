@@ -1,14 +1,30 @@
 package cn.jia.core.service;
 
 import cn.jia.core.entity.Log;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
 
-public interface LogService {
+@Service
+public class LogService {
+	
+	@Autowired
+	private ILogService logService;
 
-	Log selectById(Integer id);
+	public Log selectById(Integer id) {
+		return logService.getById(id);
+	}
 
-	void insert(Log log);
+	@Async
+	public void insert(Log log) {
+		logService.save(log);
+	}
 
-	void update(Log log);
+	public void update(Log log) {
+		logService.updateById(log);
+	}
 
-	void delete(Integer id);
+	public void delete(Integer id) {
+		logService.removeById(id);
+	}
 }
