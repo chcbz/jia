@@ -34,7 +34,7 @@
 	<properties>
 		<!-- lib versions -->
 		<junit.version>3.8.1</junit.version>
-		<spring.version>5.2.6.RELEASE</spring.version>
+		<spring.version>5.3.18</spring.version>
 		<springsecurity.version>5.2.4.RELEASE</springsecurity.version>
 		<springsecurityoath.version>2.4.1.RELEASE</springsecurityoath.version>
 	</properties>
