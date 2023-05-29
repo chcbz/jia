@@ -1,18 +1,10 @@
 package cn.jia.core.common;
 
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.security.NoSuchAlgorithmException;
-import java.security.spec.InvalidKeySpecException;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-
-import javax.servlet.http.HttpServletRequest;
-
+import cn.jia.core.exception.EsErrorConstants;
+import cn.jia.core.util.Md5Util;
+import cn.jia.core.util.StringUtils;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
@@ -25,13 +17,16 @@ import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.servlet.support.RequestContext;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import javax.servlet.http.HttpServletRequest;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.InvalidKeySpecException;
+import java.util.*;
 
-import cn.jia.core.exception.EsErrorConstants;
-import cn.jia.core.util.MD5Util;
-import cn.jia.core.util.StringUtils;
-
+/**
+ * @author chc
+ */
 public class EsHandler {
 	private final static Logger logger = LoggerFactory.getLogger(EsHandler.class);
 
@@ -39,7 +34,7 @@ public class EsHandler {
 	 * 检查数据绑定是否发生错误
 	 * 
 	 * @param result
-	 * @param resJson
+	 * @param message
 	 * @return
 	 */
 	public static boolean checkBindingResultHasErrors(BindingResult result, StringBuffer message) {
@@ -108,7 +103,7 @@ public class EsHandler {
 	 * @return
 	 */
 	public static String createSalt() {
-		String val = MD5Util.str2Base32MD5(String.valueOf(new Date().getTime()));
+		String val = Md5Util.str2Base32Md5(String.valueOf(System.currentTimeMillis()));
 		return val.substring(val.length() - 10);
 	}
 
@@ -122,7 +117,7 @@ public class EsHandler {
 	 */
 	public static String createHash(String password, String salt)
 			throws NoSuchAlgorithmException, InvalidKeySpecException {
-		return MD5Util.str2Base32MD5(password + salt);
+		return Md5Util.str2Base32Md5(password + salt);
 	}
 
 	/**
@@ -139,7 +134,7 @@ public class EsHandler {
 	 */
 	public static boolean validatePassword(String password, String salt, String correctHash)
 			throws NoSuchAlgorithmException, InvalidKeySpecException {
-		return StringUtils.equals(MD5Util.str2Base32MD5(password + salt), correctHash);
+		return StringUtils.equals(Md5Util.str2Base32Md5(password + salt), correctHash);
 	}
 
 	/**
@@ -198,7 +193,7 @@ public class EsHandler {
 	 */
 	public static HttpEntity<String> genRestEntity(Object params) {
 		HttpHeaders headers = new HttpHeaders();
-		headers.setContentType(MediaType.APPLICATION_JSON_UTF8);
+		headers.setContentType(MediaType.APPLICATION_JSON);
 		//  将提交的数据转换为String
 		//  最好通过bean注入的方式获取ObjectMapper
 		ObjectMapper mapper = new ObjectMapper();
@@ -214,7 +209,7 @@ public class EsHandler {
 	
 	public static HttpEntity<String> genRestEntity(Object params, String token) {
 		HttpHeaders headers = new HttpHeaders();
-		headers.setContentType(MediaType.APPLICATION_JSON_UTF8);
+		headers.setContentType(MediaType.APPLICATION_JSON);
 		headers.set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
 		//  将提交的数据转换为String
 		//  最好通过bean注入的方式获取ObjectMapper

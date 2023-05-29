@@ -14,6 +14,9 @@ import java.util.List;
 import java.util.Map;
 
 
+/**
+ * @author chc
+ */
 public class HttpUtil {
     /**
      * 向指定URL发送GET方法的请求
@@ -172,7 +175,7 @@ public class HttpUtil {
 	 */
 	public static String requestParams(HttpServletRequest httpRequest) {
         // 请求参数日志信息
-        Map<String, Object> params = new HashMap<>();
+        Map<String, Object> params = new HashMap<>(16);
         Enumeration<?> enume = httpRequest.getParameterNames();
         if (null != enume) {
             while (enume.hasMoreElements()) {
@@ -184,7 +187,7 @@ public class HttpUtil {
                 }
             }
         }
-        return JSONUtil.toJson(params);
+        return JsonUtil.toJson(params);
     }
 	
 	/**
@@ -225,15 +228,17 @@ public class HttpUtil {
         StringBuilder newb = new StringBuilder();
         boolean found = false;
         for (String bi : bArray) {
-            if (StringUtils.isBlank(bi))
+            if (StringUtils.isBlank(bi)) {
                 continue;
+            }
             String key;
             String value = "";
-
-            String[] biArray = bi.split("="); // {p1,1}
+            // {p1,1}
+            String[] biArray = bi.split("=");
             key = biArray[0];
-            if (biArray.length > 1)
+            if (biArray.length > 1) {
                 value = biArray[1];
+            }
 
             if (key.equals(paramName)) {
                 found = true;
@@ -248,10 +253,12 @@ public class HttpUtil {
         if (!found && StringUtils.isNotBlank(paramValue)) {
             newb.append("&").append(paramName).append("=").append(paramValue);
         }
-        if (StringUtils.isNotBlank(newb.toString()))
+        if (StringUtils.isNotBlank(newb.toString())) {
             a = a + "?" + newb.substring(1);
-        if (StringUtils.isNotBlank(c))
+        }
+        if (StringUtils.isNotBlank(c)) {
             a = a + "#" + c;
+        }
         return a;
     }
     /**
@@ -281,14 +288,17 @@ public class HttpUtil {
         // 用&拆p, p1=1&p2=2 ，{p1=1,p2=2}
         String[] bArray = b.split("&");
         for (String bi : bArray) {
-            if (StringUtils.isBlank(bi))
+            if (StringUtils.isBlank(bi)) {
                 continue;
+            }
             String key;
             String value = "";
-            String[] biArray = bi.split("="); // {p1,1}
+            // {p1,1}
+            String[] biArray = bi.split("=");
             key = biArray[0];
-            if (biArray.length > 1)
+            if (biArray.length > 1) {
                 value = biArray[1];
+            }
             if (key.equals(paramName)) {
                 return value;
             }
@@ -317,51 +327,51 @@ public class HttpUtil {
 
     /**
      * 根据文件后缀获取contentType
-     * @param FilenameExtension 文件后缀
+     * @param filenameExtension 文件后缀
      * @return contentType
      */
-    public static String fileContentType(String FilenameExtension) {
-        if (FilenameExtension.equals("BMP") || FilenameExtension.equals("bmp")
-                || FilenameExtension.toUpperCase().equals("BMP")) {
+    public static String fileContentType(String filenameExtension) {
+        if ("BMP".equals(filenameExtension) || "bmp".equals(filenameExtension)
+                || "BMP".equals(filenameExtension.toUpperCase())) {
             return "image/bmp";
         }
-        if (FilenameExtension.equals("GIF") || FilenameExtension.equals("gif")
-                || FilenameExtension.toUpperCase().equals("GIF")) {
+        if ("GIF".equals(filenameExtension) || "gif".equals(filenameExtension)
+                || "GIF".equals(filenameExtension.toUpperCase())) {
             return "image/gif";
         }
-        if (FilenameExtension.equals("JPEG") || FilenameExtension.equals("jpeg") || FilenameExtension.equals("JPG")
-                || FilenameExtension.equals("jpg") || FilenameExtension.equals("PNG")
-                || FilenameExtension.equals("png") || FilenameExtension.toUpperCase().equals("JPEG")
-                || FilenameExtension.toUpperCase().equals("JPG") || FilenameExtension.toUpperCase().equals("PNG")) {
+        if ("JPEG".equals(filenameExtension) || "jpeg".equals(filenameExtension) || "JPG".equals(filenameExtension)
+                || "jpg".equals(filenameExtension) || "PNG".equals(filenameExtension)
+                || "png".equals(filenameExtension) || "JPEG".equals(filenameExtension.toUpperCase())
+                || "JPG".equals(filenameExtension.toUpperCase()) || "PNG".equals(filenameExtension.toUpperCase())) {
             return "image/jpeg";
         }
-        if (FilenameExtension.equals("HTML") || FilenameExtension.equals("html")) {
+        if ("HTML".equals(filenameExtension) || "html".equals(filenameExtension)) {
             return "text/html";
         }
-        if (FilenameExtension.equals("TXT") || FilenameExtension.equals("txt")
-                || FilenameExtension.toUpperCase().equals("TXT")) {
+        if ("TXT".equals(filenameExtension) || "txt".equals(filenameExtension)
+                || "TXT".equals(filenameExtension.toUpperCase())) {
             return "text/plain";
         }
-        if (FilenameExtension.equals("VSD") || FilenameExtension.equals("vsd")
-                || FilenameExtension.toUpperCase().equals("VSD")) {
+        if ("VSD".equals(filenameExtension) || "vsd".equals(filenameExtension)
+                || "VSD".equals(filenameExtension.toUpperCase())) {
             return "application/vnd.visio";
         }
-        if (FilenameExtension.equals("PPTX") || FilenameExtension.equals("pptx") || FilenameExtension.equals("PPT")
-                || FilenameExtension.equals("ppt") || FilenameExtension.toUpperCase().equals("PPTX")
-                || FilenameExtension.toUpperCase().equals("PPT")) {
+        if ("PPTX".equals(filenameExtension) || "pptx".equals(filenameExtension) || "PPT".equals(filenameExtension)
+                || "ppt".equals(filenameExtension) || "PPTX".equals(filenameExtension.toUpperCase())
+                || "PPT".equals(filenameExtension.toUpperCase())) {
             return "application/vnd.ms-powerpoint";
         }
-        if (FilenameExtension.equals("DOCX") || FilenameExtension.equals("docx") || FilenameExtension.equals("DOC")
-                || FilenameExtension.equals("doc") || FilenameExtension.toUpperCase().equals("DOCX")
-                || FilenameExtension.toUpperCase().equals("DOC")) {
+        if ("DOCX".equals(filenameExtension) || "docx".equals(filenameExtension) || "DOC".equals(filenameExtension)
+                || "doc".equals(filenameExtension) || "DOCX".equals(filenameExtension.toUpperCase())
+                || "DOC".equals(filenameExtension.toUpperCase())) {
             return "application/msword";
         }
-        if (FilenameExtension.equals("XML") || FilenameExtension.equals("xml")
-                || FilenameExtension.toUpperCase().equals("XML")) {
+        if ("XML".equals(filenameExtension) || "xml".equals(filenameExtension)
+                || "XML".equals(filenameExtension.toUpperCase())) {
             return "text/xml";
         }
-        if (FilenameExtension.equals("pdf") || FilenameExtension.equals("PDF")
-                || FilenameExtension.toUpperCase().equals("PDF")) {
+        if ("pdf".equals(filenameExtension) || "PDF".equals(filenameExtension)
+                || "PDF".equals(filenameExtension.toUpperCase())) {
             return "application/pdf";
         }
         return null;

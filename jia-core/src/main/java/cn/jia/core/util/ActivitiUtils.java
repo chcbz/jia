@@ -1,5 +1,12 @@
 package cn.jia.core.util;
 
+import org.activiti.engine.ProcessEngine;
+import org.activiti.engine.impl.persistence.entity.ProcessDefinitionEntity;
+import org.activiti.engine.repository.Deployment;
+import org.activiti.engine.repository.ProcessDefinition;
+import org.activiti.engine.runtime.ProcessInstance;
+import org.activiti.engine.task.Task;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -8,13 +15,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipInputStream;
-
-import org.activiti.engine.ProcessEngine;
-import org.activiti.engine.impl.persistence.entity.ProcessDefinitionEntity;
-import org.activiti.engine.repository.Deployment;
-import org.activiti.engine.repository.ProcessDefinition;
-import org.activiti.engine.runtime.ProcessInstance;
-import org.activiti.engine.task.Task;
 
 /**
  * @author scw
@@ -83,7 +83,7 @@ public class ActivitiUtils {
      * 根据部署ID，来删除部署
      * @param deplyomenId
      */
-    public void deleteDeplyomentByPID(String deplyomenId){
+    public void deleteDeplyomentByPid(String deplyomenId){
         this.processEngine.getRepositoryService()
                 .deleteDeployment(deplyomenId , true);
     }
@@ -104,10 +104,11 @@ public class ActivitiUtils {
      * @param userId
      */
     public void startProceesInstance(Long billId , String userId){
-        Map<String , Object> variables = new HashMap<>();
+        Map<String , Object> variables = new HashMap<>(1);
         variables.put("userID" , userId);
+        //第一个参数，就是流程中自己定义的名字，这个一定要匹配，否则是找不到的。
         this.processEngine.getRuntimeService()
-                .startProcessInstanceByKey("shenqingtest" , ""+billId , variables); //第一个参数，就是流程中自己定义的名字，这个一定要匹配，否则是找不到的。
+                .startProcessInstanceByKey("shenqingtest" , ""+billId , variables);
     }
  
     /**
@@ -207,7 +208,7 @@ public class ActivitiUtils {
      * @param object
      */
     public void finishCurrentTaskByTaskId(String taskId , Object object){
-        Map<String , Object> map = new HashMap<>();
+        Map<String , Object> map = new HashMap<>(1);
         map.put("assigeUser" , object);
         this.processEngine.getTaskService().complete(taskId , map);
     }

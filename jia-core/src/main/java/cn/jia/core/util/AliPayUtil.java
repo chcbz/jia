@@ -11,6 +11,9 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.*;
 
+/**
+ * @author chc
+ */
 public class AliPayUtil {
 	/**
 	 * 
@@ -36,11 +39,11 @@ public class AliPayUtil {
 		try {
 			if (EsConstants.SIGN_TYPE_RSA.equals(signType)) {
 
-			    return RSAUtil.rsaCheckContent(content, sign, publicKey, charset);
+			    return RsaUtil.rsaCheckContent(content, sign, publicKey, charset);
 
 			} else if (EsConstants.SIGN_TYPE_RSA2.equals(signType)) {
 
-			    return RSAUtil.rsa256CheckContent(content, sign, publicKey, charset);
+			    return RsaUtil.rsa256CheckContent(content, sign, publicKey, charset);
 
 			} else {
 				return false;
@@ -58,14 +61,14 @@ public class AliPayUtil {
      * @return 去掉空值与签名参数后的新签名参数组
      */
     public static Map<String, String> paraFilter(Map<String, String> sArray) {
-        Map<String, String> result = new HashMap<>();
+        Map<String, String> result = new HashMap<>(16);
         if (sArray == null || sArray.size() <= 0) {
             return result;
         }
         for (String key : sArray.keySet()) {
             String value = sArray.get(key);
-            if (value == null || value.equals("") || key.equalsIgnoreCase("sign")
-                || key.equalsIgnoreCase("sign_type")) {
+            if (value == null || "".equals(value) || "sign".equalsIgnoreCase(key)
+                || "sign_type".equalsIgnoreCase(key)) {
                 continue;
             }
             result.put(key, value);
@@ -85,7 +88,8 @@ public class AliPayUtil {
         for (int i = 0; i < keys.size(); i++) {
             String key = keys.get(i);
             String value = params.get(key);
-            if (i == keys.size() - 1) {//拼接时，不包括最后一个&字符
+            //拼接时，不包括最后一个&字符
+            if (i == keys.size() - 1) {
                 prestr.append(key).append("=").append(value);
             } else {
                 prestr.append(key).append("=").append(value).append("&");
@@ -150,7 +154,7 @@ public class AliPayUtil {
     public static String rsaSign(String content, String privateKey,
                                  String charset) throws AlipayApiException{
         try {
-            PrivateKey priKey = getPrivateKeyFromPKCS8(EsConstants.SIGN_TYPE_RSA2,
+            PrivateKey priKey = getPrivateKeyFromPkcs8(EsConstants.SIGN_TYPE_RSA2,
                 new ByteArrayInputStream(privateKey.getBytes()));
 
             java.security.Signature signature = java.security.Signature
@@ -187,7 +191,7 @@ public class AliPayUtil {
                                     String charset) throws AlipayApiException {
 
         try {
-            PrivateKey priKey = getPrivateKeyFromPKCS8(EsConstants.SIGN_TYPE_RSA,
+            PrivateKey priKey = getPrivateKeyFromPkcs8(EsConstants.SIGN_TYPE_RSA,
                 new ByteArrayInputStream(privateKey.getBytes()));
 
             java.security.Signature signature = java.security.Signature
@@ -210,8 +214,8 @@ public class AliPayUtil {
 
     }
     
-    public static PrivateKey getPrivateKeyFromPKCS8(String algorithm,
-            InputStream ins) throws Exception {
+    public static PrivateKey getPrivateKeyFromPkcs8(String algorithm,
+                                                    InputStream ins) throws Exception {
 		if (ins == null || StringUtils.isEmpty(algorithm)) {
 		return null;
 		}

@@ -2,12 +2,17 @@ package cn.jia.core.util;
 
 import java.security.MessageDigest;
 
+/**
+ * @author chc
+ */
 public class DigestUtil {
     private enum DigestType {
-
+        /**
+         * MD5
+         */
         MD5("MD5"), SHA("SHA"), SHA256("SHA-256"), SHA512("SHA-512");
 
-        private String digestDesc;
+        private final String digestDesc;
 
         private DigestType(String digestDesc) {
             this.digestDesc = digestDesc;
@@ -43,19 +48,19 @@ public class DigestUtil {
         }
     }
 
-    public static String MD5(String s) {
+    public static String md5(String s) {
         return digest(s, DigestType.MD5);
     }
 
-    public static String SHA(String s) {
+    public static String sha(String s) {
         return digest(s, DigestType.SHA);
     }
 
-    public static String SHA256(String s) {
+    public static String sha256(String s) {
         return digest(s, DigestType.SHA256);
     }
 
-    public static String SHA512(String s) {
+    public static String sha512(String s) {
         return digest(s, DigestType.SHA512);
     }
 
@@ -63,17 +68,17 @@ public class DigestUtil {
         String sourceStr1 = "123";
         String sourceStr2 = "Digest Str......";
 
-        System.out.println(DigestUtil.MD5(sourceStr1));
-        System.out.println(DigestUtil.MD5(sourceStr2));
+        System.out.println(DigestUtil.md5(sourceStr1));
+        System.out.println(DigestUtil.md5(sourceStr2));
 
-        System.out.println(DigestUtil.SHA(sourceStr1));
-        System.out.println(DigestUtil.SHA(sourceStr2));
+        System.out.println(DigestUtil.sha(sourceStr1));
+        System.out.println(DigestUtil.sha(sourceStr2));
 
-        System.out.println(DigestUtil.SHA256(sourceStr1));
-        System.out.println(DigestUtil.SHA256(sourceStr2));
+        System.out.println(DigestUtil.sha256(sourceStr1));
+        System.out.println(DigestUtil.sha256(sourceStr2));
 
-        System.out.println(DigestUtil.SHA512(sourceStr1));
-        System.out.println(DigestUtil.SHA512(sourceStr2));
+        System.out.println(DigestUtil.sha512(sourceStr1));
+        System.out.println(DigestUtil.sha512(sourceStr2));
 
     }
 }

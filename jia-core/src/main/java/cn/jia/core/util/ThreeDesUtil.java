@@ -12,18 +12,21 @@ import java.util.Base64;
  * @author lzh
  * 
  */
-public class ThreeDESUtil {
-	private static final String Algorithm = "DESede"; // 定义 加密算法,可用DES,DESede,Blowfish
-	private static final String key = "abcd1234";
+public class ThreeDesUtil {
+	/**
+	 * 定义 加密算法,可用DES,DESede,Blowfish
+	 */
+	private static final String ALGORITHM = "DESede";
+	private static final String KEY = "abcd1234";
 	/**
 	 * 3des解码
 	 * @param value	待解密字符串
 	 * @return
 	 * @throws Exception
 	 */
-	public static String Decrypt3DES(String value){
+	public static String decrypt3Des(String value){
 		try {
-			byte[] b = decryptMode(GetKeyBytes(key), Base64.getDecoder().decode(value));
+			byte[] b = decryptMode(getKeyBytes(KEY), Base64.getDecoder().decode(value));
 			return new String(b);
 		} catch (Exception e) {
 			return null;
@@ -35,10 +38,10 @@ public class ThreeDESUtil {
 	 * @return
 	 * @throws Exception
 	 */
-	public static String Encrypt3DES(String value){
+	public static String encrypt3Des(String value){
 		String str = null;
 		try {
-			str = byte2Base64(encryptMode(GetKeyBytes(key), value.getBytes()));
+			str = byte2Base64(encryptMode(getKeyBytes(KEY), value.getBytes()));
 		} catch (Exception e) {
 			// TODO: handle exception
 		}
@@ -50,9 +53,10 @@ public class ThreeDESUtil {
 	 * @return
 	 * @throws Exception
 	 */
-	private static byte[] GetKeyBytes(String strKey) throws Exception {
-		if (null == strKey || strKey.length() < 1)
+	private static byte[] getKeyBytes(String strKey) throws Exception {
+		if (null == strKey || strKey.length() < 1) {
 			throw new Exception("key is null or empty!");
+		}
 		java.security.MessageDigest alg = java.security.MessageDigest.getInstance("MD5");
 		alg.update(strKey.getBytes());
 		byte[] bkey = alg.digest();
@@ -76,8 +80,9 @@ public class ThreeDESUtil {
 	private static byte[] encryptMode(byte[] keybyte, byte[] src) {
 		try {
 			// 生成密钥
-			SecretKey deskey = new SecretKeySpec(keybyte, Algorithm); // 加密
-			Cipher c1 = Cipher.getInstance(Algorithm);
+			// 加密
+			SecretKey deskey = new SecretKeySpec(keybyte, ALGORITHM);
+			Cipher c1 = Cipher.getInstance(ALGORITHM);
 			c1.init(Cipher.ENCRYPT_MODE, deskey);
 			return c1.doFinal(src);
 		} catch (java.security.NoSuchAlgorithmException e1) {
@@ -97,9 +102,9 @@ public class ThreeDESUtil {
 	 */
 	private static byte[] decryptMode(byte[] keybyte, byte[] src) {
 		try { // 生成密钥
-			SecretKey deskey = new SecretKeySpec(keybyte, Algorithm);
+			SecretKey deskey = new SecretKeySpec(keybyte, ALGORITHM);
 			// 解密
-			Cipher c1 = Cipher.getInstance(Algorithm);
+			Cipher c1 = Cipher.getInstance(ALGORITHM);
 			c1.init(Cipher.DECRYPT_MODE, deskey);
 			return c1.doFinal(src);
 		} catch (java.security.NoSuchAlgorithmException e1) {
@@ -111,7 +116,13 @@ public class ThreeDESUtil {
 		}
 		return null;
 	}
-	// 转换成base64编码
+
+	/**
+	 * 转换成base64编码
+	 *
+	 * @param b 字节数组
+	 * @return base64字符串
+	 */
 	private static String byte2Base64(byte[] b) {
 		return Base64.getEncoder().encodeToString(b);
 	}

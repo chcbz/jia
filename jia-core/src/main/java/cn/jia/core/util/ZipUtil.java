@@ -10,6 +10,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
+/**
+ * @author chc
+ */
 public class ZipUtil {
 	/**
 	 * 
@@ -103,8 +106,9 @@ public class ZipUtil {
 	 * @return 返回压缩后的文本
 	 */
 	public static String zip(String str) {
-		if (str == null)
+		if (str == null) {
 			return null;
+		}
 		byte[] compressed;
 		ByteArrayOutputStream out = null;
 		ZipOutputStream zout = null;

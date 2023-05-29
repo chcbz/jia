@@ -7,31 +7,28 @@ import java.util.Hashtable;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.apache.commons.lang3.StringUtils;
-
 /**
  * 正则表达式验证类
  * @author lzh
  *
  */
 public class ValidUtil {
+	private static final Pattern MOBILE_PATTERN = Pattern.compile("[4-6]{1}[0-9]{2}[0-9]{3}[0-9]{4}$");
+	private static final Pattern CAR_NUMBER_PATTERN = Pattern.compile("^[一-龥][A-Z][A-Z_0-9]{5}$");
+	private static final Pattern NUMBER_PATTERN = Pattern.compile("[0-9]*");
+	private static final Pattern DATE_PATTERN = Pattern.compile("^((\\d{2}(([02468][048])|([13579][26]))[\\-/\\s]?((((0?[13578])|(1[02]))[\\-/\\s]?((0?[1-9])|([1-2][0-9])|(3[01])))|(((0?[469])|(11))[\\-/\\s]?((0?[1-9])|([1-2][0-9])|(30)))|(0?2[\\-/\\s]?((0?[1-9])|([1-2][0-9])))))|(\\d{2}(([02468][1235679])|([13579][01345789]))[\\-/\\s]?((((0?[13578])|(1[02]))[\\-/\\s]?((0?[1-9])|([1-2][0-9])|(3[01])))|(((0?[469])|(11))[\\-/\\s]?((0?[1-9])|([1-2][0-9])|(30)))|(0?2[\\-/\\s]?((0?[1-9])|(1[0-9])|(2[0-8]))))))(\\s(((0?[0-9])|([1-2][0-3])):([0-5]?[0-9])((\\s)|(:([0-5]?[0-9])))))?");
+	private static final Pattern EMAIL_PATTERN = Pattern.compile("^([a-zA-Z0-9_\\-.]+)@((\\[[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.)|(([a-zA-Z0-9\\-]+\\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(]?)$");
 
 	/**
 	 * 验证是否是合法的手机号
-	 * @param str	手机号
-	 * @return 
+	 * @param str 手机号
+	 * @return 校验结果
 	 */
-	public static boolean isMobile(String str) {   
+	public static boolean isMobile(String str) {
 		if(StringUtils.isNotBlank(str)){
 			try {
-				Pattern p = null;  
-		        Matcher m = null;  
-		        boolean b = false;   
-//		        p = Pattern.compile("^[1][3,4,5,8][0-9]{9}$"); // 验证手机号  
-		        p = Pattern.compile("[4-6]{1}[0-9]{2}[0-9]{3}[0-9]{4}$");
-		        m = p.matcher(str);  
-		        b = m.matches();   
-		        return b;  
+				Matcher m = MOBILE_PATTERN.matcher(str);
+				return m.matches();
 			} catch (Exception e) {
 				return false;
 			}
@@ -39,61 +36,60 @@ public class ValidUtil {
 			return false;
 		}
     }
-	
+
 	/**
 	 * 验证是否车牌号码
 	 * @param str 车牌号码
-	 * @return 
+	 * @return 校验结果
 	 */
 	public static boolean isCarNumber(String str)
 	{
 		if(StringUtils.isNotBlank(str)){
-			Pattern p=null;
-			Matcher m=null;
-			boolean b=false;
-			p=Pattern.compile("^[\u4e00-\u9fa5]{1}[A-Z]{1}[A-Z_0-9]{5}$");  //验证车牌信息
-			m=p.matcher(str);
-			b=m.matches();
-			return b;
+			//验证车牌信息
+			Matcher m = CAR_NUMBER_PATTERN.matcher(str);
+			return m.matches();
 		}else{
 			return false;
 		}
 	}
 	/**
 	 * 验证是否是合法身份证号
-	 * @param idno	身份证号
-	 * @return
+	 * @param idStr	身份证号
+	 * @return 校验结果
 	 */
-	public static boolean isIdNumber(String IDStr){
-		if(StringUtils.isNotBlank(IDStr)){
+	public static boolean isIdNumber(String idStr){
+		if(StringUtils.isNotBlank(idStr)){
 			try {
-				String[] ValCodeArr = { "1", "0", "x", "9", "8", "7", "6", "5", "4", "3", "2" };
-		        String[] Wi = { "7", "9", "10", "5", "8", "4", "2", "1", "6", "3", "7", "9", "10", "5", "8", "4", "2" };
-		        String Ai = "";
+				String[] valCodeArr = { "1", "0", "x", "9", "8", "7", "6", "5", "4", "3", "2" };
+		        String[] wi = { "7", "9", "10", "5", "8", "4", "2", "1", "6", "3", "7", "9", "10", "5", "8", "4", "2" };
+		        String ai = "";
 		        // ================ 号码的长度 15位或18位 ================
-		        if (IDStr.length() != 15 && IDStr.length() != 18) {
+		        if (idStr.length() != 15 && idStr.length() != 18) {
 		            return false;
 		        }
 		        // ================ 数字 除最后以为都为数字 ================
-		        if (IDStr.length() == 18) {
-		            Ai = IDStr.substring(0, 17);
-		        } else if (IDStr.length() == 15) {
-		            Ai = IDStr.substring(0, 6) + "19" + IDStr.substring(6, 15);
+		        if (idStr.length() == 18) {
+		            ai = idStr.substring(0, 17);
+		        } else if (idStr.length() == 15) {
+		            ai = idStr.substring(0, 6) + "19" + idStr.substring(6, 15);
 		        }
-		        if (isNumeric(Ai) == false) {
+		        if (!isNumeric(ai)) {
 		            return false;
 		        }
 		        // ================ 出生年月是否有效 ================
-		        String strYear = Ai.substring(6, 10);// 年份
-		        String strMonth = Ai.substring(10, 12);// 月份
-		        String strDay = Ai.substring(12, 14);// 月份
-		        if (isDate(strYear + "-" + strMonth + "-" + strDay) == false) {
+				// 年份
+		        String strYear = ai.substring(6, 10);
+				// 月份
+		        String strMonth = ai.substring(10, 12);
+				// 月份
+		        String strDay = ai.substring(12, 14);
+		        if (!isDate(strYear + "-" + strMonth + "-" + strDay)) {
 		            return false;
 		        }
 		        GregorianCalendar gc = new GregorianCalendar();
 		        SimpleDateFormat s = new SimpleDateFormat("yyyy-MM-dd");
 		        try {
-		            if ((gc.get(Calendar.YEAR) - Integer.parseInt(strYear)) > 150 || 
+		            if ((gc.get(Calendar.YEAR) - Integer.parseInt(strYear)) > 150 ||
 		            		(gc.getTime().getTime() - s.parse(strYear + "-" + strMonth + "-" + strDay).getTime()) < 0) {
 		                return false;
 		            }
@@ -109,29 +105,26 @@ public class ValidUtil {
 		            return false;
 		        }
 		        // ================ 地区码是否有效 ================
-		        Hashtable<?, ?> h = GetAreaCode();
-		        if (h.get(Ai.substring(0, 2)) == null) {
+		        Hashtable<?, ?> h = getAreaCode();
+		        if (h.get(ai.substring(0, 2)) == null) {
 		            return false;
 		        }
 		        // ================ 判断最后一位的值 ================
-		        int TotalmulAiWi = 0;
+		        int totalmulAiWi = 0;
 		        for (int i = 0; i < 17; i++) {
-		            TotalmulAiWi = TotalmulAiWi
-		                    + Integer.parseInt(String.valueOf(Ai.charAt(i)))
-		                    * Integer.parseInt(Wi[i]);
+		            totalmulAiWi = totalmulAiWi
+		                    + Integer.parseInt(String.valueOf(ai.charAt(i)))
+		                    * Integer.parseInt(wi[i]);
 		        }
-		        int modValue = TotalmulAiWi % 11;
-		        String strVerifyCode = ValCodeArr[modValue];
-		        Ai = Ai + strVerifyCode;
-		 
-		        if (IDStr.length() == 18) {
-		            if (Ai.equals(IDStr) == false) {
-		                return false;
-		            }
+		        int modValue = totalmulAiWi % 11;
+		        String strVerifyCode = valCodeArr[modValue];
+		        ai = ai + strVerifyCode;
+
+		        if (idStr.length() == 18) {
+					return ai.equals(idStr);
 		        } else {
 		            return true;
 		        }
-		        return true;
 			} catch (Exception e) {
 				return false;
 			}
@@ -141,63 +134,48 @@ public class ValidUtil {
 	}
 	/**
      * 功能：判断字符串是否为数字
-     * @param str
-     * @return
+     * @param str 字符串
+     * @return 校验结果
      */
     public static boolean isNumeric(String str) {
     	if(StringUtils.isBlank(str)){
     		return false;
     	}
     	try {
-    		Pattern pattern = Pattern.compile("[0-9]*");
-    		Matcher isNum = pattern.matcher(str);
-    		if (isNum.matches()) {
-    			return true;
-    		} else {
-    			return false;
-    		}
+    		Matcher isNum = NUMBER_PATTERN.matcher(str);
+			return isNum.matches();
 		} catch (Exception e) {
 			return false;
 		}
     }
     /**
      * 功能：判断字符串是否为日期格式
-     * @param str
-     * @return
+     * @param strDate 日期字符串
+     * @return 校验结果
      */
     public static boolean isDate(String strDate) {
     	if(StringUtils.isBlank(strDate)){
     		return false;
     	}
     	try {
-    		Pattern pattern = Pattern.compile("^((\\d{2}(([02468][048])|([13579][26]))[\\-\\/\\s]?((((0?[13578])|(1[02]))[\\-\\/\\s]?((0?[1-9])|([1-2][0-9])|(3[01])))|(((0?[469])|(11))[\\-\\/\\s]?((0?[1-9])|([1-2][0-9])|(30)))|(0?2[\\-\\/\\s]?((0?[1-9])|([1-2][0-9])))))|(\\d{2}(([02468][1235679])|([13579][01345789]))[\\-\\/\\s]?((((0?[13578])|(1[02]))[\\-\\/\\s]?((0?[1-9])|([1-2][0-9])|(3[01])))|(((0?[469])|(11))[\\-\\/\\s]?((0?[1-9])|([1-2][0-9])|(30)))|(0?2[\\-\\/\\s]?((0?[1-9])|(1[0-9])|(2[0-8]))))))(\\s(((0?[0-9])|([1-2][0-3]))\\:([0-5]?[0-9])((\\s)|(\\:([0-5]?[0-9])))))?{1}");
-    		Matcher m = pattern.matcher(strDate);
-    		if (m.matches()) {
-    			return true;
-    		} else {
-    			return false;
-    		}
+    		Matcher m = DATE_PATTERN.matcher(strDate);
+			return m.matches();
 		} catch (Exception e) {
 			return false;
 		}
     }
     /**
      * 校验邮箱地址
-     * @param str
-     * @return
+     * @param str 邮箱地址
+     * @return 校验结果
      */
     public static boolean isEmail(String str) {
     	if(StringUtils.isBlank(str)){
     		return false;
     	}
     	try {
-    		Pattern pattern = Pattern.compile("^([a-zA-Z0-9_\\-\\.]+)@((\\[[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.)|(([a-zA-Z0-9\\-]+\\.)+))([a-zA-Z]{2,4}|[0-9]{1,3})(\\]?)$");
-    		Matcher m = pattern.matcher(str);
-    		if (m.matches()) {
-    			return true;
-    		} else {
-    			return false;
-    		}
+    		Matcher m = EMAIL_PATTERN.matcher(str);
+			return m.matches();
 		} catch (Exception e) {
 			return false;
 		}
@@ -206,8 +184,8 @@ public class ValidUtil {
      * 功能：设置地区编码
      * @return Hashtable 对象
      */
-    private static Hashtable<String, String> GetAreaCode() {
-        Hashtable<String, String> hashtable = new Hashtable<String, String>();
+    private static Hashtable<String, String> getAreaCode() {
+        Hashtable<String, String> hashtable = new Hashtable<>();
         hashtable.put("11", "北京");
         hashtable.put("12", "天津");
         hashtable.put("13", "河北");

@@ -1,5 +1,8 @@
 package cn.jia.core.exception;
 
+/**
+ * @author chc
+ */
 public class ValidationException extends EsException{
 	private static final long serialVersionUID = 1L;
 	

@@ -9,21 +9,21 @@ import java.security.MessageDigest;
  * @author lzh
  *
  */
-public class MD5Util {
+public class Md5Util {
 	
-	private final static String[] hexDigits = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};     
+	private final static String[] HEX_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
 	/**
 	 * 生成字符串的MD5编码的完整的32位
-	 * @param  orignal 原字符串
+	 * @param  original 原字符串
 	 * @return 源字符串的MD5编码32位
 	 */
-	public static String str2Base32MD5(String orignal){
+	public static String str2Base32Md5(String original){
 		String resultString=null;
-		try{
-			resultString=new String(orignal);
+		try {
+			resultString=new String(original);
 			MessageDigest md = MessageDigest.getInstance("MD5");
 			resultString=byteArrayToHexString(md.digest(resultString.getBytes("UTF-8"))).toLowerCase();
-		}catch(Exception ex){			
+		} catch(Exception ignored){
 		}
 		return resultString;
 	}
@@ -34,8 +34,9 @@ public class MD5Util {
 	 * @return
 	 */
 	public static String appDecryptMobile(String phone){
-		if(StringUtils.isEmpty(phone))
+		if (StringUtils.isEmpty(phone)) {
 			return null;
+		}
 		char [] ch = phone.toCharArray();
 		char temp = ch[0];
 		ch[0] = ch[2];
@@ -46,8 +47,7 @@ public class MD5Util {
 		ch[3] = temp;
 		
 		String newPhone = String.valueOf(ch);
-		String encryptString = str2Base32MD5(newPhone).toUpperCase();
-		return encryptString;
+		return str2Base32Md5(newPhone).toUpperCase();
 	}
 	
 	/**
@@ -57,9 +57,9 @@ public class MD5Util {
 	*/
 	private static String byteArrayToHexString(byte[] b) 
 	{
-		StringBuffer resultSb = new StringBuffer();
-		for (int i = 0; i < b.length; i++) {
-		  resultSb.append(byteToHexString(b[i]));
+		StringBuilder resultSb = new StringBuilder();
+		for (byte value : b) {
+			resultSb.append(byteToHexString(value));
 		}
 		return resultSb.toString();
 	}
@@ -69,11 +69,11 @@ public class MD5Util {
 		if(n<0){
 			n+=256;
 		}		
-		return hexDigits[n/16]+hexDigits[n%16];
+		return HEX_DIGITS[n/16]+ HEX_DIGITS[n%16];
 	}
 	
 	public static void main(String[] args){
-		System.out.println(str2Base32MD5("123"));
+		System.out.println(str2Base32Md5("123"));
 	}
 	
 }

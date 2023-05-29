@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
+/**
+ * @author chc
+ */
 public class ExcelUtil {
 	public static void exportExcel(List<?> list, String title, String sheetName, Class<?> pojoClass, String fileName,
 			boolean isCreateHeader, HttpServletResponse response) throws Exception {
@@ -38,8 +41,6 @@ public class ExcelUtil {
 	private static void defaultExport(List<?> list, Class<?> pojoClass, String fileName, HttpServletResponse response,
 			ExportParams exportParams) throws Exception {
 		Workbook workbook = ExcelExportUtil.exportExcel(exportParams, pojoClass, list);
-		if (workbook != null)
-			;
 		downLoadExcel(fileName, response, workbook);
 	}
 
@@ -56,8 +57,6 @@ public class ExcelUtil {
 
 	private static void defaultExport(List<Map<String, Object>> list, String fileName, HttpServletResponse response) throws Exception {
 		Workbook workbook = ExcelExportUtil.exportExcel(list, ExcelType.HSSF);
-		if (workbook != null)
-			;
 		downLoadExcel(fileName, response, workbook);
 	}
 
@@ -68,7 +67,7 @@ public class ExcelUtil {
 		ImportParams params = new ImportParams();
 		params.setTitleRows(titleRows);
 		params.setHeadRows(headerRows);
-		List<T> list = null;
+		List<T> list;
 		try {
 			list = ExcelImportUtil.importExcel(new File(filePath), pojoClass, params);
 		} catch (NoSuchElementException e) {
@@ -88,7 +87,7 @@ public class ExcelUtil {
 		ImportParams params = new ImportParams();
 		params.setTitleRows(titleRows);
 		params.setHeadRows(headerRows);
-		List<T> list = null;
+		List<T> list;
 		try {
 			list = ExcelImportUtil.importExcel(file.getInputStream(), pojoClass, params);
 		} catch (NoSuchElementException e) {

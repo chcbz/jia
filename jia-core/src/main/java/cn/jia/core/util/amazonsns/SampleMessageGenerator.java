@@ -1,4 +1,4 @@
-package cn.jia.core.util.amazonSns;
+package cn.jia.core.util.amazonsns;
 
 /*
  * Copyright 2014 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -14,36 +14,52 @@ package cn.jia.core.util.amazonSns;
  * express or implied. See the License for the specific language governing
  * permissions and limitations under the License.
  */
+import org.codehaus.jackson.map.ObjectMapper;
+
 import java.util.HashMap;
 import java.util.Map;
 
-import org.codehaus.jackson.map.ObjectMapper;
-
+/**
+ * @author chc
+ */
 public class SampleMessageGenerator {
 
-	/*
+	/**
 	 * This message is delivered if a platform specific message is not specified
 	 * for the end point. It must be set. It is received by the device as the
 	 * value of the key "default".
 	 */
-	public static final String defaultMessage = "This is the default message";
+	public static final String DEFAULT_MESSAGE = "This is the default message";
 
-	private static final ObjectMapper objectMapper = new ObjectMapper();
+	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-	public static enum Platform {APNS,APNS_SANDBOX,GCM;}
+	/**
+	 * 平台
+	 */
+	public enum Platform {
+		/**
+		 * APNS
+		 */
+		APNS,APNS_SANDBOX,GCM;}
 
 	public static String jsonify(Object message) {
 		try {
-			return objectMapper.writeValueAsString(message);
+			return OBJECT_MAPPER.writeValueAsString(message);
 		} catch (Exception e) {
 			e.printStackTrace();
 			throw (RuntimeException) e;
 		}
 	}
-	//苹果发送信息模板
+
+	/**
+	 * 苹果发送信息模板
+	 *
+	 * @param msgMap
+	 * @return
+	 */
 	public static String getAppleMessage(Map<String,Object> msgMap) {
-		Map<String, Object> appleMessageMap = new HashMap<String, Object>();
-		Map<String, Object> appMessageMap = new HashMap<String, Object>();
+		Map<String, Object> appleMessageMap = new HashMap<>(3);
+		Map<String, Object> appMessageMap = new HashMap<>(1);
 //		appMessageMap.put("alert", msgMap.get("alert").toString());
 //		appMessageMap.put("sound", "default");
 		appMessageMap.put("content-available", 1);
@@ -52,10 +68,16 @@ public class SampleMessageGenerator {
 		appleMessageMap.put("msg_content", msgMap.get("msg").toString());
 		return jsonify(appleMessageMap);
 	}
-	//安卓发送信息模板
+
+	/**
+	 * 安卓发送信息模板
+	 *
+	 * @param msgMap
+	 * @return
+	 */
 	public static String getAndroidMessage(Map<String,Object> msgMap) {
-		Map<String, Object> androidMessageMap = new HashMap<String, Object>();
-		Map<String, Object> payload = new HashMap<String, Object>();
+		Map<String, Object> androidMessageMap = new HashMap<>(4);
+		Map<String, Object> payload = new HashMap<>(1);
 		payload.put("message", msgMap.get("msg"));
 		androidMessageMap.put("collapse_key", msgMap.get("alert").toString());
 		androidMessageMap.put("data", payload);

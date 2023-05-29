@@ -1,16 +1,14 @@
 package cn.jia.core.common;
 
-import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-
 import javax.servlet.ReadListener;
 import javax.servlet.ServletInputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
+import java.io.*;
 
+/**
+ * @author chc
+ */
 public class EsRequestWrapper extends HttpServletRequestWrapper {
 	private final String body;
 
@@ -47,7 +45,8 @@ public class EsRequestWrapper extends HttpServletRequestWrapper {
 	@Override
 	public ServletInputStream getInputStream() throws IOException {
 		final ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(body.getBytes());
-		ServletInputStream servletInputStream = new ServletInputStream() {
+		return new ServletInputStream() {
+			@Override
 			public int read() throws IOException {
 				return byteArrayInputStream.read();
 			}
@@ -64,10 +63,9 @@ public class EsRequestWrapper extends HttpServletRequestWrapper {
 
 			@Override
 			public void setReadListener(ReadListener arg0) {
-				
+
 			}
 		};
-		return servletInputStream;
 	}
 
 	@Override

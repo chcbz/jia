@@ -5,20 +5,23 @@ import java.lang.reflect.Field;
 import java.util.Calendar;
 import java.util.Date;
 
+/**
+ * @author chc
+ */
 public class LunarUtil {
 
-    private static String[] TianGan = {"甲", "乙", "丙", "丁", "戊", "己", "庚", "辛",
+    private static final String[] TIAN_GAN = {"甲", "乙", "丙", "丁", "戊", "己", "庚", "辛",
             "壬", "癸"};
-    private static String[] DiZhi = {"子", "丑", "寅", "卯", "辰", "巳", "午", "未",
+    private static final String[] DI_ZHI = {"子", "丑", "寅", "卯", "辰", "巳", "午", "未",
             "申", "酉", "戌", "亥"};
-    private static String[] Animals = {"鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊",
+    private static final String[] ANIMALS = {"鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊",
             "猴", "鸡", "狗", "猪"};
-    private static String[] nStr1 = {"日", "一", "二", "三", "四", "五", "六", "七",
+    private static final String[] N_STR_1 = {"日", "一", "二", "三", "四", "五", "六", "七",
             "八", "九", "十"};
-    private static String[] nStr2 = {"初", "十", "廿", "卅", "　"};
-    private static String[] monthNong = {"正", "正", "二", "三", "四", "五", "六",
+    private static final String[] N_STR_2 = {"初", "十", "廿", "卅", "　"};
+    private static final String[] MONTH_NONG = {"正", "正", "二", "三", "四", "五", "六",
             "七", "八", "九", "十", "十一", "十二"};
-    private static String[] yearName = {"零", "壹", "贰", "叁", "肆", "伍", "陆",
+    private static final String[] YEAR_NAME = {"零", "壹", "贰", "叁", "肆", "伍", "陆",
             "柒", "捌", "玖"};
 
     public static class Lunar {
@@ -33,7 +36,7 @@ public class LunarUtil {
         }
         /** 中文月份 */
         public String cMonth() {
-            return monthNong[lunarMonth];
+            return MONTH_NONG[lunarMonth];
         }
         /** 中文日 */
         public String cDay() {
@@ -41,7 +44,7 @@ public class LunarUtil {
         }
         /** 生肖 */
         public String animalYear() {
-            return Animals[(lunarYear - 4) % 12];
+            return ANIMALS[(lunarYear - 4) % 12];
         }
         /** 干支 */
         public String ganZhiYear() {
@@ -54,10 +57,10 @@ public class LunarUtil {
         public int solarMonth;
         public int solarYear;
     }
-    /*
+    /**
      * |----4位闰月|-------------13位1为30天，0为29天|
      */
-    private static int[] lunar_month_days = {1887, 0x1694, 0x16aa, 0x4ad5,
+    private static final int[] LUNAR_MONTH_DAYS = {1887, 0x1694, 0x16aa, 0x4ad5,
             0xab6, 0xc4b7, 0x4ae, 0xa56, 0xb52a, 0x1d2a, 0xd54, 0x75aa, 0x156a,
             0x1096d, 0x95c, 0x14ae, 0xaa4d, 0x1a4c, 0x1b2a, 0x8d55, 0xad4,
             0x135a, 0x495d, 0x95c, 0xd49b, 0x149a, 0x1a4a, 0xbaa5, 0x16a8,
@@ -87,7 +90,7 @@ public class LunarUtil {
             0xfb52, 0x16b4, 0xaba, 0xa95b, 0x936, 0x1496, 0x9a4b, 0x154a,
             0x136a5, 0xda4, 0x15ac};
 
-    private static int[] solar_1_1 = {1887, 0xec04c, 0xec23f, 0xec435, 0xec649,
+    private static final int[] SOLAR_1_1 = {1887, 0xec04c, 0xec23f, 0xec435, 0xec649,
             0xec83e, 0xeca51, 0xecc46, 0xece3a, 0xed04d, 0xed242, 0xed436,
             0xed64a, 0xed83f, 0xeda53, 0xedc48, 0xede3d, 0xee050, 0xee244,
             0xee439, 0xee64d, 0xee842, 0xeea36, 0xeec4a, 0xeee3e, 0xef052,
@@ -126,7 +129,14 @@ public class LunarUtil {
         return (data & (((1 << length) - 1) << shift)) >> shift;
     }
 
-    // WARNING: Dates before Oct. 1582 are inaccurate
+    /**
+     * WARNING: Dates before Oct. 1582 are inaccurate
+     *
+     * @param y 年
+     * @param m 月
+     * @param d 日
+     * @return 时间戳
+     */
     private static long solarToInt(int y, int m, int d) {
         m = (m + 9) % 12;
         y = y - m / 10;
@@ -140,7 +150,7 @@ public class LunarUtil {
      * Tiangan:甲乙丙丁戊己庚辛壬癸<br/>Dizhi: 子丑寅卯辰巳无为申酉戌亥
      */
     public static String lunarYearToGanZhi(int lunarYear) {
-        return TianGan[(lunarYear - 4) % 10] + DiZhi[(lunarYear - 4) % 12];
+        return TIAN_GAN[(lunarYear - 4) % 10] + DI_ZHI[(lunarYear - 4) % 12];
     }
 
     /**
@@ -161,8 +171,10 @@ public class LunarUtil {
                 s = "三十";
                 break;
             default:
-                s = nStr2[d / 10];//取商
-                s += nStr1[d % 10];//取余
+                //取商
+                s = N_STR_2[d / 10];
+                //取余
+                s += N_STR_1[d % 10];
         }
         return (s);
     }
@@ -178,7 +190,7 @@ public class LunarUtil {
         while (y > 0) {
             d = y % 10;
             y = (y - d) / 10;
-            s.insert(0, yearName[d]);
+            s.insert(0, YEAR_NAME[d]);
         }
         return (s.toString());
     }
@@ -211,7 +223,7 @@ public class LunarUtil {
     }
 
     public static Solar lunarToSolar(Lunar lunar) {
-        int days = lunar_month_days[lunar.lunarYear - lunar_month_days[0]];
+        int days = LUNAR_MONTH_DAYS[lunar.lunarYear - LUNAR_MONTH_DAYS[0]];
         int leap = getBitInt(days, 4, 13);
         int offset = 0;
         int loopend = leap;
@@ -227,7 +239,7 @@ public class LunarUtil {
         }
         offset += lunar.lunarDay;
 
-        int solar11 = solar_1_1[lunar.lunarYear - solar_1_1[0]];
+        int solar11 = SOLAR_1_1[lunar.lunarYear - SOLAR_1_1[0]];
 
         int y = getBitInt(solar11, 12, 9);
         int m = getBitInt(solar11, 4, 5);
@@ -254,24 +266,24 @@ public class LunarUtil {
     }
     public static Lunar solarToLunar(Solar solar) {
         Lunar lunar = new Lunar();
-        int index = solar.solarYear - solar_1_1[0];
+        int index = solar.solarYear - SOLAR_1_1[0];
         int data = (solar.solarYear << 9) | (solar.solarMonth << 5)
                 | (solar.solarDay);
         int solar11 = 0;
-        if (solar_1_1[index] > data) {
+        if (SOLAR_1_1[index] > data) {
             index--;
         }
-        solar11 = solar_1_1[index];
+        solar11 = SOLAR_1_1[index];
         int y = getBitInt(solar11, 12, 9);
         int m = getBitInt(solar11, 4, 5);
         int d = getBitInt(solar11, 5, 0);
         long offset = solarToInt(solar.solarYear, solar.solarMonth,
                 solar.solarDay) - solarToInt(y, m, d);
 
-        int days = lunar_month_days[index];
+        int days = LUNAR_MONTH_DAYS[index];
         int leap = getBitInt(days, 4, 13);
 
-        int lunarY = index + solar_1_1[0];
+        int lunarY = index + SOLAR_1_1[0];
         int lunarM = 1;
         int lunarD = 1;
         offset += 1;
@@ -306,8 +318,9 @@ public class LunarUtil {
         if (oClass.isArray()) {
             buffer.append("[");
             for (int i = 0; i < Array.getLength(o); i++) {
-                if (i > 0)
+                if (i > 0) {
                     buffer.append(",");
+                }
                 Object value = Array.get(o, i);
                 buffer.append(value.getClass().isArray() ? dump(value) : value);
             }
@@ -317,8 +330,9 @@ public class LunarUtil {
             while (oClass != null) {
                 Field[] fields = oClass.getDeclaredFields();
                 for (Field field : fields) {
-                    if (buffer.length() > 1)
+                    if (buffer.length() > 1) {
                         buffer.append(",");
+                    }
                     field.setAccessible(true);
                     buffer.append(field.getName());
                     buffer.append("=");
@@ -349,7 +363,7 @@ public class LunarUtil {
         solar = LunarUtil.lunarToSolar(lunar);
         System.out.println(dump(solar));
         System.out.println(LunarUtil.lunarYearToGanZhi(2015));
-        System.out.println(dump(LunarUtil.solarToLunar(new Date("1994/2/8"))));
+        System.out.println(dump(LunarUtil.solarToLunar(DateUtil.parseDate("1994/2/8", "yyyy/MM/dd"))));
         System.out.println(dump(LunarUtil.lunarToSolar(2019, 1, 3, true)));
     }
 }

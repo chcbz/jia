@@ -1,22 +1,24 @@
 package cn.jia.core.common;
 
+import cn.jia.core.util.JsonUtil;
+import org.apache.ibatis.type.BaseTypeHandler;
+import org.apache.ibatis.type.JdbcType;
+
 import java.sql.CallableStatement;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-import org.apache.ibatis.type.BaseTypeHandler;
-import org.apache.ibatis.type.JdbcType;
-
-import cn.jia.core.util.JSONUtil;
-
-// 继承自BaseTypeHandler<Object[]> 使用时传入的参数一定要是Object[]，例如 int[]是 Object, 不是Object[]，所以传入int[] 会报错的
+/**
+ * 继承自BaseTypeHandler<Object[]> 使用时传入的参数一定要是Object[]，例如 int[]是 Object, 不是Object[]，所以传入int[] 会报错的
+ * @author chc
+ */
 public class ArrayTypeHandler extends BaseTypeHandler<Object[]> {
 
 	@Override
 	public void setNonNullParameter(PreparedStatement ps, int i, Object[] parameter, JdbcType jdbcType)
 			throws SQLException {
-		ps.setString(i, JSONUtil.toJson(parameter));
+		ps.setString(i, JsonUtil.toJson(parameter));
 	}
 
 	@Override
@@ -39,7 +41,7 @@ public class ArrayTypeHandler extends BaseTypeHandler<Object[]> {
 			return null;
 		}
 		try {
-			return JSONUtil.getArray(array);
+			return JsonUtil.getArray(array);
 		} catch (Exception e) {
 		}
 		return null;

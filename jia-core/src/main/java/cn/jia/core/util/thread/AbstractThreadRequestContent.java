@@ -2,12 +2,15 @@ package cn.jia.core.util.thread;
 
 import java.util.Map;
 
-public abstract class ThreadRequestContent {
-	public ThreadRequestContent() {}
+/**
+ * @author chc
+ */
+public abstract class AbstractThreadRequestContent {
+	public AbstractThreadRequestContent() {}
 	
 	protected Map<String, Object> attr;
 	
-	public ThreadRequestContent(Map<String, Object> attr) {
+	public AbstractThreadRequestContent(Map<String, Object> attr) {
 		this.attr = attr;
 	}
 

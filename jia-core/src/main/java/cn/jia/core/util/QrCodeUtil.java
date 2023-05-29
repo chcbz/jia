@@ -20,7 +20,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
-public class QRCodeUtil {
+/**
+ * @author chc
+ */
+public class QrCodeUtil {
 
 	/**
 	 * 生成二维码图片
@@ -31,14 +34,15 @@ public class QRCodeUtil {
 	 * @param height 图片高度
 	 */
 	public static void encode(String filePath, String fileName, String content, int width, int height){
-		Map<EncodeHintType, Object> hints = new HashMap<>();
+		Map<EncodeHintType, Object> hints = new HashMap<>(3);
 		hints.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.H);
 		hints.put(EncodeHintType.CHARACTER_SET, "UTF-8");
 		hints.put(EncodeHintType.MARGIN, 1);
 		BitMatrix bitMatrix;
 		try {
+			// 生成矩阵
 			bitMatrix = new MultiFormatWriter().encode(content,
-					BarcodeFormat.QR_CODE, width, height, hints);// 生成矩阵
+					BarcodeFormat.QR_CODE, width, height, hints);
 			File pathFile = new File(filePath);
 			if(!pathFile.isDirectory()){
 				//noinspection ResultOfMethodCallIgnored
@@ -46,7 +50,8 @@ public class QRCodeUtil {
 			}
 			Path path = FileSystems.getDefault().getPath(filePath, fileName);
 			String format = fileName.substring(fileName.lastIndexOf(".")+1);
-			MatrixToImageWriter.writeToPath(bitMatrix, format, path);// 输出图像
+			// 输出图像
+			MatrixToImageWriter.writeToPath(bitMatrix, format, path);
 		} catch (WriterException | IOException e) {
 			e.printStackTrace();
 		}
@@ -67,9 +72,10 @@ public class QRCodeUtil {
 			LuminanceSource source = new BufferedImageLuminanceSource(image);
 			Binarizer binarizer = new HybridBinarizer(source);
 			BinaryBitmap binaryBitmap = new BinaryBitmap(binarizer);
-			Map<DecodeHintType, Object> hints = new HashMap<>();
+			Map<DecodeHintType, Object> hints = new HashMap<>(1);
 			hints.put(DecodeHintType.CHARACTER_SET, "UTF-8");
-			Result result = new MultiFormatReader().decode(binaryBitmap, hints);// 对图像进行解码
+			// 对图像进行解码
+			Result result = new MultiFormatReader().decode(binaryBitmap, hints);
 			qrtext = result.getText();
 		} catch (IOException | NotFoundException e) {
 			e.printStackTrace();
@@ -111,18 +117,22 @@ public class QRCodeUtil {
 			g2.drawImage(logo, x, y, logoWidth, logoHeight, null);
 
 			BasicStroke stroke = new BasicStroke(5,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND);
-			g2.setStroke(stroke);// 设置笔画对象
+			// 设置笔画对象
+			g2.setStroke(stroke);
 			//指定弧度的圆角矩形
 			RoundRectangle2D.Float round = new RoundRectangle2D.Float(matrixWidth/5F*2, matrixHeigh/5F*2, matrixWidth/5F, matrixHeigh/5F,20,20);
 			g2.setColor(Color.white);
-			g2.draw(round);// 绘制圆弧矩形
+			// 绘制圆弧矩形
+			g2.draw(round);
 
 			//设置logo 有一道灰色边框
 			BasicStroke stroke2 = new BasicStroke(1,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND);
-			g2.setStroke(stroke2);// 设置笔画对象
+			// 设置笔画对象
+			g2.setStroke(stroke2);
 			RoundRectangle2D.Float round2 = new RoundRectangle2D.Float(matrixWidth/5F*2+2, matrixHeigh/5F*2+2, matrixWidth/5F-4, matrixHeigh/5F-4,20,20);
 			g2.setColor(new Color(128,128,128));
-			g2.draw(round2);// 绘制圆弧矩形
+			// 绘制圆弧矩形
+			g2.draw(round2);
 
 			g2.dispose();
 			matrixImage.flush() ;
@@ -169,7 +179,7 @@ public class QRCodeUtil {
 //		System.out.println(decode("C:\\WorkSpace", "qr.png"));
 		String shareUrl = "https://open.weixin.qq.com/";
 		File qrFile = File.createTempFile("wx-qrcode", ".jpg");
-		QRCodeUtil.encode(qrFile.getParent(), qrFile.getName(), shareUrl, 344, 344);
+		QrCodeUtil.encode(qrFile.getParent(), qrFile.getName(), shareUrl, 344, 344);
 		File logFile = new File("C:\\Users\\Think\\Pictures\\fanlibao.jpg");
 		composeLogo(qrFile, logFile, qrFile);
 	}

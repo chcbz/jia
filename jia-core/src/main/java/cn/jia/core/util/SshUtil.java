@@ -6,6 +6,9 @@ import ch.ethz.ssh2.StreamGobbler;
 
 import java.io.*;
 
+/**
+ * @author chc
+ */
 public class SshUtil {
 
     public static Connection login(String ip, String username, String password) {
@@ -13,8 +16,10 @@ public class SshUtil {
         Connection connection = null;
         try {
             connection = new Connection(ip);
-            connection.connect();// 连接
-            flag = connection.authenticateWithPassword(username, password);// 认证
+            // 连接
+            connection.connect();
+            // 认证
+            flag = connection.authenticateWithPassword(username, password);
             if (flag) {
                 System.out.println("================登录成功==================");
                 return connection;
@@ -36,8 +41,10 @@ public class SshUtil {
     public static String execmd(Connection connection, String cmd) throws Exception {
         String result = "";
         if (connection != null) {
-            Session session = connection.openSession();// 打开一个会话
-            session.execCommand(cmd);// 执行命令
+            // 打开一个会话
+            Session session = connection.openSession();
+            // 执行命令
+            session.execCommand(cmd);
             result = processStdout(session.getStdout(), "UTF-8");
             System.out.println(result);
             // 如果为得到标准输出为空，说明脚本执行出错了

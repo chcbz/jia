@@ -1,9 +1,5 @@
 package cn.jia.core.util;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
 import com.stripe.exception.StripeException;
 import com.stripe.model.Charge;
 import com.stripe.model.Customer;
@@ -11,16 +7,23 @@ import com.stripe.model.ExternalAccount;
 import com.stripe.net.RequestOptions;
 import com.stripe.net.RequestOptions.RequestOptionsBuilder;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * @author chc
+ */
 public class StripePayUtil {
 	public static Customer customerCreate(String cardNumber, String expireYear, String expireMonth, String cvn, String name,
 			String apiKey) throws StripeException {
-		Map<String, Object> cardParams = new HashMap<String, Object>();
+		Map<String, Object> cardParams = new HashMap<>(5);
 		cardParams.put("number", cardNumber);
 		cardParams.put("exp_month", expireMonth);
 		cardParams.put("exp_year", expireYear);
 		cardParams.put("name", name);
 		cardParams.put("cvc", cvn);
-		Map<String, Object> customerParams = new HashMap<String, Object>();
+		Map<String, Object> customerParams = new HashMap<>(1);
 		customerParams.put("card", cardParams);
 		RequestOptions requestOptions = (new RequestOptionsBuilder()).setApiKey(apiKey).build();
 		return Customer.create(customerParams, requestOptions);
@@ -33,7 +36,7 @@ public class StripePayUtil {
 
 	public static List<Customer> customerList(Integer count, String apiKey) throws StripeException {
 		RequestOptions requestOptions = (new RequestOptionsBuilder()).setApiKey(apiKey).build();
-		Map<String, Object> listParams = new HashMap<String, Object>();
+		Map<String, Object> listParams = new HashMap<>(1);
 		listParams.put("count", count);
 		return Customer.list(listParams, requestOptions).getData();
 	}
@@ -41,7 +44,7 @@ public class StripePayUtil {
 	public static Customer customerUpdate(String customerId, String apiKey) throws StripeException {
 		RequestOptions requestOptions = (new RequestOptionsBuilder()).setApiKey(apiKey).build();
 		Customer createdCustomer = customerRetrieve(customerId, apiKey);
-		Map<String, Object> updateParams = new HashMap<String, Object>();
+		Map<String, Object> updateParams = new HashMap<>(1);
 		updateParams.put("description", "Updated Description");
 		return createdCustomer.update(updateParams, requestOptions);
 	}
@@ -49,7 +52,7 @@ public class StripePayUtil {
 	public static Customer customerCardAddition(String customerId, String cardNumber, String expireYear,
 			String expireMonth, String cvn, String name, String apiKey) throws StripeException {
 		RequestOptions requestOptions = (new RequestOptionsBuilder()).setApiKey(apiKey).build();
-		Map<String, Object> cardParams = new HashMap<String, Object>();
+		Map<String, Object> cardParams = new HashMap<>(5);
 		cardParams.put("number", cardNumber);
 		cardParams.put("exp_month", expireMonth);
 		cardParams.put("exp_year", expireYear);
@@ -57,11 +60,11 @@ public class StripePayUtil {
 		cardParams.put("cvc", cvn);
         Customer createdCustomer = customerRetrieve(customerId, apiKey);
 
-        Map<String, Object> creationParams = new HashMap<String, Object>();
+        Map<String, Object> creationParams = new HashMap<>(1);
         creationParams.put("card", cardParams);
         ExternalAccount addedCard = createdCustomer.getSources().create(creationParams, requestOptions);
         
-        Map<String, Object> updateParams = new HashMap<String, Object>();
+        Map<String, Object> updateParams = new HashMap<>(1);
         updateParams.put("default_card", addedCard.getId());
         return createdCustomer.update(updateParams, requestOptions);
     }
@@ -90,7 +93,7 @@ public class StripePayUtil {
 	public static Charge payByCustomer(String customerId, Integer amount, String apiKey, String currency)
 			throws Exception {
 		RequestOptions requestOptions = (new RequestOptionsBuilder()).setApiKey(apiKey).build();
-		Map<String, Object> chargeMap = new HashMap<String, Object>();
+		Map<String, Object> chargeMap = new HashMap<>(3);
 		chargeMap.put("amount", amount);
 		chargeMap.put("currency", currency);
 		chargeMap.put("customer", customerId);
@@ -99,11 +102,11 @@ public class StripePayUtil {
 	
 	public static Charge authPay(String cardNumber, String expireYear, String expireMonth, String apiKey) throws Exception {
 		RequestOptions requestOptions = (new RequestOptionsBuilder()).setApiKey(apiKey).build();
-		Map<String, Object> chargeMap = new HashMap<String, Object>();
+		Map<String, Object> chargeMap = new HashMap<>(4);
 		chargeMap.put("amount", 100);
 		chargeMap.put("currency", "USD");
 		chargeMap.put("capture", false);
-		Map<String, Object> cardMap = new HashMap<String, Object>();
+		Map<String, Object> cardMap = new HashMap<>(3);
 		cardMap.put("number", cardNumber);
 		cardMap.put("exp_month", expireMonth);
 		cardMap.put("exp_year", expireYear);
@@ -114,10 +117,10 @@ public class StripePayUtil {
 	public static Charge payStripe(String cardNumber, String expireYear, String expireMonth, Integer amount,
 			String apiKey, String currency) throws Exception {
 		RequestOptions requestOptions = (new RequestOptionsBuilder()).setApiKey(apiKey).build();
-		Map<String, Object> chargeMap = new HashMap<String, Object>();
+		Map<String, Object> chargeMap = new HashMap<>(3);
 		chargeMap.put("amount", amount);
 		chargeMap.put("currency", currency);
-		Map<String, Object> cardMap = new HashMap<String, Object>();
+		Map<String, Object> cardMap = new HashMap<>(3);
 		cardMap.put("number", cardNumber);
 		cardMap.put("exp_month", expireMonth);
 		cardMap.put("exp_year", expireYear);

@@ -19,13 +19,13 @@ import java.util.*;
  * @author penghuaiyi
  * @date 2014-04-04
  */
-public class JSONUtil {
-	private static final ObjectMapper mapper;
+public class JsonUtil {
+	private static final ObjectMapper MAPPER;
 
 	static {
-		mapper = new ObjectMapper();
+		MAPPER = new ObjectMapper();
 		//设置输入时忽略JSON字符串中存在而Java对象实际没有的属性
-		mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+		MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 	}
 
 	/**
@@ -37,7 +37,7 @@ public class JSONUtil {
 	 */
 	public static String toJson(Object obj) {
         try {
-			return mapper.writeValueAsString(obj);
+			return MAPPER.writeValueAsString(obj);
 		} catch (JsonProcessingException e) {
 			e.printStackTrace();
 		} 
@@ -59,7 +59,7 @@ public class JSONUtil {
 			return null;
 		}
 		try {
-			return mapper.readValue(jsonString, type);
+			return MAPPER.readValue(jsonString, type);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -77,7 +77,7 @@ public class JSONUtil {
 			return null;
 		}
 		try {
-			return mapper.readValue(jsonString, type);
+			return MAPPER.readValue(jsonString, type);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -91,9 +91,9 @@ public class JSONUtil {
 	 * @return 对象列表
 	 */
 	public static <T> List<T> jsonToList(String jsonString, Class<T> clazz) {
-		JavaType javaType = mapper.getTypeFactory().constructParametricType(List.class, clazz);
+		JavaType javaType = MAPPER.getTypeFactory().constructParametricType(List.class, clazz);
 		try {
-			return mapper.readValue(jsonString, javaType);
+			return MAPPER.readValue(jsonString, javaType);
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
