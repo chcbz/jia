@@ -1,0 +1,47 @@
+allprojects {
+    group = 'cn.jia'
+}
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'maven-publish'
+
+    dependencies {
+        implementation libs.slf4j.api
+        annotationProcessor libs.lombok
+        compileOnly libs.lombok
+    }
+
+    sourceCompatibility = JavaVersion.VERSION_17
+
+    tasks.withType(JavaCompile).tap {
+        configureEach {
+            options.encoding = 'UTF-8'
+        }
+    }
+
+    test {
+        useJUnitPlatform()
+    }
+
+    processTestResources.dependsOn copyTestResources
+
+    afterEvaluate {
+        publishing {
+            publications {
+                mavenJava(MavenPublication) {
+                    from components.java
+                }
+            }
+            repositories {
+                maven {
+                    url = version.endsWith('SNAPSHOT') ? rootProject.ext.snapshotsRepoUrl : rootProject.ext.snapshotsRepoUrl
+                    credentials {
+                        username rootProject.ext.repoUsername
+                        password rootProject.ext.repoPassword
+                    }
+                }
+            }
+        }
+    }
+}
