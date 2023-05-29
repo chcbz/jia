@@ -2,14 +2,17 @@ package cn.jia.common.handler;
 
 import cn.jia.core.util.DateUtil;
 import com.baomidou.mybatisplus.core.handlers.MetaObjectHandler;
+import jakarta.inject.Named;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.ibatis.reflection.MetaObject;
-import org.springframework.stereotype.Component;
 
 import java.util.Date;
 
+/**
+ * @author chc
+ */
 @Slf4j
-@Component
+@Named
 public class FieldFillHandler implements MetaObjectHandler {
     @Override
     public void insertFill(MetaObject metaObject) {
