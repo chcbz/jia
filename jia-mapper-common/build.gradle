@@ -1,45 +1,10 @@
-plugins {
-    id 'java-library'
-    id 'maven-publish'
-}
-
 dependencies {
-    implementation 'cn.jia:jia-core:1.1.0-SNAPSHOT'
-    implementation 'org.slf4j:slf4j-api:1.7.30'
-    implementation 'com.github.pagehelper:pagehelper:5.1.11'
-    implementation 'com.baomidou:mybatis-plus:3.3.0'
-    implementation 'org.springframework:spring-context:5.2.6.RELEASE'
-    implementation 'io.swagger:swagger-annotations:1.5.20'
-    annotationProcessor 'org.projectlombok:lombok:1.18.12'
-    compileOnly 'org.projectlombok:lombok:1.18.12'
+    api project(':jia-core')
+    api libs.pagehelper
+    api libs.mybatis.plus.core
+    implementation libs.jakarta.inject.api
+    api libs.swagger.annotations
 }
 
-group = 'cn.jia'
-version = '1.1.0-SNAPSHOT'
+version = '1.1.1-SNAPSHOT'
 description = 'jia-mapper-common'
-java.sourceCompatibility = JavaVersion.VERSION_11
-
-publishing {
-    publications {
-        mavenJava(MavenPublication) {
-            from components.java
-        }
-    }
-    repositories {
-        maven {
-            url = version.endsWith('SNAPSHOT') ? rootProject.ext.snapshotsRepoUrl : rootProject.ext.releasesRepoUrl
-            credentials {
-                username rootProject.ext.repoUsername
-                password rootProject.ext.repoPassword
-            }
-        }
-    }
-}
-
-tasks.withType(JavaCompile) {
-    options.encoding = 'UTF-8'
-}
-
-test {
-    useJUnitPlatform()
-}

@@ -13,5 +13,11 @@ import java.util.List;
  * @since 2021-01-16
  */
 public interface IBaseService<T> extends IService<T> {
+    /**
+     * 以实体属性作为过滤条件
+     *
+     * @param entity 实体
+     * @return 过滤结果
+     */
     List<T> listByEntity(T entity);
 }
