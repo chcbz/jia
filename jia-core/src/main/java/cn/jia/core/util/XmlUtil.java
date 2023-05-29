@@ -1,24 +1,15 @@
 package cn.jia.core.util;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.StringWriter;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
 import org.apache.commons.io.FileUtils;
-import org.dom4j.Attribute;
-import org.dom4j.Document;
-import org.dom4j.DocumentException;
-import org.dom4j.DocumentHelper;
-import org.dom4j.Element;
+import org.dom4j.*;
 import org.dom4j.io.OutputFormat;
 import org.dom4j.io.XMLWriter;
 import org.json.JSONObject;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.StringWriter;
+import java.util.*;
 
 /**
  * xml转map，map转xml 带属性 http://happyqing.iteye.com/blog/2316275
@@ -38,7 +29,8 @@ public class XmlUtil {
 		// }
 		// System.out.println("耗时:"+(System.currentTimeMillis()-begin));
 		JSONObject json = new JSONObject(map);
-		System.out.println(json.toString(1)); // 格式化输出
+		// 格式化输出
+		System.out.println(json.toString(1));
 
 		Document doc = map2xml(map, "root");
 		// Document doc = map2xml(map); //map中含有根节点的键
@@ -63,7 +55,7 @@ public class XmlUtil {
 		}
 		if (needRootKey) {
 			// 在返回的map里加根节点键（如果需要）
-			Map<String, Object> rootMap = new HashMap<String, Object>();
+			Map<String, Object> rootMap = new HashMap<>(16);
 			rootMap.put(root.getName(), map);
 			return rootMap;
 		}
@@ -84,11 +76,12 @@ public class XmlUtil {
 		Element root = doc.getRootElement();
 		Map<String, Object> map = (Map<String, Object>) xml2mapWithAttr(root);
 		if (root.elements().size() == 0 && root.attributes().size() == 0) {
-			return map; // 根节点只有一个文本内容
+			// 根节点只有一个文本内容
+			return map;
 		}
 		if (needRootKey) {
 			// 在返回的map里加根节点键（如果需要）
-			Map<String, Object> rootMap = new HashMap<String, Object>();
+			Map<String, Object> rootMap = new HashMap<>(1);
 			rootMap.put(root.getName(), map);
 			return rootMap;
 		}
@@ -105,8 +98,8 @@ public class XmlUtil {
 		Map map = new LinkedHashMap();
 		List list = e.elements();
 		if (list.size() > 0) {
-			for (int i = 0; i < list.size(); i++) {
-				Element iter = (Element) list.get(i);
+			for (Object o : list) {
+				Element iter = (Element) o;
 				List mapList = new ArrayList();
 
 				if (iter.elements().size() > 0) {
@@ -123,8 +116,9 @@ public class XmlUtil {
 							mapList.add(m);
 						}
 						map.put(iter.getName(), mapList);
-					} else
+					} else {
 						map.put(iter.getName(), m);
+					}
 				} else {
 					if (map.get(iter.getName()) != null) {
 						Object obj = map.get(iter.getName());
@@ -138,33 +132,35 @@ public class XmlUtil {
 							mapList.add(iter.getText());
 						}
 						map.put(iter.getName(), mapList);
-					} else
+					} else {
 						map.put(iter.getName(), iter.getText());
+					}
 				}
 			}
-		} else
+		} else {
 			map.put(e.getName(), e.getText());
+		}
 		return map;
 	}
 
 	/**
 	 * xml转map 带属性
 	 * 
-	 * @param e
+	 * @param element
 	 * @return
 	 */
 	private static Map xml2mapWithAttr(Element element) {
-		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		Map<String, Object> map = new LinkedHashMap<>();
 
 		List<Element> list = element.elements();
-		List<Attribute> listAttr0 = element.attributes(); // 当前节点的所有属性的list
+		// 当前节点的所有属性的list
+		List<Attribute> listAttr0 = element.attributes();
 		for (Attribute attr : listAttr0) {
 			map.put("@" + attr.getName(), attr.getValue());
 		}
 		if (list.size() > 0) {
 
-			for (int i = 0; i < list.size(); i++) {
-				Element iter = list.get(i);
+			for (Element iter : list) {
 				List mapList = new ArrayList();
 
 				if (iter.elements().size() > 0) {
@@ -181,16 +177,17 @@ public class XmlUtil {
 							mapList.add(m);
 						}
 						map.put(iter.getName(), mapList);
-					} else
+					} else {
 						map.put(iter.getName(), m);
+					}
 				} else {
-
-					List<Attribute> listAttr = iter.attributes(); // 当前节点的所有属性的list
+					// 当前节点的所有属性的list
+					List<Attribute> listAttr = iter.attributes();
 					Map<String, Object> attrMap = null;
 					boolean hasAttributes = false;
 					if (listAttr.size() > 0) {
 						hasAttributes = true;
-						attrMap = new LinkedHashMap<String, Object>();
+						attrMap = new LinkedHashMap<>();
 						for (Attribute attr : listAttr) {
 							attrMap.put("@" + attr.getName(), attr.getValue());
 						}
@@ -269,7 +266,8 @@ public class XmlUtil {
 	 */
 	public static Document map2xml(Map<String, Object> map) throws DocumentException, IOException {
 		Iterator<Map.Entry<String, Object>> entries = map.entrySet().iterator();
-		if (entries.hasNext()) { // 获取第一个键创建根节点
+		// 获取第一个键创建根节点
+		if (entries.hasNext()) {
 			Map.Entry<String, Object> entry = entries.next();
 			Document doc = DocumentHelper.createDocument();
 			Element root = DocumentHelper.createElement(entry.getKey());
@@ -291,30 +289,31 @@ public class XmlUtil {
 	 * @return
 	 */
 	private static Element map2xml(Map<String, Object> map, Element body) {
-		Iterator<Map.Entry<String, Object>> entries = map.entrySet().iterator();
-		while (entries.hasNext()) {
-			Map.Entry<String, Object> entry = entries.next();
+		for (Map.Entry<String, Object> entry : map.entrySet()) {
 			String key = entry.getKey();
 			Object value = entry.getValue();
-			if (key.startsWith("@")) { // 属性
-				body.addAttribute(key.substring(1, key.length()), value.toString());
-			} else if (key.equals("#text")) { // 有属性时的文本
+			// 属性
+			if (key.startsWith("@")) {
+				body.addAttribute(key.substring(1), value.toString());
+			}
+			// 有属性时的文本
+			else if ("#text".equals(key)) {
 				body.setText(value.toString());
 			} else {
-				if (value instanceof java.util.List) {
+				if (value instanceof List) {
 					List list = (List) value;
 					Object obj;
-					for (int i = 0; i < list.size(); i++) {
-						obj = list.get(i);
+					for (Object o : list) {
+						obj = o;
 						// list里是map或String，不会存在list里直接是list的，
-						if (obj instanceof java.util.Map) {
+						if (obj instanceof Map) {
 							Element subElement = body.addElement(key);
-							map2xml((Map) list.get(i), subElement);
+							map2xml((Map) o, subElement);
 						} else {
-							body.addElement(key).setText((String) list.get(i));
+							body.addElement(key).setText((String) o);
 						}
 					}
-				} else if (value instanceof java.util.Map) {
+				} else if (value instanceof Map) {
 					Element subElement = body.addElement(key);
 					map2xml((Map) value, subElement);
 				} else {

@@ -4,11 +4,15 @@ import org.apache.commons.lang3.StringUtils;
 
 import javax.servlet.http.HttpServletRequest;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.text.DecimalFormat;
 import java.util.*;
 
+/**
+ * @author chc
+ */
 public class DataUtil {
 
     /**
@@ -61,8 +65,8 @@ public class DataUtil {
      * @return
      */
     public static Double formatDecimal(Double d, Integer n) {
-        BigDecimal b = new BigDecimal(d);
-        return b.setScale(n, BigDecimal.ROUND_HALF_UP).doubleValue();
+        BigDecimal b = BigDecimal.valueOf(d);
+        return b.setScale(n, RoundingMode.HALF_UP).doubleValue();
     }
 
     /**
@@ -74,7 +78,8 @@ public class DataUtil {
     public static String formatPrice(String price) {
         try {
             float fmtPrice = Float.parseFloat(price);
-            DecimalFormat dfm = new DecimalFormat("0.0");// 格式化价格为0.0格式
+            // 格式化价格为0.0格式
+            DecimalFormat dfm = new DecimalFormat("0.0");
             return dfm.format(fmtPrice);
         } catch (Exception e) {
             return price;
@@ -90,7 +95,8 @@ public class DataUtil {
     public static String formatPrice2(String price) {
         try {
             float fmtPrice = Float.parseFloat(price);
-            DecimalFormat dfm = new DecimalFormat("0.00");// 格式化价格为0.00格式
+            // 格式化价格为0.00格式
+            DecimalFormat dfm = new DecimalFormat("0.00");
             return dfm.format(fmtPrice);
         } catch (Exception e) {
             return price;
@@ -154,7 +160,7 @@ public class DataUtil {
         }
         if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
             ip = request.getRemoteAddr();
-            if (ip.equals("127.0.0.1")) {
+            if ("127.0.0.1".equals(ip)) {
                 // 根据网卡取本机配置的IP
                 InetAddress inet = null;
                 try {
@@ -166,7 +172,8 @@ public class DataUtil {
             }
         }
         // 对于通过多个代理的情况，第一个IP为客户端真实IP,多个IP按照','分割
-        if (ip != null && ip.length() > 15) { // "***.***.***.***".length() = 15
+        // "***.***.***.***".length() = 15
+        if (ip != null && ip.length() > 15) {
             if (ip.indexOf(",") > 0) {
                 ip = ip.substring(0, ip.indexOf(","));
             }
@@ -212,7 +219,7 @@ public class DataUtil {
      *
      * @return
      */
-    public static String getUUID() {
+    public static String getUuid() {
         UUID uuid = UUID.randomUUID();
         String str = uuid.toString();
         // 去掉"-"符号  
@@ -250,7 +257,7 @@ public class DataUtil {
             if (param2 > 0) {
                 BigDecimal bcValue = new BigDecimal(param1);
                 BigDecimal cValue = new BigDecimal(param2);
-                double dbValue = bcValue.divide(cValue, 2, BigDecimal.ROUND_HALF_UP).doubleValue();
+                double dbValue = bcValue.divide(cValue, 2, RoundingMode.HALF_UP).doubleValue();
                 bcValue = new BigDecimal(dbValue);
                 cValue = new BigDecimal(100);
                 dbValue = bcValue.multiply(cValue).doubleValue();
@@ -324,11 +331,12 @@ public class DataUtil {
      * @return
      */
     public static double getDistance(double longt1, double lat1, double longt2, double lat2) {
-        double R = 6371229; // 地球的半径
+        // 地球的半径
+        double r = 6371229;
         double x, y, distance;
-        x = (longt2 - longt1) * Math.PI * R
+        x = (longt2 - longt1) * Math.PI * r
                 * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180) / 180;
-        y = (lat2 - lat1) * Math.PI * R / 180;
+        y = (lat2 - lat1) * Math.PI * r / 180;
         distance = Math.hypot(x, y);
         return formatDecimal(distance, 0);
     }
@@ -343,7 +351,7 @@ public class DataUtil {
      * @return
      */
     public static <V, V1 extends V, V2 extends V> Map<String, V> toMap(String name1, V1 value1, String name2, V2 value2) {
-        return populateMap(new HashMap<String, V>(), name1, value1, name2, value2);
+        return populateMap(new HashMap<>(16), name1, value1, name2, value2);
     }
 
     /**
@@ -373,7 +381,12 @@ public class DataUtil {
         return newString;
     }
 
-    //byte 与 int 的相互转换
+    /**
+     * byte 与 int 的相互转换
+     *
+     * @param x int
+     * @return byte
+     */
     public static byte intToByte(int x) {
         return (byte) x;
     }
@@ -383,7 +396,12 @@ public class DataUtil {
         return b & 0xFF;
     }
 
-    //byte 数组与 int 的相互转换
+    /**
+     * byte 数组与 int 的相互转换
+     *
+     * @param b byte
+     * @return int
+     */
     public static int byteArrayToInt(byte[] b) {
         return   b[3] & 0xFF |
                 (b[2] & 0xFF) << 8 |
@@ -400,7 +418,12 @@ public class DataUtil {
         };
     }
 
-    //byte 数组与 long 的相互转换
+    /**
+     * byte 数组与 long 的相互转换
+     *
+     * @param data long
+     * @return byte
+     */
     public static byte[] longToBytes(long data) {
         byte[] bytes = new byte[8];
         bytes[0] = (byte) (data & 0xff);
@@ -420,7 +443,7 @@ public class DataUtil {
     }
 
         public static void main(String[] args) {
-        System.out.println(getUUID());
+        System.out.println(getUuid());
         System.out.println(DataUtil.getRandom(false, 8));
         System.out.println(getDistance(113.7254, 23.00607, 23.00610350447056, 113.7253981177823) / 1000);
     }

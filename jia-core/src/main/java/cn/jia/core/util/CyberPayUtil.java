@@ -1,5 +1,19 @@
 package cn.jia.core.util;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.http.HttpRequest;
+import org.apache.http.client.methods.*;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.log4j.Logger;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -7,27 +21,9 @@ import java.security.SignatureException;
 import java.util.Map;
 import java.util.Map.Entry;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-
-import org.apache.commons.lang3.RandomStringUtils;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.http.HttpRequest;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpDelete;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.client.methods.HttpPut;
-import org.apache.http.client.methods.HttpUriRequest;
-import org.apache.http.entity.StringEntity;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
-import org.apache.log4j.Logger;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-
+/**
+ * @author chc
+ */
 public class CyberPayUtil {
 	final static Logger logger = Logger.getLogger(CyberPayUtil.class);
 	
@@ -35,8 +31,8 @@ public class CyberPayUtil {
 	String paymentAuthorizationRequest;
 	private static CloseableHttpClient XPayHttpClient;
 
-	public static CloseableHttpResponse doXPayTokenRequest(String baseUri, String resourcePath, String queryParams,
-			String testInfo, String body, String methodType, Map<String, String> headers,String apiKey, String sharedSecret) throws Exception {
+	public static CloseableHttpResponse doXpayTokenRequest(String baseUri, String resourcePath, String queryParams,
+                                                           String testInfo, String body, String methodType, Map<String, String> headers, String apiKey, String sharedSecret) throws Exception {
 		String url = baseUri + resourcePath + "?" + queryParams;
 		logRequestBody(url, testInfo, body);
 
@@ -58,20 +54,20 @@ public class CyberPayUtil {
 			((HttpPut) request).setEntity(new StringEntity(body, "UTF-8"));
 		}
 
-		CloseableHttpResponse response = fetchXPayHttpClient().execute((HttpUriRequest) request);
+		CloseableHttpResponse response = fetchXpayHttpClient().execute((HttpUriRequest) request);
 //		logResponse(response);
 		return response;
 	}
 	
-	private static CloseableHttpClient fetchXPayHttpClient() {
+	private static CloseableHttpClient fetchXpayHttpClient() {
         XPayHttpClient = HttpClients.createDefault();
         return XPayHttpClient;
     }
 	
-	private static void logRequestBody(String URI, String testInfo, String payload) {
+	private static void logRequestBody(String uri, String testInfo, String payload) {
         ObjectMapper mapper = getObjectMapperInstance();
         Object tree;
-        logger.info("URI: " + URI);
+        logger.info("URI: " + uri);
         logger.info(testInfo);
         if(!StringUtils.isEmpty(payload)) {
             try {
@@ -87,7 +83,8 @@ public class CyberPayUtil {
 	
 	protected static ObjectMapper getObjectMapperInstance() {
         ObjectMapper mapper = new ObjectMapper();
-        mapper.configure(SerializationFeature.INDENT_OUTPUT, true); // format json
+        // format json
+        mapper.configure(SerializationFeature.INDENT_OUTPUT, true);
         return mapper;
     }
 
@@ -170,11 +167,11 @@ public class CyberPayUtil {
     private static String getDigest(String algorithm, String sharedSecret, String data,
             boolean toLower) throws SignatureException {
         try {
-            Mac sha256HMAC = Mac.getInstance(algorithm);
+            Mac sha256Hmac = Mac.getInstance(algorithm);
             SecretKeySpec secretKey = new SecretKeySpec(sharedSecret.getBytes(StandardCharsets.UTF_8), algorithm);
-            sha256HMAC.init(secretKey);
+            sha256Hmac.init(secretKey);
 
-            byte[] hashByte = sha256HMAC.doFinal(data.getBytes(StandardCharsets.UTF_8));
+            byte[] hashByte = sha256Hmac.doFinal(data.getBytes(StandardCharsets.UTF_8));
             String hashString = toHex(hashByte);
 
             return toLower ? hashString.toLowerCase() : hashString;

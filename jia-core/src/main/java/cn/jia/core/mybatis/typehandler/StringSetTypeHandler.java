@@ -1,5 +1,8 @@
 package cn.jia.core.mybatis.typehandler;
 
+import org.apache.ibatis.type.BaseTypeHandler;
+import org.apache.ibatis.type.JdbcType;
+
 import java.sql.CallableStatement;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -8,9 +11,9 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-import org.apache.ibatis.type.BaseTypeHandler;
-import org.apache.ibatis.type.JdbcType;
-
+/**
+ * @author chc
+ */
 public class StringSetTypeHandler extends BaseTypeHandler<Set<String>> {
 
 	@Override
@@ -22,25 +25,28 @@ public class StringSetTypeHandler extends BaseTypeHandler<Set<String>> {
 	@Override
 	public Set<String> getNullableResult(ResultSet rs, String columnName) throws SQLException {
 		String str = rs.getString(columnName);
-        if (rs.wasNull())
-            return null;
-		return new HashSet<String>(Arrays.asList(str.split(",")));
+        if (rs.wasNull()) {
+			return null;
+		}
+		return new HashSet<>(Arrays.asList(str.split(",")));
 	}
 
 	@Override
 	public Set<String> getNullableResult(ResultSet rs, int columnIndex) throws SQLException {
 		String str = rs.getString(columnIndex);
-        if (rs.wasNull())
-            return null;
-        return new HashSet<String>(Arrays.asList(str.split(",")));
+        if (rs.wasNull()) {
+			return null;
+		}
+        return new HashSet<>(Arrays.asList(str.split(",")));
 	}
 
 	@Override
 	public Set<String> getNullableResult(CallableStatement cs, int columnIndex) throws SQLException {
 		String str = cs.getString(columnIndex);
-        if (cs.wasNull())
-            return null;
-        return new HashSet<String>(Arrays.asList(str.split(",")));
+        if (cs.wasNull()) {
+			return null;
+		}
+        return new HashSet<>(Arrays.asList(str.split(",")));
 	}
 
 }

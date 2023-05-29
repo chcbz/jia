@@ -14,7 +14,7 @@ import javax.servlet.http.HttpServletRequest;
  * @since 2014年5月26日 上午10:51:46
  */
 @JsonInclude(value = Include.NON_NULL)
-public class JSONResult<T> extends Result {
+public class JsonResult<T> extends Result {
 
 	private static final long serialVersionUID = 7880907731807860636L;
 
@@ -55,7 +55,7 @@ public class JSONResult<T> extends Result {
 		this.data = data;
 	}
 
-	public JSONResult() {
+	public JsonResult() {
 		super();
 	}
 
@@ -65,13 +65,13 @@ public class JSONResult<T> extends Result {
 	 * @param data
 	 * @param message
 	 */
-	public JSONResult(T data, String message, String code) {
+	public JsonResult(T data, String message, String code) {
 		this.data = data;
 		super.setMsg(message);
 		super.setCode(code);
 	}
 
-	public JSONResult(T data, String message, String code, int status) {
+	public JsonResult(T data, String message, String code, int status) {
 		this.data = data;
 		this.status = status;
 		super.setMsg(message);
@@ -84,7 +84,7 @@ public class JSONResult<T> extends Result {
 	 * @param data
 	 * @param message
 	 */
-	public JSONResult(T data, String message) {
+	public JsonResult(T data, String message) {
 		this.data = data;
 		super.setMsg(message);
 		super.setCode(EsErrorConstants.SUCCESS);
@@ -95,7 +95,7 @@ public class JSONResult<T> extends Result {
 	 *
 	 * @param data
 	 */
-	public JSONResult(T data) {
+	public JsonResult(T data) {
 		this.data = data;
 		super.setMsg("ok");
 		super.setCode(EsErrorConstants.SUCCESS);
@@ -107,15 +107,15 @@ public class JSONResult<T> extends Result {
 	 * @param msg 消息key
 	 * @return
 	 */
-	public static <T> JSONResult<T> failure(String code, String msg) {
-		JSONResult<T> result = new JSONResult<>();
+	public static <T> JsonResult<T> failure(String code, String msg) {
+		JsonResult<T> result = new JsonResult<>();
 		result.setMsg(msg);
 		result.setCode(code);
 		return result;
 	}
 	
-	public static <T> JSONResult<T> failure(HttpServletRequest request, String code) {
-		JSONResult<T> result = new JSONResult<>();
+	public static <T> JsonResult<T> failure(HttpServletRequest request, String code) {
+		JsonResult<T> result = new JsonResult<>();
 		result.setMsg(EsHandler.getMessage(request, code));
 		result.setCode(code);
 		return result;
@@ -125,22 +125,22 @@ public class JSONResult<T> extends Result {
 	 * 返回成功消息
 	 * @return
 	 */
-	public static <T> JSONResult<T> success() {
-		JSONResult<T> result = new JSONResult<>();
+	public static <T> JsonResult<T> success() {
+		JsonResult<T> result = new JsonResult<>();
 		result.setMsg("ok");
 		result.setCode(EsErrorConstants.SUCCESS);
 		return result;
 	}
 
-	public static <T> JSONResult<T> success(HttpServletRequest request, String msg) {
-		JSONResult<T> result = new JSONResult<>();
+	public static <T> JsonResult<T> success(HttpServletRequest request, String msg) {
+		JsonResult<T> result = new JsonResult<>();
 		result.setMsg(EsHandler.getMessage(request, msg));
 		result.setCode(EsErrorConstants.SUCCESS);
 		return result;
 	}
 
-	public static <T> JSONResult<T> success(T data) {
-		JSONResult<T> result = new JSONResult<>();
+	public static <T> JsonResult<T> success(T data) {
+		JsonResult<T> result = new JsonResult<>();
 		result.setMsg("ok");
 		result.setCode(EsErrorConstants.SUCCESS);
 		result.setData(data);

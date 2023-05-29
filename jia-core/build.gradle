@@ -1,79 +1,49 @@
-plugins {
-    id 'java-library'
-    id 'maven-publish'
-}
-
 dependencies {
-    compileOnly 'org.springframework:spring-webmvc:5.2.6.RELEASE'
-    compileOnly 'com.amazonaws:aws-java-sdk-sns:1.11.98'
-    compileOnly 'org.codehaus.jackson:jackson-mapper-asl:1.9.13'
-    compileOnly 'org.json:json:20140107'
-    compileOnly 'log4j:log4j:1.2.17'
-    compileOnly 'org.slf4j:slf4j-api:1.7.5'
-    compileOnly 'org.slf4j:slf4j-log4j12:1.7.5'
-    compileOnly 'dom4j:dom4j:1.6.1'
-    compileOnly 'javax.inject:javax.inject:1'
-    compileOnly 'javax.servlet:javax.servlet-api:3.1.0'
-    compileOnly 'commons-fileupload:commons-fileupload:1.3.3'
-    compileOnly 'commons-codec:commons-codec:1.6'
-    compileOnly 'commons-net:commons-net:3.3'
-    compileOnly 'commons-logging:commons-logging:1.1.1'
-    compileOnly 'commons-collections:commons-collections:3.2.1'
-    compileOnly 'commons-io:commons-io:1.4'
-    compileOnly 'org.apache.commons:commons-lang3:3.3.2'
-    compileOnly 'org.apache.httpcomponents:httpclient:4.5.3'
-    compileOnly 'redis.clients:jedis:2.6.2'
-    compileOnly 'com.auth0:java-jwt:3.2.0'
-    compileOnly 'org.jodd:jodd:3.3.8'
-    compileOnly 'com.google.zxing:core:3.4.0'
-    compileOnly 'com.google.zxing:javase:3.4.0'
-    compileOnly 'javax.mail:mail:1.4'
-    compileOnly 'com.stripe:stripe-java:4.4.0'
-    compileOnly 'com.sun.media:jai_imageio:1.1'
-    compileOnly 'org.activiti:activiti-engine:6.0.0'
-    compileOnly 'cn.afterturn:easypoi-base:3.0.3'
-    compileOnly 'com.github.xuwei-k:html2image:0.1.0'
-    compileOnly 'ch.ethz.ganymed:ganymed-ssh2:262'
-    compileOnly 'com.aliyun:aliyun-java-sdk-core:4.4.3'
-    compileOnly 'com.aliyun:aliyun-java-sdk-alidns:2.0.10'
-    compileOnly 'net.sf.cssbox:pdf2dom:1.7'
-    compileOnly 'org.apache.pdfbox:pdfbox:2.0.15'
-    compileOnly 'org.apache.pdfbox:pdfbox-tools:2.0.12'
-    compileOnly 'org.apache.poi:poi-scratchpad:3.14'
-    compileOnly 'org.apache.poi:poi-ooxml:3.14'
-    compileOnly 'fr.opensagres.xdocreport:xdocreport:1.0.6'
-    compileOnly 'org.apache.poi:poi-ooxml-schemas:3.14'
-    compileOnly 'org.apache.poi:ooxml-schemas:1.3'
-    compileOnly 'org.projectlombok:lombok:1.16.18'
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.4.2'
+    implementation libs.spring.webmvc
+    implementation libs.aws.java.sdk.sns
+    implementation libs.jackson.mapper.asl
+    implementation libs.json
+    implementation libs.log4j
+    implementation libs.slf4j.api
+    implementation libs.slf4j.log4j12
+    implementation libs.dom4j
+    implementation libs.javax.inject
+    implementation libs.javax.servlet.api
+    implementation libs.commons.fileupload
+    implementation libs.commons.codec
+    implementation libs.commons.net
+    implementation libs.commons.logging
+    implementation libs.commons.collections
+    implementation libs.commons.io
+    implementation libs.commons.lang3
+    implementation libs.httpclient
+    implementation libs.jedis
+    implementation libs.java.jwt
+    implementation libs.jodd
+    implementation libs.zxing.core
+    implementation libs.zxing.javase
+    implementation libs.mail
+    implementation libs.stripe.java
+    implementation libs.jai.imageio
+    implementation libs.opencv
+    implementation libs.activiti.engine
+    implementation libs.easypoi.base
+    implementation libs.html2image
+    implementation libs.ganymed.ssh2
+    implementation libs.aliyun.java.sdk.core
+    implementation libs.aliyun.java.sdk.alidns
+    implementation libs.pdf2dom
+    implementation libs.pdfbox.core
+    implementation libs.pdfbox.tools
+    implementation libs.poi.scratchpad
+    implementation libs.poi.ooxml.core
+    implementation libs.xdocreport
+    implementation libs.poi.ooxml.schemas
+    implementation libs.ooxml.schemas
+    implementation libs.lombok
+    testImplementation libs.junit.jupiter
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
 }
-
-group = 'cn.jia'
-version = '1.1.0-SNAPSHOT'
+version = '1.1.1-SNAPSHOT'
 description = 'jia-core'
-java.sourceCompatibility = JavaVersion.VERSION_11
-
-publishing {
-    publications {
-        maven(MavenPublication) {
-            from components.java
-        }
-    }
-    repositories {
-        maven {
-            url = version.endsWith('SNAPSHOT') ? rootProject.ext.snapshotsRepoUrl : rootProject.ext.releasesRepoUrl
-            credentials {
-                username rootProject.ext.repoUsername
-                password rootProject.ext.repoPassword
-            }
-        }
-    }
-}
-
-tasks.withType(JavaCompile) {
-    options.encoding = 'UTF-8'
-}
-
-test {
-    useJUnitPlatform()
-}

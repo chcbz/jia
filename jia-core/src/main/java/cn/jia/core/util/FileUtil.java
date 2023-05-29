@@ -6,6 +6,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 文件操作工具类
@@ -159,9 +160,14 @@ public class FileUtil {
 		}
 		return false;
 	}
-	
-	/* 按字节读取字符串 */
-	/* 个人感觉最好的方式，（一次读完）读字节就读字节吧，读完转码一次不就好了 */
+
+	/**
+	 * 按字节读取字符串
+	 * 个人感觉最好的方式，（一次读完）读字节就读字节吧，读完转码一次不就好了
+	 *
+	 * @param filePath 文件路径
+	 * @return 文件内容
+	 */
 	public static String readString(String filePath) {
 		String str = "";
 		File file = new File(filePath);
@@ -172,7 +178,7 @@ public class FileUtil {
 			byte[] buffer = new byte[size];
 			in.read(buffer);
 			in.close();
-			str = new String(buffer, "UTF-8");
+			str = new String(buffer, StandardCharsets.UTF_8);
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();

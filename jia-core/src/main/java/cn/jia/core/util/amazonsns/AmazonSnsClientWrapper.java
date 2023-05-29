@@ -1,4 +1,4 @@
-package cn.jia.core.util.amazonSns;
+package cn.jia.core.util.amazonsns;
 
 /*
  * Copyright 2014 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -14,35 +14,40 @@ package cn.jia.core.util.amazonSns;
  * express or implied. See the License for the specific language governing
  * permissions and limitations under the License.
  */
+import cn.jia.core.util.amazonsns.SampleMessageGenerator.Platform;
+import com.amazonaws.services.sns.AmazonSNS;
+import com.amazonaws.services.sns.model.*;
+
 import java.util.HashMap;
 import java.util.Map;
 
-import com.amazonaws.services.sns.AmazonSNS;
-import com.amazonaws.services.sns.model.CreatePlatformApplicationRequest;
-import com.amazonaws.services.sns.model.CreatePlatformApplicationResult;
-import com.amazonaws.services.sns.model.CreatePlatformEndpointRequest;
-import com.amazonaws.services.sns.model.CreatePlatformEndpointResult;
-import com.amazonaws.services.sns.model.DeleteEndpointRequest;
-import com.amazonaws.services.sns.model.DeletePlatformApplicationRequest;
-import com.amazonaws.services.sns.model.PublishRequest;
-import com.amazonaws.services.sns.model.PublishResult;
+;
 
-import cn.jia.core.util.amazonSns.SampleMessageGenerator.Platform;;
-
-public class AmazonSNSClientWrapper {
+/**
+ * @author chc
+ */
+public class AmazonSnsClientWrapper {
 
 	private final AmazonSNS snsClient;
 
-	public AmazonSNSClientWrapper(AmazonSNS client) {
+	public AmazonSnsClientWrapper(AmazonSNS client) {
 		this.snsClient = client;
 	}
-	
-	//创建平台应用
+
+	/**
+	 * 创建平台应用
+	 *
+	 * @param applicationName 应用名称
+	 * @param platform 平台
+	 * @param principal 用户名
+	 * @param credential 密码
+	 * @return 平台应用信息
+	 */
 	private CreatePlatformApplicationResult createPlatformApplication(
 			String applicationName, Platform platform, String principal,
 			String credential) {
 		CreatePlatformApplicationRequest platformApplicationRequest = new CreatePlatformApplicationRequest();
-		Map<String, String> attributes = new HashMap<String, String>();
+		Map<String, String> attributes = new HashMap<>(2);
 		attributes.put("PlatformPrincipal", principal);
 		attributes.put("PlatformCredential", credential);
 		platformApplicationRequest.setAttributes(attributes);
@@ -50,7 +55,16 @@ public class AmazonSNSClientWrapper {
 		platformApplicationRequest.setPlatform(platform.name());
 		return snsClient.createPlatformApplication(platformApplicationRequest);
 	}
-	//创建平台终端节点
+
+	/**
+	 * 创建平台终端节点
+	 *
+	 * @param platform
+	 * @param customData
+	 * @param platformToken
+	 * @param applicationArn
+	 * @return
+	 */
 	private CreatePlatformEndpointResult createPlatformEndpoint(
 			Platform platform, String customData, String platformToken,
 			String applicationArn) {
@@ -61,21 +75,39 @@ public class AmazonSNSClientWrapper {
 		platformEndpointRequest.setPlatformApplicationArn(applicationArn);
 		return snsClient.createPlatformEndpoint(platformEndpointRequest);
 	}
-	//删除平台终端节点
+
+	/**
+	 * 删除平台终端节点
+	 *
+	 * @param endpointArn
+	 */
 	private void deleteEndpointResult(String endpointArn)
 	{
 		DeleteEndpointRequest deleteEndpointRequest=new DeleteEndpointRequest();
 		deleteEndpointRequest.setEndpointArn(endpointArn);
 		snsClient.deleteEndpoint(deleteEndpointRequest);
 	}
-	//删除应用平台
+
+	/**
+	 * 删除应用平台
+	 *
+	 * @param applicationArn
+	 */
 	private void deletePlatformApplication(String applicationArn) {
 		DeletePlatformApplicationRequest request = new DeletePlatformApplicationRequest();
 		request.setPlatformApplicationArn(applicationArn);
 		snsClient.deletePlatformApplication(request);
 	}
 
-	//样例
+	/**
+	 * 样例
+	 * @param platform
+	 * @param principal
+	 * @param credential
+	 * @param platformToken
+	 * @param applicationName
+	 * @param msg
+	 */
 	public void demoNotification(Platform platform, String principal,
 			String credential, String platformToken, String applicationName,Map<String,Object> msg) {
 		//创建平台引用程序,对应一个应用平台
@@ -97,7 +129,7 @@ public class AmazonSNSClientWrapper {
 		deletePlatformApplication(platformApplicationArn);
 	}
 	
-	/*
+	/**
 	 * 测试Amazon SNS
 	 */
 	public void iosNotification(Platform platform,String platformApplicationArn,String platformToken,Map<String,Object> msg) {
@@ -108,7 +140,7 @@ public class AmazonSNSClientWrapper {
 		System.out.println("<<<=====平台端点结果:"+platformEndpointResult);
 		// 推送式通知发布到一个端点。
 		String endpointArn="";
-		if(platform.name().equalsIgnoreCase("gcm"))
+		if("gcm".equalsIgnoreCase(platform.name()))
 		{
 			System.out.println("<<<<<======================当前平台为："+platform.name());
 			endpointArn="arn:aws:sns:eu-central-1:773320271894:endpoint/GCM/SfereFare_User_Android/5df78b07-8b89-35f0-a109-49682f83c9db";
@@ -121,7 +153,7 @@ public class AmazonSNSClientWrapper {
 		deleteEndpointResult(platformEndpointResult.getEndpointArn());
 	}
 	
-	/*
+	/**
 	 * 发送通知
 	 */
 	public void notification(Platform platform,String platformApplicationArn,String platformToken,Map<String,Object> msg) {
@@ -134,16 +166,22 @@ public class AmazonSNSClientWrapper {
 		// 删除该平台的应用程序,因为我们将不再使用它。
 		deleteEndpointResult(platformEndpointResult.getEndpointArn());
 	}
-	
-	
-	
-	//发布推送
+
+
+	/**
+	 * 发布推送
+	 *
+	 * @param endpointArn
+	 * @param platform
+	 * @param msg
+	 * @return
+	 */
 	private PublishResult publish(String endpointArn, Platform platform,Map<String,Object> msg) {
 		PublishRequest publishRequest = new PublishRequest();
 		publishRequest.setMessageStructure("json");
 		// If the message attributes are not set in the requisite method, notification is sent with default attributes
 		String message = getPlatformSampleMessage(platform,msg);
-		Map<String, String> messageMap = new HashMap<String, String>();
+		Map<String, String> messageMap = new HashMap<>(1);
 		messageMap.put(platform.name(), message);
 		message = SampleMessageGenerator.jsonify(messageMap);
 		// For direct publish to mobile end points, topicArn is not relevant.
@@ -153,7 +191,14 @@ public class AmazonSNSClientWrapper {
 		publishRequest.setMessage(message);
 		return snsClient.publish(publishRequest);
 	}
-	//根据不同平台选择发送信息模板
+
+	/**
+	 * 根据不同平台选择发送信息模板
+	 *
+	 * @param platform
+	 * @param msg
+	 * @return
+	 */
 	private String getPlatformSampleMessage(Platform platform,Map<String,Object> msg) {
 		switch (platform) {
 		case APNS:

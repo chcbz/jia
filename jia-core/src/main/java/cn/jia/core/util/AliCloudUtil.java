@@ -38,7 +38,7 @@ public class AliCloudUtil {
             for (DescribeDomainRecordsResponse.Record record : domainRecords) {
                 records.add(BeanUtil.convertBean(record));
             }
-            Map<String, Object> result = new HashMap<>();
+            Map<String, Object> result = new HashMap<>(1);
             result.put("records", records);
             return result;
         } else if("RecordCreate".equals(action)) {

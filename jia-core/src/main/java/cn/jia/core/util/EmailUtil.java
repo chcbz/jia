@@ -12,19 +12,42 @@ import javax.mail.internet.MimeMessage;
 import javax.mail.internet.MimeMultipart;
 import java.util.Properties;
 
+/**
+ * @author chc
+ */
 public class EmailUtil {
 	private static final Logger logger = LoggerFactory.getLogger(EmailUtil.class);
-	private MimeMessage mimeMsg; // MIME邮件对象
-	private Session session; // 邮件会话对象
-	private Properties props; // 系统属性
-	// private boolean needAuth = false; // smtp是否需要认证
-	private String username = ""; // smtp认证用户名和密码
+	/**
+	 * MIME邮件对象
+	 */
+	private MimeMessage mimeMsg;
+	/**
+	 * 邮件会话对象
+	 */
+	private Session session;
+	/**
+	 * 系统属性
+	 */
+	private Properties props;
+	/*
+	 * smtp是否需要认证
+	 */
+	// private boolean needAuth = false;
+	/**
+	 * smtp认证用户名和密码
+	 */
+	private String username = "";
 	private String password = "";
-	private Multipart mp; // Multipart对象,邮件内容,标题,附件等内容均添加到其中后再生成MimeMessage对象
+	/**
+	 * Multipart对象,邮件内容,标题,附件等内容均添加到其中后再生成MimeMessage对象
+	 */
+	private Multipart mp;
 
 	public EmailUtil() {
-		// setSmtpHost(getConfig.mailHost);// 如果没有指定邮件服务器,就从getConfig类中获取
-		setSmtpHost("smtp.126.com");// 如果没有指定邮件服务器,就从getConfig类中获取
+		// 如果没有指定邮件服务器,就从getConfig类中获取
+		// setSmtpHost(getConfig.mailHost);
+		// 如果没有指定邮件服务器,就从getConfig类中获取
+		setSmtpHost("smtp.126.com");
 		createMimeMessage();
 	}
 
@@ -39,9 +62,12 @@ public class EmailUtil {
 	 */
 	public void setSmtpHost(String hostName) {
 		logger.info("设置系统属性：mail.smtp.host = " + hostName);
-		if (props == null)
-			props = System.getProperties(); // 获得系统属性对象
-		props.put("mail.smtp.host", hostName); // 设置SMTP主机
+		if (props == null) {
+			// 获得系统属性对象
+			props = System.getProperties();
+		}
+		// 设置SMTP主机
+		props.put("mail.smtp.host", hostName);
 	}
 
 	/**
@@ -51,14 +77,16 @@ public class EmailUtil {
 	public boolean createMimeMessage() {
 		try {
 			logger.info("准备获取邮件会话对象！");
-			session = Session.getDefaultInstance(props, null); // 获得邮件会话对象
+			// 获得邮件会话对象
+			session = Session.getDefaultInstance(props, null);
 		} catch (Exception e) {
 			logger.error("获取邮件会话对象时发生错误！" + e);
 			return false;
 		}
 		logger.info("准备创建MIME邮件对象！");
 		try {
-			mimeMsg = new MimeMessage(session); // 创建MIME邮件对象
+			// 创建MIME邮件对象
+			mimeMsg = new MimeMessage(session);
 			mp = new MimeMultipart();
 			return true;
 		} catch (Exception e) {
@@ -73,8 +101,9 @@ public class EmailUtil {
 	 */
 	public void setNeedAuth(boolean need) {
 		logger.info("设置smtp身份认证：mail.smtp.auth = " + need);
-		if (props == null)
+		if (props == null) {
 			props = System.getProperties();
+		}
 		if (need) {
 			props.put("mail.smtp.auth", "true");
 		} else {
@@ -151,7 +180,8 @@ public class EmailUtil {
 	public boolean setFrom(String from) {
 		logger.info("设置发信人！");
 		try {
-			mimeMsg.setFrom(new InternetAddress(from)); // 设置发信人
+			// 设置发信人
+			mimeMsg.setFrom(new InternetAddress(from));
 			return true;
 		} catch (Exception e) {
 			return false;
@@ -163,8 +193,9 @@ public class EmailUtil {
 	 * @param to 收件人
 	 */
 	public boolean setTo(String to) {
-		if (to == null)
+		if (to == null) {
 			return false;
+		}
 		try {
 			mimeMsg.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to));
 			return true;
@@ -178,8 +209,9 @@ public class EmailUtil {
 	 * @param copyto 抄送人
 	 */
 	public boolean setCopyTo(String copyto) {
-		if (copyto == null)
+		if (copyto == null) {
 			return false;
+		}
 		try {
 			mimeMsg.setRecipients(Message.RecipientType.CC, InternetAddress.parse(copyto));
 			return true;
@@ -226,14 +258,18 @@ public class EmailUtil {
 		String mailbody = "<meta http-equiv=Content-Type content=text/html; charset=gb2312>" + content;
 		EmailUtil themail = new EmailUtil(smtp);
 		themail.setNeedAuth(true);
-		if (!themail.setSubject(title))
+		if (!themail.setSubject(title)) {
 			return false;
-		if (!themail.setBody(mailbody))
+		}
+		if (!themail.setBody(mailbody)) {
 			return false;
-		if (!themail.setTo(to))
+		}
+		if (!themail.setTo(to)) {
 			return false;
-		if (!themail.setFrom(from))
+		}
+		if (!themail.setFrom(from)) {
 			return false;
+		}
 		themail.setNamePass(name, password);
 		return themail.sendout();
 	}
@@ -255,16 +291,21 @@ public class EmailUtil {
 		String mailbody = "<meta http-equiv=Content-Type content=text/html; charset=gb2312>" + content;
 		EmailUtil themail = new EmailUtil(smtp);
 		themail.setNeedAuth(true);
-		if (!themail.setSubject(title))
+		if (!themail.setSubject(title)) {
 			return false;
-		if (!themail.setBody(mailbody))
+		}
+		if (!themail.setBody(mailbody)) {
 			return false;
-		if (!themail.setTo(to))
+		}
+		if (!themail.setTo(to)) {
 			return false;
-		if (!themail.setFrom(from))
+		}
+		if (!themail.setFrom(from)) {
 			return false;
-		if (!themail.addFileAffix(affixPath))
+		}
+		if (!themail.addFileAffix(affixPath)) {
 			return false;
+		}
 		themail.setNamePass(name, password);
 		return themail.sendout();
 	}

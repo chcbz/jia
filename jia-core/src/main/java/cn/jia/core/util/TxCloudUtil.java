@@ -136,7 +136,7 @@ public class TxCloudUtil {
 //		param.put("Signature", URLEncoder.encode(sign, "UTF-8"));
         param.put("Signature", sign);
         String resp = HttpUtil.sendGet("https://" + apiHost + apiPath + buildParamStr(param));
-        Map<String, Object> respMap = JSONUtil.jsonToMap(resp);
+        Map<String, Object> respMap = JsonUtil.jsonToMap(resp);
          if(!Integer.valueOf(0).equals(Objects.requireNonNull(respMap).get("code"))){
             throw new EsRuntimeException(String.valueOf(respMap.get("code")), String.valueOf(respMap.get("message")));
         }

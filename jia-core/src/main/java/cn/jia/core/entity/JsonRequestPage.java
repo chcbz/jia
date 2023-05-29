@@ -2,6 +2,7 @@ package cn.jia.core.entity;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.io.Serializable;
 
@@ -13,7 +14,7 @@ import java.io.Serializable;
  * @param <T>
  */
 @JsonInclude(value=Include.NON_NULL)
-public class JSONRequestPage<T> implements Serializable{
+public class JsonRequestPage<T> implements Serializable{
 	private static final long serialVersionUID = -7995644969484016692L;
 	/** 请求的序列，用来跟客户端保持同步 */
     private Integer draw;
@@ -23,8 +24,8 @@ public class JSONRequestPage<T> implements Serializable{
     private Integer pageSize = Integer.MAX_VALUE;
     
     private T search;
-    
-    private String extra_search;
+	@JsonProperty("extra_search")
+    private String extraSearch;
     
     public T getSearch() {
 		return search;
@@ -42,7 +43,7 @@ public class JSONRequestPage<T> implements Serializable{
 		this.draw = draw;
 	}
 
-	public JSONRequestPage() {
+	public JsonRequestPage() {
         super();
     }
 
@@ -62,18 +63,18 @@ public class JSONRequestPage<T> implements Serializable{
 		this.pageSize = pageSize;
 	}
 
-	public String getExtra_search() {
-		return extra_search;
+	public String getExtraSearch() {
+		return extraSearch;
 	}
 
-	public void setExtra_search(String extra_search) {
-		this.extra_search = extra_search;
+	public void setExtraSearch(String extraSearch) {
+		this.extraSearch = extraSearch;
 	}
 
 	@Override
 	public String toString() {
-		return "JSONRequestPage [draw=" + draw + ", pageNum=" + pageNum + ", pageSize=" + pageSize + ", search="
-				+ search + ", extra_search=" + extra_search + "]";
+		return "JsonRequestPage [draw=" + draw + ", pageNum=" + pageNum + ", pageSize=" + pageSize + ", search="
+				+ search + ", extra_search=" + extraSearch + "]";
 	}
 
 }

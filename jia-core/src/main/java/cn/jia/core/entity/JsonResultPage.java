@@ -17,7 +17,7 @@ import java.util.List;
  * @param <T>
  */
 @JsonInclude(value=Include.NON_NULL)
-public class JSONResultPage<T> extends Result {
+public class JsonResultPage<T> extends Result {
     private static final long serialVersionUID = 7880907731807860636L;
     
     /** 请求的序列，用来跟客户端保持同步 */
@@ -29,7 +29,7 @@ public class JSONResultPage<T> extends Result {
 	/** 结果内容 */
     private List<T> data;
 
-	public JSONResultPage() {
+	public JsonResultPage() {
         super();
     }
 
@@ -40,7 +40,7 @@ public class JSONResultPage<T> extends Result {
      * @param message 消息
 	 * @param code 消息代码
      */
-    public JSONResultPage(List<T> data, String message, String code) {
+    public JsonResultPage(List<T> data, String message, String code) {
     	this.setData(data);
         super.setMsg(message);
         super.setCode(code);
@@ -52,7 +52,7 @@ public class JSONResultPage<T> extends Result {
      * @param data 内容
      * @param message 消息
      */
-    public JSONResultPage(List<T> data, String message) {
+    public JsonResultPage(List<T> data, String message) {
     	this.setData(data);
         super.setMsg(message);
         super.setCode(EsErrorConstants.SUCCESS);
@@ -63,7 +63,7 @@ public class JSONResultPage<T> extends Result {
      *
      * @param data 内容
      */
-    public JSONResultPage(List<T> data) {
+    public JsonResultPage(List<T> data) {
     	this.setData(data);
     	super.setMsg("ok");
         super.setCode(EsErrorConstants.SUCCESS);
@@ -75,8 +75,8 @@ public class JSONResultPage<T> extends Result {
 	 * @param msg 消息key
 	 * @return 错误结果
 	 */
-	public static <T> JSONResultPage<T> failure(String code, String msg) {
-		JSONResultPage<T> result = new JSONResultPage<>();
+	public static <T> JsonResultPage<T> failure(String code, String msg) {
+		JsonResultPage<T> result = new JsonResultPage<>();
 		result.setMsg(msg);
 		result.setCode(code);
 		return result;
@@ -88,8 +88,8 @@ public class JSONResultPage<T> extends Result {
      * @param msg 消息key
      * @return 错误结果
      */
-    public static<T> JSONResultPage<T> failure(HttpServletRequest request, String msg, String code){
-    	JSONResultPage<T> result = new JSONResultPage<>();
+    public static<T> JsonResultPage<T> failure(HttpServletRequest request, String msg, String code){
+    	JsonResultPage<T> result = new JsonResultPage<>();
     	result.setMsg(EsHandler.getMessage(request, msg));
     	result.setCode(code);
     	return result;
@@ -100,8 +100,8 @@ public class JSONResultPage<T> extends Result {
 	 *
 	 * @return 成功结果
 	 */
-	public static <T> JSONResultPage<T> success() {
-		JSONResultPage<T> result = new JSONResultPage<>();
+	public static <T> JsonResultPage<T> success() {
+		JsonResultPage<T> result = new JsonResultPage<>();
 		result.setMsg("ok");
 		result.setCode(EsErrorConstants.SUCCESS);
 		return result;
@@ -114,8 +114,8 @@ public class JSONResultPage<T> extends Result {
 	 * @param <T> 结果类型
 	 * @return 成功结果
 	 */
-	public static <T> JSONResultPage<T> success(HttpServletRequest request, String msg) {
-		JSONResultPage<T> result = new JSONResultPage<>();
+	public static <T> JsonResultPage<T> success(HttpServletRequest request, String msg) {
+		JsonResultPage<T> result = new JsonResultPage<>();
 		result.setMsg(EsHandler.getMessage(request, msg));
 		result.setCode(EsErrorConstants.SUCCESS);
 		return result;
@@ -128,8 +128,8 @@ public class JSONResultPage<T> extends Result {
 	 * @param <T> 结果类型
 	 * @return 成功结果
 	 */
-	public static <T> JSONResultPage<T> success(List<T> data) {
-		JSONResultPage<T> result = new JSONResultPage<>();
+	public static <T> JsonResultPage<T> success(List<T> data) {
+		JsonResultPage<T> result = new JsonResultPage<>();
 		result.setMsg("ok");
 		result.setCode(EsErrorConstants.SUCCESS);
 		result.setData(data);

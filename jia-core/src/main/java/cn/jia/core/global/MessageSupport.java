@@ -1,11 +1,15 @@
 package cn.jia.core.global;
 
+/**
+ * @author chc
+ */
 public class MessageSupport implements Messageable {
 	private static final long serialVersionUID = -2723284476195850067L;
 	private String defaultMessage = null;
 	private String messageKey = null;
 	private Object[] args = null;
 
+	@Override
 	public String getDefaultMessage() {
 		return defaultMessage;
 	}
@@ -14,6 +18,7 @@ public class MessageSupport implements Messageable {
 		this.defaultMessage = defaultMessage;
 	}
 
+	@Override
 	public String getMessageKey() {
 		return messageKey;
 	}
@@ -22,6 +27,7 @@ public class MessageSupport implements Messageable {
 		this.messageKey = messageKey;
 	}
 
+	@Override
 	public Object[] getArgs() {
 		return args;
 	}
@@ -30,6 +36,7 @@ public class MessageSupport implements Messageable {
 		this.args = args;
 	}
 
+	@Override
 	public boolean hasDefaultMessage() {
 		return (this.defaultMessage != null);
 	}

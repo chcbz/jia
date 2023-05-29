@@ -1,5 +1,8 @@
 package cn.jia.core.datasource;
 
+/**
+ * @author chc
+ */
 public class DruidSource {
 
 	private String dbUrl;

@@ -12,6 +12,9 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.*;
 
+/**
+ * @author chc
+ */
 public class BeanUtil {
 	/**
 	 * * 将一个 Map 对象转化为一个 JavaBean * @param type 要转化的类型 * @param map 包含属性值的 map
@@ -23,9 +26,11 @@ public class BeanUtil {
 	 */
 	@SuppressWarnings("rawtypes")
 	public static Object convertMap(Class type, Map map)
-			throws IntrospectionException, IllegalAccessException, InstantiationException, InvocationTargetException {
-		BeanInfo beanInfo = Introspector.getBeanInfo(type); // 获取类属性
-		Object obj = type.newInstance(); // 创建 JavaBean 对象
+			throws IntrospectionException, IllegalAccessException, InstantiationException, InvocationTargetException, NoSuchMethodException {
+		// 获取类属性
+		BeanInfo beanInfo = Introspector.getBeanInfo(type);
+		// 创建 JavaBean 对象
+		Object obj = type.getDeclaredConstructor().newInstance();
 
 		// 给 JavaBean 对象的属性赋值
 		PropertyDescriptor[] propertyDescriptors = beanInfo.getPropertyDescriptors();
@@ -62,20 +67,16 @@ public class BeanUtil {
 	public static Map<String, Object> convertBean(Object bean)
 			throws IntrospectionException, IllegalAccessException, InvocationTargetException {
 		Class type = bean.getClass();
-		Map<String, Object> returnMap = new HashMap<>();
+		Map<String, Object> returnMap = new HashMap<>(16);
 		BeanInfo beanInfo = Introspector.getBeanInfo(type);
 
 		PropertyDescriptor[] propertyDescriptors = beanInfo.getPropertyDescriptors();
 		for (PropertyDescriptor descriptor : propertyDescriptors) {
 			String propertyName = descriptor.getName();
-			if (!propertyName.equals("class")) {
+			if (!"class".equals(propertyName)) {
 				Method readMethod = descriptor.getReadMethod();
 				Object result = readMethod.invoke(bean);
-				if (result != null) {
-					returnMap.put(propertyName, result);
-				} else {
-					returnMap.put(propertyName, "");
-				}
+				returnMap.put(propertyName, Objects.requireNonNullElse(result, ""));
 			}
 		}
 		return returnMap;
@@ -94,7 +95,9 @@ public class BeanUtil {
         Set<String> emptyNames = new HashSet<>();
         for(java.beans.PropertyDescriptor pd : pds) {
             Object srcValue = src.getPropertyValue(pd.getName());
-            if (srcValue == null) emptyNames.add(pd.getName());
+            if (srcValue == null) {
+				emptyNames.add(pd.getName());
+			}
         }
         String[] result = new String[emptyNames.size()];
         return emptyNames.toArray(result);
@@ -113,7 +116,9 @@ public class BeanUtil {
 		Set<String> emptyNames = new HashSet<>();
 		for(java.beans.PropertyDescriptor pd : pds) {
 			Object srcValue = src.getPropertyValue(pd.getName());
-			if (srcValue == null || "".equals(srcValue)) emptyNames.add(pd.getName());
+			if (srcValue == null || "".equals(srcValue)) {
+				emptyNames.add(pd.getName());
+			}
 
 		}
 		String[] result = new String[emptyNames.size()];

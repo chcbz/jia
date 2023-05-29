@@ -3,6 +3,9 @@ package cn.jia.core.util;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * @author chc
+ */
 public class PageUtil {
 
 	/**
@@ -13,14 +16,10 @@ public class PageUtil {
 			page = 1;
 		}
 
-		int a[] = new int[2];
+		int[] a = new int[2];
 		try {
 			a[0] = (page - 1) * pageSize;
-			if (page * pageSize >= max) {
-				a[1] = max;
-			} else {
-				a[1] = page * pageSize;
-			}
+			a[1] = Math.min(page * pageSize, max);
 		} catch (RuntimeException e) {
 			e.printStackTrace();
 			a[0] = 0;
@@ -38,13 +37,13 @@ public class PageUtil {
 	 * @return
 	 */
 	public static List<Integer> getpageList(int page, int pageSize, int max) {
-		int maxPage = 0;
+		int maxPage;
 		if (max % pageSize == 0) {
-			maxPage = ((int) (max / pageSize));
+			maxPage = max / pageSize;
 		} else {
-			maxPage = ((int) (max / pageSize)) + 1;
+			maxPage = (max / pageSize) + 1;
 		}
-		List<Integer> l = new ArrayList<Integer>();
+		List<Integer> l = new ArrayList<>();
 		int longs = 5;
 
 		if (page <= longs / 2) {

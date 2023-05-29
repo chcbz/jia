@@ -1,6 +1,6 @@
 package cn.jia.core.util;
 
-import cn.jia.core.entity.JSONResult;
+import cn.jia.core.entity.JsonResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
+/**
+ * @author chc
+ */
 public class ClassUtil {
     private final static Logger log = LoggerFactory.getLogger(ClassUtil.class);
 
@@ -35,7 +38,7 @@ public class ClassUtil {
         FileUtil.create(is, "D:/tmp/tmp.jar");
         JarFile jarFile = new JarFile(new File("D:/tmp/tmp.jar"));
         System.out.println(jarFile);*/
-		JSONResult obj = new JSONResult();
+		JsonResult obj = new JsonResult();
 		setAttribute(obj, "status", 2100, Integer.TYPE);
 		Integer status = getAttribute(obj, "status");
         System.out.println(status);
@@ -68,9 +71,9 @@ public class ClassUtil {
                 URL url = urls.nextElement();
                 log.info("getClassName URL: " + url.toString());
                 String type = url.getProtocol();
-                if (type.equals("file")) {
+                if ("file".equals(type)) {
                     fileNames.addAll(getClassNameByFile(url.getPath(), null, childPackage));
-                } else if (type.equals("jar")) {
+                } else if ("jar".equals(type)) {
                     fileNames.addAll(getClassNameByJar(url.getPath(), childPackage));
                 }
             }
@@ -220,7 +223,7 @@ public class ClassUtil {
      * @param value      值
      * @return get方法返回实际值 set方法返回操作后对象
      */
-    private static Object Operation(Object o, String methodName, String attName, Class<?> paramType, Object value) {
+    private static Object operation(Object o, String methodName, String attName, Class<?> paramType, Object value) {
         // 方法赋值出错标志
         boolean opErr = false;
         Object res = null;
@@ -293,7 +296,7 @@ public class ClassUtil {
         }
         String methodName = attNameHandle("set", attName);
 
-        return (T) Operation(o, methodName, attName, paramType, value);
+        return (T) operation(o, methodName, attName, paramType, value);
     }
 
     /**
@@ -310,7 +313,7 @@ public class ClassUtil {
         }
         String methodName = attNameHandle("get", attName);
 
-        return (T) Operation(o, methodName, attName, null, null);
+        return (T) operation(o, methodName, attName, null, null);
     }
 
     /**

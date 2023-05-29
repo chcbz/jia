@@ -1,34 +1,34 @@
 package cn.jia.core.util.thread;
 
+/**
+ * @author chc
+ */
 public class ThreadRequest {
-	private final ThreadRequestContent rc;// 请求主体
+	/**
+	 * 请求主体
+	 */
+	private final AbstractThreadRequestContent rc;
 
-	public ThreadRequest(ThreadRequestContent rc) {
+	public ThreadRequest(AbstractThreadRequestContent rc) {
 		this.rc = rc;
 	}
 
-	public void start() { // 开始请求
+	/**
+	 * 开始请求
+	 */
+	public void start() {
 		final Thread t = new Thread(() -> {
 			try {
-				rc.doSomeThing();// 响应请求
+				// 响应请求
+				rc.doSomeThing();
 			} catch (Exception e) {
 				e.printStackTrace();
-				rc.onFailure(); // 如果执行失败
+				// 如果执行失败
+				rc.onFailure();
 			}
-			rc.onSuccess();// 如果执行成功
+			// 如果执行成功
+			rc.onSuccess();
 		});
 		t.start();
-	}
-
-	public static void main(String[] args) {
-		new ThreadRequest(new ThreadRequestContent() {
-			public void doSomeThing() {
-				System.out.println("doSomething");
-			}
-			public void onSuccess() {
-				System.out.println("override onSuccess");
-			}
-		}).start();
-		System.out.println("other thread");
 	}
 }

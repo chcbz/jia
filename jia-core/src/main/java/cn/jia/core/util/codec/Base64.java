@@ -90,52 +90,51 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      */
     static final byte PAD = (byte) '=';
 
-    // Create arrays to hold the base64 characters and a 
-    // lookup for base64 chars
-    private static byte[] base64Alphabet = new byte[BASELENGTH];
-    private static byte[] lookUpBase64Alphabet = new byte[LOOKUPLENGTH];
+    /**
+     * Create arrays to hold the base64 characters and a lookup for base64 chars
+     */
+    private static final byte[] BASE64_ALPHABET = new byte[BASELENGTH];
+    private static final byte[] LOOK_UP_BASE_64_ALPHABET = new byte[LOOKUPLENGTH];
 
     // Populating the lookup and character arrays
     static {
         for (int i = 0; i < BASELENGTH; i++) {
-            base64Alphabet[i] = (byte) -1;
+            BASE64_ALPHABET[i] = (byte) -1;
         }
         for (int i = 'Z'; i >= 'A'; i--) {
-            base64Alphabet[i] = (byte) (i - 'A');
+            BASE64_ALPHABET[i] = (byte) (i - 'A');
         }
         for (int i = 'z'; i >= 'a'; i--) {
-            base64Alphabet[i] = (byte) (i - 'a' + 26);
+            BASE64_ALPHABET[i] = (byte) (i - 'a' + 26);
         }
         for (int i = '9'; i >= '0'; i--) {
-            base64Alphabet[i] = (byte) (i - '0' + 52);
+            BASE64_ALPHABET[i] = (byte) (i - '0' + 52);
         }
 
-        base64Alphabet['+'] = 62;
-        base64Alphabet['/'] = 63;
+        BASE64_ALPHABET['+'] = 62;
+        BASE64_ALPHABET['/'] = 63;
 
         for (int i = 0; i <= 25; i++) {
-            lookUpBase64Alphabet[i] = (byte) ('A' + i);
+            LOOK_UP_BASE_64_ALPHABET[i] = (byte) ('A' + i);
         }
 
         for (int i = 26, j = 0; i <= 51; i++, j++) {
-            lookUpBase64Alphabet[i] = (byte) ('a' + j);
+            LOOK_UP_BASE_64_ALPHABET[i] = (byte) ('a' + j);
         }
 
         for (int i = 52, j = 0; i <= 61; i++, j++) {
-            lookUpBase64Alphabet[i] = (byte) ('0' + j);
+            LOOK_UP_BASE_64_ALPHABET[i] = (byte) ('0' + j);
         }
 
-        lookUpBase64Alphabet[62] = (byte) '+';
-        lookUpBase64Alphabet[63] = (byte) '/';
+        LOOK_UP_BASE_64_ALPHABET[62] = (byte) '+';
+        LOOK_UP_BASE_64_ALPHABET[63] = (byte) '/';
     }
 
     private static boolean isBase64(byte octect) {
         if (octect == PAD) {
             return true;
-        } else if (base64Alphabet[octect] == -1) {
-            return false;
         } else {
-            return true;
+            return BASE64_ALPHABET[octect] != -1;
         }
     }
 
@@ -148,7 +147,6 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      *         alphabet or if the byte array is empty; false, otherwise
      */
     public static boolean isArrayByteBase64(byte[] arrayOctect) {
-
         arrayOctect = discardWhitespace(arrayOctect);
 
         int length = arrayOctect.length;
@@ -157,8 +155,8 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
             // return false;
             return true;
         }
-        for (int i = 0; i < length; i++) {
-            if (!isBase64(arrayOctect[i])) {
+        for (byte b : arrayOctect) {
+            if (!isBase64(b)) {
                 return false;
             }
         }
@@ -200,6 +198,7 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      * @throws DecoderException if the parameter supplied is not
      *                          of type byte[]
      */
+    @Override
     public Object decode(Object pObject) throws DecoderException {
         if (!(pObject instanceof byte[])) {
             throw new DecoderException("Parameter supplied to Base64 decode is not a byte[]");
@@ -214,6 +213,7 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      * @param pArray A byte array containing Base64 character data
      * @return a byte array containing binary data
      */
+    @Override
     public byte[] decode(byte[] pArray) {
         return decodeBase64(pArray);
     }
@@ -231,7 +231,7 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
         int lengthDataBits = binaryData.length * EIGHTBIT;
         int fewerThan24bits = lengthDataBits % TWENTYFOURBITGROUP;
         int numberTriplets = lengthDataBits / TWENTYFOURBITGROUP;
-        byte encodedData[] = null;
+        byte[] encodedData = null;
         int encodedDataLength = 0;
         int nbrChunks = 0;
 
@@ -282,15 +282,15 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
             byte val3 =
                 ((b3 & SIGN) == 0) ? (byte) (b3 >> 6) : (byte) ((b3) >> 6 ^ 0xfc);
 
-            encodedData[encodedIndex] = lookUpBase64Alphabet[val1];
+            encodedData[encodedIndex] = LOOK_UP_BASE_64_ALPHABET[val1];
             //log.debug( "val2 = " + val2 );
             //log.debug( "k4   = " + (k<<4) );
             //log.debug(  "vak  = " + (val2 | (k<<4)) );
             encodedData[encodedIndex + 1] =
-                lookUpBase64Alphabet[val2 | (k << 4)];
+                LOOK_UP_BASE_64_ALPHABET[val2 | (k << 4)];
             encodedData[encodedIndex + 2] =
-                lookUpBase64Alphabet[(l << 2) | val3];
-            encodedData[encodedIndex + 3] = lookUpBase64Alphabet[b3 & 0x3f];
+                LOOK_UP_BASE_64_ALPHABET[(l << 2) | val3];
+            encodedData[encodedIndex + 3] = LOOK_UP_BASE_64_ALPHABET[b3 & 0x3f];
 
             encodedIndex += 4;
 
@@ -323,8 +323,8 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
             //log.debug("b1<<2 = " + (b1>>2) );
             byte val1 =
                 ((b1 & SIGN) == 0) ? (byte) (b1 >> 2) : (byte) ((b1) >> 2 ^ 0xc0);
-            encodedData[encodedIndex] = lookUpBase64Alphabet[val1];
-            encodedData[encodedIndex + 1] = lookUpBase64Alphabet[k << 4];
+            encodedData[encodedIndex] = LOOK_UP_BASE_64_ALPHABET[val1];
+            encodedData[encodedIndex + 1] = LOOK_UP_BASE_64_ALPHABET[k << 4];
             encodedData[encodedIndex + 2] = PAD;
             encodedData[encodedIndex + 3] = PAD;
         } else if (fewerThan24bits == SIXTEENBIT) {
@@ -339,10 +339,10 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
             byte val2 =
                 ((b2 & SIGN) == 0) ? (byte) (b2 >> 4) : (byte) ((b2) >> 4 ^ 0xf0);
 
-            encodedData[encodedIndex] = lookUpBase64Alphabet[val1];
+            encodedData[encodedIndex] = LOOK_UP_BASE_64_ALPHABET[val1];
             encodedData[encodedIndex + 1] =
-                lookUpBase64Alphabet[val2 | (k << 4)];
-            encodedData[encodedIndex + 2] = lookUpBase64Alphabet[l << 2];
+                LOOK_UP_BASE_64_ALPHABET[val2 | (k << 4)];
+            encodedData[encodedIndex + 2] = LOOK_UP_BASE_64_ALPHABET[l << 2];
             encodedData[encodedIndex + 3] = PAD;
         }
 
@@ -377,7 +377,7 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
         }
 
         int numberQuadruple = base64Data.length / FOURBYTE;
-        byte decodedData[] = null;
+        byte[] decodedData = null;
         byte b1 = 0, b2 = 0, b3 = 0, b4 = 0, marker0 = 0, marker1 = 0;
 
         // Throw away anything not in base64Data
@@ -401,13 +401,13 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
             marker0 = base64Data[dataIndex + 2];
             marker1 = base64Data[dataIndex + 3];
             
-            b1 = base64Alphabet[base64Data[dataIndex]];
-            b2 = base64Alphabet[base64Data[dataIndex + 1]];
+            b1 = BASE64_ALPHABET[base64Data[dataIndex]];
+            b2 = BASE64_ALPHABET[base64Data[dataIndex + 1]];
             
             if (marker0 != PAD && marker1 != PAD) {
                 //No PAD e.g 3cQl
-                b3 = base64Alphabet[marker0];
-                b4 = base64Alphabet[marker1];
+                b3 = BASE64_ALPHABET[marker0];
+                b4 = BASE64_ALPHABET[marker1];
                 
                 decodedData[encodedIndex] = (byte) (b1 << 2 | b2 >> 4);
                 decodedData[encodedIndex + 1] =
@@ -418,7 +418,7 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
                 decodedData[encodedIndex] = (byte) (b1 << 2 | b2 >> 4);
             } else if (marker1 == PAD) {
                 //One PAD e.g. 3cQ[Pad]
-                b3 = base64Alphabet[marker0];
+                b3 = BASE64_ALPHABET[marker0];
                 
                 decodedData[encodedIndex] = (byte) (b1 << 2 | b2 >> 4);
                 decodedData[encodedIndex + 1] =
@@ -437,22 +437,22 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      * @return The data, less whitespace (see RFC 2045).
      */
     static byte[] discardWhitespace(byte[] data) {
-        byte groomedData[] = new byte[data.length];
+        byte[] groomedData = new byte[data.length];
         int bytesCopied = 0;
-        
-        for (int i = 0; i < data.length; i++) {
-            switch (data[i]) {
-            case (byte) ' ' :
-            case (byte) '\n' :
-            case (byte) '\r' :
-            case (byte) '\t' :
+
+        for (byte datum : data) {
+            switch (datum) {
+                case (byte) ' ':
+                case (byte) '\n':
+                case (byte) '\r':
+                case (byte) '\t':
                     break;
-            default:
-                    groomedData[bytesCopied++] = data[i];
+                default:
+                    groomedData[bytesCopied++] = datum;
             }
         }
 
-        byte packedData[] = new byte[bytesCopied];
+        byte[] packedData = new byte[bytesCopied];
 
         System.arraycopy(groomedData, 0, packedData, 0, bytesCopied);
 
@@ -469,16 +469,16 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      * @return The data, less non-base64 characters (see RFC 2045).
      */
     static byte[] discardNonBase64(byte[] data) {
-        byte groomedData[] = new byte[data.length];
+        byte[] groomedData = new byte[data.length];
         int bytesCopied = 0;
 
-        for (int i = 0; i < data.length; i++) {
-            if (isBase64(data[i])) {
-                groomedData[bytesCopied++] = data[i];
+        for (byte datum : data) {
+            if (isBase64(datum)) {
+                groomedData[bytesCopied++] = datum;
             }
         }
 
-        byte packedData[] = new byte[bytesCopied];
+        byte[] packedData = new byte[bytesCopied];
 
         System.arraycopy(groomedData, 0, packedData, 0, bytesCopied);
 
@@ -500,6 +500,7 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      * @throws EncoderException if the parameter supplied is not
      *                          of type byte[]
      */
+    @Override
     public Object encode(Object pObject) throws EncoderException {
         if (!(pObject instanceof byte[])) {
             throw new EncoderException(
@@ -515,6 +516,7 @@ public class Base64 implements BinaryEncoder, BinaryDecoder {
      * @param pArray a byte array containing binary data
      * @return A byte array containing only Base64 character data
      */
+    @Override
     public byte[] encode(byte[] pArray) {
         return encodeBase64(pArray, false);
     }
