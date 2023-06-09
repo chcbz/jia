@@ -1,8 +1,6 @@
 package cn.jia.core.util;
 
-import cn.jia.core.entity.JsonResult;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.io.IOException;
@@ -20,30 +18,8 @@ import java.util.jar.JarFile;
 /**
  * @author chc
  */
+@Slf4j
 public class ClassUtil {
-    private final static Logger log = LoggerFactory.getLogger(ClassUtil.class);
-
-    public static void main(String[] args) throws Exception {
-		/*String packageName = "cn.jia.core.util";
-		// List<String> classNames = getClassName(packageName);
-		List<String> classNames = getClassName(packageName, false);
-		if (classNames != null) {
-			for (String className : classNames) {
-				System.out.println(className);
-			}
-		}*/
-//		System.out.println(getClassNameByJar("jar:file:/D:/workspace/shunwei/jia/project/jia-api-admin/target/jia-api-admin.jar!/BOOT-INF/lib/jia-api-core-1.0.0-SNAPSHOT.jar!/cn/jia", true));
-        /*URL url = new URL("jar:file:/D:/workspace/shunwei/jia/project/jia-api-admin/target/jia-api-admin.jar!/BOOT-INF/lib/jia-api-core-1.0.0-SNAPSHOT.jar");
-        InputStream is = url.openStream();
-        FileUtil.create(is, "D:/tmp/tmp.jar");
-        JarFile jarFile = new JarFile(new File("D:/tmp/tmp.jar"));
-        System.out.println(jarFile);*/
-		JsonResult obj = new JsonResult();
-		setAttribute(obj, "status", 2100, Integer.TYPE);
-		Integer status = getAttribute(obj, "status");
-        System.out.println(status);
-    }
-
     /**
      * 获取某包下（包括该包的所有子包）所有类
      *
@@ -211,7 +187,7 @@ public class ClassUtil {
         try {
             jarWholePath = java.net.URLDecoder.decode(jarWholePath, "UTF-8");
         } catch (UnsupportedEncodingException e) {
-            System.out.println(e.toString());
+            log.info(e.toString());
         }
         return new File(jarWholePath).getParentFile().getAbsolutePath();
     }

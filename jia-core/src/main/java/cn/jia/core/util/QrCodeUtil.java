@@ -6,6 +6,7 @@ import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.common.HybridBinarizer;
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -23,6 +24,7 @@ import java.util.Objects;
 /**
  * @author chc
  */
+@Slf4j
 public class QrCodeUtil {
 
 	/**
@@ -92,7 +94,7 @@ public class QrCodeUtil {
 		BufferedImage matrixImage = null;
 		try{
 			if(!orgiImg.isFile() || !logoImg.isFile()){
-				System.out.println("输入非图片");
+				log.info("输入非图片");
 				return null;
 			}
 			//读取二维码图片
@@ -137,7 +139,7 @@ public class QrCodeUtil {
 			g2.dispose();
 			matrixImage.flush() ;
 		}catch(Exception e){
-			System.out.println("二维码绘制logo失败");
+			log.info("二维码绘制logo失败");
 		}
 		return matrixImage;
 	}
@@ -155,7 +157,7 @@ public class QrCodeUtil {
 			String format = fileName.substring(fileName.lastIndexOf(".")+1);
 			ImageIO.write(Objects.requireNonNull(image), format, file);
 		} catch (IOException e) {
-			System.out.println("二维码写入文件失败"+e.getMessage());
+			log.info("二维码写入文件失败"+e.getMessage());
 		}
 	}
 	/**
@@ -170,13 +172,13 @@ public class QrCodeUtil {
 		try {
 			ImageIO.write(Objects.requireNonNull(image), format, stream);
 		} catch (IOException e) {
-			System.out.println("二维码写入流失败"+e.getMessage());
+			log.info("二维码写入流失败"+e.getMessage());
 		}
 	}
 	
 	public static void main(String[] args) throws IOException {
 //		encode("C:\\WorkSpace", "qr.png", "http://www.qq.com", 200, 200);
-//		System.out.println(decode("C:\\WorkSpace", "qr.png"));
+//		log.info(decode("C:\\WorkSpace", "qr.png"));
 		String shareUrl = "https://open.weixin.qq.com/";
 		File qrFile = File.createTempFile("wx-qrcode", ".jpg");
 		QrCodeUtil.encode(qrFile.getParent(), qrFile.getName(), shareUrl, 344, 344);

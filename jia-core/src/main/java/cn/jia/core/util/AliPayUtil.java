@@ -2,6 +2,7 @@ package cn.jia.core.util;
 
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.util.codec.Base64;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -14,13 +15,12 @@ import java.util.*;
 /**
  * @author chc
  */
+@Slf4j
 public class AliPayUtil {
 	/**
 	 * 
 	 * 根据反馈回来的信息，生成签名结果
-	 * 
-	 * 
-	 * 
+	 *
 	 * @param params
 	 * 通知返回来的参数数组
 	 * 
@@ -30,7 +30,7 @@ public class AliPayUtil {
 	 * 
 	 */
 
-	public static boolean getSignVeryfy(Map<String, String> params, String publicKey, String charset) {
+	public static boolean getSignVerify(Map<String, String> params, String publicKey, String charset) {
 		String sign = params.get("sign");
 		String signType = params.get("sign_type");
 //		//获取验签的字符串
@@ -49,7 +49,7 @@ public class AliPayUtil {
 				return false;
 			}
 		} catch (AlipayApiException e) {
-			System.out.println("Sign Type is Not Support : signType=" + signType);
+			log.info("Sign Type is Not Support : signType=" + signType);
 			e.printStackTrace();
 			return false;
 		}
@@ -57,6 +57,7 @@ public class AliPayUtil {
 	
 	/** 
      * 除去数组中的空值和签名参数
+     *
      * @param sArray 签名参数组
      * @return 去掉空值与签名参数后的新签名参数组
      */
@@ -78,6 +79,7 @@ public class AliPayUtil {
 
     /** 
      * 把数组所有元素排序，并按照“参数=参数值”的模式用“&”字符拼接成字符串
+     *
      * @param params 需要排序并参与字符拼接的参数组
      * @return 拼接后字符串
      */
@@ -99,6 +101,7 @@ public class AliPayUtil {
     }
     /** 
      * 把数组所有元素排序，并按照“参数=参数值”的模式用“&”字符拼接成字符串
+     *
      * @param sortedParams 需要排序并参与字符拼接的参数组
      * @return 拼接后字符串
      */

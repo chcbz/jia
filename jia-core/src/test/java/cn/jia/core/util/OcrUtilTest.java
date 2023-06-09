@@ -1,5 +1,6 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
@@ -7,6 +8,7 @@ import java.io.File;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+@Slf4j
 class OcrUtilTest {
     @Test
     void recognizeText() throws Exception {
@@ -45,7 +47,7 @@ class OcrUtilTest {
             //noinspection ResultOfMethodCallIgnored
             new File(outputPath).mkdirs();
 //            String imgPath = path + "/opencv_test.png";
-//        System.out.println("imgPath: " + imgPath);
+//        log.info("imgPath: " + imgPath);
 
             String namePath = outputPath + "/ocr_name.png";
             ImgUtil.cutPic(imgPath, namePath, 160, 220, 180, 70);
@@ -54,34 +56,34 @@ class OcrUtilTest {
                 ImgUtil.cutPic(imgPath, namePath, 170, 230, 80, 60);
                 nameValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(namePath), "png"));
             }
-//        System.out.println("name: " + nameValue);
+//        log.info("name: " + nameValue);
 
             String sexPath = outputPath + "/ocr_sex.png";
             ImgUtil.cutPic(imgPath, sexPath, 170, 230, 200, 60);
             boolean manIncludeFlag = OpenCvUtil.includeImage(new File(sexPath), new File(path + "/ocr_test_m.png"));
             String sexValue = (manIncludeFlag ? "M" : "F");
-//        System.out.println("sex: " + (sexValue ? "M" : "F"));
+//        log.info("sex: " + (sexValue ? "M" : "F"));
 
             String birthPath = outputPath + "/ocr_birth.png";
             ImgUtil.cutPic(imgPath, birthPath, 170, 360, 150, 50);
             String birthValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(birthPath), "png"));
-//        System.out.println("birth: " + birthValue);
+//        log.info("birth: " + birthValue);
 
             String phonePath = outputPath + "/ocr_phone.png";
             ImgUtil.cutPic(imgPath, phonePath, 170, 820, 350, 70);
             String phoneValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(phonePath), "png"));
-//        System.out.println("phone: " + phoneValue);
+//        log.info("phone: " + phoneValue);
 
             String emailPath = outputPath + "/ocr_email.png";
             ImgUtil.cutPic(imgPath, emailPath, 170, 920, 450, 70);
             String emailValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(emailPath), "png"));
-//        System.out.println("email: " + emailValue);
+//        log.info("email: " + emailValue);
 
             String addressPath = outputPath + "/ocr_address.png";
             ImgUtil.cutPic(imgPath, addressPath, 170, 1000, 450, 100);
             String addressValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(addressPath), "png"));
-//        System.out.println("address: " + addressValue);
-            System.out.println(file.getName() + "\t" + nameValue + "\t" + sexValue + "\t" + birthValue + "\t" + phoneValue + "\t" + emailValue + "\t" + addressValue);
+//        log.info("address: " + addressValue);
+            log.info(file.getName() + "\t" + nameValue + "\t" + sexValue + "\t" + birthValue + "\t" + phoneValue + "\t" + emailValue + "\t" + addressValue);
         }
     }
 

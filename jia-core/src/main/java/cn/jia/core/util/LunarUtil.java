@@ -1,5 +1,7 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.util.Calendar;
@@ -8,6 +10,7 @@ import java.util.Date;
 /**
  * @author chc
  */
+@Slf4j
 public class LunarUtil {
 
     private static final String[] TIAN_GAN = {"甲", "乙", "丙", "丁", "戊", "己", "庚", "辛",
@@ -357,13 +360,13 @@ public class LunarUtil {
         solar.solarYear = 1986;
         solar.solarMonth = 11;
         solar.solarDay = 7;
-        System.out.println(dump(solar));
+        log.info(dump(solar));
         Lunar lunar = LunarUtil.solarToLunar(solar);
-        System.out.println(dump(lunar));
+        log.info(dump(lunar));
         solar = LunarUtil.lunarToSolar(lunar);
-        System.out.println(dump(solar));
-        System.out.println(LunarUtil.lunarYearToGanZhi(2015));
-        System.out.println(dump(LunarUtil.solarToLunar(DateUtil.parseDate("1994/2/8", "yyyy/MM/dd"))));
-        System.out.println(dump(LunarUtil.lunarToSolar(2019, 1, 3, true)));
+        log.info(dump(solar));
+        log.info(LunarUtil.lunarYearToGanZhi(2015));
+        log.info(dump(LunarUtil.solarToLunar(DateUtil.parseDate("1994/2/8", "yyyy/MM/dd"))));
+        log.info(dump(LunarUtil.lunarToSolar(2019, 1, 3, true)));
     }
 }

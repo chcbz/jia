@@ -3,12 +3,14 @@ package cn.jia.core.util;
 import ch.ethz.ssh2.Connection;
 import ch.ethz.ssh2.Session;
 import ch.ethz.ssh2.StreamGobbler;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.*;
 
 /**
  * @author chc
  */
+@Slf4j
 public class SshUtil {
 
     public static Connection login(String ip, String username, String password) {
@@ -21,11 +23,11 @@ public class SshUtil {
             // 认证
             flag = connection.authenticateWithPassword(username, password);
             if (flag) {
-                System.out.println("================登录成功==================");
+                log.info("================登录成功==================");
                 return connection;
             }
         } catch (IOException e) {
-            System.out.println("=========登录失败=========" + e);
+            log.info("=========登录失败=========" + e);
             connection.close();
         }
         return connection;
@@ -46,13 +48,13 @@ public class SshUtil {
             // 执行命令
             session.execCommand(cmd);
             result = processStdout(session.getStdout(), "UTF-8");
-            System.out.println(result);
+            log.info(result);
             // 如果为得到标准输出为空，说明脚本执行出错了
             /*if (StringUtils.isBlank(result)) {
-                System.out.println("得到标准输出为空,链接conn:" + connection + ",执行的命令：" + cmd);
+                log.info("得到标准输出为空,链接conn:" + connection + ",执行的命令：" + cmd);
                 result = processStdout(session.getStderr(), DEFAULTCHART);
             } else {
-                System.out.println("执行命令成功,链接conn:" + connection + ",执行的命令：" + cmd);
+                log.info("执行命令成功,链接conn:" + connection + ",执行的命令：" + cmd);
             }*/
             connection.close();
             session.close();
@@ -78,11 +80,11 @@ public class SshUtil {
             String line;
             while ((line = br.readLine()) != null) {
                 buffer.append(line).append("\n");
-                System.out.println(line);
+                log.info(line);
             }
             br.close();
         } catch (IOException e) {
-            System.out.println("解析脚本出错：" + e.getMessage());
+            log.info("解析脚本出错：" + e.getMessage());
             e.printStackTrace();
         }
         return buffer.toString();

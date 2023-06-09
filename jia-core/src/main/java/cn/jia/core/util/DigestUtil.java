@@ -1,10 +1,13 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.security.MessageDigest;
 
 /**
  * @author chc
  */
+@Slf4j
 public class DigestUtil {
     private enum DigestType {
         /**
@@ -68,17 +71,17 @@ public class DigestUtil {
         String sourceStr1 = "123";
         String sourceStr2 = "Digest Str......";
 
-        System.out.println(DigestUtil.md5(sourceStr1));
-        System.out.println(DigestUtil.md5(sourceStr2));
+        log.info(DigestUtil.md5(sourceStr1));
+        log.info(DigestUtil.md5(sourceStr2));
 
-        System.out.println(DigestUtil.sha(sourceStr1));
-        System.out.println(DigestUtil.sha(sourceStr2));
+        log.info(DigestUtil.sha(sourceStr1));
+        log.info(DigestUtil.sha(sourceStr2));
 
-        System.out.println(DigestUtil.sha256(sourceStr1));
-        System.out.println(DigestUtil.sha256(sourceStr2));
+        log.info(DigestUtil.sha256(sourceStr1));
+        log.info(DigestUtil.sha256(sourceStr2));
 
-        System.out.println(DigestUtil.sha512(sourceStr1));
-        System.out.println(DigestUtil.sha512(sourceStr2));
+        log.info(DigestUtil.sha512(sourceStr1));
+        log.info(DigestUtil.sha512(sourceStr2));
 
     }
 }

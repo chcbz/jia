@@ -1,12 +1,12 @@
 package cn.jia.core.util.thread;
 
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.*;
-
+@Slf4j
 class RunnableRequestTest {
 
     @Test
@@ -17,13 +17,13 @@ class RunnableRequestTest {
             final String val = String.valueOf(attr.get("attr1"));
             @Override
             public void doSomeThing() {
-                System.out.println("doSomething="+val);
+                log.info("doSomething="+val);
             }
             @Override
             public void onSuccess() {
-                System.out.println("override onSuccess");
+                log.info("override onSuccess");
             }
         })).start();
-        System.out.println("other thread");
+        log.info("other thread");
     }
 }

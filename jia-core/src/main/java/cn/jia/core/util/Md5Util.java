@@ -1,5 +1,6 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
 import java.security.MessageDigest;
@@ -9,6 +10,7 @@ import java.security.MessageDigest;
  * @author lzh
  *
  */
+@Slf4j
 public class Md5Util {
 	
 	private final static String[] HEX_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
@@ -73,7 +75,7 @@ public class Md5Util {
 	}
 	
 	public static void main(String[] args){
-		System.out.println(str2Base32Md5("123"));
+		log.info(str2Base32Md5("123"));
 	}
 	
 }

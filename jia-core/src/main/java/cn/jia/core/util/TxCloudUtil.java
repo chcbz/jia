@@ -1,6 +1,7 @@
 package cn.jia.core.util;
 
 import cn.jia.core.exception.EsRuntimeException;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -17,6 +18,7 @@ import java.util.*;
  * 腾讯云签名工具类
  * @author chc
  */
+@Slf4j
 public class TxCloudUtil {
     private static final Charset UTF8;
 
@@ -157,9 +159,9 @@ public class TxCloudUtil {
         param.put("SecretId", "AKIDf8LIzWw6VfZEdmMPt77sOfgR2NTKrLUP");
         param.put("SignatureMethod", "HmacSHA1");
         String msg = TxCloudUtil.makeSignPlainText(param, httpMethod, apiHost, apiPath);
-        System.out.println(msg);
+        log.info(msg);
         String sign = TxCloudUtil.sign("pdEdvFQO8ez4VjhQt88xXszrUs65vWrx", msg, "HmacSHA1");
         param.put("Signature", URLEncoder.encode(sign, "UTF-8"));
-        System.out.println(sign);
+        log.info(sign);
     }
 }

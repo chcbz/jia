@@ -3,6 +3,7 @@ package cn.jia.core.util;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpRequest;
@@ -10,7 +11,6 @@ import org.apache.http.client.methods.*;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
-import org.apache.log4j.Logger;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -24,15 +24,14 @@ import java.util.Map.Entry;
 /**
  * @author chc
  */
+@Slf4j
 public class CyberPayUtil {
-	final static Logger logger = Logger.getLogger(CyberPayUtil.class);
-	
 	String apiKey;
 	String paymentAuthorizationRequest;
 	private static CloseableHttpClient XPayHttpClient;
 
 	public static CloseableHttpResponse doXpayTokenRequest(String baseUri, String resourcePath, String queryParams,
-                                                           String testInfo, String body, String methodType, Map<String, String> headers, String apiKey, String sharedSecret) throws Exception {
+            String testInfo, String body, String methodType, Map<String, String> headers, String apiKey, String sharedSecret) throws Exception {
 		String url = baseUri + resourcePath + "?" + queryParams;
 		logRequestBody(url, testInfo, body);
 
@@ -42,7 +41,7 @@ public class CyberPayUtil {
 		request.setHeader("x-pay-token", xPayToken);
 		request.setHeader("x-correlation-id", RandomStringUtils.random(10, true, true) + "_SC");
 
-		if (headers != null && headers.isEmpty() == false) {
+		if (headers != null && !headers.isEmpty()) {
 			for (Entry<String, String> header : headers.entrySet()) {
 				request.setHeader(header.getKey(), header.getValue());
 			}
@@ -67,16 +66,16 @@ public class CyberPayUtil {
 	private static void logRequestBody(String uri, String testInfo, String payload) {
         ObjectMapper mapper = getObjectMapperInstance();
         Object tree;
-        logger.info("URI: " + uri);
-        logger.info(testInfo);
+        log.info("URI: " + uri);
+        log.info(testInfo);
         if(!StringUtils.isEmpty(payload)) {
             try {
                 tree = mapper.readValue(payload,Object.class);
-                logger.info("RequestBody: " + mapper.writerWithDefaultPrettyPrinter().writeValueAsString(tree));
+                log.info("RequestBody: " + mapper.writerWithDefaultPrettyPrinter().writeValueAsString(tree));
             } catch (JsonProcessingException e) {
-                logger.error(e.getMessage());
+                log.error(e.getMessage());
             } catch (IOException e) {
-                logger.error(e.getMessage());
+                log.error(e.getMessage());
             }
         }
     }
@@ -101,24 +100,24 @@ public class CyberPayUtil {
 
 		// Print the response details
 		HttpEntity entity = response.getEntity();
-		logger.info("Response status : " + response.getStatusLine() + "\n");
+		log.info("Response status : " + response.getStatusLine() + "\n");
 
-		logger.info("Response Headers: \n");
+		log.info("Response Headers: \n");
 
 		for (int i = 0; i < h.length; i++)
-			logger.info(h[i].getName() + ":" + h[i].getValue());
-		logger.info("\n Response Body:");
+			log.info(h[i].getName() + ":" + h[i].getValue());
+		log.info("\n Response Body:");
 
 		if (!StringUtils.isEmpty(result.toString())) {
 			ObjectMapper mapper = getObjectMapperInstance();
 			Object tree;
 			try {
 				tree = mapper.readValue(result.toString(), Object.class);
-				logger.info("ResponseBody: " + mapper.writerWithDefaultPrettyPrinter().writeValueAsString(tree));
+				log.info("ResponseBody: " + mapper.writerWithDefaultPrettyPrinter().writeValueAsString(tree));
 			} catch (JsonProcessingException e) {
-				logger.error(e.getMessage());
+				log.error(e.getMessage());
 			} catch (IOException e) {
-				logger.error(e.getMessage());
+				log.error(e.getMessage());
 			}
 		}
 
@@ -141,7 +140,7 @@ public class CyberPayUtil {
     		request = new HttpDelete(url);
     	    break;
     	default:
-    		logger.error("Incompatible HTTP request method " + methodType);
+    		log.error("Incompatible HTTP request method " + methodType);
     	}
     	return request;
    }

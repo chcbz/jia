@@ -137,19 +137,4 @@ public class FtpUtil {
         }
         return result;
     }
-
-    /**
-     * 测试
-     * @param args
-     */
-    public static void main(String[] args) {
-        try {
-	       /* FileInputStream in=new FileInputStream(new File("/Users/Downloads/test.png"));
-	        boolean flag = uploadFile("111.231.31.41", 21, "ftp_test", "test0", "/ftp_data/images","", "holle.jpg", in);*/
-            boolean flag = downloadFile("111.231.31.41", 21,  "ftp_test", "testO","/ftp_data/images","test.jpg","/Volumes/H");
-            System.out.println(flag);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
 }

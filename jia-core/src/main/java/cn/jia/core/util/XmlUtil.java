@@ -1,5 +1,6 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FileUtils;
 import org.dom4j.*;
 import org.dom4j.io.OutputFormat;
@@ -17,6 +18,7 @@ import java.util.*;
  * @author happyqing
  * @since 2016.8.8
  */
+@Slf4j
 @SuppressWarnings({ "rawtypes", "unchecked" })
 public class XmlUtil {
 	public static void main(String[] args) throws DocumentException, IOException {
@@ -27,14 +29,14 @@ public class XmlUtil {
 		// for(int i=0; i<1000; i++){
 		// map = (Map<String, Object>) xml2mapWithAttr(doc.getRootElement());
 		// }
-		// System.out.println("耗时:"+(System.currentTimeMillis()-begin));
+		// log.info("耗时:"+(System.currentTimeMillis()-begin));
 		JSONObject json = new JSONObject(map);
 		// 格式化输出
-		System.out.println(json.toString(1));
+		log.info(json.toString(1));
 
 		Document doc = map2xml(map, "root");
 		// Document doc = map2xml(map); //map中含有根节点的键
-		System.out.println(formatXml(doc));
+		log.info(formatXml(doc));
 	}
 
 	/**
@@ -252,8 +254,8 @@ public class XmlUtil {
 		Element root = DocumentHelper.createElement(rootName);
 		doc.add(root);
 		map2xml(map, root);
-		// System.out.println(doc.asXML());
-		// System.out.println(formatXml(doc));
+		// log.info(doc.asXML());
+		// log.info(formatXml(doc));
 		return doc;
 	}
 
@@ -273,8 +275,8 @@ public class XmlUtil {
 			Element root = DocumentHelper.createElement(entry.getKey());
 			doc.add(root);
 			map2xml((Map) entry.getValue(), root);
-			// System.out.println(doc.asXML());
-			// System.out.println(formatXml(doc));
+			// log.info(doc.asXML());
+			// log.info(formatXml(doc));
 			return doc;
 		}
 		return null;
@@ -320,7 +322,7 @@ public class XmlUtil {
 					body.addElement(key).setText(value.toString());
 				}
 			}
-			// System.out.println("Key = " + entry.getKey() + ", Value = " +
+			// log.info("Key = " + entry.getKey() + ", Value = " +
 			// entry.getValue());
 		}
 		return body;

@@ -3,9 +3,9 @@ dependencies {
     implementation libs.aws.java.sdk.sns
     implementation libs.jackson.mapper.asl
     implementation libs.json
-    implementation libs.log4j
+//    implementation libs.log4j
     implementation libs.slf4j.api
-    implementation libs.slf4j.log4j12
+//    implementation libs.slf4j.log4j12
     implementation libs.dom4j
     implementation libs.javax.inject
     implementation libs.javax.servlet.api

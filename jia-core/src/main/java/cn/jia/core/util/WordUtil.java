@@ -1,5 +1,6 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.converter.WordToHtmlConverter;
 import org.apache.poi.xwpf.converter.core.FileImageExtractor;
@@ -20,6 +21,7 @@ import java.io.*;
 /**
  * @author chc
  */
+@Slf4j
 public class WordUtil {
 
     /**
@@ -101,7 +103,7 @@ public class WordUtil {
         File f = new File(srcFile);
 
         if (!f.exists()) {
-            System.out.println("Sorry File does not Exists!");
+            log.info("Sorry File does not Exists!");
         } else {
 
             try (InputStream in = new FileInputStream(f);) {

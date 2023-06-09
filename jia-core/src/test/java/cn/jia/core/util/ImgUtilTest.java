@@ -1,11 +1,13 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
 import java.io.FileOutputStream;
 import java.net.URL;
 import java.util.Objects;
 
+@Slf4j
 class ImgUtilTest {
 
     @Test
@@ -24,7 +26,7 @@ class ImgUtilTest {
         out.write(Objects.requireNonNull(img));
         out.flush();
         out.close();
-        System.out.println(ImgUtil.getImageStr(new URL("http://thirdwx.qlogo.cn/mmopen/vi_32/PiajxSqBRaELwreASwe7C5JuocHNHSlia5XibNw5u0kdZX94X0l0gYVUApKelElBBaVNZZTQiblJnQ53wu68UvyNicg/132")));
+        log.info(ImgUtil.getImageStr(new URL("http://thirdwx.qlogo.cn/mmopen/vi_32/PiajxSqBRaELwreASwe7C5JuocHNHSlia5XibNw5u0kdZX94X0l0gYVUApKelElBBaVNZZTQiblJnQ53wu68UvyNicg/132")));
     }
 
     @Test

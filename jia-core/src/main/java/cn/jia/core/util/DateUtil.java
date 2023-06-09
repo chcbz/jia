@@ -1,5 +1,7 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -14,6 +16,7 @@ import java.util.Date;
  * @author lzh
  *
  */
+@Slf4j
 public class DateUtil {
 	
 	/**
@@ -266,7 +269,7 @@ public class DateUtil {
 	}
 	
 	public static void main(String[] args){
-		System.out.println(new Date(1460390400000L));
-		System.out.println(System.currentTimeMillis());
+		log.info(String.valueOf(new Date(1460390400000L)));
+		log.info(String.valueOf(System.currentTimeMillis()));
 	}
 }

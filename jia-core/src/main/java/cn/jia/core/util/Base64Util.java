@@ -6,9 +6,12 @@
 
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * @author chc
  */
+@Slf4j
 public final class Base64Util {
 
     static private final int BASE_LENGTH = 128;
@@ -96,7 +99,7 @@ public final class Base64Util {
         int encodedIndex = 0;
         int dataIndex = 0;
         if (F_DEBUG) {
-            System.out.println("number of triplets = " + numberTriplets);
+            log.info("number of triplets = " + numberTriplets);
         }
 
         for (int i = 0; i < numberTriplets; i++) {
@@ -105,7 +108,7 @@ public final class Base64Util {
             b3 = binaryData[dataIndex++];
 
             if (F_DEBUG) {
-                System.out.println("b1= " + b1 + ", b2= " + b2 + ", b3= " + b3);
+                log.info("b1= " + b1 + ", b2= " + b2 + ", b3= " + b3);
             }
 
             l = (byte) (b2 & 0x0f);
@@ -116,9 +119,9 @@ public final class Base64Util {
             byte val3 = ((b3 & SIGN) == 0) ? (byte) (b3 >> 6) : (byte) ((b3) >> 6 ^ 0xfc);
 
             if (F_DEBUG) {
-                System.out.println("val2 = " + val2);
-                System.out.println("k4   = " + (k << 4));
-                System.out.println("vak  = " + (val2 | (k << 4)));
+                log.info("val2 = " + val2);
+                log.info("k4   = " + (k << 4));
+                log.info("vak  = " + (val2 | (k << 4)));
             }
 
             encodedData[encodedIndex++] = LOOK_UP_BASE64_ALPHABET[val1];
@@ -132,8 +135,8 @@ public final class Base64Util {
             b1 = binaryData[dataIndex];
             k = (byte) (b1 & 0x03);
             if (F_DEBUG) {
-                System.out.println("b1=" + b1);
-                System.out.println("b1<<2 = " + (b1 >> 2));
+                log.info("b1=" + b1);
+                log.info("b1<<2 = " + (b1 >> 2));
             }
             byte val1 = ((b1 & SIGN) == 0) ? (byte) (b1 >> 2) : (byte) ((b1) >> 2 ^ 0xc0);
             encodedData[encodedIndex++] = LOOK_UP_BASE64_ALPHABET[val1];

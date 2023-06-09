@@ -1,5 +1,7 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
+
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
@@ -17,6 +19,7 @@ import java.util.Map;
 /**
  * @author chc
  */
+@Slf4j
 public class HttpUtil {
     /**
      * 向指定URL发送GET方法的请求
@@ -43,7 +46,7 @@ public class HttpUtil {
             Map<String, List<String>> map = connection.getHeaderFields();
             // 遍历所有的响应头字段
             for (String key : map.keySet()) {
-                System.out.println(key + "--->" + map.get(key));
+                log.info(key + "--->" + map.get(key));
             }
             // 定义 BufferedReader输入流来读取URL的响应
             in = new BufferedReader(new InputStreamReader(
@@ -53,7 +56,7 @@ public class HttpUtil {
                 result.append(line);
             }
         } catch (Exception e) {
-            System.out.println("发送GET请求出现异常！" + e);
+            log.info("发送GET请求出现异常！" + e);
             e.printStackTrace();
         }
         // 使用finally块来关闭输入流
@@ -108,7 +111,7 @@ public class HttpUtil {
                 result.append(line);
             }
         } catch (Exception e) {
-            System.out.println("发送 POST 请求出现异常！"+e);
+            log.info("发送 POST 请求出现异常！"+e);
             e.printStackTrace();
         }
         //使用finally块来关闭输出流、输入流
@@ -332,46 +335,46 @@ public class HttpUtil {
      */
     public static String fileContentType(String filenameExtension) {
         if ("BMP".equals(filenameExtension) || "bmp".equals(filenameExtension)
-                || "BMP".equals(filenameExtension.toUpperCase())) {
+                || "BMP".equalsIgnoreCase(filenameExtension)) {
             return "image/bmp";
         }
         if ("GIF".equals(filenameExtension) || "gif".equals(filenameExtension)
-                || "GIF".equals(filenameExtension.toUpperCase())) {
+                || "GIF".equalsIgnoreCase(filenameExtension)) {
             return "image/gif";
         }
         if ("JPEG".equals(filenameExtension) || "jpeg".equals(filenameExtension) || "JPG".equals(filenameExtension)
                 || "jpg".equals(filenameExtension) || "PNG".equals(filenameExtension)
-                || "png".equals(filenameExtension) || "JPEG".equals(filenameExtension.toUpperCase())
-                || "JPG".equals(filenameExtension.toUpperCase()) || "PNG".equals(filenameExtension.toUpperCase())) {
+                || "png".equals(filenameExtension) || "JPEG".equalsIgnoreCase(filenameExtension)
+                || "JPG".equalsIgnoreCase(filenameExtension) || "PNG".equalsIgnoreCase(filenameExtension)) {
             return "image/jpeg";
         }
         if ("HTML".equals(filenameExtension) || "html".equals(filenameExtension)) {
             return "text/html";
         }
         if ("TXT".equals(filenameExtension) || "txt".equals(filenameExtension)
-                || "TXT".equals(filenameExtension.toUpperCase())) {
+                || "TXT".equalsIgnoreCase(filenameExtension)) {
             return "text/plain";
         }
         if ("VSD".equals(filenameExtension) || "vsd".equals(filenameExtension)
-                || "VSD".equals(filenameExtension.toUpperCase())) {
+                || "VSD".equalsIgnoreCase(filenameExtension)) {
             return "application/vnd.visio";
         }
         if ("PPTX".equals(filenameExtension) || "pptx".equals(filenameExtension) || "PPT".equals(filenameExtension)
-                || "ppt".equals(filenameExtension) || "PPTX".equals(filenameExtension.toUpperCase())
-                || "PPT".equals(filenameExtension.toUpperCase())) {
+                || "ppt".equals(filenameExtension) || "PPTX".equalsIgnoreCase(filenameExtension)
+                || "PPT".equalsIgnoreCase(filenameExtension)) {
             return "application/vnd.ms-powerpoint";
         }
         if ("DOCX".equals(filenameExtension) || "docx".equals(filenameExtension) || "DOC".equals(filenameExtension)
-                || "doc".equals(filenameExtension) || "DOCX".equals(filenameExtension.toUpperCase())
-                || "DOC".equals(filenameExtension.toUpperCase())) {
+                || "doc".equals(filenameExtension) || "DOCX".equalsIgnoreCase(filenameExtension)
+                || "DOC".equalsIgnoreCase(filenameExtension)) {
             return "application/msword";
         }
         if ("XML".equals(filenameExtension) || "xml".equals(filenameExtension)
-                || "XML".equals(filenameExtension.toUpperCase())) {
+                || "XML".equalsIgnoreCase(filenameExtension)) {
             return "text/xml";
         }
         if ("pdf".equals(filenameExtension) || "PDF".equals(filenameExtension)
-                || "PDF".equals(filenameExtension.toUpperCase())) {
+                || "PDF".equalsIgnoreCase(filenameExtension)) {
             return "application/pdf";
         }
         return null;
