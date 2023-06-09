@@ -17,15 +17,15 @@ package cn.jia.core.util.amazonsns;
 import cn.jia.core.util.amazonsns.SampleMessageGenerator.Platform;
 import com.amazonaws.services.sns.AmazonSNS;
 import com.amazonaws.services.sns.model.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
 import java.util.Map;
 
-;
-
 /**
  * @author chc
  */
+@Slf4j
 public class AmazonSnsClientWrapper {
 
 	private final AmazonSNS snsClient;
@@ -112,19 +112,19 @@ public class AmazonSnsClientWrapper {
 			String credential, String platformToken, String applicationName,Map<String,Object> msg) {
 		//创建平台引用程序,对应一个应用平台
 		CreatePlatformApplicationResult platformApplicationResult = createPlatformApplication(applicationName, platform, principal, credential);
-		System.out.println("<<======platformApplicationResult:"+platformApplicationResult);
+		log.info("<<======platformApplicationResult:"+platformApplicationResult);
 
 		// 平台的应用程序是可用于唯一地标识该平台的应用程序。
 		String platformApplicationArn = platformApplicationResult.getPlatformApplicationArn();
-		System.out.println("<<======platformApplicationArn:"+platformApplicationArn);
+		log.info("<<======platformApplicationArn:"+platformApplicationArn);
 
 		// 创建一个端点。这对应于一个应用程序在设备上。
 		CreatePlatformEndpointResult platformEndpointResult = createPlatformEndpoint(platform,"CustomData - Useful to store endpoint specific data",platformToken, platformApplicationArn);
-		System.out.println("<<<=====platformEndpointResult:"+platformEndpointResult);
+		log.info("<<<=====platformEndpointResult:"+platformEndpointResult);
 
 		// 推送式通知发布到一个端点。
 		PublishResult publishResult = publish(platformEndpointResult.getEndpointArn(), platform,msg);
-		System.out.println("Published! \n{MessageId="+ publishResult.getMessageId() + "}");
+		log.info("Published! \n{MessageId="+ publishResult.getMessageId() + "}");
 		// 删除该平台的应用程序,因为我们将不再使用它。
 		deletePlatformApplication(platformApplicationArn);
 	}
@@ -134,21 +134,21 @@ public class AmazonSnsClientWrapper {
 	 */
 	public void iosNotification(Platform platform,String platformApplicationArn,String platformToken,Map<String,Object> msg) {
 		// 平台的应用程序是可用于唯一地标识该平台的应用程序。 SNS上面已经设置
-		System.out.println("<<======平台应用程序Arn:"+platformApplicationArn);
+		log.info("<<======平台应用程序Arn:"+platformApplicationArn);
 		// 创建一个端点。这对应于一个应用程序在设备上。
 		CreatePlatformEndpointResult platformEndpointResult = createPlatformEndpoint(platform,"Test Amazon SNS for IOS",platformToken, platformApplicationArn);
-		System.out.println("<<<=====平台端点结果:"+platformEndpointResult);
+		log.info("<<<=====平台端点结果:"+platformEndpointResult);
 		// 推送式通知发布到一个端点。
 		String endpointArn="";
 		if("gcm".equalsIgnoreCase(platform.name()))
 		{
-			System.out.println("<<<<<======================当前平台为："+platform.name());
+			log.info("<<<<<======================当前平台为："+platform.name());
 			endpointArn="arn:aws:sns:eu-central-1:773320271894:endpoint/GCM/SfereFare_User_Android/5df78b07-8b89-35f0-a109-49682f83c9db";
 		}else{
 			endpointArn=platformEndpointResult.getEndpointArn();
 		}
 		PublishResult publishResult = publish(endpointArn, platform,msg);
-		System.out.println("Published! \n{MessageId="+ publishResult.getMessageId() + "}");
+		log.info("Published! \n{MessageId="+ publishResult.getMessageId() + "}");
 		// 删除该平台的应用程序,因为我们将不再使用它。
 		deleteEndpointResult(platformEndpointResult.getEndpointArn());
 	}
@@ -162,7 +162,7 @@ public class AmazonSnsClientWrapper {
 		CreatePlatformEndpointResult platformEndpointResult = createPlatformEndpoint(platform,"Test Amazon SNS",platformToken, platformApplicationArn);
 		// 推送式通知发布到一个端点。
 		PublishResult publishResult = publish(platformEndpointResult.getEndpointArn(), platform,msg);
-		System.out.println("Published! \n{MessageId="+ publishResult.getMessageId() + "}");
+		log.info("Published! \n{MessageId="+ publishResult.getMessageId() + "}");
 		// 删除该平台的应用程序,因为我们将不再使用它。
 		deleteEndpointResult(platformEndpointResult.getEndpointArn());
 	}
@@ -187,7 +187,7 @@ public class AmazonSnsClientWrapper {
 		// For direct publish to mobile end points, topicArn is not relevant.
 		publishRequest.setTargetArn(endpointArn);
 		// Display the message that will be sent to the endpoint/
-		System.out.println("{Message Body: " + message + "}");
+		log.info("{Message Body: " + message + "}");
 		publishRequest.setMessage(message);
 		return snsClient.publish(publishRequest);
 	}

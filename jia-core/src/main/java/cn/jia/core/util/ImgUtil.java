@@ -1,6 +1,7 @@
 package cn.jia.core.util;
 
 import gui.ava.html.image.generator.HtmlImageGenerator;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -19,6 +20,7 @@ import java.util.Base64;
  *
  * @author lzh
  */
+@Slf4j
 public class ImgUtil {
     /**
      * 获得图片大小 传入参数 String path ：图片路径
@@ -60,7 +62,7 @@ public class ImgUtil {
             Image img = ImageIO.read(file);
             // 判断图片格式是否正确
             if (img.getWidth(null) == -1) {
-                System.out.println(" can't read,retry!" + "<BR>");
+                log.info(" can't read,retry!" + "<BR>");
                 return "no";
             } else {
                 int newWidth;
@@ -123,7 +125,7 @@ public class ImgUtil {
             BufferedImage img = ImageIO.read(file);
             // 判断图片格式是否正确
             if (img.getWidth(null) == -1) {
-                System.out.println(" can't read,retry!" + "<BR>");
+                log.info(" can't read,retry!" + "<BR>");
                 return "no";
             }
             img = img.getSubimage(x, y, width, height);
@@ -169,7 +171,7 @@ public class ImgUtil {
         //对字节数组Base64编码
         Base64.Encoder encoder = Base64.getEncoder();
         String base64 = encoder.encodeToString(data);
-        System.out.println("网络文件[{}]编码成base64字符串:[{}]" + url.toString() + base64);
+        log.info("网络文件[{}]编码成base64字符串:[{}]" + url.toString() + base64);
         //返回Base64编码过的字节数组字符串
         return base64;
     }
@@ -223,7 +225,7 @@ public class ImgUtil {
             int height = bi.getHeight();
             int minx = bi.getMinX();
             int miny = bi.getMinY();
-            System.out.println("正在处理：" + imageFile.getName());
+            log.info("正在处理：" + imageFile.getName());
 
             /*
               这里是遍历图片的像素，因为要处理图片的背色，所以要把指定像素上的颜色换成目标颜色 这里 是一个二层循环，遍历长和宽上的每个像素
@@ -245,7 +247,7 @@ public class ImgUtil {
 
                 }
             }
-            System.out.println("\t处理完毕：" + imageFile.getName());
+            log.info("\t处理完毕：" + imageFile.getName());
             // 将缓冲对象保存到新文件中
             FileOutputStream ops = new FileOutputStream(new File(imgFilePath));
             ImageIO.write(bi, "jpg", ops);
@@ -319,7 +321,7 @@ public class ImgUtil {
 
     public static byte[] fromUrl(URL url) {
         //将图片文件转化为字节数组字符串，并对其进行Base64编码处理
-        System.out.println("图片的路径为:" + url.toString());
+        log.info("图片的路径为:" + url.toString());
         //打开链接
         HttpURLConnection conn = null;
         try {

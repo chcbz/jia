@@ -6,6 +6,7 @@ import com.stripe.model.Customer;
 import com.stripe.model.ExternalAccount;
 import com.stripe.net.RequestOptions;
 import com.stripe.net.RequestOptions.RequestOptionsBuilder;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
 import java.util.List;
@@ -14,6 +15,7 @@ import java.util.Map;
 /**
  * @author chc
  */
+@Slf4j
 public class StripePayUtil {
 	public static Customer customerCreate(String cardNumber, String expireYear, String expireMonth, String cvn, String name,
 			String apiKey) throws StripeException {
@@ -133,8 +135,8 @@ public class StripePayUtil {
 
 		try {
 			Customer customer = customerCreate("4242424242424242", "2021", "07", "555", "chenyy", apiKey);
-			System.out.println(customer);
-			System.out.println("customer id: " + customer.getId());
+			log.info("{}", customer);
+			log.info("customer id: " + customer.getId());
 		} catch (StripeException e) {
 			e.printStackTrace();
 		}
@@ -143,7 +145,7 @@ public class StripePayUtil {
 		// List<Customer> list = customerList(6,
 		// "sk_test_xcIzGR6H5HHIWHKLR0aX9Qgi");
 		// for (Customer c : list) {
-		// System.out.println(c.getId());
+		// log.info(c.getId());
 		// }
 		// } catch (StripeException e) {
 		// e.printStackTrace();
@@ -152,39 +154,39 @@ public class StripePayUtil {
 		// try {
 		// Customer customer = customerRetrieve("cus_Aa5wLLVCxEseAh",
 		// "sk_test_xcIzGR6H5HHIWHKLR0aX9Qgi");
-		// System.out.println(customer);
+		// log.info(customer);
 		// } catch (StripeException e) {
 		// e.printStackTrace();
 		// }
 
 //		try {
 //			Charge charge = payByCustomer("cus_AaOrs03YpbIceP", 5234, apiKey, "EUR");
-//			System.out.println(charge);
+//			log.info(charge);
 //		} catch (Exception e) {
 //			e.printStackTrace();
 //		}
 		
 //		try {
 //			Customer customer = customerCardUpdate("cus_Aa5wLLVCxEseAh", "4242424242424242", "2022", "08", "111", apiKey);
-//			System.out.println(customer);
+//			log.info(customer);
 //		} catch (StripeException e) {
 //			e.printStackTrace();
 //		}
 //		try {
 //			Customer customer = customerCardAddition("cus_Aa5wLLVCxEseAh", "4012888888881881", "2021", "07", "111", apiKey);
-//			System.out.println(customer);
+//			log.info(customer);
 //		} catch (StripeException e) {
 //			e.printStackTrace();
 //		}
 //		try {
 //			Customer customer = customerCardDelete("cus_Aa5wLLVCxEseAh", apiKey);
-//			System.out.println(customer);
+//			log.info(customer);
 //		} catch (StripeException e) {
 //			e.printStackTrace();
 //		}
 //		try {
 //			Charge charge = authPay("4242424242424242", "2022", "08", apiKey);
-//			System.out.println(charge);
+//			log.info(charge);
 //		} catch (Exception e) {
 //			e.printStackTrace();
 //		}

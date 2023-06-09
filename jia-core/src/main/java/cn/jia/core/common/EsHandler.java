@@ -5,8 +5,7 @@ import cn.jia.core.util.Md5Util;
 import cn.jia.core.util.StringUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpEntity;
@@ -27,9 +26,8 @@ import java.util.*;
 /**
  * @author chc
  */
+@Slf4j
 public class EsHandler {
-	private final static Logger logger = LoggerFactory.getLogger(EsHandler.class);
-
 	/**
 	 * 检查数据绑定是否发生错误
 	 * 
@@ -45,7 +43,7 @@ public class EsHandler {
 				if (i != 0) {
 					message.append(EsConstants.COMMA);
 				}
-				logger.error("输入参数【" + fieldError.getField() + "】错误," + fieldError.getDefaultMessage());
+				log.error("输入参数【" + fieldError.getField() + "】错误," + fieldError.getDefaultMessage());
 				message.append(fieldError.getDefaultMessage());
 			}
 		}
@@ -68,7 +66,7 @@ public class EsHandler {
 				if (i != 0) {
 					message.append(EsConstants.COMMA);
 				}
-				logger.error("输入参数【" + fieldError.getField() + "】错误," + fieldError.getDefaultMessage());
+				log.error("输入参数【" + fieldError.getField() + "】错误," + fieldError.getDefaultMessage());
 				message.append(fieldError.getDefaultMessage());
 			}
 			model.addAttribute(EsErrorConstants.ERROR, message.toString());
@@ -226,7 +224,7 @@ public class EsHandler {
 	
 	public static void main(String[] args) {
 		try {
-			System.out.println(java.net.URLEncoder.encode("你的验证码是1234, 请在2分钟内输入！", "UTF-8"));
+			log.info(java.net.URLEncoder.encode("你的验证码是1234, 请在2分钟内输入！", "UTF-8"));
 		} catch (UnsupportedEncodingException e) {
 			e.printStackTrace();
 		}

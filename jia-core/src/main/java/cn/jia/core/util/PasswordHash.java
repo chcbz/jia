@@ -1,5 +1,7 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
+
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import java.math.BigInteger;
@@ -51,6 +53,7 @@ import java.security.spec.InvalidKeySpecException;
  *
  * @author chc
  **/
+@Slf4j
 public class PasswordHash {
     public static final String PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA1";
 
@@ -214,6 +217,6 @@ public class PasswordHash {
     }
 
     public static void main(String[] args) throws InvalidKeySpecException, NoSuchAlgorithmException {
-        System.out.println(createHash("13450070072", createSalt()));
+        log.info(createHash("13450070072", createSalt()));
     }
 }

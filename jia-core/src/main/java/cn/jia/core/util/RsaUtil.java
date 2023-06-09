@@ -74,7 +74,7 @@ public class RsaUtil {
 //
 //            return signature.verify(Base64Util.decodeBase64(sign.getBytes()));
 //        } catch (Exception e) {
-//        	System.out.println("支付宝验签错误,RSAcontent = " + content + ",sign=" + sign + ",charset = " + input_charset);
+//        	log.info("支付宝验签错误,RSAcontent = " + content + ",sign=" + sign + ",charset = " + input_charset);
 //        	e.printStackTrace();
 //        	return false;
 //        }

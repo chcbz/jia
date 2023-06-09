@@ -1,7 +1,6 @@
 package cn.jia.core.util;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.activation.DataHandler;
 import javax.activation.FileDataSource;
@@ -15,8 +14,8 @@ import java.util.Properties;
 /**
  * @author chc
  */
+@Slf4j
 public class EmailUtil {
-	private static final Logger logger = LoggerFactory.getLogger(EmailUtil.class);
 	/**
 	 * MIME邮件对象
 	 */
@@ -61,7 +60,7 @@ public class EmailUtil {
 	 * @param hostName SMTP主机名
 	 */
 	public void setSmtpHost(String hostName) {
-		logger.info("设置系统属性：mail.smtp.host = " + hostName);
+		log.info("设置系统属性：mail.smtp.host = " + hostName);
 		if (props == null) {
 			// 获得系统属性对象
 			props = System.getProperties();
@@ -76,21 +75,21 @@ public class EmailUtil {
 	 */
 	public boolean createMimeMessage() {
 		try {
-			logger.info("准备获取邮件会话对象！");
+			log.info("准备获取邮件会话对象！");
 			// 获得邮件会话对象
 			session = Session.getDefaultInstance(props, null);
 		} catch (Exception e) {
-			logger.error("获取邮件会话对象时发生错误！" + e);
+			log.error("获取邮件会话对象时发生错误！" + e);
 			return false;
 		}
-		logger.info("准备创建MIME邮件对象！");
+		log.info("准备创建MIME邮件对象！");
 		try {
 			// 创建MIME邮件对象
 			mimeMsg = new MimeMessage(session);
 			mp = new MimeMultipart();
 			return true;
 		} catch (Exception e) {
-			logger.error("创建MIME邮件对象失败！", e);
+			log.error("创建MIME邮件对象失败！", e);
 			return false;
 		}
 	}
@@ -100,7 +99,7 @@ public class EmailUtil {
 	 * @param need 是否需要身份认证
 	 */
 	public void setNeedAuth(boolean need) {
-		logger.info("设置smtp身份认证：mail.smtp.auth = " + need);
+		log.info("设置smtp身份认证：mail.smtp.auth = " + need);
 		if (props == null) {
 			props = System.getProperties();
 		}
@@ -127,12 +126,12 @@ public class EmailUtil {
 	 * @return boolean
 	 */
 	public boolean setSubject(String mailSubject) {
-		logger.info("设置邮件主题！");
+		log.info("设置邮件主题！");
 		try {
 			mimeMsg.setSubject(mailSubject);
 			return true;
 		} catch (Exception e) {
-			logger.error("设置邮件主题发生错误！", e);
+			log.error("设置邮件主题发生错误！", e);
 			return false;
 		}
 	}
@@ -149,7 +148,7 @@ public class EmailUtil {
 			mp.addBodyPart(bp);
 			return true;
 		} catch (Exception e) {
-			logger.error("设置邮件正文时发生错误！", e);
+			log.error("设置邮件正文时发生错误！", e);
 			return false;
 		}
 	}
@@ -159,7 +158,7 @@ public class EmailUtil {
 	 * @param filename 附件名
 	 */
 	public boolean addFileAffix(String filename) {
-		logger.info("增加邮件附件：" + filename);
+		log.info("增加邮件附件：" + filename);
 		try {
 			BodyPart bp = new MimeBodyPart();
 			FileDataSource fileds = new FileDataSource(filename);
@@ -168,7 +167,7 @@ public class EmailUtil {
 			mp.addBodyPart(bp);
 			return true;
 		} catch (Exception e) {
-			logger.error("增加邮件附件：" + filename + "发生错误！", e);
+			log.error("增加邮件附件：" + filename + "发生错误！", e);
 			return false;
 		}
 	}
@@ -178,7 +177,7 @@ public class EmailUtil {
 	 * @param from 发件人
 	 */
 	public boolean setFrom(String from) {
-		logger.info("设置发信人！");
+		log.info("设置发信人！");
 		try {
 			// 设置发信人
 			mimeMsg.setFrom(new InternetAddress(from));
@@ -227,17 +226,17 @@ public class EmailUtil {
 		try {
 			mimeMsg.setContent(mp);
 			mimeMsg.saveChanges();
-			logger.info("正在发送邮件....");
+			log.info("正在发送邮件....");
 			Session mailSession = Session.getInstance(props, null);
 			Transport transport = mailSession.getTransport("smtp");
 			transport.connect((String) props.get("mail.smtp.host"), username, password);
 			transport.sendMessage(mimeMsg, mimeMsg.getRecipients(Message.RecipientType.TO));
 			// transport.send(mimeMsg);
-			logger.info("发送邮件成功！");
+			log.info("发送邮件成功！");
 			transport.close();
 			return true;
 		} catch (Exception e) {
-			logger.error("邮件发送失败！", e);
+			log.error("邮件发送失败！", e);
 			return false;
 		}
 	}
@@ -311,6 +310,6 @@ public class EmailUtil {
 	}
 
 	public static void main(String[] args) {
-		System.out.println(EmailUtil.doSend("test", "content", "12349@e2tt.com", "chcbz@qq.com", "12349@e2tt.com", "ngguknecfrpyeihd", "smtp.qq.com"));
+		log.info("{}", EmailUtil.doSend("test", "content", "12349@e2tt.com", "chcbz@qq.com", "12349@e2tt.com", "ngguknecfrpyeihd", "smtp.qq.com"));
 	}
 }

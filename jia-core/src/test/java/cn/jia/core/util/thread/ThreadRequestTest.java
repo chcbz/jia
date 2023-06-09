@@ -1,9 +1,9 @@
 package cn.jia.core.util.thread;
 
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
-
+@Slf4j
 class ThreadRequestTest {
 
     @Test
@@ -11,13 +11,13 @@ class ThreadRequestTest {
         new ThreadRequest(new AbstractThreadRequestContent() {
             @Override
             public void doSomeThing() {
-                System.out.println("doSomething");
+                log.info("doSomething");
             }
             @Override
             public void onSuccess() {
-                System.out.println("override onSuccess");
+                log.info("override onSuccess");
             }
         }).start();
-        System.out.println("other thread");
+        log.info("other thread");
     }
 }

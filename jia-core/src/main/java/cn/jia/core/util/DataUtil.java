@@ -1,5 +1,6 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
 import javax.servlet.http.HttpServletRequest;
@@ -13,6 +14,7 @@ import java.util.*;
 /**
  * @author chc
  */
+@Slf4j
 public class DataUtil {
 
     /**
@@ -403,14 +405,14 @@ public class DataUtil {
      * @return int
      */
     public static int byteArrayToInt(byte[] b) {
-        return   b[3] & 0xFF |
+        return b[3] & 0xFF |
                 (b[2] & 0xFF) << 8 |
                 (b[1] & 0xFF) << 16 |
                 (b[0] & 0xFF) << 24;
     }
 
     public static byte[] intToByteArray(int a) {
-        return new byte[] {
+        return new byte[]{
                 (byte) ((a >> 24) & 0xFF),
                 (byte) ((a >> 16) & 0xFF),
                 (byte) ((a >> 8) & 0xFF),
@@ -442,9 +444,9 @@ public class DataUtil {
                 | (0xff00000000L & ((long) bytes[4] << 32)) | (0xff0000000000L & ((long) bytes[5] << 40)) | (0xff000000000000L & ((long) bytes[6] << 48)) | (0xff00000000000000L & ((long) bytes[7] << 56));
     }
 
-        public static void main(String[] args) {
-        System.out.println(getUuid());
-        System.out.println(DataUtil.getRandom(false, 8));
-        System.out.println(getDistance(113.7254, 23.00607, 23.00610350447056, 113.7253981177823) / 1000);
+    public static void main(String[] args) {
+        log.info(getUuid());
+        log.info(DataUtil.getRandom(false, 8));
+        log.info(String.valueOf(getDistance(113.7254, 23.00607, 23.00610350447056, 113.7253981177823) / 1000));
     }
 }

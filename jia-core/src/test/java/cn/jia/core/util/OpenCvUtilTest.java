@@ -1,11 +1,13 @@
 package cn.jia.core.util;
 
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@Slf4j
 class OpenCvUtilTest {
     @Test
     void includeImage() {
@@ -26,6 +28,6 @@ class OpenCvUtilTest {
         File sourceFile = new File(path + "/opencv_test.png");
         File templateFile = new File(path + "/opencv_test_m.png");
         File result = OpenCvUtil.tagMatchImage(sourceFile, templateFile);
-        System.out.println(result.getAbsolutePath());
+        log.info(result.getAbsolutePath());
     }
 }
