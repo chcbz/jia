@@ -1,10 +1,10 @@
 package cn.jia.core.service.impl;
 
+import cn.jia.common.service.impl.BaseServiceImpl;
 import cn.jia.core.entity.Log;
 import cn.jia.core.mapper.LogMapper;
 import cn.jia.core.service.ILogService;
-import cn.jia.common.service.impl.BaseServiceImpl;
-import org.springframework.stereotype.Service;
+import jakarta.inject.Named;
 
 /**
  * <p>
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * @author chc
  * @since 2021-10-02
  */
-@Service
+@Named
 public class LogServiceImpl extends BaseServiceImpl<LogMapper, Log> implements ILogService {
 
 }

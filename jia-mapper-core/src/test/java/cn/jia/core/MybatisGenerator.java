@@ -20,7 +20,7 @@ import java.util.List;
 public class MybatisGenerator extends BaseTest {
     private final static String PARENT_PACKAGE = "cn.jia";
     private final static String MODULE_NAME = "core";
-    private final static String[] TABLES = new String[]{"core_action", "core_dict", "core_log", "core_notice"};
+    private final static String[] TABLES = new String[]{"core_dict", "core_log", "core_notice"};
 
     @Value("${spring.datasource.driverClassName}")
     String driverClassName;
