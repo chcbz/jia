@@ -1,10 +1,10 @@
 package cn.jia.core.service.impl;
 
+import cn.jia.common.service.impl.BaseServiceImpl;
 import cn.jia.core.entity.Notice;
 import cn.jia.core.mapper.NoticeMapper;
 import cn.jia.core.service.INoticeService;
-import cn.jia.common.service.impl.BaseServiceImpl;
-import org.springframework.stereotype.Service;
+import jakarta.inject.Named;
 
 /**
  * <p>
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * @author chc
  * @since 2021-10-02
  */
-@Service
+@Named
 public class NoticeServiceImpl extends BaseServiceImpl<NoticeMapper, Notice> implements INoticeService {
 
 }
