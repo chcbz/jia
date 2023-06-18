@@ -2,6 +2,7 @@ dependencies {
     api project(':jia-mapper-common')
     testImplementation project(':jia-core-test')
     testImplementation libs.mybatis.plus.generator
+    testImplementation libs.spring.boot.starter.freemarker
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

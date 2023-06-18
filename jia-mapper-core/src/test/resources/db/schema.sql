@@ -1,9 +1,9 @@
 CREATE TABLE core_dict (
   id int NOT NULL AUTO_INCREMENT COMMENT '表id',
   type varchar(100) DEFAULT NULL COMMENT '字典类型',
-  language varchar(50) DEFAULT NULL,
+  `language` varchar(50) DEFAULT NULL,
   name varchar(255) DEFAULT NULL COMMENT '字典名称',
-  value varchar(255) DEFAULT NULL COMMENT '字典值',
+  `value` varchar(255) DEFAULT NULL COMMENT '字典值',
   url varchar(100) DEFAULT NULL COMMENT '字典文件路径',
   parent_id varchar(32) DEFAULT NULL COMMENT '父Id',
   dict_order int DEFAULT NULL,
