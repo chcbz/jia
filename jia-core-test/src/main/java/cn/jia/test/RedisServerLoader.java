@@ -9,11 +9,12 @@ import redis.embedded.RedisServerBuilder;
 import redis.embedded.util.OS;
 import redis.embedded.util.OSDetector;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 
 /**
  * 内置Redis服务器加载
+ * @author chc
  */
 @Slf4j
 @Component
@@ -33,7 +34,7 @@ public class RedisServerLoader {
         log.info("redis server is starting...");
         RedisExecProvider customProvider = RedisExecProvider.defaultProvider();
         RedisServerBuilder builder = RedisServer.builder().redisExecProvider(customProvider)
-                .port(redisPort).setting("daemonize no").setting("appendonly no");
+                .setting("bind 127.0.0.1").port(redisPort).setting("daemonize no").setting("appendonly no");
         if (OS.WINDOWS.equals(OSDetector.getOS())) {
             builder.setting("maxheap 200m");
         }

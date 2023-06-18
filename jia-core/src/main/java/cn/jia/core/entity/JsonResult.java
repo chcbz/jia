@@ -4,8 +4,8 @@ import cn.jia.core.common.EsHandler;
 import cn.jia.core.exception.EsErrorConstants;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import jakarta.servlet.http.HttpServletRequest;
 
-import javax.servlet.http.HttpServletRequest;
 
 /**
  * JSONResult : Response JSONResult for RESTful,封装返回JSON格式的数据

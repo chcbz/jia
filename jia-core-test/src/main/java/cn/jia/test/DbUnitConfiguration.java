@@ -9,9 +9,10 @@ import javax.sql.DataSource;
 
 /**
  * DbUnit数据源配置
+ * @author chc
  */
 @Configuration
-public class DBUnitConfiguration {
+public class DbUnitConfiguration {
     @Bean
     public DatabaseConfigBean dbUnitDatabaseConfig() {
         DatabaseConfigBean bean = new DatabaseConfigBean();

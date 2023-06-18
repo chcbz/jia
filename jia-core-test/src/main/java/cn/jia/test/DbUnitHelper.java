@@ -1,6 +1,6 @@
 package cn.jia.test;
 
-import cn.jia.core.util.JSONUtil;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StreamUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +16,9 @@ import java.io.StringWriter;
 import java.lang.reflect.Type;
 import java.util.List;
 
+/**
+ * @author chc
+ */
 @Slf4j
 public class DbUnitHelper {
 
@@ -50,7 +53,7 @@ public class DbUnitHelper {
     public static <T> T readJsonEntity(Resource resource, Class<T> clazz) {
         try {
             String str = StreamUtil.readText(resource.getInputStream());
-            return JSONUtil.fromJson(str, clazz);
+            return JsonUtil.fromJson(str, clazz);
         } catch (Exception e) {
             log.error("[readJsonEntity]error", e);
             return null;
@@ -67,7 +70,7 @@ public class DbUnitHelper {
     public static <T> List<T> readJsonEntitys(Resource resource, Class<T> clazz) {
         try {
             String str = StreamUtil.readText(resource.getInputStream());
-            return JSONUtil.jsonToList(str, new TypeReference<List<T>>() {
+            return JsonUtil.jsonToList(str, new TypeReference<List<T>>() {
                 @Override
                 public Type getType() {
                     return clazz;
