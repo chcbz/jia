@@ -1,6 +1,6 @@
 package cn.jia.wx.service;
 
-import cn.jia.core.util.JSONUtil;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.test.BaseTest;
 import cn.jia.test.DbUnitHelper;
 import cn.jia.wx.entity.MpInfo;
@@ -32,7 +32,7 @@ public class IMpInfoServiceTest extends BaseTest {
     void save() {
         MpInfo mpInfo = DbUnitHelper.readJsonEntity(mpInfoJson, MpInfo.class);
         mpInfoService.save(mpInfo);
-        log.info(JSONUtil.toJson(mpInfo));
+        log.info(JsonUtil.toJson(mpInfo));
         assertNotNull(mpInfo.getAcid());
     }
 

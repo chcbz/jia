@@ -1,103 +1,51 @@
 package cn.jia.dwz.entity;
 
-public class DwzRecord {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-10-21
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("dwz_record")
+@Schema(name = "DwzRecord对象", description="")
+public class DwzRecord extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
-    private String clientId;
-
+    @Schema(description = "Jia账号")
     private String jiacn;
 
+    @Schema(description = "原地址")
     private String orgi;
 
+    @Schema(description = "目标地址")
     private String uri;
 
-    private Long createTime;
-
+    @Schema(description = "有效时间")
     private Long expireTime;
 
-    private Long updateTime;
-
+    @Schema(description = "状态 1有效 0无效")
     private Integer status;
 
+    @Schema(description = "访问量")
     private Integer pv;
 
-    public Integer getId() {
-        return id;
-    }
 
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public String getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(String clientId) {
-        this.clientId = clientId == null ? null : clientId.trim();
-    }
-
-    public String getJiacn() {
-        return jiacn;
-    }
-
-    public void setJiacn(String jiacn) {
-        this.jiacn = jiacn == null ? null : jiacn.trim();
-    }
-
-    public String getOrgi() {
-        return orgi;
-    }
-
-    public void setOrgi(String orgi) {
-        this.orgi = orgi == null ? null : orgi.trim();
-    }
-
-    public String getUri() {
-        return uri;
-    }
-
-    public void setUri(String uri) {
-        this.uri = uri == null ? null : uri.trim();
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Long getExpireTime() {
-        return expireTime;
-    }
-
-    public void setExpireTime(Long expireTime) {
-        this.expireTime = expireTime;
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
-
-    public Integer getPv() {
-        return pv;
-    }
-
-    public void setPv(Integer pv) {
-        this.pv = pv;
-    }
 }

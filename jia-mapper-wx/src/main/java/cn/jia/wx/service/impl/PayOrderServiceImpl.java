@@ -4,7 +4,7 @@ import cn.jia.common.service.impl.BaseServiceImpl;
 import cn.jia.wx.entity.PayOrder;
 import cn.jia.wx.mapper.PayOrderMapper;
 import cn.jia.wx.service.IPayOrderService;
-import org.springframework.stereotype.Service;
+import jakarta.inject.Named;
 
 /**
  * <p>
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * @author chc
  * @since 2021-01-09
  */
-@Service
+@Named
 public class PayOrderServiceImpl extends BaseServiceImpl<PayOrderMapper, PayOrder> implements IPayOrderService {
 
 }

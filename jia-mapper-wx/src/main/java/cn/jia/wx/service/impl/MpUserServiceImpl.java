@@ -4,7 +4,7 @@ import cn.jia.common.service.impl.BaseServiceImpl;
 import cn.jia.wx.entity.MpUser;
 import cn.jia.wx.mapper.MpUserMapper;
 import cn.jia.wx.service.IMpUserService;
-import org.springframework.stereotype.Service;
+import jakarta.inject.Named;
 
 /**
  * <p>
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * @author chc
  * @since 2021-01-09
  */
-@Service
+@Named
 public class MpUserServiceImpl extends BaseServiceImpl<MpUserMapper, MpUser> implements IMpUserService {
 
 }
