@@ -11,6 +11,9 @@ import org.springframework.test.context.support.DirtiesContextTestExecutionListe
 import org.springframework.test.context.transaction.TransactionalTestExecutionListener;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * @author chc
+ */
 @ActiveProfiles("test")
 @SpringBootTest(classes = {JiaTestApplication.class})
 @TestExecutionListeners({
@@ -19,6 +22,6 @@ import org.springframework.transaction.annotation.Transactional;
         TransactionalTestExecutionListener.class,
         MockitoTestExecutionListener.class,
         DependencyInjectionTestExecutionListener.class})
-@Transactional
+@Transactional(rollbackFor = Exception.class)
 public class BaseTest {
 }

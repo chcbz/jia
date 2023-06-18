@@ -7,8 +7,8 @@ dependencies {
     implementation libs.slf4j.api
 //    implementation libs.slf4j.log4j12
     implementation libs.dom4j
-    implementation libs.javax.inject
-    implementation libs.javax.servlet.api
+    implementation libs.jakarta.inject.api
+    implementation libs.jakarta.servlet.api
     implementation libs.commons.fileupload
     implementation libs.commons.codec
     implementation libs.commons.net
@@ -26,7 +26,6 @@ dependencies {
     implementation libs.stripe.java
     implementation libs.jai.imageio
     implementation libs.opencv
-    implementation libs.activiti.engine
     implementation libs.easypoi.base
     implementation libs.html2image
     implementation libs.ganymed.ssh2
@@ -40,6 +39,7 @@ dependencies {
     implementation libs.xdocreport
     implementation libs.poi.ooxml.schemas
     implementation libs.ooxml.schemas
+    implementation libs.mybatis.core
     implementation libs.lombok
     testImplementation libs.junit.jupiter
     testAnnotationProcessor libs.lombok
