@@ -1,10 +1,10 @@
 package cn.jia.kefu.service.impl;
 
+import cn.jia.common.service.impl.BaseServiceImpl;
 import cn.jia.kefu.entity.KefuMsgSubscribe;
 import cn.jia.kefu.mapper.KefuMsgSubscribeMapper;
 import cn.jia.kefu.service.IKefuMsgSubscribeService;
-import cn.jia.common.service.impl.BaseServiceImpl;
-import org.springframework.stereotype.Service;
+import jakarta.inject.Named;
 
 /**
  * <p>
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * @author chc
  * @since 2021-02-18
  */
-@Service
+@Named
 public class KefuMsgSubscribeServiceImpl extends BaseServiceImpl<KefuMsgSubscribeMapper, KefuMsgSubscribe> implements IKefuMsgSubscribeService {
 
 }

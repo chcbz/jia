@@ -1,126 +1,47 @@
 package cn.jia.user.entity;
 
-import java.util.List;
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
 
-public class Role {
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-11-20
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("user_role")
+@Schema(name = "Role对象", description="")
+public class Role extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
     private String clientId;
 
+    @Schema(description = "角色名")
     private String name;
 
+    @Schema(description = "编码")
     private String code;
 
-    private Integer level;
-
+    @Schema(description = "备注")
     private String remark;
 
-    private Long updateTime;
-
-    private Long createTime;
-
+    @Schema(description = "状态(1:正常,0停用)")
     private Integer status;
 
-    private List<Integer> permsIds;
-
-    private List<Integer> userIds;
-
-    private List<Integer> groupIds;
-
-    public Integer getId() {
-        return id;
-    }
-
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public String getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(String clientId) {
-        this.clientId = clientId == null ? null : clientId.trim();
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name == null ? null : name.trim();
-    }
-
-    public String getCode() {
-        return code;
-    }
-
-    public void setCode(String code) {
-        this.code = code == null ? null : code.trim();
-    }
-
-    public Integer getLevel() {
-        return level;
-    }
-
-    public void setLevel(Integer level) {
-        this.level = level;
-    }
-
-    public String getRemark() {
-        return remark;
-    }
-
-    public void setRemark(String remark) {
-        this.remark = remark == null ? null : remark.trim();
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
-
-	public List<Integer> getPermsIds() {
-		return permsIds;
-	}
-
-	public void setPermsIds(List<Integer> permsIds) {
-		this.permsIds = permsIds;
-	}
-
-	public List<Integer> getUserIds() {
-		return userIds;
-	}
-
-	public void setUserIds(List<Integer> userIds) {
-		this.userIds = userIds;
-	}
-
-    public List<Integer> getGroupIds() {
-        return groupIds;
-    }
-
-    public void setGroupIds(List<Integer> groupIds) {
-        this.groupIds = groupIds;
-    }
 
 }

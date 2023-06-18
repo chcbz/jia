@@ -1,11 +1,10 @@
 package cn.jia.kefu.entity;
 
 import cn.jia.common.entity.BaseEntity;
-import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
-import io.swagger.annotations.ApiModel;
-import io.swagger.annotations.ApiModelProperty;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -22,7 +21,7 @@ import lombok.experimental.Accessors;
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
 @TableName("kefu_message")
-@ApiModel(value="KefuMessage对象", description="")
+@Schema(name = "KefuMessage对象", description="")
 public class KefuMessage extends BaseEntity {
 
     private static final long serialVersionUID=1L;
@@ -30,22 +29,22 @@ public class KefuMessage extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
-    @ApiModelProperty(value = "资源ID")
+    @Schema(description = "资源ID")
     private String resourceId;
 
-    @ApiModelProperty(value = "应用标识符")
+    @Schema(description = "应用标识符")
     private String clientId;
 
-    @ApiModelProperty(value = "Jia账号")
+    @Schema(description = "Jia账号")
     private String jiacn;
 
-    @ApiModelProperty(value = "姓名")
+    @Schema(description = "姓名")
     private String name;
 
-    @ApiModelProperty(value = "电话号码")
+    @Schema(description = "电话号码")
     private String phone;
 
-    @ApiModelProperty(value = "邮箱地址")
+    @Schema(description = "邮箱地址")
     private String email;
 
     private String title;
@@ -54,10 +53,10 @@ public class KefuMessage extends BaseEntity {
 
     private String attachment;
 
-    @ApiModelProperty(value = "回复内容")
+    @Schema(description = "回复内容")
     private String reply;
 
-    @ApiModelProperty(value = "状态 0待回复 1已回复")
+    @Schema(description = "状态 0待回复 1已回复")
     private Integer status;
 
 

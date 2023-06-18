@@ -1,103 +1,55 @@
 package cn.jia.sms.entity;
 
-public class SmsTemplate {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-11-14
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("sms_template")
+@Schema(name = "SmsTemplate对象", description="")
+public class SmsTemplate extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @Schema(description = "模板ID")
+    @TableId(value = "template_id", type = IdType.AUTO)
     private String templateId;
 
+    @Schema(description = "应用标识码")
     private String clientId;
 
+    @Schema(description = "模板名称")
     private String name;
 
+    @Schema(description = "模板标题")
     private String title;
 
+    @Schema(description = "模板内容")
     private String content;
 
+    @Schema(description = "消息类型 1微信 2邮件 3短信")
     private Integer msgType;
 
+    @Schema(description = "模板类型")
     private Integer type;
 
-    private Long createTime;
-
-    private Long updateTime;
-
+    @Schema(description = "状态 0待审核 1审核通过 2审核失败")
     private Integer status;
 
-    public String getTemplateId() {
-        return templateId;
-    }
 
-    public void setTemplateId(String templateId) {
-        this.templateId = templateId == null ? null : templateId.trim();
-    }
-
-    public String getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(String clientId) {
-        this.clientId = clientId == null ? null : clientId.trim();
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name == null ? null : name.trim();
-    }
-
-    public String getTitle() {
-        return title;
-    }
-
-    public void setTitle(String title) {
-        this.title = title == null ? null : title.trim();
-    }
-
-    public String getContent() {
-        return content;
-    }
-
-    public void setContent(String content) {
-        this.content = content == null ? null : content.trim();
-    }
-
-    public Integer getMsgType() {
-        return msgType;
-    }
-
-    public void setMsgType(Integer msgType) {
-        this.msgType = msgType;
-    }
-
-    public Integer getType() {
-        return type;
-    }
-
-    public void setType(Integer type) {
-        this.type = type;
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
 }

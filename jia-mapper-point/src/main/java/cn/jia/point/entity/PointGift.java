@@ -3,8 +3,7 @@ package cn.jia.point.entity;
 import cn.jia.common.entity.BaseEntity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
-import io.swagger.annotations.ApiModel;
-import io.swagger.annotations.ApiModelProperty;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -20,40 +19,40 @@ import lombok.experimental.Accessors;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
-@ApiModel(value="PointGift对象", description="")
+@Schema(name = "PointGift对象", description="")
 public class PointGift extends BaseEntity {
 
     private static final long serialVersionUID=1L;
 
-    @ApiModelProperty(value = "礼品ID")
+    @Schema(description = "礼品ID")
     @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
-    @ApiModelProperty(value = "应用标识码")
+    @Schema(description = "应用标识码")
     private String clientId;
 
-    @ApiModelProperty(value = "礼品名称")
+    @Schema(description = "礼品名称")
     private String name;
 
-    @ApiModelProperty(value = "礼品描述")
+    @Schema(description = "礼品描述")
     private String description;
 
-    @ApiModelProperty(value = "礼品图片地址")
+    @Schema(description = "礼品图片地址")
     private String picUrl;
 
-    @ApiModelProperty(value = "礼品所需积分")
+    @Schema(description = "礼品所需积分")
     private Integer point;
 
-    @ApiModelProperty(value = "价格（单位：分）")
+    @Schema(description = "价格（单位：分）")
     private Integer price;
 
-    @ApiModelProperty(value = "礼品数量")
+    @Schema(description = "礼品数量")
     private Integer quantity;
 
-    @ApiModelProperty(value = "是否虚拟物品 0否 1是")
+    @Schema(description = "是否虚拟物品 0否 1是")
     private Integer virtualFlag;
 
-    @ApiModelProperty(value = "状态 1上架 0下架")
+    @Schema(description = "状态 1上架 0下架")
     private Integer status;
 
 

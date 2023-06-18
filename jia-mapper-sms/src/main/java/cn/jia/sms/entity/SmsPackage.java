@@ -1,73 +1,47 @@
 package cn.jia.sms.entity;
 
-public class SmsPackage {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+import java.math.BigDecimal;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-11-14
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("sms_package")
+@Schema(name = "SmsPackage对象", description="")
+public class SmsPackage extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
     private Integer id;
 
+    @Schema(description = "数量")
     private Integer number;
 
-    private Double money;
+    @Schema(description = "金额")
+    private BigDecimal money;
 
+    @Schema(description = "序列")
     private Integer order;
 
+    @Schema(description = "状态 1有效 0无效")
     private Integer status;
 
-    private Long createTime;
 
-    private Long updateTime;
-
-    public Integer getId() {
-        return id;
-    }
-
-    public void setId(Integer id) {
-        this.id = id;
-    }
-
-    public Integer getNumber() {
-        return number;
-    }
-
-    public void setNumber(Integer number) {
-        this.number = number;
-    }
-
-    public Double getMoney() {
-        return money;
-    }
-
-    public void setMoney(Double money) {
-        this.money = money;
-    }
-
-    public Integer getOrder() {
-        return order;
-    }
-
-    public void setOrder(Integer order) {
-        this.order = order;
-    }
-
-    public Integer getStatus() {
-        return status;
-    }
-
-    public void setStatus(Integer status) {
-        this.status = status;
-    }
-
-    public Long getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(Long createTime) {
-        this.createTime = createTime;
-    }
-
-    public Long getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(Long updateTime) {
-        this.updateTime = updateTime;
-    }
 }

@@ -1,43 +1,43 @@
 package cn.jia.sms.entity;
 
-public class SmsConfig {
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-11-14
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("sms_config")
+@Schema(name = "SmsConfig对象", description="")
+public class SmsConfig extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @Schema(description = "应用标识码")
+    @TableId(value = "client_id", type = IdType.AUTO)
     private String clientId;
 
+    @Schema(description = "简称")
     private String shortName;
 
+    @Schema(description = "短信回复回调地址")
     private String replyUrl;
 
+    @Schema(description = "剩余可用数量")
     private Integer remain;
 
-    public String getClientId() {
-        return clientId;
-    }
 
-    public void setClientId(String clientId) {
-        this.clientId = clientId == null ? null : clientId.trim();
-    }
-
-    public String getShortName() {
-        return shortName;
-    }
-
-    public void setShortName(String shortName) {
-        this.shortName = shortName == null ? null : shortName.trim();
-    }
-
-    public String getReplyUrl() {
-        return replyUrl;
-    }
-
-    public void setReplyUrl(String replyUrl) {
-        this.replyUrl = replyUrl == null ? null : replyUrl.trim();
-    }
-
-    public Integer getRemain() {
-        return remain;
-    }
-
-    public void setRemain(Integer remain) {
-        this.remain = remain;
-    }
 }

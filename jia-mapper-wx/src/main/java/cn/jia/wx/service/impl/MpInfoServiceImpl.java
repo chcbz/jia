@@ -4,7 +4,7 @@ import cn.jia.common.service.impl.BaseServiceImpl;
 import cn.jia.wx.entity.MpInfo;
 import cn.jia.wx.mapper.MpInfoMapper;
 import cn.jia.wx.service.IMpInfoService;
-import org.springframework.stereotype.Service;
+import jakarta.inject.Named;
 
 /**
  * <p>
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * @author chc
  * @since 2021-01-09
  */
-@Service
+@Named
 public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoMapper, MpInfo> implements IMpInfoService {
 
 }

@@ -1,63 +1,49 @@
 package cn.jia.sms.entity;
 
-public class SmsSend {
-    private String msgid;
+import cn.jia.common.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.experimental.Accessors;
 
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author chc
+ * @since 2021-11-14
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Accessors(chain = true)
+@TableName("sms_send")
+@Schema(name = "SmsSend对象", description="")
+public class SmsSend extends BaseEntity {
+
+    private static final long serialVersionUID=1L;
+
+    @Schema(description = "应用标识码")
     private String clientId;
 
+    @Schema(description = "手机号码")
     private String mobile;
 
+    @Schema(description = "短信内容")
     private String content;
 
+    @Schema(description = "小号")
     private String xh;
 
+    @Schema(description = "消息编号")
+    @TableId(value = "msgid", type = IdType.AUTO)
+    private String msgid;
+
+    @Schema(description = "发送日期")
     private Long time;
 
-    public String getMsgid() {
-        return msgid;
-    }
 
-    public void setMsgid(String msgid) {
-        this.msgid = msgid == null ? null : msgid.trim();
-    }
-
-    public String getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(String clientId) {
-        this.clientId = clientId == null ? null : clientId.trim();
-    }
-
-    public String getMobile() {
-        return mobile;
-    }
-
-    public void setMobile(String mobile) {
-        this.mobile = mobile == null ? null : mobile.trim();
-    }
-
-    public String getContent() {
-        return content;
-    }
-
-    public void setContent(String content) {
-        this.content = content == null ? null : content.trim();
-    }
-
-    public String getXh() {
-        return xh;
-    }
-
-    public void setXh(String xh) {
-        this.xh = xh == null ? null : xh.trim();
-    }
-
-    public Long getTime() {
-        return time;
-    }
-
-    public void setTime(Long time) {
-        this.time = time;
-    }
 }

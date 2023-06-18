@@ -1,10 +1,10 @@
 package cn.jia.point.service.impl;
 
+import cn.jia.common.service.impl.BaseServiceImpl;
 import cn.jia.point.entity.PointGiftUsage;
 import cn.jia.point.mapper.PointGiftUsageMapper;
 import cn.jia.point.service.IPointGiftUsageService;
-import cn.jia.common.service.impl.BaseServiceImpl;
-import org.springframework.stereotype.Service;
+import jakarta.inject.Named;
 
 /**
  * <p>
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * @author chc
  * @since 2021-02-14
  */
-@Service
+@Named
 public class PointGiftUsageServiceImpl extends BaseServiceImpl<PointGiftUsageMapper, PointGiftUsage> implements IPointGiftUsageService {
 
 }
