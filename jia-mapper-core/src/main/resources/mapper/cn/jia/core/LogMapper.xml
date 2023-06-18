@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.core.mapper.LogMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="cn.jia.core.entity.Log">
+        <id column="ID" property="id" />
+        <result column="CREATE_TIME" property="createTime" />
+        <result column="UPDATE_TIME" property="updateTime" />
+        <result column="JIACN" property="jiacn" />
+        <result column="USERNAME" property="username" />
+        <result column="IP" property="ip" />
+        <result column="URI" property="uri" />
+        <result column="METHOD" property="method" />
+        <result column="PARAM" property="param" />
+        <result column="USER_AGENT" property="userAgent" />
+        <result column="HEADER" property="header" />
+        <result column="TIME" property="time" />
+    </resultMap>
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        CREATE_TIME,
+        UPDATE_TIME,
+        ID, JIACN, USERNAME, IP, URI, METHOD, PARAM, USER_AGENT, HEADER, TIME
+    </sql>
+
+</mapper>
