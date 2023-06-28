@@ -1,13 +1,15 @@
 package cn.jia.isp.entity;
 
-import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.util.List;
 
 /**
  * @author chcbz
  */
-@Data
+@Getter
+@Setter
 public class LdapUserGroupDTO extends LdapUserGroup {
     private List<String> users;
 }

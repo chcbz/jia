@@ -138,7 +138,7 @@ public class JsonResultPage<T> extends Result {
 
 	@Override
 	public String toString() {
-		return "JSONResultPage {pageNum=" + pageNum + ", total=" + total + "}";
+		return "JsonResultPage {pageNum=" + pageNum + ", total=" + total + "}";
 	}
 
 	public List<T> getData() {

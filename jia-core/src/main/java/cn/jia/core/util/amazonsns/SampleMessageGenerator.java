@@ -14,7 +14,8 @@ package cn.jia.core.util.amazonsns;
  * express or implied. See the License for the specific language governing
  * permissions and limitations under the License.
  */
-import org.codehaus.jackson.map.ObjectMapper;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.HashMap;
 import java.util.Map;
