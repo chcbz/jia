@@ -12,14 +12,15 @@ import org.springframework.stereotype.Component;
  * @date 2018年4月27日 下午3:12:14
  */
 @Component
-public class SpringContextHolder implements ApplicationContextAware{
+public class SpringContextHolder implements ApplicationContextAware {
 	private static ApplicationContext applicationContext;
 
 	/**
 	 * 实现ApplicationContextAware接口的context注入函数, 将其存入静态变量.
 	 */
+	@Override
 	public void setApplicationContext(ApplicationContext applicationContext) {
-		SpringContextHolder.applicationContext = applicationContext; // NOSONAR
+		SpringContextHolder.applicationContext = applicationContext;
 	}
 
 	/**

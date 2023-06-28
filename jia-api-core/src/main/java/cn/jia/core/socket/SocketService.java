@@ -1,5 +1,9 @@
 package cn.jia.core.socket;
 
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -11,26 +15,28 @@ import java.nio.channels.SocketChannel;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.Iterator;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-import org.springframework.stereotype.Service;
-
-import lombok.extern.slf4j.Slf4j;
-
-@Service
+/**
+ * @author chc
+ */
 @Slf4j
 public class SocketService {
 	
 	private Selector selector;
-	//端口
+    /**
+     * 端口
+     */
 	private int port = 8888;
-	//字符编码
+    /**
+     * 字符编码
+     */
     private String charsetName = "UTF-8";
-    //消息处理类
+    /**
+     * 消息处理类
+     */
     private SocketHandler socketHandler; 
-
-    private ExecutorService tp = Executors.newCachedThreadPool();
+    @Autowired
+    private ThreadPoolTaskExecutor taskExecutor;
 
     class HandleMsg implements Runnable {
         ByteBuffer byteBuffer;
@@ -85,7 +91,7 @@ public class SocketService {
         try {
             int readBytes = channel.read(byteBuffer);
             if(readBytes > 0) {
-                tp.execute(new HandleMsg(byteBuffer, key));
+                taskExecutor.execute(new HandleMsg(byteBuffer, key));
             }
         } catch (IOException e) {
             //请求取消此键的通道到其选择器的注册

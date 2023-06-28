@@ -1,10 +1,11 @@
 package cn.jia.core.ldap;
 
 import cn.jia.core.common.EsHandler;
-import cn.jia.core.entity.JSONResult;
+import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
+import jakarta.servlet.http.HttpServletRequest;
 
-import javax.servlet.http.HttpServletRequest;
+import java.io.Serial;
 
 
 /**
@@ -13,8 +14,9 @@ import javax.servlet.http.HttpServletRequest;
  * @date 2016年8月25日 下午4:57:43
  * @param <T>
  */
-public class LdapResultPage<T> extends JSONResult<T> {
-    private static final long serialVersionUID = 7880907731807860636L;
+public class LdapResultPage<T> extends JsonResult<T> {
+    @Serial
+	private static final long serialVersionUID = 7880907731807860636L;
 
     /** 请求的序列，用来跟客户端保持同步 */
     private String nextTag;
@@ -90,7 +92,7 @@ public class LdapResultPage<T> extends JSONResult<T> {
 
 	@Override
 	public String toString() {
-		return "JSONResultPage {nextTag=" + nextTag + ", total=" + total + "}";
+		return "JsonResultPage {nextTag=" + nextTag + ", total=" + total + "}";
 	}
     
 }
