@@ -1,5 +1,6 @@
 package cn.jia.core.ldap;
 
+import java.io.Serial;
 import java.io.Serializable;
 
 /**
@@ -9,6 +10,7 @@ import java.io.Serializable;
  * @param <T>
  */
 public class LdapRequestPage<T> implements Serializable{
+    @Serial
     private static final long serialVersionUID = -7995644969484016692L;
     /** 请求的序列，用来跟客户端保持同步 */
     private Integer draw;

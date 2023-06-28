@@ -1,28 +1,26 @@
 package cn.jia.core.interceptor;
 
+import cn.jia.core.exception.EsException;
+import cn.jia.core.util.JsonUtil;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.NamedThreadLocal;
+import org.springframework.web.servlet.HandlerInterceptor;
+
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.core.NamedThreadLocal;
-import org.springframework.web.servlet.handler.HandlerInterceptorAdapter;
-
-import cn.jia.core.exception.EsException;
-import cn.jia.core.util.JSONUtil;
-
 /**
  * 日志拦截器，获取所有请求的日志
  * @author chcbz
  * @date 2017年3月22日 下午12:19:03
  */
-public class LogInterceptor extends HandlerInterceptorAdapter {
+public class LogInterceptor implements HandlerInterceptor {
 	protected final static Logger logger = LoggerFactory.getLogger(LogInterceptor.class);
 	
 	private static final ThreadLocal<Long> startTimeThreadLocal = new NamedThreadLocal<Long>("ThreadLocal StartTime");
@@ -69,7 +67,6 @@ public class LogInterceptor extends HandlerInterceptorAdapter {
             }
             params.put("param", hpMap);
         }
-        String paramsStr = JSONUtil.toJson(params);
-        return paramsStr;
+		return JsonUtil.toJson(params);
     }
 }

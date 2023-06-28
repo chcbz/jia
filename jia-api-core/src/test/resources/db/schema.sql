@@ -28,7 +28,7 @@ CREATE TABLE core_dict  (
   type varchar(100) NULL DEFAULT NULL,
   language varchar(50) NULL DEFAULT NULL,
   name varchar(255) NULL DEFAULT NULL,
-  value varchar(255) NULL DEFAULT NULL,
+  `value` varchar(255) NULL DEFAULT NULL,
   url varchar(100) NULL DEFAULT NULL,
   parent_id varchar(32) NULL DEFAULT NULL,
   dict_order int NULL DEFAULT NULL,

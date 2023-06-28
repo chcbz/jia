@@ -1,9 +1,10 @@
 package cn.jia.core.common;
 
 import cn.jia.core.configuration.SpringContextHolder;
-import cn.jia.core.entity.JSONResult;
+import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.StringUtils;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -11,11 +12,11 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.oauth2.provider.OAuth2Authentication;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
+import org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal;
 import org.springframework.web.client.RestTemplate;
 
-import javax.servlet.http.HttpServletRequest;
-import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -27,11 +28,11 @@ public class EsSecurityHandler {
     	Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
     	if(authentication != null && authentication.getPrincipal() instanceof UserDetails) {
     		return ((UserDetails)authentication.getPrincipal()).getUsername();
-    	}else if(authentication instanceof OAuth2Authentication) {
-    		Authentication userAuthentication = ((OAuth2Authentication) authentication).getUserAuthentication();
-    		if(userAuthentication != null) {
-    			return userAuthentication.getName();
-    		}
+    	}else if(authentication instanceof OAuth2AuthenticationToken oauthToken) {
+			OAuth2AuthenticatedPrincipal principal = oauthToken.getPrincipal();
+			if (principal != null) {
+				return principal.getName();
+			}
     	}
     	return null;
     }
@@ -48,8 +49,8 @@ public class EsSecurityHandler {
     		return clientId == null ? username : clientId.toString();
     	}else {
     		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        	if(authentication instanceof OAuth2Authentication) {
-        		return ((OAuth2Authentication) authentication).getOAuth2Request().getClientId();
+        	if(authentication instanceof OAuth2AuthenticationToken oauthToken) {
+        		return oauthToken.getPrincipal().getAttribute("client_id");
         	}else {
         		return null;
         	}
@@ -72,7 +73,7 @@ public class EsSecurityHandler {
 		String username = StringUtils.valueOf(tokenMap.get("user_name"));
     	if(StringUtils.isNotEmpty(username)) {
     		RedisTemplate<String, Object> redisTemplate = SpringContextHolder.getBean("redisTemplate");
-    		return redisTemplate.opsForValue().get("clientId_"+ username).toString();
+    		return StringUtils.valueOf(redisTemplate.opsForValue().get("clientId_"+ username));
     	}else {
     		return StringUtils.valueOf(tokenMap.get("client_id"));
     	}
@@ -87,7 +88,7 @@ public class EsSecurityHandler {
     	RestTemplate restTemplate = SpringContextHolder.getBean("restTemplate");
 
     	String token = String.valueOf(redisTemplate.opsForValue().get("jia-api-client-token"));
-		if(token != null && !token.equals("null") && !token.equals("")) {
+		if(token != null && !"null".equals(token) && !"".equals(token)) {
 			return token;
 		}
 		
@@ -141,7 +142,7 @@ public class EsSecurityHandler {
         		}
         		if(StringUtils.isNotEmpty(appcn)) {
         			RestTemplate restTemplate = SpringContextHolder.getBean("restTemplate");
-					JSONResult<Map<String, Object>> result = restTemplate.getForObject("http://jia-api-oauth/oauth/clientid?appcn={appcn}", JSONResult.class, appcn);
+					JsonResult<Map<String, Object>> result = restTemplate.getForObject("http://jia-api-oauth/oauth/clientid?appcn={appcn}", JsonResult.class, appcn);
         			if(result != null && EsErrorConstants.SUCCESS.equals(result.getCode())) {
         				return StringUtils.valueOf(result.getData());
         			}
@@ -155,10 +156,6 @@ public class EsSecurityHandler {
     }
 
 	public static void main(String[] args) {
-		try {
-			System.out.println(java.net.URLEncoder.encode("你的验证码是1234, 请在2分钟内输入！", "UTF-8"));
-		} catch (UnsupportedEncodingException e) {
-			e.printStackTrace();
-		}
+		System.out.println(java.net.URLEncoder.encode("你的验证码是1234, 请在2分钟内输入！", StandardCharsets.UTF_8));
 	}
 }

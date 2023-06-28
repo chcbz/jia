@@ -7,17 +7,17 @@ import cn.jia.core.entity.Log;
 import cn.jia.core.service.LogService;
 import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.HttpUtil;
-import cn.jia.core.util.JSONUtil;
+import cn.jia.core.util.JsonUtil;
+import jakarta.servlet.*;
+import jakarta.servlet.http.HttpServletRequest;
 
-import javax.servlet.*;
-import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
-public class EsLogFilter implements Filter{
+public class EsLogFilter implements Filter {
 
 	@Override
 	public void destroy() {
@@ -52,7 +52,7 @@ public class EsLogFilter implements Filter{
 			String headerName = e1.nextElement();
 			header.put(headerName, esRequestWrapper.getHeader(headerName));
 		}
-		log.setHeader(JSONUtil.toJson(header));
+		log.setHeader(JsonUtil.toJson(header));
 		if("GET".equals(esRequestWrapper.getMethod())){
 			log.setParam(HttpUtil.requestParams(esRequestWrapper));
 		}else if("POST".equals(esRequestWrapper.getMethod())) {

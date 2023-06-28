@@ -1,6 +1,6 @@
 package cn.jia.core.configuration;
 
-import org.springframework.cache.annotation.CachingConfigurerSupport;
+import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.interceptor.KeyGenerator;
 import org.springframework.context.annotation.Bean;
@@ -16,11 +16,19 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 import java.time.Duration;
 
+/**
+ * @author chc
+ */
 @Configuration
 @EnableCaching
-public class RedisCacheConfig extends CachingConfigurerSupport {
+public class RedisCacheConfig implements CachingConfigurer {
 
-	// 自定义key生成器
+	/**
+	 * 自定义key生成器
+	 *
+	 * @return key生成器
+	 */
+	@Override
 	@Bean
 	public KeyGenerator keyGenerator(){
 		return (o, method, params) ->{
@@ -34,11 +42,17 @@ public class RedisCacheConfig extends CachingConfigurerSupport {
 		};
 	}
 
-	// 配置缓存管理器
+	/**
+	 * 配置缓存管理器
+	 *
+	 * @param connectionFactory 连接工厂类
+	 * @return 缓存管理器
+	 */
 	@Bean
 	public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
 		RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig()
-				.entryTtl(Duration.ofSeconds(60)) // 60s缓存失效
+				// 60s缓存失效
+				.entryTtl(Duration.ofSeconds(60))
 				// 设置key的序列化方式
 				.serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(keySerializer()))
 				// 设置value的序列化方式
@@ -63,12 +77,20 @@ public class RedisCacheConfig extends CachingConfigurerSupport {
 		return redisTemplate;
 	}
 
-	// key键序列化方式
+	/**
+	 * key键序列化方式
+	 *
+	 * @return key键序列化方式
+	 */
 	private RedisSerializer<String> keySerializer() {
 		return new StringRedisSerializer();
 	}
 
-	// value值序列化方式
+	/**
+	 * value值序列化方式
+	 *
+	 * @return value值序列化方式
+	 */
 	private GenericJackson2JsonRedisSerializer valueSerializer(){
 		return new GenericJackson2JsonRedisSerializer();
 	}

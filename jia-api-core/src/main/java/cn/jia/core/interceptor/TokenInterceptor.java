@@ -1,24 +1,21 @@
 package cn.jia.core.interceptor;
 
-import java.lang.reflect.Method;
-import java.util.UUID;
-
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
-import org.springframework.web.method.HandlerMethod;
-import org.springframework.web.servlet.handler.HandlerInterceptorAdapter;
-
 import cn.jia.core.annotation.Token;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.web.method.HandlerMethod;
+import org.springframework.web.servlet.HandlerInterceptor;
 
-public class TokenInterceptor extends HandlerInterceptorAdapter {
+import java.lang.reflect.Method;
+import java.util.UUID;
+
+public class TokenInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-    	if (handler instanceof HandlerMethod) {
-            HandlerMethod handlerMethod = (HandlerMethod) handler;
+    	if (handler instanceof HandlerMethod handlerMethod) {
             Method method = handlerMethod.getMethod();
             Token annotation = method.getAnnotation(Token.class);
             if (annotation != null) {
@@ -34,11 +31,8 @@ public class TokenInterceptor extends HandlerInterceptorAdapter {
                     request.getSession(false).removeAttribute("token");
                 }
             }
-            return true;
-            
-        } else {
-            return super.preHandle(request, response, handler);
         }
+        return true;
     }
 
     private boolean isRepeatSubmit(HttpServletRequest request) {
@@ -50,9 +44,6 @@ public class TokenInterceptor extends HandlerInterceptorAdapter {
         if (clinetToken == null) {
             return true;
         }
-        if (!serverToken.equals(clinetToken)) {
-            return true;
-        }
-        return false;
+        return !serverToken.equals(clinetToken);
     }
 }

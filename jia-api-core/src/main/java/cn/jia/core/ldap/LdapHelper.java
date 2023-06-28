@@ -161,8 +161,9 @@ public class LdapHelper<T> {
                 if ("objectclass".equals(mkey)) {
                     filter.and(new EqualsFilter(mkey, map.get(mkey).toString()));
                 }
-                if(StringUtils.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey))
+                if(StringUtils.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey)) {
                     filter.and(new WhitespaceWildcardsFilter(mkey, map.get(mkey).toString()));
+                }
             }
         } catch (IntrospectionException | IllegalAccessException | InvocationTargetException e) {
             e.printStackTrace();
@@ -183,8 +184,9 @@ public class LdapHelper<T> {
                 if ("objectclass".equals(mkey)) {
                     filter.and(new EqualsFilter(mkey, map.get(mkey).toString()));
                 }
-                if(StringUtils.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey))
+                if(StringUtils.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey)) {
                     filter.and(new EqualsFilter(mkey, map.get(mkey).toString()));
+                }
             }
         } catch (IntrospectionException | IllegalAccessException | InvocationTargetException e) {
             e.printStackTrace();
