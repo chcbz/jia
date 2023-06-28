@@ -2,6 +2,7 @@ package cn.jia.core.entity;
 
 import cn.jia.common.entity.BaseEntity;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -31,11 +32,13 @@ public class Dict extends BaseEntity {
     @Schema(description = "字典类型")
     private String type;
 
+    @TableField("`language`")
     private String language;
 
     @Schema(description = "字典名称")
     private String name;
 
+    @TableField("`value`")
     @Schema(description = "字典值")
     private String value;
 

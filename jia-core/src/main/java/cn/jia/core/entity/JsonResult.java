@@ -8,7 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 
 /**
- * JSONResult : Response JSONResult for RESTful,封装返回JSON格式的数据
+ * JsonResult : Response JsonResult for RESTful,封装返回JSON格式的数据
  *
  * @author StarZou
  * @since 2014年5月26日 上午10:51:46
@@ -149,6 +149,6 @@ public class JsonResult<T> extends Result {
 
 	@Override
 	public String toString() {
-		return "JSONResult {status=" + status + ", location=" + location + ", data=" + data + "}";
+		return "JsonResult {status=" + status + ", location=" + location + ", data=" + data + "}";
 	}
 }

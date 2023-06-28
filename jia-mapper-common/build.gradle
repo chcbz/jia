@@ -1,6 +1,6 @@
 dependencies {
     api project(':jia-core')
-    api libs.pagehelper
+    api libs.pagehelper.core
     api libs.mybatis.plus.core
     api libs.swagger.annotations
 }

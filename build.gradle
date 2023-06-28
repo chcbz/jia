@@ -8,6 +8,8 @@ subprojects {
 
     dependencies {
         implementation libs.slf4j.api
+        implementation libs.jakarta.inject.api
+        compileOnly 'com.intellij:annotations:+@jar'
         annotationProcessor libs.lombok
         compileOnly libs.lombok
     }
@@ -24,7 +26,7 @@ subprojects {
         useJUnitPlatform()
     }
 
-    processTestResources.dependsOn copyTestResources
+//    processTestResources.dependsOn copyTestResources
 
     afterEvaluate {
         publishing {

@@ -1,7 +1,7 @@
 dependencies {
     implementation libs.spring.webmvc
     implementation libs.aws.java.sdk.sns
-    implementation libs.jackson.mapper.asl
+    implementation libs.jackson.core
     implementation libs.json
 //    implementation libs.log4j
     implementation libs.slf4j.api
