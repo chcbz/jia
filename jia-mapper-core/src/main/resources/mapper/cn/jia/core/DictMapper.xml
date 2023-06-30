@@ -3,7 +3,7 @@
 <mapper namespace="cn.jia.core.mapper.DictMapper">
 
     <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.jia.core.entity.Dict">
+    <resultMap id="BaseResultMap" type="cn.jia.core.entity.DictEntity">
         <id column="ID" property="id" />
         <result column="UPDATE_TIME" property="updateTime" />
         <result column="CREATE_TIME" property="createTime" />

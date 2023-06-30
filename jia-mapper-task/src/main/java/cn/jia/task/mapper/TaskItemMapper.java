@@ -1,6 +1,6 @@
 package cn.jia.task.mapper;
 
-import cn.jia.task.entity.TaskItem;
+import cn.jia.task.entity.TaskItemEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-11-07
  */
-public interface TaskItemMapper extends BaseMapper<TaskItem> {
+public interface TaskItemMapper extends BaseMapper<TaskItemEntity> {
 
 }

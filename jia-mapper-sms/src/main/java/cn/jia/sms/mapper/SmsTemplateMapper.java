@@ -1,6 +1,6 @@
 package cn.jia.sms.mapper;
 
-import cn.jia.sms.entity.SmsTemplate;
+import cn.jia.sms.entity.SmsTemplateEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-11-14
  */
-public interface SmsTemplateMapper extends BaseMapper<SmsTemplate> {
+public interface SmsTemplateMapper extends BaseMapper<SmsTemplateEntity> {
 
 }

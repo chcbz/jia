@@ -1,7 +1,7 @@
 package cn.jia.point.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.point.entity.PointSign;
+import cn.jia.point.entity.PointSignEntity;
 import cn.jia.point.mapper.PointSignMapper;
 import cn.jia.point.service.IPointSignService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-02-14
  */
 @Named
-public class PointSignServiceImpl extends BaseServiceImpl<PointSignMapper, PointSign> implements IPointSignService {
+public class PointSignServiceImpl extends BaseServiceImpl<PointSignMapper, PointSignEntity> implements IPointSignService {
 
 }

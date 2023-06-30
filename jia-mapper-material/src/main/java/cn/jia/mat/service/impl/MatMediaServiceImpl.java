@@ -1,7 +1,7 @@
 package cn.jia.mat.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.mat.entity.MatMedia;
+import cn.jia.mat.entity.MatMediaEntity;
 import cn.jia.mat.mapper.MatMediaMapper;
 import cn.jia.mat.service.IMatMediaService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-10-29
  */
 @Named
-public class MatMediaServiceImpl extends BaseServiceImpl<MatMediaMapper, MatMedia> implements IMatMediaService {
+public class MatMediaServiceImpl extends BaseServiceImpl<MatMediaMapper, MatMediaEntity> implements IMatMediaService {
 
 }

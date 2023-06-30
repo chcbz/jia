@@ -1,6 +1,6 @@
 package cn.jia.mat.service;
 
-import cn.jia.mat.entity.MatVoteQuestion;
+import cn.jia.mat.entity.MatVoteQuestionEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-10-29
  */
-public interface IMatVoteQuestionService extends IBaseService<MatVoteQuestion> {
+public interface IMatVoteQuestionService extends IBaseService<MatVoteQuestionEntity> {
 
 }

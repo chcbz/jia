@@ -1,7 +1,7 @@
 package cn.jia.wx.service;
 
 import cn.jia.common.service.IBaseService;
-import cn.jia.wx.entity.PayInfo;
+import cn.jia.wx.entity.PayInfoEntity;
 
 /**
  * <p>
@@ -11,6 +11,6 @@ import cn.jia.wx.entity.PayInfo;
  * @author chc
  * @since 2021-01-09
  */
-public interface IPayInfoService extends IBaseService<PayInfo> {
+public interface IPayInfoService extends IBaseService<PayInfoEntity> {
 
 }

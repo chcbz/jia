@@ -3,7 +3,7 @@
 <mapper namespace="cn.jia.core.mapper.NoticeMapper">
 
     <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.jia.core.entity.Notice">
+    <resultMap id="BaseResultMap" type="cn.jia.core.entity.NoticeEntity">
         <id column="ID" property="id" />
         <result column="CREATE_TIME" property="createTime" />
         <result column="UPDATE_TIME" property="updateTime" />

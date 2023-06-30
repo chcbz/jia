@@ -1,6 +1,6 @@
 package cn.jia.core.service;
 
-import cn.jia.core.entity.Notice;
+import cn.jia.core.entity.NoticeEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2023-06-18
  */
-public interface INoticeService extends IBaseService<Notice> {
+public interface INoticeService extends IBaseService<NoticeEntity> {
 
 }

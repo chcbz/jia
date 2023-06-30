@@ -1,6 +1,6 @@
 package cn.jia.mat.mapper;
 
-import cn.jia.mat.entity.MatNews;
+import cn.jia.mat.entity.MatNewsEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-10-29
  */
-public interface MatNewsMapper extends BaseMapper<MatNews> {
+public interface MatNewsMapper extends BaseMapper<MatNewsEntity> {
 
 }

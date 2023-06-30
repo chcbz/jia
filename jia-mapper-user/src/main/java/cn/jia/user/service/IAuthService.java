@@ -1,6 +1,6 @@
 package cn.jia.user.service;
 
-import cn.jia.user.entity.Auth;
+import cn.jia.user.entity.AuthEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-20
  */
-public interface IAuthService extends IBaseService<Auth> {
+public interface IAuthService extends IBaseService<AuthEntity> {
 
 }

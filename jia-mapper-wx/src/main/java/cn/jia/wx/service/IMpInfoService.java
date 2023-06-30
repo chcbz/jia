@@ -1,7 +1,7 @@
 package cn.jia.wx.service;
 
 import cn.jia.common.service.IBaseService;
-import cn.jia.wx.entity.MpInfo;
+import cn.jia.wx.entity.MpInfoEntity;
 
 /**
  * <p>
@@ -11,6 +11,6 @@ import cn.jia.wx.entity.MpInfo;
  * @author chc
  * @since 2021-01-09
  */
-public interface IMpInfoService extends IBaseService<MpInfo> {
+public interface IMpInfoService extends IBaseService<MpInfoEntity> {
 
 }

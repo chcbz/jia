@@ -1,6 +1,6 @@
 package cn.jia.core.service;
 
-import cn.jia.core.entity.Dict;
+import cn.jia.core.entity.DictEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2023-06-18
  */
-public interface IDictService extends IBaseService<Dict> {
+public interface IDictService extends IBaseService<DictEntity> {
 
 }

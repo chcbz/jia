@@ -1,6 +1,6 @@
 package cn.jia.kefu.mapper;
 
-import cn.jia.kefu.entity.KefuMsgLog;
+import cn.jia.kefu.entity.KefuMsgLogEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-06-01
  */
-public interface KefuMsgLogMapper extends BaseMapper<KefuMsgLog> {
+public interface KefuMsgLogMapper extends BaseMapper<KefuMsgLogEntity> {
 
 }

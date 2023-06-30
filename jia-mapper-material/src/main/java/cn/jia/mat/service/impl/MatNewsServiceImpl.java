@@ -1,7 +1,7 @@
 package cn.jia.mat.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.mat.entity.MatNews;
+import cn.jia.mat.entity.MatNewsEntity;
 import cn.jia.mat.mapper.MatNewsMapper;
 import cn.jia.mat.service.IMatNewsService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-10-29
  */
 @Named
-public class MatNewsServiceImpl extends BaseServiceImpl<MatNewsMapper, MatNews> implements IMatNewsService {
+public class MatNewsServiceImpl extends BaseServiceImpl<MatNewsMapper, MatNewsEntity> implements IMatNewsService {
 
 }

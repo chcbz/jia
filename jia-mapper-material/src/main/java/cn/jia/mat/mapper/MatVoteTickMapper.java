@@ -1,6 +1,6 @@
 package cn.jia.mat.mapper;
 
-import cn.jia.mat.entity.MatVoteTick;
+import cn.jia.mat.entity.MatVoteTickEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-10-29
  */
-public interface MatVoteTickMapper extends BaseMapper<MatVoteTick> {
+public interface MatVoteTickMapper extends BaseMapper<MatVoteTickEntity> {
 
 }

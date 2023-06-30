@@ -1,7 +1,7 @@
 package cn.jia.user.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.user.entity.GroupRel;
+import cn.jia.user.entity.GroupRelEntity;
 import cn.jia.user.mapper.GroupRelMapper;
 import cn.jia.user.service.IGroupRelService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-11-20
  */
 @Named
-public class GroupRelServiceImpl extends BaseServiceImpl<GroupRelMapper, GroupRel> implements IGroupRelService {
+public class GroupRelServiceImpl extends BaseServiceImpl<GroupRelMapper, GroupRelEntity> implements IGroupRelService {
 
 }

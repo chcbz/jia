@@ -1,6 +1,6 @@
 package cn.jia.sms.service;
 
-import cn.jia.sms.entity.SmsConfig;
+import cn.jia.sms.entity.SmsConfigEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-14
  */
-public interface ISmsConfigService extends IBaseService<SmsConfig> {
+public interface ISmsConfigService extends IBaseService<SmsConfigEntity> {
 
 }

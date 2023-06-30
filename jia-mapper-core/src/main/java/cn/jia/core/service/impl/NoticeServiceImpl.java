@@ -1,7 +1,7 @@
 package cn.jia.core.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.core.entity.Notice;
+import cn.jia.core.entity.NoticeEntity;
 import cn.jia.core.mapper.NoticeMapper;
 import cn.jia.core.service.INoticeService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2023-06-18
  */
 @Named
-public class NoticeServiceImpl extends BaseServiceImpl<NoticeMapper, Notice> implements INoticeService {
+public class NoticeServiceImpl extends BaseServiceImpl<NoticeMapper, NoticeEntity> implements INoticeService {
 
 }

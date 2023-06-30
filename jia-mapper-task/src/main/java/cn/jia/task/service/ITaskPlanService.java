@@ -1,6 +1,6 @@
 package cn.jia.task.service;
 
-import cn.jia.task.entity.TaskPlan;
+import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-07
  */
-public interface ITaskPlanService extends IBaseService<TaskPlan> {
+public interface ITaskPlanService extends IBaseService<TaskPlanEntity> {
 
 }

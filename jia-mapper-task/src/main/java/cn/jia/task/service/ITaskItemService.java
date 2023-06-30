@@ -1,6 +1,6 @@
 package cn.jia.task.service;
 
-import cn.jia.task.entity.TaskItem;
+import cn.jia.task.entity.TaskItemEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-07
  */
-public interface ITaskItemService extends IBaseService<TaskItem> {
+public interface ITaskItemService extends IBaseService<TaskItemEntity> {
 
 }

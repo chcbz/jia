@@ -1,6 +1,6 @@
 package cn.jia.sms.service;
 
-import cn.jia.sms.entity.SmsReply;
+import cn.jia.sms.entity.SmsReplyEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-14
  */
-public interface ISmsReplyService extends IBaseService<SmsReply> {
+public interface ISmsReplyService extends IBaseService<SmsReplyEntity> {
 
 }

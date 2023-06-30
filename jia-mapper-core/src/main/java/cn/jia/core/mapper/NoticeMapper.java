@@ -1,6 +1,6 @@
 package cn.jia.core.mapper;
 
-import cn.jia.core.entity.Notice;
+import cn.jia.core.entity.NoticeEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2023-06-18
  */
-public interface NoticeMapper extends BaseMapper<Notice> {
+public interface NoticeMapper extends BaseMapper<NoticeEntity> {
 
 }

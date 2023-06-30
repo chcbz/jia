@@ -1,6 +1,6 @@
 package cn.jia.kefu.mapper;
 
-import cn.jia.kefu.entity.KefuMsgSubscribe;
+import cn.jia.kefu.entity.KefuMsgSubscribeEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-02-18
  */
-public interface KefuMsgSubscribeMapper extends BaseMapper<KefuMsgSubscribe> {
+public interface KefuMsgSubscribeMapper extends BaseMapper<KefuMsgSubscribeEntity> {
 
 }

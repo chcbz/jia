@@ -1,7 +1,7 @@
 package cn.jia.user.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.user.entity.Org;
+import cn.jia.user.entity.OrgEntity;
 import cn.jia.user.mapper.OrgMapper;
 import cn.jia.user.service.IOrgService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-11-20
  */
 @Named
-public class OrgServiceImpl extends BaseServiceImpl<OrgMapper, Org> implements IOrgService {
+public class OrgServiceImpl extends BaseServiceImpl<OrgMapper, OrgEntity> implements IOrgService {
 
 }

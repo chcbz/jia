@@ -1,7 +1,7 @@
 package cn.jia.user.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.user.entity.Group;
+import cn.jia.user.entity.GroupEntity;
 import cn.jia.user.mapper.GroupMapper;
 import cn.jia.user.service.IGroupService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-11-20
  */
 @Named
-public class GroupServiceImpl extends BaseServiceImpl<GroupMapper, Group> implements IGroupService {
+public class GroupServiceImpl extends BaseServiceImpl<GroupMapper, GroupEntity> implements IGroupService {
 
 }

@@ -1,6 +1,6 @@
 package cn.jia.mat.service;
 
-import cn.jia.mat.entity.MatPvLog;
+import cn.jia.mat.entity.MatPvLogEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-10-29
  */
-public interface IMatPvLogService extends IBaseService<MatPvLog> {
+public interface IMatPvLogService extends IBaseService<MatPvLogEntity> {
 
 }

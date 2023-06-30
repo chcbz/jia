@@ -1,6 +1,6 @@
 package cn.jia.user.mapper;
 
-import cn.jia.user.entity.OrgRel;
+import cn.jia.user.entity.OrgRelEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-11-20
  */
-public interface OrgRelMapper extends BaseMapper<OrgRel> {
+public interface OrgRelMapper extends BaseMapper<OrgRelEntity> {
 
 }

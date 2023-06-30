@@ -1,7 +1,7 @@
 package cn.jia.point.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.point.entity.PointGiftUsage;
+import cn.jia.point.entity.PointGiftUsageEntity;
 import cn.jia.point.mapper.PointGiftUsageMapper;
 import cn.jia.point.service.IPointGiftUsageService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-02-14
  */
 @Named
-public class PointGiftUsageServiceImpl extends BaseServiceImpl<PointGiftUsageMapper, PointGiftUsage> implements IPointGiftUsageService {
+public class PointGiftUsageServiceImpl extends BaseServiceImpl<PointGiftUsageMapper, PointGiftUsageEntity> implements IPointGiftUsageService {
 
 }

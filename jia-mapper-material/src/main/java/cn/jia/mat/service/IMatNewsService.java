@@ -1,6 +1,6 @@
 package cn.jia.mat.service;
 
-import cn.jia.mat.entity.MatNews;
+import cn.jia.mat.entity.MatNewsEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-10-29
  */
-public interface IMatNewsService extends IBaseService<MatNews> {
+public interface IMatNewsService extends IBaseService<MatNewsEntity> {
 
 }
