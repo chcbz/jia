@@ -3,7 +3,7 @@ package cn.jia.wx.service;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.test.BaseTest;
 import cn.jia.test.DbUnitHelper;
-import cn.jia.wx.entity.MpInfo;
+import cn.jia.wx.entity.MpInfoEntity;
 import com.github.springtestdbunit.annotation.DatabaseOperation;
 import com.github.springtestdbunit.annotation.DatabaseSetup;
 import lombok.extern.slf4j.Slf4j;
@@ -24,16 +24,16 @@ public class IMpInfoServiceTest extends BaseTest {
     @Test
     @DatabaseSetup(value = "classpath:testObject/mp_info_init.xml", type = DatabaseOperation.CLEAN_INSERT)
     void findById() {
-        MpInfo mpInfo = mpInfoService.getById(1);
-        assertNotNull(mpInfo);
+        MpInfoEntity mpInfoEntity = mpInfoService.getById(1);
+        assertNotNull(mpInfoEntity);
     }
 
     @Test
     void save() {
-        MpInfo mpInfo = DbUnitHelper.readJsonEntity(mpInfoJson, MpInfo.class);
-        mpInfoService.save(mpInfo);
-        log.info(JsonUtil.toJson(mpInfo));
-        assertNotNull(mpInfo.getAcid());
+        MpInfoEntity mpInfoEntity = DbUnitHelper.readJsonEntity(mpInfoJson, MpInfoEntity.class);
+        mpInfoService.save(mpInfoEntity);
+        log.info(JsonUtil.toJson(mpInfoEntity));
+        assertNotNull(mpInfoEntity.getAcid());
     }
 
 }

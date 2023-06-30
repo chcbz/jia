@@ -1,6 +1,6 @@
 package cn.jia.dwz.mapper;
 
-import cn.jia.dwz.entity.DwzRecord;
+import cn.jia.dwz.entity.DwzRecordEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-10-21
  */
-public interface DwzRecordMapper extends BaseMapper<DwzRecord> {
+public interface DwzRecordMapper extends BaseMapper<DwzRecordEntity> {
 
 }

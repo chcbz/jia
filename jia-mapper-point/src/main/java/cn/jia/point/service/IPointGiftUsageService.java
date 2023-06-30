@@ -1,6 +1,6 @@
 package cn.jia.point.service;
 
-import cn.jia.point.entity.PointGiftUsage;
+import cn.jia.point.entity.PointGiftUsageEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-02-14
  */
-public interface IPointGiftUsageService extends IBaseService<PointGiftUsage> {
+public interface IPointGiftUsageService extends IBaseService<PointGiftUsageEntity> {
 
 }

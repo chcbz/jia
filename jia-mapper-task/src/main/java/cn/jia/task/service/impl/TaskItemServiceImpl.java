@@ -1,7 +1,7 @@
 package cn.jia.task.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.task.entity.TaskItem;
+import cn.jia.task.entity.TaskItemEntity;
 import cn.jia.task.mapper.TaskItemMapper;
 import cn.jia.task.service.ITaskItemService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-11-07
  */
 @Named
-public class TaskItemServiceImpl extends BaseServiceImpl<TaskItemMapper, TaskItem> implements ITaskItemService {
+public class TaskItemServiceImpl extends BaseServiceImpl<TaskItemMapper, TaskItemEntity> implements ITaskItemService {
 
 }

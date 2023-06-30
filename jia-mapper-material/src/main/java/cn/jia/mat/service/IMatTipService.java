@@ -1,6 +1,6 @@
 package cn.jia.mat.service;
 
-import cn.jia.mat.entity.MatTip;
+import cn.jia.mat.entity.MatTipEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-10-29
  */
-public interface IMatTipService extends IBaseService<MatTip> {
+public interface IMatTipService extends IBaseService<MatTipEntity> {
 
 }

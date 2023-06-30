@@ -1,6 +1,6 @@
 package cn.jia.mat.mapper;
 
-import cn.jia.mat.entity.MatPhrase;
+import cn.jia.mat.entity.MatPhraseEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-10-29
  */
-public interface MatPhraseMapper extends BaseMapper<MatPhrase> {
+public interface MatPhraseMapper extends BaseMapper<MatPhraseEntity> {
 
 }

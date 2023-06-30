@@ -1,6 +1,6 @@
 package cn.jia.oauth.mapper;
 
-import cn.jia.oauth.entity.OauthClient;
+import cn.jia.oauth.entity.OauthClientEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-11-07
  */
-public interface OauthClientMapper extends BaseMapper<OauthClient> {
+public interface OauthClientMapper extends BaseMapper<OauthClientEntity> {
 
 }

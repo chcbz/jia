@@ -1,7 +1,7 @@
 package cn.jia.point.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.point.entity.PointReferral;
+import cn.jia.point.entity.PointReferralEntity;
 import cn.jia.point.mapper.PointReferralMapper;
 import cn.jia.point.service.IPointReferralService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-02-14
  */
 @Named
-public class PointReferralServiceImpl extends BaseServiceImpl<PointReferralMapper, PointReferral> implements IPointReferralService {
+public class PointReferralServiceImpl extends BaseServiceImpl<PointReferralMapper, PointReferralEntity> implements IPointReferralService {
 
 }

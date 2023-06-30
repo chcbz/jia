@@ -1,7 +1,7 @@
 package cn.jia.sms.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.sms.entity.SmsConfig;
+import cn.jia.sms.entity.SmsConfigEntity;
 import cn.jia.sms.mapper.SmsConfigMapper;
 import cn.jia.sms.service.ISmsConfigService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-11-14
  */
 @Named
-public class SmsConfigServiceImpl extends BaseServiceImpl<SmsConfigMapper, SmsConfig> implements ISmsConfigService {
+public class SmsConfigServiceImpl extends BaseServiceImpl<SmsConfigMapper, SmsConfigEntity> implements ISmsConfigService {
 
 }

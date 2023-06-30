@@ -1,6 +1,6 @@
 package cn.jia.mat.mapper;
 
-import cn.jia.mat.entity.MatPvLog;
+import cn.jia.mat.entity.MatPvLogEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-10-29
  */
-public interface MatPvLogMapper extends BaseMapper<MatPvLog> {
+public interface MatPvLogMapper extends BaseMapper<MatPvLogEntity> {
 
 }

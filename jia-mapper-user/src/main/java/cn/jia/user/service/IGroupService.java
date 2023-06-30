@@ -1,6 +1,6 @@
 package cn.jia.user.service;
 
-import cn.jia.user.entity.Group;
+import cn.jia.user.entity.GroupEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-20
  */
-public interface IGroupService extends IBaseService<Group> {
+public interface IGroupService extends IBaseService<GroupEntity> {
 
 }

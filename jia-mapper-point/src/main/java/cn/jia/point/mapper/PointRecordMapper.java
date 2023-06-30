@@ -1,6 +1,6 @@
 package cn.jia.point.mapper;
 
-import cn.jia.point.entity.PointRecord;
+import cn.jia.point.entity.PointRecordEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-02-14
  */
-public interface PointRecordMapper extends BaseMapper<PointRecord> {
+public interface PointRecordMapper extends BaseMapper<PointRecordEntity> {
 
 }

@@ -66,7 +66,7 @@ public class MybatisGeneratorTest extends BaseTest {
                                 .mapperBuilder().enableBaseColumnList()
                                                 .enableBaseResultMap()
                                 .entityBuilder().superClass(BaseEntity.class)
-                                                .enableChainModel()
+                                                .enableChainModel().formatFileName("%sEntity")
                                                 .enableLombok().disableSerialVersionUID()
                                                 .columnNaming(NamingStrategy.underline_to_camel)
                                                 .naming(NamingStrategy.underline_to_camel))

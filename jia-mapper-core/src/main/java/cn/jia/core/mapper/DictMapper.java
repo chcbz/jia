@@ -1,6 +1,6 @@
 package cn.jia.core.mapper;
 
-import cn.jia.core.entity.Dict;
+import cn.jia.core.entity.DictEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2023-06-18
  */
-public interface DictMapper extends BaseMapper<Dict> {
+public interface DictMapper extends BaseMapper<DictEntity> {
 
 }

@@ -1,6 +1,6 @@
 package cn.jia.core.service;
 
-import cn.jia.core.entity.Log;
+import cn.jia.core.entity.LogEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2023-06-18
  */
-public interface ILogService extends IBaseService<Log> {
+public interface ILogService extends IBaseService<LogEntity> {
 
 }

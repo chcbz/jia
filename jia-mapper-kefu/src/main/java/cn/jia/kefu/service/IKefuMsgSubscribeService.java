@@ -1,6 +1,6 @@
 package cn.jia.kefu.service;
 
-import cn.jia.kefu.entity.KefuMsgSubscribe;
+import cn.jia.kefu.entity.KefuMsgSubscribeEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-02-18
  */
-public interface IKefuMsgSubscribeService extends IBaseService<KefuMsgSubscribe> {
+public interface IKefuMsgSubscribeService extends IBaseService<KefuMsgSubscribeEntity> {
 
 }

@@ -1,7 +1,7 @@
 package cn.jia.oauth.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.oauth.entity.OauthAction;
+import cn.jia.oauth.entity.OauthActionEntity;
 import cn.jia.oauth.mapper.OauthActionMapper;
 import cn.jia.oauth.service.IOauthActionService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-11-20
  */
 @Named
-public class OauthActionServiceImpl extends BaseServiceImpl<OauthActionMapper, OauthAction> implements IOauthActionService {
+public class OauthActionServiceImpl extends BaseServiceImpl<OauthActionMapper, OauthActionEntity> implements IOauthActionService {
 
 }

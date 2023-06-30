@@ -1,6 +1,6 @@
 package cn.jia.user.service;
 
-import cn.jia.user.entity.Msg;
+import cn.jia.user.entity.MsgEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-20
  */
-public interface IMsgService extends IBaseService<Msg> {
+public interface IMsgService extends IBaseService<MsgEntity> {
 
 }

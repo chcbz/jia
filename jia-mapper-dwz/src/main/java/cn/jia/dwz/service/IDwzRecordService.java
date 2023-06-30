@@ -1,6 +1,6 @@
 package cn.jia.dwz.service;
 
-import cn.jia.dwz.entity.DwzRecord;
+import cn.jia.dwz.entity.DwzRecordEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-10-21
  */
-public interface IDwzRecordService extends IBaseService<DwzRecord> {
+public interface IDwzRecordService extends IBaseService<DwzRecordEntity> {
 
 }

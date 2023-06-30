@@ -1,6 +1,6 @@
 package cn.jia.wx.mapper;
 
-import cn.jia.wx.entity.MpInfo;
+import cn.jia.wx.entity.MpInfoEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-01-09
  */
-public interface MpInfoMapper extends BaseMapper<MpInfo> {
+public interface MpInfoMapper extends BaseMapper<MpInfoEntity> {
 
 }

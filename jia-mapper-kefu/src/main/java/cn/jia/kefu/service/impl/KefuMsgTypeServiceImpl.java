@@ -1,7 +1,7 @@
 package cn.jia.kefu.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.kefu.entity.KefuMsgType;
+import cn.jia.kefu.entity.KefuMsgTypeEntity;
 import cn.jia.kefu.mapper.KefuMsgTypeMapper;
 import cn.jia.kefu.service.IKefuMsgTypeService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-06-27
  */
 @Named
-public class KefuMsgTypeServiceImpl extends BaseServiceImpl<KefuMsgTypeMapper, KefuMsgType> implements IKefuMsgTypeService {
+public class KefuMsgTypeServiceImpl extends BaseServiceImpl<KefuMsgTypeMapper, KefuMsgTypeEntity> implements IKefuMsgTypeService {
 
 }

@@ -1,6 +1,6 @@
 package cn.jia.mat.service;
 
-import cn.jia.mat.entity.MatMedia;
+import cn.jia.mat.entity.MatMediaEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-10-29
  */
-public interface IMatMediaService extends IBaseService<MatMedia> {
+public interface IMatMediaService extends IBaseService<MatMediaEntity> {
 
 }

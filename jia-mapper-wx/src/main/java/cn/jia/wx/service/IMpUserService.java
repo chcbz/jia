@@ -1,7 +1,7 @@
 package cn.jia.wx.service;
 
 import cn.jia.common.service.IBaseService;
-import cn.jia.wx.entity.MpUser;
+import cn.jia.wx.entity.MpUserEntity;
 
 /**
  * <p>
@@ -11,6 +11,6 @@ import cn.jia.wx.entity.MpUser;
  * @author chc
  * @since 2021-01-09
  */
-public interface IMpUserService extends IBaseService<MpUser> {
+public interface IMpUserService extends IBaseService<MpUserEntity> {
 
 }

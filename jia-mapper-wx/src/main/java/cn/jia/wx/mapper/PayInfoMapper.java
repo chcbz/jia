@@ -1,6 +1,6 @@
 package cn.jia.wx.mapper;
 
-import cn.jia.wx.entity.PayInfo;
+import cn.jia.wx.entity.PayInfoEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-01-09
  */
-public interface PayInfoMapper extends BaseMapper<PayInfo> {
+public interface PayInfoMapper extends BaseMapper<PayInfoEntity> {
 
 }

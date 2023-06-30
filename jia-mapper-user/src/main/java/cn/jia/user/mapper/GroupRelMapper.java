@@ -1,6 +1,6 @@
 package cn.jia.user.mapper;
 
-import cn.jia.user.entity.GroupRel;
+import cn.jia.user.entity.GroupRelEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-11-20
  */
-public interface GroupRelMapper extends BaseMapper<GroupRel> {
+public interface GroupRelMapper extends BaseMapper<GroupRelEntity> {
 
 }

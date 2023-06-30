@@ -1,7 +1,7 @@
 package cn.jia.mat.service.impl;
 
 import cn.jia.common.service.impl.BaseServiceImpl;
-import cn.jia.mat.entity.MatVote;
+import cn.jia.mat.entity.MatVoteEntity;
 import cn.jia.mat.mapper.MatVoteMapper;
 import cn.jia.mat.service.IMatVoteService;
 import jakarta.inject.Named;
@@ -15,6 +15,6 @@ import jakarta.inject.Named;
  * @since 2021-10-29
  */
 @Named
-public class MatVoteServiceImpl extends BaseServiceImpl<MatVoteMapper, MatVote> implements IMatVoteService {
+public class MatVoteServiceImpl extends BaseServiceImpl<MatVoteMapper, MatVoteEntity> implements IMatVoteService {
 
 }

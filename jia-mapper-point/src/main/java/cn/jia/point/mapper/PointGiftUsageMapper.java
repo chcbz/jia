@@ -1,6 +1,6 @@
 package cn.jia.point.mapper;
 
-import cn.jia.point.entity.PointGiftUsage;
+import cn.jia.point.entity.PointGiftUsageEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-02-14
  */
-public interface PointGiftUsageMapper extends BaseMapper<PointGiftUsage> {
+public interface PointGiftUsageMapper extends BaseMapper<PointGiftUsageEntity> {
 
 }

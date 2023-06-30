@@ -1,6 +1,6 @@
 package cn.jia.user.service;
 
-import cn.jia.user.entity.Info;
+import cn.jia.user.entity.UserEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-20
  */
-public interface IInfoService extends IBaseService<Info> {
+public interface IInfoService extends IBaseService<UserEntity> {
 
 }

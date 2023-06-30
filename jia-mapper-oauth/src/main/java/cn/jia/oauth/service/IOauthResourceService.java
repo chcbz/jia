@@ -1,6 +1,6 @@
 package cn.jia.oauth.service;
 
-import cn.jia.oauth.entity.OauthResource;
+import cn.jia.oauth.entity.OauthResourceEntity;
 import cn.jia.common.service.IBaseService;
 
 /**
@@ -11,6 +11,6 @@ import cn.jia.common.service.IBaseService;
  * @author chc
  * @since 2021-11-07
  */
-public interface IOauthResourceService extends IBaseService<OauthResource> {
+public interface IOauthResourceService extends IBaseService<OauthResourceEntity> {
 
 }

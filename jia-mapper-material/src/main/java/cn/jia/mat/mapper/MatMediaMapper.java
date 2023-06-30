@@ -1,6 +1,6 @@
 package cn.jia.mat.mapper;
 
-import cn.jia.mat.entity.MatMedia;
+import cn.jia.mat.entity.MatMediaEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 
 /**
@@ -11,6 +11,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  * @author chc
  * @since 2021-10-29
  */
-public interface MatMediaMapper extends BaseMapper<MatMedia> {
+public interface MatMediaMapper extends BaseMapper<MatMediaEntity> {
 
 }
