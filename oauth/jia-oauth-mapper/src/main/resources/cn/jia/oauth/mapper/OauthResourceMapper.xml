@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.oauth.mapper.OauthResourceMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        create_time,
+        update_time,
+        resource_id, resource_name, resource_description, status
+    </sql>
+
+    <select id="selectByExample" parameterType="cn.jia.oauth.entity.OauthResourceEntity"
+            resultType="cn.jia.oauth.entity.OauthResourceEntity">
+        select
+        <include refid="Base_Column_List" />
+        from oauth_resource
+        <where>
+            <if test="resourceName != null">
+                resource_name LIKE CONCAT('%',#{resourceName,jdbcType=VARCHAR},'%')
+            </if>
+            <if test="status != null">
+                and status = #{status,jdbcType=INTEGER}
+            </if>
+        </where>
+    </select>
+</mapper>

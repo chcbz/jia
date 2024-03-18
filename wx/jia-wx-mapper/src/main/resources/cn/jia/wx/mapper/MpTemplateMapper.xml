@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.wx.mapper.MpTemplateMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        template_id, client_id, appid, title, primary_industry, deputy_industry, content, example, status, create_time, update_time
+    </sql>
+
+</mapper>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.isp.mapper.CarBrandAudiMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.CarBrandAudiEntity">
+    <id column="id" jdbcType="BIGINT" property="id" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="brand_mf" jdbcType="BIGINT" property="brandMf" />
+    <result column="car_series" jdbcType="VARCHAR" property="carSeries" />
+    <result column="abbr" jdbcType="VARCHAR" property="abbr" />
+    <result column="initials" jdbcType="VARCHAR" property="initials" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    id, client_id, brand_mf, car_series, abbr, initials
+  </sql>
+  
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.CarBrandAudiEntity" resultMap="BaseResultMap">
+     select 
+    <include refid="Base_Column_List" />
+    from car_brand_audi
+    <where>
+      <if test="brandMf != null">
+        brand_mf = #{brandMf,jdbcType=BIGINT}
+      </if>
+      <if test="carSeries != null">
+        and car_series LIKE CONCAT('%',#{carSeries,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="abbr != null">
+        and abbr LIKE CONCAT('%',#{abbr,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="initials != null">
+        and initials = #{initials,jdbcType=CHAR}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=CHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.mapper.GroupRelMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        update_time,
+        create_time,
+        user_id, group_id
+    </sql>
+
+    <select id="selectByUserId" parameterType="java.lang.Long" resultType="cn.jia.user.entity.GroupRelEntity">
+        select * from user_group_rel
+        where user_id = #{userId,jdbcType=BIGINT}
+    </select>
+    <select id="selectByGroupId" parameterType="java.lang.Long" resultType="cn.jia.user.entity.GroupRelEntity">
+        select * from user_group_rel
+        where group_id = #{groupId,jdbcType=BIGINT}
+    </select>
+    <insert id="batchAdd">
+        INSERT INTO user_group_rel(user_id,group_id,update_time,create_time)
+        VALUES
+        <foreach collection="groupRelList" item="groupRel" separator=",">
+            (#{groupRel.userId},#{groupRel.groupId},#{groupRel.updateTime},#{groupRel.createTime})
+        </foreach>
+    </insert>
+    <delete id="batchDel" parameterType="java.util.List">
+        delete from user_group_rel where
+        <foreach collection="groupRelList" item="groupRel" index="index" separator="or">
+            (user_id = #{groupRel.userId} and group_id = #{groupRel.groupId})
+        </foreach>
+    </delete>
+</mapper>

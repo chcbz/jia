@@ -1,0 +1,14 @@
+dependencies {
+    api project(':user:jia-user-api')
+    api project(':oauth:jia-oauth-api')
+    api project(':isp:jia-isp-api')
+    api project(':sms:jia-sms-api')
+    api project(':common:jia-common-service')
+    implementation(libs.spring.redis)
+    testImplementation project(':common:jia-common-test')
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-user-service'

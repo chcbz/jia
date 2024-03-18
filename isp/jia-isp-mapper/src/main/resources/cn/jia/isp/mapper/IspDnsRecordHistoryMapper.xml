@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.mapper.IspDnsRecordHistoryMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspDnsRecordHistoryEntity" >
+    <id column="id" property="id" jdbcType="BIGINT" />
+    <result column="zone_id" property="zoneId" jdbcType="BIGINT" />
+    <result column="domain" property="domain" jdbcType="VARCHAR" />
+    <result column="ttl" property="ttl" jdbcType="INTEGER" />
+    <result column="type" property="type" jdbcType="VARCHAR" />
+    <result column="ip" property="ip" jdbcType="VARCHAR" />
+    <result column="record_time" property="recordTime" jdbcType="TIMESTAMP" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, zone_id, domain, ttl, type, ip, record_time
+  </sql>
+</mapper>

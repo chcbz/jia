@@ -1,0 +1,8 @@
+dependencies {
+    api project(':common:jia-common-core')
+    api(libs.swagger.annotations)
+    api(libs.mybatis.plus.annotation)
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-kefu-core'

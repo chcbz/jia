@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.mapper.IspSmbVDirMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspSmbVDirEntity" >
+    <id column="id" property="id" jdbcType="BIGINT" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="server_id" property="serverId" jdbcType="BIGINT" />
+    <result column="user" property="user" jdbcType="VARCHAR" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="path" property="path" jdbcType="VARCHAR" />
+    <result column="available" property="available" jdbcType="VARCHAR" />
+    <result column="writable" property="writable" jdbcType="VARCHAR" />
+    <result column="browseable" property="browseable" jdbcType="VARCHAR" />
+    <result column="printable" property="printable" jdbcType="VARCHAR" />
+    <result column="comment" property="comment" jdbcType="VARCHAR" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, client_id, server_id, user, name, path, available, writable, browseable, printable, 
+    comment, create_time, update_time
+  </sql>
+
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.IspSmbVDirEntity" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from isp_smb_vdir
+    <where>
+      <if test="user != null">
+        user LIKE CONCAT('%',#{user,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="name != null">
+        and name LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="serverId != null">
+        and server_id = #{serverId,jdbcType=BIGINT}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

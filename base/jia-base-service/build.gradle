@@ -1,0 +1,12 @@
+dependencies {
+    api project(':base:jia-base-api')
+    api project(':common:jia-common-service')
+    implementation(libs.spring.boot.starter.data.redis)
+    implementation(libs.spring.boot.starter.security)
+    testImplementation project(':common:jia-common-test')
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-base-service'

@@ -1,0 +1,7 @@
+dependencies {
+    api project(':material:jia-material-core')
+    api project(':common:jia-common-api')
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-material-api'

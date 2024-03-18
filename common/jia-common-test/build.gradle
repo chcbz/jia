@@ -1,0 +1,76 @@
+dependencies {
+    api project(':common:jia-common-core')
+    api libs.h2
+    api libs.mybatis.plus.boot.starter
+    api(libs.spring.boot.starter.web) {
+        exclude module: 'spring-boot-starter-tomcat'
+    }
+    api libs.spring.boot.starter.undertow
+    api libs.spring.boot.starter.data.jdbc
+    api libs.spring.boot.starter.data.redis
+    api libs.redisson.spring.boot.starter
+    api libs.pagehelper.spring.boot.starter
+    api(libs.spring.boot.starter.test) {
+        exclude module: 'android-json'
+    }
+    api(libs.dbunit) {
+        exclude module: 'junit'
+    }
+    api libs.spring.test.dbunit
+    api libs.mockito.core
+    api libs.embedded.redis
+    api libs.testable.all
+    annotationProcessor libs.testable.processor
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-common-test'
+
+compileJava {
+    options.fork = true
+    options.forkOptions.jvmArgs = ['--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED',
+                                   '--add-opens=jdk.compiler/com.sun.tools.javac.jvm=ALL-UNNAMED']
+}
+
+test {
+    jvmArgs "-javaagent:${classpath.find { it.name.contains("testable-agent") }.absolutePath}",
+            "--add-opens=java.base/java.lang=ALL-UNNAMED",
+            "--add-opens=java.base/java.util=ALL-UNNAMED",
+            "--add-opens=java.base/java.io=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.function=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.stream=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.regex=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.logging=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.zip=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.jar=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.prefs=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.spi=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
+            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED"
+    useJUnitPlatform()
+}

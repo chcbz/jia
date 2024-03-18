@@ -9,9 +9,14 @@ subprojects {
     dependencies {
         implementation libs.slf4j.api
         implementation libs.jakarta.inject.api
+        implementation libs.jakarta.annotation.api
+        implementation libs.mapstruct.core
         compileOnly 'com.intellij:annotations:+@jar'
         annotationProcessor libs.lombok
+        annotationProcessor libs.mapstruct.processor
         compileOnly libs.lombok
+        testAnnotationProcessor libs.lombok
+        testCompileOnly libs.lombok
     }
 
     sourceCompatibility = JavaVersion.VERSION_17
@@ -37,7 +42,7 @@ subprojects {
             }
             repositories {
                 maven {
-                    url = version.endsWith('SNAPSHOT') ? rootProject.ext.snapshotsRepoUrl : rootProject.ext.snapshotsRepoUrl
+                    url = version.endsWith('SNAPSHOT') ? rootProject.ext.snapshotsRepoUrl : rootProject.ext.releasesRepoUrl
                     credentials {
                         username rootProject.ext.repoUsername
                         password rootProject.ext.repoPassword

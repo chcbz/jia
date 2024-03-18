@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.isp.mapper.CmsTableMapper">
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.CmsTableEntity">
+    <id column="id" jdbcType="BIGINT" property="id" />
+    <result column="client_id" jdbcType="VARCHAR" property="clientId" />
+    <result column="name" jdbcType="VARCHAR" property="name" />
+    <result column="remark" jdbcType="VARCHAR" property="remark" />
+  </resultMap>
+  <sql id="Base_Column_List">
+    id, client_id, name, remark
+  </sql>
+
+  <select id="findByName" parameterType="java.lang.String" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from cms_table where name = #{name,jdbcType=VARCHAR}
+  </select>
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.CmsTableEntity" resultMap="BaseResultMap">
+     select 
+    <include refid="Base_Column_List" />
+    from cms_table
+    <where>
+      <if test="name != null">
+        name LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=CHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>
