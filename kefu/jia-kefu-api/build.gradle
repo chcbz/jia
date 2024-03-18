@@ -1,0 +1,7 @@
+dependencies {
+    api project(':kefu:jia-kefu-core')
+    api project(':common:jia-common-api')
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-kefu-api'

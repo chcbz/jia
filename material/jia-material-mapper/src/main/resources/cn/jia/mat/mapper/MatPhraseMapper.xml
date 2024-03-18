@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.mat.mapper.MatPhraseMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        create_time,
+        update_time,
+        id, client_id, content, tag, status, pv, up, down, jiacn
+    </sql>
+
+    <select id="selectRandom" parameterType="cn.jia.mat.entity.MatPhraseEntity"
+            resultType="cn.jia.mat.entity.MatPhraseEntity">
+        SELECT t1.* FROM mat_phrase AS t1
+        <where>
+            <if test="clientId != null">
+                and t1.client_id = #{clientId,jdbcType=VARCHAR}
+            </if>
+            <if test="jiacn != null">
+                AND t1.id NOT IN (SELECT phrase_id FROM mat_phrase_vote WHERE jiacn = #{jiacn})
+            </if>
+            <if test="tag != null">
+                and FIND_IN_SET(#{tag,jdbcType=VARCHAR}, t1.tag)
+            </if>
+        </where>
+        ORDER BY RAND() LIMIT 1
+    </select>
+</mapper>

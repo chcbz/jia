@@ -1,0 +1,7 @@
+dependencies {
+    api project(':point:jia-point-core')
+    api project(':common:jia-common-api')
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-point-api'

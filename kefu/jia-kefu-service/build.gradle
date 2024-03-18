@@ -1,0 +1,14 @@
+dependencies {
+    api project(':kefu:jia-kefu-api')
+    api project(':wx:jia-wx-api')
+    api project(':isp:jia-isp-api')
+    api project(':common:jia-common-service')
+    implementation(libs.weixin.java.mp)
+    implementation(libs.spring.redis)
+    testImplementation project(':common:jia-common-test')
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-kefu-service'

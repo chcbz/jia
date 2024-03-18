@@ -1,0 +1,7 @@
+dependencies {
+    api project(':sms:jia-sms-core')
+    api project(':common:jia-common-api')
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-sms-api'

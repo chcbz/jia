@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.mapper.OrgMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        update_time,
+        create_time,
+        id, client_id, name, p_id, type, code, remark, director, logo, logo_icon, status
+    </sql>
+
+    <select id="selectByUserId" parameterType="java.lang.Long" resultType="cn.jia.user.entity.OrgEntity">
+        select r.* from user_org r, user_org_rel rr
+        where r.id = rr.org_id and rr.user_id = #{userId,jdbcType=BIGINT}
+    </select>
+    <select id="findFirstChild" parameterType="java.lang.Long" resultType="cn.jia.user.entity.OrgEntity">
+        select * from user_org where p_id = #{pId,jdbcType=BIGINT} and type in (0,1,2) order by id LIMIT 1
+    </select>
+    <select id="findDirector" resultType="java.lang.String">
+        select director from user_org where p_id = #{orgId,jdbcType=BIGINT}
+        and ',' || role || ',' like '%,' || #{roleId,jdbcType=BIGINT} || ',%'
+    </select>
+    <select id="findPreOrg" parameterType="java.lang.Long" resultType="cn.jia.user.entity.OrgEntity">
+        select * from user_org where #{orgId,jdbcType=BIGINT} > id and type in (0,1,2) and
+        p_id = (select p_id from user_org where id = #{orgId,jdbcType=BIGINT}) order by id desc limit 1
+    </select>
+    <select id="findNextOrg" parameterType="java.lang.Long" resultType="cn.jia.user.entity.OrgEntity">
+        select * from user_org where id > #{orgId,jdbcType=BIGINT} and type in (0,1,2) and
+        p_id = (select p_id from user_org where id = #{orgId,jdbcType=BIGINT}) order by id limit 1
+    </select>
+    <select id="findParentOrg" parameterType="java.lang.Long" resultType="cn.jia.user.entity.OrgEntity">
+        select * from user_org where id = (select p_id from user_org where id = #{orgId,jdbcType=BIGINT}) and type in (0,1,2)
+    </select>
+
+</mapper>

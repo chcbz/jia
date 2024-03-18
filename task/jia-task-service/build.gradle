@@ -1,0 +1,13 @@
+dependencies {
+    api project(':task:jia-task-api')
+    api project(':base:jia-base-api')
+    api project(':user:jia-user-api')
+    api project(':kefu:jia-kefu-api')
+    api project(':common:jia-common-service')
+    testImplementation project(':common:jia-common-test')
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-task-service'

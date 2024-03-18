@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.mapper.IspFileMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspFileEntity" >
+    <id column="id" property="id" jdbcType="BIGINT" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="name" property="name" jdbcType="VARCHAR" />
+    <result column="uri" property="uri" jdbcType="VARCHAR" />
+    <result column="size" property="size" jdbcType="BIGINT" />
+    <result column="type" property="type" jdbcType="INTEGER" />
+    <result column="extension" property="extension" jdbcType="VARCHAR" />
+    <result column="status" property="status" jdbcType="INTEGER" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, client_id, name, uri, size, type, extension, status, create_time, update_time
+  </sql>
+
+  <select id="selectByUri" resultMap="BaseResultMap" parameterType="java.lang.String" >
+    select
+    <include refid="Base_Column_List" />
+    from isp_file
+    where uri = #{uri,jdbcType=VARCHAR} limit 1
+  </select>
+  <select id="selectByExample" resultMap="BaseResultMap" parameterType="cn.jia.isp.entity.IspFileEntity" >
+    select
+    <include refid="Base_Column_List" />
+    from isp_file
+    <where>
+      <if test="clientId != null" >
+        client_id = #{clientId,jdbcType=VARCHAR}
+      </if>
+      <if test="name != null" >
+        and name LIKE CONCAT('%',#{name,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="type != null" >
+        and type = #{type,jdbcType=INTEGER}
+      </if>
+      <if test="extension != null" >
+        and extension = #{extension,jdbcType=VARCHAR}
+      </if>
+      <if test="status != null" >
+        and status = #{status,jdbcType=INTEGER}
+      </if>
+    </where>
+  </select>
+</mapper>

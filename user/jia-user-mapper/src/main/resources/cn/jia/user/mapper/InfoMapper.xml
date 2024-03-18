@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.mapper.InfoMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        create_time,
+        update_time,
+        id, username, password, openid, jiacn, phone, email, sex, nickname, avatar, city, country, province,
+        latitude, longitude, point, referrer, birthday, tel, weixin, qq, position, status, remark, msg_type, subscribe
+    </sql>
+
+    <select id="selectByRole" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
+        select u.*
+        from user_info u left join user_role_rel r on u.id = r.user_id
+        where r.role_id = #{roleId,jdbcType=BIGINT}
+    </select>
+    <select id="selectByGroup" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
+        select u.*
+        from user_info u left join user_group_rel r on u.id = r.user_id
+        where r.group_id = #{groupId,jdbcType=BIGINT}
+    </select>
+    <select id="selectByOrg" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
+        select u.*
+        from user_info u left join user_org_rel r on u.id = r.user_id
+        where r.org_id = #{orgId,jdbcType=BIGINT}
+    </select>
+    <select id="searchByExample" parameterType="cn.jia.user.entity.UserEntity" resultType="cn.jia.user.entity.UserEntity">
+        select
+        <include refid="Base_Column_List" />
+        from user_info
+        where 1 = 2
+        <if test="openid != null">
+            or openid LIKE CONCAT('%',#{openid,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="jiacn != null">
+            or jiacn LIKE CONCAT('%',#{jiacn,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="phone != null">
+            or phone LIKE CONCAT('%',#{phone,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="email != null">
+            or email LIKE CONCAT('%',#{email,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="sex != null">
+            or sex = #{sex,jdbcType=INTEGER}
+        </if>
+        <if test="nickname != null">
+            or nickname LIKE CONCAT('%',#{nickname,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="city != null">
+            or city LIKE CONCAT('%',#{city,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="country != null">
+            or country LIKE CONCAT('%',#{country,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="province != null">
+            or province LIKE CONCAT('%',#{province,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="latitude != null">
+            or latitude = #{latitude,jdbcType=VARCHAR}
+        </if>
+        <if test="longitude != null">
+            or longitude = #{longitude,jdbcType=VARCHAR}
+        </if>
+        <if test="point != null">
+            or point = #{point,jdbcType=INTEGER}
+        </if>
+        <if test="referrer != null">
+            or referrer LIKE CONCAT('%',#{referrer,jdbcType=VARCHAR},'%')
+        </if>
+        <if test="birthday != null">
+            or birthday = #{birthday,jdbcType=DATE}
+        </if>
+        <if test="createTime != null">
+            or create_time = #{createTime,jdbcType=BIGINT}
+        </if>
+        <if test="updateTime != null">
+            or update_time = #{updateTime,jdbcType=BIGINT}
+        </if>
+    </select>
+</mapper>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.wx.mapper.PayInfoMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        acid, client_id, name, account, country, province, city, username, password, create_time, update_time, status, app_id, sub_app_id, mch_id, mch_key, sub_mch_id, notify_url, trade_type, sign_type, key_path, key_content
+    </sql>
+
+</mapper>

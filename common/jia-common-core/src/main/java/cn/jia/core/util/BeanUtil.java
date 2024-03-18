@@ -1,0 +1,167 @@
+package cn.jia.core.util;
+
+import cn.jia.core.exception.EsErrorConstants;
+import cn.jia.core.exception.EsRuntimeException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
+import org.springframework.beans.BeanWrapper;
+import org.springframework.beans.BeanWrapperImpl;
+
+import java.beans.BeanInfo;
+import java.beans.IntrospectionException;
+import java.beans.Introspector;
+import java.beans.PropertyDescriptor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.*;
+
+/**
+ * @author chc
+ */
+@Slf4j
+public class BeanUtil {
+    /**
+     * 将一个 Map 对象转化为一个 JavaBean
+     *
+     * @param type 要转化的类型
+     * @param map  包含属性值的 map
+     * @return 转化出来的 JavaBean 对象
+     */
+    public static Object fromMap(Class<?> type, Map<?, ?> map) {
+        try {
+            // 获取类属性
+            BeanInfo beanInfo = Introspector.getBeanInfo(type);
+            // 创建 JavaBean 对象
+            Object obj = type.getDeclaredConstructor().newInstance();
+
+            // 给 JavaBean 对象的属性赋值
+            PropertyDescriptor[] propertyDescriptors = beanInfo.getPropertyDescriptors();
+            for (PropertyDescriptor descriptor : propertyDescriptors) {
+                String propertyName = descriptor.getName();
+
+                if (map.containsKey(propertyName)) {
+                    // 下面一句可以 try 起来，这样当一个属性赋值失败的时候就不会影响其他属性赋值。
+                    Object value = map.get(propertyName);
+
+                    Object[] args = new Object[1];
+                    args[0] = value;
+
+                    descriptor.getWriteMethod().invoke(obj, args);
+                }
+            }
+            return obj;
+        } catch (IntrospectionException | IllegalAccessException | InstantiationException | InvocationTargetException |
+                 NoSuchMethodException e) {
+            log.error("convertMap error", e);
+            throw new EsRuntimeException(EsErrorConstants.PARAMETER_INCORRECT, e);
+        }
+    }
+
+    /**
+     * 将一个 JavaBean 对象转化为一个 Map
+     *
+     * @param bean 要转化的JavaBean 对象
+     * @return 转化出来的 Map 对象
+     */
+    @SuppressWarnings("rawtypes")
+    public static Map<String, Object> toMap(Object bean) {
+        try {
+            Class type = bean.getClass();
+            Map<String, Object> returnMap = new HashMap<>(16);
+            BeanInfo beanInfo = Introspector.getBeanInfo(type);
+
+            PropertyDescriptor[] propertyDescriptors = beanInfo.getPropertyDescriptors();
+            for (PropertyDescriptor descriptor : propertyDescriptors) {
+                String propertyName = descriptor.getName();
+                if (!"class".equals(propertyName)) {
+                    Method readMethod = descriptor.getReadMethod();
+                    Object result = readMethod.invoke(bean);
+                    returnMap.put(propertyName, Objects.requireNonNullElse(result, ""));
+                }
+            }
+            return returnMap;
+        } catch (IntrospectionException | IllegalAccessException | InvocationTargetException e) {
+            log.error("toMap error", e);
+            throw new EsRuntimeException(EsErrorConstants.PARAMETER_INCORRECT, e);
+        }
+    }
+
+    /**
+     * 获取对象中的空属性
+     *
+     * @param source 对象
+     * @return 空属性的字段
+     */
+    public static String[] getNullPropertyNames(Object source) {
+        final BeanWrapper src = new BeanWrapperImpl(source);
+        java.beans.PropertyDescriptor[] pds = src.getPropertyDescriptors();
+
+        Set<String> emptyNames = new HashSet<>();
+        for (java.beans.PropertyDescriptor pd : pds) {
+            Object srcValue = src.getPropertyValue(pd.getName());
+            if (srcValue == null) {
+                emptyNames.add(pd.getName());
+            }
+        }
+        String[] result = new String[emptyNames.size()];
+        return emptyNames.toArray(result);
+    }
+
+    /**
+     * 获取对象中的空属性或者空字符
+     *
+     * @param source 对象
+     * @return 空属性和空字符的字段
+     */
+    public static String[] getEmptyPropertyNames(Object source) {
+        final BeanWrapper src = new BeanWrapperImpl(source);
+        java.beans.PropertyDescriptor[] pds = src.getPropertyDescriptors();
+
+        Set<String> emptyNames = new HashSet<>();
+        for (java.beans.PropertyDescriptor pd : pds) {
+            Object srcValue = src.getPropertyValue(pd.getName());
+            if (srcValue == null || "".equals(srcValue)) {
+                emptyNames.add(pd.getName());
+            }
+
+        }
+        String[] result = new String[emptyNames.size()];
+        return emptyNames.toArray(result);
+    }
+
+    /**
+     * 复制对象，排除空属性
+     *
+     * @param src    源对象
+     * @param target 目标对象
+     */
+    public static void copyPropertiesIgnoreNull(Object src, Object target) {
+        BeanUtils.copyProperties(src, target, getNullPropertyNames(src));
+    }
+
+    /**
+     * 复制对象，排除空字符
+     *
+     * @param src    源对象
+     * @param target 目标对象
+     */
+    public static void copyPropertiesIgnoreEmpty(Object src, Object target) {
+        BeanUtils.copyProperties(src, target, getEmptyPropertyNames(src));
+    }
+
+    /**
+     * 复制对象，排除空属性和指定属性
+     *
+     * @param src              源对象
+     * @param target           目标对象
+     * @param ignoreProperties 排除的字段
+     */
+    public static void copyPropertiesIgnoreNull(Object src, Object target, String... ignoreProperties) {
+        String[] nullPropertys = getNullPropertyNames(src);
+        int nullPropertysLength = nullPropertys.length;
+        int ignorePropertiesLength = ignoreProperties.length;
+        ignoreProperties = Arrays.copyOf(ignoreProperties, nullPropertysLength + ignorePropertiesLength);
+        System.arraycopy(nullPropertys, 0, ignoreProperties, ignorePropertiesLength, nullPropertysLength);
+        BeanUtils.copyProperties(src, target, ignoreProperties);
+    }
+}

@@ -1,0 +1,12 @@
+dependencies {
+    api project(':point:jia-point-service')
+    api project(':common:jia-common-mapper')
+    testImplementation project(':common:jia-common-test')
+    testImplementation libs.mybatis.plus.generator
+    testImplementation libs.spring.boot.starter.freemarker
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-point-mapper'

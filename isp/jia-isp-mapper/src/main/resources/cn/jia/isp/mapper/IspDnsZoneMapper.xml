@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.mapper.IspDnsZoneMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspDnsZoneEntity" >
+    <id column="id" property="id" jdbcType="BIGINT" />
+    <result column="zone" property="zone" jdbcType="VARCHAR" />
+    <result column="key_name" property="keyName" jdbcType="VARCHAR" />
+    <result column="key_value" property="keyValue" jdbcType="VARCHAR" />
+    <result column="create_time" property="createTime" jdbcType="TIMESTAMP" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, zone, key_name, key_value, create_time
+  </sql>
+
+  <select id="selectByExample" resultMap="BaseResultMap" parameterType="cn.jia.isp.entity.IspDnsZoneEntity" >
+    select
+    <include refid="Base_Column_List" />
+    from dns_zone
+    <where>
+      <if test="id != null" >
+        and id = #{id,jdbcType=BIGINT}
+      </if>
+      <if test="zone != null" >
+        and zone = #{zone,jdbcType=VARCHAR}
+      </if>
+      <if test="keyName != null" >
+        and key_name = #{keyName,jdbcType=VARCHAR}
+      </if>
+      <if test="keyValue != null" >
+        and key_value = #{keyValue,jdbcType=VARCHAR}
+      </if>
+    </where>
+  </select>
+</mapper>

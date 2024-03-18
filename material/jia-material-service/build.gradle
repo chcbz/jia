@@ -1,0 +1,18 @@
+dependencies {
+    api project(':base:jia-base-api')
+    api project(':material:jia-material-api')
+    api project(':user:jia-user-api')
+    api project(':point:jia-point-api')
+    api project(':wx:jia-wx-api')
+    api project(':sms:jia-sms-api')
+    api project(':common:jia-common-service')
+    implementation(libs.thumbnailator)
+    implementation(libs.commons.fileupload)
+    implementation(libs.elasticsearch.rest.high.level.client)
+    testImplementation project(':common:jia-common-test')
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-material-service'

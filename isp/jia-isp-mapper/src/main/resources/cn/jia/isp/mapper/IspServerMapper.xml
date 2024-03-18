@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="cn.jia.isp.mapper.IspServerMapper" >
+  <resultMap id="BaseResultMap" type="cn.jia.isp.entity.IspServerEntity" >
+    <id column="id" property="id" jdbcType="BIGINT" />
+    <result column="client_id" property="clientId" jdbcType="VARCHAR" />
+    <result column="server_name" property="serverName" jdbcType="VARCHAR" />
+    <result column="server_description" property="serverDescription" jdbcType="VARCHAR" />
+    <result column="ip" property="ip" jdbcType="VARCHAR" />
+    <result column="ssh_port" property="sshPort" jdbcType="INTEGER" />
+    <result column="ssh_user" property="sshUser" jdbcType="VARCHAR" />
+    <result column="ssh_password" property="sshPassword" jdbcType="VARCHAR" />
+    <result column="console_port" property="consolePort" jdbcType="INTEGER" />
+    <result column="console_token" property="consoleToken" jdbcType="VARCHAR" />
+    <result column="ldap_service" property="ldapService" jdbcType="INTEGER" />
+    <result column="ldap_port" property="ldapPort" jdbcType="INTEGER" />
+    <result column="ldap_user" property="ldapUser" jdbcType="VARCHAR" />
+    <result column="ldap_password" property="ldapPassword" jdbcType="VARCHAR" />
+    <result column="ldap_base" property="ldapBase" jdbcType="VARCHAR" />
+    <result column="smb_service" property="smbService" jdbcType="INTEGER" />
+    <result column="smb_ldap_base" property="smbLdapBase" jdbcType="VARCHAR" />
+    <result column="smb_ldap_user" property="smbLdapUser" jdbcType="VARCHAR" />
+    <result column="smb_ldap_password" property="smbLdapPassword" jdbcType="VARCHAR" />
+    <result column="smb_ldap_url" property="smbLdapUrl" jdbcType="VARCHAR" />
+    <result column="status" property="status" jdbcType="INTEGER" />
+    <result column="create_time" property="createTime" jdbcType="BIGINT" />
+    <result column="update_time" property="updateTime" jdbcType="BIGINT" />
+  </resultMap>
+  <sql id="Base_Column_List" >
+    id, client_id, server_name, server_description, ip, ssh_port, ssh_user, ssh_password, 
+    console_port, console_token, ldap_service, ldap_port, ldap_user, ldap_password, ldap_base, 
+    smb_service, smb_ldap_base, smb_ldap_user, smb_ldap_password, smb_ldap_url, status, 
+    create_time, update_time
+  </sql>
+
+  <select id="selectByExample" parameterType="cn.jia.isp.entity.IspServerEntity" resultMap="BaseResultMap">
+    select
+    <include refid="Base_Column_List" />
+    from isp_server
+    <where>
+      <if test="serverName != null">
+        server_name LIKE CONCAT('%',#{serverName,jdbcType=VARCHAR},'%')
+      </if>
+      <if test="status != null">
+        and status = #{status,jdbcType=INTEGER}
+      </if>
+      <if test="clientId != null">
+        and (client_id = #{clientId,jdbcType=VARCHAR} or client_id is null)
+      </if>
+    </where>
+  </select>
+</mapper>

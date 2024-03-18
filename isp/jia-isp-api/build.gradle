@@ -1,0 +1,7 @@
+dependencies {
+    api project(':isp:jia-isp-core')
+    api project(':common:jia-common-api')
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-isp-api'

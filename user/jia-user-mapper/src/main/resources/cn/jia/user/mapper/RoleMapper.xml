@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.mapper.RoleMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        update_time,
+        create_time,
+        id, client_id, name, code, remark, status
+    </sql>
+
+    <select id="selectByUserId" resultType="cn.jia.user.entity.RoleEntity">
+        select r.* from user_role r, user_role_rel rr
+        where r.id = rr.role_id and (rr.user_id = #{userId,jdbcType=BIGINT} or
+        rr.group_id in (select group_id from user_group_rel where user_id = #{userId,jdbcType=BIGINT}))
+    </select>
+    <select id="selectByGroupId" resultType="cn.jia.user.entity.RoleEntity">
+        select r.* from user_role r, user_role_rel rr
+        where r.id = rr.role_id and rr.group_id = #{groupId,jdbcType=BIGINT}
+    </select>
+</mapper>
