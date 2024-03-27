@@ -8,6 +8,10 @@ import lombok.Setter;
 public class EsContext {
     private String clientId;
 
+    private String appcn;
+
+    private String jiacn;
+
     private String username;
 
 }

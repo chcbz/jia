@@ -1,13 +1,15 @@
 package cn.jia.base.filter;
 
 import cn.jia.base.entity.LogEntity;
-import cn.jia.base.service.impl.LogServiceImpl;
+import cn.jia.base.service.LogService;
 import cn.jia.core.common.EsRequestWrapper;
 import cn.jia.core.common.EsSecurityHandler;
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.JsonUtil;
 import jakarta.servlet.*;
+import jakarta.servlet.annotation.WebFilter;
+import jakarta.servlet.annotation.WebInitParam;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
@@ -15,6 +17,11 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
+@WebFilter(filterName = "logFilter", urlPatterns = "/*",
+		initParams = {
+				@WebInitParam(name = "exclusions", value = "*.js,*.gif,*.jpg,*.bmp,*.png,*.css,*.ico,/druid/*")//忽略资源
+		}
+)
 public class EsLogFilter implements Filter {
 
 	@Override
@@ -59,7 +66,7 @@ public class EsLogFilter implements Filter {
 
 		logEntity.setJiacn(EsSecurityHandler.clientId());
 		logEntity.setUsername(EsSecurityHandler.username());
-		LogServiceImpl logService = SpringContextHolder.getBean("logServiceImpl");
+		LogService logService = SpringContextHolder.getBean(LogService.class);
 		logService.create(logEntity);
 	}
 

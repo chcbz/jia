@@ -1,6 +1,7 @@
 dependencies {
     api project(':common:jia-common-core')
     api libs.h2
+    api libs.spring.boot.starter.mybatis
     api libs.mybatis.plus.boot.starter
     api(libs.spring.boot.starter.web) {
         exclude module: 'spring-boot-starter-tomcat'
@@ -8,7 +9,7 @@ dependencies {
     api libs.spring.boot.starter.undertow
     api libs.spring.boot.starter.data.jdbc
     api libs.spring.boot.starter.data.redis
-    api libs.redisson.spring.boot.starter
+    api libs.spring.boot.starter.redisson
     api libs.pagehelper.spring.boot.starter
     api(libs.spring.boot.starter.test) {
         exclude module: 'android-json'

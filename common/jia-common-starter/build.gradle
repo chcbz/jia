@@ -1,0 +1,32 @@
+dependencies {
+    api project(':common:jia-common-service')
+    implementation(libs.spring.boot.starter.web) {
+        exclude module: 'spring-boot-starter-tomcat'
+    }
+    implementation(libs.spring.boot.configuration.processor)
+    api(libs.spring.boot.starter.mybatis)
+    implementation(libs.pagehelper.spring.boot.starter)
+    implementation(libs.mybatis.plus.boot.starter)
+    implementation(libs.spring.boot.starter.data.jdbc)
+    implementation(libs.mysql)
+    implementation(libs.spring.boot.starter.undertow)
+    implementation(libs.spring.boot.starter.swagger)
+
+    compileOnly(libs.spring.boot.starter.data.redis)
+    compileOnly(libs.spring.boot.starter.data.ldap)
+    compileOnly(libs.spring.boot.starter.cache)
+    compileOnly(libs.spring.boot.starter.websocket)
+    compileOnly(libs.spring.boot.starter.security)
+    compileOnly(libs.spring.boot.starter.oauth2.resource.server)
+    compileOnly(libs.spring.boot.starter.oauth2.client)
+    compileOnly(libs.spring.boot.starter.data.elasticsearch)
+    compileOnly(libs.spring.security.oauth2.authorization.server)
+    compileOnly(libs.spring.boot.starter.druid)
+    compileOnly(libs.spring.rabbit)
+    testImplementation project(':common:jia-common-test')
+    testAnnotationProcessor libs.lombok
+    testImplementation libs.lombok
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-common-starter'

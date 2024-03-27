@@ -1,6 +1,6 @@
 package cn.jia.core.mybatis;
 
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
 import org.apache.ibatis.cache.Cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

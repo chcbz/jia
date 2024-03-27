@@ -12,7 +12,7 @@ class ClassUtilTest {
     void getClassName() {
         String packageName = "cn.jia.core.util";
         // List<String> classNames = getClassName(packageName);
-        List<String> classNames = ClassUtil.getClassName(packageName, false);
+        List<String> classNames = ClassUtil.getClassNames(packageName, false);
         for (String className : classNames) {
             log.info(className);
         }
@@ -20,7 +20,7 @@ class ClassUtilTest {
 
     @Test
     void getClassNameByJar() {
-		log.info(String.valueOf(ClassUtil.getClassName("jar:file:/D:/workspace/shunwei/jia/project/jia-api-admin/target/jia-api-admin.jar!/BOOT-INF/lib/jia-core-api-1.0.0-SNAPSHOT.jar!/cn/jia", true)));
+		log.info(String.valueOf(ClassUtil.getClassNames("jar:file:/D:/workspace/shunwei/jia/project/jia-api-admin/target/jia-api-admin.jar!/BOOT-INF/lib/jia-core-api-1.0.0-SNAPSHOT.jar!/cn/jia", true)));
         /*URL url = new URL("jar:file:/D:/workspace/shunwei/jia/project/jia-api-admin/target/jia-api-admin.jar!/BOOT-INF/lib/jia-core-api-1.0.0-SNAPSHOT.jar");
         InputStream is = url.openStream();
         FileUtil.create(is, "D:/tmp/tmp.jar");
