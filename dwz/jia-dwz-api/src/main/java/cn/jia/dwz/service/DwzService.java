@@ -5,7 +5,7 @@ import cn.jia.dwz.entity.DwzRecordEntity;
 
 public interface DwzService extends IBaseService<DwzRecordEntity> {
 
-    DwzRecordEntity view(String uri) throws Exception;
+    DwzRecordEntity view(String uri);
 
     String gen(String jiacn, String orig, Long expireTime);
 }

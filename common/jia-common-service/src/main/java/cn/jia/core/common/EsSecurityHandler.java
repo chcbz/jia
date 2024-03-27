@@ -1,6 +1,7 @@
 package cn.jia.core.common;
 
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
+import cn.jia.core.context.EsContext;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.StringUtils;
@@ -16,7 +17,6 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authentic
 import org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal;
 import org.springframework.web.client.RestTemplate;
 
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -155,7 +155,13 @@ public class EsSecurityHandler {
 		return null;
     }
 
-	public static void main(String[] args) {
-		System.out.println(java.net.URLEncoder.encode("你的验证码是1234, 请在2分钟内输入！", StandardCharsets.UTF_8));
+	/**
+	 * 根据token获取当前用户上下文
+	 *
+	 * @param token token
+	 * @return 用户上下文
+	 */
+	public static EsContext currentContext(String token) {
+		return new EsContext();
 	}
 }

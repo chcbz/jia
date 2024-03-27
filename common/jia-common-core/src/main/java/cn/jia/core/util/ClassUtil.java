@@ -5,10 +5,10 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -21,13 +21,28 @@ import java.util.jar.JarFile;
 @Slf4j
 public class ClassUtil {
     /**
+     * 根据类路径获取类
+     *
+     * @param className 类名
+     * @return 类
+     */
+    public static Class<?> forName(String className) {
+        try {
+            return Class.forName(className);
+        } catch (Throwable e) {
+            log.error("无法获取类：{}", className);
+            return null;
+        }
+    }
+
+    /**
      * 获取某包下（包括该包的所有子包）所有类
      *
      * @param packageName 包名
      * @return 类的完整名称
      */
-    public static List<String> getClassName(String packageName) {
-        return getClassName(packageName, true);
+    public static List<String> getClassNames(String packageName) {
+        return getClassNames(packageName, true);
     }
 
     /**
@@ -37,7 +52,7 @@ public class ClassUtil {
      * @param childPackage 是否遍历子包
      * @return 类的完整名称
      */
-    public static List<String> getClassName(String packageName, boolean childPackage) {
+    public static List<String> getClassNames(String packageName, boolean childPackage) {
         List<String> fileNames = new ArrayList<>();
         ClassLoader loader = Thread.currentThread().getContextClassLoader();
         String packagePath = packageName.replace(".", "/");
@@ -184,11 +199,7 @@ public class ClassUtil {
 
     public static String getJarRealPath(Class<?> c) {
         String jarWholePath = c.getProtectionDomain().getCodeSource().getLocation().getFile();
-        try {
-            jarWholePath = java.net.URLDecoder.decode(jarWholePath, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            log.info(e.toString());
-        }
+        jarWholePath = java.net.URLDecoder.decode(jarWholePath, StandardCharsets.UTF_8);
         return new File(jarWholePath).getParentFile().getAbsolutePath();
     }
 
@@ -205,7 +216,7 @@ public class ClassUtil {
         Object res = null;
         Class<?> type = o.getClass();
         try {
-            Method method = null;
+            Method method;
             if (methodName.contains("get")) {
                 // get方法
                 // 获取方法
@@ -317,5 +328,30 @@ public class ClassUtil {
         }
 
         return res.toString();
+    }
+
+    /**
+     * 获取指定类的所有静态变量的值
+     *
+     * @param clazz 类
+     * @return 变量列表
+     */
+    public static List<Object> getStaticFieldValues(Class<?> clazz) {
+        List<Object> values = new ArrayList<>();
+        try {
+            Field[] fields = clazz.getDeclaredFields();
+            for (Field field : fields) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                    // 如果字段为私有的，需要设置为可访问
+                    field.setAccessible(true);
+                    // 静态字段的值为 null
+                    Object value = field.get(null);
+                    values.add(value);
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return values;
     }
 }

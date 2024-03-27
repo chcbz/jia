@@ -1,4 +1,4 @@
-package cn.jia.core.configuration;
+package cn.jia.core.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -9,7 +9,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 /**
  * @author chc
  */
-@Configuration
+@Configuration(proxyBeanMethods = false)
 public class ThreadPoolTaskConfig {
     /**
      * 核心线程数（默认线程数）

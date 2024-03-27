@@ -129,21 +129,21 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
 
     @Override
     public int insertOrUpdate(T entity) {
-        if (null != entity) {
-            TableInfo tableInfo = TableInfoHelper.getTableInfo(this.entityClass);
-            Assert.notNull(tableInfo, "error: can not execute. because can not find cache of TableInfo for entity!");
-            String keyProperty = tableInfo.getKeyProperty();
-            Assert.notEmpty(keyProperty, "error: can not execute. because can not find column for id from entity!");
-            Object idVal = tableInfo.getPropertyValue(entity, tableInfo.getKeyProperty());
-            if (StringUtils.checkValNull(idVal) || Objects.isNull(selectById((Serializable) idVal))) {
-                entity.init4Creation();
-                return insert(entity);
-            } else {
-                entity.init4Update();
-                return updateById(entity);
-            }
+        if (null == entity) {
+            return 0;
         }
-        return 0;
+        TableInfo tableInfo = TableInfoHelper.getTableInfo(this.entityClass);
+        Assert.notNull(tableInfo, "error: can not execute. because can not find cache of TableInfo for entity!");
+        String keyProperty = tableInfo.getKeyProperty();
+        Assert.notEmpty(keyProperty, "error: can not execute. because can not find column for id from entity!");
+        Object idVal = tableInfo.getPropertyValue(entity, tableInfo.getKeyProperty());
+        if (StringUtils.checkValNull(idVal) || Objects.isNull(selectById((Serializable) idVal))) {
+            entity.init4Creation();
+            return insert(entity);
+        } else {
+            entity.init4Update();
+            return updateById(entity);
+        }
     }
 
     @Override
@@ -169,8 +169,8 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
     }
 
     protected void appendQueryWrapper(T entity, QueryWrapper<T> queryWrapper) {
-        String extendWrapperClass = entity.getClass().getName() + "Wrapper";
         try {
+            String extendWrapperClass = entity.getClass().getName() + "Wrapper";
             Class<?> clazz = Class.forName(extendWrapperClass);
             Constructor<?> constructor = clazz.getDeclaredConstructor();
             BaseEntityWrapper<T, T> entityWrapper = (BaseEntityWrapper) constructor.newInstance();

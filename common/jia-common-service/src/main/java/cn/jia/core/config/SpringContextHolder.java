@@ -1,4 +1,4 @@
-package cn.jia.core.configuration;
+package cn.jia.core.config;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
