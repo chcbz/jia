@@ -2,7 +2,8 @@ rootProject.name = 'jia'
 
 include 'common:jia-common-core', 'common:jia-common-api', 'common:jia-common-test', 'common:jia-common-mapper',
         'common:jia-common-service', 'common:jia-common-starter'
-include 'base:jia-base-core', 'base:jia-base-api', 'base:jia-base-service', 'base:jia-base-mapper'
+include 'base:jia-base-core', 'base:jia-base-api', 'base:jia-base-service', 'base:jia-base-mapper',
+        'base:jia-base-starter'
 include 'dwz:jia-dwz-core', 'dwz:jia-dwz-api', 'dwz:jia-dwz-service', 'dwz:jia-dwz-mapper', 'dwz:jia-dwz-starter'
 include 'isp:jia-isp-core', 'isp:jia-isp-api', 'isp:jia-isp-service', 'isp:jia-isp-mapper'
 include 'kefu:jia-kefu-core', 'kefu:jia-kefu-api', 'kefu:jia-kefu-service', 'kefu:jia-kefu-mapper'
@@ -31,6 +32,7 @@ dependencyResolutionManagement {
             version('spring-boot-druid', '1.2.22')
             version('spring-boot-swagger', '4.5.0')
             version('spring-boot-mybatis', '3.0.3')
+            version('spring-boot-jasypt', '3.0.5')
 
             library('pagehelper-core', 'com.github.pagehelper:pagehelper:5.3.2')
             library('pagehelper-spring-boot-starter', 'com.github.pagehelper', 'pagehelper-spring-boot-starter').versionRef('spring-boot-pagehelper')
@@ -52,7 +54,7 @@ dependencyResolutionManagement {
             library('spring.ldap', 'org.springframework.ldap', 'spring-ldap-core').version('3.1.0')
             library('spring.redis', 'org.springframework.data', 'spring-data-redis').version('3.1.0')
             library('spring.elasticsearch', 'org.springframework.data', 'spring-data-elasticsearch').version('5.1.0')
-            library('spring.rabbit', 'org.springframework.amqp', 'spring-rabbit').version('3.0.4')
+            library('spring.rabbit', 'org.springframework.amqp', 'spring-rabbit').version('3.1.3')
             library('spring.security.core', 'org.springframework.security', 'spring-security-core').versionRef('spring-security')
             library('spring.security.config', 'org.springframework.security', 'spring-security-config').versionRef('spring-security')
             library('spring.security.oauth2.client', 'org.springframework.security', 'spring-security-oauth2-client').versionRef('spring-security')
@@ -72,12 +74,14 @@ dependencyResolutionManagement {
             library('spring-boot-starter-cache', 'org.springframework.boot', 'spring-boot-starter-cache').versionRef('spring-boot')
             library('spring-boot-starter-data-redis', 'org.springframework.boot', 'spring-boot-starter-data-redis').versionRef('spring-boot')
             library('spring-boot-starter-redisson', 'org.redisson', 'redisson-spring-boot-starter').versionRef('spring-boot-redisson')
+            library('spring-boot-starter-amqp', 'org.springframework.boot', 'spring-boot-starter-amqp').versionRef('spring-boot')
             library('spring-boot-starter-data-ldap', 'org.springframework.boot', 'spring-boot-starter-data-ldap').versionRef('spring-boot')
             library('spring-boot-starter-data-elasticsearch', 'org.springframework.boot', 'spring-boot-starter-data-elasticsearch').versionRef('spring-boot')
             library('spring-boot-starter-druid', 'com.alibaba', 'druid-spring-boot-starter').versionRef('spring-boot-druid')
             library('spring-boot-starter-freemarker', 'org.springframework.boot', 'spring-boot-starter-freemarker').versionRef('spring-boot')
             library('spring-boot-starter-swagger', 'com.github.xiaoymin', 'knife4j-openapi3-jakarta-spring-boot-starter').versionRef('spring-boot-swagger')
             library('spring-boot-starter-test', 'org.springframework.boot', 'spring-boot-starter-test').versionRef('spring-boot')
+            library('spring-boot-starter-jasypt', 'com.github.ulisesbocchio', 'jasypt-spring-boot-starter').versionRef('spring-boot-jasypt')
             library('spring-boot-properties-migrator', 'org.springframework.boot', 'spring-boot-properties-migrator').versionRef('spring-boot')
             library('spring-cloud-config-server', 'org.springframework.cloud', 'spring-cloud-config-server').versionRef('spring-cloud')
             library('spring-cloud-starter-netflix-eureka-server', 'org.springframework.cloud', 'spring-cloud-starter-netflix-eureka-server').versionRef('spring-cloud')
@@ -139,6 +143,8 @@ dependencyResolutionManagement {
             library('dbunit', 'org.dbunit:dbunit:2.7.3')
             library('mockito-core', 'org.mockito:mockito-core:5.11.0')
             library('embedded-redis', 'it.ozimov:embedded-redis:0.7.3')
+            library('testcontainers-rabbitmq', 'org.testcontainers:rabbitmq:1.19.7')
+            library('testcontainers-junit', 'org.testcontainers:junit-jupiter:1.19.7')
             library('testable-all', 'com.alibaba.testable:testable-all:0.7.9')
             library('testable-processor', 'com.alibaba.testable:testable-processor:0.7.9')
             library('ldap-core', 'org.springframework.ldap:spring-ldap-core:3.1.0')

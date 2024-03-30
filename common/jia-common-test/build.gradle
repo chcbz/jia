@@ -20,6 +20,8 @@ dependencies {
     api libs.spring.test.dbunit
     api libs.mockito.core
     api libs.embedded.redis
+    api libs.testcontainers.junit
+    api libs.testcontainers.rabbitmq
     api libs.testable.all
     annotationProcessor libs.testable.processor
     testAnnotationProcessor libs.lombok
