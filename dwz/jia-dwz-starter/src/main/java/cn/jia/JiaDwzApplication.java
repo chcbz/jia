@@ -12,9 +12,9 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @EnableTransactionManagement
 @EnableAsync
 @MapperScan({"cn.jia.*.mapper"})
-public class JiaApplication {
+public class JiaDwzApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(JiaApplication.class, args);
+		SpringApplication.run(JiaDwzApplication.class, args);
 	}
 }

@@ -11,6 +11,7 @@ dependencies {
     implementation(libs.mysql)
     implementation(libs.spring.boot.starter.undertow)
     implementation(libs.spring.boot.starter.swagger)
+    implementation(libs.spring.boot.starter.jasypt)
 
     compileOnly(libs.spring.boot.starter.data.redis)
     compileOnly(libs.spring.boot.starter.data.ldap)
@@ -22,7 +23,7 @@ dependencies {
     compileOnly(libs.spring.boot.starter.data.elasticsearch)
     compileOnly(libs.spring.security.oauth2.authorization.server)
     compileOnly(libs.spring.boot.starter.druid)
-    compileOnly(libs.spring.rabbit)
+    compileOnly(libs.spring.boot.starter.amqp)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok

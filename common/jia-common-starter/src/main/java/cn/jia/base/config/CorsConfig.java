@@ -1,5 +1,6 @@
 package cn.jia.base.config;
 
+import org.jasypt.encryption.pbe.StandardPBEStringEncryptor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.cors.CorsConfiguration;
@@ -22,6 +23,18 @@ public class CorsConfig {
         corsConfiguration.setAllowCredentials(true);
 //        corsConfiguration.addExposedHeader(HttpHeaderConStant.X_TOTAL_COUNT);
         return corsConfiguration;
+    }
+
+    public static void main(String[] args) {
+        String originalText = "jia_dev";
+        String password = "123456";
+
+        StandardPBEStringEncryptor encryptor = new StandardPBEStringEncryptor();
+        encryptor.setAlgorithm("PBEWithMD5AndDES");
+        encryptor.setPassword(password);
+
+        String encryptedText = encryptor.encrypt(originalText);
+        System.out.println("Encrypted Text: " + encryptedText);
     }
 
     /**
