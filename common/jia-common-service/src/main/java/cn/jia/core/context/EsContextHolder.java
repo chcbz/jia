@@ -4,6 +4,11 @@ public class EsContextHolder {
     private static final ThreadLocal<EsContext> CONTEXT = new ThreadLocal<>();
 
     public static EsContext getContext() {
-        return CONTEXT.get();
+        EsContext esContext = CONTEXT.get();
+        if (esContext == null) {
+            esContext = new EsContext();
+            CONTEXT.set(esContext);
+        }
+        return esContext;
     }
 }

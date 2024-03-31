@@ -1,6 +1,6 @@
 package cn.jia.user.service.impl;
 
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.ImgUtil;

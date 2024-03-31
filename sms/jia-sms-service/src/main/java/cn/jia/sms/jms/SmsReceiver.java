@@ -17,6 +17,7 @@ import jakarta.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitHandler;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -43,7 +44,7 @@ public class SmsReceiver {
 	private SmsTemplateDao smsTemplateDao;
 	@Inject
 	private SmsConfigDao smsConfigDao;
-	@Inject
+	@Autowired(required = false)
 	private DictService dictService;
 	@Inject
 	@Qualifier("singleRestTemplate")

@@ -1,7 +1,7 @@
 package cn.jia.wx.service.impl;
 
 import cn.jia.core.common.EsConstants;
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.*;
 import cn.jia.isp.entity.IspFileEntity;

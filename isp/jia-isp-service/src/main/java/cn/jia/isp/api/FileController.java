@@ -1,6 +1,6 @@
 package cn.jia.isp.api;
 
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.util.StreamUtil;
 import cn.jia.isp.entity.IspFileEntity;
 import cn.jia.isp.service.FileService;

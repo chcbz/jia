@@ -15,6 +15,7 @@ import com.github.pagehelper.PageInfo;
 import jakarta.inject.Inject;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -37,7 +38,7 @@ public class SmsController {
 	
 	@Inject
 	private SmsService smsService;
-	@Inject
+	@Autowired(required = false)
 	private DictService dictService;
 	@Value("${security.oauth2.resource.id:jia-sms}")
 	private String resourceId;

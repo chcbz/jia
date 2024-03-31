@@ -63,7 +63,7 @@ public class NewsController {
 	private MpInfoService mpInfoService;
 	@Autowired
 	private RestTemplate restTemplate;
-	@Value("${mat.web.realpath}")
+	@Value("${mat.web.realpath:/home/isp/hosts/jia/web}")
 	private String webRealPath;
 	@Autowired(required = false)
 	private DictService dictService;

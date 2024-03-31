@@ -28,7 +28,7 @@ dependencyResolutionManagement {
             version('mybatis-plus', '3.5.5')
             version('mapstruct', '1.5.5.Final')
             version('spring-boot-pagehelper', '2.1.0')
-            version('spring-boot-redisson', '3.22.1')
+            version('spring-boot-redisson', '3.27.2')
             version('spring-boot-druid', '1.2.22')
             version('spring-boot-swagger', '4.5.0')
             version('spring-boot-mybatis', '3.0.3')

@@ -20,8 +20,11 @@ import jakarta.annotation.PreDestroy;
 @Component
 public class RedisServerLoader {
 
-    @Value("${spring.redis.port}")
+    @Value("${spring.data.redis.port}")
     private int redisPort;
+
+    @Value("${spring.data.redis.password}")
+    private String redisPassword;
 
     private RedisServer redisServer;
 
@@ -34,7 +37,8 @@ public class RedisServerLoader {
         log.info("redis server is starting...");
         RedisExecProvider customProvider = RedisExecProvider.defaultProvider();
         RedisServerBuilder builder = RedisServer.builder().redisExecProvider(customProvider)
-                .setting("bind 127.0.0.1").port(redisPort).setting("daemonize no").setting("appendonly no");
+                .setting("bind 127.0.0.1").port(redisPort).setting("daemonize no").setting("appendonly no")
+                .setting("requirepass " + redisPassword);
         if (OS.WINDOWS.equals(OSDetector.getOS())) {
             builder.setting("maxheap 200m");
         }

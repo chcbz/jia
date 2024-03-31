@@ -2,9 +2,9 @@ dependencies {
     api project(':base:jia-base-api')
     api project(':sms:jia-sms-api')
     api project(':common:jia-common-service')
-    api(libs.spring.rabbit)
+    api(libs.spring.boot.starter.amqp)
     testImplementation project(':common:jia-common-test')
-    testImplementation project(':base:jia-base-service')
+    testImplementation project(':base:jia-base-api')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }
