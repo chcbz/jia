@@ -8,7 +8,7 @@ dependencies {
     api project(':common:jia-common-service')
     implementation(libs.thumbnailator)
     implementation(libs.commons.fileupload)
-    implementation(libs.elasticsearch.rest.high.level.client)
+    compileOnly(libs.spring.elasticsearch)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok

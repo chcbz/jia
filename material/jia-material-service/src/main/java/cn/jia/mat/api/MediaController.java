@@ -37,7 +37,7 @@ public class MediaController {
     private MatMediaService mediaService;
     @Autowired(required = false)
     private DictService dictService;
-    @Value("${mat.web.realpath}")
+    @Value("${mat.web.realpath:/home/isp/hosts/jia/web}")
     private String webRealPath;
 
     /**

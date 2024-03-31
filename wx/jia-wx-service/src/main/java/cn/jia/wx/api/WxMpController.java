@@ -80,25 +80,25 @@ public class WxMpController {
 	private MpInfoService mpInfoService;
 	@Autowired
 	private PayInfoService payInfoService;
-	@Autowired
+	@Autowired(required = false)
 	private RestTemplate restTemplate;
-	@Autowired
+	@Autowired(required = false)
 	private UserService userService;
 	@Autowired
 	private MpUserService mpUserService;
-	@Autowired
+	@Autowired(required = false)
 	private PointService pointService;
-	@Autowired
+	@Autowired(required = false)
 	private GiftService giftService;
-	@Autowired
+	@Autowired(required = false)
 	private DictService dictService;
 	@Autowired
 	private RedisTemplate<String, Object> redisTemplate;
-	@Autowired
+	@Autowired(required = false)
 	private MatVoteService voteService;
-	@Autowired
+	@Autowired(required = false)
 	private FileService fileService;
-	@Autowired
+	@Autowired(required = false)
     private DwzService dwzService;
 
 	/**

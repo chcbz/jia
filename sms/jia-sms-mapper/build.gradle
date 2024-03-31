@@ -2,7 +2,7 @@ dependencies {
     api project(':sms:jia-sms-service')
     api project(':common:jia-common-mapper')
     testImplementation project(':common:jia-common-test')
-    testImplementation project(':base:jia-base-mapper')
+    testImplementation project(':base:jia-base-api')
     testImplementation libs.mybatis.plus.generator
     testImplementation libs.spring.boot.starter.freemarker
     testAnnotationProcessor libs.lombok

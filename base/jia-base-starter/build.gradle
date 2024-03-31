@@ -1,0 +1,19 @@
+dependencies {
+    api project(':base:jia-base-service')
+    api project(':base:jia-base-mapper')
+    api project(':common:jia-common-starter')
+//    implementation(libs.spring.boot.starter.data.redis)
+//    implementation(libs.spring.boot.starter.data.ldap)
+//    implementation(libs.spring.boot.starter.cache)
+//    implementation(libs.spring.boot.starter.websocket)
+//    implementation(libs.spring.boot.starter.security)
+//    implementation(libs.spring.boot.starter.oauth2.resource.server)
+//    implementation(libs.spring.boot.starter.oauth2.client)
+//    implementation(libs.spring.boot.starter.data.elasticsearch)
+//    implementation(libs.spring.security.oauth2.authorization.server)
+//    implementation(libs.druid.spring.boot.starter)
+//    implementation(libs.spring.rabbit)
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-base-starter'

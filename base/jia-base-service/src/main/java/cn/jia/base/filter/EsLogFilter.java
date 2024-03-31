@@ -3,8 +3,8 @@ package cn.jia.base.filter;
 import cn.jia.base.entity.LogEntity;
 import cn.jia.base.service.LogService;
 import cn.jia.core.common.EsRequestWrapper;
-import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.config.SpringContextHolder;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.JsonUtil;
 import jakarta.servlet.*;
@@ -64,8 +64,8 @@ public class EsLogFilter implements Filter {
 			logEntity.setParam(body);
 		}
 
-		logEntity.setJiacn(EsSecurityHandler.clientId());
-		logEntity.setUsername(EsSecurityHandler.username());
+		logEntity.setJiacn(EsContextHolder.getContext().getJiacn());
+		logEntity.setUsername(EsContextHolder.getContext().getUsername());
 		LogService logService = SpringContextHolder.getBean(LogService.class);
 		logService.create(logEntity);
 	}

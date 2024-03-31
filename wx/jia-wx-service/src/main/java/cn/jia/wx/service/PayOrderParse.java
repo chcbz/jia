@@ -1,6 +1,6 @@
 package cn.jia.wx.service;
 
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.StringUtils;
 import cn.jia.wx.common.WxErrorConstants;

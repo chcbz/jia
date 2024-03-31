@@ -2,7 +2,7 @@ package cn.jia.isp.api;
 
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.common.EsSecurityHandler;
-import cn.jia.core.configuration.SpringContextHolder;
+import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
