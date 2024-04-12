@@ -1,6 +1,7 @@
 package cn.jia.isp.api;
 
 import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -95,7 +96,7 @@ public class CarController {
 	@RequestMapping(value = "/brand/delete", method = RequestMethod.GET)
 	public Object deleteBrand(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandEntity record = carService.findBrand(id);
-		if(record == null || !Objects.equals(EsSecurityHandler.clientId(), record.getClientId())) {
+		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
 			throw new EsRuntimeException(IspErrorConstants.DATA_NOT_FOUND);
 		}
 		carService.deleteBrand(id);
@@ -163,7 +164,7 @@ public class CarController {
 	@RequestMapping(value = "/brandAudi/delete", method = RequestMethod.GET)
 	public Object deleteBrandAudi(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandAudiEntity record = carService.findBrandAudi(id);
-		if(record == null || !Objects.equals(EsSecurityHandler.clientId(), record.getClientId())) {
+		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
 			throw new EsRuntimeException(IspErrorConstants.DATA_NOT_FOUND);
 		}
 		carService.deleteBrandAudi(id);
@@ -231,7 +232,7 @@ public class CarController {
 	@RequestMapping(value = "/brandVersion/delete", method = RequestMethod.GET)
 	public Object deleteBrandVersion(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandVersionEntity record = carService.findBrandVersion(id);
-		if(record == null || !Objects.equals(EsSecurityHandler.clientId(), record.getClientId())) {
+		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
 			throw new EsRuntimeException(IspErrorConstants.DATA_NOT_FOUND);
 		}
 		carService.deleteBrandVersion(id);
@@ -299,7 +300,7 @@ public class CarController {
 	@RequestMapping(value = "/brandMf/delete", method = RequestMethod.GET)
 	public Object deleteBrandMf(@RequestParam(name = "id") Long id) throws Exception {
 		CarBrandMfEntity record = carService.findBrandMf(id);
-		if(record == null || !Objects.equals(EsSecurityHandler.clientId(), record.getClientId())) {
+		if(record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
 			throw new EsRuntimeException(IspErrorConstants.DATA_NOT_FOUND);
 		}
 		carService.deleteBrandMf(id);
