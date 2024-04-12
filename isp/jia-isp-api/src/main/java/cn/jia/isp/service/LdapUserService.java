@@ -8,9 +8,9 @@ public interface LdapUserService {
 
 	LdapUser create(LdapUser person);
 
-	LdapUser findByUid(String uid) throws Exception;
+	LdapUser findByUid(String uid);
 	
-	LdapUser findByExample(LdapUser person) throws Exception;
+	LdapUser findByExample(LdapUser person);
 	
 	List<LdapUser> search(LdapUser person);
 	

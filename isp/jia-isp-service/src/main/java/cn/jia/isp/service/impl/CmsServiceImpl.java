@@ -1,6 +1,7 @@
 package cn.jia.isp.service.impl;
 
 import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.isp.dao.CmsColumnDao;
 import cn.jia.isp.dao.CmsConfigDao;
 import cn.jia.isp.dao.CmsRowDao;
@@ -35,7 +36,7 @@ public class CmsServiceImpl implements CmsService {
 	@Override
 	@Transactional
 	public CmsTableEntity createTable(CmsTableDTO record) {
-		String clientId = EsSecurityHandler.clientId();
+		String clientId = EsContextHolder.getContext().getClientId();
 		record.setClientId(clientId);
 		cmsTableDao.insert(record);
 		for(CmsColumnEntity column : record.getColumns()) {
@@ -64,7 +65,7 @@ public class CmsServiceImpl implements CmsService {
 	@Transactional
 	public void deleteTable(Long id) {
 		CmsTableEntity record = cmsTableDao.selectById(id);
-		CmsConfigEntity config = cmsConfigDao.selectById(EsSecurityHandler.clientId());
+		CmsConfigEntity config = cmsConfigDao.selectById(EsContextHolder.getContext().getClientId());
 		record.setName("cms_" + config.getTablePrefix() + "_" + record.getName());
 		cmsRowDao.dropTable(record);
 		cmsTableDao.deleteById(id);

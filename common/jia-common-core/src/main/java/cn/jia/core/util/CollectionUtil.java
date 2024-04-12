@@ -1,6 +1,7 @@
 package cn.jia.core.util;
 
 import java.util.Collection;
+import java.util.function.Function;
 
 /**
  * 提供集合操作的实用方法。
@@ -27,5 +28,14 @@ public class CollectionUtil {
         return !isNullOrEmpty(collection);
     }
 
-    // 根据需要添加更多的实用方法
+    /**
+     * 获取列表的第一个元素，如果列表为空或者为null，则返回null
+     *
+     * @param collection 集合
+     * @return 列表的第一个元素
+     * @param <T> 返回值的类型
+     */
+    public static <T> T findFirst(Collection<T> collection) {
+        return isNullOrEmpty(collection) ? null : collection.iterator().next();
+    }
 }

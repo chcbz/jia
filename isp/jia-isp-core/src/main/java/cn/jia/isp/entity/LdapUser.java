@@ -10,7 +10,7 @@ import org.springframework.ldap.support.LdapNameBuilder;
 import javax.naming.Name;
 import java.io.Serializable;
 
-@Entry(objectClasses = { "top", "person", "jiaPerson" }, base = "ou=users,dc=jia")
+@Entry(objectClasses = { "top", "person", "jiaPerson" }, base = "ou=users")
 @Data
 public class LdapUser implements Serializable {
 
@@ -74,13 +74,13 @@ public class LdapUser implements Serializable {
 	
 	public LdapUser(String uid) {
 		this.uid = uid;
-		this.dn = LdapNameBuilder.newInstance().add("ou=users,dc=jia").add("uid", uid).build();
+		this.dn = LdapNameBuilder.newInstance().add("ou=users").add("uid", uid).build();
 	}
 
 	public LdapUser() {}
 
 	public void setUid(String uid) {
 		this.uid = uid;
-		this.dn = LdapNameBuilder.newInstance().add("ou=users,dc=jia").add("uid", uid).build();
+		this.dn = LdapNameBuilder.newInstance().add("ou=users").add("uid", uid).build();
 	}
 }

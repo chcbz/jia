@@ -1,18 +1,18 @@
 package cn.jia.isp.service.impl;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.DateUtil;
 import cn.jia.isp.dao.CarBrandAudiDao;
 import cn.jia.isp.dao.CarBrandDao;
 import cn.jia.isp.dao.CarBrandMfDao;
 import cn.jia.isp.dao.CarBrandVersionDao;
-import cn.jia.isp.entity.CarBrandEntity;
 import cn.jia.isp.entity.CarBrandAudiEntity;
+import cn.jia.isp.entity.CarBrandEntity;
 import cn.jia.isp.entity.CarBrandMfEntity;
 import cn.jia.isp.entity.CarBrandVersionEntity;
 import cn.jia.isp.service.CarService;
-import com.github.pagehelper.PageInfo;
 import com.github.pagehelper.PageHelper;
+import com.github.pagehelper.PageInfo;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
@@ -36,7 +36,7 @@ public class CarServiceImpl implements CarService {
 	@Override
 	public CarBrandEntity createBrand(CarBrandEntity record) {
 		long now = DateUtil.nowTime();
-		record.setClientId(EsSecurityHandler.clientId());
+		record.setClientId(EsContextHolder.getContext().getClientId());
 		record.setAddTime(now);
 		record.setUpTime(now);
 		carBrandDao.insert(record);
@@ -66,7 +66,7 @@ public class CarServiceImpl implements CarService {
 	}
 	@Override
 	public CarBrandAudiEntity createBrandAudi(CarBrandAudiEntity record) {
-		record.setClientId(EsSecurityHandler.clientId());
+		record.setClientId(EsContextHolder.getContext().getClientId());
 		carBrandAudiDao.insert(record);
 		return record;
 	}
@@ -91,7 +91,7 @@ public class CarServiceImpl implements CarService {
 	}
 	@Override
 	public CarBrandMfEntity createBrandMf(CarBrandMfEntity record) {
-		record.setClientId(EsSecurityHandler.clientId());
+		record.setClientId(EsContextHolder.getContext().getClientId());
 		carBrandMfDao.insert(record);
 		return record;
 	}
@@ -116,7 +116,7 @@ public class CarServiceImpl implements CarService {
 	}
 	@Override
 	public CarBrandVersionEntity createBrandVersion(CarBrandVersionEntity record) {
-		record.setClientId(EsSecurityHandler.clientId());
+		record.setClientId(EsContextHolder.getContext().getClientId());
 		carBrandVersionDao.insert(record);
 		return record;
 	}

@@ -11,7 +11,7 @@ import javax.naming.Name;
 import java.io.Serializable;
 import java.util.Set;
 
-@Entry(objectClasses = { "top", "groupOfNames", "jiaOrg" }, base = "ou=groups,dc=jia")
+@Entry(objectClasses = { "top", "groupOfNames", "jiaOrg" }, base = "ou=groups")
 @Data
 public class LdapUserGroup implements Serializable {
 
@@ -39,7 +39,8 @@ public class LdapUserGroup implements Serializable {
 
 	@Attribute(name = "description")
 	private String description;
-	
+
+	@JsonIgnore
 	@Attribute(name = "member")
 	private Set<Name> member;
 
@@ -47,11 +48,11 @@ public class LdapUserGroup implements Serializable {
 	
 	public LdapUserGroup(String cn) {
 		this.cn = cn;
-		this.dn = LdapNameBuilder.newInstance().add("ou=groups,dc=jia").add("cn", cn).build();
+		this.dn = LdapNameBuilder.newInstance().add("ou=groups").add("cn", cn).build();
 	}
 
 	public void setCn(String cn) {
 		this.cn = cn;
-		this.dn = LdapNameBuilder.newInstance().add("ou=groups,dc=jia").add("cn", cn).build();
+		this.dn = LdapNameBuilder.newInstance().add("ou=groups").add("cn", cn).build();
 	}
 }

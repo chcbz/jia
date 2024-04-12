@@ -1,10 +1,12 @@
 package cn.jia.isp.api;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.BeanUtil;
+import cn.jia.core.util.CollectionUtil;
+import cn.jia.core.util.ValidUtil;
 import cn.jia.isp.common.IspErrorConstants;
 import cn.jia.isp.entity.LdapAccount;
 import cn.jia.isp.entity.LdapUser;
@@ -14,8 +16,10 @@ import cn.jia.isp.service.LdapAccountService;
 import cn.jia.isp.service.LdapUserGroupService;
 import cn.jia.isp.service.LdapUserService;
 import jakarta.inject.Inject;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ldap.core.LdapTemplate;
 import org.springframework.ldap.core.support.LdapContextSource;
+import org.springframework.ldap.support.LdapNameBuilder;
 import org.springframework.web.bind.annotation.*;
 
 import javax.naming.Name;
@@ -39,17 +43,19 @@ public class LdapController {
     @Inject
     private LdapTemplate ldapTemplate;
 
+    @Value("${ldap.default.user:cn=root}")
+    private String ldapDefaultUser;
+
     /**
      * 根据cn获取用户信息
      *
      * @param type 检索类型
      * @param key  检索值
      * @return 用户信息
-     * @throws Exception 异常情况
      */
     @GetMapping(value = "/user/get")
     public Object userFind(@RequestParam(name = "type", defaultValue = "uid") String type,
-                           @RequestParam(name = "key") String key) throws Exception {
+                           @RequestParam(name = "key") String key) {
         LdapUser user = new LdapUser();
         if ("uid".equals(type)) {
             user.setUid(key);
@@ -73,10 +79,9 @@ public class LdapController {
      *
      * @param user 检索条件
      * @return 用户信息
-     * @throws Exception 异常信息
      */
     @PostMapping(value = "/user/search")
-    public Object userFind(@RequestBody LdapUser user) throws Exception {
+    public Object userSearch(@RequestBody LdapUser user) {
         List<LdapUser> userList = ldapUserService.search(user);
         if (userList == null || userList.size() == 0) {
             throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
@@ -103,11 +108,13 @@ public class LdapController {
         }
 
         //添加到当前组织
-        LdapUserGroup group = ldapUserGroupService.findByClientId(EsSecurityHandler.clientId());
-        LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
-        Name baseDn = contextSource.getBaseLdapName();
-        group.getMember().add(baseDn.addAll(user.getDn()));
-        ldapUserGroupService.modify(group);
+        LdapUserGroup group = ldapUserGroupService.findByClientId(EsContextHolder.getContext().getClientId());
+        if (group != null) {
+            LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
+            Name baseDn = contextSource.getBaseLdapName();
+            group.getMember().add(baseDn.addAll(user.getDn()));
+            ldapUserGroupService.modify(group);
+        }
         return JsonResult.success(user);
     }
 
@@ -118,7 +125,7 @@ public class LdapController {
      * @return 处理结果
      */
     @PostMapping(value = "/user/update")
-    public Object userUpdate(@RequestBody LdapUser user) throws Exception {
+    public Object userUpdate(@RequestBody LdapUser user) {
         LdapUser upUser = ldapUserService.findByUid(user.getUid());
         BeanUtil.copyPropertiesIgnoreNull(user, upUser);
         ldapUserService.modifyLdapUser(upUser);
@@ -174,8 +181,8 @@ public class LdapController {
      */
     @GetMapping(value = "/usergroup/findAll")
     public Object userGroupFindAll() {
-        List<LdapUserGroup> userGroupList = ldapUserGroupService.findAll();
-        JsonResultPage<LdapUserGroup> result = new JsonResultPage<>(userGroupList);
+        List<LdapUserGroupDTO> userGroupList = ldapUserGroupService.findAll();
+        JsonResultPage<LdapUserGroupDTO> result = new JsonResultPage<>(userGroupList);
         result.setTotal((long) userGroupList.size());
         return result;
     }
@@ -198,8 +205,13 @@ public class LdapController {
             }
             member.add(baseDn.addAll(user.getDn()));
         }
-        userGroup.setMember(member);
-        ldapUserGroupService.create(userGroup);
+        if (CollectionUtil.isNullOrEmpty(member)) {
+            member.add(LdapNameBuilder.newInstance().add(ldapDefaultUser).build());
+        }
+        LdapUserGroup group = new LdapUserGroup();
+        BeanUtil.copyPropertiesIgnoreNull(userGroup, group);
+        group.setMember(member);
+        ldapUserGroupService.create(group);
         return JsonResult.success();
     }
 
@@ -212,6 +224,7 @@ public class LdapController {
     @PostMapping(value = "/usergroup/update")
     public Object userGroupUpdate(@RequestBody LdapUserGroup userGroup) {
         LdapUserGroup upUserGroup = ldapUserGroupService.findByCn(userGroup.getCn());
+        ValidUtil.assertNotNull(upUserGroup, IspErrorConstants.DATA_NOT_FOUND);
         BeanUtil.copyPropertiesIgnoreNull(userGroup, upUserGroup);
         ldapUserGroupService.modify(upUserGroup);
         return JsonResult.success();

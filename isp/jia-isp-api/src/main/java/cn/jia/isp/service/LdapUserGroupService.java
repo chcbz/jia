@@ -1,6 +1,7 @@
 package cn.jia.isp.service;
 
 import cn.jia.isp.entity.LdapUserGroup;
+import cn.jia.isp.entity.LdapUserGroupDTO;
 
 import java.util.List;
 
@@ -16,5 +17,5 @@ public interface LdapUserGroupService {
 
 	void delete(LdapUserGroup group);
 	
-	List<LdapUserGroup> findAll();
+	List<LdapUserGroupDTO> findAll();
 }

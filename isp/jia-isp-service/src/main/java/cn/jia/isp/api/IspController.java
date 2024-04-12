@@ -1,6 +1,7 @@
 package cn.jia.isp.api;
 
 import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -80,7 +81,7 @@ public class IspController {
      */
     @RequestMapping(value = "/server/create", method = RequestMethod.POST)
     public Object createServer(@RequestBody IspServerEntity record) {
-        record.setClientId(EsSecurityHandler.clientId());
+        record.setClientId(EsContextHolder.getContext().getClientId());
         ispService.createServer(record);
         return JsonResult.success();
     }

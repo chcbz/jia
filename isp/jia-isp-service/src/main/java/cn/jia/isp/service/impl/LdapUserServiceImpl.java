@@ -28,9 +28,9 @@ public class LdapUserServiceImpl implements LdapUserService {
     }
 
     @Override
-    public LdapUser findByUid(String uid) throws Exception {
+    public LdapUser findByUid(String uid) {
         try {
-            return ldapTemplate.findOne(query().base("ou=users,dc=jia")
+            return ldapTemplate.findOne(query().base("ou=users")
                     .where("uid").is(uid), LdapUser.class);
         } catch (Exception e) {
             throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
@@ -54,9 +54,9 @@ public class LdapUserServiceImpl implements LdapUserService {
     }
 
     @Override
-    public LdapUser findByExample(LdapUser person) throws Exception {
+    public LdapUser findByExample(LdapUser person) {
         try {
-            ContainerCriteria criteria = query().base("ou=users,dc=jia")
+            ContainerCriteria criteria = query().base("ou=users")
                     .where("objectClass").is("jiaPerson");
             if (person.getUid() != null) {
                 criteria.and("uid").is(person.getUid());
@@ -79,7 +79,7 @@ public class LdapUserServiceImpl implements LdapUserService {
     @Override
     public List<LdapUser> search(LdapUser person) {
         try {
-            ContainerCriteria criteria = query().base("ou=users,dc=jia")
+            ContainerCriteria criteria = query().base("ou=users")
                     .where("objectClass").is("jiaPerson");
             ContainerCriteria subCriteria = query().where("uid").is("");
             if (person.getUid() != null) {

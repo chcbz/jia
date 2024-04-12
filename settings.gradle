@@ -5,7 +5,7 @@ include 'common:jia-common-core', 'common:jia-common-api', 'common:jia-common-te
 include 'base:jia-base-core', 'base:jia-base-api', 'base:jia-base-service', 'base:jia-base-mapper',
         'base:jia-base-starter'
 include 'dwz:jia-dwz-core', 'dwz:jia-dwz-api', 'dwz:jia-dwz-service', 'dwz:jia-dwz-mapper', 'dwz:jia-dwz-starter'
-include 'isp:jia-isp-core', 'isp:jia-isp-api', 'isp:jia-isp-service', 'isp:jia-isp-mapper'
+include 'isp:jia-isp-core', 'isp:jia-isp-api', 'isp:jia-isp-service', 'isp:jia-isp-mapper', 'isp:jia-isp-starter'
 include 'kefu:jia-kefu-core', 'kefu:jia-kefu-api', 'kefu:jia-kefu-service', 'kefu:jia-kefu-mapper'
 include 'material:jia-material-core', 'material:jia-material-api', 'material:jia-material-service',
         'material:jia-material-mapper', 'material:jia-material-starter'
@@ -51,9 +51,9 @@ dependencyResolutionManagement {
             library('spring.jdbc', 'org.springframework', 'spring-jdbc').versionRef('spring')
             library('spring.aspects', 'org.springframework', 'spring-aspects').versionRef('spring')
             library('spring.websocket', 'org.springframework', 'spring-websocket').versionRef('spring')
-            library('spring.ldap', 'org.springframework.ldap', 'spring-ldap-core').version('3.1.0')
+            library('spring.ldap', 'org.springframework.ldap', 'spring-ldap-core').version('3.2.2')
             library('spring.redis', 'org.springframework.data', 'spring-data-redis').version('3.1.0')
-            library('spring.elasticsearch', 'org.springframework.data', 'spring-data-elasticsearch').version('5.1.0')
+            library('spring.elasticsearch', 'org.springframework.data', 'spring-data-elasticsearch').version('5.2.4')
             library('spring.rabbit', 'org.springframework.amqp', 'spring-rabbit').version('3.1.3')
             library('spring.security.core', 'org.springframework.security', 'spring-security-core').versionRef('spring-security')
             library('spring.security.config', 'org.springframework.security', 'spring-security-config').versionRef('spring-security')

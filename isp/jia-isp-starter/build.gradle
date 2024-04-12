@@ -1,0 +1,9 @@
+dependencies {
+    api project(':isp:jia-isp-service')
+    api project(':isp:jia-isp-mapper')
+    api project(':common:jia-common-starter')
+    implementation(libs.spring.boot.starter.data.ldap)
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-isp-starter'

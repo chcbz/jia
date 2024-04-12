@@ -1,7 +1,10 @@
 package cn.jia.isp.service.impl;
 
+import cn.jia.core.util.CollectionUtil;
 import cn.jia.isp.entity.LdapUserGroup;
+import cn.jia.isp.entity.LdapUserGroupDTO;
 import cn.jia.isp.service.LdapUserGroupService;
+import cn.jia.isp.vomapper.LdapUserGroupMapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.ldap.core.LdapTemplate;
@@ -24,17 +27,19 @@ public class LdapUserGroupServiceImpl implements LdapUserGroupService {
 
 	@Override
 	public LdapUserGroup findByCn(String cn) {
-		return ldapTemplate.findOne(query().base("ou=groups,dc=jia").where("cn").is(cn), LdapUserGroup.class);
+		return CollectionUtil.findFirst(ldapTemplate.find(
+				query().base("ou=groups").where("cn").is(cn), LdapUserGroup.class));
 	}
 
 	@Override
 	public LdapUserGroup findByClientId(String clientId) {
-		return ldapTemplate.findOne(query().base("ou=groups,dc=jia").where("clientId").is(clientId), LdapUserGroup.class);
+		return CollectionUtil.findFirst(ldapTemplate.find(
+				query().base("ou=groups").where("clientId").is(clientId), LdapUserGroup.class));
 	}
 	
 	@Override
-	public List<LdapUserGroup> findAll() {
-		return ldapTemplate.findAll(LdapUserGroup.class);
+	public List<LdapUserGroupDTO> findAll() {
+		return LdapUserGroupMapper.INSTANCE.toList(ldapTemplate.findAll(LdapUserGroup.class));
 	}
 
 	@Override

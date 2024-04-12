@@ -3,6 +3,7 @@ package cn.jia.isp.api;
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.config.SpringContextHolder;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -190,7 +191,7 @@ public class CmsController {
      */
     @RequestMapping(value = "/config/get", method = RequestMethod.GET)
     public Object findConfig() {
-        CmsConfigEntity config = cmsService.selectConfig(EsSecurityHandler.clientId());
+        CmsConfigEntity config = cmsService.selectConfig(EsContextHolder.getContext().getClientId());
         return JsonResult.success(config);
     }
 
@@ -202,7 +203,7 @@ public class CmsController {
      */
     @RequestMapping(value = "/config/update", method = RequestMethod.POST)
     public Object updateConfig(@RequestBody CmsConfigEntity config) {
-        config.setClientId(EsSecurityHandler.clientId());
+        config.setClientId(EsContextHolder.getContext().getClientId());
         cmsService.updateConfig(config);
         return JsonResult.success(config);
     }
@@ -216,9 +217,9 @@ public class CmsController {
     @RequestMapping(value = "/register", method = RequestMethod.POST)
     public Object register(@RequestBody CmsConfigEntity config) throws Exception {
         //新增客户端资源
-        clientService.addResource(resourceId, EsSecurityHandler.clientId());
+        clientService.addResource(resourceId, EsContextHolder.getContext().getClientId());
         //新增配置信息
-        config.setClientId(EsSecurityHandler.clientId());
+        config.setClientId(EsContextHolder.getContext().getClientId());
         cmsService.createConfig(config);
         return JsonResult.success(config);
     }

@@ -1,5 +1,6 @@
 package cn.jia.isp.service.impl;
 
+import cn.jia.core.util.CollectionUtil;
 import cn.jia.isp.entity.LdapAccount;
 import cn.jia.isp.service.LdapAccountService;
 import jakarta.inject.Inject;
@@ -24,7 +25,8 @@ public class LdapAccountServiceImpl implements LdapAccountService {
 
 	@Override
 	public LdapAccount findByUid(String uid) {
-		return ldapTemplate.findOne(query().where("uid").is(uid), LdapAccount.class);
+		return CollectionUtil.findFirst(ldapTemplate.find(
+				query().where("uid").is(uid), LdapAccount.class));
 	}
 	
 	@Override
