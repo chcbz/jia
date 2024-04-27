@@ -74,7 +74,7 @@ public class PhraseController {
 	 * @return 短语列表
 	 */
 	@PostMapping(value = "/get/random")
-	public Object getRandom(@RequestBody MatPhraseEntity example) throws Exception {
+	public Object getRandom(@RequestBody MatPhraseEntity example) {
 		MatPhraseEntity phrase = phraseService.findRandom(example);
 		if(phrase == null) {
 			throw new EsRuntimeException(MatErrorConstants.MEDIA_NOT_EXIST);
@@ -86,10 +86,9 @@ public class PhraseController {
 	 * 投票
 	 * @param vote 投票信息
 	 * @return 处理结果
-	 * @throws Exception 异常信息
 	 */
 	@PostMapping(value = "/vote")
-	public Object vote(@RequestBody MatPhraseVoteEntity vote) throws Exception {
+	public Object vote(@RequestBody MatPhraseVoteEntity vote) {
 		phraseService.vote(vote);
 		return JsonResult.success();
 	}
@@ -98,10 +97,9 @@ public class PhraseController {
 	 * 访问
 	 * @param id 短语ID
 	 * @return 处理结果
-	 * @throws Exception 异常信息
 	 */
 	@GetMapping(value = "/read")
-	public Object read(@RequestParam Long id) throws Exception {
+	public Object read(@RequestParam Long id) {
 		phraseService.read(id);
 		return JsonResult.success();
 	}
