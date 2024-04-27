@@ -22,10 +22,10 @@ public class ElasticsearchService {
      * @param value 查询内容
      * @return 查询结果
      */
-    public SearchHits<?> searchMatch(String index, String field, String value) {
+    public <T>  SearchHits<T> searchMatch(String index, String field, String value, Class<T> clazz) {
         NativeQuery query = NativeQuery.builder()
                 .withQuery(Queries.matchQueryAsQuery(field, value, null, null)).build();
-        return elasticsearchOperations.search(query, String.class, IndexCoordinates.of(index));
+        return elasticsearchOperations.search(query, clazz, IndexCoordinates.of(index));
     }
 
     /**
