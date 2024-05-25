@@ -4,7 +4,7 @@ import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.JsonUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import jakarta.websocket.*;
 import jakarta.websocket.server.ServerEndpoint;
 import lombok.EqualsAndHashCode;
@@ -141,7 +141,7 @@ public class WebSocketServer {
      * @since 2017年6月2日上午10:35:32
      */
     public static WebSocketServer getCurrentWebSocket(String loginUser) {
-        if (StringUtils.isEmpty(loginUser) || WEB_SOCKET_SET.size() < 1) {
+        if (StringUtil.isEmpty(loginUser) || WEB_SOCKET_SET.size() < 1) {
             return null;
         }
         for (WebSocketServer socketServer : WEB_SOCKET_SET) {
@@ -175,7 +175,7 @@ public class WebSocketServer {
      */
     public static void sendMessage(String message, String loginUser) {
         try {
-            if (StringUtils.isEmpty(loginUser) || StringUtils.isBlank(message)) {
+            if (StringUtil.isEmpty(loginUser) || StringUtil.isBlank(message)) {
                 return;
             }
             WebSocketServer currentWebSocket = getCurrentWebSocket(loginUser);
@@ -198,7 +198,7 @@ public class WebSocketServer {
      */
     public static void sendMessageList(String message, List<String> loginUserList) {
         try {
-            if (CollectionUtil.isNullOrEmpty(loginUserList) || StringUtils.isBlank(message)) {
+            if (CollectionUtil.isNullOrEmpty(loginUserList) || StringUtil.isBlank(message)) {
                 return;
             }
             for (String loginUser : loginUserList) {
@@ -223,7 +223,7 @@ public class WebSocketServer {
      */
     public static void sendMessageAll(String message) {
         try {
-            if (WEB_SOCKET_SET.size() < 1 || StringUtils.isBlank(message)) {
+            if (WEB_SOCKET_SET.size() < 1 || StringUtil.isBlank(message)) {
                 return;
             }
             for (WebSocketServer item : WEB_SOCKET_SET) {

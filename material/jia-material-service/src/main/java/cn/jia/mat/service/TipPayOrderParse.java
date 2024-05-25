@@ -2,7 +2,7 @@ package cn.jia.mat.service;
 
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.util.DataUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.mat.entity.MatTipEntity;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.user.service.UserService;
@@ -44,7 +44,7 @@ public class TipPayOrderParse extends AbstractPayOrderParseService {
         PayOrderEntity payOrder = new PayOrderEntity();
         payOrder.setBody("打赏");
         payOrder.setDetail("打赏");
-        if(StringUtils.isNotEmpty(payOrderParseVO.getOutTradeNo())) {
+        if(StringUtil.isNotEmpty(payOrderParseVO.getOutTradeNo())) {
             Long tipId = Long.parseLong(payOrderParseVO.getOutTradeNo().substring(3));
             MatTipEntity tip = tipService.get(tipId);
             payOrder.setTotalFee(tip.getPrice());

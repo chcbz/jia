@@ -204,7 +204,7 @@ public class HttpUtil {
      */
     public static String addUrlValue(String url,String paramName,String paramValue){
         //参数和参数名为空的话就返回原来的URL
-        if(StringUtils.isBlank(paramValue) || StringUtils.isBlank(paramName)){
+        if(StringUtil.isBlank(paramValue) || StringUtil.isBlank(paramName)){
             return url;
         }
         //先很据# ? 将URL拆分成一个String数组
@@ -222,7 +222,7 @@ public class HttpUtil {
                 c = bcArray[1];
             }
         }
-        if (StringUtils.isBlank(b)) {
+        if (StringUtil.isBlank(b)) {
             return url + "?" + paramName + "=" + paramValue;
         }
 
@@ -231,7 +231,7 @@ public class HttpUtil {
         StringBuilder newb = new StringBuilder();
         boolean found = false;
         for (String bi : bArray) {
-            if (StringUtils.isBlank(bi)) {
+            if (StringUtil.isBlank(bi)) {
                 continue;
             }
             String key;
@@ -245,7 +245,7 @@ public class HttpUtil {
 
             if (key.equals(paramName)) {
                 found = true;
-                if (StringUtils.isNotBlank(paramValue)) {
+                if (StringUtil.isNotBlank(paramValue)) {
                     newb.append("&").append(key).append("=").append(paramValue);
                 }
             } else {
@@ -253,13 +253,13 @@ public class HttpUtil {
             }
         }
         // 如果没找到，加上
-        if (!found && StringUtils.isNotBlank(paramValue)) {
+        if (!found && StringUtil.isNotBlank(paramValue)) {
             newb.append("&").append(paramName).append("=").append(paramValue);
         }
-        if (StringUtils.isNotBlank(newb.toString())) {
+        if (StringUtil.isNotBlank(newb.toString())) {
             a = a + "?" + newb.substring(1);
         }
-        if (StringUtils.isNotBlank(c)) {
+        if (StringUtil.isNotBlank(c)) {
             a = a + "#" + c;
         }
         return a;
@@ -273,7 +273,7 @@ public class HttpUtil {
      * @return
      */
     public static String getUrlValue(String url, String paramName) {
-        if(StringUtils.isBlank(paramName)){
+        if(StringUtil.isBlank(paramName)){
             return null;
         }
         // ? #拆开，先把?拆开 a?b#c ->{a,b,c}
@@ -284,14 +284,14 @@ public class HttpUtil {
             String[] bcArray = bc.split("#");
             b = bcArray[0];
         }
-        if (StringUtils.isBlank(b)) {
+        if (StringUtil.isBlank(b)) {
             return null;
         }
 
         // 用&拆p, p1=1&p2=2 ，{p1=1,p2=2}
         String[] bArray = b.split("&");
         for (String bi : bArray) {
-            if (StringUtils.isBlank(bi)) {
+            if (StringUtil.isBlank(bi)) {
                 continue;
             }
             String key;

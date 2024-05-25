@@ -1,7 +1,7 @@
 package cn.jia.core.ldap;
 
 import cn.jia.core.util.BeanUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import org.springframework.ldap.control.PagedResultsCookie;
@@ -18,7 +18,6 @@ import org.springframework.ldap.support.LdapUtils;
 
 import javax.naming.Name;
 import javax.naming.directory.SearchControls;
-import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.Map;
 
@@ -155,7 +154,7 @@ public class LdapHelper<T> {
             if ("objectclass".equals(mkey)) {
                 filter.and(new EqualsFilter(mkey, map.get(mkey).toString()));
             }
-            if(StringUtils.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey)) {
+            if(StringUtil.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey)) {
                 filter.and(new WhitespaceWildcardsFilter(mkey, map.get(mkey).toString()));
             }
         }
@@ -174,7 +173,7 @@ public class LdapHelper<T> {
             if ("objectclass".equals(mkey)) {
                 filter.and(new EqualsFilter(mkey, map.get(mkey).toString()));
             }
-            if(StringUtils.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey)) {
+            if(StringUtil.isNotBlank(map.get(mkey).toString()) && !"objectclass".equals(mkey)) {
                 filter.and(new EqualsFilter(mkey, map.get(mkey).toString()));
             }
         }

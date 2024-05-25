@@ -2,7 +2,7 @@ package cn.jia.wx.service;
 
 import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.exception.EsRuntimeException;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.wx.common.WxErrorConstants;
 import cn.jia.wx.entity.PayOrderEntity;
 import cn.jia.wx.entity.PayOrderParseVO;
@@ -15,12 +15,12 @@ import jakarta.inject.Named;
 public class PayOrderParse implements PayOrderParseService {
     public PayOrderParseService instance(PayOrderParseVO payOrderParseVO) {
         String prefix = null;
-        if (StringUtils.isNotEmpty(payOrderParseVO.getOutTradeNo())) {
+        if (StringUtil.isNotEmpty(payOrderParseVO.getOutTradeNo())) {
             prefix = payOrderParseVO.getOutTradeNo().substring(0, 3);
-        } else if (StringUtils.isNotEmpty(payOrderParseVO.getProductId())) {
+        } else if (StringUtil.isNotEmpty(payOrderParseVO.getProductId())) {
             prefix = payOrderParseVO.getProductId().substring(0, 3);
         }
-        if (StringUtils.isEmpty(prefix)) {
+        if (StringUtil.isEmpty(prefix)) {
             throw new EsRuntimeException(WxErrorConstants.WXPAY_TYPE_ISNULL);
         }
         // 取得Class对象

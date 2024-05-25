@@ -2,7 +2,7 @@ package cn.jia.user.service.impl;
 
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.service.BaseServiceImpl;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.user.common.UserErrorConstants;
 import cn.jia.user.dao.UserOrgDao;
 import cn.jia.user.dao.UserOrgRelDao;
@@ -92,7 +92,7 @@ public class OrgServiceImpl extends BaseServiceImpl<UserOrgDao, OrgEntity> imple
 		if(!checkedList.contains(curOrgId)) {
 			//判断当前部门是否存在对应角色，有则直接返回
 			String director = baseDao.findDirector(curOrgId, roleId);
-			if(StringUtils.isNotEmpty(director)) {
+			if(StringUtil.isNotEmpty(director)) {
 				return director;
 			}
 			checkedList.add(curOrgId);

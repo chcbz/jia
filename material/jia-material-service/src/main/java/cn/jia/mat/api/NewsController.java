@@ -164,7 +164,7 @@ public class NewsController {
 		}
 
 		if(MatConstants.SEND_TYPE_WX.equals(type)) {
-			if(StringUtils.isEmpty(user.getOpenid())) {
+			if(StringUtil.isEmpty(user.getOpenid())) {
 				throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
 			}
 			File file = new File(webRealPath+"/"+news.getPicurl());
@@ -181,7 +181,7 @@ public class NewsController {
 			} catch (WxErrorException e) {
 				throw new EsRuntimeException("", e.getError().getErrorMsg());
 			}
-			if(result == null || StringUtils.isEmpty(result.getMediaId())) {
+			if(result == null || StringUtil.isEmpty(result.getMediaId())) {
 				throw new EsRuntimeException(MatErrorConstants.MEDIA_NOT_EXIST);
 			}
 
@@ -205,7 +205,7 @@ public class NewsController {
 			} catch (WxErrorException e) {
 				throw new EsRuntimeException("", e.getError().getErrorMsg());
 			}
-			if(newsUploadResult == null || StringUtils.isEmpty(newsUploadResult.getMediaId())) {
+			if(newsUploadResult == null || StringUtil.isEmpty(newsUploadResult.getMediaId())) {
 				throw new EsRuntimeException(MatErrorConstants.MEDIA_NOT_EXIST);
 			}
 
@@ -224,7 +224,7 @@ public class NewsController {
 				throw new EsRuntimeException();
 			}
 		} else if(MatConstants.SEND_TYPE_MAIL.equals(type)) {
-			if(StringUtils.isEmpty(user.getEmail())) {
+			if(StringUtil.isEmpty(user.getEmail())) {
 				throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
 			}
 			String from = dictService.getValue(SmsConstants.DICT_TYPE_EMAIL_SERVER, SmsConstants.EMAIL_SERVER_FROM);
@@ -237,7 +237,7 @@ public class NewsController {
 				throw new EsRuntimeException();
 			}
 		} else if(MatConstants.SEND_TYPE_SMS.equals(type)) {
-			if(StringUtils.isEmpty(user.getPhone())) {
+			if(StringUtil.isEmpty(user.getPhone())) {
 				throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
 			}
 			String tkey = DateUtil.getDate("yyyyMMddHHmmss");

@@ -61,7 +61,7 @@ public class ExcelUtil {
 	}
 
 	public static <T> List<T> importExcel(String filePath, Integer titleRows, Integer headerRows, Class<T> pojoClass) throws Exception {
-		if (StringUtils.isBlank(filePath)) {
+		if (StringUtil.isBlank(filePath)) {
 			return null;
 		}
 		ImportParams params = new ImportParams();

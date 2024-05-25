@@ -1,7 +1,7 @@
 dependencies {
     api project(':common:jia-common-service')
     implementation(libs.spring.boot.starter.web) {
-        exclude module: 'spring-boot-starter-tomcat'
+        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-tomcat'
     }
     implementation(libs.spring.boot.configuration.processor)
     api(libs.spring.boot.starter.mybatis)
@@ -10,13 +10,16 @@ dependencies {
     implementation(libs.spring.boot.starter.data.jdbc)
     implementation(libs.mysql)
     implementation(libs.spring.boot.starter.undertow)
+    implementation(libs.spring.boot.starter.validation)
     implementation(libs.spring.boot.starter.swagger)
     implementation(libs.spring.boot.starter.jasypt)
 
     compileOnly(libs.spring.boot.starter.data.redis)
     compileOnly(libs.spring.boot.starter.data.ldap)
     compileOnly(libs.spring.boot.starter.cache)
-    compileOnly(libs.spring.boot.starter.websocket)
+    compileOnly(libs.spring.boot.starter.websocket) {
+        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-tomcat'
+    }
     compileOnly(libs.spring.boot.starter.security)
     compileOnly(libs.spring.boot.starter.oauth2.resource.server)
     compileOnly(libs.spring.boot.starter.oauth2.client)

@@ -7,9 +7,9 @@ import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.exception.EsRuntimeException;
+import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.*;
 import cn.jia.dwz.service.DwzService;
-import cn.jia.isp.service.FileService;
 import cn.jia.mat.entity.MatVoteItemEntity;
 import cn.jia.mat.entity.MatVoteQuestionEntity;
 import cn.jia.mat.entity.MatVoteQuestionVO;
@@ -53,7 +53,6 @@ import me.chanjar.weixin.mp.bean.result.WxMpUserList;
 import me.chanjar.weixin.mp.bean.template.WxMpTemplateMessage;
 import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
@@ -93,11 +92,9 @@ public class WxMpController {
 	@Autowired(required = false)
 	private DictService dictService;
 	@Autowired
-	private RedisTemplate<String, Object> redisTemplate;
+	private RedisService redisService;
 	@Autowired(required = false)
 	private MatVoteService voteService;
-	@Autowired(required = false)
-	private FileService fileService;
 	@Autowired(required = false)
     private DwzService dwzService;
 
@@ -158,7 +155,7 @@ public class WxMpController {
 			mpUser = mpUserService.create(params);
 		}
 		// 将当前用户设置为活跃用户
-		redisTemplate.opsForValue().set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
+		redisService.set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
 		//关注
 		if(WxConsts.XmlMsgType.EVENT.equals(message.getMsgType()) && WxConsts.EventType.SUBSCRIBE.equals(message.getEvent())) {
 			WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
@@ -330,7 +327,7 @@ public class WxMpController {
 			return outMessage.toXml();
 		}
 		//回答问题
-        Object obj = redisTemplate.opsForValue().get("vote_" + mpUser.getJiacn());
+        String obj = redisService.get("vote_" + mpUser.getJiacn());
         if(obj != null && WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())) {
 			WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
 			outMessage.setCreateTime(message.getCreateTime());
@@ -346,7 +343,7 @@ public class WxMpController {
 				mpUserService.update(upUser);
 				outMessage.setContent("退订成功咯！哼！！");
 			} else {
-				Long questionId = (Long)obj;
+				Long questionId = Long.parseLong(obj);
 				MatVoteQuestionEntity voteQuestion = voteService.findQuestion(questionId);
 				MatVoteTickEntity voteTick = new MatVoteTickEntity();
 				voteTick.setQuestionId(questionId);
@@ -376,7 +373,7 @@ public class WxMpController {
 				}
 
 			}
-			redisTemplate.delete("vote_" + mpUser.getJiacn());
+			redisService.delete("vote_" + mpUser.getJiacn());
             return outMessage.toXml();
         }
         //处理消息是否送达成功推送
@@ -407,7 +404,7 @@ public class WxMpController {
 					content.append(item.getOpt()).append(" ").append(item.getContent()).append("\n");
 				}
 				outMessage.setContent(content.toString());
-				redisTemplate.opsForValue().set("vote_" + mpUser.getJiacn(), question.getId(), 2, TimeUnit.HOURS);
+				redisService.set("vote_" + mpUser.getJiacn(), String.valueOf(question.getId()), 2L, TimeUnit.HOURS);
 			}
 			return outMessage.toXml();
 		} else if ("我的积分".equals(message.getContent())) {
@@ -553,7 +550,7 @@ public class WxMpController {
 				}
 			}
 			userList = wxMpService.getUserService().userList(userList.getNextOpenid());
-		}while(StringUtils.isNotEmpty(userList.getNextOpenid()));
+		}while(StringUtil.isNotEmpty(userList.getNextOpenid()));
 		return JsonResult.success();
 	}
 	
@@ -726,7 +723,7 @@ public class WxMpController {
 			article.setContent(thsrc(article.getContent(), 0, request));
 		}
 		WxMpMaterialUploadResult result = mpInfoService.findWxMpService(request).getMaterialService().materialNewsUpload(news);
-		if(result != null && StringUtils.isNotEmpty(result.getMediaId())) {
+		if(result != null && StringUtil.isNotEmpty(result.getMediaId())) {
 			return JsonResult.success(result);
 		}else {
 			return JsonResult.failure(String.valueOf(Objects.requireNonNull(result).getErrCode()), result.getErrMsg());
@@ -781,7 +778,7 @@ public class WxMpController {
 		file.transferTo(tmpFile);
 		material.setFile(tmpFile);
 		WxMpMaterialUploadResult result = mpInfoService.findWxMpService(request).getMaterialService().materialFileUpload(type, material);
-		if(result != null && StringUtils.isNotEmpty(result.getMediaId())) {
+		if(result != null && StringUtil.isNotEmpty(result.getMediaId())) {
 			return JsonResult.success(result);
 		}else {
 			return JsonResult.failure(String.valueOf(Objects.requireNonNull(result).getErrCode()), result.getErrMsg());

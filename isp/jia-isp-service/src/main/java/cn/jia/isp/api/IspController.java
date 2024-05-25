@@ -183,8 +183,8 @@ public class IspController {
             String domainName = domainSplit[domainSplit.length - 2] + "." + domainSplit[domainSplit.length - 1];
             String subDomainName = domainSplit.length > 2 ?
                     record.getDomainName().substring(0, record.getDomainName().lastIndexOf(domainName) - 1) : "";
-            String ownDomainName = StringUtils.isEmpty(subDomainName) ? "@" : subDomainName;
-            String allDomainName = StringUtils.isEmpty(subDomainName) ? "*" : "*." + subDomainName;
+            String ownDomainName = StringUtil.isEmpty(subDomainName) ? "@" : subDomainName;
+            String allDomainName = StringUtil.isEmpty(subDomainName) ? "*" : "*." + subDomainName;
 
             if (IspConstants.DNS_TYPE_TXY.equals(record.getDnsType())) {
                 Map<String, Object> data = (Map<String, Object>) TxCloudUtil.dnsSend(

@@ -4,7 +4,7 @@ import org.springframework.core.NestedCheckedException;
 
 import cn.jia.core.global.MessageSupport;
 import cn.jia.core.global.Messageable;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 
 import java.io.Serial;
 
@@ -26,7 +26,7 @@ public class EsCheckedException extends NestedCheckedException implements Messag
 	
 	public EsCheckedException(String errorCode) {
 		super(errorCode);
-		if(StringUtils.isEmpty(errorCode)){
+		if(StringUtil.isEmpty(errorCode)){
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		}else{
 			this.messageSupport.setMessageKey(errorCode);
@@ -35,7 +35,7 @@ public class EsCheckedException extends NestedCheckedException implements Messag
 	
 	public EsCheckedException(String errorCode, Object[] args) {
 		super(errorCode);
-		if (StringUtils.isEmpty(errorCode)) {
+		if (StringUtil.isEmpty(errorCode)) {
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		} else {
 			this.messageSupport.setMessageKey(errorCode);
@@ -45,7 +45,7 @@ public class EsCheckedException extends NestedCheckedException implements Messag
 	
 	public EsCheckedException(String errorCode, Throwable paramThrowable) {
 		super(errorCode, paramThrowable);
-		if (StringUtils.isEmpty(errorCode)) {
+		if (StringUtil.isEmpty(errorCode)) {
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		} else {
 			this.messageSupport.setMessageKey(errorCode);
@@ -54,7 +54,7 @@ public class EsCheckedException extends NestedCheckedException implements Messag
 	
 	public EsCheckedException(String errorCode, Throwable paramThrowable, Object[] args) {
 		super(errorCode, paramThrowable);
-		if (StringUtils.isEmpty(errorCode)) {
+		if (StringUtil.isEmpty(errorCode)) {
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		} else {
 			this.messageSupport.setMessageKey(errorCode);

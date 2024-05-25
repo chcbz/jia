@@ -27,7 +27,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
-import java.util.Date;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -102,7 +101,7 @@ public class SmsController {
 		
 		String smsCode = smsService.upsert(phone, smsType);
 
-		templateId = StringUtils.isEmpty(templateId) ? SmsConstants.SMS_CODE_TEMPLATE_ID : templateId;
+		templateId = StringUtil.isEmpty(templateId) ? SmsConstants.SMS_CODE_TEMPLATE_ID : templateId;
 		SmsTemplateEntity template = smsService.findTemplate(templateId);
 		if(template == null) {
 			throw new EsRuntimeException(SmsErrorConstants.SMS_TEMPLATE_NOT_EXIST);
@@ -353,7 +352,7 @@ public class SmsController {
 		
 		SmsSendEntity send = smsService.selectSend(msgid);
 		SmsConfigEntity config = smsService.selectConfig(send.getClientId());
-		if(config != null && StringUtils.isNotEmpty(config.getReplyUrl())) {
+		if(config != null && StringUtil.isNotEmpty(config.getReplyUrl())) {
 			String replyUrl = config.getReplyUrl();
 			replyUrl = HttpUtil.addUrlValue(replyUrl, "mobile", mobile);
 			replyUrl = HttpUtil.addUrlValue(replyUrl, "content", content);

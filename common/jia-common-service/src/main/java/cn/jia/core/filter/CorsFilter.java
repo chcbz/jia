@@ -1,6 +1,6 @@
 package cn.jia.core.filter;
 
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -30,7 +30,7 @@ public class CorsFilter implements Filter {
     public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
         HttpServletRequest request = (HttpServletRequest) req;
         HttpServletResponse response = (HttpServletResponse) res;
-        if (StringUtils.isNotEmpty(allowOrigin)) {
+        if (StringUtil.isNotEmpty(allowOrigin)) {
             List<String> allowOriginList = Arrays.asList(allowOrigin.split(","));
             if (allowOriginList.size() > 0) {
                 String currentOrigin = request.getHeader("Origin");
@@ -39,16 +39,16 @@ public class CorsFilter implements Filter {
                 }
             }
         }
-        if (StringUtils.isNotEmpty(allowMethods)) {
+        if (StringUtil.isNotEmpty(allowMethods)) {
             response.setHeader("Access-Control-Allow-Methods", allowMethods);
         }
-        if (StringUtils.isNotEmpty(allowCredentials)) {
+        if (StringUtil.isNotEmpty(allowCredentials)) {
             response.setHeader("Access-Control-Allow-Credentials", allowCredentials);
         }
-        if (StringUtils.isNotEmpty(allowHeaders)) {
+        if (StringUtil.isNotEmpty(allowHeaders)) {
             response.setHeader("Access-Control-Allow-Headers", allowHeaders);
         }
-        if (StringUtils.isNotEmpty(exposeHeaders)) {
+        if (StringUtil.isNotEmpty(exposeHeaders)) {
             response.setHeader("Access-Control-Expose-Headers", exposeHeaders);
         }
         chain.doFilter(req, res);

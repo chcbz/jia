@@ -1,8 +1,13 @@
 package cn.jia.core.util;
 
+import org.springframework.lang.Nullable;
+import org.springframework.util.StringUtils;
+
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -12,7 +17,7 @@ import java.util.regex.Pattern;
  * @author carver.gu
  * @since 1.0, Sep 12, 2009
  */
-public class StringUtils {
+public class StringUtil {
     /**
      * 检查指定的字符串是否为空。
      * <ul>
@@ -47,7 +52,7 @@ public class StringUtils {
     }
 
     public static boolean isNotEmpty(final CharSequence cs) {
-        return !StringUtils.isEmpty(cs);
+        return !StringUtil.isEmpty(cs);
     }
 
     /**
@@ -452,5 +457,25 @@ public class StringUtils {
         }
         Matcher m = BLANK_PATTERN.matcher(str);
         return m.replaceAll("");
+    }
+
+    /**
+     * 逗号分隔字符串转Set
+     *
+     * @param str 字符串
+     * @return set列表
+     */
+    public static Set<String> commaDelimitedListToSet(@Nullable String str) {
+        return StringUtils.commaDelimitedListToSet(str);
+    }
+
+    /**
+     * Set转逗号分隔字符串
+     *
+     * @param set set列表
+     * @return 字符串
+     */
+    public static String collectionToCommaDelimitedString(@Nullable Set<String> set) {
+        return StringUtils.collectionToCommaDelimitedString(set);
     }
 }

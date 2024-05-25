@@ -123,7 +123,7 @@ public class SmsReceiver {
 					}
 				}
 				SmsConfigEntity config = smsConfigDao.selectById(clientId);
-				content = "【" + config.getShortName() + "】" + content + StringUtils.ignoreNull(smsMessage.getUrl());
+				content = "【" + config.getShortName() + "】" + content + StringUtil.ignoreNull(smsMessage.getUrl());
 				
 				HttpHeaders headers = new HttpHeaders();
 				headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);

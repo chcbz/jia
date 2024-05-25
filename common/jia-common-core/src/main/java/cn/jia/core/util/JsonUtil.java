@@ -55,7 +55,7 @@ public class JsonUtil {
 	 */
 	@SuppressWarnings("hiding")
 	public static <T> T fromJson(String jsonString, Class<T> type) {
-		if(StringUtils.isEmpty(jsonString)) {
+		if(StringUtil.isEmpty(jsonString)) {
 			return null;
 		}
 		try {
@@ -73,7 +73,7 @@ public class JsonUtil {
 	 * @return 对象列表
 	 */
 	public static <T> List<T> jsonToList(String jsonString, TypeReference<List<T>> type) {
-		if(StringUtils.isEmpty(jsonString)) {
+		if(StringUtil.isEmpty(jsonString)) {
 			return null;
 		}
 		try {
@@ -139,7 +139,7 @@ public class JsonUtil {
 	 * @return map
 	 */
 	public static Map<String, Object> jsonToMap(String json) {
-		if(StringUtils.isEmpty(json)) {
+		if(StringUtil.isEmpty(json)) {
 			return null;
 		}
 		JSONObject obj = new JSONObject(json);

@@ -2,7 +2,7 @@ package cn.jia.sms.entity;
 
 import cn.jia.common.entity.BaseEntityWrapper;
 import cn.jia.core.entity.BaseEntity;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 
@@ -13,7 +13,7 @@ public class SmsTemplateEntityWrapper implements BaseEntityWrapper<SmsTemplateVO
                 .lt(entity.getUpdateTimeEnd() != null, BaseEntity::getUpdateTime, entity.getUpdateTimeEnd())
                 .ge(entity.getCreateTimeStart() != null, BaseEntity::getUpdateTime, entity.getCreateTimeStart())
                 .lt(entity.getCreateTimeEnd() != null, BaseEntity::getUpdateTime, entity.getCreateTimeEnd())
-                .like(StringUtils.isNotEmpty(entity.getNameLike()), SmsTemplateEntity::getName, entity.getNameLike());
+                .like(StringUtil.isNotEmpty(entity.getNameLike()), SmsTemplateEntity::getName, entity.getNameLike());
     }
 
     @Override

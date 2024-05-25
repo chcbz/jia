@@ -1,7 +1,7 @@
 package cn.jia.point.service;
 
 import cn.jia.core.util.DataUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.point.common.PointConstants;
 import cn.jia.point.dao.PointGiftDao;
 import cn.jia.point.dao.PointGiftUsageDao;
@@ -36,7 +36,7 @@ public class GiftPayOrderService extends AbstractPayOrderParseService {
         PayOrderEntity payOrder = new PayOrderEntity();
         payOrder.setBody("礼品兑换");
         payOrder.setDetail("礼品兑换");
-        if(StringUtils.isNotEmpty(payOrderParseVO.getOutTradeNo())) {
+        if(StringUtil.isNotEmpty(payOrderParseVO.getOutTradeNo())) {
             Long giftUsageId = Long.parseLong(payOrderParseVO.getOutTradeNo().substring(3));
             PointGiftUsageEntity giftUsage = pointGiftUsageDao.selectById(giftUsageId);
             payOrder.setTotalFee(giftUsage.getPrice());

@@ -5,7 +5,7 @@ import cn.jia.core.elasticsearch.ElasticsearchService;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.DateUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.mat.common.MatErrorConstants;
 import cn.jia.mat.dao.MatPhraseDao;
 import cn.jia.mat.dao.MatPhraseVoteDao;
@@ -77,7 +77,7 @@ public class MatPhraseServiceImpl extends BaseServiceImpl<MatPhraseDao, MatPhras
         if (vote.getVote().equals(1)) {
             upPhrase.setUp(phrase.getUp() + 1);
             //每被点赞10次，增加1积分
-            if (StringUtils.isNotEmpty(phrase.getJiacn()) && upPhrase.getUp() % 10 == 0) {
+            if (StringUtil.isNotEmpty(phrase.getJiacn()) && upPhrase.getUp() % 10 == 0) {
                 pointService.add(phrase.getJiacn(), 1, PointConstants.POINT_TYPE_PHRASE);
             }
         } else {

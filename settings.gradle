@@ -14,7 +14,7 @@ include 'oauth:jia-oauth-core', 'oauth:jia-oauth-api', 'oauth:jia-oauth-service'
 include 'point:jia-point-core', 'point:jia-point-api', 'point:jia-point-service', 'point:jia-point-mapper'
 include 'sms:jia-sms-core', 'sms:jia-sms-api', 'sms:jia-sms-service', 'sms:jia-sms-mapper'
 include 'task:jia-task-core', 'task:jia-task-api', 'task:jia-task-service', 'task:jia-task-mapper'
-include 'user:jia-user-core', 'user:jia-user-api', 'user:jia-user-service', 'user:jia-user-mapper'
+include 'user:jia-user-core', 'user:jia-user-api', 'user:jia-user-service', 'user:jia-user-mapper', 'user:jia-user-starter'
 include 'wx:jia-wx-core', 'wx:jia-wx-api', 'wx:jia-wx-service', 'wx:jia-wx-mapper'
 
 dependencyResolutionManagement {
@@ -63,6 +63,7 @@ dependencyResolutionManagement {
             library('spring-boot-configuration-processor', 'org.springframework.boot', 'spring-boot-configuration-processor').versionRef('spring-boot')
             library('spring-boot-autoconfigure', 'org.springframework.boot', 'spring-boot-autoconfigure').versionRef('spring-boot')
             library('spring-boot-starter-web', 'org.springframework.boot', 'spring-boot-starter-web').versionRef('spring-boot')
+            library('spring-boot-starter-validation', 'org.springframework.boot', 'spring-boot-starter-validation').versionRef('spring-boot')
             library('spring-boot-starter-undertow', 'org.springframework.boot', 'spring-boot-starter-undertow').versionRef('spring-boot')
             library('spring-boot-starter-mybatis', 'org.mybatis.spring.boot', 'mybatis-spring-boot-starter').versionRef('spring-boot-mybatis')
             library('spring-boot-starter-websocket', 'org.springframework.boot', 'spring-boot-starter-websocket').versionRef('spring-boot')

@@ -8,6 +8,8 @@ package cn.jia.core.util;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * @author chc
  */
@@ -70,6 +72,16 @@ public final class Base64Util {
 
     private static boolean isData(char octect) {
         return (octect < BASE_LENGTH && BASE64_ALPHABET[octect] != -1);
+    }
+
+    /**
+     * Base64加密
+     *
+     * @param rawData 原数据
+     * @return 加密后数据
+     */
+    public static String encode(String rawData) {
+        return encode(rawData.getBytes(StandardCharsets.UTF_8));
     }
 
     /**

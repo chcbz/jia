@@ -3,7 +3,7 @@ package cn.jia.wx.service.impl;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.BeanUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.wx.common.WxErrorConstants;
 import cn.jia.wx.dao.PayInfoDao;
 import cn.jia.wx.entity.PayInfoEntity;
@@ -40,7 +40,7 @@ public class PayInfoServiceImpl extends BaseServiceImpl<PayInfoDao, PayInfoEntit
     @Override
     public WxPayService findWxPayService(HttpServletRequest request) {
         String appid = request.getParameter("appid");
-        if(StringUtils.isEmpty(appid)) {
+        if(StringUtil.isEmpty(appid)) {
             throw new EsRuntimeException(WxErrorConstants.APPID_NOT_NULL);
         }
         return findWxPayService(appid);
@@ -48,7 +48,7 @@ public class PayInfoServiceImpl extends BaseServiceImpl<PayInfoDao, PayInfoEntit
 
     @Override
     public WxPayService findWxPayService(String key) {
-        if(StringUtils.isEmpty(key)) {
+        if(StringUtil.isEmpty(key)) {
             throw new EsRuntimeException(WxErrorConstants.APPID_NOT_NULL);
         }
         WxPayService wxPayService = wxPayServiceMap.get(key);

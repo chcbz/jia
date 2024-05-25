@@ -36,7 +36,7 @@ public class OrgController {
 	private RoleService roleService;
 	@Autowired(required = false)
 	private FileService fileService;
-	@Value("${jia.file.path}")
+	@Value("${jia.file.path:}")
 	private String filePath;
 	
 	/**
@@ -54,7 +54,7 @@ public class OrgController {
 		OrgVO orgVO = new OrgVO();
 		BeanUtil.copyPropertiesIgnoreNull(org, orgVO);
 		//显示负责人名称列表
-		if(StringUtils.isNotEmpty(orgVO.getDirector())) {
+		if(StringUtil.isNotEmpty(orgVO.getDirector())) {
 			StringBuilder directorNames = new StringBuilder();
 			for(String u : orgVO.getDirector().split(",")) {
 				UserEntity user = userService.get(Long.valueOf(u));
@@ -233,7 +233,7 @@ public class OrgController {
 	@RequestMapping(value = "/get/director", method = RequestMethod.GET)
 	public Object findDirector(@RequestParam("position") Long position, @RequestParam("role") String role) throws Exception {
 		String director = orgService.findDirector(position, role);
-		if(StringUtils.isEmpty(director)) {
+		if(StringUtil.isEmpty(director)) {
 			throw new EsRuntimeException(UserErrorConstants.ORG_DIRECTOR_NOT_EXIST);
 		}
 		UserVO user = null;

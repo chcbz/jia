@@ -8,7 +8,7 @@ import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.BeanUtil;
 import cn.jia.core.util.HttpUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.mat.common.MatErrorConstants;
 import cn.jia.mat.entity.MatPvLogEntity;
 import cn.jia.mat.service.MatPvLogService;
@@ -56,7 +56,7 @@ public class PvLogController {
 	@PreAuthorize("hasAuthority('pvlog-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
 	public Object create(@RequestBody MatPvLogEntity pageViewLog, HttpServletRequest request) {
-		if(StringUtils.isNotBlank(pageViewLog.getJiacn())) {
+		if(StringUtil.isNotBlank(pageViewLog.getJiacn())) {
 			UserEntity user = userService.findByJiacn(pageViewLog.getJiacn());
 			if(user != null) {
 				BeanUtil.copyPropertiesIgnoreNull(user, pageViewLog, "id");

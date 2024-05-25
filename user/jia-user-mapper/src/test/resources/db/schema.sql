@@ -43,7 +43,7 @@ CREATE TABLE user_group_rel (
 CREATE TABLE user_info (
   id bigint NOT NULL AUTO_INCREMENT COMMENT '用户ID',
   username varchar(32) DEFAULT NULL COMMENT '用户名',
-  password varchar(32) DEFAULT '123' COMMENT '密码',
+  password varchar(64) DEFAULT '123' COMMENT '密码',
   openid varchar(32) DEFAULT NULL COMMENT '微信openid',
   jiacn varchar(32) DEFAULT NULL COMMENT 'Jia账号',
   phone varchar(20) DEFAULT NULL COMMENT '电话',
@@ -73,7 +73,9 @@ CREATE TABLE user_info (
   tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY user_info_jiacn_idx (jiacn),
-  KEY user_info_openid_idx (openid)
+  KEY user_info_openid_idx (openid),
+  KEY user_info_username_idx (username),
+  KEY user_info_phone_idx (phone)
 ) COMMENT='用户信息';
 
 CREATE TABLE user_msg (

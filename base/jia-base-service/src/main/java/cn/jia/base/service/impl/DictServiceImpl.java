@@ -3,12 +3,13 @@ package cn.jia.base.service.impl;
 import cn.jia.base.dao.DictDao;
 import cn.jia.base.entity.DictEntity;
 import cn.jia.base.service.DictService;
+import cn.jia.core.redis.RedisService;
 import cn.jia.core.service.BaseServiceImpl;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.JsonUtil;
+import cn.jia.core.util.StringUtil;
 import jakarta.annotation.Resource;
 import jakarta.inject.Named;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.RedisTemplate;
 import cn.jia.core.util.CollectionUtil;
 
 import java.util.List;
@@ -20,23 +21,23 @@ public class DictServiceImpl extends BaseServiceImpl<DictDao, DictEntity> implem
     private final static String CACHE_KEY = "DICT_LIST";
 
     @Resource
-    private RedisTemplate<String, List<DictEntity>> redisTemplate;
+    private RedisService redisService;
     @Value("${dict.cache.time:300}")
     private long cacheTime;
 
     @Override
     public List<DictEntity> selectAll() {
-        List<DictEntity> dictEntityList = redisTemplate.opsForValue().get(CACHE_KEY);
+        List<DictEntity> dictEntityList = JsonUtil.jsonToList(redisService.get(CACHE_KEY), DictEntity.class);
         if (CollectionUtil.isNullOrEmpty(dictEntityList)) {
             dictEntityList = baseDao.selectAll();
-            redisTemplate.opsForValue().set(CACHE_KEY, dictEntityList, cacheTime, TimeUnit.SECONDS);
+            redisService.set(CACHE_KEY, JsonUtil.toJson(dictEntityList), cacheTime, TimeUnit.SECONDS);
         }
         return dictEntityList;
     }
 
     @Override
     public List<DictEntity> selectAll(String lang) {
-        return selectAll().stream().filter(dictEntity -> StringUtils.isEmpty(dictEntity.getLanguage()) ||
+        return selectAll().stream().filter(dictEntity -> StringUtil.isEmpty(dictEntity.getLanguage()) ||
                 lang.equals(dictEntity.getLanguage())).collect(Collectors.toList());
     }
 

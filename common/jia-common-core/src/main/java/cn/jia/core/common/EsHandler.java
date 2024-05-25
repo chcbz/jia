@@ -3,7 +3,7 @@ package cn.jia.core.common;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.Md5Util;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -141,7 +141,7 @@ public class EsHandler {
 	 */
 	public static boolean validatePassword(String password, String salt, String correctHash)
 			throws NoSuchAlgorithmException, InvalidKeySpecException {
-		return StringUtils.equals(Md5Util.str2Base32Md5(password + salt), correctHash);
+		return StringUtil.equals(Md5Util.str2Base32Md5(password + salt), correctHash);
 	}
 
 	/**

@@ -170,7 +170,7 @@ public class RsaUtil {
 
             signature.initVerify(pubKey);
 
-            if (StringUtils.isEmpty(charset)) {
+            if (StringUtil.isEmpty(charset)) {
                 signature.update(content.getBytes());
             } else {
                 signature.update(content.getBytes(charset));
@@ -194,7 +194,7 @@ public class RsaUtil {
 
             signature.initVerify(pubKey);
 
-            if (StringUtils.isEmpty(charset)) {
+            if (StringUtil.isEmpty(charset)) {
                 signature.update(content.getBytes());
             } else {
                 signature.update(content.getBytes(charset));

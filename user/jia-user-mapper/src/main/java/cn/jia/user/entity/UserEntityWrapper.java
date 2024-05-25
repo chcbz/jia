@@ -1,7 +1,7 @@
 package cn.jia.user.entity;
 
 import cn.jia.common.entity.BaseEntityWrapper;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -11,17 +11,17 @@ public class UserEntityWrapper implements BaseEntityWrapper<UserVO, UserEntity> 
     @Override
     public void appendQueryWrapper(UserVO entity, QueryWrapper<UserEntity> wrapper) {
         Wrappers.lambdaQuery(UserEntity.class)
-                .like(StringUtils.isNotBlank(entity.getUsernameLike()), UserEntity::getUsername,
+                .like(StringUtil.isNotBlank(entity.getUsernameLike()), UserEntity::getUsername,
                         entity.getUsernameLike())
-                .like(StringUtils.isNotBlank(entity.getOpenidLike()), UserEntity::getOpenid, entity.getOpenidLike())
-                .like(StringUtils.isNotBlank(entity.getJiacnLike()), UserEntity::getJiacn, entity.getJiacnLike())
-                .like(StringUtils.isNotBlank(entity.getPhoneLike()), UserEntity::getPhone, entity.getPhoneLike())
-                .like(StringUtils.isNotBlank(entity.getEmailLike()), UserEntity::getEmail, entity.getEmailLike())
-                .like(StringUtils.isNotBlank(entity.getNicknameLike()), UserEntity::getNickname, entity.getNicknameLike())
-                .like(StringUtils.isNotBlank(entity.getCityLike()), UserEntity::getCity, entity.getCityLike())
-                .like(StringUtils.isNotBlank(entity.getProvinceLike()), UserEntity::getProvince, entity.getProvinceLike())
-                .like(StringUtils.isNotBlank(entity.getCountryLike()), UserEntity::getCountry, entity.getCountryLike())
-                .like(StringUtils.isNotBlank(entity.getReferrerLike()), UserEntity::getReferrer,
+                .like(StringUtil.isNotBlank(entity.getOpenidLike()), UserEntity::getOpenid, entity.getOpenidLike())
+                .like(StringUtil.isNotBlank(entity.getJiacnLike()), UserEntity::getJiacn, entity.getJiacnLike())
+                .like(StringUtil.isNotBlank(entity.getPhoneLike()), UserEntity::getPhone, entity.getPhoneLike())
+                .like(StringUtil.isNotBlank(entity.getEmailLike()), UserEntity::getEmail, entity.getEmailLike())
+                .like(StringUtil.isNotBlank(entity.getNicknameLike()), UserEntity::getNickname, entity.getNicknameLike())
+                .like(StringUtil.isNotBlank(entity.getCityLike()), UserEntity::getCity, entity.getCityLike())
+                .like(StringUtil.isNotBlank(entity.getProvinceLike()), UserEntity::getProvince, entity.getProvinceLike())
+                .like(StringUtil.isNotBlank(entity.getCountryLike()), UserEntity::getCountry, entity.getCountryLike())
+                .like(StringUtil.isNotBlank(entity.getReferrerLike()), UserEntity::getReferrer,
                         entity.getReferrerLike())
                 .ge(entity.getCreateTimeStart() != null, UserEntity::getCreateTime, entity.getCreateTimeStart())
                 .le(entity.getCreateTimeEnd() != null, UserEntity::getCreateTime, entity.getCreateTimeEnd())

@@ -4,7 +4,7 @@ import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,12 +70,12 @@ public class EsSecurityHandler {
 		if(tokenMap == null) {
 			return null;
 		}
-		String username = StringUtils.valueOf(tokenMap.get("user_name"));
-    	if(StringUtils.isNotEmpty(username)) {
+		String username = StringUtil.valueOf(tokenMap.get("user_name"));
+    	if(StringUtil.isNotEmpty(username)) {
     		RedisTemplate<String, Object> redisTemplate = SpringContextHolder.getBean("redisTemplate");
-    		return StringUtils.valueOf(redisTemplate.opsForValue().get("clientId_"+ username));
+    		return StringUtil.valueOf(redisTemplate.opsForValue().get("clientId_"+ username));
     	}else {
-    		return StringUtils.valueOf(tokenMap.get("client_id"));
+    		return StringUtil.valueOf(tokenMap.get("client_id"));
     	}
 	}
     
@@ -115,7 +115,7 @@ public class EsSecurityHandler {
      */
     public static String checkClientId(HttpServletRequest request) throws AccessDeniedException {
     	String clientId = clientId(request);
-    	if(StringUtils.isEmpty(clientId)) {
+    	if(StringUtil.isEmpty(clientId)) {
     		throw new AccessDeniedException("Unable to get clientId");
     	}
     	return clientId;
@@ -130,21 +130,21 @@ public class EsSecurityHandler {
 	public static String clientId(HttpServletRequest request) {
     	try {
     		String clientId = clientId();
-    		if(StringUtils.isNotEmpty(clientId)) {
+    		if(StringUtil.isNotEmpty(clientId)) {
         		return clientId;
         	} else {
-        		String appcn = StringUtils.valueOf(request.getParameter("appcn"));
-        		if(StringUtils.isEmpty(appcn)) {
+        		String appcn = StringUtil.valueOf(request.getParameter("appcn"));
+        		if(StringUtil.isEmpty(appcn)) {
         			String auth = request.getHeader("Authorization");
-        			if(StringUtils.isNotEmpty(auth) && auth.startsWith("APPCN ")) {
+        			if(StringUtil.isNotEmpty(auth) && auth.startsWith("APPCN ")) {
         				appcn = auth.substring(6);
         			}
         		}
-        		if(StringUtils.isNotEmpty(appcn)) {
+        		if(StringUtil.isNotEmpty(appcn)) {
         			RestTemplate restTemplate = SpringContextHolder.getBean("restTemplate");
 					JsonResult<Map<String, Object>> result = restTemplate.getForObject("http://jia-api-oauth/oauth/clientid?appcn={appcn}", JsonResult.class, appcn);
         			if(result != null && EsErrorConstants.SUCCESS.getCode().equals(result.getCode())) {
-        				return StringUtils.valueOf(result.getData());
+        				return StringUtil.valueOf(result.getData());
         			}
         		}
         	}

@@ -5,7 +5,7 @@ import cn.jia.core.entity.Result;
 import cn.jia.core.errcode.ErrCodeHolder;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -54,7 +54,7 @@ public class ExceptionHandlerAdvice {
     public Result handleEsRuntimeException(EsRuntimeException e) {
         log.warn(e.getMessageKey(), e);
         JsonResult<Object> result = new JsonResult<>();
-        if (StringUtils.isNotEmpty(e.getMessage())) {
+        if (StringUtil.isNotEmpty(e.getMessage())) {
             result.setMsg(e.getMessage());
         } else {
             result.setMsg(ErrCodeHolder.getMessage(e.getMessageKey()));
