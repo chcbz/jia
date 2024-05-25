@@ -2,7 +2,7 @@ package cn.jia.core.exception;
 
 import cn.jia.core.global.MessageSupport;
 import cn.jia.core.global.Messageable;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import org.springframework.core.NestedRuntimeException;
 
 import java.io.Serial;
@@ -26,7 +26,7 @@ public class EsRuntimeException extends NestedRuntimeException implements Messag
 	
 	public EsRuntimeException(String errorCode) {
 		super("");
-		if(StringUtils.isEmpty(errorCode)){
+		if(StringUtil.isEmpty(errorCode)){
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		}else{
 			this.messageSupport.setMessageKey(errorCode);
@@ -35,7 +35,7 @@ public class EsRuntimeException extends NestedRuntimeException implements Messag
 
 	public EsRuntimeException(EsErrorConstants errorConstants, Object... args) {
 		super(errorConstants.getMessage());
-		if(StringUtils.isEmpty(errorConstants.getCode())){
+		if(StringUtil.isEmpty(errorConstants.getCode())){
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		}else{
 			this.messageSupport.setMessageKey(errorConstants.getCode());
@@ -45,7 +45,7 @@ public class EsRuntimeException extends NestedRuntimeException implements Messag
 
 	public EsRuntimeException(String errorCode, String msg) {
 		super(msg);
-		if(StringUtils.isEmpty(errorCode)){
+		if(StringUtil.isEmpty(errorCode)){
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		}else{
 			this.messageSupport.setMessageKey(errorCode);
@@ -54,7 +54,7 @@ public class EsRuntimeException extends NestedRuntimeException implements Messag
 	
 	public EsRuntimeException(String errorCode, Object[] args) {
 		super("");
-		if (StringUtils.isEmpty(errorCode)) {
+		if (StringUtil.isEmpty(errorCode)) {
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		} else {
 			this.messageSupport.setMessageKey(errorCode);
@@ -64,7 +64,7 @@ public class EsRuntimeException extends NestedRuntimeException implements Messag
 	
 	public EsRuntimeException(String errorCode, Throwable paramThrowable) {
 		super(paramThrowable.getMessage(), paramThrowable);
-		if (StringUtils.isEmpty(errorCode)) {
+		if (StringUtil.isEmpty(errorCode)) {
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		} else {
 			this.messageSupport.setMessageKey(errorCode);
@@ -73,7 +73,7 @@ public class EsRuntimeException extends NestedRuntimeException implements Messag
 	
 	public EsRuntimeException(String errorCode, Throwable paramThrowable, Object[] args) {
 		super(paramThrowable.getMessage(), paramThrowable);
-		if (StringUtils.isEmpty(errorCode)) {
+		if (StringUtil.isEmpty(errorCode)) {
 			this.messageSupport.setMessageKey(DEFAULT_MESSAGE_KEY);
 		} else {
 			this.messageSupport.setMessageKey(errorCode);

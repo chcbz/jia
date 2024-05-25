@@ -2,7 +2,7 @@ package cn.jia.wx.service.impl;
 
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.service.BaseServiceImpl;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.wx.common.WxErrorConstants;
 import cn.jia.wx.dao.MpInfoDao;
 import cn.jia.wx.entity.MpInfoEntity;
@@ -41,7 +41,7 @@ public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> 
 	@Override
 	public WxMpService findWxMpService(HttpServletRequest request) {
 		String appid = request.getParameter("appid");
-		if(StringUtils.isEmpty(appid)) {
+		if(StringUtil.isEmpty(appid)) {
 			throw new EsRuntimeException(WxErrorConstants.APPID_NOT_NULL);
 		}
 		return findWxMpService(appid);
@@ -49,7 +49,7 @@ public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> 
 	
 	@Override
 	public WxMpService findWxMpService(String key) {
-		if(StringUtils.isEmpty(key)) {
+		if(StringUtil.isEmpty(key)) {
 			throw new EsRuntimeException(WxErrorConstants.APPID_NOT_NULL);
 		}
 		WxMpService wxMpService = wxMpServiceMap.get(key);

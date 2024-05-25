@@ -112,7 +112,7 @@ public class AliPayUtil {
         int index = 0;
         for (String key : keys) {
             String value = sortedParams.get(key);
-            if (StringUtils.areNotEmpty(key, value)) {
+            if (StringUtil.areNotEmpty(key, value)) {
                 content.append(index == 0 ? "" : "&").append(key).append("=").append(value);
                 index++;
             }
@@ -165,7 +165,7 @@ public class AliPayUtil {
 
             signature.initSign(priKey);
 
-            if (StringUtils.isEmpty(charset)) {
+            if (StringUtil.isEmpty(charset)) {
                 signature.update(content.getBytes());
             } else {
                 signature.update(content.getBytes(charset));
@@ -202,7 +202,7 @@ public class AliPayUtil {
 
             signature.initSign(priKey);
 
-            if (StringUtils.isEmpty(charset)) {
+            if (StringUtil.isEmpty(charset)) {
                 signature.update(content.getBytes());
             } else {
                 signature.update(content.getBytes(charset));
@@ -219,7 +219,7 @@ public class AliPayUtil {
     
     public static PrivateKey getPrivateKeyFromPkcs8(String algorithm,
                                                     InputStream ins) throws Exception {
-		if (ins == null || StringUtils.isEmpty(algorithm)) {
+		if (ins == null || StringUtil.isEmpty(algorithm)) {
 		return null;
 		}
 		

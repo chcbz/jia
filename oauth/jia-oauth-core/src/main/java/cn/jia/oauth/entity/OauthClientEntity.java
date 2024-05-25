@@ -10,6 +10,7 @@ import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
 
 import java.io.Serial;
+import java.util.Date;
 
 /**
  * <p>
@@ -29,26 +30,34 @@ public class OauthClientEntity extends BaseEntity {
     @Serial
     private static final long serialVersionUID=1L;
 
-    @TableId(value = "client_id", type = IdType.AUTO)
+    @TableId(value = "id", type = IdType.AUTO)
+    private String id;
+
     private String clientId;
 
+    private Date clientIdIssuedAt;
+
     private String clientSecret;
+
+    private Date clientSecretExpiresAt;
+
+    private String clientName;
+
+    private String clientAuthenticationMethods;
 
     @Schema(description = "应用标识符")
     private String appcn;
 
-    private String resourceIds;
+    private String authorizationGrantTypes;
 
-    private String authorizedGrantTypes;
+    private String redirectUris;
 
-    private String registeredRedirectUris;
+    private String postLogoutRedirectUris;
 
-    private String scope;
+    private String scopes;
 
-    private String autoapprove;
+    private String clientSettings;
 
-    private Integer accessTokenValiditySeconds;
-
-    private Integer refreshTokenValiditySeconds;
+    private String tokenSettings;
 
 }

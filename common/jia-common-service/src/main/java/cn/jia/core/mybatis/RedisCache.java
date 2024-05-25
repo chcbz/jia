@@ -1,12 +1,11 @@
 package cn.jia.core.mybatis;
 
-import cn.jia.core.config.SpringContextHolder;
+import cn.jia.core.redis.RedisService;
+import cn.jia.core.util.CollectionUtil;
 import org.apache.ibatis.cache.Cache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.connection.RedisServerCommands;
-import org.springframework.data.redis.core.RedisTemplate;
-import cn.jia.core.util.CollectionUtil;
 
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -24,7 +23,7 @@ public class RedisCache implements Cache {
     private static final Logger logger = LoggerFactory.getLogger(RedisCache.class);
     private final ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
     private final String id; // cache instance id
-    private RedisTemplate<String, Object> redisTemplate;
+    private RedisService redisService;
     private static final long EXPIRE_TIME_IN_MINUTES = 30; // redis过期时间（分钟）
 
     public RedisCache(String id) {
@@ -46,17 +45,15 @@ public class RedisCache implements Cache {
      */
     @Override
     public void putObject(Object key, Object value) {
-        redisTemplate = getRedisTemplate();
-        redisTemplate.opsForValue().set(key.toString(), value, EXPIRE_TIME_IN_MINUTES, TimeUnit.MINUTES);
+        redisService.set(String.valueOf(key), String.valueOf(value), EXPIRE_TIME_IN_MINUTES, TimeUnit.MINUTES);
         logger.debug("Put query result to redis");
     }
 
     @Override
     public Object getObject(Object key) {
-        redisTemplate = getRedisTemplate();
         try {
             if (key != null) {
-                return redisTemplate.opsForValue().get(key.toString());
+                return redisService.get(key.toString());
             }
         } catch (Exception e) {
             logger.error("[RedisCache]getObject error", e);
@@ -66,10 +63,9 @@ public class RedisCache implements Cache {
 
     @Override
     public Object removeObject(Object key) {
-        redisTemplate = getRedisTemplate();
         try {
             if (key != null) {
-                redisTemplate.delete(key.toString());
+                redisService.delete(key.toString());
             }
         } catch (Exception e) {
             logger.error("[RedisCache]removeObject error", e);
@@ -79,12 +75,11 @@ public class RedisCache implements Cache {
 
     @Override
     public void clear() {
-        redisTemplate = getRedisTemplate();
         logger.debug("清空缓存");
         try {
-            Set<String> keys = redisTemplate.keys("*:" + this.id + "*");
+            Set<String> keys = redisService.keys("*:" + this.id + "*");
             if (CollectionUtil.isNotNullOrEmpty(keys)) {
-                redisTemplate.delete(keys);
+                redisService.delete(keys);
             }
         } catch (Exception e) {
             logger.error("[RedisCache]clear error", e);
@@ -93,8 +88,7 @@ public class RedisCache implements Cache {
 
     @Override
     public int getSize() {
-        redisTemplate = getRedisTemplate();
-        Long size = redisTemplate.execute(RedisServerCommands::dbSize);
+        Long size = redisService.execute(RedisServerCommands::dbSize);
         assert size != null;
         return size.intValue();
     }
@@ -104,10 +98,4 @@ public class RedisCache implements Cache {
         return this.readWriteLock;
     }
 
-    private RedisTemplate<String, Object> getRedisTemplate() {
-        if (redisTemplate == null) {
-            redisTemplate = SpringContextHolder.getBean("redisTemplate");
-        }
-        return redisTemplate;
-    }
 }

@@ -35,14 +35,14 @@ public class MpUserServiceImpl extends BaseServiceImpl<MpUserDao, MpUserEntity> 
 		LdapUser params = new LdapUser();
 		params.setCn(user.getOpenId());
 		params.setSn(user.getOpenId());
-		params.setEmail(StringUtils.isEmpty(user.getEmail()) ? null : user.getEmail());
+		params.setEmail(StringUtil.isEmpty(user.getEmail()) ? null : user.getEmail());
 		params.setOpenid(user.getOpenId());
-		params.setCountry(StringUtils.isEmpty(user.getCountry()) ? null : user.getCountry());
-		params.setProvince(StringUtils.isEmpty(user.getProvince()) ? null : user.getProvince());
-		params.setCity(StringUtils.isEmpty(user.getCity()) ? null : user.getCity());
+		params.setCountry(StringUtil.isEmpty(user.getCountry()) ? null : user.getCountry());
+		params.setProvince(StringUtil.isEmpty(user.getProvince()) ? null : user.getProvince());
+		params.setCity(StringUtil.isEmpty(user.getCity()) ? null : user.getCity());
 		params.setSex(user.getSex());
-		params.setNickname(StringUtils.isEmpty(user.getNickname()) ? null : user.getNickname());
-		if(StringUtils.isNotEmpty(user.getHeadImgUrl())) {
+		params.setNickname(StringUtil.isEmpty(user.getNickname()) ? null : user.getNickname());
+		if(StringUtil.isNotEmpty(user.getHeadImgUrl())) {
 			params.setHeadimg(ImgUtil.fromUrl(user.getHeadImgUrl()));
 		}
 		ldapUserService.create(params);
@@ -55,7 +55,7 @@ public class MpUserServiceImpl extends BaseServiceImpl<MpUserDao, MpUserEntity> 
 		String filename = DateUtil.getDateString() + "_" + user.getOpenId() + ".jpg";
 		String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);
 		byte[] b = null;
-		if (StringUtils.isNotEmpty(user.getHeadImgUrl())) {
+		if (StringUtil.isNotEmpty(user.getHeadImgUrl())) {
 			b = ImgUtil.fromUrl(user.getHeadImgUrl());
 		}
 		if (b != null) {

@@ -2,9 +2,10 @@ package cn.jia.wx.schedule;
 
 import cn.jia.core.entity.DelayObj;
 import cn.jia.core.exception.EsErrorConstants;
+import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.JsonUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.core.util.ValidUtil;
 import cn.jia.core.util.thread.AbstractThreadRequestContent;
 import cn.jia.core.util.thread.ThreadRequest;
@@ -21,7 +22,6 @@ import cn.jia.mat.service.MatPhraseService;
 import cn.jia.mat.service.MatVoteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -36,7 +36,7 @@ public class WxSchedule {
 	@Autowired(required = false)
 	private MatVoteService voteService;
 	@Autowired
-	private RedisTemplate<String, Object> redisTemplate;
+	private RedisService redisService;
 	@Autowired(required = false)
 	private MatPhraseService phraseService;
 	@Autowired(required = false)
@@ -61,7 +61,7 @@ public class WxSchedule {
 			String title = question.getTitle();
 			StringBuilder content = new StringBuilder();
 			for (MatVoteItemEntity item : question.getItems()) {
-				if (StringUtils.isNotEmpty(content)) {
+				if (StringUtil.isNotEmpty(content)) {
 					content.append("\\n");
 				}
 				content.append(item.getOpt()).append(". ").append(item.getContent());
@@ -70,7 +70,8 @@ public class WxSchedule {
 				boolean sendSuccess = kefuService.sendWxTemplate(kefuMsgType, kefuMsgSubscribe.getJiacn(), title,
 						content.toString());
 				if (sendSuccess) {
-					redisTemplate.opsForValue().set("vote_" + kefuMsgSubscribe.getJiacn(), question.getId(), 2, TimeUnit.HOURS);
+					redisService.set("vote_" + kefuMsgSubscribe.getJiacn(), String.valueOf(question.getId()),
+							2L, TimeUnit.HOURS);
 				}
 			} catch (Exception e) {
 				log.error("sendVote.WxMpTemplateMessage", e);

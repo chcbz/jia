@@ -2,7 +2,7 @@ package cn.jia.point.entity;
 
 import cn.jia.common.entity.BaseEntityWrapper;
 import cn.jia.core.entity.BaseEntity;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
@@ -19,16 +19,16 @@ public class PointGiftEntityWrapper implements BaseEntityWrapper<PointGiftVO, Po
             queryWrapper.lt(BaseEntity::getCreateTime, entity.getCreateTimeEnd());
         }
         if (entity.getClientStrictFlag() != null && entity.getClientStrictFlag().equals(1)) {
-            if (StringUtils.isNotEmpty(entity.getClientId())) {
+            if (StringUtil.isNotEmpty(entity.getClientId())) {
                 queryWrapper.eq(PointGiftEntity::getClientId, entity.getClientId());
             } else {
                 queryWrapper.isNull(PointGiftEntity::getClientId);
             }
         }
-        if (StringUtils.isNotEmpty(entity.getNameLike())) {
+        if (StringUtil.isNotEmpty(entity.getNameLike())) {
             queryWrapper.like(PointGiftEntity::getName, entity.getNameLike());
         }
-        if (StringUtils.isNotEmpty(entity.getDescriptionLike())) {
+        if (StringUtil.isNotEmpty(entity.getDescriptionLike())) {
             queryWrapper.like(PointGiftEntity::getDescription, entity.getDescriptionLike());
         }
     }

@@ -30,7 +30,7 @@ class OcrUtilTest {
 //        textImage = ImageHelper.getScaledInstance(textImage, textImage.getWidth() * 1, textImage.getHeight() * 1);
 //
 //        textImage = ImageHelper.convertImageToBinary(textImage);
-        imgValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(imgPath), "png"));
+        imgValue = StringUtil.removeBlank(OcrUtil.recognizeText(new File(imgPath), "png"));
         assertEquals(imgValue, "蔡明");
     }
 
@@ -51,10 +51,10 @@ class OcrUtilTest {
 
             String namePath = outputPath + "/ocr_name.png";
             ImgUtil.cutPic(imgPath, namePath, 160, 220, 180, 70);
-            String nameValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(namePath), "png"));
-            if (StringUtils.isBlank(nameValue)) {
+            String nameValue = StringUtil.removeBlank(OcrUtil.recognizeText(new File(namePath), "png"));
+            if (StringUtil.isBlank(nameValue)) {
                 ImgUtil.cutPic(imgPath, namePath, 170, 230, 80, 60);
-                nameValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(namePath), "png"));
+                nameValue = StringUtil.removeBlank(OcrUtil.recognizeText(new File(namePath), "png"));
             }
 //        log.info("name: " + nameValue);
 
@@ -66,22 +66,22 @@ class OcrUtilTest {
 
             String birthPath = outputPath + "/ocr_birth.png";
             ImgUtil.cutPic(imgPath, birthPath, 170, 360, 150, 50);
-            String birthValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(birthPath), "png"));
+            String birthValue = StringUtil.removeBlank(OcrUtil.recognizeText(new File(birthPath), "png"));
 //        log.info("birth: " + birthValue);
 
             String phonePath = outputPath + "/ocr_phone.png";
             ImgUtil.cutPic(imgPath, phonePath, 170, 820, 350, 70);
-            String phoneValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(phonePath), "png"));
+            String phoneValue = StringUtil.removeBlank(OcrUtil.recognizeText(new File(phonePath), "png"));
 //        log.info("phone: " + phoneValue);
 
             String emailPath = outputPath + "/ocr_email.png";
             ImgUtil.cutPic(imgPath, emailPath, 170, 920, 450, 70);
-            String emailValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(emailPath), "png"));
+            String emailValue = StringUtil.removeBlank(OcrUtil.recognizeText(new File(emailPath), "png"));
 //        log.info("email: " + emailValue);
 
             String addressPath = outputPath + "/ocr_address.png";
             ImgUtil.cutPic(imgPath, addressPath, 170, 1000, 450, 100);
-            String addressValue = StringUtils.removeBlank(OcrUtil.recognizeText(new File(addressPath), "png"));
+            String addressValue = StringUtil.removeBlank(OcrUtil.recognizeText(new File(addressPath), "png"));
 //        log.info("address: " + addressValue);
             log.info(file.getName() + "\t" + nameValue + "\t" + sexValue + "\t" + birthValue + "\t" + phoneValue + "\t" + emailValue + "\t" + addressValue);
         }

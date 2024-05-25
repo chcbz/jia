@@ -28,7 +28,7 @@ public class ValidUtil {
 	 * @return 校验结果
 	 */
 	public static boolean isMobile(String str) {
-		if(StringUtils.isNotBlank(str)){
+		if(StringUtil.isNotBlank(str)){
 			try {
 				Matcher m = MOBILE_PATTERN.matcher(str);
 				return m.matches();
@@ -47,7 +47,7 @@ public class ValidUtil {
 	 */
 	public static boolean isCarNumber(String str)
 	{
-		if(StringUtils.isNotBlank(str)){
+		if(StringUtil.isNotBlank(str)){
 			//验证车牌信息
 			Matcher m = CAR_NUMBER_PATTERN.matcher(str);
 			return m.matches();
@@ -61,7 +61,7 @@ public class ValidUtil {
 	 * @return 校验结果
 	 */
 	public static boolean isIdNumber(String idStr){
-		if(StringUtils.isNotBlank(idStr)){
+		if(StringUtil.isNotBlank(idStr)){
 			try {
 				String[] valCodeArr = { "1", "0", "x", "9", "8", "7", "6", "5", "4", "3", "2" };
 		        String[] wi = { "7", "9", "10", "5", "8", "4", "2", "1", "6", "3", "7", "9", "10", "5", "8", "4", "2" };
@@ -141,7 +141,7 @@ public class ValidUtil {
      * @return 校验结果
      */
     public static boolean isNumeric(String str) {
-    	if(StringUtils.isBlank(str)){
+    	if(StringUtil.isBlank(str)){
     		return false;
     	}
     	try {
@@ -157,7 +157,7 @@ public class ValidUtil {
      * @return 校验结果
      */
     public static boolean isDate(String strDate) {
-    	if(StringUtils.isBlank(strDate)){
+    	if(StringUtil.isBlank(strDate)){
     		return false;
     	}
     	try {
@@ -173,7 +173,7 @@ public class ValidUtil {
      * @return 校验结果
      */
     public static boolean isEmail(String str) {
-    	if(StringUtils.isBlank(str)){
+    	if(StringUtil.isBlank(str)){
     		return false;
     	}
     	try {

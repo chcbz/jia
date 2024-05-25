@@ -7,7 +7,7 @@ import cn.jia.core.exception.EsCheckedException;
 import cn.jia.core.util.CookieUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.Md5Util;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -35,7 +35,7 @@ public class ValidateInterceptor implements HandlerInterceptor {
 		if(null!=cookies){
 			userId = CookieUtil.getCookie(request, EsConstants.COOKIE_USERID);
 			cookieId = CookieUtil.getCookie(request, EsConstants.COOKIE_COOKIEID);
-			if(StringUtils.isNotBlank(userId) && StringUtils.isNotBlank(cookieId)){
+			if(StringUtil.isNotBlank(userId) && StringUtil.isNotBlank(cookieId)){
 				String MD5CookieId = Md5Util.str2Base32Md5(userId+cookieKey);
 				if(MD5CookieId.equals(cookieId)){
 					return true;

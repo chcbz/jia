@@ -19,8 +19,8 @@ class ImgUtilTest {
         for(int i=0;i<img.length;i++) {
             data[i] = img[i] & 0xff;
         }
-        String hexStr = StringUtils.byteToHex(img);
-        String b = StringUtils.fromHexString(hexStr);
+        String hexStr = StringUtil.byteToHex(img);
+        String b = StringUtil.fromHexString(hexStr);
         String outputPath = this.getClass().getResource("/img").getPath();
         FileOutputStream out = new FileOutputStream(outputPath + "/test.jpeg");
         out.write(Objects.requireNonNull(img));

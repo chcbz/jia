@@ -3,7 +3,7 @@ package cn.jia.core.config.db;
 import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.datasource.DruidSource;
 import cn.jia.core.util.BeanUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import com.alibaba.druid.pool.DruidDataSource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -31,7 +31,7 @@ public class DataSourceConfig {
         int i = 1;
         while (true) {
             String multiFlag = SpringContextHolder.getProperty("spring.datasource." + i + ".multiFlag", String.class);
-            if (StringUtils.isEmpty(multiFlag)) {
+            if (StringUtil.isEmpty(multiFlag)) {
                 break;
             }
             DruidSource dataSource = new DruidSource();

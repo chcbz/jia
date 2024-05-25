@@ -1,5 +1,5 @@
 -- 保存注册的客户端
-CREATE TABLE oauth2_registered_client (
+CREATE TABLE oauth_client (
     id varchar(100) NOT NULL,
     client_id varchar(100) NOT NULL,
     client_id_issued_at timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -13,11 +13,15 @@ CREATE TABLE oauth2_registered_client (
     scopes varchar(1000) NOT NULL,
     client_settings varchar(2000) NOT NULL,
     token_settings varchar(2000) NOT NULL,
+    create_time bigint DEFAULT NULL COMMENT '创建时间',
+    update_time bigint DEFAULT NULL COMMENT '最后更新时间',
+    tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+    appcn varchar(32) DEFAULT NULL COMMENT '应用标识码',
     PRIMARY KEY (id)
 );
 
 -- 记录用户确认授权记录
-CREATE TABLE oauth2_authorization_consent (
+CREATE TABLE oauth_authorization_consent (
     registered_client_id varchar(100) NOT NULL,
     principal_name varchar(200) NOT NULL,
     authorities varchar(1000) NOT NULL,
@@ -25,7 +29,7 @@ CREATE TABLE oauth2_authorization_consent (
 );
 
 -- 记录发放令牌记录
-CREATE TABLE oauth2_authorization (
+CREATE TABLE oauth_authorization (
     id varchar(100) NOT NULL,
     registered_client_id varchar(100) NOT NULL,
     principal_name varchar(200) NOT NULL,

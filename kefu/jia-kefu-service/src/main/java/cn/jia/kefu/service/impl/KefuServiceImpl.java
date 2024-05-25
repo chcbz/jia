@@ -1,9 +1,10 @@
 package cn.jia.kefu.service.impl;
 
 import cn.jia.core.common.EsConstants;
+import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.JsonUtil;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import cn.jia.kefu.common.KefuConstants;
 import cn.jia.kefu.dao.KefuMsgLogDao;
 import cn.jia.kefu.dao.KefuMsgSubscribeDao;
@@ -25,7 +26,6 @@ import me.chanjar.weixin.mp.bean.kefu.WxMpKefuMessage;
 import me.chanjar.weixin.mp.bean.template.WxMpTemplateData;
 import me.chanjar.weixin.mp.bean.template.WxMpTemplateMessage;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -51,7 +51,7 @@ public class KefuServiceImpl implements KefuService {
 	@Autowired(required = false)
 	private MpUserService mpUserService;
 	@Autowired
-	private RedisTemplate<String, Object> redisTemplate;
+	private RedisService redisService;
 
 	/**
 	 * 发送客服消息
@@ -102,8 +102,8 @@ public class KefuServiceImpl implements KefuService {
 		}
 		String msgContent = "";
 		boolean sendSuccess = false;
-		Object activeMpUser = redisTemplate.opsForValue().get(ACTIVE_MP_USER + mpUser.getOpenId());
-		if (StringUtils.isNotEmpty(kefuMsgType.getWxTemplateTxt()) && activeMpUser != null) {
+		Object activeMpUser = redisService.get(ACTIVE_MP_USER + mpUser.getOpenId());
+		if (StringUtil.isNotEmpty(kefuMsgType.getWxTemplateTxt()) && activeMpUser != null) {
 			WxMpKefuMessage kfmessage = new WxMpKefuMessage();
 			kfmessage.setToUser(mpUser.getOpenId());
 			kfmessage.setMsgType(WxConsts.KefuMsgType.TEXT);
@@ -119,7 +119,7 @@ public class KefuServiceImpl implements KefuService {
 			}
 		}
 		// 如果客服消息发送失败，尝试用模板消息
-		if (!sendSuccess && StringUtils.isNotEmpty(kefuMsgType.getWxTemplateId())) {
+		if (!sendSuccess && StringUtil.isNotEmpty(kefuMsgType.getWxTemplateId())) {
 			MpTemplateEntity mpTemplate = mpTemplateService.get(kefuMsgType.getWxTemplateId());
 			if (mpTemplate != null) {
 				msgContent = kefuMsgType.getWxTemplate();
@@ -133,7 +133,7 @@ public class KefuServiceImpl implements KefuService {
 				message.setData(data);
 				message.setUrl(kefuMsgType.getUrl());
 				String messageId = mpInfoService.findWxMpService(mpTemplate.getAppid()).getTemplateMsgService().sendTemplateMsg(message);
-				sendSuccess = StringUtils.isNotEmpty(messageId);
+				sendSuccess = StringUtil.isNotEmpty(messageId);
 			}
 		}
 		if (sendSuccess) {

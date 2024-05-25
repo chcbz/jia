@@ -1,7 +1,7 @@
 package cn.jia.mat.entity;
 
 import cn.jia.common.entity.BaseEntityWrapper;
-import cn.jia.core.util.StringUtils;
+import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 
@@ -9,7 +9,7 @@ public class MatVoteEntityWrapper implements BaseEntityWrapper<MatVoteReqVO, Mat
     @Override
     public void appendQueryWrapper(MatVoteReqVO entity, QueryWrapper<MatVoteEntity> wrapper) {
         wrapper.lambda()
-                .like(StringUtils.isNotEmpty(entity.getNameLike()), MatVoteEntity::getName, entity.getNameLike());
+                .like(StringUtil.isNotEmpty(entity.getNameLike()), MatVoteEntity::getName, entity.getNameLike());
     }
 
     @Override

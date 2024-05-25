@@ -4,8 +4,10 @@ dependencies {
     api project(':isp:jia-isp-api')
     api project(':sms:jia-sms-api')
     api project(':common:jia-common-service')
-    implementation(libs.spring.redis)
+    compileOnly(libs.spring.redis)
+    compileOnly(libs.jodd)
     testImplementation project(':common:jia-common-test')
+    testImplementation(libs.jodd)
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

@@ -208,21 +208,21 @@ public class CmsController {
         return JsonResult.success(config);
     }
 
-    /**
-     * 注册服务
-     *
-     * @return
-     * @throws Exception
-     */
-    @RequestMapping(value = "/register", method = RequestMethod.POST)
-    public Object register(@RequestBody CmsConfigEntity config) throws Exception {
-        //新增客户端资源
-        clientService.addResource(resourceId, EsContextHolder.getContext().getClientId());
-        //新增配置信息
-        config.setClientId(EsContextHolder.getContext().getClientId());
-        cmsService.createConfig(config);
-        return JsonResult.success(config);
-    }
+//    /**
+//     * 注册服务
+//     *
+//     * @return
+//     * @throws Exception
+//     */
+//    @RequestMapping(value = "/register", method = RequestMethod.POST)
+//    public Object register(@RequestBody CmsConfigEntity config) throws Exception {
+//        //新增客户端资源
+//        clientService.addResource(resourceId, EsContextHolder.getContext().getClientId());
+//        //新增配置信息
+//        config.setClientId(EsContextHolder.getContext().getClientId());
+//        cmsService.createConfig(config);
+//        return JsonResult.success(config);
+//    }
 
     /**
      * 行数据列表
@@ -284,7 +284,7 @@ public class CmsController {
         for (CmsColumnEntity c : columns) {
             for (CmsRowEntity r : record.getRows()) {
                 String rowValue = r.getValue();
-                if (c.getName().equals(r.getName()) && "image".equals(c.getType()) && StringUtils.isNotBlank(rowValue)) {
+                if (c.getName().equals(r.getName()) && "image".equals(c.getType()) && StringUtil.isNotBlank(rowValue)) {
                     String extension = "png";
                     if (rowValue.startsWith("data:")) {
                         extension = rowValue.substring(rowValue.indexOf("/") + 1, rowValue.indexOf(";"));
@@ -335,7 +335,7 @@ public class CmsController {
         for (CmsColumnEntity c : columns) {
             for (CmsRowEntity r : record.getRows()) {
                 String rowValue = r.getValue();
-                if (c.getName().equals(r.getName()) && "image".equals(c.getType()) && StringUtils.isNotBlank(rowValue)) {
+                if (c.getName().equals(r.getName()) && "image".equals(c.getType()) && StringUtil.isNotBlank(rowValue)) {
                     String extension = "png";
                     if (rowValue.startsWith("data:")) {
                         extension = rowValue.substring(rowValue.indexOf("/") + 1, rowValue.indexOf(";"));
@@ -344,13 +344,13 @@ public class CmsController {
                     File pathFile = new File(filePath + "/cms");
                     //noinspection ResultOfMethodCallIgnored
                     pathFile.mkdirs();
-                    String fileName = StringUtils.valueOf(row.get(c.getName()));
+                    String fileName = StringUtil.valueOf(row.get(c.getName()));
                     IspFileEntity cf = null;
-                    if (StringUtils.isNotEmpty(fileName)) {
+                    if (StringUtil.isNotEmpty(fileName)) {
                         cf = fileService.findByUri(fileName);
                         FileUtil.delete(filePath + "/" + fileName);
                     }
-                    if (StringUtils.isNotEmpty(fileName) && FileUtil.getExtension(fileName).equals(extension)) {
+                    if (StringUtil.isNotEmpty(fileName) && FileUtil.getExtension(fileName).equals(extension)) {
                         fileName = fileName.substring(fileName.lastIndexOf("/") + 1);
                     } else {
                         fileName = DateUtil.formatDate(new Date(), "yyyyMMddHHmmss") + "_" +

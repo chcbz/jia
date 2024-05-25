@@ -155,7 +155,7 @@ public class MediaController {
         //如果是文件上传，则直接保存文件
         if (file != null) {
             String fileName = file.getOriginalFilename();
-            if (StringUtils.isEmpty(media.getTitle())) {
+            if (StringUtil.isEmpty(media.getTitle())) {
                 media.setTitle(fileName);
             }
             media.setUrl(mediaType + "/" + now + "_" + fileName);
@@ -170,10 +170,10 @@ public class MediaController {
         else {
             String fileName = media.getTitle();
             media.setUrl(mediaType + "/" + now + "_" + fileName);
-            if (StringUtils.isEmpty(fileName)) {
+            if (StringUtil.isEmpty(fileName)) {
                 throw new EsRuntimeException(MatErrorConstants.MEDIA_TITLE_NEED);
             }
-            if (StringUtils.isEmpty(media.getContent())) {
+            if (StringUtil.isEmpty(media.getContent())) {
                 throw new EsRuntimeException(MatErrorConstants.MEDIA_CONTENT_NEED);
             }
             StreamUtil.io(new ByteArrayInputStream(media.getContent().getBytes()), new FileOutputStream(filePath + "/" + now + "_" + fileName));

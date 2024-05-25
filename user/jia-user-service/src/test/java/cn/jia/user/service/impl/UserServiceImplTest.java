@@ -1,6 +1,7 @@
 package cn.jia.user.service.impl;
 
 import cn.jia.core.exception.EsRuntimeException;
+import cn.jia.core.util.PasswordUtil;
 import cn.jia.isp.entity.LdapUser;
 import cn.jia.isp.service.LdapUserService;
 import cn.jia.test.BaseMockTest;
@@ -225,7 +226,7 @@ class UserServiceImplTest extends BaseMockTest {
     @Test
     void testChangePassword() {
         UserEntity userEntity = new UserEntity();
-        userEntity.setPassword("password");
+        userEntity.setPassword(PasswordUtil.encode("password"));
         when(userInfoDao.selectById(any())).thenReturn(userEntity);
         when(userInfoDao.updateById(any())).thenReturn(1);
 
