@@ -1,0 +1,19 @@
+plugins {
+    id 'java-gradle-plugin'
+}
+
+dependencies {
+    implementation gradleApi()
+}
+
+gradlePlugin {
+    plugins {
+        create("jiaDependencyManagement") {
+            id = "cn.jia.jia-dependency-management"
+            implementationClass = "cn.jia.plugin.gradle.SharedDependencyManagementPlugin"
+        }
+    }
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-gradle-plugin'
