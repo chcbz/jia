@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -19,6 +20,7 @@ import java.util.*;
  * @author penghuaiyi
  * @since 2014-04-04
  */
+@Slf4j
 public class JsonUtil {
 	private static final ObjectMapper MAPPER;
 
@@ -38,8 +40,8 @@ public class JsonUtil {
 	public static String toJson(Object obj) {
         try {
 			return MAPPER.writeValueAsString(obj);
-		} catch (JsonProcessingException e) {
-			e.printStackTrace();
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
 		} 
         return null;
 	}
@@ -60,8 +62,8 @@ public class JsonUtil {
 		}
 		try {
 			return MAPPER.readValue(jsonString, type);
-		} catch (IOException e) {
-			e.printStackTrace();
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
 		}
 		return null;
 	}
@@ -74,14 +76,14 @@ public class JsonUtil {
 	 */
 	public static <T> List<T> jsonToList(String jsonString, TypeReference<List<T>> type) {
 		if(StringUtil.isEmpty(jsonString)) {
-			return null;
+			return Collections.emptyList();
 		}
 		try {
 			return MAPPER.readValue(jsonString, type);
-		} catch (IOException e) {
-			e.printStackTrace();
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
 		}
-		return null;
+		return Collections.emptyList();
 	}
 
 	/**
@@ -91,13 +93,16 @@ public class JsonUtil {
 	 * @return 对象列表
 	 */
 	public static <T> List<T> jsonToList(String jsonString, Class<T> clazz) {
+		if(StringUtil.isEmpty(jsonString)) {
+			return Collections.emptyList();
+		}
 		JavaType javaType = MAPPER.getTypeFactory().constructParametricType(List.class, clazz);
 		try {
 			return MAPPER.readValue(jsonString, javaType);
-		} catch (IOException e) {
-			e.printStackTrace();
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
 		}
-		return null;
+		return Collections.emptyList();
 	}
 
 	/**

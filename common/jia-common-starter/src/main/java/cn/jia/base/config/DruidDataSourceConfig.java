@@ -15,7 +15,7 @@ import com.alibaba.druid.pool.DruidDataSource;
 
 import cn.jia.core.datasource.DruidSource;
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(DruidDataSource.class)
 public class DruidDataSourceConfig {
 	@Inject

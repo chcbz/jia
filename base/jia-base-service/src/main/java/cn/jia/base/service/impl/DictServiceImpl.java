@@ -9,6 +9,7 @@ import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import jakarta.annotation.Resource;
 import jakarta.inject.Named;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import cn.jia.core.util.CollectionUtil;
 
@@ -20,7 +21,7 @@ import java.util.stream.Collectors;
 public class DictServiceImpl extends BaseServiceImpl<DictDao, DictEntity> implements DictService {
     private final static String CACHE_KEY = "DICT_LIST";
 
-    @Resource
+    @Autowired(required = false)
     private RedisService redisService;
     @Value("${dict.cache.time:300}")
     private long cacheTime;
@@ -58,7 +59,7 @@ public class DictServiceImpl extends BaseServiceImpl<DictDao, DictEntity> implem
         List<DictEntity> list = selectAll().stream().filter(dictEntity -> dictType.equals(dictEntity.getType()) &&
                         dictValue.equals(dictEntity.getValue()) && lang.equals(dictEntity.getLanguage()))
                 .collect(Collectors.toList());
-        if (list.size() == 0) {
+        if (CollectionUtil.isNullOrEmpty(list)) {
             DictEntity example = new DictEntity();
             example.setType(dictType);
             example.setValue(dictValue);
@@ -72,7 +73,7 @@ public class DictServiceImpl extends BaseServiceImpl<DictDao, DictEntity> implem
     public DictEntity selectByTypeAndValue(String dictType, String dictValue) {
         List<DictEntity> list = selectAll().stream().filter(dictEntity -> dictType.equals(dictEntity.getType()) &&
                 dictValue.equals(dictEntity.getValue())).collect(Collectors.toList());
-        if (list.size() == 0) {
+        if (CollectionUtil.isNullOrEmpty(list)) {
             DictEntity example = new DictEntity();
             example.setType(dictType);
             example.setValue(dictValue);

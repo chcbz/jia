@@ -1,11 +1,14 @@
 dependencies {
     api project(':oauth:jia-oauth-api')
+    api project(':base:jia-base-api')
     api project(':user:jia-user-api')
     api project(':sms:jia-sms-api')
+    api project(':isp:jia-isp-api')
     api project(':common:jia-common-service')
 //    implementation(libs.spring.security.config)
     implementation(libs.jodd)
     implementation(libs.spring.security.oauth2.authorization.server)
+    compileOnly(libs.spring.security.oauth2.client)
 //    implementation(libs.spring.redis)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok

@@ -52,3 +52,11 @@ subprojects {
         }
     }
 }
+
+tasks.register('publishAllToLocal') {
+    dependsOn subprojects*.publishToMavenLocal
+}
+
+tasks.register('publishAllToMavenRepository') {
+    dependsOn subprojects*.publishAllPublicationsToMavenRepository
+}

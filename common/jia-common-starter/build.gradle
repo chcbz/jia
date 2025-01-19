@@ -27,6 +27,8 @@ dependencies {
     compileOnly(libs.spring.security.oauth2.authorization.server)
     compileOnly(libs.spring.boot.starter.druid)
     compileOnly(libs.spring.boot.starter.amqp)
+    compileOnly(libs.spring.boot.starter.actuator)
+
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok

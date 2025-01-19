@@ -5,8 +5,8 @@ import cn.jia.base.service.impl.DictServiceImpl;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
+import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.DateUtil;
-import cn.jia.core.util.JsonUtil;
 import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -69,9 +69,8 @@ public class DictController {
      */
     @PreAuthorize("hasAuthority('dict-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
-    public Object list(@RequestBody JsonRequestPage<String> page) {
-        DictEntity dict = JsonUtil.fromJson(page.getSearch(), DictEntity.class);
-        PageInfo<DictEntity> dictList = dictService.findPage(dict, page.getPageSize(), page.getPageNum());
+    public Object list(@RequestBody JsonRequestPage<DictEntity> page) {
+        PageInfo<DictEntity> dictList = dictService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum());
         JsonResultPage<DictEntity> result = new JsonResultPage<>(dictList.getList());
         result.setPageNum(dictList.getPageNum());
         result.setTotal(dictList.getTotal());
@@ -110,7 +109,7 @@ public class DictController {
     @RequestMapping(value = "/cleanCache", method = RequestMethod.GET)
     public Object cleanCache() {
         List<DictEntity> dictList = dictService.selectAll(LocaleContextHolder.getLocale().toString());
-        if (dictList.size() > 0) {
+        if (CollectionUtil.isNotNullOrEmpty(dictList)) {
             DictEntity dict = dictList.get(0);
             DictEntity upDict = new DictEntity();
             upDict.setId(dict.getId());

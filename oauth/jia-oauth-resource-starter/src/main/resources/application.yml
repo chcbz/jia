@@ -1,0 +1,13 @@
+server:
+  port: 10103
+
+logging:
+  level:
+    org.springframework.security: trace
+
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://my-auth-server.com

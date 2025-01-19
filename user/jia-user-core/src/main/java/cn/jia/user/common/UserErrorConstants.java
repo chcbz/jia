@@ -24,5 +24,17 @@ public class UserErrorConstants extends EsErrorConstants {
 	public static final UserErrorConstants ROLE_NOT_EXIST = new UserErrorConstants("EUSER005", "角色不存在");
 	/** 找不到角色负责人 */
 	public static final UserErrorConstants ORG_DIRECTOR_NOT_EXIST = new UserErrorConstants("EUSER006", "找不到角色负责人");
+	/** 组织编码已存在 */
+	public static final UserErrorConstants ORG_HAS_EXIST = new UserErrorConstants("EUSER007", "组织编码已存在");
+	/** 手机号码已存在 */
+	public static final UserErrorConstants USER_PHONE_HAS_EXIST = new UserErrorConstants("EUSER008", "手机号码已存在");
+	/** OPENID不存在 */
+	public static final UserErrorConstants OPENID_NOT_EXIST = new UserErrorConstants("EUSER009", "OPENID不存在");
+	/** EMAIL不存在 */
+	public static final UserErrorConstants EMAIL_NOT_EXIST = new UserErrorConstants("EUSER010", "EMAIL不存在");
+	/** 电话号码不存在 */
+	public static final UserErrorConstants PHONE_NOT_EXIST = new UserErrorConstants("EUSER011", "电话号码不存在");
+	/** EMAIL已存在 */
+	public static final UserErrorConstants USER_EMAIL_HAS_EXIST = new UserErrorConstants("EUSER012", "EMAIL已存在");
 
 }

@@ -11,7 +11,7 @@ import javax.sql.DataSource;
  * DbUnit数据源配置
  * @author chc
  */
-@Configuration
+@Configuration(proxyBeanMethods = false)
 public class DbUnitConfiguration {
     @Bean
     public DatabaseConfigBean dbUnitDatabaseConfig() {
