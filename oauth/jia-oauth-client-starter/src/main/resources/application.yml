@@ -1,0 +1,45 @@
+server:
+  port: 10102
+
+logging:
+  level:
+    org.springframework.security: trace
+
+spring:
+  application:
+    name: jia-oauth-client-starter
+  security:
+    oauth2:
+      client:
+        provider:
+          #认证服务器信息，下面这个string可以自定义，但是要和下方jia-client-oidc.provider的对应上
+          oauth-server:
+            #授权地址
+            issuer-uri: http://oauth-server:10101
+            authorizationUri: ${spring.security.oauth2.client.provider.oauth-server.issuer-uri}/oauth2/authorize
+            #令牌获取地址
+            tokenUri: ${spring.security.oauth2.client.provider.oauth-server.issuer-uri}/oauth2/token
+        registration:
+          # 下面这个string可以自定义，这里自定义的要和最下面redirect-uri的最后一个请求地址对应上
+          jia-client-oidc:
+            #认证提供者，标识由哪个认证服务器进行认证，和上面的oauth-server进行关联
+            provider: oauth-server
+            #客户端名称
+            client-name: jia客户端
+            #客户端id，从认证平台申请的客户端id
+            client-id: jia_client
+            #客户端秘钥
+            client-secret: jia_secret
+            #客户端认证方式
+            client-authentication-method: client_secret_basic
+            #使用授权码模式获取令牌（token）
+            authorization-grant-type: authorization_code
+            #回调地址，接收认证服务器回传code的接口地址，之前我们是使用http://www.baidu.com代替
+            # /login/oauth2/code/jia-client-oidc 这个接口是使用的oauth2-client依赖默认提供的接口
+            # 这里最后的jia-client-oidc 需要和上方我们自定义是string对应上
+            # 该接口会收到code授权码之后，会去调用授权服务器获取token，
+            # 也就是我们上方配置的${spring.security.oauth2.client.provider.oauth-server.tokenUri}
+            # 也可以使用自定义的接口，只不过需要我们自己拿到code之后再去调用资源服务器获取token
+            redirect-uri: http://oauth-client:10102/login/oauth2/code/jia-client-oidc
+            scope:
+              - openid

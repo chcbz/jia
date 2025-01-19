@@ -66,6 +66,7 @@ CREATE TABLE wx_mp_user (
   subscribe_items varchar(2000) DEFAULT NULL COMMENT '订阅服务明细',
   status int DEFAULT '1' COMMENT '状态 1有效 0无效',
   remark varchar(200) DEFAULT NULL COMMENT '简短说明',
+  latest_auth_code varchar(255) DEFAULT NULL COMMENT '最新授权码',
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',

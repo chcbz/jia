@@ -2,7 +2,7 @@ dependencies {
     api project(':base:jia-base-service')
     api project(':base:jia-base-mapper')
     api project(':common:jia-common-starter')
-//    implementation(libs.spring.boot.starter.data.redis)
+    implementation(libs.spring.boot.starter.data.redis)
 //    implementation(libs.spring.boot.starter.data.ldap)
 //    implementation(libs.spring.boot.starter.cache)
 //    implementation(libs.spring.boot.starter.websocket)

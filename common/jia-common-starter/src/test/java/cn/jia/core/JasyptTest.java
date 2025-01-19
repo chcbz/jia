@@ -25,7 +25,7 @@ public class JasyptTest {
     public void decrypt() {
         PooledPBEStringEncryptor encryptor = new PooledPBEStringEncryptor();
         SimpleStringPBEConfig config = new SimpleStringPBEConfig();
-        config.setPassword("123456");
+        config.setPassword("comeongogogo");
         config.setAlgorithm("PBEWITHHMACSHA512ANDAES_256");
         config.setKeyObtentionIterations("1000");
         config.setPoolSize("1");
@@ -35,6 +35,6 @@ public class JasyptTest {
         config.setStringOutputType("base64");
         encryptor.setConfig(config);
         System.out.println(encryptor.decrypt(
-                "eZ+ev8ac6+SZHL4Y1zSEIAKHChJONtmiE9furv4dSYxf0XL/0V4jW5RhuvpuaJ7o"));
+                "tgvCGDCQrft4C8hS/tqADdC2O27LV1joyKOkIQZrfexFkd/SYyWNZJd+F7HRVf1O"));
     }
 }

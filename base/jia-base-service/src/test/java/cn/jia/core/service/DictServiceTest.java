@@ -34,6 +34,7 @@ class DictServiceTest extends BaseMockTest {
     @Test
     void selectAll() {
         when(baseDao.selectAll()).thenReturn(Collections.singletonList(new DictEntity()));
+        when(redisService.get(any())).thenReturn("[]");
         doNothing().when(redisService).set(any(), any(), any(), any());
         assertTrue(dictService.selectAll().size() > 0);
     }

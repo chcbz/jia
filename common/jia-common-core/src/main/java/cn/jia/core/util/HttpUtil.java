@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -23,7 +24,7 @@ import java.util.Map;
 public class HttpUtil {
     /**
      * 向指定URL发送GET方法的请求
-     * 
+     *
      * @param url 发送请求的URL
      * @return URL 所代表远程资源的响应结果
      */
@@ -74,11 +75,9 @@ public class HttpUtil {
 
     /**
      * 向指定 URL 发送POST方法的请求
-     * 
-     * @param url
-     *            发送请求的 URL
-     * @param param
-     *            请求参数，请求参数应该是 name1=value1&name2=value2 的形式。
+     *
+     * @param url   发送请求的 URL
+     * @param param 请求参数，请求参数应该是 name1=value1&name2=value2 的形式。
      * @return 所代表远程资源的响应结果
      */
     public static String sendPost(String url, String param) {
@@ -111,72 +110,76 @@ public class HttpUtil {
                 result.append(line);
             }
         } catch (Exception e) {
-            log.info("发送 POST 请求出现异常！"+e);
+            log.info("发送 POST 请求出现异常！" + e);
             e.printStackTrace();
         }
         //使用finally块来关闭输出流、输入流
-        finally{
-            try{
-                if(out!=null){
+        finally {
+            try {
+                if (out != null) {
                     out.close();
                 }
-                if(in!=null){
+                if (in != null) {
                     in.close();
                 }
-            }
-            catch(IOException ex){
+            } catch (IOException ex) {
                 ex.printStackTrace();
             }
         }
         return result.toString();
-    }    
-    
-	public static boolean isAjaxRequest(HttpServletRequest request){
-		String header = request.getHeader("X-Requested-With");
+    }
+
+    public static boolean isAjaxRequest(HttpServletRequest request) {
+        String header = request.getHeader("X-Requested-With");
         return "XMLHttpRequest".equals(header);
-	}
-	
-	/**
-	 * 以JSON格式输出
-	 * @param response
-	 */
-	public static void responseJson(HttpServletResponse response, String json) {
-		//将实体对象转换为JSON Object转换
-		response.setCharacterEncoding("UTF-8");
-		response.setContentType("application/json; charset=utf-8");
+    }
+
+    /**
+     * 以JSON格式输出
+     *
+     * @param response
+     */
+    public static void responseJson(HttpServletResponse response, String json) {
+        //将实体对象转换为JSON Object转换
+        response.setCharacterEncoding("UTF-8");
+        response.setContentType("application/json; charset=utf-8");
         try (PrintWriter out = response.getWriter()) {
             out.append(json);
         } catch (IOException e) {
             e.printStackTrace();
         }
-	}
-	/**
-	 * 获取IP地址
-	 * @param request
-	 * @return
-	 */
-	public static String getIpAddr(HttpServletRequest request) {
-		String ip = request.getHeader("x-forwarded-for");
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = request.getHeader("Proxy-Client-IP");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = request.getHeader("WL-Proxy-Client-IP");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = request.getHeader("MB-X-Forwarded-For");
-		}
-		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
-			ip = request.getRemoteAddr();
-		}
-		return ip;
-	}
-	/**
-	 * 获取地址参数
-	 * @param httpRequest
-	 * @return
-	 */
-	public static String requestParams(HttpServletRequest httpRequest) {
+    }
+
+    /**
+     * 获取IP地址
+     *
+     * @param request
+     * @return
+     */
+    public static String getIpAddr(HttpServletRequest request) {
+        String ip = request.getHeader("x-forwarded-for");
+        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+            ip = request.getHeader("Proxy-Client-IP");
+        }
+        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+            ip = request.getHeader("WL-Proxy-Client-IP");
+        }
+        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+            ip = request.getHeader("MB-X-Forwarded-For");
+        }
+        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+            ip = request.getRemoteAddr();
+        }
+        return ip;
+    }
+
+    /**
+     * 获取地址参数
+     *
+     * @param httpRequest
+     * @return
+     */
+    public static String requestParams(HttpServletRequest httpRequest) {
         // 请求参数日志信息
         Map<String, Object> params = new HashMap<>(16);
         Enumeration<?> enume = httpRequest.getParameterNames();
@@ -192,19 +195,18 @@ public class HttpUtil {
         }
         return JsonUtil.toJson(params);
     }
-	
-	/**
+
+    /**
      * MethodsTitle:传入的URL中参数的处理
-     * @author: xg.chen
-     * @date:2016年9月2日 
-     * @param url 传入的url ex："http://exp.kunnr.com/so/index.html?kunnrId=16&openid=16#/app/home"
-     * @param paramName 参数名
+     *
+     * @param url        传入的url ex："http://exp.kunnr.com/so/index.html?kunnrId=16&openid=16#/app/home"
+     * @param paramName  参数名
      * @param paramValue 参数值
      * @return
      */
-    public static String addUrlValue(String url,String paramName,String paramValue){
+    public static String addUrlValue(String url, String paramName, String paramValue) {
         //参数和参数名为空的话就返回原来的URL
-        if(StringUtil.isBlank(paramValue) || StringUtil.isBlank(paramName)){
+        if (StringUtil.isBlank(paramValue) || StringUtil.isBlank(paramName)) {
             return url;
         }
         //先很据# ? 将URL拆分成一个String数组
@@ -264,20 +266,20 @@ public class HttpUtil {
         }
         return a;
     }
+
     /**
      * MethodsTitle: 从url地址中根据key获取value
-     * @author: xg.chen
-     * @date:2016年9月2日 
-     * @param url  "http://exp.kunnr.com/so/index.html?kunnrId=16&openid=16#/app/home"
-     * @param paramName
-     * @return
+     *
+     * @param url       比如http://exp.kunnr.com/so/index.html?kunnrId=16&openid=16#/app/home
+     * @param paramName 参数名
+     * @return 参数值
      */
     public static String getUrlValue(String url, String paramName) {
-        if(StringUtil.isBlank(paramName)){
+        if (StringUtil.isBlank(url) || StringUtil.isBlank(paramName)) {
             return null;
         }
         // ? #拆开，先把?拆开 a?b#c ->{a,b,c}
-        String b = "";
+        String b = url;
         String[] abcArray = url.split("[?]");
         if (abcArray.length > 1) {
             String bc = abcArray[1];
@@ -311,6 +313,7 @@ public class HttpUtil {
 
     /**
      * 特殊字符转义
+     *
      * @param str html字符串
      * @return 转移后字符串
      */
@@ -330,6 +333,7 @@ public class HttpUtil {
 
     /**
      * 根据文件后缀获取contentType
+     *
      * @param filenameExtension 文件后缀
      * @return contentType
      */

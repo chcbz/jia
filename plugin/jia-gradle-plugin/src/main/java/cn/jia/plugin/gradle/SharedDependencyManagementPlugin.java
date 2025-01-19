@@ -13,6 +13,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.version("spring-boot", "3.2.4");
                             catalog.version("spring-cloud", "Edgware.SR3");
                             catalog.version("spring-security", "6.2.3");
+                            catalog.version("spring-security-oauth2", "1.2.3");
                             catalog.version("weixin-java", "4.5.6.B");
                             catalog.version("mybatis-plus", "3.5.5");
                             catalog.version("mapstruct", "1.5.5.Final");
@@ -48,7 +49,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring.security.config", "org.springframework.security", "spring-security-config").versionRef("spring-security");
                             catalog.library("spring.security.oauth2.client", "org.springframework.security", "spring-security-oauth2-client").versionRef("spring-security");
                             catalog.library("spring-security-oauth2-resource-server", "org.springframework.security", "spring-security-oauth2-resource-server").versionRef("spring-security");
-                            catalog.library("spring-security-oauth2-authorization-server", "org.springframework.security", "spring-security-oauth2-authorization-server").version("1.1.0");
+                            catalog.library("spring-security-oauth2-authorization-server", "org.springframework.security", "spring-security-oauth2-authorization-server").versionRef("spring-security-oauth2");
                             catalog.library("spring-boot-configuration-processor", "org.springframework.boot", "spring-boot-configuration-processor").versionRef("spring-boot");
                             catalog.library("spring-boot-autoconfigure", "org.springframework.boot", "spring-boot-autoconfigure").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-web", "org.springframework.boot", "spring-boot-starter-web").versionRef("spring-boot");
@@ -68,10 +69,12 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-boot-starter-data-ldap", "org.springframework.boot", "spring-boot-starter-data-ldap").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-data-elasticsearch", "org.springframework.boot", "spring-boot-starter-data-elasticsearch").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-druid", "com.alibaba", "druid-spring-boot-starter").versionRef("spring-boot-druid");
+                            catalog.library("spring-boot-starter-thymeleaf", "org.springframework.boot", "spring-boot-starter-thymeleaf").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-freemarker", "org.springframework.boot", "spring-boot-starter-freemarker").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-swagger", "com.github.xiaoymin", "knife4j-openapi3-jakarta-spring-boot-starter").versionRef("spring-boot-swagger");
                             catalog.library("spring-boot-starter-test", "org.springframework.boot", "spring-boot-starter-test").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-jasypt", "com.github.ulisesbocchio", "jasypt-spring-boot-starter").versionRef("spring-boot-jasypt");
+                            catalog.library("spring-boot-starter-actuator", "org.springframework.boot", "spring-boot-starter-actuator").versionRef("spring-boot");
                             catalog.library("spring-boot-properties-migrator", "org.springframework.boot", "spring-boot-properties-migrator").versionRef("spring-boot");
                             catalog.library("spring-cloud-config-server", "org.springframework.cloud", "spring-cloud-config-server").versionRef("spring-cloud");
                             catalog.library("spring-cloud-starter-netflix-eureka-server", "org.springframework.cloud", "spring-cloud-starter-netflix-eureka-server").versionRef("spring-cloud");
@@ -102,6 +105,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("httpclient", "org.apache.httpcomponents:httpclient:4.5.14");
                             catalog.library("mysql", "com.mysql:mysql-connector-j:8.3.0");
                             catalog.library("jedis", "redis.clients:jedis:4.4.1");
+                            catalog.library("camunda", "org.camunda.bpm:camunda-engine:7.21.0");
                             catalog.library("java-jwt", "com.auth0:java-jwt:3.2.0");
                             catalog.library("jodd", "org.jodd:jodd:3.3.8");
                             catalog.library("zxing-core", "com.google.zxing:core:3.4.0");
