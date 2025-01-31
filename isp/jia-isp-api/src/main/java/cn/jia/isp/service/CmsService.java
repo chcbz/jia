@@ -1,6 +1,3 @@
-/**
- * 内容管理系统(CMS)服务接口，定义了对表格、列、配置和行数据的操作
- */
 package cn.jia.isp.service;
 
 import cn.jia.isp.entity.*;
@@ -9,7 +6,7 @@ import com.github.pagehelper.PageInfo;
 import java.util.Map;
 
 /**
- * CMS服务接口
+ * 内容管理系统(CMS)服务接口，定义了对表格、列、配置和行数据的操作
  */
 public interface CmsService {
 
