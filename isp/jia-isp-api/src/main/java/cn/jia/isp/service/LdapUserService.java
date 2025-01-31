@@ -1,6 +1,3 @@
-/**
- * Ldap用户服务接口，提供对Ldap用户数据的操作方法
- */
 package cn.jia.isp.service;
 
 import cn.jia.isp.entity.LdapUser;
