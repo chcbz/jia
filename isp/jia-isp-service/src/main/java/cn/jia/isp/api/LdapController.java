@@ -27,6 +27,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * LDAP控制器，用于处理与LDAP用户和用户组相关的操作
+ */
 @RestController
 @RequestMapping("/ldap")
 public class LdapController {
@@ -83,7 +86,7 @@ public class LdapController {
     @PostMapping(value = "/user/search")
     public Object userSearch(@RequestBody LdapUser user) {
         List<LdapUser> userList = ldapUserService.search(user);
-        if (userList == null || userList.size() == 0) {
+        if (CollectionUtil.isNullOrEmpty(userList)) {
             throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
         }
         for (LdapUser u : userList) {
@@ -101,7 +104,7 @@ public class LdapController {
     @PostMapping(value = "/user/create")
     public Object userCreate(@RequestBody LdapUser user) throws Exception {
         List<LdapUser> userList = ldapUserService.search(user);
-        if (userList == null || userList.size() == 0) {
+        if (CollectionUtil.isNullOrEmpty(userList)) {
             user = ldapUserService.create(user);
         } else {
             user = userList.get(0);

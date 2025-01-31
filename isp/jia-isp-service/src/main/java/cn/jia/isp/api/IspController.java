@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * ISP服务接口
@@ -39,17 +40,14 @@ public class IspController {
     /**
      * 服务器列表
      *
-     * @param page
-     * @param request
-     * @return
+     * @param page 分页请求对象
+     * @param request HTTP请求对象
+     * @return 服务器列表信息
      */
     @RequestMapping(value = "/server/list", method = RequestMethod.POST)
-    public Object listServer(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
+    public Object listServer(@RequestBody JsonRequestPage<IspServerEntity> page, HttpServletRequest request) {
         String clientId = EsSecurityHandler.checkClientId(request);
-        IspServerEntity example = JsonUtil.fromJson(page.getSearch(), IspServerEntity.class);
-        if (example == null) {
-            example = new IspServerEntity();
-        }
+        IspServerEntity example = Optional.ofNullable(page.getSearch()).orElse(new IspServerEntity());
         example.setClientId(clientId);
         PageInfo<IspServerEntity> ispList = ispService.listServer(example, page.getPageNum(), page.getPageSize());
         JsonResultPage<IspServerEntity> result = new JsonResultPage<>(ispList.getList());
@@ -61,8 +59,8 @@ public class IspController {
     /**
      * 获取服务器信息
      *
-     * @param id
-     * @return
+     * @param id 服务器ID
+     * @return 服务器信息
      */
     @RequestMapping(value = "/server/get", method = RequestMethod.GET)
     public Object findServerById(@RequestParam(name = "id") Long id) throws Exception {
@@ -76,8 +74,8 @@ public class IspController {
     /**
      * 创建服务器
      *
-     * @param record
-     * @return
+     * @param record 服务器实体对象
+     * @return 创建结果
      */
     @RequestMapping(value = "/server/create", method = RequestMethod.POST)
     public Object createServer(@RequestBody IspServerEntity record) {
@@ -89,8 +87,8 @@ public class IspController {
     /**
      * 更新服务器信息
      *
-     * @param record
-     * @return
+     * @param record 服务器实体对象
+     * @return 更新结果
      */
     @RequestMapping(value = "/server/update", method = RequestMethod.POST)
     public Object updateServer(@RequestBody IspServerEntity record) throws Exception {
@@ -101,8 +99,8 @@ public class IspController {
     /**
      * 删除服务器
      *
-     * @param id
-     * @return
+     * @param id 服务器ID
+     * @return 删除结果
      */
     @RequestMapping(value = "/server/delete", method = RequestMethod.GET)
     public Object deleteServer(@RequestParam(name = "id") Long id) {
@@ -113,9 +111,9 @@ public class IspController {
     /**
      * 刷新HTTPS证书
      *
-     * @param id
-     * @param domain
-     * @return
+     * @param id 服务器ID
+     * @param domain 域名
+     * @return 刷新结果
      */
     @RequestMapping(value = "/server/ssl/refresh", method = RequestMethod.GET)
     public Object refreshSSL(@RequestParam Long id, @RequestParam String domain) {
@@ -132,8 +130,8 @@ public class IspController {
     /**
      * 获取DNS对应的hosts信息
      *
-     * @param dnsRecordDTO
-     * @return
+     * @param dnsRecordDTO DNS记录DTO对象
+     * @return hosts信息
      */
     @RequestMapping(value = "/dns/hosts", method = RequestMethod.GET, produces = "text/plain;charset=UTF-8")
     public Object hosts(DnsRecordDTO dnsRecordDTO) {
@@ -141,7 +139,7 @@ public class IspController {
         zone.setZone(dnsRecordDTO.getZone());
         zone.setKeyName(dnsRecordDTO.getKeyName());
         List<IspDnsZoneEntity> zoneList = dnsService.listDnsZone(zone);
-        if (zoneList == null || zoneList.size() == 0) {
+        if (CollectionUtil.isNullOrEmpty(zoneList)) {
             return "no this zone";
         }
         List<IspDnsRecordEntity> recordList = dnsService.listDnsRecord(zoneList.get(0).getId());
@@ -156,10 +154,10 @@ public class IspController {
     /**
      * 更新DNS记录信息
      *
-     * @param name    服务器名称
-     * @param request
-     * @return
-     * @throws Exception
+     * @param name 服务器名称
+     * @param request HTTP请求对象
+     * @return 更新结果
+     * @throws Exception 更新过程中可能抛出的异常
      */
     @SuppressWarnings("unchecked")
     @RequestMapping("/dns/update_record")
@@ -192,7 +190,7 @@ public class IspController {
                         .get("data");
                 List<Map<String, Object>> records = (List<Map<String, Object>>) data.get("records");
 
-                if (records != null && records.size() > 0) {
+                if (CollectionUtil.isNotNullOrEmpty(records)) {
                     for (Map<String, Object> o : records) {
                         if (ownDomainName.equals(o.get("name")) || allDomainName.equals(o.get("name"))) {
                             TxCloudUtil.dnsSend(domainName, String.valueOf(o.get("id")), "",
@@ -206,7 +204,7 @@ public class IspController {
                 Map<String, Object> data = AliCloudUtil.dnsSend(domainName, "", "", record.getDnsKey(), record.getDnsToken(), "RecordList");
                 List<Map<String, Object>> records = (List<Map<String, Object>>) Objects.requireNonNull(data).get("records");
 
-                if (records != null && records.size() > 0) {
+                if (CollectionUtil.isNotNullOrEmpty(records)) {
                     for (Map<String, Object> o : records) {
                         if (ownDomainName.equals(o.get("rR")) || allDomainName.equals(o.get("rR"))) {
                             AliCloudUtil.dnsSend(domainName, String.valueOf(o.get("recordId")), "", record.getDnsKey(), record.getDnsToken(), "RecordDelete");

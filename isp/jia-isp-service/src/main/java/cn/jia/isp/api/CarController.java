@@ -6,7 +6,6 @@ import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.exception.EsRuntimeException;
-import cn.jia.core.util.JsonUtil;
 import cn.jia.isp.common.IspErrorConstants;
 import cn.jia.isp.entity.CarBrandEntity;
 import cn.jia.isp.entity.CarBrandAudiEntity;
@@ -19,6 +18,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * 车辆数据接口
@@ -38,12 +38,9 @@ public class CarController {
 	 * @return 品牌列表
 	 */
 	@RequestMapping(value = "/list/brand", method = RequestMethod.POST)
-	public Object listBrand(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
+	public Object listBrand(@RequestBody JsonRequestPage<CarBrandEntity> page, HttpServletRequest request) {
 		String clientId = EsSecurityHandler.checkClientId(request);
-		CarBrandEntity example = JsonUtil.fromJson(page.getSearch(), CarBrandEntity.class);
-		if(example == null) {
-			example = new CarBrandEntity();
-		}
+		CarBrandEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandEntity());
 		example.setClientId(clientId);
 		PageInfo<CarBrandEntity> carList = carService.listBrand(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<CarBrandEntity> result = new JsonResultPage<>(carList.getList());
@@ -110,9 +107,9 @@ public class CarController {
 	 * @return 系列列表
 	 */
 	@RequestMapping(value = "/list/brandAudi", method = RequestMethod.POST)
-	public Object listBrandAudi(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
+	public Object listBrandAudi(@RequestBody JsonRequestPage<CarBrandAudiEntity> page, HttpServletRequest request) {
 		EsSecurityHandler.checkClientId(request);
-		CarBrandAudiEntity example = JsonUtil.fromJson(page.getSearch(), CarBrandAudiEntity.class);
+		CarBrandAudiEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandAudiEntity());
 		PageInfo<CarBrandAudiEntity> carList = carService.listBrandAudi(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<CarBrandAudiEntity> result = new JsonResultPage<>(carList.getList());
 		result.setPageNum(carList.getPageNum());
@@ -178,9 +175,9 @@ public class CarController {
 	 * @return 车型列表
 	 */
 	@RequestMapping(value = "/list/brandVersion", method = RequestMethod.POST)
-	public Object listBrandVersion(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
+	public Object listBrandVersion(@RequestBody JsonRequestPage<CarBrandVersionEntity> page, HttpServletRequest request) {
 		EsSecurityHandler.checkClientId(request);
-		CarBrandVersionEntity example = JsonUtil.fromJson(page.getSearch(), CarBrandVersionEntity.class);
+		CarBrandVersionEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandVersionEntity());
 		PageInfo<CarBrandVersionEntity> carList = carService.listBrandVersion(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<CarBrandVersionEntity> result = new JsonResultPage<>(carList.getList());
 		result.setPageNum(carList.getPageNum());
@@ -246,9 +243,9 @@ public class CarController {
 	 * @return 制造商列表
 	 */
 	@RequestMapping(value = "/list/brandMf", method = RequestMethod.POST)
-	public Object listBrandMf(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
+	public Object listBrandMf(@RequestBody JsonRequestPage<CarBrandMfEntity> page, HttpServletRequest request) {
 		EsSecurityHandler.checkClientId(request);
-		CarBrandMfEntity example = JsonUtil.fromJson(page.getSearch(), CarBrandMfEntity.class);
+		CarBrandMfEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandMfEntity());
 		PageInfo<CarBrandMfEntity> carList = carService.listBrandMf(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<CarBrandMfEntity> result = new JsonResultPage<>(carList.getList());
 		result.setPageNum(carList.getPageNum());
