@@ -1,12 +1,12 @@
-/**
- * LdapAccountService接口定义了对LDAP账户进行操作的方法
- * 它提供了创建、查询、修改和删除LDAP账户的功能
- */
 package cn.jia.isp.service;
 
 import cn.jia.isp.entity.LdapAccount;
 import java.util.List;
 
+/**
+ * LdapAccountService接口定义了对LDAP账户进行操作的方法
+ * 它提供了创建、查询、修改和删除LDAP账户的功能
+ */
 public interface LdapAccountService {
 
     /**

@@ -1,14 +1,14 @@
-/**
- * 接口IspService定义了与ISP（Internet Service Provider）相关的服务方法，
- * 包括服务器和域名的管理操作。它使用PageInfo来分页显示查询结果，
- * 并对服务器和域名实体进行CRUD操作。
- */
 package cn.jia.isp.service;
 
 import cn.jia.isp.entity.IspDomainEntity;
 import cn.jia.isp.entity.IspServerEntity;
 import com.github.pagehelper.PageInfo;
 
+/**
+ * 接口IspService定义了与ISP（Internet Service Provider）相关的服务方法，
+ * 包括服务器和域名的管理操作。它使用PageInfo来分页显示查询结果，
+ * 并对服务器和域名实体进行CRUD操作。
+ */
 public interface IspService {
     /**
      * 根据示例对象查询服务器列表，并进行分页。

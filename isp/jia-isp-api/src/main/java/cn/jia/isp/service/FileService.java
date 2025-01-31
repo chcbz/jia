@@ -1,6 +1,3 @@
-/**
- * 文件服务接口，提供文件相关的操作
- */
 package cn.jia.isp.service;
 
 import cn.jia.isp.entity.IspFileEntity;
