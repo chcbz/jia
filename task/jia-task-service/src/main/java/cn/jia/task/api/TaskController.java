@@ -1,10 +1,10 @@
 package cn.jia.task.api;
 
 import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
-import cn.jia.core.util.JsonUtil;
 import cn.jia.task.entity.TaskDetailEntity;
 import cn.jia.task.entity.TaskDetailVO;
 import cn.jia.task.entity.TaskPlanEntity;
@@ -13,6 +13,8 @@ import cn.jia.task.service.TaskService;
 import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Optional;
 
 /**
  * 任务计划接口
@@ -97,9 +99,9 @@ public class TaskController {
      */
     /*@PreAuthorize("hasAuthority('task-search')")*/
     @RequestMapping(value = "/search", method = RequestMethod.POST)
-    public Object search(@RequestBody JsonRequestPage<String> page) {
-        TaskPlanVO plan = JsonUtil.fromJson(page.getSearch(), TaskPlanVO.class);
-        plan.setClientId(EsSecurityHandler.clientId());
+    public Object search(@RequestBody JsonRequestPage<TaskPlanVO> page) {
+        TaskPlanVO plan = Optional.ofNullable(page.getSearch()).orElse(new TaskPlanVO());
+        plan.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<TaskPlanEntity> taskList = taskService.findPage(plan, page.getPageSize(), page.getPageNum());
         JsonResultPage<TaskPlanEntity> result = new JsonResultPage<>(taskList.getList());
         result.setPageNum(taskList.getPageNum());
@@ -113,8 +115,8 @@ public class TaskController {
      * @return 任务明细列表
      */
     @RequestMapping(value = "/item/search", method = RequestMethod.POST)
-    public Object searchItem(@RequestBody JsonRequestPage<String> page) {
-        TaskDetailVO item = JsonUtil.fromJson(page.getSearch(), TaskDetailVO.class);
+    public Object searchItem(@RequestBody JsonRequestPage<TaskDetailVO> page) {
+        TaskDetailVO item = Optional.ofNullable(page.getSearch()).orElse(new TaskDetailVO());
         PageInfo<TaskDetailEntity> taskList = taskService.findItems(item, page.getPageNum(), page.getPageSize());
         JsonResultPage<TaskDetailEntity> result = new JsonResultPage<>(taskList.getList());
         result.setPageNum(taskList.getPageNum());

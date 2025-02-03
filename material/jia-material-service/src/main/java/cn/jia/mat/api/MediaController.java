@@ -26,6 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 import javax.servlet.http.HttpServletResponse;
 import java.io.*;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @RestController
@@ -117,8 +118,8 @@ public class MediaController {
      * @return 媒体信息
      */
     @PostMapping(value = "/list")
-    public Object list(@RequestBody JsonRequestPage<String> page) {
-        MatMediaReqVO example = JsonUtil.fromJson(page.getSearch(), MatMediaReqVO.class);
+    public Object list(@RequestBody JsonRequestPage<MatMediaReqVO> page) {
+        MatMediaReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatMediaReqVO());
         PageInfo<MatMediaEntity> mediaList = mediaService.findPage(example, page.getPageSize(), page.getPageNum());
         List<MatMediaResVO> medias =
                 mediaList.getList().stream().map(media -> {

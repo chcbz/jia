@@ -1,10 +1,10 @@
 package cn.jia.user.service.impl;
 
 import cn.jia.core.service.BaseServiceImpl;
-import cn.jia.user.dao.UserAuthDao;
+import cn.jia.user.dao.UserPermsRelDao;
 import cn.jia.user.dao.UserRoleDao;
 import cn.jia.user.dao.UserRoleRelDao;
-import cn.jia.user.entity.AuthEntity;
+import cn.jia.user.entity.PermsRelEntity;
 import cn.jia.user.entity.RoleEntity;
 import cn.jia.user.entity.RoleRelEntity;
 import cn.jia.user.entity.RoleVO;
@@ -21,7 +21,7 @@ import java.util.List;
 @Service
 public class RoleServiceImpl extends BaseServiceImpl<UserRoleDao, RoleEntity> implements RoleService {
     @Autowired
-    private UserAuthDao userAuthDao;
+    private UserPermsRelDao userPermsRelDao;
     @Autowired
     private UserRoleRelDao userRoleRelDao;
 
@@ -29,25 +29,25 @@ public class RoleServiceImpl extends BaseServiceImpl<UserRoleDao, RoleEntity> im
     @Transactional
     public void changePerms(RoleVO role) {
         //查询用户当前权限
-        List<AuthEntity> authList = userAuthDao.selectByRoleId(role.getId());
-        List<AuthEntity> addList = new ArrayList<>(); //需要添加的角色权限
-        List<AuthEntity> cancelList = new ArrayList<>(); //需要取消的角色权限
+        List<PermsRelEntity> authList = userPermsRelDao.selectByRoleId(role.getId());
+        List<PermsRelEntity> addList = new ArrayList<>(); //需要添加的角色权限
+        List<PermsRelEntity> cancelList = new ArrayList<>(); //需要取消的角色权限
         //查找需要添加的角色权限
         role.getPermsIds().stream().filter(permsId -> authList.stream().noneMatch(auth ->
                 permsId.equals(auth.getPermsId()))).forEach(permsId -> {
-            AuthEntity auth = new AuthEntity();
+            PermsRelEntity auth = new PermsRelEntity();
             auth.setRoleId(role.getId());
             auth.setPermsId(permsId);
             addList.add(auth);
         });
         if (addList.size() > 0) {
-            userAuthDao.insertBatch(addList);
+            userPermsRelDao.insertBatch(addList);
         }
 
         //查找需要取消的角色权限
         authList.stream().filter(auth -> !role.getPermsIds().contains(auth.getPermsId())).forEach(cancelList::add);
         if (cancelList.size() > 0) {
-            userAuthDao.deleteBatchIds(cancelList);
+            userPermsRelDao.deleteBatchIds(cancelList);
         }
     }
 
@@ -114,8 +114,8 @@ public class RoleServiceImpl extends BaseServiceImpl<UserRoleDao, RoleEntity> im
     }
 
     @Override
-    public PageInfo<AuthEntity> listPerms(Long roleId, int pageSize, int pageNum) {
+    public PageInfo<PermsRelEntity> listPerms(Long roleId, int pageSize, int pageNum) {
         PageHelper.startPage(pageNum, pageSize);
-        return PageInfo.of(userAuthDao.selectByRoleId(roleId));
+        return PageInfo.of(userPermsRelDao.selectByRoleId(roleId));
     }
 }

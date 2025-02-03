@@ -1,11 +1,13 @@
 dependencies {
+    api project(':base:jia-base-api')
     api project(':user:jia-user-api')
-    api project(':oauth:jia-oauth-api')
     api project(':isp:jia-isp-api')
     api project(':sms:jia-sms-api')
     api project(':common:jia-common-service')
     compileOnly(libs.spring.redis)
     compileOnly(libs.jodd)
+    compileOnly(libs.spring.security.config)
+    compileOnly(libs.spring.security.web)
     testImplementation project(':common:jia-common-test')
     testImplementation(libs.jodd)
     testAnnotationProcessor libs.lombok

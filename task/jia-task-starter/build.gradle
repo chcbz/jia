@@ -1,0 +1,8 @@
+dependencies {
+    api project(':task:jia-task-service')
+    api project(':task:jia-task-mapper')
+    api project(':common:jia-common-starter')
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-task-starter'

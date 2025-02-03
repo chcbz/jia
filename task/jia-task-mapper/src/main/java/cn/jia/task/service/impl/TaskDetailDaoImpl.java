@@ -1,7 +1,6 @@
 package cn.jia.task.service.impl;
 
 import cn.jia.common.dao.BaseDaoImpl;
-import cn.jia.core.dao.IBaseDao;
 import cn.jia.task.dao.TaskDetailDao;
 import cn.jia.task.entity.TaskDetailEntity;
 import cn.jia.task.mapper.TaskDetailMapper;

@@ -2,6 +2,7 @@ dependencies {
     api project(':common:jia-common-core')
     api(libs.swagger.annotations)
     api(libs.mybatis.plus.annotation)
+    compileOnly(libs.mybatis.core)
 }
 
 version = '1.1.1-SNAPSHOT'

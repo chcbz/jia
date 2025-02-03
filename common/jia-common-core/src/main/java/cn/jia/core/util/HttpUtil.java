@@ -16,68 +16,66 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-
 /**
- * @author chc
+ * HTTP操作的工具类。
+ * 提供发送GET和POST请求、处理JSON响应等方法。
+ * <p>
+ * 作者: chc
  */
 @Slf4j
 public class HttpUtil {
+
     /**
      * 向指定URL发送GET方法的请求
      *
      * @param url 发送请求的URL
-     * @return URL 所代表远程资源的响应结果
+     * @return URL所代表远程资源的响应结果
      */
     public static String sendGet(String url) {
         StringBuilder result = new StringBuilder();
         BufferedReader in = null;
         try {
-
             URL realUrl = new URL(url);
             // 打开和URL之间的连接
             URLConnection connection = realUrl.openConnection();
             // 设置通用的请求属性
             connection.setRequestProperty("accept", "*/*");
             connection.setRequestProperty("connection", "Keep-Alive");
-            connection.setRequestProperty("user-agent",
-                    "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1;SV1)");
+            connection.setRequestProperty("user-agent", "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1;SV1)");
             // 建立实际的连接
             connection.connect();
             // 获取所有响应头字段
             Map<String, List<String>> map = connection.getHeaderFields();
             // 遍历所有的响应头字段
             for (String key : map.keySet()) {
-                log.info(key + "--->" + map.get(key));
+                log.info("{}--->{}", key, map.get(key));
             }
             // 定义 BufferedReader输入流来读取URL的响应
-            in = new BufferedReader(new InputStreamReader(
-                    connection.getInputStream()));
+            in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
             String line;
             while ((line = in.readLine()) != null) {
                 result.append(line);
             }
         } catch (Exception e) {
-            log.info("发送GET请求出现异常！" + e);
-            e.printStackTrace();
-        }
-        // 使用finally块来关闭输入流
-        finally {
+            log.error("发送GET请求出现异常！", e);
+        } finally {
+            // 使用finally块来关闭输入流
             try {
                 if (in != null) {
                     in.close();
                 }
             } catch (Exception e2) {
-                e2.printStackTrace();
+                log.error("关闭输入流异常！", e2);
             }
         }
         return result.toString();
     }
 
     /**
-     * 向指定 URL 发送POST方法的请求
+     * 向指定URL发送POST方法的请求
      *
-     * @param url   发送请求的 URL
-     * @param param 请求参数，请求参数应该是 name1=value1&name2=value2 的形式。
+     * @param url   发送请求的URL
+     * @param param 请求参数，请求参数应该是 name1=value1&name2=value2 的形式
      * @return 所代表远程资源的响应结果
      */
     public static String sendPost(String url, String param) {
@@ -91,8 +89,7 @@ public class HttpUtil {
             // 设置通用的请求属性
             conn.setRequestProperty("accept", "*/*");
             conn.setRequestProperty("connection", "Keep-Alive");
-            conn.setRequestProperty("user-agent",
-                    "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1;SV1)");
+            conn.setRequestProperty("user-agent", "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1;SV1)");
             // 发送POST请求必须设置如下两行
             conn.setDoOutput(true);
             conn.setDoInput(true);
@@ -102,19 +99,16 @@ public class HttpUtil {
             out.print(param);
             // flush输出流的缓冲
             out.flush();
-            // 定义BufferedReader输入流来读取URL的响应
-            in = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream()));
+            // 定义BufferedReader输入流来读取URL响应
+            in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             String line;
             while ((line = in.readLine()) != null) {
                 result.append(line);
             }
         } catch (Exception e) {
-            log.info("发送 POST 请求出现异常！" + e);
-            e.printStackTrace();
-        }
-        //使用finally块来关闭输出流、输入流
-        finally {
+            log.error("发送POST请求出现异常！", e);
+        } finally {
+            // 使用finally块来关闭输出流、输入流
             try {
                 if (out != null) {
                     out.close();
@@ -123,12 +117,18 @@ public class HttpUtil {
                     in.close();
                 }
             } catch (IOException ex) {
-                ex.printStackTrace();
+                log.error("关闭流异常！", ex);
             }
         }
         return result.toString();
     }
 
+    /**
+     * 判断是否为Ajax请求
+     *
+     * @param request HttpServletRequest对象
+     * @return 如果是Ajax请求返回true，否则返回false
+     */
     public static boolean isAjaxRequest(HttpServletRequest request) {
         String header = request.getHeader("X-Requested-With");
         return "XMLHttpRequest".equals(header);
@@ -137,56 +137,55 @@ public class HttpUtil {
     /**
      * 以JSON格式输出
      *
-     * @param response
+     * @param response HttpServletResponse对象
+     * @param json     JSON字符串
      */
     public static void responseJson(HttpServletResponse response, String json) {
-        //将实体对象转换为JSON Object转换
         response.setCharacterEncoding("UTF-8");
         response.setContentType("application/json; charset=utf-8");
         try (PrintWriter out = response.getWriter()) {
             out.append(json);
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("输出JSON异常！", e);
         }
     }
 
     /**
      * 获取IP地址
      *
-     * @param request
-     * @return
+     * @param request HttpServletRequest对象
+     * @return IP地址字符串
      */
     public static String getIpAddr(HttpServletRequest request) {
         String ip = request.getHeader("x-forwarded-for");
-        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
             ip = request.getHeader("Proxy-Client-IP");
         }
-        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
             ip = request.getHeader("WL-Proxy-Client-IP");
         }
-        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
             ip = request.getHeader("MB-X-Forwarded-For");
         }
-        if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
             ip = request.getRemoteAddr();
         }
         return ip;
     }
 
     /**
-     * 获取地址参数
+     * 获取请求参数并转换为JSON字符串
      *
-     * @param httpRequest
-     * @return
+     * @param httpRequest HttpServletRequest���象
+     * @return 请求参数的JSON字符串
      */
     public static String requestParams(HttpServletRequest httpRequest) {
-        // 请求参数日志信息
         Map<String, Object> params = new HashMap<>(16);
         Enumeration<?> enume = httpRequest.getParameterNames();
-        if (null != enume) {
+        if (enume != null) {
             while (enume.hasMoreElements()) {
                 Object element = enume.nextElement();
-                if (null != element) {
+                if (element != null) {
                     String paramName = (String) element;
                     String paramValue = httpRequest.getParameter(paramName);
                     params.put(paramName, paramValue);
@@ -197,19 +196,17 @@ public class HttpUtil {
     }
 
     /**
-     * MethodsTitle:传入的URL中参数的处理
+     * 向URL中添加参数
      *
-     * @param url        传入的url ex："http://exp.kunnr.com/so/index.html?kunnrId=16&openid=16#/app/home"
+     * @param url        原始URL
      * @param paramName  参数名
      * @param paramValue 参数值
-     * @return
+     * @return 添加参数后的URL
      */
     public static String addUrlValue(String url, String paramName, String paramValue) {
-        //参数和参数名为空的话就返回原来的URL
         if (StringUtil.isBlank(paramValue) || StringUtil.isBlank(paramName)) {
             return url;
         }
-        //先很据# ? 将URL拆分成一个String数组
         String a = "";
         String b = "";
         String c = "";
@@ -228,7 +225,6 @@ public class HttpUtil {
             return url + "?" + paramName + "=" + paramValue;
         }
 
-        // 用&拆p, p1=1&p2=2 ，{p1=1,p2=2}
         String[] bArray = b.split("&");
         StringBuilder newb = new StringBuilder();
         boolean found = false;
@@ -238,7 +234,6 @@ public class HttpUtil {
             }
             String key;
             String value = "";
-            // {p1,1}
             String[] biArray = bi.split("=");
             key = biArray[0];
             if (biArray.length > 1) {
@@ -254,7 +249,6 @@ public class HttpUtil {
                 newb.append("&").append(key).append("=").append(value);
             }
         }
-        // 如果没找到，加上
         if (!found && StringUtil.isNotBlank(paramValue)) {
             newb.append("&").append(paramName).append("=").append(paramValue);
         }
@@ -268,17 +262,16 @@ public class HttpUtil {
     }
 
     /**
-     * MethodsTitle: 从url地址中根据key获取value
+     * 从URL中获取参数值
      *
-     * @param url       比如http://exp.kunnr.com/so/index.html?kunnrId=16&openid=16#/app/home
+     * @param url       URL字符串
      * @param paramName 参数名
-     * @return 参数值
+     * @return 参数值，如果未找到则返回null
      */
     public static String getUrlValue(String url, String paramName) {
         if (StringUtil.isBlank(url) || StringUtil.isBlank(paramName)) {
             return null;
         }
-        // ? #拆开，先把?拆开 a?b#c ->{a,b,c}
         String b = url;
         String[] abcArray = url.split("[?]");
         if (abcArray.length > 1) {
@@ -290,7 +283,6 @@ public class HttpUtil {
             return null;
         }
 
-        // 用&拆p, p1=1&p2=2 ，{p1=1,p2=2}
         String[] bArray = b.split("&");
         for (String bi : bArray) {
             if (StringUtil.isBlank(bi)) {
@@ -298,7 +290,6 @@ public class HttpUtil {
             }
             String key;
             String value = "";
-            // {p1,1}
             String[] biArray = bi.split("=");
             key = biArray[0];
             if (biArray.length > 1) {
@@ -314,8 +305,8 @@ public class HttpUtil {
     /**
      * 特殊字符转义
      *
-     * @param str html字符串
-     * @return 转移后字符串
+     * @param str 要转义的字符串
+     * @return 转义后的字符串
      */
     public static String escape(String str) {
         str = str.replace("'", "&apos;");
@@ -335,52 +326,58 @@ public class HttpUtil {
      * 根据文件后缀获取contentType
      *
      * @param filenameExtension 文件后缀
-     * @return contentType
+     * @return contentType字符串
      */
     public static String fileContentType(String filenameExtension) {
-        if ("BMP".equals(filenameExtension) || "bmp".equals(filenameExtension)
-                || "BMP".equalsIgnoreCase(filenameExtension)) {
+        if ("BMP".equalsIgnoreCase(filenameExtension)) {
             return "image/bmp";
         }
-        if ("GIF".equals(filenameExtension) || "gif".equals(filenameExtension)
-                || "GIF".equalsIgnoreCase(filenameExtension)) {
+        if ("GIF".equalsIgnoreCase(filenameExtension)) {
             return "image/gif";
         }
-        if ("JPEG".equals(filenameExtension) || "jpeg".equals(filenameExtension) || "JPG".equals(filenameExtension)
-                || "jpg".equals(filenameExtension) || "PNG".equals(filenameExtension)
-                || "png".equals(filenameExtension) || "JPEG".equalsIgnoreCase(filenameExtension)
-                || "JPG".equalsIgnoreCase(filenameExtension) || "PNG".equalsIgnoreCase(filenameExtension)) {
+        if ("JPEG".equalsIgnoreCase(filenameExtension) || "JPG".equalsIgnoreCase(filenameExtension) || "PNG".equalsIgnoreCase(filenameExtension)) {
             return "image/jpeg";
         }
-        if ("HTML".equals(filenameExtension) || "html".equals(filenameExtension)) {
+        if ("HTML".equalsIgnoreCase(filenameExtension)) {
             return "text/html";
         }
-        if ("TXT".equals(filenameExtension) || "txt".equals(filenameExtension)
-                || "TXT".equalsIgnoreCase(filenameExtension)) {
+        if ("TXT".equalsIgnoreCase(filenameExtension)) {
             return "text/plain";
         }
-        if ("VSD".equals(filenameExtension) || "vsd".equals(filenameExtension)
-                || "VSD".equalsIgnoreCase(filenameExtension)) {
+        if ("VSD".equalsIgnoreCase(filenameExtension)) {
             return "application/vnd.visio";
         }
-        if ("PPTX".equals(filenameExtension) || "pptx".equals(filenameExtension) || "PPT".equals(filenameExtension)
-                || "ppt".equals(filenameExtension) || "PPTX".equalsIgnoreCase(filenameExtension)
-                || "PPT".equalsIgnoreCase(filenameExtension)) {
+        if ("PPTX".equalsIgnoreCase(filenameExtension) || "PPT".equalsIgnoreCase(filenameExtension)) {
             return "application/vnd.ms-powerpoint";
         }
-        if ("DOCX".equals(filenameExtension) || "docx".equals(filenameExtension) || "DOC".equals(filenameExtension)
-                || "doc".equals(filenameExtension) || "DOCX".equalsIgnoreCase(filenameExtension)
-                || "DOC".equalsIgnoreCase(filenameExtension)) {
+        if ("DOCX".equalsIgnoreCase(filenameExtension) || "DOC".equalsIgnoreCase(filenameExtension)) {
             return "application/msword";
         }
-        if ("XML".equals(filenameExtension) || "xml".equals(filenameExtension)
-                || "XML".equalsIgnoreCase(filenameExtension)) {
+        if ("XML".equalsIgnoreCase(filenameExtension)) {
             return "text/xml";
         }
-        if ("pdf".equals(filenameExtension) || "PDF".equals(filenameExtension)
-                || "PDF".equalsIgnoreCase(filenameExtension)) {
+        if ("PDF".equalsIgnoreCase(filenameExtension)) {
             return "application/pdf";
         }
         return null;
+    }
+
+    /**
+     * 匹配urlPatterns
+     *
+     * @param requestURI 请求URI
+     * @param urlPatterns URL模式
+     * @return 是否匹配
+     */
+    public static boolean matchUrlPatterns(String requestURI, String[] urlPatterns) {
+        if (urlPatterns == null) {
+            return false;
+        }
+        for (String urlPattern : urlPatterns) {
+            if (requestURI.matches(urlPattern.replace("?", ".").replace("*", ".*"))) {
+                return true;
+            }
+        }
+        return false;
     }
 }

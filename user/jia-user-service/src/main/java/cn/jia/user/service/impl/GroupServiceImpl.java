@@ -40,7 +40,7 @@ public class GroupServiceImpl extends BaseServiceImpl<UserGroupDao, GroupEntity>
             rel.setGroupId(group.getId());
             addList.add(rel);
         });
-        if (addList.size() > 0) {
+        if (!addList.isEmpty()) {
             userGroupRelDao.insertBatch(addList);
         }
     }
@@ -54,7 +54,7 @@ public class GroupServiceImpl extends BaseServiceImpl<UserGroupDao, GroupEntity>
         // 查找需要取消的角色
         groupRelList.stream().filter(groupRel ->
                 group.getUserIds().contains(groupRel.getUserId())).forEach(cancelList::add);
-        if (cancelList.size() > 0) {
+        if (!cancelList.isEmpty()) {
             userGroupRelDao.deleteBatchIds(cancelList);
         }
     }
@@ -73,14 +73,14 @@ public class GroupServiceImpl extends BaseServiceImpl<UserGroupDao, GroupEntity>
             rel.setRoleId(roleId);
             addList.add(rel);
         });
-        if (addList.size() > 0) {
+        if (!addList.isEmpty()) {
             userRoleRelDao.insertBatch(addList);
         }
 
         // 查找需要取消的角色
         roleRelList.stream().filter(roleRel ->
                 !group.getRoleIds().contains(roleRel.getRoleId())).forEach(cancelList::add);
-        if (cancelList.size() > 0) {
+        if (!cancelList.isEmpty()) {
             userRoleRelDao.deleteBatchIds(cancelList);
         }
     }

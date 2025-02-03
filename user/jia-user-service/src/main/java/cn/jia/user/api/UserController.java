@@ -10,9 +10,6 @@ import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.*;
 import cn.jia.isp.entity.IspFileEntity;
 import cn.jia.isp.service.FileService;
-import cn.jia.oauth.entity.OauthActionEntity;
-import cn.jia.oauth.entity.OauthActionVO;
-import cn.jia.oauth.service.ActionService;
 import cn.jia.sms.common.SmsConstants;
 import cn.jia.sms.common.SmsErrorConstants;
 import cn.jia.sms.entity.SmsCodeEntity;
@@ -21,6 +18,7 @@ import cn.jia.user.common.UserConstants;
 import cn.jia.user.common.UserErrorConstants;
 import cn.jia.user.entity.*;
 import cn.jia.user.service.OrgService;
+import cn.jia.user.service.PermsService;
 import cn.jia.user.service.RoleService;
 import cn.jia.user.service.UserService;
 import cn.jia.user.vomapper.UserVOMapper;
@@ -41,8 +39,12 @@ import java.io.File;
 import java.security.Principal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
+/**
+ * 用户控制器，用于处理用户相关操作
+ */
 @RestController
 @RequestMapping("/user")
 public class UserController {
@@ -58,19 +60,19 @@ public class UserController {
     @Autowired(required = false)
     private SmsService smsService;
     @Autowired(required = false)
-    private ActionService actionService;
+    private PermsService permsService;
     @Autowired(required = false)
     private FileService fileService;
     @Value("${jia.file.path:}")
     private String filePath;
 
     /**
-     * 获取用户信息
+     * 根据不同类型获取用户信息
      *
-     * @param type
-     * @param key
-     * @return
-	 */
+     * @param type 类型，如id、cn、openid、username、phone
+     * @param key  对应类型的键值
+     * @return 用户信息
+     */
     @RequestMapping(value = "/get", method = RequestMethod.GET)
     public Object find(@RequestParam(name = "type", defaultValue = "id") String type,
                        @RequestParam(name = "key") String key) {
@@ -99,10 +101,10 @@ public class UserController {
     }
 
     /**
-     * 获取用户姓名
+     * 根据ID获取用户姓名
      *
-     * @param id
-     * @return
+     * @param id 用户ID
+     * @return 用户姓名
      */
     @PreAuthorize("hasAuthority('user-get_name')")
     @RequestMapping(value = "/get/name", method = RequestMethod.GET)
@@ -118,14 +120,14 @@ public class UserController {
     /**
      * 获取用户角色列表
      *
-     * @param page
-     * @return
+     * @param page 分页请求
+     * @return 角色列表
      */
     @PreAuthorize("hasAuthority('user-get_roles')")
     @RequestMapping(value = "/get/roles", method = RequestMethod.POST)
-    public Object findRoles(@RequestBody JsonRequestPage<String> page) {
-        UserEntity user = JsonUtil.fromJson(page.getSearch(), UserEntity.class);
-		ValidUtil.assertNotNull(user);
+    public Object findRoles(@RequestBody JsonRequestPage<UserEntity> page) {
+        UserEntity user = Optional.ofNullable(page.getSearch()).orElse(new UserEntity());
+        ValidUtil.assertNotNull(user);
         PageInfo<RoleEntity> roleList = roleService.listByUserId(user.getId(), page.getPageSize(), page.getPageNum());
         JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
         result.setPageNum(roleList.getPageNum());
@@ -137,7 +139,7 @@ public class UserController {
      * 获取用户组织列表
      *
      * @param id 用户ID
-     * @return
+     * @return 组织列表
      */
     @PreAuthorize("hasAuthority('user-get_orgs')")
     @RequestMapping(value = "/get/orgs", method = RequestMethod.GET)
@@ -149,9 +151,9 @@ public class UserController {
     /**
      * 检查用户是否可注册
      *
-     * @param type
-     * @param key
-     * @return
+     * @param type 类型，如id、cn、openid、username
+     * @param key  对应类型的键值
+     * @return 是否可注册，0表示可注册，1表示不可注册
      */
     @PreAuthorize("hasAuthority('user-check')")
     @RequestMapping(value = "/check", method = RequestMethod.GET)
@@ -173,8 +175,9 @@ public class UserController {
     /**
      * 创建用户
      *
-     * @param user
-     * @return
+     * @param user 用户实体
+     * @return 创建结果
+     * @throws Exception 创建异常
      */
     @PreAuthorize("hasAuthority('user-create')")
     @RequestMapping(value = "/create", method = RequestMethod.POST)
@@ -186,8 +189,8 @@ public class UserController {
     /**
      * 更新用户信息
      *
-     * @param user
-     * @return
+     * @param user 用户实体
+     * @return 更新结果
      */
     @PreAuthorize("hasAuthority('user-update')")
     @RequestMapping(value = "/update", method = RequestMethod.POST)
@@ -199,8 +202,9 @@ public class UserController {
     /**
      * 批量同步用户
      *
-     * @param userList
-     * @return
+     * @param userList 用户列表
+     * @return 同步结果
+     * @throws Exception 同步异常
      */
     @PreAuthorize("hasAuthority('user-sync')")
     @RequestMapping(value = "/sync", method = RequestMethod.POST)
@@ -212,8 +216,8 @@ public class UserController {
     /**
      * 删除用户
      *
-     * @param id
-     * @return
+     * @param id 用户ID
+     * @return 删除结果
      */
     @PreAuthorize("hasAuthority('user-delete')")
     @RequestMapping(value = "/delete", method = RequestMethod.GET)
@@ -225,13 +229,13 @@ public class UserController {
     /**
      * 获取所有用户信息
      *
-     * @return
+     * @param page 分页请求
+     * @return 用户列表
      */
     @PreAuthorize("hasAuthority('user-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
-    public Object list(@RequestBody JsonRequestPage<String> page) {
-        UserVO example = JsonUtil.fromJson(page.getSearch(), UserVO.class);
-        PageInfo<UserEntity> userList = userService.findPage(example, page.getPageSize(), page.getPageNum());
+    public Object list(@RequestBody JsonRequestPage<UserVO> page) {
+        PageInfo<UserEntity> userList = userService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum());
         List<UserVO> userVOList = new ArrayList<>();
         //隐藏密码
         for (UserEntity u : userList.getList()) {
@@ -251,14 +255,13 @@ public class UserController {
     /**
      * 根据用户信息查找用户
      *
-     * @param page
-     * @return
+     * @param page 分页请求
+     * @return 用户列表
      */
     @PreAuthorize("hasAuthority('user-search')")
     @RequestMapping(value = "/search", method = RequestMethod.POST)
-    public Object search(@RequestBody JsonRequestPage<String> page) {
-        UserEntity user = JsonUtil.fromJson(page.getSearch(), UserEntity.class);
-        PageInfo<UserEntity> userList = userService.search(user, page.getPageNum(), page.getPageSize());
+    public Object search(@RequestBody JsonRequestPage<UserEntity> page) {
+        PageInfo<UserEntity> userList = userService.search(page.getSearch(), page.getPageNum(), page.getPageSize());
         //隐藏密码
         for (UserEntity u : userList.getList()) {
             u.setPassword("******");
@@ -274,8 +277,8 @@ public class UserController {
      *
      * @param jiacn Jia账号
      * @param num   积分变化数量，可以为负数
-     * @return
-	 */
+     * @return 修改结果
+     */
     @PreAuthorize("hasAuthority('user-point_change')")
     @RequestMapping(value = "/point/change", method = RequestMethod.GET)
     public Object changePoint(@RequestParam("jiacn") String jiacn, @RequestParam("num") int num) {
@@ -286,8 +289,8 @@ public class UserController {
     /**
      * 更新用户角色
      *
-     * @param user
-     * @return
+     * @param user 用户视图对象
+     * @return 更新结果
      */
     @PreAuthorize("hasAuthority('user-role_change')")
     @RequestMapping(value = "/role/change", method = RequestMethod.POST)
@@ -299,8 +302,8 @@ public class UserController {
     /**
      * 更新用户组
      *
-     * @param user
-     * @return
+     * @param user 用户视图对象
+     * @return 更新结果
      */
     @PreAuthorize("hasAuthority('user-group_change')")
     @RequestMapping(value = "/group/change", method = RequestMethod.POST)
@@ -312,8 +315,8 @@ public class UserController {
     /**
      * 更新用户组织
      *
-     * @param user
-     * @return
+     * @param user 用户视图对象
+     * @return 更新结果
      */
     @PreAuthorize("hasAuthority('user-org_change')")
     @RequestMapping(value = "/org/change", method = RequestMethod.POST)
@@ -326,8 +329,8 @@ public class UserController {
     /**
      * 获取用户OAUTH2权限信息
      *
-     * @param user
-     * @return
+     * @param user 当前认证用户
+     * @return 返回用户权限信息
      */
     @PreAuthorize("hasAuthority('user-info')")
     @RequestMapping(value = "/info", method = RequestMethod.GET)
@@ -335,6 +338,12 @@ public class UserController {
         return user;
     }
 
+    /**
+     * 获取用户信息
+     *
+     * @return 用户信息对象
+     * @throws EsRuntimeException 如果用户不存在，则抛出异常
+     */
     @RequestMapping(value = "/userinfo", method = RequestMethod.GET)
     public Object userInfo() {
         String username = EsSecurityHandler.username();
@@ -362,12 +371,13 @@ public class UserController {
      * @param userId      用户ID
      * @param oldPassword 旧密码
      * @param newPassword 新密码
-     * @return
-	 */
+     * @return 操作结果
+     * @throws EsRuntimeException 如果修改密码失败，则抛出异常
+     */
     @PreAuthorize("hasAuthority('user-password_change')")
     @RequestMapping(value = "/password/change", method = RequestMethod.GET)
     public Object changePassword(@RequestParam Long userId, @RequestParam String oldPassword,
-								 @RequestParam String newPassword) {
+                                 @RequestParam String newPassword) {
         userService.changePassword(userId, oldPassword, newPassword);
         return JsonResult.success();
     }
@@ -378,13 +388,14 @@ public class UserController {
      * @param phone       手机号码
      * @param smsCode     验证码
      * @param newPassword 新密码
-     * @return
-	 */
+     * @return 操作结果
+     * @throws EsRuntimeException 如果重置密码失败，则抛出异常
+     */
     @RequestMapping(value = "/password/reset", method = RequestMethod.GET)
     public Object resetPassword(@RequestParam String phone, @RequestParam String smsCode,
-								@RequestParam String newPassword) {
+                                @RequestParam String newPassword) {
         SmsCodeEntity smsCodeNoUsed =
-				smsService.selectSmsCodeNoUsed(phone, SmsConstants.SMS_CODE_TYPE_RESETPWD);
+                smsService.selectSmsCodeNoUsed(phone, SmsConstants.SMS_CODE_TYPE_RESETPWD);
         if (!smsCode.equals(smsCodeNoUsed.getSmsCode())) {
             throw new EsRuntimeException(SmsErrorConstants.SMS_CODE_INCORRECT);
         }
@@ -396,16 +407,16 @@ public class UserController {
     /**
      * 批量导入用户信息
      *
-     * @param file
-     * @return
-     * @throws Exception
+     * @param file 用户信息Excel文件
+     * @return 操作结果
+     * @throws Exception 如果导入过程中发生错误，则抛出异常
      */
     @PreAuthorize("hasAuthority('user-batch_import')")
     @RequestMapping(value = "/batch/import", method = RequestMethod.POST)
     public Object batchImport(MultipartFile file) throws Exception {
         List<UserEntity> userList = new ArrayList<>();
         List<UserImport> userImportList =
-				ExcelUtil.importExcel(file, 0, 1, UserImport.class);
+                ExcelUtil.importExcel(file, 0, 1, UserImport.class);
         for (UserImport userImport : userImportList) {
             UserEntity user = new UserEntity();
             BeanUtil.copyPropertiesIgnoreNull(userImport, user);
@@ -418,9 +429,10 @@ public class UserController {
     /**
      * 修改用户当前职位
      *
-     * @param position
-     * @return
-	 */
+     * @param position 新职位ID
+     * @return 操作结果
+     * @throws EsRuntimeException 如果用户不存在或修改失败，则抛出异常
+     */
     @PreAuthorize("hasAuthority('user-position_change')")
     @RequestMapping(value = "/position/change", method = RequestMethod.GET)
     public Object changePosition(@RequestParam(name = "position") Long position) {
@@ -436,14 +448,14 @@ public class UserController {
         OrgEntity org = orgService.get(position);
         if (org != null) {
             for (RoleEntity role : roleService.listByUserId(user.getId(), Integer.MAX_VALUE, 1).getList()) {
-                List<AuthEntity> authList = roleService.listPerms(role.getId(), Integer.MAX_VALUE, 1).getList();
+                List<PermsRelEntity> authList = roleService.listPerms(role.getId(), Integer.MAX_VALUE, 1).getList();
                 if (CollectionUtil.isNullOrEmpty(authList)) {
                     continue;
                 }
-                OauthActionVO oauthActionVO = new OauthActionVO();
-                oauthActionVO.setIdList(authList.stream().map(AuthEntity::getPermsId).collect(Collectors.toList()));
-                List<OauthActionEntity> perms = actionService.findList(oauthActionVO);
-                for (OauthActionEntity p : perms) {
+                PermsVO permsVO = new PermsVO();
+                permsVO.setIdList(authList.stream().map(PermsRelEntity::getPermsId).collect(Collectors.toList()));
+                List<PermsEntity> perms = permsService.findList(permsVO);
+                for (PermsEntity p : perms) {
                     if (UserConstants.PERMS_STATUS_ENABLE.equals(p.getStatus())) {
                         GrantedAuthority grantedAuthority = new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc());
                         updatedAuthorities.add(grantedAuthority);
@@ -469,10 +481,10 @@ public class UserController {
     /**
      * 修改用户头像
      *
-     * @param id
-     * @param file
-     * @return
-     * @throws Exception
+     * @param id   用户ID
+     * @param file 新头像文件
+     * @return 操作结果
+     * @throws Exception 如果修改过程中发生错误，则抛出异常
      */
     @PreAuthorize("hasAuthority('user-update_avatar')")
     @RequestMapping(value = "/update/avatar", method = RequestMethod.POST)

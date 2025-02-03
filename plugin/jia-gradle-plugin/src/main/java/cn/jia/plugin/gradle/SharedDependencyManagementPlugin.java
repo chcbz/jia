@@ -47,6 +47,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring.rabbit", "org.springframework.amqp", "spring-rabbit").version("3.1.3");
                             catalog.library("spring.security.core", "org.springframework.security", "spring-security-core").versionRef("spring-security");
                             catalog.library("spring.security.config", "org.springframework.security", "spring-security-config").versionRef("spring-security");
+                            catalog.library("spring.security.web", "org.springframework.security", "spring-security-web").versionRef("spring-security");
                             catalog.library("spring.security.oauth2.client", "org.springframework.security", "spring-security-oauth2-client").versionRef("spring-security");
                             catalog.library("spring-security-oauth2-resource-server", "org.springframework.security", "spring-security-oauth2-resource-server").versionRef("spring-security");
                             catalog.library("spring-security-oauth2-authorization-server", "org.springframework.security", "spring-security-oauth2-authorization-server").versionRef("spring-security-oauth2");

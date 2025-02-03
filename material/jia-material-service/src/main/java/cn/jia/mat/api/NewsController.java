@@ -49,6 +49,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/news")
@@ -125,8 +126,8 @@ public class NewsController {
 	 * @return 图文列表
 	 */
 	@PostMapping(value = "/list")
-	public Object list(@RequestBody JsonRequestPage<String> page) {
-		MatNewsReqVO example = JsonUtil.fromJson(page.getSearch(), MatNewsReqVO.class);
+	public Object list(@RequestBody JsonRequestPage<MatNewsReqVO> page) {
+		MatNewsReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatNewsReqVO());
 		PageInfo<MatNewsEntity> newsList = newsService.findPage(example, page.getPageSize(), page.getPageNum());
 //		String material_url = dictService.getValue(Constants.DICT_TYPE_MODULE_URL, Constants.MODULE_URL_MATERIAL);
 //		List<MatNewsEntity> newss = newsList.getResult().stream().map(news -> {

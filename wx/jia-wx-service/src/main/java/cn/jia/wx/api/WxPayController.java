@@ -7,7 +7,6 @@ import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.FileUtil;
 import cn.jia.core.util.HttpUtil;
-import cn.jia.core.util.JsonUtil;
 import cn.jia.wx.common.WxErrorConstants;
 import cn.jia.wx.entity.PayInfoEntity;
 import cn.jia.wx.entity.PayOrderEntity;
@@ -49,6 +48,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/wx/pay")
@@ -729,15 +729,11 @@ public class WxPayController {
 	/**
 	 * 支付平台列表
 	 * @param page 分页信息
-	 * @param request Http请求
 	 * @return 支付平台列表
 	 */
 	@RequestMapping(value = "/info/list", method = RequestMethod.POST)
-	public Object listPayInfo(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
-		PayInfoEntity example = JsonUtil.fromJson(page.getSearch(), PayInfoEntity.class);
-		if(example == null) {
-			example = new PayInfoEntity();
-		}
+	public Object listPayInfo(@RequestBody JsonRequestPage<PayInfoEntity> page) {
+		PayInfoEntity example = Optional.ofNullable(page.getSearch()).orElse(new PayInfoEntity());
 		example.setClientId(EsSecurityHandler.clientId());
 		PageInfo<PayInfoEntity> list = payInfoService.findPage(example, page.getPageSize(), page.getPageNum());
 		JsonResultPage<PayInfoEntity> result = new JsonResultPage<>(list.getList());

@@ -4,7 +4,7 @@ import cn.jia.base.dao.LogDao;
 import cn.jia.base.entity.LogEntity;
 import cn.jia.base.service.LogService;
 import cn.jia.core.common.EsRequestWrapper;
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.JsonUtil;
@@ -37,8 +37,8 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
             logEntity.setParam(body);
         }
 
-        logEntity.setJiacn(EsSecurityHandler.clientId());
-        logEntity.setUsername(EsSecurityHandler.username());
+        logEntity.setJiacn(EsContextHolder.getContext().getJiacn());
+        logEntity.setUsername(EsContextHolder.getContext().getUsername());
         return create(logEntity);
     }
 }

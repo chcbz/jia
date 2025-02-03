@@ -51,10 +51,10 @@ public class TxCloudUtil {
 
         String key;
         String value;
-        for(Iterator var3 = requestParams.keySet().iterator(); var3.hasNext(); retStr = retStr + key.replace("_", ".") + '=' + value) {
-            key = (String)var3.next();
+        for(Iterator<String> var3 = requestParams.keySet().iterator(); var3.hasNext(); retStr = retStr + key.replace("_", ".") + '=' + value) {
+            key = var3.next();
             value = requestParams.get(key);
-            if (retStr.length() == 0) {
+            if (StringUtil.isEmpty(retStr)) {
                 retStr = retStr + '?';
             } else {
                 retStr = retStr + '&';
@@ -161,7 +161,7 @@ public class TxCloudUtil {
         String msg = TxCloudUtil.makeSignPlainText(param, httpMethod, apiHost, apiPath);
         log.info(msg);
         String sign = TxCloudUtil.sign("pdEdvFQO8ez4VjhQt88xXszrUs65vWrx", msg, "HmacSHA1");
-        param.put("Signature", URLEncoder.encode(sign, "UTF-8"));
+        param.put("Signature", URLEncoder.encode(sign, StandardCharsets.UTF_8));
         log.info(sign);
     }
 }
