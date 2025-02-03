@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/vote")
@@ -76,8 +77,8 @@ public class VoteController {
 	 * @return
 	 */
 	@PostMapping(value = "/list")
-	public Object list(@RequestBody JsonRequestPage<String> page) {
-		MatVoteReqVO example = JsonUtil.fromJson(page.getSearch(), MatVoteReqVO.class);
+	public Object list(@RequestBody JsonRequestPage<MatVoteReqVO> page) {
+		MatVoteReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatVoteReqVO());
 		PageInfo<MatVoteEntity> voteList = voteService.list(page.getPageNum(), page.getPageSize(), example);
 		JsonResultPage<MatVoteEntity> result = new JsonResultPage<>(voteList.getList());
 		result.setPageNum(voteList.getPageNum());

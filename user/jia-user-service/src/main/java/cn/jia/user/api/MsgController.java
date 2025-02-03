@@ -3,7 +3,6 @@ package cn.jia.user.api;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
-import cn.jia.core.util.JsonUtil;
 import cn.jia.user.common.UserConstants;
 import cn.jia.user.entity.MsgEntity;
 import cn.jia.user.service.MsgService;
@@ -11,6 +10,8 @@ import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/msg")
@@ -132,8 +133,8 @@ public class MsgController {
 	 */
 //	@PreAuthorize("hasAuthority('msg-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<String> page) {
-		MsgEntity example = JsonUtil.fromJson(page.getSearch(), MsgEntity.class);
+	public Object list(@RequestBody JsonRequestPage<MsgEntity> page) {
+		MsgEntity example = Optional.ofNullable(page.getSearch()).orElse(new MsgEntity());
 		PageInfo<MsgEntity> msgList = msgService.findPage(example, page.getPageSize(), page.getPageNum());
 		JsonResultPage<MsgEntity> result = new JsonResultPage<>(msgList.getList());
 		result.setPageNum(msgList.getPageNum());

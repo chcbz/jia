@@ -1,0 +1,438 @@
+body,input,button,select,textarea,h1,h2,h3,h4,h5,h6 {
+    font-family: 'Helvetica Neue','STHeiti','Microsoft YaHei',Helvetica,Arial,sans-serif
+}
+
+* {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box
+}
+
+em {
+    font-style: normal
+}
+
+ul,ol {
+    margin: 0;
+    padding: 0;
+    list-style: none
+}
+
+a {
+    color: #428bca;
+    text-decoration: none
+}
+
+body {
+    margin: 0;
+    height: 100%;
+    font-size: 14px;
+    line-height: 160%;
+    color: #666;
+}
+
+h1,h2,h3,h4,h5,h6,.h1,.h2,.h3,.h4,.h5,.h6 {
+    font-family: inherit;
+    font-weight: 500;
+    line-height: 1.1;
+    color: inherit
+}
+
+h1,h2,h3,h4,h5,h6 {
+    margin-top: 0;
+    font-size: 100%;
+    line-height: 1.7
+}
+
+#wrapper {
+        display: table;
+        position: relative;
+        margin-bottom: 20px;
+        margin-top: 20px;
+        width: 100%;
+        padding: 20px;
+        background: url('../image/bg.jpg') no-repeat center;
+        background-size: 100% auto;
+       /* background: #dddddd;*/
+}
+
+.aw-login-box {
+    position: relative;
+    border: 1px solid #d5d5d5;
+    width: 550px;
+    background-color: #ffffff;
+    border-radius: 5px;
+    float: right;
+}
+
+.box-bg-ys {
+    background: url('../image/png.png') no-repeat;
+    width: 265px;
+    height: 279px;
+    position: absolute;
+    margin-left: 635px;
+    margin-top: 251px
+}
+
+.clearfix:before,.clearfix:after,.dl-horizontal dd:before,.dl-horizontal dd:after,.container:before,.container:after,.container-fluid:before,.container-fluid:after,.row:before,.row:after,.form-horizontal .form-group:before,.form-horizontal .form-group:after,.btn-toolbar:before,.btn-toolbar:after,.btn-group-vertical>.btn-group:before,.btn-group-vertical>.btn-group:after,.nav:before,.nav:after,.navbar:before,.navbar:after,.navbar-header:before,.navbar-header:after,.navbar-collapse:before,.navbar-collapse:after,.pager:before,.pager:after,.panel-body:before,.panel-body:after,.modal-footer:before,.modal-footer:after {
+    display: table;
+    content: " "
+}
+
+.aw-login-box .mod-body {
+    padding: 50px 60px;
+    overflow: hidden;
+}
+
+.pull-left {
+    float: left!important
+}
+
+.aw-login-box .mod-body .content {
+    width: 300px;
+}
+/*.aw-login-box .logo{width:240px;height:94px;background:url('../image/logo.png') no-repeat}*/
+.aw-login-box .logo a {
+    display: block;
+    width: 151px;
+    height: 94px
+}
+
+.btn-weibo:hover {
+    background-color: #FF4D4D;
+    color: #fff
+}
+
+.btn-qq:hover {
+    background-color: #2D7FE2;
+    color: #fff
+}
+
+.btn-wechat:hover {
+    background-color: #119626;
+    color: #fff
+}
+
+#login_form {
+    margin-top: 34px
+}
+
+form {
+    margin: 0
+}
+
+.aw-login-box .mod-body .content ul li {
+    margin-top: 20px;
+    line-height: 30px
+}
+
+.aw-login-box .mod-body .content ul li:first-child {
+    margin-top: 0
+}
+
+.form-control {
+    display: block;
+    width: 100%;
+    height: 34px;
+    padding: 6px 12px;
+    font-size: 14px;
+    line-height: 1.42857143;
+    color: #555;
+    background-color: #fff;
+    background-image: none;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    -webkit-box-shadow: inset 0 1px 1px rgba(0,0,0,.075);
+    box-shadow: inset 0 1px 1px rgba(0,0,0,.075);
+    -webkit-transition: border-color ease-in-out .15s,-webkit-box-shadow ease-in-out .15s;
+    -o-transition: border-color ease-in-out .15s,box-shadow ease-in-out .15s;
+    transition: border-color ease-in-out .15s,box-shadow ease-in-out .15s
+}
+
+.form-control {
+    padding: 6px;
+    resize: none;
+    box-shadow: none;
+    border-color: #ccc
+}
+
+.aw-login-box .mod-body .form-control {
+    height: 40px;
+    line-height: 28px\0;
+    padding-left: 15px !important;
+    box-shadow: none;
+    border-color: #e6e6e6
+}
+
+.alert-danger,.alert-error {
+    color: #B94A48
+}
+[class^="icon-"],[class*=" icon-"] {
+    font-family: 'icomoon';
+    speak: none;
+    font-style: normal;
+    font-weight: normal;
+    font-variant: normal;
+    text-transform: none;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale
+}
+
+.aw-login-box .mod-body .content ul li.last {
+    font-size: 12px;
+    line-height: 40px;
+    display: table;
+}
+
+.btn-primary {
+    border: none;
+    background-color: #418ae2
+}
+
+.pull-right {
+    float: right!important
+}
+
+.btn-primary:hover {
+    background-color: #2D7FE2
+}
+
+.aw-login-box .mod-body .content ul li .btn-primary {
+    color: #fff !important
+}
+
+.aw-login-box .mod-body .content ul li.last a {
+    color: #666666
+}
+
+label {
+    display: inline-block;
+    max-width: 100%;
+    margin-bottom: 5px;
+    font-weight: 700
+}
+
+label {
+    margin: 0;
+    font-weight: normal
+}
+
+input,button,select,textarea {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit
+}
+
+input[type=checkbox],input[type=radio] {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+    padding: 0
+}
+
+input[type=radio],input[type=checkbox] {
+    margin: 4px 0 0;
+    margin-top: 1px \9;
+    line-height: normal
+}
+
+input[type="radio"],input[type="checkbox"] {
+    margin: 0
+}
+
+.aw-login-box .mod-body .content ul li.last input {
+    vertical-align: -2px\0
+}
+
+.aw-login-box .mod-body .side-bar {
+    width:35%;
+    height: 326px;
+    padding: 60px 0 60px 30px;
+    border-left: 1px solid #e6e6e6
+}
+
+.aw-login-box .mod-body .side-bar h3 {
+    margin-bottom: 27px;
+    color: #666666;
+    text-align: center
+}
+
+.btn {
+    display: inline-block;
+    padding: 6px 12px;
+    margin-bottom: 0;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.42857143;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: middle;
+    cursor: pointer;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 4px
+}
+
+.btn-block {
+    display: block;
+     width: 80px;
+       height: 80px;
+}
+
+.btn-weibo {
+        margin: 0 auto;
+        border-radius: 50px;
+        background-color: #ff6666;
+        color: #fff;
+}
+
+.btn-weibo i{
+    line-height: 60px;
+    font-size: 42px;
+}
+
+.aw-login-box .mod-body .side-bar .btn {
+    position: relative;
+    width: 170px;
+    height: 40px;
+    line-height: 40px;
+    margin: 0 0 20px;
+    padding: 0 0 0 15px
+}
+
+.aw-login-box .mod-body .side-bar .btn i {
+    position: absolute;
+    left: 15px;
+    top: 10px;
+    font-size: 18px;
+    color: #fff
+}
+
+.btn-qq {
+    background-color: #418ae2;
+    color: #fff;
+    color: #fff
+}
+
+.btn-wechat {
+    margin: 0 auto;
+        border-radius: 50px;
+        background-color: #22ac38;
+    color: #fff
+}
+
+.btn-wechat i{
+    line-height: 66px;
+    font-size: 46px;
+}
+
+.aw-login-box .mod-footer {
+    height: 70px;
+    line-height: 70px;
+    background-color: #f5f5f5;
+    padding: 0 60px;
+    color: #66b7ff
+}
+
+.aw-login-box .mod-footer span {
+    color: #666666
+}
+
+.aw-login-box .mod-footer a {
+    color: #66b7ff
+}
+
+.s_form table,tbody {
+    width: 100%;
+}
+
+.s_form td {
+    padding-top: 10px;
+    vertical-align: top;
+    word-wrap: break-word;
+}
+
+.s_form_title{
+    text-align: left;
+}
+
+.s_form_title span {
+    white-space: nowrap;
+    display: block;
+}
+
+.s_form_content{
+    text-align: right;
+}
+
+.s_form_content input,select{
+    width: 240px;
+}
+
+#telephoneNumberV{
+    width: 140px;
+}
+
+@media screen and (max-width: 450px) {
+    .s_form_content input,select{
+        width: 140px;
+    }
+}
+
+@media screen and (max-width: 350px) {
+    .s_form_content input,select{
+        width: 100px;
+    }
+}
+
+.title {
+    font-size: 24px;
+}
+
+.right-bg {
+    position: absolute;
+    width: 265px;
+    height: 279px;
+    bottom: 0;
+    right: -205px;
+}
+
+.footer_wrap {
+   position: fixed;
+       text-align: center;
+       width: 100%;
+       bottom: 0;
+}
+
+.footer_wrap p {
+    color: #080808;
+}
+
+.footer_wrap a {
+    text-decoration: none;
+}
+
+.btn-danger {
+    background: crimson;
+    color: #fff !important;
+}
+.textLeft{
+text-align: left !important;
+}
+.textRight{
+text-align: right !important;
+}
+.displayNone{
+display:none;
+}
+.textCenter{
+text-align: center !important;
+}
+@media only screen and (min-width: 1024px) {
+
+}

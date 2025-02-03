@@ -160,7 +160,7 @@ public class SocketService {
             Set<SelectionKey> readyKeys = selector.selectedKeys();
             Iterator<SelectionKey> iterator = readyKeys.iterator();
             while(iterator.hasNext()) {
-                SelectionKey key = (SelectionKey) iterator.next();
+                SelectionKey key = iterator.next();
 
                 //避免重复处理相同的SelectionKey
                 iterator.remove();

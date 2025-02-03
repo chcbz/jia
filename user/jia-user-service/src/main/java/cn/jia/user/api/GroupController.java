@@ -1,13 +1,9 @@
 package cn.jia.user.api;
 
-import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
-import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.BeanUtil;
-import cn.jia.core.util.JsonUtil;
-import cn.jia.user.common.UserErrorConstants;
 import cn.jia.user.entity.GroupEntity;
 import cn.jia.user.entity.GroupVO;
 import cn.jia.user.entity.RoleEntity;
@@ -19,6 +15,8 @@ import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/group")
@@ -55,11 +53,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-get_users')")
 	@RequestMapping(value = "/get/users", method = RequestMethod.POST)
-	public Object findUsers(@RequestBody JsonRequestPage<String> page) {
-		GroupEntity group = JsonUtil.fromJson(page.getSearch(), GroupEntity.class);
-		if (group == null) {
-			throw new EsRuntimeException(UserErrorConstants.PARAMETER_INCORRECT);
-		}
+	public Object findUsers(@RequestBody JsonRequestPage<GroupEntity> page) {
+		GroupEntity group = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
 		PageInfo<UserEntity> userList = userService.listByGroupId(group.getId(), page.getPageSize(), page.getPageNum());
 		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
 		result.setPageNum(userList.getPageNum());
@@ -75,12 +70,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-get_roles')")
 	@RequestMapping(value = "/get/roles", method = RequestMethod.POST)
-	public Object findRoles(@RequestBody JsonRequestPage<String> page) {
-		GroupEntity group = JsonUtil.fromJson(page.getSearch(), GroupEntity.class);
-		if (group == null) {
-			throw new EsRuntimeException(UserErrorConstants.PARAMETER_INCORRECT);
-		}
-		
+	public Object findRoles(@RequestBody JsonRequestPage<GroupEntity> page) {
+		GroupEntity group = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
 		PageInfo<RoleEntity> roleList = roleService.listByGroupId(group.getId(), page.getPageSize(), page.getPageNum());
 		JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
 		result.setPageNum(roleList.getPageNum());
@@ -134,8 +125,8 @@ public class GroupController {
 	 */
 	@PreAuthorize("hasAuthority('group-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<String> page) {
-		GroupEntity example = JsonUtil.fromJson(page.getSearch(), GroupEntity.class);
+	public Object list(@RequestBody JsonRequestPage<GroupEntity> page) {
+		GroupEntity example = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
 		PageInfo<GroupEntity> groupList = groupService.findPage(example, page.getPageSize(), page.getPageNum());
 		JsonResultPage<GroupEntity> result = new JsonResultPage<>(groupList.getList());
 		result.setPageNum(groupList.getPageNum());

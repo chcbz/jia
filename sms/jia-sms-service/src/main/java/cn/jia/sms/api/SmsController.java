@@ -16,7 +16,6 @@ import jakarta.inject.Inject;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -28,6 +27,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -39,9 +39,7 @@ public class SmsController {
 	private SmsService smsService;
 	@Autowired(required = false)
 	private DictService dictService;
-	@Value("${security.oauth2.resource.id:jia-sms}")
-	private String resourceId;
-	
+
 	private final RestTemplate restTemplate = new RestTemplate();
 	
 	private static final String sendSmsURL = "http://hy.mix2.zthysms.com/sendSms.do";
@@ -195,11 +193,8 @@ public class SmsController {
 	 * @return
 	 */
 	@RequestMapping(value = "/send/list", method = RequestMethod.POST)
-	public Object listSend(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
-		SmsSendVO example = JsonUtil.fromJson(page.getSearch(), SmsSendVO.class);
-		if(example == null) {
-			example = new SmsSendVO();
-		}
+	public Object listSend(@RequestBody JsonRequestPage<SmsSendVO> page, HttpServletRequest request) {
+		SmsSendVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsSendVO());
 		example.setClientId(EsSecurityHandler.clientId());
 		PageInfo<SmsSendEntity> list = smsService.listSend(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<SmsSendEntity> result = new JsonResultPage<>(list.getList());
@@ -375,8 +370,8 @@ public class SmsController {
 	 * @return
 	 */
 	@RequestMapping(value = "/reply/list", method = RequestMethod.POST)
-	public Object listReply(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
-		SmsReplyEntity example = JsonUtil.fromJson(page.getSearch(), SmsReplyEntity.class);
+	public Object listReply(@RequestBody JsonRequestPage<SmsReplyEntity> page, HttpServletRequest request) {
+		SmsReplyEntity example = Optional.ofNullable(page.getSearch()).orElse(new SmsReplyEntity());
 		PageInfo<SmsReplyEntity> list = smsService.listReply(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<SmsReplyEntity> result = new JsonResultPage<>(list.getList());
 		result.setPageNum(list.getPageNum());
@@ -460,11 +455,8 @@ public class SmsController {
 	 * @return
 	 */
 	@RequestMapping(value = "/template/list", method = RequestMethod.POST)
-	public Object listTemplate(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
-		SmsTemplateVO example = JsonUtil.fromJson(page.getSearch(), SmsTemplateVO.class);
-		if(example == null) {
-			example = new SmsTemplateVO();
-		}
+	public Object listTemplate(@RequestBody JsonRequestPage<SmsTemplateVO> page, HttpServletRequest request) {
+		SmsTemplateVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsTemplateVO());
 		example.setClientId(EsSecurityHandler.clientId());
 		PageInfo<SmsTemplateEntity> list = smsService.listTemplate(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<SmsTemplateEntity> result = new JsonResultPage<>(list.getList());

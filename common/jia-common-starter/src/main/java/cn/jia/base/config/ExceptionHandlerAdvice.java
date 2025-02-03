@@ -7,12 +7,15 @@ import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.StringUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * 全局异常处理配置类，主要将自定义异常信息以JSON格式返回给前端
@@ -64,11 +67,22 @@ public class ExceptionHandlerAdvice {
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public Result handleAccessDeniedException(AccessDeniedException e) {
+    public ResponseEntity<Result> handleAccessDeniedException(AccessDeniedException e) {
         log.warn(e.getMessage(), e);
         JsonResult<Object> result = new JsonResult<>();
         result.setMsg(ErrCodeHolder.getMessage(EsErrorConstants.UNAUTHORIZED));
         result.setCode(EsErrorConstants.UNAUTHORIZED.getCode());
-        return result;
+        result.setStatus(HttpStatus.UNAUTHORIZED.value());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(result);
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Result> handleNoResourceFoundException(NoResourceFoundException e) {
+        log.warn(e.getMessage(), e);
+        JsonResult<Object> result = new JsonResult<>();
+        result.setMsg(ErrCodeHolder.getMessage(EsErrorConstants.NOT_FOUND));
+        result.setCode(EsErrorConstants.NOT_FOUND.getCode());
+        result.setStatus(HttpStatus.NOT_FOUND.value());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(result);
     }
 }

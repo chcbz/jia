@@ -58,7 +58,7 @@ public class LdapHelper<T> {
      * @return 实体信息
      */
     public T findByPrimaryKey(final T t) {
-        return (T) ldapTemplate.lookup(buildDn(t),  getContextMapper(t));
+        return ldapTemplate.lookup(buildDn(t),  getContextMapper(t));
     }
 
     /**
@@ -68,7 +68,7 @@ public class LdapHelper<T> {
      * @return 实体信息
      */
     public T findByDN(final T t,String dn) {
-        return (T) ldapTemplate.lookup(dn,  getContextMapper(t));
+        return ldapTemplate.lookup(dn,  getContextMapper(t));
     }
     /**
      * 根据实体条件精确查找进行查找
@@ -209,9 +209,9 @@ public class LdapHelper<T> {
      * @param t 实体信息
      * @return 构造器
      */
-    private ContextMapper getContextMapper(final T t) {
+    private ContextMapper<T> getContextMapper(final T t) {
         ObjectDirectoryMapper odm = new DefaultObjectDirectoryMapper();
-        return ctx -> odm.mapFromLdapDataEntry((DirContextOperations) ctx, t.getClass());
+        Class<T> clazz = (Class<T>) t.getClass();
+        return ctx -> odm.mapFromLdapDataEntry((DirContextOperations) ctx, clazz);
     }
-
 }

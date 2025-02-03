@@ -868,11 +868,8 @@ public class WxMpController {
      * @return
      */
     @RequestMapping(value = "/info/list", method = RequestMethod.POST)
-    public Object listMpInfo(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
-        MpInfoVO example = JsonUtil.fromJson(page.getSearch(), MpInfoVO.class);
-        if (example == null) {
-            example = new MpInfoVO();
-        }
+    public Object listMpInfo(@RequestBody JsonRequestPage<MpInfoVO> page, HttpServletRequest request) {
+        MpInfoVO example = Optional.ofNullable(page.getSearch()).orElse(new MpInfoVO());
         example.setClientId(EsSecurityHandler.clientId());
         PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageSize(), page.getPageNum());
         JsonResultPage<MpInfoEntity> result = new JsonResultPage<>(list.getList());

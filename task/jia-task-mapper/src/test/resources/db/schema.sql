@@ -37,6 +37,6 @@ CREATE TABLE task_item (
 
 CREATE VIEW v_task_item AS select i.id AS id,i.plan_id AS plan_id,p.jiacn AS jiacn,p.type AS
 type,p.period AS period,p.crond AS crond,p.name AS name,p.description AS description,p.amount AS amount,p.remind AS
-remind,p.remind_phone AS remind_phone,p.remind_msg AS remind_msg,p.status AS status,i.create_time AS create_time,
-i.update_time AS update_time,i.client_id AS client_id,i.tenant_id AS tenant_id from
+remind,p.remind_phone AS remind_phone,p.remind_msg AS remind_msg,i.status AS status,i.execute_time AS execute_time,
+i.create_time AS create_time,i.update_time AS update_time,i.client_id AS client_id,i.tenant_id AS tenant_id from
 (task_plan p join task_item i on((p.id = i.plan_id))) order by i.create_time;

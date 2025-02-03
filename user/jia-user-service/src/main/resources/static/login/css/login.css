@@ -1,0 +1,42 @@
+#wrapper{
+    margin-top: 30px;
+}
+.aw-login-box {
+    width: 100%;
+    max-width: 450px;
+}
+.aw-login-box .mod-body .content {
+    width: 100%;
+    text-align: center;
+}
+.aw-login-box .mod-body {
+    min-height: 380px;
+    padding: 50px 60px;
+}
+.other_login{
+    text-align: center;
+    width: 50%;
+    float: left;
+}
+.other_login img{
+    cursor: pointer;
+    width: 60px;
+    height: auto;
+}
+.aw-login-box .mod-body .content ul li.last{
+    width: 100%;
+}
+.aw-login-box .mod-body .content ul li .btn-primary{
+    width: 100%;
+}
+.backLogin span {
+    color: #868788;
+    cursor: pointer;
+}
+.ologin_wrap{
+    width: 80%;
+    margin: auto;
+}
+.ologin img{
+    width:100%
+}

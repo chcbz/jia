@@ -137,7 +137,7 @@ public class GiftController {
 	 */
 //	@PreAuthorize("hasAuthority('gift-usage_list_gift')")
 	@RequestMapping(value = "/usage/list/gift/{giftId}", method = RequestMethod.POST)
-	public Object usageListByGift(@RequestBody JsonRequestPage<String> page, @PathVariable Long giftId) {
+	public Object usageListByGift(@RequestBody JsonRequestPage<PointGiftUsageEntity> page, @PathVariable Long giftId) {
 		PageInfo<PointGiftUsageEntity> usageList = giftService.usageListByGift(page.getPageNum(), page.getPageSize(), giftId);
 		JsonResultPage<PointGiftUsageEntity> result = new JsonResultPage<>(usageList.getList());
 		result.setPageNum(usageList.getPageNum());

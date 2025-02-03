@@ -43,16 +43,19 @@ public class EsErrorConstants {
 	public static final EsErrorConstants DUPLICATE_SUBMISSION = new EsErrorConstants("E002", "重复提交");
 	/** 参数异常 */
 	public static final EsErrorConstants PARAMETER_INCORRECT = new EsErrorConstants("E003", "参数异常");
+	/** 不是有效URL */
+	public static final EsErrorConstants INVALID_URL = new EsErrorConstants("E004", "不是有效URL");
 	
 	/** 未授权 */
 	public static final EsErrorConstants UNAUTHORIZED = new EsErrorConstants("E401", "未授权");
 	/** 拒绝访问 */
 	public static final EsErrorConstants FORBIDDEN = new EsErrorConstants("E403", "拒绝访问");
+	/** 资源不存在 */
+	public static final EsErrorConstants NOT_FOUND = new EsErrorConstants("E404", "资源不存在");
 	/** 非法访问 */
 	public static final EsErrorConstants METHOD_NOT_ALLOWED = new EsErrorConstants("E405", "非法访问");
 	/** 请求超时 */
 	public static final EsErrorConstants REQUEST_TIMEOUT = new EsErrorConstants("E408", "请求超时");
 	/** 服务异常 */
 	public static final EsErrorConstants INTERNAL_SERVER_ERROR = new EsErrorConstants("E500", "服务异常");
-
 }

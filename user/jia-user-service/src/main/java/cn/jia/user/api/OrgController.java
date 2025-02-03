@@ -23,26 +23,35 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
+import java.util.Optional;
 
+/**
+ * 组织控制器，用于处理与组织相关的HTTP请求
+ */
 @RestController
 @RequestMapping("/org")
 public class OrgController {
-	
+
+	// 注入组织服务
 	@Autowired
 	private OrgService orgService;
+	// 注入用户服务
 	@Autowired
 	private UserService userService;
+	// 注入角色服务
 	@Autowired
 	private RoleService roleService;
+	// 可选地注入文件服务
 	@Autowired(required = false)
 	private FileService fileService;
+	// 文件路径配置
 	@Value("${jia.file.path:}")
 	private String filePath;
-	
+
 	/**
-	 * 获取组织信息
-	 * @param id
-	 * @return
+	 * 根据ID获取组织信息
+	 * @param id 组织ID
+	 * @return 组织信息
 	 */
 	@PreAuthorize("hasAuthority('org-get')")
 	@RequestMapping(value = "/get", method = RequestMethod.GET)
@@ -53,7 +62,7 @@ public class OrgController {
 		}
 		OrgVO orgVO = new OrgVO();
 		BeanUtil.copyPropertiesIgnoreNull(org, orgVO);
-		//显示负责人名称列表
+		// 显示负责人名称列表
 		if(StringUtil.isNotEmpty(orgVO.getDirector())) {
 			StringBuilder directorNames = new StringBuilder();
 			for(String u : orgVO.getDirector().split(",")) {
@@ -66,12 +75,12 @@ public class OrgController {
 		}
 		return JsonResult.success(orgVO);
 	}
-	
+
 	/**
 	 * 获取父组织信息
-	 * @param id
-	 * @return
-	 * @throws Exception
+	 * @param id 组织ID
+	 * @return 父组织信息
+	 * @throws Exception 如果数据未找到则抛出异常
 	 */
 	@PreAuthorize("hasAuthority('org-get_parent')")
 	@RequestMapping(value = "/get/parent", method = RequestMethod.GET)
@@ -82,12 +91,12 @@ public class OrgController {
 		}
 		return JsonResult.success(org);
 	}
-	
+
 	/**
-	 * 获取组织姓名
-	 * @param id
-	 * @return
-	 * @throws Exception
+	 * 根据ID获取组织名称
+	 * @param id 组织ID
+	 * @return 组织名称
+	 * @throws Exception 如果数据未找到则抛出异常
 	 */
 	@PreAuthorize("hasAuthority('org-get_name')")
 	@RequestMapping(value = "/get/name", method = RequestMethod.GET)
@@ -98,16 +107,16 @@ public class OrgController {
 		}
 		return org.getName();
 	}
-	
+
 	/**
 	 * 获取当前组织下的所有用户
-	 * @param page
-	 * @return
+	 * @param page 分页请求对象
+	 * @return 用户列表
 	 */
 	@PreAuthorize("hasAuthority('org-get_users')")
 	@RequestMapping(value = "/get/users", method = RequestMethod.POST)
-	public Object findUsers(@RequestBody JsonRequestPage<String> page) {
-		UserVO example = JsonUtil.fromJson(page.getSearch(), UserVO.class);
+	public Object findUsers(@RequestBody JsonRequestPage<UserVO> page) {
+		UserVO example = Optional.ofNullable(page.getSearch()).orElse(new UserVO());
 		ValidUtil.assertNotNull(example, UserErrorConstants.PARAMETER_INCORRECT.getCode());
 		PageInfo<UserEntity> userList = userService.listByOrgId(example.getOrgId(), page.getPageSize(),
 				page.getPageNum());
@@ -118,9 +127,9 @@ public class OrgController {
 	}
 
 	/**
-	 * 创建组织
-	 * @param org
-	 * @return
+	 * 创建新组织
+	 * @param org 组织实体
+	 * @return 创建结果
 	 */
 	@PreAuthorize("hasAuthority('org-create')")
 	@RequestMapping(value = "/create", method = RequestMethod.POST)
@@ -131,8 +140,8 @@ public class OrgController {
 
 	/**
 	 * 更新组织信息
-	 * @param org
-	 * @return
+	 * @param org 组织实体
+	 * @return 更新结果
 	 */
 	@PreAuthorize("hasAuthority('org-update')")
 	@RequestMapping(value = "/update", method = RequestMethod.POST)
@@ -143,8 +152,8 @@ public class OrgController {
 
 	/**
 	 * 删除组织
-	 * @param id
-	 * @return
+	 * @param id 组织ID
+	 * @return 删除结果
 	 */
 	@PreAuthorize("hasAuthority('org-delete')")
 	@RequestMapping(value = "/delete", method = RequestMethod.GET)
@@ -152,30 +161,30 @@ public class OrgController {
 		orgService.delete(id);
 		return JsonResult.success();
 	}
-	
+
 	/**
 	 * 获取所有组织信息
-	 * @return
+	 * @return 组织列表
 	 */
 	@PreAuthorize("hasAuthority('org-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
-	public Object list(@RequestBody JsonRequestPage<String> page) {
+	public Object list(@RequestBody JsonRequestPage<OrgEntity> page) {
 		PageInfo<OrgEntity> orgList = orgService.list(page.getPageNum(), page.getPageSize());
 		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
 		result.setPageNum(orgList.getPageNum());
 		result.setTotal(orgList.getTotal());
 		return result;
 	}
-	
+
 	/**
-	 * 
-	 * @param page
-	 * @return
+	 * 获取子组织信息
+	 * @param page 分页请求对象
+	 * @return 子组织列表
 	 */
 	@PreAuthorize("hasAuthority('org-list_sub')")
 	@RequestMapping(value = "/list/sub", method = RequestMethod.POST)
-	public Object listSub(@RequestBody JsonRequestPage<String> page) {
-		OrgEntity org = JsonUtil.fromJson(page.getSearch(), OrgEntity.class);
+	public Object listSub(@RequestBody JsonRequestPage<OrgEntity> page) {
+		OrgEntity org = Optional.ofNullable(page.getSearch()).orElse(new OrgEntity());
 		PageInfo<OrgEntity> orgList = orgService.listSub(org.getId(), page.getPageNum(), page.getPageSize());
 		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
 		result.setPageNum(orgList.getPageNum());
@@ -185,18 +194,18 @@ public class OrgController {
 
 	/**
 	 * 批量添加组织用户
-	 * @param org
-	 * @return
+	 * @param org 组织视图对象
+	 * @return 添加结果
 	 */
 	@PreAuthorize("hasAuthority('org-users_add')")
 	@RequestMapping(value = "/users/add", method = RequestMethod.POST)
 	public Object userBatchAdd(@RequestBody OrgVO org) {
 		orgService.batchAddUser(org);
-		//更新用户职位
+		// 更新用户职位
 		for(Long userId : org.getUserIds()) {
 			userService.setDefaultOrg(userId);
 		}
-		//初始化用户权限
+		// 初始化用户权限
 		RoleVO role = new RoleVO();
 		role.setId(UserConstants.DEFAULT_ROLE_ID);
 		role.setUserIds(org.getUserIds());
@@ -208,26 +217,26 @@ public class OrgController {
 
 	/**
 	 * 批量删除组织用户
-	 * @param org
-	 * @return
+	 * @param org 组织视图对象
+	 * @return 删除结果
 	 */
 	@PreAuthorize("hasAuthority('org-users_del')")
 	@RequestMapping(value = "/users/del", method = RequestMethod.POST)
 	public Object userBatchDel(@RequestBody OrgVO org) {
 		orgService.batchDelUser(org);
-		//更新用户职位
+		// 更新用户职位
 		for(Long userId : org.getUserIds()) {
 			userService.setDefaultOrg(userId);
 		}
 		return JsonResult.success();
 	}
-	
+
 	/**
 	 * 根据当前职位获取不同组织的审批人
-	 * @param position
-	 * @param role
-	 * @return
-	 * @throws Exception
+	 * @param position 职位ID
+	 * @param role 角色ID
+	 * @return 审批人信息
+	 * @throws Exception 如果审批人不存在则抛出异常
 	 */
 	@PreAuthorize("hasAuthority('org-get_director')")
 	@RequestMapping(value = "/get/director", method = RequestMethod.GET)
@@ -253,11 +262,11 @@ public class OrgController {
 
 	/**
 	 * 修改公司LOGO
-	 * @param id
-	 * @param file
+	 * @param id 组织ID
+	 * @param file LOGO文件
 	 * @param type LOGO类型 1长LOGO 2方形LOGO
-	 * @return
-	 * @throws Exception
+	 * @return 修改结果
+	 * @throws Exception 如果文件上传失败则抛出异常
 	 */
 	@PreAuthorize("hasAuthority('org-update_logo')")
 	@RequestMapping(value = "/update/logo", method = RequestMethod.POST)
@@ -269,7 +278,7 @@ public class OrgController {
 		File f = new File(filePath + "/logo/" + filename);
 		file.transferTo(f);
 
-		//保存文件信息
+		// 保存文件信息
 		IspFileEntity cf = new IspFileEntity();
 		cf.setClientId(EsSecurityHandler.clientId());
 		cf.setExtension(FileUtil.getExtension(filename));
@@ -279,10 +288,10 @@ public class OrgController {
 		cf.setUri("logo/" + filename);
 		fileService.create(cf);
 
-		//保存组织信息
+		// 保存组织信息
 		OrgEntity org = new OrgEntity();
 		org.setId(id);
-		if(type.equals(1)){
+		if(type.equals(1L)){
 			org.setLogo("logo/" + filename);
 		} else {
 			org.setLogoIcon("logo/" + filename);

@@ -5,6 +5,8 @@ import cn.jia.core.exception.EsErrorConstants;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.io.Serial;
 import java.util.List;
@@ -17,6 +19,8 @@ import java.util.List;
  * @since 2016年8月25日 下午4:57:43
  * @param <T>
  */
+@Setter
+@Getter
 @JsonInclude(value=Include.NON_NULL)
 public class JsonResultPage<T> extends Result {
     @Serial
@@ -143,35 +147,4 @@ public class JsonResultPage<T> extends Result {
 		return "JsonResultPage {pageNum=" + pageNum + ", total=" + total + "}";
 	}
 
-	public List<T> getData() {
-		return this.data;
-	}
-
-	public void setData(List<T> data) {
-		this.data = data;
-	}
-
-	public int getStatus() {
-		return status;
-	}
-
-	public void setStatus(int status) {
-		this.status = status;
-	}
-
-	public Integer getPageNum() {
-		return pageNum;
-	}
-
-	public void setPageNum(Integer pageNum) {
-		this.pageNum = pageNum;
-	}
-
-	public Long getTotal() {
-		return total;
-	}
-
-	public void setTotal(Long total) {
-		this.total = total;
-	}
 }

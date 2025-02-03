@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.user.mapper.PermsRelMapper">
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        update_time,
+        create_time,
+        role_id, perms_id
+    </sql>
+    
+    <select id="selectByUserId" resultType="cn.jia.user.entity.PermsRelEntity">
+        select DISTINCT r.*
+        from user_perms_rel r
+        left join user_role_rel rr on r.role_id = rr.role_id
+        where (rr.user_id = #{userId,jdbcType=BIGINT} or
+        rr.group_id in (select group_id from user_group_rel where user_id = #{userId,jdbcType=BIGINT}))
+    </select>
+</mapper>

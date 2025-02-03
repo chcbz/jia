@@ -5,6 +5,8 @@ import cn.jia.core.exception.EsErrorConstants;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.io.Serial;
 
@@ -15,6 +17,8 @@ import java.io.Serial;
  * @author StarZou
  * @since 2014年5月26日 上午10:51:46
  */
+@Setter
+@Getter
 @JsonInclude(value = Include.NON_NULL)
 public class JsonResult<T> extends Result {
 
@@ -28,37 +32,13 @@ public class JsonResult<T> extends Result {
 
 	private String location;
 
-	/**
+    // EsHandler.jsonValueToString(data);
+    /**
 	 * 数据
 	 */
 	private T data;
 
-	public int getStatus() {
-		return status;
-	}
-
-	public void setStatus(int status) {
-		this.status = status;
-	}
-
-	public String getLocation() {
-		return location;
-	}
-
-	public void setLocation(String location) {
-		this.location = location;
-	}
-
-	public T getData() {
-		return data;
-	}
-
-	public void setData(T data) {
-		// EsHandler.jsonValueToString(data);
-		this.data = data;
-	}
-
-	public JsonResult() {
+    public JsonResult() {
 		super();
 	}
 

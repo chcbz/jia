@@ -1,10 +1,10 @@
 package cn.jia.user.service.impl;
 
 import cn.jia.test.BaseMockTest;
-import cn.jia.user.dao.UserAuthDao;
+import cn.jia.user.dao.UserPermsRelDao;
 import cn.jia.user.dao.UserRoleDao;
 import cn.jia.user.dao.UserRoleRelDao;
-import cn.jia.user.entity.AuthEntity;
+import cn.jia.user.entity.PermsRelEntity;
 import cn.jia.user.entity.RoleEntity;
 import cn.jia.user.entity.RoleRelEntity;
 import cn.jia.user.entity.RoleVO;
@@ -23,7 +23,7 @@ import static org.mockito.Mockito.*;
 
 class RoleServiceImplTest extends BaseMockTest {
     @Mock
-    UserAuthDao userAuthDao;
+    UserPermsRelDao userPermsRelDao;
     @Mock
     UserRoleRelDao userRoleRelDao;
     @Mock
@@ -38,11 +38,11 @@ class RoleServiceImplTest extends BaseMockTest {
 
     @Test
     void testChangePerms() {
-        AuthEntity authEntity = new AuthEntity().setPermsId(1L);
-        AuthEntity authEntity2 = new AuthEntity().setPermsId(3L);
-        when(userAuthDao.selectByRoleId(anyLong())).thenReturn(List.of(authEntity, authEntity2));
-        when(userAuthDao.insertBatch(any())).thenReturn(true);
-        when(userAuthDao.deleteBatchIds(any())).thenReturn(1);
+        PermsRelEntity permsRelEntity = new PermsRelEntity().setPermsId(1L);
+        PermsRelEntity permsRelEntity2 = new PermsRelEntity().setPermsId(3L);
+        when(userPermsRelDao.selectByRoleId(anyLong())).thenReturn(List.of(permsRelEntity, permsRelEntity2));
+        when(userPermsRelDao.insertBatch(any())).thenReturn(true);
+        when(userPermsRelDao.deleteBatchIds(any())).thenReturn(1);
 
         RoleVO roleVO = new RoleVO().setPermsIds(List.of(1L, 2L));
         roleVO.setId(1L);
@@ -96,11 +96,11 @@ class RoleServiceImplTest extends BaseMockTest {
 
     @Test
     void testListPerms() {
-        AuthEntity authEntity = new AuthEntity();
-        when(userAuthDao.selectByRoleId(anyLong())).thenReturn(List.of(authEntity));
+        PermsRelEntity permsRelEntity = new PermsRelEntity();
+        when(userPermsRelDao.selectByRoleId(anyLong())).thenReturn(List.of(permsRelEntity));
 
-        PageInfo<AuthEntity> result = roleServiceImpl.listPerms(1L, 10, 1);
+        PageInfo<PermsRelEntity> result = roleServiceImpl.listPerms(1L, 10, 1);
         Assertions.assertNotNull(result);
-        Assertions.assertEquals(authEntity, result.getList().get(0));
+        Assertions.assertEquals(permsRelEntity, result.getList().get(0));
     }
 }

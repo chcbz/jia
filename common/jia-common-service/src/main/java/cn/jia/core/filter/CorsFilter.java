@@ -1,5 +1,6 @@
 package cn.jia.core.filter;
 
+import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.StringUtil;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,7 +33,7 @@ public class CorsFilter implements Filter {
         HttpServletResponse response = (HttpServletResponse) res;
         if (StringUtil.isNotEmpty(allowOrigin)) {
             List<String> allowOriginList = Arrays.asList(allowOrigin.split(","));
-            if (allowOriginList.size() > 0) {
+            if (CollectionUtil.isNotNullOrEmpty(allowOriginList)) {
                 String currentOrigin = request.getHeader("Origin");
                 if (allowOriginList.contains(currentOrigin)) {
                     response.setHeader("Access-Control-Allow-Origin", currentOrigin);

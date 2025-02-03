@@ -1,7 +1,7 @@
 package cn.jia.user.service;
 
 import cn.jia.common.service.IBaseService;
-import cn.jia.user.entity.AuthEntity;
+import cn.jia.user.entity.PermsRelEntity;
 import cn.jia.user.entity.RoleEntity;
 import cn.jia.user.entity.RoleVO;
 import com.github.pagehelper.PageInfo;
@@ -17,5 +17,5 @@ public interface RoleService extends IBaseService<RoleEntity> {
 	
 	void batchDelUser(RoleVO role);
 	
-	PageInfo<AuthEntity> listPerms(Long roleId, int pageSize, int pageNum);
+	PageInfo<PermsRelEntity> listPerms(Long roleId, int pageSize, int pageNum);
 }

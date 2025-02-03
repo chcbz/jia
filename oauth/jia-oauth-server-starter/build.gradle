@@ -4,9 +4,9 @@ dependencies {
     implementation project(':common:jia-common-starter')
     implementation project(':user:jia-user-mapper')
     implementation project(':isp:jia-isp-mapper')
-    implementation(libs.spring.boot.starter.oauth2.authorization.server) {
-        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-web'
-    }
+//    implementation(libs.spring.boot.starter.oauth2.authorization.server) {
+//        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-web'
+//    }
     implementation(libs.spring.boot.starter.thymeleaf)
 }
 

@@ -6,7 +6,6 @@ import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
-import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StreamUtil;
 import cn.jia.core.util.StringUtil;
 import cn.jia.workflow.entity.DeploymentExample;
@@ -33,6 +32,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.zip.ZipInputStream;
 
 @RestController
@@ -67,8 +67,8 @@ public class WorkflowController {
      * @return
      */
     @RequestMapping(value = "/deployment/list", method = RequestMethod.POST)
-    public Object getDeployment(@RequestBody JsonRequestPage<String> page) {
-        DeploymentExample example = JsonUtil.fromJson(page.getSearch(), DeploymentExample.class);
+    public Object getDeployment(@RequestBody JsonRequestPage<DeploymentExample> page) {
+        DeploymentExample example = Optional.ofNullable(page.getSearch()).orElse(new DeploymentExample());
         Page<Deployment> list = workflowService.getDeployment(example, page.getPageNum(), page.getPageSize());
         List<Map<String, Object>> deployments = new ArrayList<>();
         for (Deployment d : list) {
@@ -161,8 +161,8 @@ public class WorkflowController {
      * @return
      */
     @RequestMapping(value = "/definition/list", method = RequestMethod.POST)
-    public Object getDefinition(@RequestBody JsonRequestPage<String> page) {
-        ProcessDefinitionExample example = JsonUtil.fromJson(page.getSearch(), ProcessDefinitionExample.class);
+    public Object getDefinition(@RequestBody JsonRequestPage<ProcessDefinitionExample> page) {
+        ProcessDefinitionExample example = Optional.ofNullable(page.getSearch()).orElse(new ProcessDefinitionExample());
         Page<ProcessDefinition> list = workflowService.getProcessDefinition(example, page.getPageNum(), page.getPageSize());
         List<Map<String, Object>> deployments = new ArrayList<>();
         for (ProcessDefinition d : list) {
@@ -293,8 +293,8 @@ public class WorkflowController {
      * @return
      */
     @PostMapping(value = "/list/wait")
-    public Object listWait(@RequestBody JsonRequestPage<String> page) {
-        TaskExample example = JsonUtil.fromJson(page.getSearch(), TaskExample.class);
+    public Object listWait(@RequestBody JsonRequestPage<TaskExample> page) {
+        TaskExample example = Optional.ofNullable(page.getSearch()).orElse(new TaskExample());
         Page<Task> taskList = workflowService.getTasks(example, page.getPageNum(), page.getPageSize());
         List<Map<String, Object>> tasks = new ArrayList<>();
         for (Task task : taskList) {
@@ -330,8 +330,8 @@ public class WorkflowController {
      * @return
      */
     @PostMapping(value = "/list/history")
-    public Object listHistory(@RequestBody JsonRequestPage<String> page) {
-        TaskExample example = JsonUtil.fromJson(page.getSearch(), TaskExample.class);
+    public Object listHistory(@RequestBody JsonRequestPage<TaskExample> page) {
+        TaskExample example = Optional.ofNullable(page.getSearch()).orElse(new TaskExample());
         Page<HistoricTaskInstance> taskList = workflowService.getHistorys(example, page.getPageNum(), page.getPageSize());
         List<Map<String, Object>> tasks = new ArrayList<>();
         for (HistoricTaskInstance task : taskList) {
@@ -405,8 +405,8 @@ public class WorkflowController {
      * @return
      */
     @PostMapping(value = "/list/my")
-    public Object listHistoricProcessInstances(@RequestBody JsonRequestPage<String> page, HttpServletRequest request) {
-        ProcessInstanceExample example = JsonUtil.fromJson(page.getSearch(), ProcessInstanceExample.class);
+    public Object listHistoricProcessInstances(@RequestBody JsonRequestPage<ProcessInstanceExample> page, HttpServletRequest request) {
+        ProcessInstanceExample example = Optional.ofNullable(page.getSearch()).orElse(new ProcessInstanceExample());
         Page<HistoricProcessInstance> instanceList =
 				workflowService.getHistoricProcessInstances(example, page.getPageNum(), page.getPageSize());
         List<Map<String, Object>> instances = new ArrayList<>();

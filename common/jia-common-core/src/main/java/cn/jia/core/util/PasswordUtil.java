@@ -50,7 +50,7 @@ public class PasswordUtil {
         if (rawPassword == null) {
             throw new IllegalArgumentException("rawPassword cannot be null");
         }
-        if (encodedPassword == null || encodedPassword.length() == 0) {
+        if (StringUtil.isEmpty(encodedPassword)) {
             log.warn("Empty encoded password");
             return false;
         }
