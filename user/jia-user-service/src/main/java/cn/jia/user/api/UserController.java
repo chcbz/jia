@@ -2,6 +2,7 @@ package cn.jia.user.api;
 
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -344,20 +345,13 @@ public class UserController {
      * @return 用户信息对象
      * @throws EsRuntimeException 如果用户不存在，则抛出异常
      */
-    @RequestMapping(value = "/userinfo", method = RequestMethod.GET)
+    @RequestMapping(value = "/my", method = RequestMethod.GET)
     public Object userInfo() {
-        String username = EsSecurityHandler.username();
-        if (StringUtil.isEmpty(username)) {
+        String jiacn = EsContextHolder.getContext().getJiacn();
+        if (StringUtil.isEmpty(jiacn)) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
-        UserEntity user;
-        if (username.startsWith("wx-")) {
-            user = userService.findByOpenid(username.substring(3));
-        } else if (username.startsWith("mb-")) {
-            user = userService.findByPhone(username.substring(3));
-        } else {
-            user = userService.findByUsername(username);
-        }
+        UserEntity user = userService.findByJiacn(jiacn);
         if (user == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }

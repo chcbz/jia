@@ -2,12 +2,14 @@ package cn.jia.user.config;
 
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.config.SpringContextHolder;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.PasswordUtil;
-import cn.jia.core.util.StringUtil;
+import cn.jia.core.util.ThreeDesUtil;
 import cn.jia.sms.common.SmsConstants;
 import cn.jia.sms.entity.SmsCodeEntity;
 import cn.jia.sms.service.SmsService;
@@ -17,6 +19,7 @@ import cn.jia.user.entity.UserEntity;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.Getter;
@@ -47,14 +50,11 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.authentication.SavedRequestAwareAuthenticationSuccessHandler;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -199,19 +199,20 @@ public class DefaultSecurityConfig {
             @Override
             public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
                     Authentication authentication) throws ServletException, IOException {
-//                String uri = request.getHeader("Referer");
-//                if (StringUtil.isNotBlank(uri)) {
-//                    String redirectUri = UriComponentsBuilder.fromUriString(uri)
-//                            .build().getQueryParams().getFirst("redirect_uri");
-//                    if (StringUtil.isNotBlank(redirectUri)) {
-//                        Arrays.asList(request.getCookies()).forEach(response::addCookie);
-//                        clearAuthenticationAttributes(request);
-//                        // Use the DefaultSavedRequest URL
-//                        getRedirectStrategy().sendRedirect(request, response,
-//                                URLDecoder.decode(redirectUri, StandardCharsets.UTF_8));
-//                        return;
-//                    }
-//                }
+                String username = authentication.getName();
+                UserEntity user;
+                if (username.startsWith("wx-")) { //微信登录
+                    user = userService.findByOpenid(username.substring(3));
+                } else if (username.startsWith("mb-")) {
+                    user = userService.findByPhone(username.substring(3));
+                } else {
+                    user = userService.findByUsername(username);
+                }
+                EsContext context = EsContextHolder.getContext();
+                context.setUsername(username);
+                context.setJiacn(user.getJiacn());
+                Cookie cookie = EsContextHolder.genCookie();
+                response.addCookie(cookie);
                 super.onAuthenticationSuccess(request, response, authentication);
             }
         };

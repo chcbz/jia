@@ -1,6 +1,7 @@
 package cn.jia.base.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
@@ -19,9 +20,10 @@ import java.util.List;
  */
 @Configuration(proxyBeanMethods = false)
 @Order(Ordered.HIGHEST_PRECEDENCE)
+@ConditionalOnExpression("${cors.enabled:true}")
 public class CorsConfig {
-    @Value("${cors.allowed.origins:*}")
-    private String[] allowedOrigins;
+    @Value("${cors.allowed.origin.patterns:*}")
+    private String[] allowedOriginPatterns;
     @Value("${cors.allowed.methods:GET,POST,PUT,DELETE,OPTIONS}")
     private String[] allowedMethods;
     @Value("${cors.allowed.headers:*}")
@@ -29,7 +31,7 @@ public class CorsConfig {
 
     private CorsConfiguration buildConfig() {
         CorsConfiguration corsConfiguration = new CorsConfiguration();
-        corsConfiguration.setAllowedOrigins(List.of(allowedOrigins));
+        corsConfiguration.setAllowedOriginPatterns(List.of(allowedOriginPatterns));
         corsConfiguration.setAllowedHeaders(List.of(allowedHeaders));
         corsConfiguration.setAllowedMethods(List.of(allowedMethods));
         corsConfiguration.setAllowCredentials(true);
