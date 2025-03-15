@@ -1,6 +1,6 @@
 package cn.jia.workflow.service.impl;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.StringUtil;
 import cn.jia.workflow.entity.DeploymentExample;
 import cn.jia.workflow.entity.ProcessDefinitionExample;
@@ -54,25 +54,25 @@ public class WorkflowServiceImpl implements WorkflowService {
 
     @Override
     public void deployProcess(Deployment deployment, InputStream inputStream) {
-        String clientId = EsSecurityHandler.clientId();
+        String clientId = EsContextHolder.getContext().getClientId();
         repositoryService.createDeployment().addInputStream(deployment.getName() + ".bpmn", inputStream).name(deployment.getName()).tenantId(clientId).deploy();
     }
 
     @Override
     public void deployProcess(Deployment deployment, ZipInputStream zipInputStream) {
-        String clientId = EsSecurityHandler.clientId();
+        String clientId = EsContextHolder.getContext().getClientId();
         repositoryService.createDeployment().addZipInputStream(zipInputStream).name(deployment.getName()).tenantId(clientId).deploy();
     }
 
     @Override
     public List<Deployment> getDeployment() {
-        return repositoryService.createDeploymentQuery().tenantIdIn(EsSecurityHandler.clientId()).list();
+        return repositoryService.createDeploymentQuery().tenantIdIn(EsContextHolder.getContext().getClientId()).list();
     }
 
     @Override
     public Page<Deployment> getDeployment(DeploymentExample example, int pageNo, int pageSize) {
         Page<Deployment> page = new Page<>(pageNo, pageSize);
-        DeploymentQuery query = repositoryService.createDeploymentQuery().tenantIdIn(EsSecurityHandler.clientId());
+        DeploymentQuery query = repositoryService.createDeploymentQuery().tenantIdIn(EsContextHolder.getContext().getClientId());
         if (example != null) {
             if (example.getName() != null) {
                 query.deploymentNameLike("%" + example.getName() + "%");
@@ -86,7 +86,7 @@ public class WorkflowServiceImpl implements WorkflowService {
 
     @Override
     public Deployment getDeploymentById(String deploymentId) {
-        return repositoryService.createDeploymentQuery().tenantIdIn(EsSecurityHandler.clientId()).deploymentId(deploymentId).singleResult();
+        return repositoryService.createDeploymentQuery().tenantIdIn(EsContextHolder.getContext().getClientId()).deploymentId(deploymentId).singleResult();
     }
 
     @Override
@@ -107,7 +107,7 @@ public class WorkflowServiceImpl implements WorkflowService {
     @Override
     public Page<ProcessDefinition> getProcessDefinition(ProcessDefinitionExample example, int pageNo, int pageSize) {
         Page<ProcessDefinition> page = new Page<>(pageNo, pageSize);
-        ProcessDefinitionQuery query = repositoryService.createProcessDefinitionQuery().tenantIdIn(EsSecurityHandler.clientId());
+        ProcessDefinitionQuery query = repositoryService.createProcessDefinitionQuery().tenantIdIn(EsContextHolder.getContext().getClientId());
         if (StringUtil.isNotEmpty(example.getKey())) {
             query.processDefinitionKeyLike("%" + example.getKey() + "%");
         }
@@ -152,13 +152,13 @@ public class WorkflowServiceImpl implements WorkflowService {
 
     @Override
     public void startProcess(String processDefinitionKey, String businessKey, Map<String, Object> variables) {
-        identityService.setAuthentication(String.valueOf(variables.get("applicant")), null, Collections.singletonList(EsSecurityHandler.clientId()));
+        identityService.setAuthentication(String.valueOf(variables.get("applicant")), null, Collections.singletonList(EsContextHolder.getContext().getClientId()));
         runtimeService.startProcessInstanceByKey(processDefinitionKey, businessKey, variables);
     }
 
     @Override
     public List<Task> getTasks(String assignee) {
-        return taskService.createTaskQuery().or().taskAssignee(assignee).taskCandidateUser(assignee).endOr().tenantIdIn(EsSecurityHandler.clientId()).list();
+        return taskService.createTaskQuery().or().taskAssignee(assignee).taskCandidateUser(assignee).endOr().tenantIdIn(EsContextHolder.getContext().getClientId()).list();
     }
 
     @Override
@@ -191,7 +191,7 @@ public class WorkflowServiceImpl implements WorkflowService {
                 query.processVariableValueLike("applicant", "%" + example.getApplicant() + "%");
             }
         }
-        query.tenantIdIn(EsSecurityHandler.clientId()).orderByTaskCreateTime().desc();
+        query.tenantIdIn(EsContextHolder.getContext().getClientId()).orderByTaskCreateTime().desc();
         page.setTotal(query.count());
         page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
         return page;
@@ -199,22 +199,22 @@ public class WorkflowServiceImpl implements WorkflowService {
 
     @Override
     public Task getTaskByBusinessKey(String businessKey, String assignee) {
-        return taskService.createTaskQuery().processInstanceBusinessKey(businessKey).or().taskAssignee(assignee).taskCandidateUser(assignee).endOr().tenantIdIn(EsSecurityHandler.clientId()).singleResult();
+        return taskService.createTaskQuery().processInstanceBusinessKey(businessKey).or().taskAssignee(assignee).taskCandidateUser(assignee).endOr().tenantIdIn(EsContextHolder.getContext().getClientId()).singleResult();
     }
 
     @Override
     public List<Task> getTaskByBusinessKey(String businessKey) {
-        return taskService.createTaskQuery().processInstanceBusinessKey(businessKey).tenantIdIn(EsSecurityHandler.clientId()).list();
+        return taskService.createTaskQuery().processInstanceBusinessKey(businessKey).tenantIdIn(EsContextHolder.getContext().getClientId()).list();
     }
 
     @Override
     public Task getTaskById(String taskId) {
-        return taskService.createTaskQuery().taskId(taskId).tenantIdIn(EsSecurityHandler.clientId()).singleResult();
+        return taskService.createTaskQuery().taskId(taskId).tenantIdIn(EsContextHolder.getContext().getClientId()).singleResult();
     }
 
     @Override
     public List<Task> getTaskByProcessInstanceId(String processInstanceId) {
-        return taskService.createTaskQuery().processInstanceId(processInstanceId).tenantIdIn(EsSecurityHandler.clientId()).list();
+        return taskService.createTaskQuery().processInstanceId(processInstanceId).tenantIdIn(EsContextHolder.getContext().getClientId()).list();
     }
 
     @Override
@@ -256,7 +256,7 @@ public class WorkflowServiceImpl implements WorkflowService {
 
     @Override
     public List<HistoricTaskInstance> getHistorys(String assignee) {
-        return historyService.createHistoricTaskInstanceQuery().taskAssignee(assignee).tenantIdIn(EsSecurityHandler.clientId()).finished().list();
+        return historyService.createHistoricTaskInstanceQuery().taskAssignee(assignee).tenantIdIn(EsContextHolder.getContext().getClientId()).finished().list();
     }
 
     @Override
@@ -284,7 +284,7 @@ public class WorkflowServiceImpl implements WorkflowService {
             }
         }
 
-        query = query.tenantIdIn(EsSecurityHandler.clientId()).finished().orderByTaskDueDate().desc();
+        query = query.tenantIdIn(EsContextHolder.getContext().getClientId()).finished().orderByTaskDueDate().desc();
         page.setTotal(query.count());
         page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
         return page;
@@ -293,7 +293,7 @@ public class WorkflowServiceImpl implements WorkflowService {
     @Override
     public Page<HistoricTaskInstance> getHistorysByBusinessKey(String businessKey, int pageNo, int pageSize) {
         Page<HistoricTaskInstance> page = new Page<>(pageNo, pageSize);
-        HistoricTaskInstanceQuery query = historyService.createHistoricTaskInstanceQuery().processInstanceBusinessKey(businessKey).tenantIdIn(EsSecurityHandler.clientId()).finished().orderByHistoricTaskInstanceEndTime().asc();
+        HistoricTaskInstanceQuery query = historyService.createHistoricTaskInstanceQuery().processInstanceBusinessKey(businessKey).tenantIdIn(EsContextHolder.getContext().getClientId()).finished().orderByHistoricTaskInstanceEndTime().asc();
         page.setTotal(query.count());
         page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
         return page;
@@ -301,7 +301,7 @@ public class WorkflowServiceImpl implements WorkflowService {
 
     @Override
     public List<HistoricProcessInstance> getHistoricProcessInstances(String applicant) {
-        return historyService.createHistoricProcessInstanceQuery().startedBy(applicant).tenantIdIn(EsSecurityHandler.clientId()).list();
+        return historyService.createHistoricProcessInstanceQuery().startedBy(applicant).tenantIdIn(EsContextHolder.getContext().getClientId()).list();
     }
 
     @Override
@@ -335,7 +335,7 @@ public class WorkflowServiceImpl implements WorkflowService {
             }
         }
 
-        query.tenantIdIn(EsSecurityHandler.clientId()).orderByProcessInstanceStartTime().desc();
+        query.tenantIdIn(EsContextHolder.getContext().getClientId()).orderByProcessInstanceStartTime().desc();
         page.setTotal(query.count());
         page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
         return page;
@@ -344,14 +344,14 @@ public class WorkflowServiceImpl implements WorkflowService {
     @Override
     public ProcessInstance getProcessInstanceByTask(Task task) {
         //得到当前任务的流程
-        return runtimeService.createProcessInstanceQuery().tenantIdIn(EsSecurityHandler.clientId())
+        return runtimeService.createProcessInstanceQuery().tenantIdIn(EsContextHolder.getContext().getClientId())
                 .processInstanceId(task.getProcessInstanceId()).singleResult();
     }
 
     @Override
     public HistoricProcessInstance getHistoricProcessInstanceById(String instanceId) {
         //得到当前任务的流程
-        return historyService.createHistoricProcessInstanceQuery().tenantIdIn(EsSecurityHandler.clientId())
+        return historyService.createHistoricProcessInstanceQuery().tenantIdIn(EsContextHolder.getContext().getClientId())
                 .processInstanceId(instanceId).singleResult();
     }
 

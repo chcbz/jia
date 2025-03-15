@@ -1,6 +1,6 @@
 package cn.jia.user.api;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -158,7 +158,7 @@ public class RoleController {
 	@PreAuthorize("hasAuthority('role-users_add')")
 	@RequestMapping(value = "/users/add", method = RequestMethod.POST)
 	public Object userBatchAdd(@RequestBody RoleVO role) {
-		role.setClientId(EsSecurityHandler.clientId());
+		role.setClientId(EsContextHolder.getContext().getClientId());
 		roleService.batchAddUser(role);
 		return JsonResult.success();
 	}
@@ -171,7 +171,7 @@ public class RoleController {
 	@PreAuthorize("hasAuthority('role-users_del')")
 	@RequestMapping(value = "/users/del", method = RequestMethod.POST)
 	public Object userBatchDel(@RequestBody RoleVO role) {
-		role.setClientId(EsSecurityHandler.clientId());
+		role.setClientId(EsContextHolder.getContext().getClientId());
 		roleService.batchDelUser(role);
 		return JsonResult.success();
 	}

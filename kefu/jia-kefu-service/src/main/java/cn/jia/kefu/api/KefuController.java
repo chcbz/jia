@@ -2,8 +2,8 @@ package cn.jia.kefu.api;
 
 import cn.jia.core.annotation.SysPermission;
 import cn.jia.core.common.EsConstants;
-import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.config.SpringContextHolder;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -58,7 +58,7 @@ public class KefuController {
         if (example == null) {
             example = new KefuFaqEntity();
         }
-        example.setClientId(EsSecurityHandler.clientId());
+        example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<KefuFaqEntity> list = kefuFaqService.findPage(example, page.getPageSize(), page.getPageNum());
         JsonResultPage<KefuFaqEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
@@ -91,7 +91,7 @@ public class KefuController {
     @PreAuthorize("hasAuthority('kefu-faq_create')")
     @RequestMapping(value = "/faq/create", method = RequestMethod.POST)
     public Object createFaq(@RequestBody KefuFaqEntity record) {
-        record.setClientId(EsSecurityHandler.clientId());
+        record.setClientId(EsContextHolder.getContext().getClientId());
         kefuFaqService.create(record);
         return JsonResult.success(record);
     }
@@ -119,7 +119,7 @@ public class KefuController {
     @RequestMapping(value = "/faq/delete", method = RequestMethod.GET)
     public Object deleteFaq(@RequestParam(name = "id") Long id) throws Exception {
         KefuFaqEntity record = kefuFaqService.get(id);
-        if (record == null || !Objects.equals(EsSecurityHandler.clientId(), record.getClientId())) {
+        if (record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
             throw new EsRuntimeException(EsErrorConstants.DATA_NOT_FOUND);
         }
         kefuFaqService.delete(id);
@@ -139,7 +139,7 @@ public class KefuController {
         if (example == null) {
             example = new KefuMessageEntity();
         }
-        example.setClientId(EsSecurityHandler.clientId());
+        example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<KefuMessageEntity> list = kefuMessageService.findPage(example, page.getPageSize(), page.getPageNum());
         JsonResultPage<KefuMessageEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
@@ -182,7 +182,7 @@ public class KefuController {
 
             //保存文件信息
             IspFileEntity cf = new IspFileEntity();
-            cf.setClientId(EsSecurityHandler.clientId());
+            cf.setClientId(EsContextHolder.getContext().getClientId());
             cf.setExtension(FileUtil.getExtension(filename));
             cf.setName(file.getOriginalFilename());
             cf.setSize(file.getSize());
@@ -192,7 +192,7 @@ public class KefuController {
 
             record.setAttachment("kefu/" + filename);
         }
-        record.setClientId(EsSecurityHandler.clientId());
+        record.setClientId(EsContextHolder.getContext().getClientId());
         kefuMessageService.create(record);
         return JsonResult.success(record);
     }
@@ -220,7 +220,7 @@ public class KefuController {
     @RequestMapping(value = "/message/delete", method = RequestMethod.GET)
     public Object deleteMessage(@RequestParam(name = "id") Long id) throws Exception {
         KefuMessageEntity record = kefuMessageService.get(id);
-        if (record == null || !Objects.equals(EsSecurityHandler.clientId(), record.getClientId())) {
+        if (record == null || !Objects.equals(EsContextHolder.getContext().getClientId(), record.getClientId())) {
             throw new EsRuntimeException(EsErrorConstants.DATA_NOT_FOUND);
         }
         kefuMessageService.delete(id);
@@ -247,7 +247,7 @@ public class KefuController {
 
         //保存文件信息
         IspFileEntity cf = new IspFileEntity();
-        cf.setClientId(EsSecurityHandler.clientId());
+        cf.setClientId(EsContextHolder.getContext().getClientId());
         cf.setExtension(FileUtil.getExtension(filename));
         cf.setName(file.getOriginalFilename());
         cf.setSize(file.getSize());

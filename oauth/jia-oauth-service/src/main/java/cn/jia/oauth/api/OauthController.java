@@ -619,7 +619,7 @@ public class OauthController {
      */
     @RequestMapping(value = "/client/get", method = RequestMethod.GET)
     public Object find() {
-        OauthClientEntity client = clientService.get(EsSecurityHandler.clientId());
+        OauthClientEntity client = clientService.get(EsContextHolder.getContext().getClientId());
         return JsonResult.success(client);
     }
 
@@ -631,7 +631,7 @@ public class OauthController {
      */
     @RequestMapping(value = "/client/update", method = RequestMethod.POST)
     public Object updateClient(@RequestBody OauthClientEntity client) {
-        client.setClientId(EsSecurityHandler.clientId());
+        client.setClientId(EsContextHolder.getContext().getClientId());
         clientService.update(client);
         return JsonResult.success(client);
     }

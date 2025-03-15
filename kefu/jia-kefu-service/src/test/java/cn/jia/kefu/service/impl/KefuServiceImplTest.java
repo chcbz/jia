@@ -1,6 +1,7 @@
 package cn.jia.kefu.service.impl;
 
 import cn.jia.core.common.EsConstants;
+import cn.jia.core.redis.RedisService;
 import cn.jia.kefu.dao.KefuMsgLogDao;
 import cn.jia.kefu.dao.KefuMsgSubscribeDao;
 import cn.jia.kefu.dao.KefuMsgTypeDao;
@@ -22,8 +23,6 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.slf4j.Logger;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 
 import java.util.List;
 
@@ -43,7 +42,7 @@ class KefuServiceImplTest extends BaseMockTest {
     @Mock
     MpUserService mpUserService;
     @Mock
-    RedisTemplate<String, Object> redisTemplate;
+    RedisService redisService;
     @Mock
     Logger log;
     @InjectMocks
@@ -75,9 +74,7 @@ class KefuServiceImplTest extends BaseMockTest {
         MpUserEntity mpUserEntity = new MpUserEntity();
         mpUserEntity.setAppid("appid");
         when(mpUserService.findByJiacn(anyString())).thenReturn(mpUserEntity);
-        ValueOperations<String, Object> valueOperations = Mockito.mock(ValueOperations.class);
-        when(valueOperations.get(any())).thenReturn("");
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisService.get(any())).thenReturn("");
 
         when(kefuMsgLogDao.insert(any())).thenReturn(1);
         WxMpService wxMpService = Mockito.mock(WxMpService.class);
@@ -94,7 +91,7 @@ class KefuServiceImplTest extends BaseMockTest {
         boolean result = kefuServiceImpl.sendWxTemplate(kefuMsgTypeEntity, kefuMsgSubscribeEntity.getJiacn(), "attr");
         Assertions.assertTrue(result);
 
-        when(valueOperations.get(any())).thenReturn(null);
+        when(redisService.get(any())).thenReturn(null);
         MpTemplateEntity mpTemplateEntity = new MpTemplateEntity();
         mpTemplateEntity.setTemplateId("templateId");
         mpTemplateEntity.setAppid("appId");

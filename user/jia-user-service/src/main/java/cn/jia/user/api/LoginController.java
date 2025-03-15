@@ -1,7 +1,6 @@
 package cn.jia.user.api;
 
 import cn.jia.base.service.DictService;
-import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.errcode.ErrCodeHolder;
@@ -315,7 +314,7 @@ public class LoginController {
     @GetMapping(value = "/user/info")
     @ResponseBody
     public Object userInfo() {
-        LdapUser user = ldapUserService.findByUid(EsSecurityHandler.username());
+        LdapUser user = ldapUserService.findByUid(EsContextHolder.getContext().getUsername());
         if (user == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
@@ -332,7 +331,7 @@ public class LoginController {
     @PostMapping(value = "/user/info/update")
     @ResponseBody
     public Object updateUser(LdapUser user) {
-        LdapUser u = ldapUserService.findByUid(EsSecurityHandler.username());
+        LdapUser u = ldapUserService.findByUid(EsContextHolder.getContext().getUsername());
         if (u == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
@@ -352,7 +351,7 @@ public class LoginController {
     @GetMapping(value = "/user/password/change")
     @ResponseBody
     public Object changePassword(@RequestParam String oldPassword, @RequestParam String newPassword) {
-        LdapUser u = ldapUserService.findByUid(EsSecurityHandler.username());
+        LdapUser u = ldapUserService.findByUid(EsContextHolder.getContext().getUsername());
         if (u == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
@@ -375,7 +374,7 @@ public class LoginController {
     @PostMapping(value = "/user/avatar/update")
     @ResponseBody
     public Object updateAvatar(@RequestPart MultipartFile file) throws Exception {
-        LdapUser u = ldapUserService.findByUid(EsSecurityHandler.username());
+        LdapUser u = ldapUserService.findByUid(EsContextHolder.getContext().getUsername());
         if (u == null || StringUtil.isEmpty(u.getTelephoneNumber())) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }

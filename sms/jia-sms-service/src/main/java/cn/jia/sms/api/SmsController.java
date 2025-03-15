@@ -1,7 +1,7 @@
 package cn.jia.sms.api;
 
 import cn.jia.base.service.DictService;
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -92,7 +92,7 @@ public class SmsController {
 	@RequestMapping(value = "/gen", method = RequestMethod.GET)
 	public Object gen(@RequestParam String phone, @RequestParam Integer smsType, @RequestParam(value="templateId", required=false) String templateId) throws Exception{
 		//检查是否还有额度
-		SmsConfigEntity config = smsService.selectConfig(EsSecurityHandler.clientId());
+		SmsConfigEntity config = smsService.selectConfig(EsContextHolder.getContext().getClientId());
 		if(config == null || config.getRemain() <= 0) {
 			throw new EsRuntimeException(SmsErrorConstants.SMS_NOT_ENOUGH);
 		}
@@ -149,7 +149,7 @@ public class SmsController {
 	@ResponseBody
 	public Object sendSms(@RequestParam String mobile, @RequestParam String content, @RequestParam(required=false) String xh) throws Exception {
 		//检查是否还有额度
-		SmsConfigEntity config = smsService.selectConfig(EsSecurityHandler.clientId());
+		SmsConfigEntity config = smsService.selectConfig(EsContextHolder.getContext().getClientId());
 		if(config == null || config.getRemain() <= 0) {
 			throw new EsRuntimeException(SmsErrorConstants.SMS_NOT_ENOUGH);
 		}
@@ -195,7 +195,7 @@ public class SmsController {
 	@RequestMapping(value = "/send/list", method = RequestMethod.POST)
 	public Object listSend(@RequestBody JsonRequestPage<SmsSendVO> page, HttpServletRequest request) {
 		SmsSendVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsSendVO());
-		example.setClientId(EsSecurityHandler.clientId());
+		example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<SmsSendEntity> list = smsService.listSend(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<SmsSendEntity> result = new JsonResultPage<>(list.getList());
 		result.setPageNum(list.getPageNum());
@@ -214,7 +214,7 @@ public class SmsController {
 	@ResponseBody
 	public Object sendSmsBatch(@RequestParam String mobile, @RequestParam String content, @RequestParam(required=false) String xh) throws Exception {
 		//检查是否还有额度
-		SmsConfigEntity config = smsService.selectConfig(EsSecurityHandler.clientId());
+		SmsConfigEntity config = smsService.selectConfig(EsContextHolder.getContext().getClientId());
 		if(config == null || config.getRemain() < mobile.split(",").length) {
 			throw new EsRuntimeException(SmsErrorConstants.SMS_NOT_ENOUGH);
 		}
@@ -265,7 +265,7 @@ public class SmsController {
 	@ResponseBody
 	public Object sendSmsBatchIdentity(@RequestParam String mobile, @RequestParam String content, @RequestParam(required=false) String xh) throws Exception {
 		//检查是否还有额度
-		SmsConfigEntity config = smsService.selectConfig(EsSecurityHandler.clientId());
+		SmsConfigEntity config = smsService.selectConfig(EsContextHolder.getContext().getClientId());
 		if(config == null || config.getRemain() < mobile.split(",").length) {
 			throw new EsRuntimeException(SmsErrorConstants.SMS_NOT_ENOUGH);
 		}
@@ -385,7 +385,7 @@ public class SmsController {
 	 */
 	@RequestMapping(value = "/config/get", method = RequestMethod.GET)
 	public Object findConfig() {
-		SmsConfigEntity config = smsService.selectConfig(EsSecurityHandler.clientId());
+		SmsConfigEntity config = smsService.selectConfig(EsContextHolder.getContext().getClientId());
 		return JsonResult.success(config);
 	}
 	
@@ -396,7 +396,7 @@ public class SmsController {
 	 */
 	@RequestMapping(value = "/config/update", method = RequestMethod.POST)
 	public Object updateConfig(@RequestBody SmsConfigEntity config) {
-		config.setClientId(EsSecurityHandler.clientId());
+		config.setClientId(EsContextHolder.getContext().getClientId());
 		smsService.updateConfig(config);
 		return JsonResult.success(config);
 	}
@@ -457,7 +457,7 @@ public class SmsController {
 	@RequestMapping(value = "/template/list", method = RequestMethod.POST)
 	public Object listTemplate(@RequestBody JsonRequestPage<SmsTemplateVO> page, HttpServletRequest request) {
 		SmsTemplateVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsTemplateVO());
-		example.setClientId(EsSecurityHandler.clientId());
+		example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<SmsTemplateEntity> list = smsService.listTemplate(example, page.getPageNum(), page.getPageSize());
 		JsonResultPage<SmsTemplateEntity> result = new JsonResultPage<>(list.getList());
 		result.setPageNum(list.getPageNum());

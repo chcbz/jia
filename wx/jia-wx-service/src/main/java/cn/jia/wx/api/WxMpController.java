@@ -2,7 +2,7 @@ package cn.jia.wx.api;
 
 import cn.jia.base.service.DictService;
 import cn.jia.core.common.EsHandler;
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -524,7 +524,7 @@ public class WxMpController {
     public Object userSync(HttpServletRequest request) throws Exception {
         WxMpService wxMpService = mpInfoService.findWxMpService(request);
         String wxAppId = wxMpService.getWxMpConfigStorage().getAppId();
-        String clientId = EsSecurityHandler.clientId();
+        String clientId = EsContextHolder.getContext().getClientId();
         //先清空所有用户的公众号订阅情况
         MpUserEntity example = new MpUserEntity();
         example.setClientId(clientId);
@@ -831,7 +831,7 @@ public class WxMpController {
      */
     @RequestMapping(value = "/info/create", method = RequestMethod.POST)
     public Object createMpInfo(@RequestBody MpInfoEntity info) {
-        info.setClientId(EsSecurityHandler.clientId());
+        info.setClientId(EsContextHolder.getContext().getClientId());
         mpInfoService.create(info);
         return JsonResult.success(info);
     }
@@ -870,7 +870,7 @@ public class WxMpController {
     @RequestMapping(value = "/info/list", method = RequestMethod.POST)
     public Object listMpInfo(@RequestBody JsonRequestPage<MpInfoVO> page, HttpServletRequest request) {
         MpInfoVO example = Optional.ofNullable(page.getSearch()).orElse(new MpInfoVO());
-        example.setClientId(EsSecurityHandler.clientId());
+        example.setClientId(EsContextHolder.getContext().getClientId());
         PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageSize(), page.getPageNum());
         JsonResultPage<MpInfoEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());

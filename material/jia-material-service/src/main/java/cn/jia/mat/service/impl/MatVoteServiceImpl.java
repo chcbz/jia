@@ -1,6 +1,6 @@
 package cn.jia.mat.service.impl;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.DateUtil;
 import cn.jia.mat.common.MatConstants;
@@ -46,7 +46,7 @@ public class MatVoteServiceImpl implements MatVoteService {
 		List<MatVoteQuestionVO> questions = vote.getQuestions();
 		vote.setId(null);
 		vote.setStartTime(now);
-		vote.setClientId(EsSecurityHandler.clientId());
+		vote.setClientId(EsContextHolder.getContext().getClientId());
 		matVoteDao.insert(vote);
 		for(MatVoteQuestionVO question : questions) {
 			List<MatVoteItemEntity> items = question.getItems();
@@ -101,7 +101,7 @@ public class MatVoteServiceImpl implements MatVoteService {
 		if(example == null) {
 			example = new MatVoteReqVO();
 		}
-		example.setClientId(EsSecurityHandler.clientId());
+		example.setClientId(EsContextHolder.getContext().getClientId());
 		PageHelper.startPage(pageNo, pageSize);
 		return PageInfo.of(matVoteDao.selectByEntity(example));
 	}
@@ -164,7 +164,7 @@ public class MatVoteServiceImpl implements MatVoteService {
 				.replaceAll("、[ 　]+", "、");
 		long now = DateUtil.nowTime();
 		MatVoteEntity vote = new MatVoteEntity();
-		vote.setClientId(EsSecurityHandler.clientId());
+		vote.setClientId(EsContextHolder.getContext().getClientId());
 		vote.setStartTime(now);
 		vote.setCloseTime(now + 365 * 24 * 60 * 60);
 		vote.setName(voteName);

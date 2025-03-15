@@ -1,7 +1,7 @@
 package cn.jia.mat.api;
 
 import cn.jia.core.annotation.SysPermission;
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -101,7 +101,7 @@ public class PvLogController {
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<MatPvLogEntity> page) {
         MatPvLogEntity example = page.getSearch() == null ? new MatPvLogEntity() : page.getSearch();
-        example.setClientId(EsSecurityHandler.clientId());
+        example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<MatPvLogEntity> pageViewLogList = pvLogService.findPage(example, page.getPageSize(), page.getPageNum());
 		JsonResultPage<MatPvLogEntity> result = new JsonResultPage<>(pageViewLogList.getList());
 		result.setPageNum(pageViewLogList.getPageNum());

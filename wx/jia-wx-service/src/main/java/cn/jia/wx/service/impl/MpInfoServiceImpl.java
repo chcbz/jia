@@ -19,11 +19,10 @@ import java.util.Map;
 
 @Service
 public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> implements MpInfoService {
-	private Map<String, WxMpService> wxMpServiceMap;
+	private final Map<String, WxMpService> wxMpServiceMap = new HashMap<>(16);
 	
 //	@PostConstruct
 	public void init() {
-		wxMpServiceMap = new HashMap<>(16);
 		List<MpInfoEntity> mpInfoList = baseDao.selectAll();
 		for(MpInfoEntity mp : mpInfoList) {
 			WxMpService wxMpService = new WxMpServiceImpl();

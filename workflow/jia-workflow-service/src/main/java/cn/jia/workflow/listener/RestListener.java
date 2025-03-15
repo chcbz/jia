@@ -1,6 +1,6 @@
 package cn.jia.workflow.listener;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.*;
@@ -48,7 +48,7 @@ public class RestListener implements ExecutionListener, TaskListener {
 		String rqurl = fixedValueToString(url, delegateTask);
 		String random = DataUtil.getRandom(false, 16);
 		rqurl = HttpUtil.addUrlValue(rqurl, "nonce", random);
-		String signature = Md5Util.str2Base32Md5(Md5Util.str2Base32Md5(random)+EsSecurityHandler.clientId());
+		String signature = Md5Util.str2Base32Md5(Md5Util.str2Base32Md5(random)+EsContextHolder.getContext().getClientId());
 		rqurl = HttpUtil.addUrlValue(rqurl, "signature", signature);
 		String businessKey = String.valueOf(taskService.getVariable(delegateTask.getId(), "businessKey"));
 		rqurl = HttpUtil.addUrlValue(rqurl, "businessKey", businessKey);
@@ -92,7 +92,7 @@ public class RestListener implements ExecutionListener, TaskListener {
 		String rqurl = fixedValueToString(url, execution);
 		String random = DataUtil.getRandom(false, 16);
 		rqurl = HttpUtil.addUrlValue(rqurl, "nonce", random);
-		String signature = Md5Util.str2Base32Md5(Md5Util.str2Base32Md5(random)+EsSecurityHandler.clientId());
+		String signature = Md5Util.str2Base32Md5(Md5Util.str2Base32Md5(random)+ EsContextHolder.getContext().getClientId());
 		rqurl = HttpUtil.addUrlValue(rqurl, "signature", signature);
 		String businessKey = execution.getBusinessKey();
 		rqurl = HttpUtil.addUrlValue(rqurl, "businessKey", businessKey);
