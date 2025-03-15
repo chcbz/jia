@@ -1,6 +1,6 @@
 package cn.jia.wx.api;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -734,7 +734,7 @@ public class WxPayController {
 	@RequestMapping(value = "/info/list", method = RequestMethod.POST)
 	public Object listPayInfo(@RequestBody JsonRequestPage<PayInfoEntity> page) {
 		PayInfoEntity example = Optional.ofNullable(page.getSearch()).orElse(new PayInfoEntity());
-		example.setClientId(EsSecurityHandler.clientId());
+		example.setClientId(EsContextHolder.getContext().getClientId());
 		PageInfo<PayInfoEntity> list = payInfoService.findPage(example, page.getPageSize(), page.getPageNum());
 		JsonResultPage<PayInfoEntity> result = new JsonResultPage<>(list.getList());
 		result.setPageNum(list.getPageNum());

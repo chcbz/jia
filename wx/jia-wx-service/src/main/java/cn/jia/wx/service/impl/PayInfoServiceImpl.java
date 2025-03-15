@@ -18,15 +18,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-
-
 @Service
 public class PayInfoServiceImpl extends BaseServiceImpl<PayInfoDao, PayInfoEntity> implements PayInfoService {
-    private Map<String, WxPayService> wxPayServiceMap;
+    private final Map<String, WxPayService> wxPayServiceMap = new HashMap<>(16);
 
 //    @PostConstruct
     public void init() {
-        wxPayServiceMap = new HashMap<>(16);
         List<PayInfoEntity> payInfoList = baseDao.selectAll();
         for(PayInfoEntity pay : payInfoList) {
             WxPayService wxPayService = new WxPayServiceImpl();

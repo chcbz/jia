@@ -1,6 +1,5 @@
 package cn.jia.isp.service.impl;
 
-import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.isp.dao.CmsColumnDao;
 import cn.jia.isp.dao.CmsConfigDao;

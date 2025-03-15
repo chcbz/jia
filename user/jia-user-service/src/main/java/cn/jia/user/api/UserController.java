@@ -1,7 +1,6 @@
 package cn.jia.user.api;
 
 import cn.jia.core.common.EsConstants;
-import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -430,7 +429,7 @@ public class UserController {
     @PreAuthorize("hasAuthority('user-position_change')")
     @RequestMapping(value = "/position/change", method = RequestMethod.GET)
     public Object changePosition(@RequestParam(name = "position") Long position) {
-        UserEntity user = userService.findByUsername(EsSecurityHandler.username());
+        UserEntity user = userService.findByUsername(EsContextHolder.getContext().getUsername());
         if (user == null) {
             throw new EsRuntimeException(UserErrorConstants.DATA_NOT_FOUND);
         }
@@ -492,7 +491,7 @@ public class UserController {
 
         //保存文件信息
         IspFileEntity cf = new IspFileEntity();
-        cf.setClientId(EsSecurityHandler.clientId());
+        cf.setClientId(EsContextHolder.getContext().getClientId());
         cf.setExtension(FileUtil.getExtension(filename));
         cf.setName(file.getOriginalFilename());
         cf.setSize(file.getSize());

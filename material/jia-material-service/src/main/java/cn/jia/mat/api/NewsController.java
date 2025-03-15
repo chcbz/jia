@@ -1,7 +1,7 @@
 package cn.jia.mat.api;
 
 import cn.jia.base.service.DictService;
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -248,7 +248,7 @@ public class NewsController {
 
 			String jiaUrl =  dictService.getValue(MatConstants.DICT_TYPE_JIA_CONFIG, MatConstants.JIA_CONFIG_SERVER_URL);
 			String mobile = user.getPhone();
-			SmsConfigEntity config = smsService.selectConfig(EsSecurityHandler.clientId());
+			SmsConfigEntity config = smsService.selectConfig(EsContextHolder.getContext().getClientId());
 			String content = "【" + config.getShortName() + "】" + news.getTitle() + " " + jiaUrl + "/file/res/"+ news.getBodyurl();
 
 			HttpHeaders headers = new HttpHeaders();
@@ -267,7 +267,7 @@ public class NewsController {
 			if("1".equals(response.getBody().split(",")[0])){
 				for(String m : mobile.split(",")) {
 					SmsSendEntity smsSend = new SmsSendEntity();
-					smsSend.setClientId(EsSecurityHandler.clientId());
+					smsSend.setClientId(EsContextHolder.getContext().getClientId());
 					smsSend.setContent(content);
 					smsSend.setMobile(m);
 					smsSend.setMsgid(response.getBody().split(",")[1]);

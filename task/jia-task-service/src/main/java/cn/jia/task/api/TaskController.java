@@ -1,6 +1,5 @@
 package cn.jia.task.api;
 
-import cn.jia.core.common.EsSecurityHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -48,7 +47,7 @@ public class TaskController {
     /*@PreAuthorize("hasAuthority('task-create')")*/
     @RequestMapping(value = "/create", method = RequestMethod.POST)
     public Object create(@RequestBody TaskPlanEntity task) {
-        task.setClientId(EsSecurityHandler.clientId());
+        task.setClientId(EsContextHolder.getContext().getClientId());
         taskService.create(task);
         return JsonResult.success();
     }

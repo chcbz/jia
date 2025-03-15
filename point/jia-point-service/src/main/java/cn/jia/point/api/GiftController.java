@@ -1,6 +1,6 @@
 package cn.jia.point.api;
 
-import cn.jia.core.common.EsSecurityHandler;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -97,7 +97,7 @@ public class GiftController {
 //	@PreAuthorize("hasAuthority('gift-usage_add')")
 	@RequestMapping(value = "/usage/add", method = RequestMethod.POST)
 	public Object usageAdd(@RequestBody PointGiftUsageEntity giftUsage, HttpServletRequest request) throws Exception {
-		String clientId = EsSecurityHandler.clientId();
+		String clientId = EsContextHolder.getContext().getClientId();
 		giftUsage.setClientId(clientId);
 		giftService.usage(giftUsage);
 		// 通知管理员
