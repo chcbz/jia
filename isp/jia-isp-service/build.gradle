@@ -2,6 +2,7 @@ dependencies {
     api project(':isp:jia-isp-api')
     api project(':oauth:jia-oauth-api')
     api project(':common:jia-common-service')
+    implementation(libs.spring.ldap)
     implementation(libs.ganymed.ssh2)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok

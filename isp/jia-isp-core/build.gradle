@@ -1,9 +1,9 @@
 dependencies {
     api project(':common:jia-common-core')
-    api(libs.ldap.core)
-    api(libs.jackson.annotations)
-    api(libs.swagger.annotations)
-    api(libs.mybatis.plus.annotation)
+    compileOnly(libs.spring.ldap)
+    compileOnly(libs.jackson.annotations)
+    compileOnly(libs.swagger.annotations)
+    compileOnly(libs.mybatis.plus.annotation)
 }
 
 version = '1.1.1-SNAPSHOT'

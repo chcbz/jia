@@ -8,6 +8,7 @@ dependencies {
     api(libs.spring.jdbc)
     api(libs.spring.aspects)
     api(libs.spring.boot.autoconfigure)
+    implementation(libs.mybatis.plus.annotation)
     compileOnly(libs.spring.redis)
     compileOnly(libs.spring.ldap)
     compileOnly(libs.spring.elasticsearch)

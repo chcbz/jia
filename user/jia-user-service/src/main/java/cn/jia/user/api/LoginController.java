@@ -33,8 +33,6 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.ldap.core.LdapTemplate;
-import org.springframework.ldap.core.support.LdapContextSource;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.LdapShaPasswordEncoder;
 import org.springframework.security.web.WebAttributes;
@@ -56,10 +54,8 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.ModelAndView;
 
-import javax.naming.InvalidNameException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.Arrays;
@@ -81,8 +77,6 @@ public class LoginController {
     private SmsService smsService;
     @Autowired(required = false)
     private DictService dictService;
-    @Autowired(required = false)
-    private LdapTemplate ldapTemplate;
 
     @Autowired
     private RestTemplate restTemplate;
@@ -247,14 +241,7 @@ public class LoginController {
             String clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
             LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
             if (org != null) {
-                LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
-                try {
-                    org.getMember().add(contextSource.getBaseLdapName().addAll(user.getDn()));
-                } catch (InvalidNameException e) {
-                    view.addObject("error", e.getMessage());
-                    return view;
-                }
-                ldapUserGroupService.modify(org);
+                ldapUserGroupService.addUser(org, user.getDn());
             }
         }
         view.addObject("success", true);
