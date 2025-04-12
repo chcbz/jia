@@ -2,6 +2,8 @@ package cn.jia.isp.service;
 
 import cn.jia.isp.entity.LdapUserGroup;
 import cn.jia.isp.entity.LdapUserGroupDTO;
+
+import javax.naming.Name;
 import java.util.List;
 
 /**
@@ -55,4 +57,13 @@ public interface LdapUserGroupService {
      * @return 包含所有LDAP用户组的列表，以DTO形式返回
      */
     List<LdapUserGroupDTO> findAll();
+
+    /**
+     * 添加用户
+     *
+     * @param group 用户组
+     * @param userDn 用户DN
+     * @return 用户组
+     */
+    LdapUserGroup addUser(LdapUserGroup group, Name userDn);
 }

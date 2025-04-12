@@ -7,8 +7,11 @@ import cn.jia.isp.service.LdapUserGroupService;
 import cn.jia.isp.vomapper.LdapUserGroupMapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import lombok.SneakyThrows;
 import org.springframework.ldap.core.LdapTemplate;
+import org.springframework.ldap.core.support.LdapContextSource;
 
+import javax.naming.Name;
 import java.util.List;
 
 import static org.springframework.ldap.query.LdapQueryBuilder.query;
@@ -53,4 +56,11 @@ public class LdapUserGroupServiceImpl implements LdapUserGroupService {
 		ldapTemplate.delete(group);
 	}
 
+	@Override
+	@SneakyThrows
+    public LdapUserGroup addUser(LdapUserGroup group, Name userDn) {
+		LdapContextSource contextSource = (LdapContextSource) ldapTemplate.getContextSource();
+		group.getMember().add(contextSource.getBaseLdapName().addAll(userDn));
+		return modify(group);
+	}
 }

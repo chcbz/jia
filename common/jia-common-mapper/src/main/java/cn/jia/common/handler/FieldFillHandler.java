@@ -14,7 +14,7 @@ import org.apache.ibatis.reflection.MetaObject;
 public class FieldFillHandler implements MetaObjectHandler {
     @Override
     public void insertFill(MetaObject metaObject) {
-        log.info("start insert fill ....");
+        log.debug("fill insert field for {} ....", metaObject.getOriginalObject().getClass());
         long time = DateUtil.nowTime();
         this.strictInsertFill(metaObject, "createTime", Long.class, time);
         this.strictInsertFill(metaObject, "updateTime", Long.class, time);
@@ -22,7 +22,7 @@ public class FieldFillHandler implements MetaObjectHandler {
 
     @Override
     public void updateFill(MetaObject metaObject) {
-        log.info("start update fill ....");
+        log.debug("fill update field for {} ....", metaObject.getOriginalObject().getClass());
         this.strictUpdateFill(metaObject, "updateTime", Long.class, DateUtil.nowTime());
     }
 }

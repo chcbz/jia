@@ -1,8 +1,6 @@
 dependencies {
     api project(':isp:jia-isp-service')
     api project(':common:jia-common-mapper')
-    implementation libs.jackson.annotations
-    implementation libs.ldap.core
     testImplementation project(':common:jia-common-test')
     testImplementation libs.mybatis.plus.generator
     testImplementation libs.spring.boot.starter.freemarker

@@ -142,7 +142,6 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("testcontainers-junit", "org.testcontainers:junit-jupiter:1.19.7");
                             catalog.library("testable-all", "com.alibaba.testable:testable-all:0.7.9");
                             catalog.library("testable-processor", "com.alibaba.testable:testable-processor:0.7.9");
-                            catalog.library("ldap-core", "org.springframework.ldap:spring-ldap-core:3.1.0");
                             catalog.library("weixin-java-pay", "com.github.binarywang", "weixin-java-pay").versionRef("weixin-java");
                             catalog.library("weixin-java-mp", "com.github.binarywang", "weixin-java-mp").versionRef("weixin-java");
                             catalog.library("mapstruct.core", "org.mapstruct", "mapstruct").versionRef("mapstruct");

@@ -41,7 +41,7 @@ public class DnsServiceImpl implements DnsService {
 	 * @param dnsRecordDTO 动态域名记录信息
 	 */
 	@Override
-	public void updateDnsRecord(DnsRecordDTO dnsRecordDTO){
+	public void updateDnsRecord(DnsRecordDTO dnsRecordDTO) {
 		//判断域名是否存在
 		IspDnsRecordEntity dnsRecord = dnsRecordDao.selectByDomain(dnsRecordDTO.getDomain());
 		if(dnsRecord == null){

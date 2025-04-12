@@ -1,6 +1,5 @@
 package cn.jia.isp.service;
 
-import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.isp.entity.IspDnsRecordEntity;
 import cn.jia.isp.entity.DnsRecordDTO;
 import cn.jia.isp.entity.IspDnsZoneEntity;
@@ -23,9 +22,8 @@ public interface DnsService {
      * 更新动态域名记录信息
      *
      * @param dnsRecordDTO 域名记录DTO，包含需要更新的域名信息
-     * @throws EsRuntimeException 当更新操作失败时抛出运行时异常
      */
-    void updateDnsRecord(DnsRecordDTO dnsRecordDTO) throws EsRuntimeException;
+    void updateDnsRecord(DnsRecordDTO dnsRecordDTO);
 
     /**
      * 域名记录列表
