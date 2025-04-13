@@ -33,10 +33,10 @@ public class HttpRequestLogInterceptor implements HandlerInterceptor {
             map.put(handler.getClass().getName(), beginTime);
             return map;
         }));
-        log.info("URI: {}  参数: {}  开始计时: {}",
+        log.info("URI: {}  开始计时: {}  参数: {}",
                 request.getRequestURI(),
-                requestParams(request),
-                TIME_FORMATTER.format(Instant.ofEpochMilli(beginTime)));
+                TIME_FORMATTER.format(Instant.ofEpochMilli(beginTime)),
+                requestParams(request));
         return true;
     }
 
