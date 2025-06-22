@@ -5,6 +5,8 @@ import cn.jia.core.util.ThreeDesUtil;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 
+import java.util.Optional;
+
 public class EsContextHolder {
     private static final ThreadLocal<EsContext> CONTEXT = new ThreadLocal<>();
 
@@ -18,7 +20,7 @@ public class EsContextHolder {
     }
 
     public static EsContext getContext(HttpServletRequest request) {
-        for (Cookie cookie : request.getCookies()) {
+        for (Cookie cookie : Optional.ofNullable(request.getCookies()).orElse(new Cookie[0])) {
             if ("CTX".equals(cookie.getName())) {
                 EsContext esContext = JsonUtil.fromJson(ThreeDesUtil.decrypt3Des(cookie.getValue()), EsContext.class);
                 CONTEXT.set(esContext);

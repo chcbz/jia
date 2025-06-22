@@ -12,6 +12,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.version("spring", "6.1.5");
                             catalog.version("spring-boot", "3.2.4");
                             catalog.version("spring-cloud", "Edgware.SR3");
+                            catalog.version("spring-ai", "1.0.0");
                             catalog.version("spring-security", "6.2.3");
                             catalog.version("spring-security-oauth2", "1.2.3");
                             catalog.version("weixin-java", "4.5.6.B");
@@ -82,6 +83,13 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-cloud-starter-zuul", "org.springframework.cloud", "spring-cloud-starter-zuul").versionRef("spring-cloud");
                             catalog.library("spring-cloud-starter-security", "org.springframework.cloud", "spring-cloud-starter-security").versionRef("spring-cloud");
                             catalog.library("spring-cloud-starter-oauth2", "org.springframework.cloud", "spring-cloud-starter-oauth2").versionRef("spring-cloud");
+                            catalog.library("spring-ai-starter-mcp-client", "org.springframework.ai", "spring-ai-starter-mcp-client").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-model-zhipuai", "org.springframework.ai", "spring-ai-starter-model-zhipuai").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-model-deepseek", "org.springframework.ai", "spring-ai-starter-model-deepseek").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-model-ollama", "org.springframework.ai", "spring-ai-starter-model-ollama").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-vector-store-elasticsearch", "org.springframework.ai", "spring-ai-starter-vector-store-elasticsearch").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-vector-store-redis", "org.springframework.ai", "spring-ai-starter-vector-store-redis").versionRef("spring-ai");
+                            catalog.library("spring-ai-advisors-vector-store", "org.springframework.ai", "spring-ai-advisors-vector-store").versionRef("spring-ai");
                             catalog.library("spring-test-dbunit", "com.github.springtestdbunit:spring-test-dbunit:1.3.0");
                             catalog.library("jackson-core", "com.fasterxml.jackson.core:jackson-core:2.15.2");
                             catalog.library("jackson-annotations", "com.fasterxml.jackson.core:jackson-annotations:2.15.2");

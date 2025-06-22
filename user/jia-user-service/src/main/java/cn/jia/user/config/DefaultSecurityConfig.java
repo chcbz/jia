@@ -9,7 +9,6 @@ import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.PasswordUtil;
-import cn.jia.core.util.ThreeDesUtil;
 import cn.jia.sms.common.SmsConstants;
 import cn.jia.sms.entity.SmsCodeEntity;
 import cn.jia.sms.service.SmsService;

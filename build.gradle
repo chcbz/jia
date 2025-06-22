@@ -27,6 +27,14 @@ subprojects {
 //        options.compilerArgs << '-Xlint:deprecation'
     }
 
+    sourceSets {
+        main {
+            resources {
+                srcDirs = ['src/main/resources']
+            }
+        }
+    }
+
     test {
         useJUnitPlatform()
     }
