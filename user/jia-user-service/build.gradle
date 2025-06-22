@@ -9,6 +9,7 @@ dependencies {
     compileOnly(libs.spring.security.config)
     compileOnly(libs.spring.security.web)
     testImplementation project(':common:jia-common-test')
+    testImplementation(libs.spring.ldap)
     testImplementation(libs.jodd)
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok

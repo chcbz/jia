@@ -129,14 +129,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             rel.setRoleId(roleId);
             addList.add(rel);
         });
-        if (addList.size() > 0) {
+        if (!addList.isEmpty()) {
             userRoleRelDao.insertBatch(addList);
         }
 
         //查找需要取消的角色
         roleRelList.stream().filter(roleRel ->
                 !user.getRoleIds().contains(roleRel.getRoleId())).forEach(cancelList::add);
-        if (cancelList.size() > 0) {
+        if (!cancelList.isEmpty()) {
             userRoleRelDao.deleteBatchIds(cancelList);
         }
     }
@@ -243,7 +243,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             params.setOpenid(user.getOpenid());
 
             List<LdapUser> ldapUserResult = ldapUserService.search(params);
-            if (ldapUserResult.size() > 0) {
+            if (!ldapUserResult.isEmpty()) {
                 ldapUser = ldapUserResult.get(0);
                 ldapUser.setTelephoneNumber(StringUtil.isEmpty(user.getPhone()) ? ldapUser.getTelephoneNumber() : user.getPhone());
                 ldapUser.setEmail(StringUtil.isEmpty(user.getEmail()) ? ldapUser.getEmail() : user.getEmail());
@@ -379,7 +379,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     public void setDefaultOrg(Long userId) {
         UserEntity user = baseDao.selectById(userId);
         List<OrgRelEntity> orgRelList = userOrgRelDao.selectByUserId(userId);
-        if (orgRelList.size() > 0) {
+        if (!orgRelList.isEmpty()) {
             UserEntity upUser = new UserEntity();
             upUser.setId(user.getId());
             //如果用户还没有设置默认职位，则默认第一个职位

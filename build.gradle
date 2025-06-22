@@ -21,18 +21,10 @@ subprojects {
 
     sourceCompatibility = JavaVersion.VERSION_17
 
-    tasks.withType(JavaCompile) {
+    tasks.withType(JavaCompile).configureEach {
         options.encoding = 'UTF-8'
         options.compilerArgs << '-parameters'
 //        options.compilerArgs << '-Xlint:deprecation'
-    }
-
-    sourceSets {
-        main {
-            resources {
-                srcDirs = ['src/main/resources']
-            }
-        }
     }
 
     test {
