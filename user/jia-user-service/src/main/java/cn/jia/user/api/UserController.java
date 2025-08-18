@@ -36,7 +36,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
-import java.security.Principal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -324,18 +323,6 @@ public class UserController {
         userService.changeOrg(user);
         userService.setDefaultOrg(user.getId());
         return JsonResult.success();
-    }
-
-    /**
-     * 获取用户OAUTH2权限信息
-     *
-     * @param user 当前认证用户
-     * @return 返回用户权限信息
-     */
-    @PreAuthorize("hasAuthority('user-info')")
-    @RequestMapping(value = "/info", method = RequestMethod.GET)
-    public Principal info(Principal user) {
-        return user;
     }
 
     /**

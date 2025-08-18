@@ -1,9 +1,7 @@
 package cn.jia.oauth.api;
 
-import cn.jia.core.common.EsConstants;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
-import cn.jia.core.errcode.ErrCodeHolder;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.*;
@@ -15,18 +13,15 @@ import cn.jia.oauth.dto.WeiXinOauthTokenDTO;
 import cn.jia.oauth.dto.WeiXinOauthUserDTO;
 import cn.jia.oauth.entity.OauthClientEntity;
 import cn.jia.oauth.service.ClientService;
-import cn.jia.sms.common.SmsConstants;
-import cn.jia.sms.entity.SmsCodeEntity;
-import cn.jia.sms.service.SmsService;
+import com.nimbusds.oauth2.sdk.AuthorizationRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.LdapShaPasswordEncoder;
 import org.springframework.security.web.WebAttributes;
 import org.springframework.security.web.authentication.WebAuthenticationDetails;
@@ -46,15 +41,19 @@ import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.*;
 
+/**
+ * OAuth认证控制器
+ * 处理OAuth2认证流程，包括登录、第三方认证、客户端管理等功能
+ */
 @Slf4j
 @Controller
 @RequestMapping("/oauth")
 @SessionAttributes("authorizationRequest")
+@RequiredArgsConstructor
 public class OauthController {
     private final ClientService clientService;
     private final LdapUserService ldapUserService;
     private final LdapUserGroupService ldapUserGroupService;
-    private final SmsService smsService;
 
     private final RestTemplate restTemplate;
 
@@ -73,16 +72,14 @@ public class OauthController {
     @Value("${oauth.third-party.weibo.secret:}")
     private String weiBoSecret;
 
-    public OauthController(ClientService clientService, LdapUserService ldapUserService,
-                           LdapUserGroupService ldapUserGroupService, SmsService smsService,
-                           RestTemplate restTemplate) {
-        this.clientService = clientService;
-        this.ldapUserService = ldapUserService;
-        this.ldapUserGroupService = ldapUserGroupService;
-        this.smsService = smsService;
-        this.restTemplate = restTemplate;
-    }
-
+    /**
+     * 处理用户登录请求
+     * 根据不同的登录类型跳转到相应的认证页面
+     *
+     * @param request  HTTP请求对象
+     * @param response HTTP响应对象
+     * @return 登录视图或重定向URL
+     */
     @GetMapping("/login")
     public ModelAndView login(HttpServletRequest request, HttpServletResponse response) {
         ModelAndView view = new ModelAndView();
@@ -147,54 +144,16 @@ public class OauthController {
         return view;
     }
 
-    @PostMapping("/login")
-    public String login(@RequestParam String username, @RequestParam String password,
-                        @RequestParam String loginType,
-                        HttpServletRequest request, HttpServletResponse response) {
-        LdapUser ldapUser = new LdapUser();
-        try {
-            if ("phone".equals(loginType)) {
-                SmsCodeEntity smsCode = smsService.selectSmsCodeNoUsed(username, SmsConstants.SMS_CODE_TYPE_LOGIN);
-                if (smsCode == null || !password.equals(smsCode.getSmsCode())) {
-                    String errMessage = ErrCodeHolder.getMessage(EsConstants.DICT_TYPE_ERROR_CODE);
-                    request.getSession().setAttribute(WebAttributes.AUTHENTICATION_EXCEPTION, new UsernameNotFoundException(errMessage));
-                    return "redirect:/oauth/login";
-                }
-                ldapUser.setTelephoneNumber(username);
-
-                ldapUser = ldapUserService.findByExample(ldapUser);
-                password = new String(ldapUser.getUserPassword(), StandardCharsets.UTF_8);
-            } else {
-                ldapUser.setCn(username);
-                ldapUser = ldapUserService.findByExample(ldapUser);
-            }
-        } catch (Exception e) {
-            String errMessage = ErrCodeHolder.getMessage(EsConstants.DICT_TYPE_ERROR_CODE);
-            request.getSession().setAttribute(WebAttributes.AUTHENTICATION_EXCEPTION, new UsernameNotFoundException(errMessage));
-            return "redirect:/oauth/login";
-        }
-
-        UsernamePasswordAuthenticationToken token = new UsernamePasswordAuthenticationToken(ldapUser.getUid(), password);
-        try {
-            token.setDetails(new WebAuthenticationDetails(request));
-//            Authentication authenticatedUser = authenticationManager.authenticate(token);
-//
-//            SecurityContextHolder.getContext().setAuthentication(authenticatedUser);
-            request.getSession().setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, SecurityContextHolder.getContext());
-        } catch (AuthenticationException e) {
-            String errMessage = ErrCodeHolder.getMessage(EsConstants.DICT_TYPE_ERROR_CODE);
-            request.getSession().setAttribute(WebAttributes.AUTHENTICATION_EXCEPTION, new BadCredentialsException(errMessage));
-            return "redirect:/oauth/login";
-        }
-        RequestCache requestCache = new HttpSessionRequestCache();
-        SavedRequest savedRequest = requestCache.getRequest(request, response);
-        if (savedRequest != null) {
-            String redirectUrl = savedRequest.getRedirectUrl();
-            return "redirect:" + redirectUrl;
-        }
-        return "redirect:/oauth/login";
-    }
-
+    /**
+     * 处理微信公众号第三方登录回调
+     *
+     * @param code     授权码
+     * @param state    状态参数
+     * @param request  HTTP请求对象
+     * @param response HTTP响应对象
+     * @return 重定向到自动登录处理
+     * @throws Exception 处理过程中可能抛出的异常
+     */
     @GetMapping("/third-party/wxmp")
     public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state,
                                  HttpServletRequest request, HttpServletResponse response) throws Exception {
@@ -237,6 +196,16 @@ public class OauthController {
         return "redirect:/oauth/third-party/autologin";
     }
 
+    /**
+     * 处理微信第三方登录回调
+     *
+     * @param code     授权码
+     * @param state    状态参数
+     * @param request  HTTP请求对象
+     * @param response HTTP响应对象
+     * @return 重定向到自动登录处理
+     * @throws Exception 处理过程中可能抛出的异常
+     */
     @GetMapping("/third-party/weixin")
     public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state,
                                    HttpServletRequest request, HttpServletResponse response) throws Exception {
@@ -276,6 +245,15 @@ public class OauthController {
         return "redirect:/oauth/third-party/autologin";
     }
 
+    /**
+     * 处理微博第三方登录回调
+     *
+     * @param code     授权码
+     * @param request  HTTP请求对象
+     * @param response HTTP响应对象
+     * @return 重定向到自动登录处理
+     * @throws Exception 处理过程中可能抛出的异常
+     */
     @GetMapping("/third-party/weibo")
     public String thirdPartyWeiBo(@RequestParam String code, HttpServletRequest request, HttpServletResponse response) throws Exception {
         String weiBoBaseUrl = "https://api.weibo.com";
@@ -345,6 +323,14 @@ public class OauthController {
         return "redirect:/oauth/third-party/autologin";
     }
 
+    /**
+     * 第三方登录后自动注册和登录处理
+     *
+     * @param request  HTTP请求对象
+     * @param response HTTP响应对象
+     * @return 重定向到原始请求地址或登录页
+     * @throws Exception 处理过程中可能抛出的异常
+     */
     @GetMapping("/third-party/autologin")
     public String thirdPartyAutoLogin(HttpServletRequest request, HttpServletResponse response) throws Exception {
         LdapUser user = (LdapUser) request.getSession().getAttribute("user");
@@ -391,23 +377,31 @@ public class OauthController {
         return "redirect:/oauth/login";
     }
 
-//    @RequestMapping("/confirm_access")
-//    public ModelAndView getAccessConfirmation(Map<String, Object> model, HttpServletRequest request) {
-//        AuthorizationRequest authorizationRequest = (AuthorizationRequest) model.get("authorizationRequest");
-//        ModelAndView view = new ModelAndView();
-//        view.setViewName("login/authorize");
-//        view.addObject("clientId", authorizationRequest.getClientId());
-//        view.addObject("scopes", authorizationRequest.getScope());
-//        return view;
-//    }
+    /**
+     * 获取访问确认页面
+     *
+     * @param model   模型数据
+     * @param request HTTP请求对象
+     * @return 访问确认视图
+     */
+    @RequestMapping("/confirm_access")
+    public ModelAndView getAccessConfirmation(Map<String, Object> model, HttpServletRequest request) {
+        AuthorizationRequest authorizationRequest = (AuthorizationRequest) model.get("authorizationRequest");
+        ModelAndView view = new ModelAndView();
+        view.setViewName("oauth/authorize");
+        view.addObject("clientId", authorizationRequest.getClientID());
+        view.addObject("scopes", authorizationRequest.getScope());
+        return view;
+    }
 
     /**
      * 根据应用标识符获取客户ID
      *
-     * @param appcn
-     * @return
+     * @param appcn 应用标识符
+     * @return 客户端ID
      */
     @RequestMapping(value = "/clientid", method = RequestMethod.GET)
+    @ResponseBody
     public Object findClientId(@RequestParam(name = "appcn") String appcn) {
         OauthClientEntity client = clientService.findByAppcn(appcn);
         if (client == null) {
@@ -419,9 +413,10 @@ public class OauthController {
     /**
      * 获取客户端信息
      *
-     * @return
+     * @return 客户端信息
      */
     @RequestMapping(value = "/client/get", method = RequestMethod.GET)
+    @ResponseBody
     public Object find() {
         OauthClientEntity client = clientService.get(EsContextHolder.getContext().getClientId());
         return JsonResult.success(client);
@@ -430,10 +425,11 @@ public class OauthController {
     /**
      * 更新客户端信息
      *
-     * @param client
-     * @return
+     * @param client 客户端实体
+     * @return 更新后的客户端信息
      */
     @RequestMapping(value = "/client/update", method = RequestMethod.POST)
+    @ResponseBody
     public Object updateClient(@RequestBody OauthClientEntity client) {
         client.setClientId(EsContextHolder.getContext().getClientId());
         clientService.update(client);
@@ -447,7 +443,8 @@ public class OauthController {
      * @return 用户信息
      */
     @RequestMapping(value = "/user", method = RequestMethod.GET)
-    public Principal info(Principal user) {
-        return user;
+    @ResponseBody
+    public Object info(Principal user) {
+        return JsonResult.success(user);
     }
 }

@@ -92,7 +92,7 @@ public class DefaultSecurityConfig {
                     if (CollectionUtil.isNotNullOrEmpty(ignoreUris)) {
                         authorize.requestMatchers(ignoreUris.toArray(new String[0])).permitAll();
                     }
-                    authorize.requestMatchers("/login/**", "/favicon.ico").permitAll()
+                    authorize.requestMatchers("/login/**", "/oauth/**", "/favicon.ico").permitAll()
                             .anyRequest().authenticated();
                 })
                 .cors(Customizer.withDefaults())
@@ -112,7 +112,11 @@ public class DefaultSecurityConfig {
                         }, matcher -> MediaType.APPLICATION_JSON_VALUE.equalsIgnoreCase(matcher.getContentType()))
                 )
 //                .httpBasic(Customizer.withDefaults())
-                .formLogin(v -> v.loginPage("/login").successHandler(authenticationSuccessHandler()))
+                .formLogin(v -> v.loginPage("/login/index.html").loginProcessingUrl("/login")
+                        .successHandler(authenticationSuccessHandler()))
+                // Accept access tokens for User Info and/or Client Registration
+                .oauth2ResourceServer((resourceServer) -> resourceServer
+                        .jwt(Customizer.withDefaults()));
         ;
         return http.build();
     }
@@ -197,7 +201,10 @@ public class DefaultSecurityConfig {
         return new SavedRequestAwareAuthenticationSuccessHandler() {
             @Override
             public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
-                    Authentication authentication) throws ServletException, IOException {
+                                                Authentication authentication) throws ServletException, IOException {
+                if (request.getParameter("redirect_uri") != null) {
+                    super.setTargetUrlParameter("redirect_uri");
+                }
                 String username = authentication.getName();
                 UserEntity user;
                 if (username.startsWith("wx-")) { //微信登录
@@ -216,4 +223,39 @@ public class DefaultSecurityConfig {
             }
         };
     }
+
+//    /**
+//     * 默认发放令牌
+//     *
+//     * @return 令牌
+//     */
+//    @Bean
+//    public JWKSource<SecurityContext> jwkSource() {
+//        KeyPair keyPair = generateRsaKey();
+//        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
+//        RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
+//        RSAKey rsaKey = new RSAKey.Builder(publicKey)
+//                .privateKey(privateKey)
+//                .keyID(UUID.randomUUID().toString())
+//                .build();
+//        JWKSet jwkSet = new JWKSet(rsaKey);
+//        return new ImmutableJWKSet<>(jwkSet);
+//    }
+//
+//    private static KeyPair generateRsaKey() {
+//        KeyPair keyPair;
+//        try {
+//            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+//            keyPairGenerator.initialize(2048);
+//            keyPair = keyPairGenerator.generateKeyPair();
+//        } catch (Exception ex) {
+//            throw new IllegalStateException(ex);
+//        }
+//        return keyPair;
+//    }
+//
+//    @Bean
+//    public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource) {
+//        return OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
+//    }
 }

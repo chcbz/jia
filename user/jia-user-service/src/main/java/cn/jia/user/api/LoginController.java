@@ -24,10 +24,11 @@ import cn.jia.sms.entity.SmsSendEntity;
 import cn.jia.sms.entity.SmsTemplateEntity;
 import cn.jia.sms.service.SmsService;
 import cn.jia.user.common.UserErrorConstants;
+import cn.jia.user.service.OrgService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -54,8 +55,6 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.ModelAndView;
 
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.Arrays;
@@ -68,18 +67,17 @@ import java.util.Optional;
 @Slf4j
 @Controller
 @RequestMapping("/login")
+@RequiredArgsConstructor
 public class LoginController {
-    @Autowired(required = false)
-    private LdapUserService ldapUserService;
-    @Autowired(required = false)
-    private LdapUserGroupService ldapUserGroupService;
-    @Autowired(required = false)
-    private SmsService smsService;
-    @Autowired(required = false)
-    private DictService dictService;
+    private static final String SAVED_REQUEST = "SPRING_SECURITY_SAVED_REQUEST";
 
-    @Autowired
-    private RestTemplate restTemplate;
+    private final LdapUserService ldapUserService;
+    private final LdapUserGroupService ldapUserGroupService;
+    private final SmsService smsService;
+    private final DictService dictService;
+    private final OrgService orgService;
+
+    private final RestTemplate restTemplate;
 
     @Value("${oauth.default.clientId:jia_client}")
     private String defaultClientId;
@@ -94,20 +92,10 @@ public class LoginController {
     public ModelAndView login(HttpServletRequest request) {
         ModelAndView view = new ModelAndView();
         view.setViewName("login/login");
-        String redirectUri = request.getParameter("redirect_uri");
-        if (StringUtil.isNotBlank(redirectUri)) {
-            URI url;
-            try {
-                url = new URI(redirectUri);
-            } catch (URISyntaxException e) {
-                throw new EsRuntimeException(EsErrorConstants.INVALID_URL, "redirect_uri");
-            }
-            SavedRequest savedRequest = new DefaultSavedRequest.Builder().setScheme(url.getScheme())
-                    .setServerName(url.getHost()).setServerPort(url.getPort()).setQueryString(url.getQuery())
-                    .setRequestURI(url.getPath()).setRequestURL(redirectUri).build();
-            request.getSession().setAttribute("SPRING_SECURITY_SAVED_REQUEST", savedRequest);
-        }
-        String clientId = Optional.ofNullable(request.getParameter("client_id")).orElse(defaultClientId);
+        String clientId = Optional.ofNullable(request.getSession())
+                .map(session -> (DefaultSavedRequest)session.getAttribute(SAVED_REQUEST))
+                .map(savedRequest -> savedRequest.getParameterValues("client_id"))
+                .map(values -> values[0]).orElse(defaultClientId);
         LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
         view.addObject("org", org);
         view.addObject("orgLogo", Base64Util.encode(org.getLogo()));

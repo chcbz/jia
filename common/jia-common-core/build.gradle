@@ -41,6 +41,7 @@ dependencies {
     compileOnly libs.swagger.annotations
     compileOnly libs.mybatis.plus.annotation
     compileOnly libs.lombok
+    compileOnly libs.mvel
     testImplementation libs.junit.jupiter
     testImplementation libs.spring.webmvc
     testImplementation libs.aws.java.sdk.sns
@@ -81,6 +82,7 @@ dependencies {
     testImplementation libs.poi.ooxml.schemas
     testImplementation libs.ooxml.schemas
     testImplementation libs.mybatis.core
+    testImplementation libs.mvel
     testImplementation libs.lombok
 }
 version = '1.1.1-SNAPSHOT'

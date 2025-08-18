@@ -6,6 +6,7 @@ import cn.jia.core.util.JsonUtil;
 import cn.jia.oauth.entity.OauthClientEntity;
 import cn.jia.oauth.service.ClientService;
 import cn.jia.oauth.vomapper.RegisteredClientMapper;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,11 +17,14 @@ import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configurers.OAuth2AuthorizationServerConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
@@ -57,15 +61,13 @@ public class AuthorizationServerConfig {
                             out.print(JsonUtil.toJson(result));
                         }, matcher -> MediaType.APPLICATION_JSON_VALUE.equalsIgnoreCase(matcher.getContentType()))
                 )
-//                .exceptionHandling((configurer) ->
-//                        configurer.defaultAuthenticationEntryPointFor(
-//                                new LoginUrlAuthenticationEntryPoint("/oauth/login"),
-//                                new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
-//                        )
-//                )
-                // Accept access tokens for User Info and/or Client Registration
-                .oauth2ResourceServer((resourceServer) -> resourceServer
-                        .jwt(Customizer.withDefaults()));
+                .exceptionHandling((configurer) ->
+                        configurer.defaultAuthenticationEntryPointFor(
+                                new CustomAuthenticationEntryPoint("/login/index.html"),
+                                new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
+                        )
+                )
+                ;
 
         return http.build();
     }
@@ -92,41 +94,31 @@ public class AuthorizationServerConfig {
         };
     }
 
-//    /**
-//     * 默认发放令牌
-//     *
-//     * @return 令牌
-//     */
-//    @Bean
-//    public JWKSource<SecurityContext> jwkSource() {
-//        KeyPair keyPair = generateRsaKey();
-//        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
-//        RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
-//        RSAKey rsaKey = new RSAKey.Builder(publicKey)
-//                .privateKey(privateKey)
-//                .keyID(UUID.randomUUID().toString())
-//                .build();
-//        JWKSet jwkSet = new JWKSet(rsaKey);
-//        return new ImmutableJWKSet<>(jwkSet);
-//    }
+    static class CustomAuthenticationEntryPoint extends LoginUrlAuthenticationEntryPoint {
+        public CustomAuthenticationEntryPoint(String loginFormUrl) {
+            super(loginFormUrl);
+        }
+
+        @Override
+        protected String buildRedirectUrlToLoginPage(
+                HttpServletRequest request,
+                HttpServletResponse response,
+                AuthenticationException authException) {
+            return super.buildRedirectUrlToLoginPage(request, response, authException);
+//            // 构建基础登录URL
+//            String redirectUrl = super.buildRedirectUrlToLoginPage(
+//                    request, response, authException);
 //
-//    private static KeyPair generateRsaKey() {
-//        KeyPair keyPair;
-//        try {
-//            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
-//            keyPairGenerator.initialize(2048);
-//            keyPair = keyPairGenerator.generateKeyPair();
-//        } catch (Exception ex) {
-//            throw new IllegalStateException(ex);
-//        }
-//        return keyPair;
-//    }
+//            // 保留所有原始查询参数
+//            String queryString = request.getQueryString();
+//            if (queryString != null && !queryString.isEmpty()) {
+//                redirectUrl += "?" + queryString;
+//            }
 //
-//    @Bean
-//    public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource) {
-//        return OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
-//    }
-//
+//            return redirectUrl;
+        }
+    }
+
 //    @Bean
 //    public AuthorizationServerSettings authorizationServerSettings() {
 //        return AuthorizationServerSettings.builder().build();

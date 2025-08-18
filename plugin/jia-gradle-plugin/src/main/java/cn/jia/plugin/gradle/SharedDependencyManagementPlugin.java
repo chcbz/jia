@@ -125,6 +125,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("easypoi-base", "cn.afterturn:easypoi-base:3.0.3");
                             catalog.library("easypoi-annotation", "cn.afterturn:easypoi-annotation:3.0.3");
                             catalog.library("html2image", "com.github.xuwei-k:html2image:0.1.0");
+                            catalog.library("mvel", "org.mvel:mvel2:2.5.2.Final");
                             // 图片压缩
                             catalog.library("thumbnailator", "net.coobird:thumbnailator:0.4.8");
                             catalog.library("ganymed-ssh2", "ch.ethz.ganymed:ganymed-ssh2:262");

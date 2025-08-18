@@ -25,6 +25,7 @@
                     <li>
                         <form name="login_form_password" class="s_form" method="post" action="#" th:action="@{/login}" onkeydown="if(event.keyCode=='13') return login();">
                             <input type="hidden" name="loginType" value="password" />
+                            <input type="hidden" name="redirect_uri" th:value="${param.redirect_uri}" />
                             <table>
                                 <tr>
                                     <td class="s_form_title">
@@ -46,6 +47,7 @@
                         </form>
                         <form style="display:none;" name="login_form_phone" class="s_form" method="post" action="#" th:action="@{/login}" onkeydown="if(event.keyCode=='13') return login();">
                             <input type="hidden" name="loginType" value="phone" />
+                            <input type="hidden" name="redirect_uri" th:value="${param.redirect_uri}" />
                             <table>
                                 <tr>
                                     <td class="s_form_title">
