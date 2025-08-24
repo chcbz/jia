@@ -1,79 +1,119 @@
+import { useApiStore } from '@/stores/api'
+
 export default [
+  {
+    path: '/oauth2/callback',
+    name: 'OAuthCallback',
+    component: {
+      async beforeRouteEnter(to, from, next) {
+        try {
+          const code = to.query.code
+          if (!code) throw new Error('No authorization code provided')
+          const apiStore = useApiStore()
+          await apiStore.exchangeCodeForToken(code)
+          await apiStore.getUserInfo()
+          next(to.query.state || '/')
+        } catch (error) {
+          console.error('OAuth callback error:', error)
+          next('/')
+        }
+      },
+      render: () => null
+    }
+  },
   {
     path: '/',
     name: 'TaskIndex',
-    component: resolve => require(['@/components/TaskIndex'], resolve),
+    component: () => import('@/components/TaskIndex'),
     meta: {
-      title: 'app.title'
+      title: 'app.title',
+      showInMenu: true
     }
   },
   {
     path: '/list',
     name: 'TaskList',
-    component: resolve => require(['@/components/TaskList'], resolve),
+    component: () => import('@/components/TaskList'),
     meta: {
-      title: 'app.task_list'
+      title: 'app.task_list',
+      showInMenu: false
     }
   },
   {
     path: '/history',
     name: 'TaskHistory',
-    component: resolve => require(['@/components/TaskHistory'], resolve),
+    component: () => import('@/components/TaskHistory'),
     meta: {
-      title: 'app.task_history'
+      title: 'app.task_history',
+      showInMenu: false
     }
   },
   {
     path: '/add',
     name: 'TaskAdd',
-    component: resolve => require(['@/components/TaskAdd'], resolve),
+    component: () => import('@/components/TaskAdd'),
     meta: {
-      title: 'app.task_add'
+      title: 'app.task_add',
+      showInMenu: false
     }
   },
   {
     path: '/pay',
     name: 'GiftPay',
-    component: resolve => require(['@/components/GiftPay'], resolve),
+    component: () => import('@/components/GiftPay'),
     meta: {
-      title: 'gift.title'
+      title: 'gift.title',
+      showInMenu: true
     }
   },
   {
     path: '/order/list',
     name: 'OrderList',
-    component: resolve => require(['@/components/OrderList'], resolve),
+    component: () => import('@/components/OrderList'),
     meta: {
-      title: 'gift.order_list'
+      title: 'gift.order_list',
+      showInMenu: true
     }
   },
   {
     path: '/vote',
     name: 'VoteTick',
-    component: resolve => require(['@/components/VoteTick'], resolve),
+    component: () => import('@/components/VoteTick'),
     meta: {
-      title: 'vote.title'
+      title: 'vote.title',
+      showInMenu: true
     }
   },
   {
     path: '/phrase',
     name: 'Phrase',
-    component: resolve => require(['@/components/Phrase'], resolve),
+    component: () => import('@/components/Phrase'),
     meta: {
-      title: 'phrase.title'
+      title: 'phrase.title',
+      showInMenu: true
     }
   },
   {
     path: '/dwz',
     name: 'ShortLink',
-    component: resolve => require(['@/components/ShortLink'], resolve),
+    component: () => import('@/components/ShortLink'),
     meta: {
-      title: 'dwz.title'
+      title: 'dwz.title',
+      showInMenu: true
+    }
+  },
+  {
+    path: '/chat',
+    name: 'Chat',
+    component: () => import('@/components/Chat'),
+    meta: {
+      title: 'chat.title',
+      showInMenu: true
     }
   },
   {
     path: '/hello',
     name: 'HellowList',
-    component: resolve => require(['@/components/HelloWorld'], resolve)
-  }
+    component: () => import('@/components/HelloWorld')
+  },
 ]

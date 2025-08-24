@@ -1,34 +1,76 @@
 <template>
 <div style="height:100%;">
-  <div v-transfer-dom>
-    <x-dialog v-model="taskDetailShow" hide-on-blur>
-      <panel :list="detail" type="4"></panel>
-    </x-dialog>
+  <div class="calendar-container" v-if="showCalendar">
+    <div class="calendar-header">
+      <var-button @click="prevMonth">&lt;</var-button>
+      <h2>{{ currentMonth }}</h2>
+      <var-button @click="nextMonth">&gt;</var-button>
+    </div>
+
+    <div class="calendar-grid">
+      <div class="calendar-weekdays">
+        <div v-for="day in weekdays" :key="day" class="weekday">
+          {{ day }}
+        </div>
+      </div>
+
+      <div class="calendar-days">
+        <div 
+          v-for="day in calendarDays" 
+          :key="day.date"
+          :class="['day', {
+            'today': day.isToday,
+            'current-month': day.isCurrentMonth,
+            'has-tasks': day.hasTasks
+          }]"
+          @click="selectCalendarDay(day)"
+        >
+          <div class="day-number">{{ day.day }}</div>
+          <div v-if="day.hasTasks" class="task-indicator"></div>
+        </div>
+      </div>
+    </div>
   </div>
-  <inline-calendar
-  ref="calendar"
-  @on-change="onChange"
-  @on-view-change="onViewChange"
-  class="inline-calendar-demo"
-  :show.sync="show"
-  v-model="value"
-  :render-function="buildSlotFn"
-  :start-date="startDate"
-  :end-date="endDate"
-  :highlight-weekend="highlightWeekend">
-  </inline-calendar>
-  <group>
-    <cell :title="typeDict(item.type) + item.name" :value="item.amount" v-for="item in listPlan" v-bind:key="item.id" @click.native="doShowDetail(item)" is-link></cell>
-  </group>
+
+  <var-dialog v-model="taskDetailShow">
+    <div class="task-detail">
+      <div class="task-item" v-for="item in detail" :key="item.id">
+        <div class="task-header">
+          <h3>{{ item.title }}</h3>
+          <span class="task-amount">{{ item.meta.source }}</span>
+        </div>
+        <div class="task-desc">{{ item.desc }}</div>
+        <div class="task-meta">
+          <span>{{ item.meta.date }}</span>
+          <span>{{ item.meta.other }}</span>
+        </div>
+      </div>
+    </div>
+  </var-dialog>
+
+  <var-list>
+    <var-cell 
+      :title="typeDict(item.type) + item.name" 
+      :value="item.amount" 
+      v-for="item in listPlan" 
+      :key="item.id" 
+      @click="doShowDetail(item)" 
+      clickable>
+    </var-cell>
+  </var-list>
 </div>
 </template>
 
 <script>
-import { Panel, ViewBox, XHeader, XDialog, TransferDom, InlineCalendar, Group, Cell, CellFormPreview, dateFormat } from 'vux'
+import { useGlobalStore } from '../stores/global'
+import { useApiStore } from '../stores/api'
+import { useUtilStore } from '../stores/util'
+import dayjs from 'dayjs'
 
 export default {
   created: function () {
-    this.$store.commit('global/setMenu', {
+    const globalStore = useGlobalStore()
+    globalStore.setMenu({
       menus: [{
         key: 'add',
         value: this.$t('task.add'),
@@ -50,76 +92,125 @@ export default {
       }],
       event: this
     })
-    this.$store.commit('global/setTitle', this.$t('app.title'))
-    this.$store.commit('global/setShowBack', false)
+    globalStore.setTitle(this.$t('app.title'))
+    globalStore.setShowBack(false)
+    this.fetchTasks()
+  },
+  computed: {
+    currentMonth() {
+      return this.currentDate.format('YYYY年MM月')
+    },
+    calendarDays() {
+      const startOfMonth = this.currentDate.startOf('month')
+      const endOfMonth = this.currentDate.endOf('month')
+      const startDay = startOfMonth.day()
+      const daysInMonth = endOfMonth.date()
+      
+      const daysArray = []
+      
+      // 上个月的最后几天
+      const prevMonthDays = startDay
+      for (let i = prevMonthDays - 1; i >= 0; i--) {
+        const date = startOfMonth.subtract(i + 1, 'day')
+        daysArray.push({
+          date: date.format('YYYY-MM-DD'),
+          day: date.date(),
+          isCurrentMonth: false,
+          isToday: date.isSame(dayjs(), 'day'),
+          hasTasks: this.hasTasksForDate(date)
+        })
+      }
+      
+      // 当前月的天数
+      for (let i = 1; i <= daysInMonth; i++) {
+        const date = startOfMonth.date(i)
+        daysArray.push({
+          date: date.format('YYYY-MM-DD'),
+          day: date.date(),
+          isCurrentMonth: true,
+          isToday: date.isSame(dayjs(), 'day'),
+          hasTasks: this.hasTasksForDate(date)
+        })
+      }
+      
+      // 下个月的前几天
+      const remainingCells = 42 - daysArray.length
+      for (let i = 1; i <= remainingCells; i++) {
+        const date = endOfMonth.add(i, 'day')
+        daysArray.push({
+          date: date.format('YYYY-MM-DD'),
+          day: date.date(),
+          isCurrentMonth: false,
+          isToday: date.isSame(dayjs(), 'day'),
+          hasTasks: this.hasTasksForDate(date)
+        })
+      }
+      
+      return daysArray
+    }
   },
   methods: {
-    onChange (val) {
-      var valTimeStart = new Date(val + ' 00:00:00').getTime() / 1000
-      var valTimeEnd = new Date(val + ' 23:59:59').getTime() / 1000
-      var baseUrl = this.$store.state.api.baseUrl
-      var token = this.$store.state.api.token()
-      var jiacn = this.$store.state.global.user.jiacn
+    hasTasksForDate(date) {
+      return this.highlightDates.includes(date.format('YYYY-MM-DD'))
+    },
+    prevMonth() {
+      this.currentDate = this.currentDate.subtract(1, 'month')
+      this.fetchTasks()
+    },
+    nextMonth() {
+      this.currentDate = this.currentDate.add(1, 'month')
+      this.fetchTasks()
+    },
+    selectCalendarDay(day) {
+      if (!day.isCurrentMonth) return
+      this.value = day.date
+      this.onChange(day.date)
+    },
+    onChange(val) {
+      const valTimeStart = dayjs(val).startOf('day').unix()
+      const valTimeEnd = dayjs(val).endOf('day').unix()
+      const apiStore = useApiStore()
+      const globalStore = useGlobalStore()
+      var baseUrl = apiStore.baseUrl
+      var jiacn = globalStore.getJiacn
       this.$http.post(baseUrl + '/task/item/search', {
-        search: JSON.stringify({
+        search: {
           jiacn: jiacn,
           status: 1,
           timeStart: valTimeStart,
           timeEnd: valTimeEnd
-        })
-      }, {
-        headers: {
-          Authorization: 'Bearer ' + token,
-          'Content-Type': 'application/json'
         }
       }).then(res => {
         this.listPlan = res.data.data
         this.totalMoney = 0
-        // res.data.data.forEach(element => {
-        //   let taskItem = {
-        //     label: element.name,
-        //     value: element.amount
-        //   }
-        //   this.listPlan.push(taskItem)
-        //   this.totalMoney = (this.totalMoney * 1000 + element.amount * 1000) / 1000
-        // })
       })
     },
-    onViewChange (val, count) {
-      var baseUrl = this.$store.state.api.baseUrl
-      var token = this.$store.state.api.token()
-      var firstTime = this.$store.state.util.toTimeStamp(new Date(val.firstCurrentMonthDate + ' 00:00:00'))
-      var lastTime = this.$store.state.util.toTimeStamp(new Date(val.lastCurrentMonthDate + ' 23:59:59'))
-      var jiacn = this.$store.state.global.user.jiacn
+    fetchTasks() {
+      const firstDay = this.currentDate.startOf('month')
+      const lastDay = this.currentDate.endOf('month')
+      const apiStore = useApiStore()
+      const globalStore = useGlobalStore()
+      var baseUrl = apiStore.baseUrl
+      var jiacn = globalStore.getJiacn
+      
       this.$http.post(baseUrl + '/task/item/search', {
-        search: JSON.stringify({
+        search: {
           jiacn: jiacn,
-          timeStart: firstTime,
-          timeEnd: lastTime
-        })
-      }, {
-        headers: {
-          Authorization: 'Bearer ' + token,
-          'Content-Type': 'application/json'
+          timeStart: firstDay.unix(),
+          timeEnd: lastDay.unix()
         }
       }).then(res => {
-        var redDate = []
-        res.data.data.forEach(element => {
-          redDate.push(dateFormat(new Date(element.time * 1000), 'YYYY-MM-DD'))
-        })
-        this.buildSlotFn = (line, index, data) => {
-          return redDate.includes(data.formatedDate) ? '<div style="font-size:12px;text-align:center;"><span style="display:inline-block;width:5px;height:5px;background-color:red;border-radius:50%;"></span></div>' : '<div style="height:19px;"></div>'
-        }
-        this.onChange(this.value)
+        this.highlightDates = res.data.data.map(item => 
+          dayjs.unix(item.executeTime).format('YYYY-MM-DD'))
       })
     },
-    doShowDetail (item) {
-      var baseUrl = this.$store.state.api.baseUrl
-      var token = this.$store.state.api.token()
+    doShowDetail(item) {
+      const apiStore = useApiStore()
+      const utilStore = useUtilStore()
+      var baseUrl = apiStore.baseUrl
       this.$http.get(baseUrl + '/task/get', {
         params: {
-          id: item.planId,
-          access_token: token
+          id: item.planId
         }
       }).then(res => {
         this.detail = []
@@ -130,7 +221,10 @@ export default {
           desc: item.description,
           meta: {
             source: item.type > 1 ? '￥' + item.amount : '',
-            date: item.type > 1 ? dateFormat(this.$store.state.util.fromTimeStamp(item.time), 'YYYY-MM-DD') : dateFormat(this.$store.state.util.fromTimeStamp(res.data.data.startTime), 'YYYY-MM-DD') + ' ~ ' + dateFormat(this.$store.state.util.fromTimeStamp(res.data.data.endTime), 'YYYY-MM-DD'),
+            date: item.type > 1 ? 
+              dayjs.unix(item.executeTime).format('YYYY-MM-DD') : 
+              dayjs.unix(res.data.data.startTime).format('YYYY-MM-DD') + ' ~ ' + 
+              dayjs.unix(res.data.data.endTime).format('YYYY-MM-DD'),
             other: item.crond == null ? period[item.period] : item.crond
           }
         }
@@ -138,7 +232,7 @@ export default {
         this.taskDetailShow = true
       })
     },
-    typeDict (key) {
+    typeDict(key) {
       let value
       switch (key) {
         case 3:
@@ -150,39 +244,139 @@ export default {
       return '【' + value + '】'
     }
   },
-  data () {
+  data() {
     return {
       show: true,
-      value: dateFormat(new Date(), 'YYYY-MM-DD'),
-      startDate: '',
-      endDate: '',
-      highlightWeekend: true,
-      buildSlotFn: () => '',
+      showCalendar: true,
+      currentDate: dayjs(),
+      weekdays: ['日', '一', '二', '三', '四', '五', '六'],
+      value: dayjs().format('YYYY-MM-DD'),
+      highlightDates: [],
       listPlan: [],
-      totalMoney: '',
-      index: 0,
       detail: [],
       taskDetailShow: false
     }
-  },
-  directives: {
-    TransferDom
-  },
-  components: {
-    Panel,
-    ViewBox,
-    XHeader,
-    XDialog,
-    InlineCalendar,
-    Group,
-    Cell,
-    CellFormPreview
   }
 }
 </script>
 
-<style lang="less" scoped>
-.inline-calendar-demo {
-  background: rgba(255,255,255,0.9);
+<style scoped>
+.calendar-container {
+  background: #fff;
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 15px;
+}
+
+.calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.calendar-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.calendar-grid {
+  display: flex;
+  flex-direction: column;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-weight: bold;
+  margin-bottom: 10px;
+}
+
+.calendar-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 5px;
+}
+
+.day {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+}
+
+.day.current-month {
+  background: #f8f9fa;
+}
+
+.day.today {
+  background: #e3f2fd;
+}
+
+.day.has-tasks .task-indicator {
+  width: 6px;
+  height: 6px;
+  background: #42b983;
+  border-radius: 50%;
+  margin-top: 2px;
+}
+
+.task-detail {
+  padding: 15px;
+}
+
+.task-item {
+  margin-bottom: 15px;
+  padding: 15px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.task-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.task-amount {
+  color: #ff6b6b;
+  font-weight: bold;
+}
+
+.task-desc {
+  color: #666;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.task-meta {
+  display: flex;
+  justify-content: space-between;
+  color: #999;
+  font-size: 12px;
+}
+
+.date-picker {
+  padding: 15px;
+  background: #fff;
+  margin-bottom: 15px;
+  border-radius: 8px;
+}
+
+.date-input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
 }
 </style>

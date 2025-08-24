@@ -1,35 +1,51 @@
 <template>
 <div>
-  <div v-transfer-dom>
-    <actionsheet :menus="opMenu" v-model="showOpMenu" @on-click-menu="onClickOpMenu"></actionsheet>
+  <var-action-sheet 
+    :actions="opMenu" 
+    v-model="showOpMenu" 
+    @select="onClickOpMenu">
+  </var-action-sheet>
+
+  <div class="task-list">
+    <div class="task-item" v-for="item in list" :key="item.id" @click="doShowOpMenu(item)">
+      <div class="task-header">
+        <h3>{{ item.title }}</h3>
+        <span class="task-amount">{{ item.meta.source }}</span>
+      </div>
+      <div class="task-desc">{{ item.desc }}</div>
+      <div class="task-meta">
+        <span>{{ item.meta.date }}</span>
+        <span>{{ item.meta.other }}</span>
+      </div>
+    </div>
   </div>
-  <panel :list="list" type="4" @on-click-item="doShowOpMenu"></panel>
 </div>
 </template>
 
 <script>
-import { Panel, dateFormat, TransferDom, Actionsheet, AlertModule, ConfirmPlugin } from 'vux'
+import { useGlobalStore } from '../stores/global'
+import { useApiStore } from '../stores/api'
+import { useUtilStore } from '../stores/util'
+import dayjs from 'dayjs'
 
 export default {
   created: function () {
-    this.$store.commit('global/setMenu', {
+    const globalStore = useGlobalStore()
+    const apiStore = useApiStore()
+    const utilStore = useUtilStore()
+    
+    globalStore.setMenu({
       menus: [],
       event: this
     })
-    this.$store.commit('global/setTitle', this.$t('app.task_history'))
-    this.$store.commit('global/setShowBack', true)
-    var baseUrl = this.$store.state.api.baseUrl
-    var token = this.$store.state.api.token()
-    var jiacn = this.$store.state.global.user.jiacn
+    globalStore.setTitle(this.$t('app.task_history'))
+    globalStore.setShowBack(true)
+    var baseUrl = apiStore.baseUrl
+    var jiacn = globalStore.getJiacn
     this.$http.post(baseUrl + '/task/search', {
-      search: JSON.stringify({
+      search: {
         jiacn: jiacn,
         historyFlag: 1
-      })
-    }, {
-      headers: {
-        Authorization: 'Bearer ' + token,
-        'Content-Type': 'application/json'
       }
     }).then(res => {
       this.list = []
@@ -40,7 +56,8 @@ export default {
           desc: element.description,
           meta: {
             source: '￥' + element.amount,
-            date: dateFormat(this.$store.state.util.fromTimeStamp(element.startTime), 'YYYY-MM-DD') + ' - ' + dateFormat(this.$store.state.util.fromTimeStamp(element.endTime), 'YYYY-MM-DD'),
+            date: dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') + ' - ' + 
+                  dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
             other: element.crond
           }
         }
@@ -53,33 +70,34 @@ export default {
       this.selectId = item.id
       this.showOpMenu = true
     },
-    onClickOpMenu: function (key, item) {
+    onClickOpMenu: function (key) {
       if (key === 'del') {
         const _this = this
-        this.$vux.confirm.show({
+        Dialog.confirm({
           title: _this.$t('task.del_alert'),
-          onConfirm () {
-            var baseUrl = _this.$store.state.api.baseUrl
-            var token = _this.$store.state.api.token()
+          onConfirm: () => {
+            const apiStore = useApiStore()
+            var baseUrl = apiStore.baseUrl
             _this.$http.get(baseUrl + '/task/delete', {
               params: {
                 id: _this.selectId
-              },
-              headers: {
-                Authorization: 'Bearer ' + token,
-                'Content-Type': 'application/json'
               }
             }).then(res => {
               if (res.data.code === 'E0') {
-                AlertModule.show({
+                Dialog({
                   title: _this.$t('app.notify'),
-                  content: res.data.msg,
-                  onHide () {
+                  message: res.data.msg,
+                  confirmButtonText: _this.$t('app.confirm'),
+                  onConfirm: () => {
                     _this.$router.go(0)
                   }
                 })
               } else {
-                AlertModule.show({title: _this.$t('app.alert'), content: res.data.msg})
+                Dialog({
+                  title: _this.$t('app.alert'),
+                  message: res.data.msg,
+                  confirmButtonText: _this.$t('app.confirm')
+                })
               }
             })
           }
@@ -90,21 +108,49 @@ export default {
   data () {
     return {
       list: [],
-      opMenu: {
-        del: this.$t('app.del')
-      },
+      opMenu: [
+        { name: 'del', text: this.$t('app.del') }
+      ],
       showOpMenu: false,
       selectId: 0
     }
   },
-  directives: {
-    TransferDom
-  },
-  components: {
-    Panel,
-    dateFormat,
-    Actionsheet,
-    ConfirmPlugin
-  }
 }
 </script>
+
+<style scoped>
+.task-list {
+  padding: 10px;
+}
+.task-item {
+  margin-bottom: 15px;
+  padding: 15px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.task-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.task-amount {
+  color: #ff6b6b;
+  font-weight: bold;
+}
+.task-desc {
+  color: #666;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.task-meta {
+  display: flex;
+  justify-content: space-between;
+  color: #999;
+  font-size: 12px;
+}
+</style>

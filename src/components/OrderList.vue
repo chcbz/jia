@@ -1,33 +1,57 @@
 <template>
-<div>
-  <div v-transfer-dom>
-    <actionsheet :menus="opMenu" v-model="showOpMenu" @on-click-menu="onClickOpMenu"></actionsheet>
+  <div>
+    <var-action-sheet 
+      :actions="opMenu" 
+      v-model="showOpMenu"
+      @select="onClickOpMenu"
+    />
+
+    <var-list>
+      <var-cell 
+        v-for="item in list" 
+        :key="item.id"
+        @click="doShowOpMenu(item)"
+      >
+        <template #title>
+          {{item.title}}
+        </template>
+        <template #description>
+          {{item.desc}}
+        </template>
+        <template #extra>
+          <div style="font-size:12px;color:#999;">
+            <div>{{item.meta.source}}</div>
+            <div>{{item.meta.date}}</div>
+            <div>{{item.meta.other}}</div>
+          </div>
+        </template>
+      </var-cell>
+    </var-list>
   </div>
-  <panel :list="list" type="4" @on-click-item="doShowOpMenu"></panel>
-</div>
 </template>
 
 <script>
-import { Panel, dateFormat, TransferDom, Actionsheet, AlertModule, ConfirmPlugin } from 'vux'
+import dayjs from 'dayjs'
+import { useGlobalStore } from '@/stores/global'
+import { useApiStore } from '@/stores/api'
+import { useUtilStore } from '@/stores/util'
 
 export default {
+  setup() {
+    const globalStore = useGlobalStore()
+    const apiStore = useApiStore()
+    const utilStore = useUtilStore()
+    return { globalStore, apiStore, utilStore }
+  },
   created: function () {
-    this.$store.commit('global/setTitle', this.$t('gift.order_list'))
-    this.$store.commit('global/setShowBack', true)
-    this.$store.commit('global/setShowMore', false)
-    var baseUrl = this.$store.state.api.baseUrl
-    var token = this.$store.state.api.token()
-    var jiacn = this.$store.state.global.user.jiacn
+    this.globalStore.setTitle(this.$t('gift.order_list'))
+    this.globalStore.setShowBack(true)
+    this.globalStore.setShowMore(false)
+    var baseUrl = this.apiStore.baseUrl
+    var jiacn = this.globalStore.getJiacn
     this.$http.post(baseUrl + '/gift/usage/list/user/' + jiacn, {
-      search: JSON.stringify({
-        pageNum: 1,
-        pageSize: 999
-      })
-    }, {
-      headers: {
-        Authorization: 'Bearer ' + token,
-        'Content-Type': 'application/json'
-      }
+      pageNum: 1,
+      pageSize: 999
     }).then(res => {
       const _this = this
       this.list = []
@@ -39,7 +63,7 @@ export default {
           status: element.status,
           meta: {
             source: element.point ? element.point + _this.$t('gift.point') : '￥' + element.price,
-            date: dateFormat(this.$store.state.util.fromTimeStamp(element.time), 'YYYY-MM-DD'),
+            date: dayjs(this.utilStore.fromTimeStamp(element.time)).format('YYYY-MM-DD'),
             other: _this.$t('gift.quantity_title', {'quantity': element.quantity}) + '　' + _this.statusMap[element.status]
           }
         }
@@ -51,68 +75,61 @@ export default {
     doShowOpMenu: function (item) {
       this.selectId = item.id
       if (item.status === 1) {
-        this.opMenu = {'cancel': this.$t('gift.cancel')}
+        this.opMenu = [{ key: 'cancel', name: this.$t('gift.cancel') }]
       } else if (item.status === 0 || item.status === 5) {
-        this.opMenu = {'del': this.$t('gift.del')}
+        this.opMenu = [{ key: 'del', name: this.$t('gift.del') }]
       }
       this.showOpMenu = true
     },
-    onClickOpMenu: function (key, item) {
-      if (key === 'del') {
+    onClickOpMenu: function (item) {
+      if (item.key === 'del') {
         const _this = this
-        this.$vux.confirm.show({
+        Dialog({
           title: _this.$t('gift.del_alert'),
-          onConfirm () {
-            var baseUrl = _this.$store.state.api.baseUrl
-            var token = _this.$store.state.api.token()
+          message: '',
+          onConfirm: () => {
+            var baseUrl = _this.apiStore.baseUrl
             _this.$http.post(baseUrl + '/gift/usage/delete/' + _this.selectId, {
-
-            }, {
-              headers: {
-                Authorization: 'Bearer ' + token,
-                'Content-Type': 'application/json'
-              }
             }).then(res => {
               if (res.data.code === 'E0') {
-                AlertModule.show({
+                Dialog({
                   title: _this.$t('app.notify'),
-                  content: res.data.msg,
-                  onHide () {
+                  message: res.data.msg,
+                  onConfirm: () => {
                     _this.$router.go(0)
                   }
                 })
               } else {
-                AlertModule.show({title: _this.$t('app.alert'), content: res.data.msg})
+                Dialog({ 
+                  title: _this.$t('app.alert'), 
+                  message: res.data.msg 
+                })
               }
             })
           }
         })
-      } else if (key === 'cancel') {
+      } else if (item.key === 'cancel') {
         const _this = this
-        this.$vux.confirm.show({
+        Dialog({
           title: _this.$t('gift.cancel_alert'),
-          onConfirm () {
-            var baseUrl = _this.$store.state.api.baseUrl
-            var token = _this.$store.state.api.token()
+          message: '',
+          onConfirm: () => {
+            var baseUrl = _this.apiStore.baseUrl
             _this.$http.post(baseUrl + '/gift/usage/cancel/' + _this.selectId, {
-
-            },
-            {
-              headers: {
-                Authorization: 'Bearer ' + token,
-                'Content-Type': 'application/json'
-              }
             }).then(res => {
               if (res.data.code === 'E0') {
-                AlertModule.show({
+                Dialog({
                   title: _this.$t('app.notify'),
-                  content: res.data.msg,
-                  onHide () {
+                  message: res.data.msg,
+                  onConfirm: () => {
                     _this.$router.go(0)
                   }
                 })
               } else {
-                AlertModule.show({title: _this.$t('app.alert'), content: res.data.msg})
+                Dialog({ 
+                  title: _this.$t('app.alert'), 
+                  message: res.data.msg 
+                })
               }
             })
           }
@@ -123,24 +140,15 @@ export default {
   data () {
     return {
       list: [],
-      opMenu: {},
+      opMenu: [],
       showOpMenu: false,
       selectId: 0,
       statusMap: {
-        '0': '未支付',
-        '1': '已支付',
-        '5': '已取消'
+        '0': this.$t('order.status_unpaid'),
+        '1': this.$t('order.status_paid'),
+        '5': this.$t('order.status_canceled')
       }
     }
   },
-  directives: {
-    TransferDom
-  },
-  components: {
-    Panel,
-    dateFormat,
-    Actionsheet,
-    ConfirmPlugin
-  }
 }
 </script>

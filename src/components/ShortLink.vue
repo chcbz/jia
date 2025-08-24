@@ -1,103 +1,181 @@
 <template>
-  <div style="background-color: #FFFFFF;">
-    <div>
-      <tab v-model="index">
-        <tab-item selected>{{ $t('dwz.short') }}</tab-item>
-        <tab-item>{{ $t('dwz.restore') }}</tab-item>
-      </tab>
-    </div>
-    <swiper v-model="index"
-            :show-dots="false"
-            height="480px">
-      <swiper-item>
-        <group label-width="4.5em" label-margin-right="1em">
-          <x-textarea v-model="orgi" :placeholder="$t('dwz.long_url_placeholder')"></x-textarea>
-          <popup-picker :title="$t('dwz.expire')" :data="expireList" v-model="expireYear" :columns="1" show-name></popup-picker>
-          <x-button action-type="button" style="width:92%;"
-                    type="primary"
-                    @click.native="toShort">{{$t('dwz.short')}}</x-button>
-        </group>
-        <div style="text-align:center; margin: 25px 15px;">
+  <div class="short-link-container">
+    <var-tabs v-model:active="index">
+      <var-tab>{{ $t('dwz.short') }}</var-tab>
+      <var-tab>{{ $t('dwz.restore') }}</var-tab>
+    </var-tabs>
+
+    <var-tabs-items v-model:active="index" class="tab-items-container">
+      <var-tab-item>
+        <div>
+          <var-input 
+            type="textarea" 
+            v-model="originalUrl" 
+            id="originalUrl"
+            :placeholder="$t('dwz.long_url_placeholder')"
+            rows="3">
+          </var-input>
+          
+          <var-select 
+            :placeholder="$t('dwz.expire')" :options="expireList"
+            v-model="expireYear" label-key="name" value-key="value" />
+
+          <var-button 
+            type="primary" 
+            block
+            @click="toShort">
+            {{$t('dwz.short')}}
+          </var-button>
+        </div>
+
+        <div class="result-container">
           <span id="shortUrl">{{shortUrl}}</span>
-          <x-button id="copyBtn" mini @click.native="copyContent" data-clipboard-action="copy" data-clipboard-target="#shortUrl" v-if="shortUrl!=''">{{$t('app.copy')}}</x-button>
-          <qrcode style="margin-top: 25px;" :value="shortUrl" v-if="shortUrl!=''"></qrcode>
+          <var-button 
+            id="copyBtn" 
+            size="small" 
+            @click="copyContent" 
+            v-if="shortUrl!=''"
+            class="copy-btn">
+            {{$t('app.copy')}}
+          </var-button>
+          <div class="qrcode-container" v-if="qrcodeUrl">
+            <img :src="qrcodeUrl" class="qrcode-img">
+          </div>
         </div>
-      </swiper-item>
-      <swiper-item>
-        <group label-width="4.5em" label-margin-right="1em" label-align="right">
-          <x-textarea v-model="uri" :placeholder="$t('dwz.short_url_placeholder')"></x-textarea>
-          <x-button action-type="button" style="width:92%;"
-                    type="primary"
-                    @click.native="toLong">{{$t('dwz.restore')}}</x-button>
-        </group>
-        <div style="text-align:center; margin: 25px 15px;">
-          <span style="word-break: break-all;">{{longUrl}}</span>
+      </var-tab-item>
+
+      <var-tab-item>
+        <div>
+          <var-input 
+            type="textarea" 
+            v-model="uri" 
+            id="uri"
+            :placeholder="$t('dwz.short_url_placeholder')"
+            rows="3">
+          </var-input>
+          
+          <var-button 
+            type="primary" 
+            block
+            @click="toLong">
+            {{$t('dwz.restore')}}
+          </var-button>
         </div>
-      </swiper-item>
-    </swiper>
+
+        <div class="result-container">
+          <span class="long-url">{{longUrl}}</span>
+        </div>
+      </var-tab-item>
+    </var-tabs-items>
   </div>
 </template>
 
 <script>
-import { Tab, TabItem, Swiper, SwiperItem, Qrcode, dateFormat, TransferDom, Actionsheet, ConfirmPlugin, Group, XInput, XButton, XTextarea, AlertModule, PopupPicker } from 'vux'
-import Clipboard from 'clipboard'
+import QRCode from 'qrcode'
+import { Dialog } from '@varlet/ui'
+import { useGlobalStore } from '../stores/global'
+import { useApiStore } from '../stores/api'
+import { useUtilStore } from '../stores/util'
 
 export default {
   created: function () {
-    this.$store.commit('global/setTitle', this.$t('dwz.title'))
-    this.$store.commit('global/setShowBack', false)
-    this.$store.commit('global/setShowMore', false)
+    const globalStore = useGlobalStore()
+    globalStore.setTitle(this.$t('dwz.title'))
+    globalStore.setShowBack(false)
+    globalStore.setShowMore(false)
   },
   methods: {
+    async generateQRCode(text) {
+      console.log('Generating QR code for:', text)
+      try {
+        return await QRCode.toDataURL(text, { width: 200 })
+      } catch (error) {
+        console.error('Failed to generate QR code:', error)
+        return ''
+      }
+    },
     toShort: function () {
-      var baseUrl = this.$store.state.api.baseUrl
-      var jiacn = this.$store.state.global.user.jiacn
-      var token = this.$store.state.api.token()
+      const apiStore = useApiStore()
+      const globalStore = useGlobalStore()
+      const utilStore = useUtilStore()
+      var baseUrl = apiStore.baseUrl
+      var jiacn = globalStore.getJiacn
       const _this = this
+      
+      if (!this.originalUrl) {
+        Dialog({
+          title: this.$t('app.alert'),
+          message: this.$t('dwz.long_url_empty'),
+          confirmButtonText: this.$t('app.confirm')
+        })
+        return
+      }
+
       if (!jiacn) {
-        AlertModule.show({
+        Dialog({
           title: _this.$t('app.notify'),
-          content: _this.$t('dwx.subscribe_notify'),
-          onHide () {
+          message: _this.$t('dwz.subscribe_notify'),
+          confirmButtonText: _this.$t('app.confirm'),
+          onConfirm: () => {
             window.location.href = 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect'
           }
         })
+        return
       }
+
+      // Calculate expire time considering leap years
+      const now = new Date()
+      const futureDate = new Date(now.getFullYear() + parseInt(_this.expireYear), now.getMonth(), now.getDate())
+      const expireTime = utilStore.toTimeStamp(futureDate)
+
       this.$http.post(baseUrl + '/dwz/gen', {
         jiacn: jiacn,
-        orgi: _this.orgi,
-        expireTime: _this.$store.state.util.toTimeStamp(new Date()) + _this.expireYear * 365 * 24 * 60 * 60
-      }, {
-        headers: {
-          Authorization: 'Bearer ' + token,
-          'Content-Type': 'application/json'
-        }
+        orig: _this.originalUrl,
+        expireTime: expireTime
       }).then(res => {
         if (res.data.code === 'E0') {
-          _this.shortUrl = 'https://dwz.chaoyoufan.net/' + res.data.data
+          _this.shortUrl = apiStore.dwzDomain + res.data.data
         } else {
-          AlertModule.show({ title: _this.$t('app.alert'), content: res.data.msg })
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: res.data.msg,
+            confirmButtonText: _this.$t('app.confirm')
+          })
         }
-      }).catch(error => {
-        if (error.response.status === 401) {
-          _this.$store.commit('cleanToken')
-          _this.$router.go(0)
-        }
+      }).catch(err => {
+        Dialog({
+          title: _this.$t('app.alert'),
+          message: _this.$t('dwz.network_error'),
+          confirmButtonText: _this.$t('app.confirm')
+        })
       })
     },
     toLong: function () {
-      var baseUrl = this.$store.state.api.baseUrl
-      var jiacn = this.$store.state.global.user.jiacn
-      var token = this.$store.state.api.token()
+      const apiStore = useApiStore()
+      const globalStore = useGlobalStore()
+      var baseUrl = apiStore.baseUrl
+      var jiacn = globalStore.getJiacn
       const _this = this
+      
+      if (!this.uri) {
+        Dialog({
+          title: this.$t('app.alert'),
+          message: this.$t('dwz.short_url_empty'),
+          confirmButtonText: this.$t('app.confirm')
+        })
+        return
+      }
+
       if (!jiacn) {
-        AlertModule.show({
+        Dialog({
           title: _this.$t('app.notify'),
-          content: _this.$t('dwx.subscribe_notify'),
-          onHide () {
+          message: _this.$t('dwz.subscribe_notify'),
+          confirmButtonText: _this.$t('app.confirm'),
+          onConfirm: () => {
             window.location.href = 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect'
           }
         })
+        return
       }
       var uri = _this.uri
       if (uri.indexOf('/') !== -1) {
@@ -105,39 +183,70 @@ export default {
       }
       this.$http.get(baseUrl + '/dwz/restore', {
         params: {
-          uri: uri,
-          access_token: token
+          uri: uri
         }
       }).then(res => {
         if (res.data.code === 'E0') {
           _this.longUrl = res.data.data
         } else {
-          AlertModule.show({ title: _this.$t('app.alert'), content: res.data.msg })
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: res.data.msg,
+            confirmButtonText: _this.$t('app.confirm')
+          })
         }
-      }).catch(error => {
-        if (error.response.status === 401) {
-          _this.$store.commit('cleanToken')
-          _this.$router.go(0)
-        }
+      }).catch(err => {
+        Dialog({
+          title: _this.$t('app.alert'),
+          message: _this.$t('dwz.network_error'),
+          confirmButtonText: _this.$t('app.confirm')
+        })
       })
     },
     copyContent: function () {
-      var clipboard = new Clipboard('#copyBtn')
-      const _this = this
-      clipboard.on('success', function (e) {
-        AlertModule.show({
-          title: _this.$t('app.notify'),
-          content: _this.$t('phrase.copy_success')
+      if (!navigator.clipboard) {
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea')
+        textarea.value = this.shortUrl
+        document.body.appendChild(textarea)
+        textarea.select()
+        try {
+          document.execCommand('copy')
+          Dialog({
+            title: this.$t('app.notify'),
+            message: this.$t('phrase.copy_success'),
+            confirmButtonText: this.$t('app.confirm')
+          })
+        } catch (err) {
+          Dialog({
+            title: this.$t('app.alert'),
+            message: this.$t('phrase.copy_failed'),
+            confirmButtonText: this.$t('app.confirm')
+          })
+        }
+        document.body.removeChild(textarea)
+        return
+      }
+
+      navigator.clipboard.writeText(this.shortUrl).then(() => {
+        Dialog({
+          title: this.$t('app.notify'),
+          message: this.$t('phrase.copy_success'),
+          confirmButtonText: this.$t('app.confirm')
         })
-        e.clearSelection()
+      }).catch(err => {
+        Dialog({
+          title: this.$t('app.alert'),
+          message: this.$t('phrase.copy_failed'),
+          confirmButtonText: this.$t('app.confirm')
+        })
       })
     }
   },
   data () {
     return {
-      showOpMenu: false,
-      index: 0,
-      orgi: '',
+      index: 0, // 默认显示第一个面板
+      originalUrl: '',
       expireList: [{
         name: '一年',
         value: '1'
@@ -145,33 +254,79 @@ export default {
         name: '长期',
         value: '10'
       }],
-      expireYear: ['1'],
+      expireYear: '1',
       uri: '',
       shortUrl: '',
-      longUrl: ''
+      longUrl: '',
+      qrcodeUrl: '' // 存储生成的二维码URL
     }
   },
-  directives: {
-    TransferDom
+  watch: {
+    async shortUrl(newUrl) {
+      if (newUrl) {
+        this.qrcodeUrl = await this.generateQRCode(newUrl)
+      } else {
+        this.qrcodeUrl = ''
+      }
+    }
   },
-  components: {
-    Tab,
-    TabItem,
-    Swiper,
-    SwiperItem,
-    Qrcode,
-    dateFormat,
-    Actionsheet,
-    ConfirmPlugin,
-    Group,
-    XInput,
-    XButton,
-    XTextarea,
-    PopupPicker
-  }
 }
 </script>
-<style lang="less" scoped>
-@import "~vux/src/styles/1px.less";
-@import "~vux/src/styles/center.less";
+
+<style scoped>
+.short-link-container {
+  background-color: #FFFFFF;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-items-container {
+  height: calc(100% - 44px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tab-items-container .var-tab-item {
+  width: 100%;
+  height: auto;
+  min-height: 100%;
+}
+
+.tab-items-container .var-tab-item > div {
+  pointer-events: auto;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0 10px;
+  gap: 15px;
+}
+
+.tab-items-container .var-button[block] {
+  width: 100%;
+}
+
+.result-container {
+  text-align: center;
+  margin: 25px 15px;
+}
+
+.copy-btn {
+  margin-left: 10px;
+}
+
+.qrcode-container {
+  margin-top: 25px;
+}
+
+.qrcode-img {
+  width: 200px;
+  height: 200px;
+  max-width: 100%;
+}
+
+.long-url {
+  word-break: break-all;
+}
 </style>

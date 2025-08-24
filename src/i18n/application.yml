@@ -8,11 +8,122 @@ en:
     del: Del
     cancel: Cancel
     save: Save
-    task_list: TaskList
-    task_add: TaskAdd
-    task_history: TaskHistory
+    submit: Submit
+    select: Select
+    task_list: Task List
+    task_history: Task History
+    task_add: Add Task
     alert: Alert
     notify: Notify
+    read: Read
+    copy: Copy
+    confirm: Confirm
+  task:
+    type: Task Type
+    type_notify: Regular Reminder
+    type_pay: Payment
+    period: Task Period
+    crond: Cron Expression
+    name: Task Name
+    description: Task Description
+    lunar: Lunar Calendar
+    start_time: Start Time
+    end_time: End Time
+    amount: Amount
+    remind: Remind
+    del_alert: Confirm to delete task?
+    history: Task History
+    cancel_alert: Confirm to cancel task?
+    add: Add Task
+    del: Delete Task
+    cancel: Cancel Task
+    type_target: Target
+    type_repayment: Repayment Plan
+    type_fixed_income: Fixed Income
+    period_long_term: Long Term
+    period_yearly: Yearly
+    period_monthly: Monthly
+    period_weekly: Weekly
+    period_daily: Daily
+    period_hourly: Hourly
+    period_minutely: Minutely
+    period_secondly: Secondly
+    period_specific_date: Specific Date
+  gift:
+    title: Gift Exchange
+    pay: Direct Payment
+    qrcode: QR Code
+    consignee: Contact
+    consignee_tips: Please enter contact name
+    phone: Phone
+    phone_tips: Please enter contact phone number
+    address: Address
+    address_tips: Please enter detailed shipping address
+    point: Points
+    pay_notify: Payment completed, after-sales staff will contact you soon!
+    pay_cancel: Payment canceled!
+    subscribe_notify: This gift is only available for official account members!
+    order_list: Order List
+    quantity_title: Total {quantity} items
+    del_alert: Confirm to delete order?
+    cancel_alert: Confirm to cancel order?
+    del: Delete Order
+    cancel: Cancel Order
+  vote:
+    title: Daily Question
+    right_alert: Congratulations! Correct answer, earned {point} points!
+    wrong_alert: Wrong answer! The correct answer is {opt}, try again next time!
+    pub_author: Total {totalNum} participants, {rightNum} correct answers
+  phrase:
+    title: Daily Phrase
+    title_sub: Daily bitter soup, nutritious and healthy life
+    up: Upvote
+    down: Downvote
+    tips: Tip
+    say: Comment
+    others: ↙↘Say, what else do you want?↙↘
+    copy: Copy
+    copy_success: Copied successfully!
+    next: Next
+    add: Add
+    close: Close
+    pay_notify: Payment completed, your support is our motivation!
+    pay_cancel: Payment canceled!
+    subscribe_notify: This feature is only available for official account members!
+    add_success: Fellow sufferers meet by chance!
+    pub_author: 'Read by {num} {author} <a style="color: #576b95;" href="{copyrightLink}">{copyright}</a> posted at {time}'
+    content_placeholder: Come on...
+    feedback_title_placeholder: Feedback title (required)
+    feedback_content_placeholder: Detailed description (optional)
+    feedback_name_placeholder: Your name (optional)
+    feedback_phone_placeholder: Your phone number (required)
+    feedback_email_placeholder: Your email (optional)
+    feedback_success: Yes, you are right!
+  dwz:
+    title: URL Shortener
+    short: Shorten URL
+    restore: Restore URL
+    long_url_placeholder: Enter long URL
+    short_url_placeholder: Enter short URL (e.g. https://dwz.chaoyoufan.net/xxx) or just suffix (e.g. xxx)
+    expire: Expiration
+    subscribe_notify: This feature is only available for official account members!
+    short_url_empty: Short URL cannot be empty!
+    long_url_empty: Long URL cannot be empty!
+    network_error: Network error, please try again later
+  chat:
+    title: Chat Room
+    history_sessions: History Sessions
+    new_session: New Session
+    jia_assistant: Jia Assistant
+    input_message: Enter message
+    cancel: Cancel
+    send: Send
+    message_failed: Message sending failed
+    request_canceled: Request canceled
+  order:
+    status_unpaid: Unpaid
+    status_paid: Paid
+    status_canceled: Canceled
 zh-CN:
   app:
     start_date: 开始日期
@@ -32,6 +143,7 @@ zh-CN:
     notify: 通知
     read: 阅读
     copy: 复制
+    confirm: 确认
   task:
     type: 任务类型
     type_notify: 常规提醒
@@ -51,6 +163,18 @@ zh-CN:
     add: 添加任务
     del: 删除任务
     cancel: 取消任务
+    type_target: 目标
+    type_repayment: 还款计划
+    type_fixed_income: 固定收入
+    period_long_term: 长期
+    period_yearly: 每年
+    period_monthly: 每月
+    period_weekly: 每周
+    period_daily: 每日
+    period_hourly: 每小时
+    period_minutely: 每分钟
+    period_secondly: 每秒
+    period_specific_date: 指定日期
   gift:
     title: 礼品兑换
     pay: 直接支付
@@ -109,3 +233,20 @@ zh-CN:
     short_url_placeholder: 请输入短网址（如：https://dwz.chaoyoufan.net/xxx）或者直接输入后缀（如：xxx）
     expire: 有效期
     subscribe_notify: 该礼品只对公众号成员开放，请先关注公众号！
+    short_url_empty: 短网址不能为空！
+    long_url_empty: 长网址不能为空！
+    network_error: 网络错误，请稍后重试
+  chat:
+    title: 聊天室
+    history_sessions: 历史会话
+    new_session: 新会话
+    jia_assistant: Jia助手
+    input_message: 请输入消息
+    cancel: 取消
+    send: 发送
+    message_failed: 消息发送失败
+    request_canceled: 请求已取消
+  order:
+    status_unpaid: 未支付
+    status_paid: 已支付
+    status_canceled: 已取消
