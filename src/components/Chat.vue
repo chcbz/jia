@@ -1,5 +1,5 @@
 <template>
-  <var-card class="chat-container">
+  <div class="chat-container">
     <div class="chat-main-content">
       <div class="chat-messages" ref="messagesRef">
         <div v-if="shouldShowEmptyState" class="chat-empty-state">
@@ -41,25 +41,18 @@
         </div>
       </div>
     </div>
-  </var-card>
+  </div>
 </template>
 
 <script setup>
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, computed, watch, getCurrentInstance } from 'vue';
 import { useUtilStore } from '../stores/util';
 import { useGlobalStore } from '../stores/global';
+import { useApiStore } from '../stores/api';
 import { useI18n } from 'vue-i18n';
-import { 
-  Button as VarButton,
-  Input as VarInput,
-  Card as VarCard,
-  List as VarList,
-  Cell as VarCell,
-  Dialog,
-  Snackbar
-} from '@varlet/ui';
+import { useHttp, mcpApi } from '../composables/useHttp';
 
 // 配置marked
 marked.setOptions({
@@ -99,6 +92,7 @@ const showSidebar = ref(false);
 const STORAGE_KEY = 'chat_conversations';
 const utilStore = useUtilStore();
 const globalStore = useGlobalStore();
+const apiStore = useApiStore();
 const { t } = useI18n();
 
 // 计算属性
@@ -187,27 +181,42 @@ const updateBotMessage = (content) => {
 };
 
 const processBotResponse = (eventData) => {
+  console.log("Received event data:", eventData);
+  
+  // 处理多种可能的数据格式
   let payload = '';
-
-  for (const line of eventData.split(/\n/)) {
-    if (line.startsWith('data:')) {
-      payload += line.slice(5).trim() + '\n';
+  
+  // 如果是SSE格式 (data: {...})
+  if (eventData.startsWith('data:')) {
+    for (const line of eventData.split(/\n/)) {
+      if (line.startsWith('data:')) {
+        payload += line.slice(5).trim() + '\n';
+      }
     }
+  } else {
+    // 如果不是SSE格式，直接使用原始数据
+    payload = eventData;
   }
 
   payload = payload.trim();
   
-  if (payload === '[DONE]' || payload === '[EOM]') {
+  if (payload === '[DONE]' || payload === '[EOM]' || !payload) {
+    console.log("Stream completed or empty payload");
     return;
   }
 
   try {
+    // 尝试解析为JSON
     const data = JSON.parse(payload);
-    const messageContent = data.v || data.content || '';
+    const messageContent = data.v || data.content || data.message || data.text || '';
     if (messageContent) {
       updateBotMessage(messageContent);
+    } else {
+      console.log("No message content found in JSON:", data);
     }
-  } catch {
+  } catch (error) {
+    console.log("Not JSON, treating as plain text:", payload);
+    // 如果不是JSON，直接作为文本显示
     updateBotMessage(payload);
   }
 };
@@ -232,50 +241,38 @@ const sendMessage = async () => {
 
     scrollToBottom();
     
-    const apiUrl = import.meta.env.VITE_EVENT_STREAM_URL || `${import.meta.env.VITE_API_BASE_URL}/chat/stream`;
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    // 使用新的 useHttp 流式功能
+    const result = await mcpApi.create('/chat/stream', {
+      content: message,
+      conversationId: conversationId.value
+    }, {
+      responseType: 'stream',
+      autoLoading: false,
+      onStream: (eventData) => {
+        console.log('Stream data received:', eventData);
+        processBotResponse(eventData);
       },
-      body: JSON.stringify({
-        content: message,
-        conversationId: conversationId.value
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error('发送消息失败');
-    }
-
-    const reader = response.body.getReader();
-    readerRef.value = reader;
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
+      onStreamEnd: () => {
+        console.log('Stream ended');
         isStreaming.value = false;
         isLoading.value = false;
         readerRef.value = null;
-        break;
+        saveConversation();
+      },
+      onError: (errorMessage) => {
+        console.error('发送消息失败:', errorMessage);
+        throw new Error(errorMessage);
       }
-
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split(/\n\n/);
-      buffer = events.pop() || '';
-
-      for (const event of events) {
-        if (event.trim() === '') continue;
-        processBotResponse(event);
-      }
+    });
+    
+    // 保存reader引用以便后续取消
+    if (result && result.stream) {
+      readerRef.value = result.stream.reader;
     }
-
-    saveConversation();
   } catch (err) {
     console.error('发送消息失败:', err);
     isStreaming.value = false;
+    isLoading.value = false;
     error.value = '发送消息失败，请重试';
     messages.value = [...messages.value, {
       sender: 'system',
@@ -283,8 +280,6 @@ const sendMessage = async () => {
       isError: true,
       timestamp: new Date().toISOString()
     }];
-  } finally {
-    isStreaming.value = false;
   }
 };
 
@@ -332,28 +327,41 @@ const toggleSidebar = () => {
 // 删除会话（带重试机制）
 const deleteConversation = async (id, retryCount = 0) => {
   try {
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/conversation/delete`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
+    console.log('删除会话:', id);
+    await mcpApi.delete("/conversation/delete", id, {
+      onSuccess: () => {
+        console.log('删除会话成功:', id);
+        const index = conversations.value.findIndex(c => c.id === id);
+        if (index !== -1) {
+          conversations.value.splice(index, 1);
+        }
+        
+        if (id === conversationId.value) {
+          console.log('当前会话被删除，生成新会话ID');
+          generateNewConversationId();
+        }
+        
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations.value));
+        console.log('localStorage已更新');
       },
-      body: JSON.stringify({ id })
-    });
-    
-    if (!response.ok) {
-      throw new Error('删除请求失败');
-    }
+      onError: (errorMessage) => {
+        console.error('删除会话失败:', errorMessage);
+        
+        const lastMessage = messages.value[messages.value.length - 1];
+        if (!lastMessage || !lastMessage.isError) {
+          messages.value = [...messages.value, {
+            sender: 'system',
+            content: `删除会话失败${retryCount > 0 ? ` (重试 ${retryCount}/3)` : ''}`,
+            isError: true,
+            timestamp: new Date().toISOString()
+          }];
+        }
 
-    const index = conversations.value.findIndex(c => c.id === id);
-    if (index !== -1) {
-      conversations.value.splice(index, 1);
-    }
-    
-    if (id === conversationId.value) {
-      generateNewConversationId();
-    }
-    
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations.value));
+        if (retryCount < 3) {
+          setTimeout(() => deleteConversation(id, retryCount + 1), 1000 * (retryCount + 1));
+        }
+      }
+    });
   } catch (error) {
     console.error('删除会话失败:', error);
     
@@ -384,13 +392,20 @@ onMounted(initializeApp);
 </script>
 
 <style scoped>
+.app-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
 .chat-container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
   width: 100%;
   max-width: 1200px;
-  min-height: 100vh;
   margin: 0 auto;
-  background: var(--color-background);
-  position: relative;
+  background: var(--color-background, #ffffff);
 }
 
 .chat-sidebar {
@@ -449,7 +464,7 @@ onMounted(initializeApp);
   margin: 0;
   font-size: 18px;
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--color-text, #333333);
 }
 
 .chat-conversation-list {
@@ -486,7 +501,6 @@ onMounted(initializeApp);
 
 .chat-conversation-item:hover {
   background: var(--color-hover);
-  border-color: var(--color-border);
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
@@ -510,13 +524,13 @@ onMounted(initializeApp);
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 14px;
-  color: var(--color-text);
+  color: var(--color-text, #333333);
   line-height: 1.4;
 }
 
 .chat-conversation-date {
   font-size: 12px;
-  color: var(--color-text-secondary);
+  color: var(--color-text-secondary, #666666);
   line-height: 1.3;
 }
 
@@ -526,7 +540,7 @@ onMounted(initializeApp);
   opacity: 0;
   visibility: hidden;
   position: absolute;
-  left: 16px;
+  left: 10px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 1;
@@ -543,19 +557,20 @@ onMounted(initializeApp);
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  grid-template-rows: 1fr auto;
   background: var(--color-background);
-  min-height: 100vh;
+  overflow: hidden; /* 防止整个容器滚动 */
 }
 
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 24px 100px 24px; /* 底部增加 padding 防止被输入框遮挡 */
+  padding: 24px 24px 0 24px;
   min-height: 0;
   scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-color: var(--color-border) transparent;
+  height: 100%; /* 确保消息区域占据全部可用高度 */
 }
 
 .chat-messages::-webkit-scrollbar {
@@ -579,7 +594,9 @@ onMounted(initializeApp);
   margin-bottom: 20px;
   padding: 16px 20px;
   border-radius: 20px;
-  max-width: 75%;
+  max-width: fit-content;
+  min-width: auto;
+  width: auto;
   word-break: break-word;
   line-height: 1.6;
   animation: messageSlideIn 0.3s ease-out;
@@ -599,45 +616,55 @@ onMounted(initializeApp);
 }
 
 .chat-user-message {
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
-  color: white;
+  background: #eff6ff;
+  color: #1e40af;
   margin-left: auto;
+  margin-right: 0;
   border-bottom-right-radius: 8px;
-  text-align: left;
-  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb), 0.3);
+  text-align: right;
+  box-shadow: 0 4px 12px rgba(var(--color-primary-rgb, 59, 130, 246), 0.15);
 }
 
 .chat-bot-message {
-  background: var(--color-card);
-  color: var(--color-text);
+  background: var(--color-card, #f8fafc);
+  color: var(--color-text, #374151);
   margin-right: auto;
+  margin-left: 0;
   border-bottom-left-radius: 8px;
   text-align: left;
-  border: 1px solid var(--color-border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--color-border, #e5e7eb);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  max-width: fit-content;
+  min-width: auto;
+  width: auto;
 }
 
 .chat-input {
   display: flex;
-  width: 90%;
-  max-width: 1168px;
   padding: 24px 24px;
   border-top: 1px solid var(--color-border);
   background: var(--color-card);
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  margin: 0 auto;
-  z-index: 100;
   gap: 16px;
-  align-items: center;
+  align-items: flex-end;
   backdrop-filter: blur(10px);
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+  min-height: 80px; /* 确保最小高度 */
 }
 
 .chat-input .var-input {
   flex: 1;
+  width: 100%;
+  min-height: 48px; /* 确保输入框有最小高度 */
+}
+
+.chat-input .var-input textarea {
+  min-height: 48px !important; /* 确保textarea有最小高度 */
+  resize: vertical; /* 允许垂直调整大小 */
+}
+
+.chat-input .var-button {
+  flex-shrink: 0;
+  margin-bottom: 8px; /* 与输入框底部对齐 */
 }
 
 .send-button {
@@ -708,11 +735,7 @@ onMounted(initializeApp);
 /* 响应式设计 */
 @media (max-width: 1024px) {
   .chat-sidebar {
-    width: 280px;
-  }
-  
-  .chat-message {
-    max-width: 80%;
+    width: 380px;
   }
   
   .chat-input {
@@ -725,20 +748,18 @@ onMounted(initializeApp);
   .chat-container {
     border-radius: 0;
     max-width: 100%;
-    min-height: 100vh;
   }
   
   .chat-sidebar {
-    width: 240px;
+    width: 340px;
   }
   
   .chat-messages {
     padding: 20px 20px 100px 20px; /* 底部增加 padding 防止被输入框遮挡 */
-    max-height: calc(100vh - 140px);
+    height: 100%; /* 确保在移动端也占据全部高度 */
   }
   
   .chat-message {
-    max-width: 85%;
     padding: 14px 18px;
     font-size: 15px;
     border-radius: 18px;
@@ -747,6 +768,15 @@ onMounted(initializeApp);
   .chat-input {
     padding: 16px;
     gap: 12px;
+    min-height: 70px; /* 移动端最小高度调整 */
+  }
+  
+  .chat-input .var-input {
+    min-height: 42px; /* 移动端输入框最小高度 */
+  }
+  
+  .chat-input .var-input textarea {
+    min-height: 42px !important; /* 移动端textarea最小高度 */
   }
   
   .chat-input .var-button {
@@ -757,6 +787,8 @@ onMounted(initializeApp);
     display: flex;
     align-items: center;
     justify-content: center;
+    visibility: visible !important;
+    opacity: 1 !important;
   }
   
   .send-icon {
@@ -777,7 +809,7 @@ onMounted(initializeApp);
 
 @media (max-width: 640px) {
   .chat-sidebar {
-    width: 200px;
+    width: 300px;
   }
   
   .chat-sidebar-header {
@@ -794,10 +826,10 @@ onMounted(initializeApp);
   
   .chat-messages {
     padding: 16px 16px 90px 16px; /* 底部增加 padding 防止被输入框遮挡 */
+    height: 100%; /* 确保在移动端也占据全部高度 */
   }
   
   .chat-message {
-    max-width: 90%;
     padding: 12px 16px;
     font-size: 14px;
     border-radius: 16px;
@@ -806,6 +838,15 @@ onMounted(initializeApp);
   .chat-input {
     padding: 14px;
     gap: 10px;
+    min-height: 65px; /* 小屏幕最小高度调整 */
+  }
+  
+  .chat-input .var-input {
+    min-height: 40px; /* 小屏幕输入框最小高度 */
+  }
+  
+  .chat-input .var-input textarea {
+    min-height: 40px !important; /* 小屏幕textarea最小高度 */
   }
   
   .chat-input .var-button {
@@ -826,7 +867,7 @@ onMounted(initializeApp);
 
 @media (max-width: 480px) {
   .chat-sidebar {
-    width: 180px;
+    width: 280px;
   }
   
   .chat-sidebar-header {
@@ -856,6 +897,15 @@ onMounted(initializeApp);
   .chat-input {
     padding: 12px;
     gap: 8px;
+    min-height: 60px; /* 超小屏幕最小高度调整 */
+  }
+  
+  .chat-input .var-input {
+    min-height: 38px; /* 超小屏幕输入框最小高度 */
+  }
+  
+  .chat-input .var-input textarea {
+    min-height: 38px !important; /* 超小屏幕textarea最小高度 */
   }
   
   .chat-input .var-button {
@@ -880,6 +930,12 @@ onMounted(initializeApp);
   
   .chat-empty-hint {
     font-size: 13px;
+  }
+
+  /* 移动模式下删除按钮默认显示 */
+  .chat-delete-btn {
+    opacity: 1;
+    visibility: visible;
   }
 }
 

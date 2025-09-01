@@ -19,7 +19,7 @@ app.use(pinia)
 // 配置axios
 const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL,
-  timeout: 10000
+  timeout: 60000
 })
 
 // 添加请求拦截器
@@ -61,8 +61,9 @@ http.interceptors.response.use(
   }
 )
 
-// 将axios挂载到Vue原型上
+// 将axios挂载到Vue原型和全局对象上
 app.config.globalProperties.$http = http
+window.$http = http
 
 // 全局配置
 app.config.productionTip = false

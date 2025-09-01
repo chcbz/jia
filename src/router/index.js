@@ -23,6 +23,15 @@ export default [
   },
   {
     path: '/',
+    name: 'Chat',
+    component: () => import('@/components/Chat'),
+    meta: {
+      title: 'chat.title',
+      showInMenu: true
+    }
+  },
+  {
+    path: '/task',
     name: 'TaskIndex',
     component: () => import('@/components/TaskIndex'),
     meta: {
@@ -99,15 +108,6 @@ export default [
     component: () => import('@/components/ShortLink'),
     meta: {
       title: 'dwz.title',
-      showInMenu: true
-    }
-  },
-  {
-    path: '/chat',
-    name: 'Chat',
-    component: () => import('@/components/Chat'),
-    meta: {
-      title: 'chat.title',
       showInMenu: true
     }
   },

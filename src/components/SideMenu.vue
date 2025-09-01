@@ -2,7 +2,7 @@
   <div>
     <!-- 蒙层 -->
     <div 
-      v-if="showSideMenu" 
+      v-if="showSideMenu && isMobile" 
       class="menu-overlay"
       @click="handleOverlayClick"
     ></div>

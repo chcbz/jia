@@ -266,6 +266,7 @@ export default {
   border-radius: 8px;
   padding: 15px;
   margin-bottom: 15px;
+  overflow-y: auto;
 }
 
 .calendar-header {

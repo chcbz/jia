@@ -237,7 +237,7 @@ zh-CN:
     long_url_empty: 长网址不能为空！
     network_error: 网络错误，请稍后重试
   chat:
-    title: 聊天室
+    title: 智能助手
     history_sessions: 历史会话
     new_session: 新会话
     jia_assistant: Jia助手

@@ -74,7 +74,8 @@ export const useApiStore = defineStore('api', {
       const utilStore = useUtilStore()
       const codeVerifier = utilStore.getLocalStorage('pkce_code_verifier')
       if (!codeVerifier) throw new Error('No code verifier found')
-
+      console.log('Exchanging code for token with verifier:', codeVerifier)
+      console.log('Authorization code:', code)
       const params = new URLSearchParams({
         grant_type: 'authorization_code',
         code,
@@ -89,7 +90,6 @@ export const useApiStore = defineStore('api', {
         },
         body: params
       })
-
       if (!response.ok) throw new Error('Token exchange failed')
 
       const data = await response.json()

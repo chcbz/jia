@@ -117,9 +117,11 @@ html, body {
 }
 
 .app-content {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   transition: margin-left 0.3s;
 }
 

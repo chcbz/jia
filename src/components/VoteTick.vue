@@ -26,6 +26,7 @@
 <script>
 import { useGlobalStore } from '../stores/global'
 import { useApiStore } from '../stores/api'
+import { Dialog } from '@varlet/ui'
 
 export default {
   created: function () {
@@ -98,7 +99,7 @@ export default {
 <style scoped>
 .vote-tick-container {
   padding: 16px;
-  min-height: 100vh;
+  overflow-y: auto;
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
 }
 

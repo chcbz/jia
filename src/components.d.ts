@@ -10,6 +10,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     Calendar: typeof import('./components/Calendar.vue')['default']
     Chat: typeof import('./components/Chat.vue')['default']
+    DemoHttpUsage: typeof import('./components/DemoHttpUsage.vue')['default']
     GiftPay: typeof import('./components/GiftPay.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
     OrderList: typeof import('./components/OrderList.vue')['default']

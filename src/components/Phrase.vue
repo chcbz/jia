@@ -402,7 +402,7 @@ export default {
 .phrase-container {
   padding: 20px 0;
   background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-  min-height: 100vh;
+  overflow-y: auto;
 }
 
 .phrase-content {
