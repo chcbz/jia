@@ -1,0 +1,16 @@
+{
+  "require": [
+    "@babel/register",
+    "./tests/setup.js"
+  ],
+  "timeout": 10000,
+  "recursive": false,
+  "spec": [
+    "./tests/*.test.js",
+    "./tests/composables/*.spec.js"
+  ],
+  "extension": ["js"],
+  "reporter": "spec",
+  "ui": "bdd",
+  "watch": false
+}
