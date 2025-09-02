@@ -10,7 +10,8 @@
     "./tests/composables/*.spec.js"
   ],
   "extension": ["js"],
-  "reporter": "spec",
+  "reporter": "mochawesome",
+  "reporter-options": "reportDir=mochawesome-report,reportFilename=mochawesome.json",
   "ui": "bdd",
   "watch": false
 }
