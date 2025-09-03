@@ -1,14 +1,14 @@
 <template>
   <div>
-    <var-action-sheet 
-      :actions="opMenu" 
+    <var-action-sheet
+      :actions="opMenu"
       v-model="showOpMenu"
       @select="onClickOpMenu"
     />
 
     <var-list>
-      <var-cell 
-        v-for="item in list" 
+      <var-cell
+        v-for="item in list"
         :key="item.id"
         @click="doShowOpMenu(item)"
       >
@@ -100,9 +100,9 @@ export default {
                   }
                 })
               } else {
-                Dialog({ 
-                  title: _this.$t('app.alert'), 
-                  message: res.data.msg 
+                Dialog({
+                  title: _this.$t('app.alert'),
+                  message: res.data.msg
                 })
               }
             })
@@ -126,9 +126,9 @@ export default {
                   }
                 })
               } else {
-                Dialog({ 
-                  title: _this.$t('app.alert'), 
-                  message: res.data.msg 
+                Dialog({
+                  title: _this.$t('app.alert'),
+                  message: res.data.msg
                 })
               }
             })

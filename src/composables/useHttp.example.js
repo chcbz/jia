@@ -37,17 +37,17 @@ export function useTaskList() {
 
 // 示例 2: 使用预定义的API端点
 export function usePhraseOperations() {
-  const { 
-    loading: phraseLoading, 
-    error: phraseError, 
+  const {
+    loading: phraseLoading,
+    error: phraseError,
     data: phraseData,
-    execute: getRandomPhrase 
+    execute: getRandomPhrase
   } = useHttp()
 
-  const { 
-    loading: voteLoading, 
-    error: voteError, 
-    execute: submitVote 
+  const {
+    loading: voteLoading,
+    error: voteError,
+    execute: submitVote
   } = useHttp()
 
   const loadRandomPhrase = async () => {
@@ -94,9 +94,9 @@ export function usePhraseOperations() {
     <button @click="loadData" :disabled="loading">
       {{ loading ? 'Loading...' : 'Load Data' }}
     </button>
-    
+
     <div v-if="error" class="error">{{ error }}</div>
-    
+
     <div v-if="data">
       <pre>{{ JSON.stringify(data, null, 2) }}</pre>
     </div>
@@ -185,7 +185,7 @@ export function useFileUpload() {
   const uploadFile = async (file, additionalData = {}) => {
     const formData = new FormData()
     formData.append('file', file)
-    
+
     // 添加其他数据
     Object.keys(additionalData).forEach(key => {
       formData.append(key, additionalData[key])
@@ -241,7 +241,7 @@ export function useStreamingChat() {
             }
           }
           content = content.trim()
-          
+
           if (content === '[DONE]' || content === '[EOM]') {
             return
           }
@@ -295,7 +295,7 @@ export function useStreamingChat() {
         {{ currentMessage }}
       </div>
     </div>
-    
+
     <div class="input-area">
       <input v-model="inputMessage" @keyup.enter="send" placeholder="Type a message...">
       <button @click="send" :disabled="loading">Send</button>

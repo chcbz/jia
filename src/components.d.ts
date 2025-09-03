@@ -8,9 +8,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    Calendar: typeof import('./components/Calendar.vue')['default']
     Chat: typeof import('./components/Chat.vue')['default']
-    DemoHttpUsage: typeof import('./components/DemoHttpUsage.vue')['default']
     GiftPay: typeof import('./components/GiftPay.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
     OrderList: typeof import('./components/OrderList.vue')['default']
@@ -23,28 +21,6 @@ declare module 'vue' {
     TaskHistory: typeof import('./components/TaskHistory.vue')['default']
     TaskIndex: typeof import('./components/TaskIndex.vue')['default']
     TaskList: typeof import('./components/TaskList.vue')['default']
-    VarActionSheet: typeof import('@varlet/ui')['_ActionSheetComponent']
-    VarAppBar: typeof import('@varlet/ui')['_AppBarComponent']
-    VarButton: typeof import('@varlet/ui')['_ButtonComponent']
-    VarCard: typeof import('@varlet/ui')['_CardComponent']
-    VarCell: typeof import('@varlet/ui')['_CellComponent']
-    VarCol: typeof import('@varlet/ui')['_ColComponent']
-    VarDialog: typeof import('@varlet/ui')['_DialogComponent']
-    VarIcon: typeof import('@varlet/ui')['_IconComponent']
-    VarInput: typeof import('@varlet/ui')['_InputComponent']
-    VarList: typeof import('@varlet/ui')['_ListComponent']
-    VarMenu: typeof import('@varlet/ui')['_MenuComponent']
-    VarOption: typeof import('@varlet/ui')['_OptionComponent']
-    VarRadio: typeof import('@varlet/ui')['_RadioComponent']
-    VarRadioGroup: typeof import('@varlet/ui')['_RadioGroupComponent']
-    VarRow: typeof import('@varlet/ui')['_RowComponent']
-    VarSelect: typeof import('@varlet/ui')['_SelectComponent']
-    VarSwipe: typeof import('@varlet/ui')['_SwipeComponent']
-    VarSwipeItem: typeof import('@varlet/ui')['_SwipeItemComponent']
-    VarTab: typeof import('@varlet/ui')['_TabComponent']
-    VarTabItem: typeof import('@varlet/ui')['_TabItemComponent']
-    VarTabs: typeof import('@varlet/ui')['_TabsComponent']
-    VarTabsItems: typeof import('@varlet/ui')['_TabsItemsComponent']
     VoteTick: typeof import('./components/VoteTick.vue')['default']
   }
 }

@@ -1,11 +1,11 @@
 <template>
 <div>
-  <var-action-sheet 
-    :actions="opMenu" 
-    v-model="showOpMenu" 
+  <var-action-sheet
+    :actions="opMenu"
+    v-model="showOpMenu"
     @select="onClickOpMenu">
   </var-action-sheet>
-  
+
   <div class="task-list">
     <div class="task-item" v-for="item in list" :key="item.id" @click="doShowOpMenu(item)">
       <div class="task-header">
@@ -33,7 +33,7 @@ export default {
     const globalStore = useGlobalStore()
     const apiStore = useApiStore()
     const utilStore = useUtilStore()
-    
+
     globalStore.setMenu({
       menus: [{
         key: 'add',
@@ -70,7 +70,7 @@ export default {
           desc: element.description,
           meta: {
             source: '￥' + element.amount,
-            date: dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') + ' - ' + 
+            date: dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') + ' - ' +
                   dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
             other: element.crond
           }

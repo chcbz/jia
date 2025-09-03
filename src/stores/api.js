@@ -126,7 +126,7 @@ export const useApiStore = defineStore('api', {
     async getUserInfo() {
       const token = await this.token()
       const globalStore = useGlobalStore()
-      
+
       const response = await fetch(`${this.baseUrl}/user/my`, {
         method: 'GET',
         headers: {

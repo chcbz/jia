@@ -2,21 +2,21 @@
   <div class="phrase-container">
     <var-dialog v-model="addDialogShow">
       <div class="cell-group">
-        <var-input 
-          type="textarea" 
-          :placeholder="$t('phrase.content_placeholder')" 
-          :maxlength="200" 
+        <var-input
+          type="textarea"
+          :placeholder="$t('phrase.content_placeholder')"
+          :maxlength="200"
           v-model="newContent">
         </var-input>
-        <var-button 
-          type="primary" 
+        <var-button
+          type="primary"
           block
-          :disabled="newContent==''" 
+          :disabled="newContent==''"
           @click="addContent">
           {{ $t('app.submit') }}
         </var-button>
-        <var-button 
-          type="default" 
+        <var-button
+          type="default"
           block
           @click="addDialogShow=false">
           {{ $t('app.cancel') }}
@@ -26,44 +26,44 @@
 
     <var-dialog v-model="fbDialogShow">
       <div class="cell-group">
-        <var-input 
-          :placeholder="$t('phrase.feedback_title_placeholder')" 
-          :maxlength="50" 
+        <var-input
+          :placeholder="$t('phrase.feedback_title_placeholder')"
+          :maxlength="50"
           v-model="fbTitle">
         </var-input>
-        <var-input 
-          type="textarea" 
-          :placeholder="$t('phrase.feedback_content_placeholder')" 
-          :maxlength="500" 
+        <var-input
+          type="textarea"
+          :placeholder="$t('phrase.feedback_content_placeholder')"
+          :maxlength="500"
           v-model="fbContent">
         </var-input>
-        <var-input 
-          :placeholder="$t('phrase.feedback_name_placeholder')" 
-          :maxlength="20" 
+        <var-input
+          :placeholder="$t('phrase.feedback_name_placeholder')"
+          :maxlength="20"
           v-model="fbName">
         </var-input>
-        <var-input 
-          :placeholder="$t('phrase.feedback_phone_placeholder')" 
-          type="tel" 
+        <var-input
+          :placeholder="$t('phrase.feedback_phone_placeholder')"
+          type="tel"
           v-model="fbPhone"
           :rules="[(v) => /^1[3-9]\d{9}$/.test(v) || '请输入正确手机号']">
         </var-input>
-        <var-input 
-          :placeholder="$t('phrase.feedback_email_placeholder')" 
-          :maxlength="100" 
+        <var-input
+          :placeholder="$t('phrase.feedback_email_placeholder')"
+          :maxlength="100"
           type="email"
           v-model="fbEmail"
           :rules="[(v) => /.+@.+\..+/.test(v) || '请输入正确邮箱']">
         </var-input>
-        <var-button 
-          type="primary" 
+        <var-button
+          type="primary"
           block
-          :disabled="fbTitle==''" 
+          :disabled="fbTitle==''"
           @click="feedback">
           {{ $t('app.submit') }}
         </var-button>
-        <var-button 
-          type="default" 
+        <var-button
+          type="default"
           block
           @click="fbDialogShow=false">
           {{ $t('app.cancel') }}
@@ -79,7 +79,7 @@
         阅读{{phrase.pv}} {{author}} <a :href="globalStore.copyrightLink" class="copyright-link">{{globalStore.copyright}}</a> 发布于{{formatTime(phrase.createTime)}}
       </span>
     </div>
-    
+
     <div class="action-grid">
       <div class="action-item" @click="payTips">
           <var-icon name="heart" size="26px" class="action-icon"/>
@@ -244,9 +244,9 @@ export default {
           })
         } else {
           _this.addDialogShow = false
-          Dialog({ 
-            title: _this.$t('app.alert'), 
-            message: res.data.msg 
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: res.data.msg
           })
         }
       })
@@ -321,16 +321,16 @@ export default {
             if (res.data) {
               _this.weixinPay(res.data)
             } else {
-              Dialog({ 
-                title: _this.$t('app.alert'), 
-                message: res.data.msg 
+              Dialog({
+                title: _this.$t('app.alert'),
+                message: res.data.msg
               })
             }
           })
         } else {
-          Dialog({ 
-            title: _this.$t('app.alert'), 
-            message: res.data.msg 
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: res.data.msg
           })
         }
       })
@@ -370,9 +370,9 @@ export default {
               message: vm.$t('phrase.pay_notify')
             })
           } else {
-            Dialog({ 
-              title: vm.$t('app.alert'), 
-              message: vm.$t('phrase.pay_cancel') 
+            Dialog({
+              title: vm.$t('app.alert'),
+              message: vm.$t('phrase.pay_cancel')
             })
           }
         }
@@ -541,22 +541,22 @@ export default {
     margin: 0 15px;
     padding: 20px;
   }
-  
+
   .phrase-text {
     font-size: 1.4rem;
   }
-  
+
   .action-grid {
     grid-template-columns: repeat(4, 1fr);
     margin: 0 15px 20px;
     gap: 8px;
   }
-  
+
   .action-item {
     padding: 2px 8px;
     margin-bottom: 0;
   }
-  
+
   .action-label {
     font-size: 0.8rem;
   }
@@ -566,17 +566,17 @@ export default {
   .phrase-text {
     font-size: 1.2rem;
   }
-  
+
   .action-grid {
     grid-template-columns: repeat(4, 1fr);
     margin: 0 10px 15px;
     gap: 6px;
   }
-  
+
   .action-icon {
     font-size: 22px;
   }
-  
+
   .action-label {
     font-size: 0.75rem;
   }

@@ -36,12 +36,10 @@ export default defineConfig(({ mode }) => {
       }),
       AutoImport({
         imports: ['vue', 'vue-router', 'pinia', '@vueuse/core'],
-        dts: 'src/auto-imports.d.ts',
-        resolvers: [VarletImportResolver()]
+        dts: 'src/auto-imports.d.ts'
       }),
       Components({
-        dts: 'src/components.d.ts',
-        resolvers: [VarletImportResolver()]
+        dts: 'src/components.d.ts'
       })
     ],
     resolve: {

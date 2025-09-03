@@ -1,13 +1,13 @@
 <template>
   <div>
     <!-- 蒙层 -->
-    <div 
-      v-if="showSideMenu && isMobile" 
+    <div
+      v-if="showSideMenu && isMobile"
       class="menu-overlay"
       @click="handleOverlayClick"
     ></div>
-    
-    <var-menu 
+
+    <var-menu
       v-model="showSideMenu"
       :placement="menuPlacement"
       :offset-x="menuOffsetX"
@@ -17,14 +17,14 @@
         <div class="side-menu" :data-show="showSideMenu">
           <div class="menu-header">
             <div style="display: flex; align-items: center;">
-              <var-icon 
+              <var-icon
                 name="chevron-left"
                 class="close-icon"
                 @click="close"
               />
             </div>
           </div>
-          
+
           <div class="menu-items">
             <router-link
               v-for="route in menuRoutes"

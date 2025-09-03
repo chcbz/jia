@@ -40,7 +40,7 @@ export function useHttp(options = {}) {
 
   const execute = async (executeOptions = {}) => {
     const mergedOptions = { ...defaultOptions, ...options, ...executeOptions }
-    
+
     const {
       url,
       method,
@@ -68,7 +68,7 @@ export function useHttp(options = {}) {
       if (!headers['Content-Type']) {
         headers['Content-Type'] = 'application/json'
       }
-      
+
       const config = {
         method: method.toUpperCase(),
         headers
@@ -82,12 +82,12 @@ export function useHttp(options = {}) {
       // 添加URL参数和baseURL
       const baseURL = import.meta.env.VITE_API_BASE_URL || ''
       let requestUrl = url
-      
+
       // 如果URL不是绝对路径，添加baseURL
       if (!url.startsWith('http://') && !url.startsWith('https://') && baseURL) {
         requestUrl = `${baseURL}${url.startsWith('/') ? url : `/${url}`}`
       }
-      
+
       if (params && Object.keys(params).length > 0) {
         const urlParams = new URLSearchParams(params).toString()
         requestUrl = `${requestUrl}${requestUrl.includes('?') ? '&' : '?'}${urlParams}`
@@ -124,7 +124,7 @@ export function useHttp(options = {}) {
       // 检查 HTTP 错误状态（fetch 不会自动抛出非 2xx 的错误）
       if (!response.ok) {
         let errorMessage = `HTTP error! status: ${response.status}`
-        
+
         // 尝试从响应中提取错误消息
         try {
           const errorData = await response.clone().json()
@@ -136,7 +136,7 @@ export function useHttp(options = {}) {
         } catch (jsonError) {
           // 如果无法解析为 JSON，使用默认错误消息
         }
-        
+
         const error = new Error(errorMessage)
         error.status = response.status
         error.response = response
@@ -169,14 +169,14 @@ export function useHttp(options = {}) {
 
             const chunk = decoder.decode(value, { stream: true })
             buffer += chunk
-            
+
             // 处理 SSE (Server-Sent Events) 格式或其他流式数据
             // 查找完整的事件（以换行符分隔）
             let eventEndIndex
             while ((eventEndIndex = buffer.indexOf('\n')) !== -1) {
               const event = buffer.substring(0, eventEndIndex).trim()
               buffer = buffer.substring(eventEndIndex + 1)
-              
+
               if (event) {
                 if (onStream) {
                   onStream(event)
@@ -232,7 +232,7 @@ export function useHttp(options = {}) {
 
     } catch (err) {
       error.value = err.message || '请求失败'
-      
+
       // 处理认证错误（fetch 的错误结构不同）
       if (err.name === 'AbortError') {
         error.value = '请求超时'
@@ -270,17 +270,17 @@ export function useHttp(options = {}) {
     error,
     data,
     response,
-    
+
     // 执行方法
     execute,
-    
+
     // 快捷方法
     get,
     post,
     put,
     patch,
     delete: del,
-    
+
     // 重置状态
     reset: () => {
       loading.value = false
@@ -298,25 +298,25 @@ export function useHttp(options = {}) {
  */
 export function createApi(basePath) {
   return {
-    list: (uri, params = {}, options = {}) => 
+    list: (uri, params = {}, options = {}) =>
       useHttp().get(`${basePath}${uri}`, { params, ...options }),
-    
-    get: (uri, id, options = {}) => 
+
+    get: (uri, id, options = {}) =>
       useHttp().get(`${basePath}${uri}/${id}`, options),
-    
-    create: (uri, data, options = {}) => 
+
+    create: (uri, data, options = {}) =>
       useHttp().post(`${basePath}${uri}`, data, options),
-    
-    update: (uri, id, data, options = {}) => 
+
+    update: (uri, id, data, options = {}) =>
       useHttp().put(`${basePath}${uri}/${id}`, data, options),
-    
-    patch: (uri, id, data, options = {}) => 
+
+    patch: (uri, id, data, options = {}) =>
       useHttp().patch(`${basePath}${uri}/${id}`, data, options),
-    
-    delete: (uri, id, options = {}) => 
+
+    delete: (uri, id, options = {}) =>
       useHttp().delete(`${basePath}${uri}/${id}`, options),
-    
-    search: (uri, data, options = {}) => 
+
+    search: (uri, data, options = {}) =>
       useHttp().post(`${basePath}${uri}/search`, data, options)
   }
 }

@@ -6,8 +6,8 @@
           <p>开始与JiA智能助手对话吧！</p>
           <p class="chat-empty-hint">输入您的问题或想法，我将尽力为您解答</p>
         </div>
-        <div v-for="(msg, index) in messages" :key="index" 
-             :class="['chat-message', msg.sender === 'user' ? 'chat-user-message' : 'chat-bot-message']" 
+        <div v-for="(msg, index) in messages" :key="index"
+             :class="['chat-message', msg.sender === 'user' ? 'chat-user-message' : 'chat-bot-message']"
              v-html="DOMPurify.sanitize(marked(msg.content))">
         </div>
       </div>
@@ -29,7 +29,7 @@
         </div>
       </div>
       <div class="chat-conversation-list">
-        <div v-for="conv in conversations" 
+        <div v-for="conv in conversations"
              :key="conv.id"
              :class="['chat-conversation-item', { active: conv.id === conversationId }]"
              @click="loadConversation(conv.id)">
@@ -97,15 +97,15 @@ const { t } = useI18n();
 
 // 计算属性
 const hasMessages = computed(() => messages.value.length > 0);
-const isSendButtonDisabled = computed(() => 
+const isSendButtonDisabled = computed(() =>
   isLoading.value || !inputMessage.value.trim()
 );
-const sortedConversations = computed(() => 
-  [...conversations.value].sort((a, b) => 
+const sortedConversations = computed(() =>
+  [...conversations.value].sort((a, b) =>
     new Date(b.lastUpdated) - new Date(a.lastUpdated)
   )
 );
-const shouldShowEmptyState = computed(() => 
+const shouldShowEmptyState = computed(() =>
   !hasMessages.value && !isLoading.value
 );
 
@@ -114,7 +114,7 @@ const initializeApp = () => {
   globalStore.setTitle(t('chat.title'));
   globalStore.setShowBack(false);
   globalStore.setShowMore(true);
-  
+
   loadConversations();
 };
 
@@ -129,7 +129,7 @@ const loadConversations = () => {
 const saveConversation = () => {
   const title = messages.value.find(m => m.sender === 'user')?.content || '新会话';
   const existingIndex = conversations.value.findIndex(c => c.id === conversationId.value);
-  
+
   const conversation = {
     id: conversationId.value,
     title: title.substring(0, 30),
@@ -182,10 +182,10 @@ const updateBotMessage = (content) => {
 
 const processBotResponse = (eventData) => {
   console.log("Received event data:", eventData);
-  
+
   // 处理多种可能的数据格式
   let payload = '';
-  
+
   // 如果是SSE格式 (data: {...})
   if (eventData.startsWith('data:')) {
     for (const line of eventData.split(/\n/)) {
@@ -199,7 +199,7 @@ const processBotResponse = (eventData) => {
   }
 
   payload = payload.trim();
-  
+
   if (payload === '[DONE]' || payload === '[EOM]' || !payload) {
     console.log("Stream completed or empty payload");
     return;
@@ -240,7 +240,7 @@ const sendMessage = async () => {
     }];
 
     scrollToBottom();
-    
+
     // 使用新的 useHttp 流式功能
     const result = await mcpApi.create('/chat/stream', {
       content: message,
@@ -264,7 +264,7 @@ const sendMessage = async () => {
         throw new Error(errorMessage);
       }
     });
-    
+
     // 保存reader引用以便后续取消
     if (result && result.stream) {
       readerRef.value = result.stream.reader;
@@ -335,18 +335,18 @@ const deleteConversation = async (id, retryCount = 0) => {
         if (index !== -1) {
           conversations.value.splice(index, 1);
         }
-        
+
         if (id === conversationId.value) {
           console.log('当前会话被删除，生成新会话ID');
           generateNewConversationId();
         }
-        
+
         localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations.value));
         console.log('localStorage已更新');
       },
       onError: (errorMessage) => {
         console.error('删除会话失败:', errorMessage);
-        
+
         const lastMessage = messages.value[messages.value.length - 1];
         if (!lastMessage || !lastMessage.isError) {
           messages.value = [...messages.value, {
@@ -364,7 +364,7 @@ const deleteConversation = async (id, retryCount = 0) => {
     });
   } catch (error) {
     console.error('删除会话失败:', error);
-    
+
     const lastMessage = messages.value[messages.value.length - 1];
     if (!lastMessage || !lastMessage.isError) {
       messages.value = [...messages.value, {
@@ -737,7 +737,7 @@ onMounted(initializeApp);
   .chat-sidebar {
     width: 380px;
   }
-  
+
   .chat-input {
     padding: 20px;
     gap: 14px;
@@ -749,36 +749,36 @@ onMounted(initializeApp);
     border-radius: 0;
     max-width: 100%;
   }
-  
+
   .chat-sidebar {
     width: 340px;
   }
-  
+
   .chat-messages {
     padding: 20px 20px 100px 20px; /* 底部增加 padding 防止被输入框遮挡 */
     height: 100%; /* 确保在移动端也占据全部高度 */
   }
-  
+
   .chat-message {
     padding: 14px 18px;
     font-size: 15px;
     border-radius: 18px;
   }
-  
+
   .chat-input {
     padding: 16px;
     gap: 12px;
     min-height: 70px; /* 移动端最小高度调整 */
   }
-  
+
   .chat-input .var-input {
     min-height: 42px; /* 移动端输入框最小高度 */
   }
-  
+
   .chat-input .var-input textarea {
     min-height: 42px !important; /* 移动端textarea最小高度 */
   }
-  
+
   .chat-input .var-button {
     min-width: 48px;
     height: 48px;
@@ -790,18 +790,18 @@ onMounted(initializeApp);
     visibility: visible !important;
     opacity: 1 !important;
   }
-  
+
   .send-icon {
     display: inline;
     font-size: 20px;
     margin: 0;
   }
-  
+
   .chat-empty-state {
     padding: 60px 20px;
     font-size: 18px;
   }
-  
+
   .chat-empty-hint {
     font-size: 14px;
   }
@@ -811,44 +811,44 @@ onMounted(initializeApp);
   .chat-sidebar {
     width: 300px;
   }
-  
+
   .chat-sidebar-header {
     padding: 20px;
   }
-  
+
   .chat-sidebar-header h3 {
     font-size: 16px;
   }
-  
+
   .chat-conversation-item {
     padding: 14px;
   }
-  
+
   .chat-messages {
     padding: 16px 16px 90px 16px; /* 底部增加 padding 防止被输入框遮挡 */
     height: 100%; /* 确保在移动端也占据全部高度 */
   }
-  
+
   .chat-message {
     padding: 12px 16px;
     font-size: 14px;
     border-radius: 16px;
   }
-  
+
   .chat-input {
     padding: 14px;
     gap: 10px;
     min-height: 65px; /* 小屏幕最小高度调整 */
   }
-  
+
   .chat-input .var-input {
     min-height: 40px; /* 小屏幕输入框最小高度 */
   }
-  
+
   .chat-input .var-input textarea {
     min-height: 40px !important; /* 小屏幕textarea最小高度 */
   }
-  
+
   .chat-input .var-button {
     min-width: 44px;
     height: 44px;
@@ -858,7 +858,7 @@ onMounted(initializeApp);
     align-items: center;
     justify-content: center;
   }
-  
+
   .send-icon {
     display: inline;
     font-size: 18px;
@@ -869,45 +869,45 @@ onMounted(initializeApp);
   .chat-sidebar {
     width: 280px;
   }
-  
+
   .chat-sidebar-header {
     padding: 16px;
     flex-direction: column;
     gap: 8px;
   }
-  
+
   .chat-sidebar-header h3 {
     font-size: 14px;
   }
-  
+
   .chat-conversation-title {
     font-size: 13px;
   }
-  
+
   .chat-conversation-date {
     font-size: 11px;
   }
-  
+
   .chat-message {
     padding: 10px 14px;
     font-size: 13px;
     border-radius: 14px;
   }
-  
+
   .chat-input {
     padding: 12px;
     gap: 8px;
     min-height: 60px; /* 超小屏幕最小高度调整 */
   }
-  
+
   .chat-input .var-input {
     min-height: 38px; /* 超小屏幕输入框最小高度 */
   }
-  
+
   .chat-input .var-input textarea {
     min-height: 38px !important; /* 超小屏幕textarea最小高度 */
   }
-  
+
   .chat-input .var-button {
     min-width: 40px;
     height: 40px;
@@ -917,17 +917,17 @@ onMounted(initializeApp);
     align-items: center;
     justify-content: center;
   }
-  
+
   .send-icon {
     display: inline;
     font-size: 16px;
   }
-  
+
   .chat-empty-state {
     padding: 40px 16px;
     font-size: 16px;
   }
-  
+
   .chat-empty-hint {
     font-size: 13px;
   }

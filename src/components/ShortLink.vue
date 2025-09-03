@@ -8,20 +8,20 @@
     <var-tabs-items v-model:active="index" class="tab-items-container">
       <var-tab-item>
         <div>
-          <var-input 
-            type="textarea" 
-            v-model="originalUrl" 
+          <var-input
+            type="textarea"
+            v-model="originalUrl"
             id="originalUrl"
             :placeholder="$t('dwz.long_url_placeholder')"
             rows="3">
           </var-input>
-          
-          <var-select 
+
+          <var-select
             :placeholder="$t('dwz.expire')" :options="expireList"
             v-model="expireYear" label-key="name" value-key="value" />
 
-          <var-button 
-            type="primary" 
+          <var-button
+            type="primary"
             block
             @click="toShort">
             {{$t('dwz.short')}}
@@ -30,10 +30,10 @@
 
         <div class="result-container">
           <span id="shortUrl">{{shortUrl}}</span>
-          <var-button 
-            id="copyBtn" 
-            size="small" 
-            @click="copyContent" 
+          <var-button
+            id="copyBtn"
+            size="small"
+            @click="copyContent"
             v-if="shortUrl!=''"
             class="copy-btn">
             {{$t('app.copy')}}
@@ -46,16 +46,16 @@
 
       <var-tab-item>
         <div>
-          <var-input 
-            type="textarea" 
-            v-model="uri" 
+          <var-input
+            type="textarea"
+            v-model="uri"
             id="uri"
             :placeholder="$t('dwz.short_url_placeholder')"
             rows="3">
           </var-input>
-          
-          <var-button 
-            type="primary" 
+
+          <var-button
+            type="primary"
             block
             @click="toLong">
             {{$t('dwz.restore')}}
@@ -101,7 +101,7 @@ export default {
       var baseUrl = apiStore.baseUrl
       var jiacn = globalStore.getJiacn
       const _this = this
-      
+
       if (!this.originalUrl) {
         Dialog({
           title: this.$t('app.alert'),
@@ -156,7 +156,7 @@ export default {
       var baseUrl = apiStore.baseUrl
       var jiacn = globalStore.getJiacn
       const _this = this
-      
+
       if (!this.uri) {
         Dialog({
           title: this.$t('app.alert'),

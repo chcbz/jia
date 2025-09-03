@@ -1,8 +1,8 @@
 <template>
 <div>
-  <var-action-sheet 
-    :actions="opMenu" 
-    v-model="showOpMenu" 
+  <var-action-sheet
+    :actions="opMenu"
+    v-model="showOpMenu"
     @select="onClickOpMenu">
   </var-action-sheet>
 
@@ -33,7 +33,7 @@ export default {
     const globalStore = useGlobalStore()
     const apiStore = useApiStore()
     const utilStore = useUtilStore()
-    
+
     globalStore.setMenu({
       menus: [],
       event: this
@@ -56,7 +56,7 @@ export default {
           desc: element.description,
           meta: {
             source: '￥' + element.amount,
-            date: dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') + ' - ' + 
+            date: dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') + ' - ' +
                   dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
             other: element.crond
           }

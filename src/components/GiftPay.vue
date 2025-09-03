@@ -1,7 +1,7 @@
 <template>
   <div style="background-color: #FFFFFF;">
-    <var-action-sheet 
-      :actions="opMenu" 
+    <var-action-sheet
+      :actions="opMenu"
       v-model="showOpMenu"
       @select="onClickOpMenu"
     />
@@ -32,9 +32,9 @@
           </var-radio-group>
         </div>
         <div>
-          <var-input 
+          <var-input
             :label="$t('gift.consignee')"
-            :placeholder="$t('gift.consignee_tips')" 
+            :placeholder="$t('gift.consignee_tips')"
             v-model="consignee"
             :rules="[(v) => !!v || $t('gift.consignee_tips')]"
           >
@@ -42,23 +42,23 @@
               <var-button type="primary" size="small" @click="wxAddress">{{$t('app.select')}}</var-button>
             </template>
           </var-input>
-          <var-input 
+          <var-input
             :label="$t('gift.phone')"
             type="tel"
-            :placeholder="$t('gift.phone_tips')" 
+            :placeholder="$t('gift.phone_tips')"
             v-model="phone"
             :rules="[(v) => !!v || $t('gift.phone_tips')]"
           />
-          <var-input 
+          <var-input
             v-if="virtual != 1"
             type="textarea"
             :label="$t('gift.address')"
-            :placeholder="$t('gift.address_tips')" 
+            :placeholder="$t('gift.address_tips')"
             v-model="address"
             :rows="2"
             :rules="[(v) => !!v || $t('gift.address_tips')]"
           />
-          <var-button 
+          <var-button
             block
             type="primary"
             @click="toPay"
@@ -78,7 +78,7 @@
 </template>
 
 <script>
-import { Card as VarCard, Tabs as VarTabs, Tab as VarTab, Swipe as VarSwipe, SwipeItem as VarSwipeItem, 
+import { Card as VarCard, Tabs as VarTabs, Tab as VarTab, Swipe as VarSwipe, SwipeItem as VarSwipeItem,
          Input as VarInput, Button as VarButton, RadioGroup as VarRadioGroup,
          Radio as VarRadio, ActionSheet as VarActionSheet, Dialog } from '@varlet/ui'
 import QRCode from 'qrcode'
@@ -185,17 +185,17 @@ export default {
               if (res.data) {
                 _this.weixinPay(res.data)
               } else {
-                Dialog({ 
-                  title: _this.$t('app.alert'), 
-                  message: res.data.msg 
+                Dialog({
+                  title: _this.$t('app.alert'),
+                  message: res.data.msg
                 })
               }
             })
           }
         } else {
-          Dialog({ 
-            title: _this.$t('app.alert'), 
-            message: res.data.msg 
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: res.data.msg
           })
         }
       })
@@ -251,9 +251,9 @@ export default {
               }
             })
           } else {
-            Dialog({ 
-              title: vm.$t('app.alert'), 
-              message: vm.$t('gift.pay_cancel') 
+            Dialog({
+              title: vm.$t('app.alert'),
+              message: vm.$t('gift.pay_cancel')
             })
           }
         }

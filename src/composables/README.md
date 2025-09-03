@@ -139,7 +139,7 @@ const startStream = async () => {
     onStream: (eventData) => {
       // 处理 SSE 事件数据
       console.log('Received stream data:', eventData)
-      
+
       // 解析 SSE 格式
       let content = ''
       for (const line of eventData.split(/\n/)) {
@@ -148,7 +148,7 @@ const startStream = async () => {
         }
       }
       content = content.trim()
-      
+
       if (content === '[DONE]' || content === '[EOM]') {
         return
       }
@@ -180,7 +180,7 @@ export default {
   setup() {
     const messages = ref([])
     const currentMessage = ref('')
-    
+
     const { loading, execute } = useHttp()
 
     const sendMessage = async (message) => {
@@ -202,7 +202,7 @@ export default {
             }
           }
           content = content.trim()
-          
+
           if (content && content !== '[DONE]' && content !== '[EOM]') {
             try {
               const data = JSON.parse(content)
@@ -234,7 +234,7 @@ export default {
 ## 预定义的 API 端点
 
 - `taskApi`: `/task` 端点操作
-- `phraseApi`: `/phrase` 端点操作  
+- `phraseApi`: `/phrase` 端点操作
 - `userApi`: `/user` 端点操作
 - `voteApi`: `/vote` 端点操作
 - `tipApi`: `/tip` 端点操作

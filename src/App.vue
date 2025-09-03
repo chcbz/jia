@@ -6,7 +6,7 @@
       @click-left="$router.back()"
     >
       <template #left>
-        <var-icon 
+        <var-icon
           v-if="!leftOptions.showBack"
           name="menu"
           @click.stop="toggleMenu"
@@ -14,7 +14,7 @@
         />
       </template>
       <template #right>
-        <var-icon 
+        <var-icon
           v-if="showMore"
           name="dots-vertical"
           @click.stop="handleMoreClick"
@@ -23,7 +23,7 @@
       </template>
     </var-app-bar>
 
-    <var-action-sheet 
+    <var-action-sheet
       v-if="actionMenu.length > 0"
       :actions="actionMenu"
       v-model="showActionMenu"
@@ -42,9 +42,9 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { 
-  AppBar as VarAppBar, 
-  Loading as VarLoading, 
+import {
+  AppBar as VarAppBar,
+  Loading as VarLoading,
   Icon as VarIcon,
   Menu as VarMenu,
   ActionSheet as VarActionSheet
@@ -139,7 +139,7 @@ html, body {
   .app-content {
     transition: margin-left 0.3s;
   }
-  
+
   .app-content.show-menu {
     margin-left: 250px;
   }

@@ -48,7 +48,7 @@ export const useUtilStore = defineStore('util', {
         }
         for (const k in o) {
           if (new RegExp('(' + k + ')').test(fmt)) {
-            fmt = fmt.replace(RegExp.$1, 
+            fmt = fmt.replace(RegExp.$1,
               (RegExp.$1.length === 1) ? (o[k]) : (('00' + o[k]).substr(String(o[k]).length)))
           }
         }
@@ -70,7 +70,7 @@ export const useUtilStore = defineStore('util', {
     closeWindow() {
       if (window.WeixinJSBridge) {
         window.WeixinJSBridge.call('closeWindow')
-      } else if (navigator.userAgent.indexOf('Firefox') !== -1 || 
+      } else if (navigator.userAgent.indexOf('Firefox') !== -1 ||
                  navigator.userAgent.indexOf('Chrome') !== -1) {
         window.location.href = 'about:blank'
       } else {

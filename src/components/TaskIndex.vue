@@ -15,8 +15,8 @@
       </div>
 
       <div class="calendar-days">
-        <div 
-          v-for="day in calendarDays" 
+        <div
+          v-for="day in calendarDays"
           :key="day.date"
           :class="['day', {
             'today': day.isToday,
@@ -49,12 +49,12 @@
   </var-dialog>
 
   <var-list>
-    <var-cell 
-      :title="typeDict(item.type) + item.name" 
-      :value="item.amount" 
-      v-for="item in listPlan" 
-      :key="item.id" 
-      @click="doShowDetail(item)" 
+    <var-cell
+      :title="typeDict(item.type) + item.name"
+      :value="item.amount"
+      v-for="item in listPlan"
+      :key="item.id"
+      @click="doShowDetail(item)"
       clickable>
     </var-cell>
   </var-list>
@@ -105,9 +105,9 @@ export default {
       const endOfMonth = this.currentDate.endOf('month')
       const startDay = startOfMonth.day()
       const daysInMonth = endOfMonth.date()
-      
+
       const daysArray = []
-      
+
       // 上个月的最后几天
       const prevMonthDays = startDay
       for (let i = prevMonthDays - 1; i >= 0; i--) {
@@ -120,7 +120,7 @@ export default {
           hasTasks: this.hasTasksForDate(date)
         })
       }
-      
+
       // 当前月的天数
       for (let i = 1; i <= daysInMonth; i++) {
         const date = startOfMonth.date(i)
@@ -132,7 +132,7 @@ export default {
           hasTasks: this.hasTasksForDate(date)
         })
       }
-      
+
       // 下个月的前几天
       const remainingCells = 42 - daysArray.length
       for (let i = 1; i <= remainingCells; i++) {
@@ -145,7 +145,7 @@ export default {
           hasTasks: this.hasTasksForDate(date)
         })
       }
-      
+
       return daysArray
     }
   },
@@ -192,7 +192,7 @@ export default {
       const globalStore = useGlobalStore()
       var baseUrl = apiStore.baseUrl
       var jiacn = globalStore.getJiacn
-      
+
       this.$http.post(baseUrl + '/task/item/search', {
         search: {
           jiacn: jiacn,
@@ -200,7 +200,7 @@ export default {
           timeEnd: lastDay.unix()
         }
       }).then(res => {
-        this.highlightDates = res.data.data.map(item => 
+        this.highlightDates = res.data.data.map(item =>
           dayjs.unix(item.executeTime).format('YYYY-MM-DD'))
       })
     },
@@ -221,9 +221,9 @@ export default {
           desc: item.description,
           meta: {
             source: item.type > 1 ? '￥' + item.amount : '',
-            date: item.type > 1 ? 
-              dayjs.unix(item.executeTime).format('YYYY-MM-DD') : 
-              dayjs.unix(res.data.data.startTime).format('YYYY-MM-DD') + ' ~ ' + 
+            date: item.type > 1 ?
+              dayjs.unix(item.executeTime).format('YYYY-MM-DD') :
+              dayjs.unix(res.data.data.startTime).format('YYYY-MM-DD') + ' ~ ' +
               dayjs.unix(res.data.data.endTime).format('YYYY-MM-DD'),
             other: item.crond == null ? period[item.period] : item.crond
           }

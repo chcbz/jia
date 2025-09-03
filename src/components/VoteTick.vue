@@ -8,10 +8,10 @@
       <span class="statistics-info" v-html="$t('vote.pub_author', {'totalNum': totalNum, 'rightNum': rightNum})"></span>
     </div>
     <var-list class="options-list">
-      <var-button 
-        class="option-button" 
-        v-for="(item, i) in question.items" 
-        :key="item.opt" 
+      <var-button
+        class="option-button"
+        v-for="(item, i) in question.items"
+        :key="item.opt"
         @click="toTick(item.opt)"
         block
         ripple
@@ -192,33 +192,33 @@ export default {
   .vote-tick-container {
     padding: 12px;
   }
-  
+
   .question-header {
     margin: 0 8px 20px 8px;
     min-height: 160px;
     padding: 16px;
   }
-  
+
   .question-title {
     font-size: 16px;
   }
-  
+
   .info-section {
     flex-direction: row;
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
   }
-  
+
   .option-button {
     padding: 12px;
     min-height: 50px;
   }
-  
+
   .option-label {
     font-size: 14px;
   }
-  
+
   .option-content {
     font-size: 13px;
   }
@@ -230,11 +230,11 @@ export default {
     min-height: 120px;
     padding: 12px;
   }
-  
+
   .question-title {
     font-size: 15px;
   }
-  
+
   .option-button {
     padding: 10px;
     min-height: 45px;

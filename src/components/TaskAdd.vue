@@ -20,6 +20,15 @@
 import { useGlobalStore } from '../stores/global'
 import { useApiStore } from '../stores/api'
 import { useUtilStore } from '../stores/util'
+import {
+  Picker as VarPicker,
+  Input as VarInput,
+  Textarea as VarTextarea,
+  DatePicker as VarDatePicker,
+  Switch as VarSwitch,
+  Button as VarButton,
+  Dialog
+} from '@varlet/ui'
 
 export default {
   created: function () {
