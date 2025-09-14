@@ -14,7 +14,8 @@ include 'isp:jia-isp-core', 'isp:jia-isp-api', 'isp:jia-isp-service', 'isp:jia-i
 include 'kefu:jia-kefu-core', 'kefu:jia-kefu-api', 'kefu:jia-kefu-service', 'kefu:jia-kefu-mapper'
 include 'material:jia-material-core', 'material:jia-material-api', 'material:jia-material-service',
         'material:jia-material-mapper', 'material:jia-material-starter'
-include 'oauth:jia-oauth-core', 'oauth:jia-oauth-api', 'oauth:jia-oauth-service', 'oauth:jia-oauth-mapper',
+include 'oauth:jia-oauth-core', 'oauth:jia-oauth-api', 'oauth:jia-oauth-mapper',
+        'oauth:jia-oauth-service', 'oauth:jia-oauth-resource',
         'oauth:jia-oauth-server-starter', 'oauth:jia-oauth-client-starter', 'oauth:jia-oauth-resource-starter'
 include 'point:jia-point-core', 'point:jia-point-api', 'point:jia-point-service', 'point:jia-point-mapper'
 include 'sms:jia-sms-core', 'sms:jia-sms-api', 'sms:jia-sms-service', 'sms:jia-sms-mapper'
@@ -22,3 +23,4 @@ include 'task:jia-task-core', 'task:jia-task-api', 'task:jia-task-service', 'tas
 include 'user:jia-user-core', 'user:jia-user-api', 'user:jia-user-service', 'user:jia-user-mapper', 'user:jia-user-starter'
 include 'workflow:jia-workflow-core', 'workflow:jia-workflow-api', 'workflow:jia-workflow-service', 'workflow:jia-workflow-starter'
 include 'wx:jia-wx-core', 'wx:jia-wx-api', 'wx:jia-wx-service', 'wx:jia-wx-mapper'
+include 'mcp:jia-mcp-client', 'mcp:jia-mcp-client-starter', 'mcp:jia-mcp-server'

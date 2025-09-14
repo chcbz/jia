@@ -70,7 +70,7 @@ public class DbUnitHelper {
     public static <T> List<T> readJsonEntitys(Resource resource, Class<T> clazz) {
         try {
             String str = StreamUtil.readText(resource.getInputStream());
-            return JsonUtil.jsonToList(str, new TypeReference<List<T>>() {
+            return JsonUtil.jsonToList(str, new TypeReference<>() {
                 @Override
                 public Type getType() {
                     return clazz;

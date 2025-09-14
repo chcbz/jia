@@ -5,8 +5,14 @@ dependencies {
     }
     implementation(libs.spring.boot.configuration.processor)
     api(libs.spring.boot.starter.mybatis)
-    implementation(libs.pagehelper.spring.boot.starter)
-    implementation(libs.mybatis.plus.boot.starter)
+    implementation(libs.pagehelper.spring.boot.starter) {
+        exclude group: 'org.mybatis.spring.boot', module: 'mybatis-spring-boot-starter'
+        exclude group: 'org.springframework.boot'
+    }
+    implementation(libs.mybatis.plus.boot.starter) {
+        exclude module: 'mybatis-spring'
+        exclude group: 'org.springframework.boot'
+    }
     implementation(libs.spring.boot.starter.data.jdbc)
     implementation(libs.mysql)
     implementation(libs.spring.boot.starter.undertow)

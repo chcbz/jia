@@ -173,7 +173,26 @@ public class JsonUtil {
 		}
 		return map;
 	}
-	
+
+	/**
+	 * 将json字符串转换成List<Map<String, Object>>对象
+	 * 
+	 * @param jsonString json字符串
+	 * @return List<Map<String, Object>>对象
+	 */
+	public static List<Map<String, Object>> jsonToListMap(String jsonString) {
+		if (StringUtil.isEmpty(jsonString)) {
+			return Collections.emptyList();
+		}
+		try {
+			JavaType javaType = MAPPER.getTypeFactory().constructParametricType(List.class, Map.class);
+			return MAPPER.readValue(jsonString, javaType);
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+		}
+		return Collections.emptyList();
+	}
+
 	public static Object[] getArray(String str) {
 		return jsonToList(str).toArray();
 	}

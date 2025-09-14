@@ -64,7 +64,7 @@ public class MatVoteServiceImpl implements MatVoteService {
 	}
 
 	@Override
-	public MatVoteResVO find(Long id) throws Exception {
+	public MatVoteResVO find(Long id) {
 		MatVoteEntity vote = matVoteDao.selectById(id);
 		if(vote == null) {
 			throw new EsRuntimeException(MatErrorConstants.MEDIA_NOT_EXIST);

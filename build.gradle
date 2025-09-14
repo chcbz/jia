@@ -19,7 +19,7 @@ subprojects {
         testCompileOnly libs.lombok
     }
 
-    sourceCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_21
 
     tasks.withType(JavaCompile).configureEach {
         options.encoding = 'UTF-8'

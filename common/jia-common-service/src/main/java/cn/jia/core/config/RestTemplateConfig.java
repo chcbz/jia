@@ -82,10 +82,5 @@ public class RestTemplateConfig {
             return false;
         }
 
-        @Override
-        public void handleError(ClientHttpResponse response) throws IOException {
-            log.error(response.getStatusText());
-        }
-
     }
 }

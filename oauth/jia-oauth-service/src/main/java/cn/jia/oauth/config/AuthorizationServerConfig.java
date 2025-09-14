@@ -39,14 +39,19 @@ public class AuthorizationServerConfig {
     @Bean
     @Order(1)
     public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http) throws Exception {
-        //针对 Spring Authorization Server 最佳实践配置
-        OAuth2AuthorizationServerConfiguration.applyDefaultSecurity(http);
-        http.getConfigurer(OAuth2AuthorizationServerConfigurer.class)
-                .oidc(Customizer.withDefaults())    // Enable OpenID Connect 1.0
-                .authorizationEndpoint(endpointConfigurer ->
-                        endpointConfigurer.consentPage("/oauth/confirm_access"));
+        // 创建 OAuth2 授权服务器配置器
+        OAuth2AuthorizationServerConfigurer authorizationServerConfigurer =
+                OAuth2AuthorizationServerConfigurer.authorizationServer();
 
-        http.exceptionHandling(configurer ->
+        // 配置安全策略
+        http.securityMatcher(authorizationServerConfigurer.getEndpointsMatcher())
+                .with(authorizationServerConfigurer, (authorizationServer) -> authorizationServer
+                        .oidc(Customizer.withDefaults())
+                        .authorizationEndpoint(endpointConfigurer ->
+                                endpointConfigurer.consentPage("/oauth/confirm_access"))
+                )
+                .authorizeHttpRequests((authorize) -> authorize.anyRequest().authenticated())
+                .exceptionHandling(configurer ->
                         configurer.defaultAuthenticationEntryPointFor((request, response, authException) -> {
                             log.warn(authException.getMessage(), authException);
                             JsonResult<Object> result = new JsonResult<>();
@@ -67,8 +72,7 @@ public class AuthorizationServerConfig {
                                 new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
                         )
                 )
-                ;
-
+        ;
         return http.build();
     }
 

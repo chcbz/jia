@@ -24,11 +24,10 @@ import cn.jia.sms.entity.SmsSendEntity;
 import cn.jia.sms.entity.SmsTemplateEntity;
 import cn.jia.sms.service.SmsService;
 import cn.jia.user.common.UserErrorConstants;
-import cn.jia.user.service.OrgService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -67,17 +66,20 @@ import java.util.Optional;
 @Slf4j
 @Controller
 @RequestMapping("/login")
-@RequiredArgsConstructor
 public class LoginController {
     private static final String SAVED_REQUEST = "SPRING_SECURITY_SAVED_REQUEST";
 
-    private final LdapUserService ldapUserService;
-    private final LdapUserGroupService ldapUserGroupService;
-    private final SmsService smsService;
-    private final DictService dictService;
-    private final OrgService orgService;
+    @Autowired(required = false)
+    private LdapUserService ldapUserService;
+    @Autowired(required = false)
+    private LdapUserGroupService ldapUserGroupService;
+    @Autowired(required = false)
+    private SmsService smsService;
+    @Autowired(required = false)
+    private DictService dictService;
 
-    private final RestTemplate restTemplate;
+    @Autowired
+    private RestTemplate restTemplate;
 
     @Value("${oauth.default.clientId:jia_client}")
     private String defaultClientId;

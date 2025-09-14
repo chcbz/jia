@@ -27,7 +27,6 @@ import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.security.SecurityProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -84,7 +83,7 @@ public class DefaultSecurityConfig {
     }
 
     @Bean
-    @Order(SecurityProperties.BASIC_AUTH_ORDER)
+    @Order(100)
     @DependsOn("userPermitProperties")
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests((authorize) -> {
@@ -114,9 +113,6 @@ public class DefaultSecurityConfig {
 //                .httpBasic(Customizer.withDefaults())
                 .formLogin(v -> v.loginPage("/login/index.html").loginProcessingUrl("/login")
                         .successHandler(authenticationSuccessHandler()))
-                // Accept access tokens for User Info and/or Client Registration
-                .oauth2ResourceServer((resourceServer) -> resourceServer
-                        .jwt(Customizer.withDefaults()));
         ;
         return http.build();
     }

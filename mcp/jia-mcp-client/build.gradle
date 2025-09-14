@@ -1,0 +1,21 @@
+dependencies {
+	implementation project(':common:jia-common-core')
+	implementation libs.spring.boot.starter.webflux
+	implementation libs.spring.ai.starter.mcp.client
+	implementation (libs.spring.ai.starter.model.zhipuai) {
+		exclude group: 'org.springframework.ai', module: 'spring-ai-autoconfigure-model-image-observation'
+	}
+	implementation libs.spring.ai.starter.model.deepseek
+	implementation libs.spring.ai.starter.model.ollama
+	implementation libs.spring.ai.starter.vector.store.elasticsearch
+	// implementation 'org.springframework.ai:spring-ai-starter-vector-store-redis'
+	implementation libs.spring.ai.advisors.vector.store
+	compileOnly libs.spring.boot.starter.websocket
+	compileOnly libs.spring.security.oauth2.client
+//	implementation 'org.springframework.retry:spring-retry'
+//	implementation 'org.springframework:spring-aspects'
+	testImplementation project(':common:jia-common-test')
+}
+
+version = '1.1.1-SNAPSHOT'
+description = 'jia-mcp-client'

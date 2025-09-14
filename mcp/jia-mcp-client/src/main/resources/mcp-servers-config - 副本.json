@@ -1,0 +1,83 @@
+{
+    "mcpServers": {
+        "filesystem": {
+            "command": "cmd",
+            "args": [
+                "/c",
+                "npx",
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "."
+            ]
+        },
+        "brave-search": {
+            "command": "cmd",
+            "args": [
+                "/c",
+                "npx",
+                "-y",
+                "@modelcontextprotocol/server-brave-search"
+            ],
+            "env": {
+                "BRAVE_API_KEY": "BSAybnnRIRov2FNKyWlQNvd968rlow1"
+            }
+        },
+        "playwright": {
+            "command": "cmd",
+            "args": [
+                "/c",
+                "npx",
+                "-y",
+                "@executeautomation/playwright-mcp-server",
+                "."
+            ]
+        },
+        "JiaAiServer": {
+            "command": "java",
+            "args": [
+                "-jar",
+                "D:/workspace/chcbz/project/jia/ai/jia-mcp-server/build/libs/jia-mcp-server-0.0.1-SNAPSHOT.jar"
+            ]
+        },
+        "elasticsearch-mcp-server": {
+          "command": "cmd",
+          "args": [
+            "/c",
+            "npx",
+            "-y",
+            "@elastic/mcp-server-elasticsearch"
+          ],
+          "env": {
+            "ES_URL": "http://47.106.106.57:9200",
+            "ES_API_KEY": "R295Um9KWUJkUzhxcmo3NW9CbEg6ZVcyWHlUM3ZTS2l6OXlpMHBha1ozdw=="
+          }
+        },
+        "mysql": {
+            "command": "cmd",
+            "args": [
+                "/c",
+                "npx",
+                "-y",
+                "@davewind/mysql-mcp-server",
+                "mysql://jia_dev:password@47.106.106.57:3306/jia_dev"
+            ]
+        },
+        "time": {
+            "command": "uvx",
+            "args": [
+                "mcp-server-time",
+                "--local-timezone=Asia/Shanghai"
+            ]
+        },
+        "fetch": {
+            "command": "uvx",
+            "args": [
+                "mcp-server-fetch",
+                "--ignore-robots-txt"
+            ],
+            "env": {
+                "PYTHONIOENCODING": "utf-8"
+            }
+        }
+    }
+}

@@ -2,7 +2,10 @@ dependencies {
     api project(':common:jia-common-core')
     api libs.h2
     api libs.spring.boot.starter.mybatis
-    api libs.mybatis.plus.boot.starter
+    api (libs.mybatis.plus.boot.starter) {
+        exclude module: 'mybatis-spring'
+        exclude group: 'org.springframework.boot'
+    }
     api(libs.spring.boot.starter.web) {
         exclude module: 'spring-boot-starter-tomcat'
     }
@@ -10,10 +13,14 @@ dependencies {
     api libs.spring.boot.starter.data.jdbc
     api libs.spring.boot.starter.data.redis
     api libs.spring.boot.starter.redisson
-    api libs.pagehelper.spring.boot.starter
+    api (libs.pagehelper.spring.boot.starter) {
+        exclude group: 'org.mybatis.spring.boot', module: 'mybatis-spring-boot-starter'
+        exclude group: 'org.springframework.boot'
+    }
     api(libs.spring.boot.starter.test) {
         exclude module: 'android-json'
     }
+    api("org.junit.platform:junit-platform-launcher")
     api(libs.dbunit) {
         exclude module: 'junit'
     }

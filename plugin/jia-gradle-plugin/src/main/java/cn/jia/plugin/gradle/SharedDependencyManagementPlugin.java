@@ -9,31 +9,35 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
         settings.dependencyResolutionManagement(drm ->
                 drm.versionCatalogs(catalogs ->
                         catalogs.create("libs", catalog -> {
-                            catalog.version("spring", "6.1.5");
-                            catalog.version("spring-boot", "3.2.4");
-                            catalog.version("spring-cloud", "Edgware.SR3");
-                            catalog.version("spring-ai", "1.0.0");
-                            catalog.version("spring-security", "6.2.3");
-                            catalog.version("spring-security-oauth2", "1.2.3");
+                            catalog.version("spring", "6.2.7");
+                            catalog.version("spring-boot", "3.5.0");
+                            catalog.version("spring-cloud", "2025.0.0");
+                            catalog.version("spring-ai", "1.0.1");
+                            catalog.version("spring-security", "6.5.0");
+                            catalog.version("spring-security-oauth2", "1.5.0");
                             catalog.version("weixin-java", "4.5.6.B");
-                            catalog.version("mybatis-plus", "3.5.5");
+                            catalog.version("mybatis-plus", "3.5.12");
                             catalog.version("mapstruct", "1.5.5.Final");
-                            catalog.version("spring-boot-pagehelper", "2.1.0");
-                            catalog.version("spring-boot-redisson", "3.27.2");
+                            catalog.version("jackson", "2.19.0");
+                            catalog.version("spring-boot-pagehelper", "2.1.1");
+                            catalog.version("spring-boot-redisson", "3.50.0");
                             catalog.version("spring-boot-druid", "1.2.22");
                             catalog.version("spring-boot-swagger", "4.5.0");
-                            catalog.version("spring-boot-mybatis", "3.0.3");
+                            catalog.version("spring-boot-mybatis", "3.0.5");
                             catalog.version("spring-boot-jasypt", "3.0.5");
+                            catalog.version("junit-platform", "1.12.2");
+                            catalog.version("junit-jupiter", "5.12.2");
+                            catalog.version("lombok", "1.18.34");
 
-                            catalog.library("pagehelper-core", "com.github.pagehelper:pagehelper:5.3.2");
+                            catalog.library("pagehelper-core", "com.github.pagehelper:pagehelper:6.1.1");
                             catalog.library("pagehelper-spring-boot-starter", "com.github.pagehelper", "pagehelper-spring-boot-starter").versionRef("spring-boot-pagehelper");
-                            catalog.library("mybatis-core", "org.mybatis:mybatis:3.5.14");
+                            catalog.library("mybatis-core", "org.mybatis:mybatis:3.5.19");
                             catalog.library("mybatis-plus-core", "com.baomidou", "mybatis-plus").versionRef("mybatis-plus");
                             catalog.library("mybatis-plus-annotation", "com.baomidou", "mybatis-plus-annotation").versionRef("mybatis-plus");
                             catalog.library("mybatis-plus-generator", "com.baomidou", "mybatis-plus-generator").versionRef("mybatis-plus");
                             catalog.library("mybatis-plus-boot-starter", "com.baomidou", "mybatis-plus-boot-starter").versionRef("mybatis-plus");
                             catalog.library("swagger.annotations", "io.swagger.core.v3:swagger-annotations:2.2.10");
-                            catalog.library("lombok", "org.projectlombok:lombok:1.18.28");
+                            catalog.library("lombok", "org.projectlombok", "lombok").versionRef("lombok");
                             catalog.library("spring.beans", "org.springframework", "spring-beans").versionRef("spring");
                             catalog.library("spring.context", "org.springframework", "spring-context").versionRef("spring");
                             catalog.library("spring.web", "org.springframework", "spring-web").versionRef("spring");
@@ -42,10 +46,10 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring.jdbc", "org.springframework", "spring-jdbc").versionRef("spring");
                             catalog.library("spring.aspects", "org.springframework", "spring-aspects").versionRef("spring");
                             catalog.library("spring.websocket", "org.springframework", "spring-websocket").versionRef("spring");
-                            catalog.library("spring.ldap", "org.springframework.ldap", "spring-ldap-core").version("3.2.2");
-                            catalog.library("spring.redis", "org.springframework.data", "spring-data-redis").version("3.1.0");
-                            catalog.library("spring.elasticsearch", "org.springframework.data", "spring-data-elasticsearch").version("5.2.4");
-                            catalog.library("spring.rabbit", "org.springframework.amqp", "spring-rabbit").version("3.1.3");
+                            catalog.library("spring.redis", "org.springframework.data", "spring-data-redis").versionRef("spring-boot");
+                            catalog.library("spring.ldap", "org.springframework.ldap", "spring-ldap-core").version("3.3.0");
+                            catalog.library("spring.elasticsearch", "org.springframework.data", "spring-data-elasticsearch").version("5.5.0");
+                            catalog.library("spring.rabbit", "org.springframework.amqp", "spring-rabbit").version("3.2.5");
                             catalog.library("spring.security.core", "org.springframework.security", "spring-security-core").versionRef("spring-security");
                             catalog.library("spring.security.config", "org.springframework.security", "spring-security-config").versionRef("spring-security");
                             catalog.library("spring.security.web", "org.springframework.security", "spring-security-web").versionRef("spring-security");
@@ -55,6 +59,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-boot-configuration-processor", "org.springframework.boot", "spring-boot-configuration-processor").versionRef("spring-boot");
                             catalog.library("spring-boot-autoconfigure", "org.springframework.boot", "spring-boot-autoconfigure").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-web", "org.springframework.boot", "spring-boot-starter-web").versionRef("spring-boot");
+                            catalog.library("spring-boot-starter-webflux", "org.springframework.boot", "spring-boot-starter-webflux").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-validation", "org.springframework.boot", "spring-boot-starter-validation").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-undertow", "org.springframework.boot", "spring-boot-starter-undertow").versionRef("spring-boot");
                             catalog.library("spring-boot-starter-mybatis", "org.mybatis.spring.boot", "mybatis-spring-boot-starter").versionRef("spring-boot-mybatis");
@@ -84,6 +89,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-cloud-starter-security", "org.springframework.cloud", "spring-cloud-starter-security").versionRef("spring-cloud");
                             catalog.library("spring-cloud-starter-oauth2", "org.springframework.cloud", "spring-cloud-starter-oauth2").versionRef("spring-cloud");
                             catalog.library("spring-ai-starter-mcp-client", "org.springframework.ai", "spring-ai-starter-mcp-client").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-mcp-server", "org.springframework.ai", "spring-ai-starter-mcp-server").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-zhipuai", "org.springframework.ai", "spring-ai-starter-model-zhipuai").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-deepseek", "org.springframework.ai", "spring-ai-starter-model-deepseek").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-ollama", "org.springframework.ai", "spring-ai-starter-model-ollama").versionRef("spring-ai");
@@ -91,8 +97,8 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-ai-starter-vector-store-redis", "org.springframework.ai", "spring-ai-starter-vector-store-redis").versionRef("spring-ai");
                             catalog.library("spring-ai-advisors-vector-store", "org.springframework.ai", "spring-ai-advisors-vector-store").versionRef("spring-ai");
                             catalog.library("spring-test-dbunit", "com.github.springtestdbunit:spring-test-dbunit:1.3.0");
-                            catalog.library("jackson-core", "com.fasterxml.jackson.core:jackson-core:2.15.2");
-                            catalog.library("jackson-annotations", "com.fasterxml.jackson.core:jackson-annotations:2.15.2");
+                            catalog.library("jackson-core", "com.fasterxml.jackson.core", "jackson-core").versionRef("jackson");
+                            catalog.library("jackson-annotations", "com.fasterxml.jackson.core", "jackson-annotations").versionRef("jackson");
                             catalog.library("json", "org.json:json:20230227");
                             catalog.library("log4j", "log4j:log4j:1.2.17");
                             catalog.library("slf4j.api", "org.slf4j:slf4j-api:2.0.6");
@@ -141,7 +147,13 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("xdocreport", "fr.opensagres.xdocreport:xdocreport:1.0.6");
                             catalog.library("poi-ooxml-schemas", "org.apache.poi:poi-ooxml-schemas:3.14");
                             catalog.library("ooxml-schemas", "org.apache.poi:ooxml-schemas:1.3");
-                            catalog.library("junit-jupiter", "org.junit.jupiter:junit-jupiter:5.9.3");
+                            catalog.library("junit-jupiter", "org.junit.jupiter", "junit-jupiter").versionRef("junit-jupiter");
+                            catalog.library("junit-platform-engine", "org.junit.platform", "junit-platform-engine").versionRef("junit-platform");
+                            catalog.library("junit-platform-launcher", "org.junit.platform", "junit-platform-launcher").versionRef("junit-platform");
+                            catalog.library("junit-platform-commons", "org.junit.platform", "junit-platform-commons").versionRef("junit-platform");
+                            catalog.library("junit-jupiter-api", "org.junit.jupiter", "junit-jupiter-api").versionRef("junit-jupiter");
+                            catalog.library("junit-jupiter-engine", "org.junit.jupiter", "junit-jupiter-engine").versionRef("junit-jupiter");
+                            catalog.library("junit-jupiter-params", "org.junit.jupiter", "junit-jupiter-params").versionRef("junit-jupiter");
                             catalog.library("h2", "com.h2database:h2:2.1.214");
                             catalog.library("druid", "com.alibaba:druid:1.2.22");
                             catalog.library("dbunit", "org.dbunit:dbunit:2.7.3");

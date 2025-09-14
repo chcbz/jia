@@ -104,7 +104,7 @@ class DwzServiceImplTest extends BaseMockTest {
         Assertions.assertNotNull(result);
         Assertions.assertEquals(result.getPageSize(), 30);
         Assertions.assertEquals(result.getPageNum(), 1);
-        Assertions.assertEquals(result.getList().get(0), entity);
+        Assertions.assertEquals(result.getList().getFirst(), entity);
 
         Mockito.verify(dwzRecordDao, times(1)).selectByEntity(any());
     }

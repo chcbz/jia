@@ -31,3 +31,4 @@ target/
 build/
 /gradlew
 /gradlew.bat
+/.vscode/
