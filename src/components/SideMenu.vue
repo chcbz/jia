@@ -16,12 +16,8 @@
       <template #default>
         <div class="side-menu" :data-show="showSideMenu">
           <div class="menu-header">
-            <div style="display: flex; align-items: center;">
-              <var-icon
-                name="chevron-left"
-                class="close-icon"
-                @click="close"
-              />
+            <div style="display: flex; align-items: center">
+              <var-icon name="chevron-left" class="close-icon" @click="close" />
             </div>
           </div>
 
@@ -44,61 +40,66 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { useWindowSize } from '@vueuse/core'
-import { useGlobalStore } from '@/stores/global'
+import { computed, watch } from "vue";
+import { useRouter } from "vue-router";
+import { useWindowSize } from "@vueuse/core";
+import { useGlobalStore } from "@/stores/global";
 
 const props = defineProps({
   modelValue: {
     type: Boolean,
-    default: false
-  }
-})
+    default: false,
+  },
+});
 
-const emit = defineEmits(['update:modelValue', 'close'])
+const emit = defineEmits(["update:modelValue", "close"]);
 
-const router = useRouter()
-const { width } = useWindowSize()
-const globalStore = useGlobalStore()
+const router = useRouter();
+const { width } = useWindowSize();
+const globalStore = useGlobalStore();
 
-const isMobile = computed(() => width.value < 768)
-const menuPlacement = computed(() => isMobile.value ? 'bottom' : 'right')
-const menuOffsetX = computed(() => isMobile.value ? 0 : -16)
-const menuOffsetY = computed(() => isMobile.value ? 0 : 56)
+const isMobile = computed(() => width.value < 768);
+const menuPlacement = computed(() => (isMobile.value ? "bottom" : "right"));
+const menuOffsetX = computed(() => (isMobile.value ? 0 : -16));
+const menuOffsetY = computed(() => (isMobile.value ? 0 : 56));
 
 const menuRoutes = computed(() => {
-  return router.getRoutes().filter(route => route.meta?.title && route.meta?.showInMenu !== false)
-})
+  return router
+    .getRoutes()
+    .filter((route) => route.meta?.title && route.meta?.showInMenu !== false);
+});
 
 const close = () => {
-  globalStore.toggleSideMenu()
-  emit('update:modelValue', false)
-  emit('close')
-}
+  globalStore.toggleSideMenu();
+  emit("update:modelValue", false);
+  emit("close");
+};
 
 const handleOverlayClick = (event) => {
   // 确保点击的是蒙层本身，而不是子元素
-  if (event.target.classList.contains('menu-overlay')) {
-    close()
+  if (event.target.classList.contains("menu-overlay")) {
+    close();
   }
-}
+};
 
-watch(() => props.modelValue, (newVal) => {
-  globalStore.showSideMenu = newVal
-  if (!newVal) {
-    emit('close')
+watch(
+  () => props.modelValue,
+  (newVal) => {
+    globalStore.showSideMenu = newVal;
+    if (!newVal) {
+      emit("close");
+    }
   }
-})
+);
 
 const showSideMenu = computed({
   get() {
-    return globalStore.showSideMenu
+    return globalStore.showSideMenu;
   },
   set(value) {
-    globalStore.showSideMenu = value
-  }
-})
+    globalStore.showSideMenu = value;
+  },
+});
 </script>
 
 <style scoped>

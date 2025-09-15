@@ -1,11 +1,18 @@
 <template>
   <div class="vote-tick-container">
     <div class="question-header">
-      <h2 class="question-title">{{question.title}}</h2>
+      <h2 class="question-title">{{ question.title }}</h2>
     </div>
     <div class="info-section">
-      <a class="copyright-link" :href="globalStore.copyrightLink">{{ globalStore.copyright }}</a>
-      <span class="statistics-info" v-html="$t('vote.pub_author', {'totalNum': totalNum, 'rightNum': rightNum})"></span>
+      <a class="copyright-link" :href="globalStore.copyrightLink">{{
+        globalStore.copyright
+      }}</a>
+      <span
+        class="statistics-info"
+        v-html="
+          $t('vote.pub_author', { totalNum: totalNum, rightNum: rightNum })
+        "
+      ></span>
     </div>
     <var-list class="options-list">
       <var-button
@@ -16,85 +23,93 @@
         block
         ripple
       >
-        <span class="option-label">{{opts[i]}}.</span>
-        <span class="option-content">{{item.content}}</span>
+        <span class="option-label">{{ opts[i] }}.</span>
+        <span class="option-content">{{ item.content }}</span>
       </var-button>
     </var-list>
   </div>
 </template>
 
 <script>
-import { useGlobalStore } from '../stores/global'
-import { useApiStore } from '../stores/api'
-import { Dialog } from '@varlet/ui'
+import { useGlobalStore } from "../stores/global";
+import { useApiStore } from "../stores/api";
+import { Dialog } from "@varlet/ui";
 
 export default {
   created: function () {
-    this.globalStore = useGlobalStore()
-    const apiStore = useApiStore()
-    this.globalStore.setTitle(this.$t('vote.title'))
-    this.globalStore.setShowBack(false)
-    this.globalStore.setShowMore(false)
-    var baseUrl = apiStore.baseUrl
-    var jiacn = this.globalStore.getJiacn
-    const _this = this
-    this.$http.get(baseUrl + '/vote/get/random', {
-      params: {
-        jiacn: jiacn
-      }
-    }).then(res => {
-      _this.question = res.data.data
-      for (var i = 0; i < _this.question.items.length; i++) {
-        _this.totalNum += _this.question.items[i].num
-        if (_this.question.items[i].tick === 1) {
-          _this.rightNum = _this.question.items[i].num
+    this.globalStore = useGlobalStore();
+    const apiStore = useApiStore();
+    this.globalStore.setTitle(this.$t("vote.title"));
+    this.globalStore.setShowBack(false);
+    this.globalStore.setShowMore(false);
+    var baseUrl = apiStore.baseUrl;
+    var jiacn = this.globalStore.getJiacn;
+    const _this = this;
+    this.$http
+      .get(baseUrl + "/vote/get/random", {
+        params: {
+          jiacn: jiacn,
+        },
+      })
+      .then((res) => {
+        _this.question = res.data.data;
+        for (var i = 0; i < _this.question.items.length; i++) {
+          _this.totalNum += _this.question.items[i].num;
+          if (_this.question.items[i].tick === 1) {
+            _this.rightNum = _this.question.items[i].num;
+          }
         }
-      }
-    })
+      });
   },
   methods: {
     onClickOpMenu: function (key, item) {
-      console.log(item)
+      console.log(item);
     },
     toTick: function (opt) {
-      const apiStore = useApiStore()
-      var baseUrl = apiStore.baseUrl
-      var jiacn = this.globalStore.getJiacn
-      const _this = this
-      this.$http.post(baseUrl + '/vote/tick', {
-        jiacn: jiacn,
-        questionId: this.question.id,
-        opt: opt
-      }).then(res => {
-        if (res.data.data) {
-          Dialog({
-            title: _this.$t('app.notify'),
-            message: _this.$t('vote.right_alert', {'point': _this.question.point}),
-            confirmButtonText: _this.$t('app.confirm'),
-            onConfirm: () => {
-              _this.$router.go(0)
-            }
-          })
-        } else {
-          Dialog({
-            title: _this.$t('app.alert'),
-            message: _this.$t('vote.wrong_alert', {'opt': _this.question.opt}),
-            confirmButtonText: _this.$t('app.confirm')
-          })
-        }
-      })
-    }
+      const apiStore = useApiStore();
+      var baseUrl = apiStore.baseUrl;
+      var jiacn = this.globalStore.getJiacn;
+      const _this = this;
+      this.$http
+        .post(baseUrl + "/vote/tick", {
+          jiacn: jiacn,
+          questionId: this.question.id,
+          opt: opt,
+        })
+        .then((res) => {
+          if (res.data.data) {
+            Dialog({
+              title: _this.$t("app.notify"),
+              message: _this.$t("vote.right_alert", {
+                point: _this.question.point,
+              }),
+              confirmButtonText: _this.$t("app.confirm"),
+              onConfirm: () => {
+                _this.$router.go(0);
+              },
+            });
+          } else {
+            Dialog({
+              title: _this.$t("app.alert"),
+              message: _this.$t("vote.wrong_alert", {
+                opt: _this.question.opt,
+              }),
+              confirmButtonText: _this.$t("app.confirm"),
+            });
+          }
+        });
+    },
   },
-  data () {
+  data() {
     return {
       question: {},
       showOpMenu: false,
-      opts: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'],
+      opts: ["A", "B", "C", "D", "E", "F", "G", "H"],
       totalNum: 0,
-      rightNum: 0
-    }
+      rightNum: 0,
+    };
   },
-}
+};
 </script>
 <style scoped>
 .vote-tick-container {
