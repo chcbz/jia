@@ -21,7 +21,7 @@ import { useUtilStore } from '../stores/util'
  * @param {Function} options.onStreamEnd - 流式结束回调（当 responseType 为 'stream' 时使用）
  * @returns {Object} 包含执行函数和响应式状态的组合
  */
-export function useHttp(options = {}) {
+export function useHttp (options = {}) {
   const loading = ref(false)
   const error = ref(null)
   const data = ref(null)
@@ -296,7 +296,7 @@ export function useHttp(options = {}) {
  * @param {string} basePath - API基础路径
  * @returns {Object} 包含CRUD操作的对象
  */
-export function createApi(basePath) {
+export function createApi (basePath) {
   return {
     list: (uri, params = {}, options = {}) =>
       useHttp().get(`${basePath}${uri}`, { params, ...options }),

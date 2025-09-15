@@ -7,7 +7,7 @@ export const useUtilStore = defineStore('util', {
     direction: !/transition=none/.test(location.href) ? 'forward' : ''
   }),
   actions: {
-    getLocalStorage(key) {
+    getLocalStorage (key) {
       const data = localStorage.getItem(key)
       if (data) {
         const dataObj = JSON.parse(data)
@@ -20,19 +20,19 @@ export const useUtilStore = defineStore('util', {
       }
       return null
     },
-    setLocalStorage(key, value, expTime) {
-      localStorage.setItem(key, JSON.stringify({data: value, expTime}))
+    setLocalStorage (key, value, expTime) {
+      localStorage.setItem(key, JSON.stringify({ data: value, expTime }))
     },
-    removeLocalStorage(key) {
+    removeLocalStorage (key) {
       localStorage.removeItem(key)
     },
-    cleanLocalStorage() {
+    cleanLocalStorage () {
       localStorage.clear()
     },
-    toTimeStamp(date) {
+    toTimeStamp (date) {
       return parseInt(date.getTime())
     },
-    fromTimeStamp(time, fmt) {
+    fromTimeStamp (time, fmt) {
       const date = new Date(time)
       if (fmt) {
         const o = {
@@ -56,7 +56,7 @@ export const useUtilStore = defineStore('util', {
       }
       return date
     },
-    getHashCode(str, caseSensitive) {
+    getHashCode (str, caseSensitive) {
       if (!caseSensitive) {
         str = str.toLowerCase()
       }
@@ -67,11 +67,11 @@ export const useUtilStore = defineStore('util', {
       }
       return (hash & 0x7FFFFFFF)
     },
-    closeWindow() {
+    closeWindow () {
       if (window.WeixinJSBridge) {
         window.WeixinJSBridge.call('closeWindow')
       } else if (navigator.userAgent.indexOf('Firefox') !== -1 ||
-                 navigator.userAgent.indexOf('Chrome') !== -1) {
+        navigator.userAgent.indexOf('Chrome') !== -1) {
         window.location.href = 'about:blank'
       } else {
         window.opener = null
@@ -79,18 +79,18 @@ export const useUtilStore = defineStore('util', {
         window.close()
       }
     },
-    updateDemoPosition(top) {
+    updateDemoPosition (top) {
       this.demoScrollTop = top
     },
-    updateLoadingStatus(isLoading) {
+    updateLoadingStatus (isLoading) {
       this.isLoading = isLoading
     },
-    updateDirection(direction) {
+    updateDirection (direction) {
       if (!/transition=none/.test(location.href)) {
         this.direction = direction
       }
     },
-    formatDate(dateStr) {
+    formatDate (dateStr) {
       const date = new Date(dateStr)
       return date.toLocaleString()
     }

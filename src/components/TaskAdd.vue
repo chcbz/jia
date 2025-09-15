@@ -14,11 +14,7 @@
         @change="changePeriod"
       />
       <var-input :label="$t('task.name')" v-model="name" />
-      <var-textarea
-        :label="$t('task.description')"
-        v-model="description"
-        :rows="3"
-      />
+      <var-textarea :label="$t('task.description')" v-model="description" :rows="3" />
       <var-date-picker
         v-model="start_time"
         :max-date="new Date(2100, 0, 1)"
@@ -35,12 +31,7 @@
         :title="$t('task.end_time')"
         v-show="endTimeShow"
       />
-      <var-switch
-        :label="$t('task.lunar')"
-        v-model="lunar"
-        :active-value="1"
-        :inactive-value="0"
-      />
+      <var-switch :label="$t('task.lunar')" v-model="lunar" :active-value="1" :inactive-value="0" />
       <var-input
         :label="$t('task.amount')"
         v-model="amount"
@@ -55,17 +46,15 @@
         :inactive-value="0"
       />
       <br />
-      <var-button type="primary" @click="doAdd">{{
-        $t("app.save")
-      }}</var-button>
+      <var-button type="primary" @click="doAdd">{{ $t('app.save') }}</var-button>
     </div>
   </div>
 </template>
 
 <script>
-import { useGlobalStore } from "../stores/global";
-import { useApiStore } from "../stores/api";
-import { useUtilStore } from "../stores/util";
+import { useGlobalStore } from '../stores/global';
+import { useApiStore } from '../stores/api';
+import { useUtilStore } from '../stores/util';
 import {
   Picker as VarPicker,
   Input as VarInput,
@@ -73,17 +62,17 @@ import {
   DatePicker as VarDatePicker,
   Switch as VarSwitch,
   Button as VarButton,
-  Dialog,
-} from "@varlet/ui";
+  Dialog
+} from '@varlet/ui';
 
 export default {
   created: function () {
     const globalStore = useGlobalStore();
     globalStore.setMenu({
       menus: [],
-      event: this,
+      event: this
     });
-    globalStore.setTitle(this.$t("app.task_add"));
+    globalStore.setTitle(this.$t('app.task_add'));
     globalStore.setShowBack(true);
   },
   methods: {
@@ -93,7 +82,7 @@ export default {
       var baseUrl = apiStore.baseUrl;
       var jiacn = globalStore.getJiacn;
       this.$http
-        .post(baseUrl + "/task/create", {
+        .post(baseUrl + '/task/create', {
           jiacn: jiacn,
           type: this.type[0],
           period: this.period[0],
@@ -104,121 +93,121 @@ export default {
           endTime: useUtilStore().toTimeStamp(new Date(this.end_time)),
           lunar: this.lunar,
           amount: this.amount,
-          remind: this.remind,
+          remind: this.remind
         })
         .then((res) => {
-          if (res.data.code === "E0") {
+          if (res.data.code === 'E0') {
             Dialog({
-              title: this.$t("app.notify"),
+              title: this.$t('app.notify'),
               message: res.data.msg,
-              confirmButtonText: this.$t("app.confirm"),
+              confirmButtonText: this.$t('app.confirm')
             });
             this.$router.go(-1);
           } else {
             Dialog({
-              title: this.$t("app.alert"),
+              title: this.$t('app.alert'),
               message: res.data.msg,
-              confirmButtonText: this.$t("app.confirm"),
+              confirmButtonText: this.$t('app.confirm')
             });
           }
         });
     },
     changeType: function (val) {
-      if (val[0] === "1") {
+      if (val[0] === '1') {
         this.amountShow = false;
       } else {
         this.amountShow = true;
       }
     },
     changePeriod: function (val) {
-      if (val[0] === "6") {
+      if (val[0] === '6') {
         this.startTimeShow = true;
         this.endTimeShow = false;
-        this.end_time = "";
-      } else if (val[0] === "0") {
+        this.end_time = '';
+      } else if (val[0] === '0') {
         this.startTimeShow = false;
         this.endTimeShow = false;
-        this.start_time = "";
-        this.end_time = "";
+        this.start_time = '';
+        this.end_time = '';
       } else {
         this.startTimeShow = true;
         this.endTimeShow = true;
       }
-    },
+    }
   },
   data() {
     return {
       type: [],
       period: [],
-      crond: "",
-      name: "",
-      description: "",
-      start_time: "",
+      crond: '',
+      name: '',
+      description: '',
+      start_time: '',
       startTimeShow: false,
-      end_time: "",
+      end_time: '',
       endTimeShow: false,
       amount: null,
       amountShow: false,
-      remind: "1",
-      lunar: "0",
+      remind: '1',
+      lunar: '0',
       typeList: [
         {
-          text: this.$t("task.type_notify"),
-          value: "1",
+          text: this.$t('task.type_notify'),
+          value: '1'
         },
         {
-          text: this.$t("task.type_target"),
-          value: "2",
+          text: this.$t('task.type_target'),
+          value: '2'
         },
         {
-          text: this.$t("task.type_repayment"),
-          value: "3",
+          text: this.$t('task.type_repayment'),
+          value: '3'
         },
         {
-          text: this.$t("task.type_fixed_income"),
-          value: "4",
-        },
+          text: this.$t('task.type_fixed_income'),
+          value: '4'
+        }
       ],
       periodList: [
         {
-          text: this.$t("task.period_long_term"),
-          value: "0",
+          text: this.$t('task.period_long_term'),
+          value: '0'
         },
         {
-          text: this.$t("task.period_yearly"),
-          value: "1",
+          text: this.$t('task.period_yearly'),
+          value: '1'
         },
         {
-          text: this.$t("task.period_monthly"),
-          value: "2",
+          text: this.$t('task.period_monthly'),
+          value: '2'
         },
         {
-          text: this.$t("task.period_weekly"),
-          value: "3",
+          text: this.$t('task.period_weekly'),
+          value: '3'
         },
         {
-          text: this.$t("task.period_daily"),
-          value: "5",
+          text: this.$t('task.period_daily'),
+          value: '5'
         },
         {
-          text: this.$t("task.period_hourly"),
-          value: "11",
+          text: this.$t('task.period_hourly'),
+          value: '11'
         },
         {
-          text: this.$t("task.period_minutely"),
-          value: "12",
+          text: this.$t('task.period_minutely'),
+          value: '12'
         },
         {
-          text: this.$t("task.period_secondly"),
-          value: "13",
+          text: this.$t('task.period_secondly'),
+          value: '13'
         },
         {
-          text: this.$t("task.period_specific_date"),
-          value: "6",
-        },
-      ],
+          text: this.$t('task.period_specific_date'),
+          value: '6'
+        }
+      ]
     };
-  },
+  }
 };
 </script>
 <style scoped>

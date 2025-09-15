@@ -9,16 +9,11 @@
           v-model="newContent"
         >
         </var-input>
-        <var-button
-          type="primary"
-          block
-          :disabled="newContent == ''"
-          @click="addContent"
-        >
-          {{ $t("app.submit") }}
+        <var-button type="primary" block :disabled="newContent == ''" @click="addContent">
+          {{ $t('app.submit') }}
         </var-button>
         <var-button type="default" block @click="addDialogShow = false">
-          {{ $t("app.cancel") }}
+          {{ $t('app.cancel') }}
         </var-button>
       </div>
     </var-dialog>
@@ -59,16 +54,11 @@
           :rules="[(v) => /.+@.+\..+/.test(v) || '请输入正确邮箱']"
         >
         </var-input>
-        <var-button
-          type="primary"
-          block
-          :disabled="fbTitle == ''"
-          @click="feedback"
-        >
-          {{ $t("app.submit") }}
+        <var-button type="primary" block :disabled="fbTitle == ''" @click="feedback">
+          {{ $t('app.submit') }}
         </var-button>
         <var-button type="default" block @click="fbDialogShow = false">
-          {{ $t("app.cancel") }}
+          {{ $t('app.cancel') }}
         </var-button>
       </div>
     </var-dialog>
@@ -79,9 +69,7 @@
     <div class="phrase-meta">
       <span class="meta-text">
         阅读{{ phrase.pv }} {{ author }}
-        <a :href="globalStore.copyrightLink" class="copyright-link">{{
-          globalStore.copyright
-        }}</a>
+        <a :href="globalStore.copyrightLink" class="copyright-link">{{ globalStore.copyright }}</a>
         发布于{{ formatTime(phrase.createTime) }}
       </span>
     </div>
@@ -89,59 +77,59 @@
     <div class="action-grid">
       <div class="action-item" @click="payTips">
         <var-icon name="heart" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.tips") }}</div>
+        <div class="action-label">{{ $t('phrase.tips') }}</div>
       </div>
       <div class="action-item" ref="upvote" @click="toTick(1)">
         <var-icon name="thumb-up" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.up") }}{{ phrase.up }}</div>
+        <div class="action-label">{{ $t('phrase.up') }}{{ phrase.up }}</div>
       </div>
       <div class="action-item" ref="downvote" @click="toTick(0)">
         <var-icon name="thumb-down" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.down") }}{{ phrase.down }}</div>
+        <div class="action-label">{{ $t('phrase.down') }}{{ phrase.down }}</div>
       </div>
       <div class="action-item" @click="fbDialogShow = true">
         <var-icon name="chat-processing" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.say") }}</div>
+        <div class="action-label">{{ $t('phrase.say') }}</div>
       </div>
     </div>
 
     <div class="section-title">
-      <h5>{{ $t("phrase.others") }}</h5>
+      <h5>{{ $t('phrase.others') }}</h5>
     </div>
 
     <div class="action-grid">
       <div class="action-item" id="copyBtn" @click="copyContent">
         <var-icon name="content-copy" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.copy") }}</div>
+        <div class="action-label">{{ $t('phrase.copy') }}</div>
       </div>
       <div class="action-item" @click="refreshPage">
         <var-icon name="refresh" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.next") }}</div>
+        <div class="action-label">{{ $t('phrase.next') }}</div>
       </div>
       <div class="action-item" @click="addDialogShow = true">
         <var-icon name="plus" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.add") }}</div>
+        <div class="action-label">{{ $t('phrase.add') }}</div>
       </div>
       <div class="action-item" @click="closeWindow">
         <var-icon name="close" size="26px" class="action-icon" />
-        <div class="action-label">{{ $t("phrase.close") }}</div>
+        <div class="action-label">{{ $t('phrase.close') }}</div>
       </div>
     </div>
   </div>
 </template>
 
 <script>
-import Clipboard from "clipboard";
-import { useGlobalStore } from "../stores/global";
-import { useApiStore } from "../stores/api";
-import { useUtilStore } from "../stores/util";
+import Clipboard from 'clipboard';
+import { useGlobalStore } from '../stores/global';
+import { useApiStore } from '../stores/api';
+import { useUtilStore } from '../stores/util';
 
 export default {
   created: function () {
     this.globalStore = useGlobalStore();
     const utilStore = useUtilStore();
-    this.globalStore.setTitle(this.$t("phrase.title"));
-    document.title = this.$t("phrase.title_sub");
+    this.globalStore.setTitle(this.$t('phrase.title'));
+    document.title = this.$t('phrase.title_sub');
     this.globalStore.setShowBack(false);
     this.globalStore.setShowMore(false);
     const apiStore = useApiStore();
@@ -150,31 +138,31 @@ export default {
     var jiacn = this.globalStore.getJiacn;
     const _this = this;
     this.$http
-      .post(baseUrl + "/phrase/get/random", {
-        jiacn: jiacn,
+      .post(baseUrl + '/phrase/get/random', {
+        jiacn: jiacn
       })
       .then((res) => {
         _this.phrase = res.data.data;
         document.title = _this.phrase.content;
         this.$http
-          .get(baseUrl + "/phrase/read", {
+          .get(baseUrl + '/phrase/read', {
             params: {
-              id: res.data.data.id,
-            },
+              id: res.data.data.id
+            }
           })
           .then((res) => {
             _this.phrase.pv++;
           });
         if (_this.phrase.jiacn) {
           this.$http
-            .get(baseUrl + "/user/get", {
+            .get(baseUrl + '/user/get', {
               params: {
-                type: "cn",
-                key: _this.phrase.jiacn,
-              },
+                type: 'cn',
+                key: _this.phrase.jiacn
+              }
             })
             .then((res) => {
-              if (res.data.code === "E0") {
+              if (res.data.code === 'E0') {
                 _this.author = res.data.data.nickname;
               }
             });
@@ -191,40 +179,40 @@ export default {
       const _this = this;
       if (!jiacn) {
         Dialog({
-          title: _this.$t("app.notify"),
-          message: _this.$t("phrase.subscribe_notify"),
+          title: _this.$t('app.notify'),
+          message: _this.$t('phrase.subscribe_notify'),
           onConfirm: () => {
             window.location.href =
-              "https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect";
-          },
+              'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect';
+          }
         });
         return false;
       }
       this.$http
-        .post(baseUrl + "/phrase/vote", {
+        .post(baseUrl + '/phrase/vote', {
           jiacn: jiacn,
           phraseId: this.phrase.id,
-          vote: opt,
+          vote: opt
         })
         .then((res) => {
-          if (res.data.code === "E0") {
+          if (res.data.code === 'E0') {
             if (opt === 1) {
               _this.phrase.up++;
-              _this.$refs.upvote.$el.classList.add("voted");
+              _this.$refs.upvote.$el.classList.add('voted');
             } else {
               _this.phrase.down++;
-              _this.$refs.downvote.$el.classList.add("voted");
+              _this.$refs.downvote.$el.classList.add('voted');
             }
           }
         });
     },
     copyContent: function () {
-      var clipboard = new Clipboard("#copyBtn");
+      var clipboard = new Clipboard('#copyBtn');
       const _this = this;
-      clipboard.on("success", function (e) {
+      clipboard.on('success', function (e) {
         Dialog({
-          title: _this.$t("app.notify"),
-          message: _this.$t("phrase.copy_success"),
+          title: _this.$t('app.notify'),
+          message: _this.$t('phrase.copy_success')
         });
         e.clearSelection();
       });
@@ -238,7 +226,7 @@ export default {
     },
     formatTime: function (timestamp) {
       const utilStore = useUtilStore();
-      return utilStore.fromTimeStamp(timestamp, "YYYY-MM-DD");
+      return utilStore.fromTimeStamp(timestamp, 'YYYY-MM-DD');
     },
     addContent: function () {
       const apiStore = useApiStore();
@@ -246,24 +234,24 @@ export default {
       var jiacn = this.globalStore.getJiacn;
       const _this = this;
       this.$http
-        .post(baseUrl + "/phrase/create", {
+        .post(baseUrl + '/phrase/create', {
           jiacn: jiacn,
           content: this.newContent.trim(),
-          tag: "毒鸡汤",
+          tag: '毒鸡汤'
         })
         .then((res) => {
-          if (res.data.code === "E0") {
-            _this.newContent = "";
+          if (res.data.code === 'E0') {
+            _this.newContent = '';
             _this.addDialogShow = false;
             Dialog({
-              title: _this.$t("app.notify"),
-              message: _this.$t("phrase.add_success"),
+              title: _this.$t('app.notify'),
+              message: _this.$t('phrase.add_success')
             });
           } else {
             _this.addDialogShow = false;
             Dialog({
-              title: _this.$t("app.alert"),
-              message: res.data.msg,
+              title: _this.$t('app.alert'),
+              message: res.data.msg
             });
           }
         });
@@ -275,36 +263,34 @@ export default {
       const _this = this;
       if (!jiacn) {
         Dialog({
-          title: _this.$t("app.notify"),
-          message: _this.$t("phrase.subscribe_notify"),
+          title: _this.$t('app.notify'),
+          message: _this.$t('phrase.subscribe_notify'),
           onConfirm: () => {
             window.location.href =
-              "https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect";
-          },
+              'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect';
+          }
         });
         return false;
       }
       let formData = new FormData();
-      formData.append("jiacn", jiacn);
-      formData.append("resourceId", "phrase");
-      formData.append("name", _this.fbName);
-      formData.append("phone", _this.fbPhone);
-      formData.append("email", _this.fbEmail);
-      formData.append("title", _this.fbTitle);
-      formData.append("content", _this.fbContent);
-      this.$http
-        .post(baseUrl + "/kefu/message/create", formData)
-        .then((res) => {
-          if (res.data.code === "E0") {
-            _this.fbTitle = "";
-            _this.fbContent = "";
-            _this.fbDialogShow = false;
-            Dialog({
-              title: _this.$t("app.notify"),
-              message: _this.$t("phrase.feedback_success"),
-            });
-          }
-        });
+      formData.append('jiacn', jiacn);
+      formData.append('resourceId', 'phrase');
+      formData.append('name', _this.fbName);
+      formData.append('phone', _this.fbPhone);
+      formData.append('email', _this.fbEmail);
+      formData.append('title', _this.fbTitle);
+      formData.append('content', _this.fbContent);
+      this.$http.post(baseUrl + '/kefu/message/create', formData).then((res) => {
+        if (res.data.code === 'E0') {
+          _this.fbTitle = '';
+          _this.fbContent = '';
+          _this.fbDialogShow = false;
+          Dialog({
+            title: _this.$t('app.notify'),
+            message: _this.$t('phrase.feedback_success')
+          });
+        }
+      });
     },
     payTips: function () {
       const apiStore = useApiStore();
@@ -315,64 +301,59 @@ export default {
 
       if (!jiacn) {
         Dialog({
-          title: _this.$t("app.notify"),
-          message: _this.$t("phrase.subscribe_notify"),
+          title: _this.$t('app.notify'),
+          message: _this.$t('phrase.subscribe_notify'),
           onConfirm: () => {
             window.location.href =
-              "https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect";
-          },
+              'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzU2OTU3Njk5MQ==&scene=110#wechat_redirect';
+          }
         });
         return false;
       }
       this.$http
-        .post(baseUrl + "/tip/create", {
+        .post(baseUrl + '/tip/create', {
           type: 1,
           entityId: this.phrase.id,
           price: 100,
           jiacn: jiacn,
-          status: 0,
+          status: 0
         })
         .then((res) => {
-          if (res.data.code === "E0") {
+          if (res.data.code === 'E0') {
             _this.$http
-              .get(baseUrl + "/wx/pay/createOrder", {
+              .get(baseUrl + '/wx/pay/createOrder', {
                 params: {
-                  outTradeNo:
-                    "TIP" + (Array(7).join("0") + res.data.data.id).slice(-7),
-                  tradeType: "JSAPI",
-                  appid: appid,
-                },
+                  outTradeNo: 'TIP' + (Array(7).join('0') + res.data.data.id).slice(-7),
+                  tradeType: 'JSAPI',
+                  appid: appid
+                }
               })
               .then((res) => {
                 if (res.data) {
                   _this.weixinPay(res.data);
                 } else {
                   Dialog({
-                    title: _this.$t("app.alert"),
-                    message: res.data.msg,
+                    title: _this.$t('app.alert'),
+                    message: res.data.msg
                   });
                 }
               });
           } else {
             Dialog({
-              title: _this.$t("app.alert"),
-              message: res.data.msg,
+              title: _this.$t('app.alert'),
+              message: res.data.msg
             });
           }
         });
     },
     weixinPay: function (data) {
       var vm = this;
-      if (typeof WeixinJSBridge === "undefined") {
+      if (typeof WeixinJSBridge === 'undefined') {
         if (document.addEventListener) {
-          document.addEventListener(
-            "WeixinJSBridgeReady",
-            vm.onBridgeReady(data),
-            false
-          );
+          document.addEventListener('WeixinJSBridgeReady', vm.onBridgeReady(data), false);
         } else if (document.attachEvent) {
-          document.attachEvent("WeixinJSBridgeReady", vm.onBridgeReady(data));
-          document.attachEvent("onWeixinJSBridgeReady", vm.onBridgeReady(data));
+          document.attachEvent('WeixinJSBridgeReady', vm.onBridgeReady(data));
+          document.attachEvent('onWeixinJSBridgeReady', vm.onBridgeReady(data));
         }
       } else {
         vm.onBridgeReady(data);
@@ -381,7 +362,7 @@ export default {
     onBridgeReady: function (data) {
       var vm = this;
       WeixinJSBridge.invoke(
-        "getBrandWCPayRequest",
+        'getBrandWCPayRequest',
         {
           debug: true,
           appId: data.appId,
@@ -390,23 +371,23 @@ export default {
           package: data.packageValue,
           signType: data.signType,
           paySign: data.paySign,
-          jsApiList: ["chooseWXPay"],
+          jsApiList: ['chooseWXPay']
         },
         function (res) {
-          if (res.err_msg === "get_brand_wcpay_request:ok") {
+          if (res.err_msg === 'get_brand_wcpay_request:ok') {
             Dialog({
-              title: vm.$t("app.notify"),
-              message: vm.$t("phrase.pay_notify"),
+              title: vm.$t('app.notify'),
+              message: vm.$t('phrase.pay_notify')
             });
           } else {
             Dialog({
-              title: vm.$t("app.alert"),
-              message: vm.$t("phrase.pay_cancel"),
+              title: vm.$t('app.alert'),
+              message: vm.$t('phrase.pay_cancel')
             });
           }
         }
       );
-    },
+    }
   },
   data() {
     return {
@@ -414,16 +395,16 @@ export default {
       showOpMenu: false,
       hasTick: false,
       addDialogShow: false,
-      newContent: "",
-      author: "",
+      newContent: '',
+      author: '',
       fbDialogShow: false,
-      fbTitle: "",
-      fbContent: "",
-      fbName: "",
-      fbPhone: "",
-      fbEmail: "",
+      fbTitle: '',
+      fbContent: '',
+      fbName: '',
+      fbPhone: '',
+      fbEmail: ''
     };
-  },
+  }
 };
 </script>
 
@@ -547,7 +528,7 @@ export default {
 
 .section-title h5::before,
 .section-title h5::after {
-  content: "";
+  content: '';
   position: absolute;
   top: 50%;
   width: 40px;

@@ -1,11 +1,7 @@
 <template>
   <div>
     <!-- 蒙层 -->
-    <div
-      v-if="showSideMenu && isMobile"
-      class="menu-overlay"
-      @click="handleOverlayClick"
-    ></div>
+    <div v-if="showSideMenu && isMobile" class="menu-overlay" @click="handleOverlayClick"></div>
 
     <var-menu
       v-model="showSideMenu"
@@ -40,26 +36,26 @@
 </template>
 
 <script setup>
-import { computed, watch } from "vue";
-import { useRouter } from "vue-router";
-import { useWindowSize } from "@vueuse/core";
-import { useGlobalStore } from "@/stores/global";
+import { computed, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { useWindowSize } from '@vueuse/core';
+import { useGlobalStore } from '@/stores/global';
 
 const props = defineProps({
   modelValue: {
     type: Boolean,
-    default: false,
-  },
+    default: false
+  }
 });
 
-const emit = defineEmits(["update:modelValue", "close"]);
+const emit = defineEmits(['update:modelValue', 'close']);
 
 const router = useRouter();
 const { width } = useWindowSize();
 const globalStore = useGlobalStore();
 
 const isMobile = computed(() => width.value < 768);
-const menuPlacement = computed(() => (isMobile.value ? "bottom" : "right"));
+const menuPlacement = computed(() => (isMobile.value ? 'bottom' : 'right'));
 const menuOffsetX = computed(() => (isMobile.value ? 0 : -16));
 const menuOffsetY = computed(() => (isMobile.value ? 0 : 56));
 
@@ -71,13 +67,13 @@ const menuRoutes = computed(() => {
 
 const close = () => {
   globalStore.toggleSideMenu();
-  emit("update:modelValue", false);
-  emit("close");
+  emit('update:modelValue', false);
+  emit('close');
 };
 
 const handleOverlayClick = (event) => {
   // 确保点击的是蒙层本身，而不是子元素
-  if (event.target.classList.contains("menu-overlay")) {
+  if (event.target.classList.contains('menu-overlay')) {
     close();
   }
 };
@@ -87,7 +83,7 @@ watch(
   (newVal) => {
     globalStore.showSideMenu = newVal;
     if (!newVal) {
-      emit("close");
+      emit('close');
     }
   }
 );
@@ -98,7 +94,7 @@ const showSideMenu = computed({
   },
   set(value) {
     globalStore.showSideMenu = value;
-  },
+  }
 });
 </script>
 
@@ -135,7 +131,7 @@ const showSideMenu = computed({
   z-index: 1000;
 }
 
-.side-menu[data-show="true"] {
+.side-menu[data-show='true'] {
   transform: translateX(0);
 }
 

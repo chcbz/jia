@@ -7,7 +7,7 @@ import { ref } from 'vue'
 import { useHttp, taskApi, phraseApi } from './useHttp'
 
 // 示例 1: 基本用法
-export function useTaskList() {
+export function useTaskList () {
   const { loading, error, data, execute } = useHttp({
     url: '/task/search',
     method: 'POST',
@@ -36,7 +36,7 @@ export function useTaskList() {
 }
 
 // 示例 2: 使用预定义的API端点
-export function usePhraseOperations() {
+export function usePhraseOperations () {
   const {
     loading: phraseLoading,
     error: phraseError,
@@ -133,7 +133,7 @@ export default {
 */
 
 // 示例 4: 带回调的用法
-export function useUserProfile() {
+export function useUserProfile () {
   const { loading, error, data, execute } = useHttp({
     url: '/user/profile',
     method: 'GET',
@@ -161,7 +161,7 @@ export function useUserProfile() {
 }
 
 // 示例 5: 不需要认证的请求
-export function usePublicData() {
+export function usePublicData () {
   const { loading, error, data, execute } = useHttp({
     url: '/public/data',
     method: 'GET',
@@ -179,7 +179,7 @@ export function usePublicData() {
 }
 
 // 示例 6: 文件上传
-export function useFileUpload() {
+export function useFileUpload () {
   const { loading, error, data, execute } = useHttp()
 
   const uploadFile = async (file, additionalData = {}) => {
@@ -216,7 +216,7 @@ export function useFileUpload() {
 }
 
 // 示例 7: 流式响应 (Server-Sent Events)
-export function useStreamingChat() {
+export function useStreamingChat () {
   const { loading, error, data, execute } = useHttp()
   const messages = ref([])
   const currentMessage = ref('')

@@ -11,7 +11,7 @@
           :key="index"
           :class="[
             'chat-message',
-            msg.sender === 'user' ? 'chat-user-message' : 'chat-bot-message',
+            msg.sender === 'user' ? 'chat-user-message' : 'chat-bot-message'
           ]"
           v-html="DOMPurify.sanitize(marked(msg.content))"
         ></div>
@@ -31,18 +31,12 @@
           round
           icon-container
         >
-          <var-icon
-            :name="isStreaming ? 'close' : 'chevron-up'"
-            class="send-icon"
-          />
+          <var-icon :name="isStreaming ? 'close' : 'chevron-up'" class="send-icon" />
         </var-button>
       </div>
     </div>
 
-    <div
-      :class="['chat-overlay', { show: showSidebar }]"
-      @click="toggleSidebar"
-    ></div>
+    <div :class="['chat-overlay', { show: showSidebar }]" @click="toggleSidebar"></div>
     <div :class="['chat-sidebar', { show: showSidebar }]">
       <div class="chat-sidebar-header">
         <h3>历史会话</h3>
@@ -60,15 +54,12 @@
         <div
           v-for="conv in conversations"
           :key="conv.id"
-          :class="[
-            'chat-conversation-item',
-            { active: conv.id === conversationId },
-          ]"
+          :class="['chat-conversation-item', { active: conv.id === conversationId }]"
           @click="loadConversation(conv.id)"
         >
           <div class="chat-conversation-content">
             <div class="chat-conversation-title">
-              {{ conv.title || "新会话" }}
+              {{ conv.title || '新会话' }}
             </div>
             <div class="chat-conversation-date">
               {{ utilStore.formatDate(conv.lastUpdated) }}
@@ -87,40 +78,40 @@
 </template>
 
 <script setup>
-import { marked } from "marked";
-import DOMPurify from "dompurify";
-import { ref, onMounted, computed, watch, getCurrentInstance } from "vue";
-import { useUtilStore } from "../stores/util";
-import { useGlobalStore } from "../stores/global";
-import { useApiStore } from "../stores/api";
-import { useI18n } from "vue-i18n";
-import { useHttp, mcpApi } from "../composables/useHttp";
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import { ref, onMounted, computed, watch, getCurrentInstance } from 'vue';
+import { useUtilStore } from '../stores/util';
+import { useGlobalStore } from '../stores/global';
+import { useApiStore } from '../stores/api';
+import { useI18n } from 'vue-i18n';
+import { useHttp, mcpApi } from '../composables/useHttp';
 
 // 配置marked
 marked.setOptions({
   breaks: true,
   gfm: true,
   headerIds: false,
-  sanitize: false, // 禁用marked内置的sanitize，使用DOMPurify
+  sanitize: false // 禁用marked内置的sanitize，使用DOMPurify
 });
 
 // 错误类型常量
 const ERROR_TYPES = {
-  NETWORK: "network",
-  SERVER: "server",
-  VALIDATION: "validation",
+  NETWORK: 'network',
+  SERVER: 'server',
+  VALIDATION: 'validation'
 };
 
 // 消息类型常量
 const MESSAGE_TYPES = {
-  USER: "user",
-  BOT: "bot",
-  SYSTEM: "system",
+  USER: 'user',
+  BOT: 'bot',
+  SYSTEM: 'system'
 };
 
 // 响应式状态
 const messages = ref([]);
-const inputMessage = ref("");
+const inputMessage = ref('');
 const messagesRef = ref(null);
 const isLoading = ref(false);
 const isStreaming = ref(false);
@@ -131,7 +122,7 @@ const conversations = ref([]);
 const showSidebar = ref(false);
 
 // 存储键和工具函数
-const STORAGE_KEY = "chat_conversations";
+const STORAGE_KEY = 'chat_conversations';
 const utilStore = useUtilStore();
 const globalStore = useGlobalStore();
 const apiStore = useApiStore();
@@ -139,21 +130,15 @@ const { t } = useI18n();
 
 // 计算属性
 const hasMessages = computed(() => messages.value.length > 0);
-const isSendButtonDisabled = computed(
-  () => isLoading.value || !inputMessage.value.trim()
-);
+const isSendButtonDisabled = computed(() => isLoading.value || !inputMessage.value.trim());
 const sortedConversations = computed(() =>
-  [...conversations.value].sort(
-    (a, b) => new Date(b.lastUpdated) - new Date(a.lastUpdated)
-  )
+  [...conversations.value].sort((a, b) => new Date(b.lastUpdated) - new Date(a.lastUpdated))
 );
-const shouldShowEmptyState = computed(
-  () => !hasMessages.value && !isLoading.value
-);
+const shouldShowEmptyState = computed(() => !hasMessages.value && !isLoading.value);
 
 // 初始化
 const initializeApp = () => {
-  globalStore.setTitle(t("chat.title"));
+  globalStore.setTitle(t('chat.title'));
   globalStore.setShowBack(false);
   globalStore.setShowMore(true);
 
@@ -169,17 +154,14 @@ const loadConversations = () => {
 };
 
 const saveConversation = () => {
-  const title =
-    messages.value.find((m) => m.sender === "user")?.content || "新会话";
-  const existingIndex = conversations.value.findIndex(
-    (c) => c.id === conversationId.value
-  );
+  const title = messages.value.find((m) => m.sender === 'user')?.content || '新会话';
+  const existingIndex = conversations.value.findIndex((c) => c.id === conversationId.value);
 
   const conversation = {
     id: conversationId.value,
     title: title.substring(0, 30),
     lastUpdated: new Date().toISOString(),
-    messages: [...messages.value], // 创建副本避免引用问题
+    messages: [...messages.value] // 创建副本避免引用问题
   };
 
   if (existingIndex >= 0) {
@@ -213,29 +195,29 @@ const generateNewConversationId = () => {
 // 消息处理函数
 const updateBotMessage = (content) => {
   const lastMessage = messages.value[messages.value.length - 1];
-  if (lastMessage?.sender === "bot") {
+  if (lastMessage?.sender === 'bot') {
     lastMessage.content += content;
   } else {
     messages.value.push({
-      sender: "bot",
+      sender: 'bot',
       content,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date().toISOString()
     });
   }
   scrollToBottom();
 };
 
 const processBotResponse = (eventData) => {
-  console.log("Received event data:", eventData);
+  console.log('Received event data:', eventData);
 
   // 处理多种可能的数据格式
-  let payload = "";
+  let payload = '';
 
   // 如果是SSE格式 (data: {...})
-  if (eventData.startsWith("data:")) {
+  if (eventData.startsWith('data:')) {
     for (const line of eventData.split(/\n/)) {
-      if (line.startsWith("data:")) {
-        payload += line.slice(5).trim() + "\n";
+      if (line.startsWith('data:')) {
+        payload += line.slice(5).trim() + '\n';
       }
     }
   } else {
@@ -245,23 +227,22 @@ const processBotResponse = (eventData) => {
 
   payload = payload.trim();
 
-  if (payload === "[DONE]" || payload === "[EOM]" || !payload) {
-    console.log("Stream completed or empty payload");
+  if (payload === '[DONE]' || payload === '[EOM]' || !payload) {
+    console.log('Stream completed or empty payload');
     return;
   }
 
   try {
     // 尝试解析为JSON
     const data = JSON.parse(payload);
-    const messageContent =
-      data.v || data.content || data.message || data.text || "";
+    const messageContent = data.v || data.content || data.message || data.text || '';
     if (messageContent) {
       updateBotMessage(messageContent);
     } else {
-      console.log("No message content found in JSON:", data);
+      console.log('No message content found in JSON:', data);
     }
   } catch (error) {
-    console.log("Not JSON, treating as plain text:", payload);
+    console.log('Not JSON, treating as plain text:', payload);
     // 如果不是JSON，直接作为文本显示
     updateBotMessage(payload);
   }
@@ -274,47 +255,47 @@ const sendMessage = async () => {
 
   isLoading.value = true;
   isStreaming.value = true;
-  inputMessage.value = "";
+  inputMessage.value = '';
 
   try {
     // 添加用户消息
     messages.value = [
       ...messages.value,
       {
-        sender: "user",
+        sender: 'user',
         content: message,
         timestamp: new Date().toISOString(),
-        conversationId: conversationId.value,
-      },
+        conversationId: conversationId.value
+      }
     ];
 
     scrollToBottom();
 
     // 使用新的 useHttp 流式功能
     const result = await mcpApi.create(
-      "/chat/stream",
+      '/chat/stream',
       {
         content: message,
-        conversationId: conversationId.value,
+        conversationId: conversationId.value
       },
       {
-        responseType: "stream",
+        responseType: 'stream',
         autoLoading: false,
         onStream: (eventData) => {
-          console.log("Stream data received:", eventData);
+          console.log('Stream data received:', eventData);
           processBotResponse(eventData);
         },
         onStreamEnd: () => {
-          console.log("Stream ended");
+          console.log('Stream ended');
           isStreaming.value = false;
           isLoading.value = false;
           readerRef.value = null;
           saveConversation();
         },
         onError: (errorMessage) => {
-          console.error("发送消息失败:", errorMessage);
+          console.error('发送消息失败:', errorMessage);
           throw new Error(errorMessage);
-        },
+        }
       }
     );
 
@@ -323,18 +304,18 @@ const sendMessage = async () => {
       readerRef.value = result.stream.reader;
     }
   } catch (err) {
-    console.error("发送消息失败:", err);
+    console.error('发送消息失败:', err);
     isStreaming.value = false;
     isLoading.value = false;
-    error.value = "发送消息失败，请重试";
+    error.value = '发送消息失败，请重试';
     messages.value = [
       ...messages.value,
       {
-        sender: "system",
-        content: "消息发送失败",
+        sender: 'system',
+        content: '消息发送失败',
         isError: true,
-        timestamp: new Date().toISOString(),
-      },
+        timestamp: new Date().toISOString()
+      }
     ];
   }
 };
@@ -346,14 +327,14 @@ const stopStream = async () => {
       messages.value = [
         ...messages.value,
         {
-          sender: "system",
-          content: "已取消当前请求",
+          sender: 'system',
+          content: '已取消当前请求',
           isInfo: true,
-          timestamp: new Date().toISOString(),
-        },
+          timestamp: new Date().toISOString()
+        }
       ];
     } catch (err) {
-      console.error("取消请求失败:", err);
+      console.error('取消请求失败:', err);
     } finally {
       isStreaming.value = false;
       isLoading.value = false;
@@ -386,72 +367,62 @@ const toggleSidebar = () => {
 // 删除会话（带重试机制）
 const deleteConversation = async (id, retryCount = 0) => {
   try {
-    console.log("删除会话:", id);
-    await mcpApi.delete("/conversation/delete", id, {
+    console.log('删除会话:', id);
+    await mcpApi.delete('/conversation/delete', id, {
       onSuccess: () => {
-        console.log("删除会话成功:", id);
+        console.log('删除会话成功:', id);
         const index = conversations.value.findIndex((c) => c.id === id);
         if (index !== -1) {
           conversations.value.splice(index, 1);
         }
 
         if (id === conversationId.value) {
-          console.log("当前会话被删除，生成新会话ID");
+          console.log('当前会话被删除，生成新会话ID');
           generateNewConversationId();
         }
 
         localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations.value));
-        console.log("localStorage已更新");
+        console.log('localStorage已更新');
       },
       onError: (errorMessage) => {
-        console.error("删除会话失败:", errorMessage);
+        console.error('删除会话失败:', errorMessage);
 
         const lastMessage = messages.value[messages.value.length - 1];
         if (!lastMessage || !lastMessage.isError) {
           messages.value = [
             ...messages.value,
             {
-              sender: "system",
-              content: `删除会话失败${
-                retryCount > 0 ? ` (重试 ${retryCount}/3)` : ""
-              }`,
+              sender: 'system',
+              content: `删除会话失败${retryCount > 0 ? ` (重试 ${retryCount}/3)` : ''}`,
               isError: true,
-              timestamp: new Date().toISOString(),
-            },
+              timestamp: new Date().toISOString()
+            }
           ];
         }
 
         if (retryCount < 3) {
-          setTimeout(
-            () => deleteConversation(id, retryCount + 1),
-            1000 * (retryCount + 1)
-          );
+          setTimeout(() => deleteConversation(id, retryCount + 1), 1000 * (retryCount + 1));
         }
-      },
+      }
     });
   } catch (error) {
-    console.error("删除会话失败:", error);
+    console.error('删除会话失败:', error);
 
     const lastMessage = messages.value[messages.value.length - 1];
     if (!lastMessage || !lastMessage.isError) {
       messages.value = [
         ...messages.value,
         {
-          sender: "system",
-          content: `删除会话失败${
-            retryCount > 0 ? ` (重试 ${retryCount}/3)` : ""
-          }`,
+          sender: 'system',
+          content: `删除会话失败${retryCount > 0 ? ` (重试 ${retryCount}/3)` : ''}`,
           isError: true,
-          timestamp: new Date().toISOString(),
-        },
+          timestamp: new Date().toISOString()
+        }
       ];
     }
 
     if (retryCount < 3) {
-      setTimeout(
-        () => deleteConversation(id, retryCount + 1),
-        1000 * (retryCount + 1)
-      );
+      setTimeout(() => deleteConversation(id, retryCount + 1), 1000 * (retryCount + 1));
     }
   }
 };
@@ -475,6 +446,7 @@ onMounted(initializeApp);
   flex-direction: column;
   overflow: hidden;
 }
+
 .chat-container {
   display: flex;
   flex: 1;
@@ -636,7 +608,8 @@ onMounted(initializeApp);
   flex-direction: column;
   grid-template-rows: 1fr auto;
   background: var(--color-background);
-  overflow: hidden; /* 防止整个容器滚动 */
+  overflow: hidden;
+  /* 防止整个容器滚动 */
 }
 
 .chat-messages {
@@ -647,7 +620,8 @@ onMounted(initializeApp);
   scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-color: var(--color-border) transparent;
-  height: 100%; /* 确保消息区域占据全部可用高度 */
+  height: 100%;
+  /* 确保消息区域占据全部可用高度 */
 }
 
 .chat-messages::-webkit-scrollbar {
@@ -686,6 +660,7 @@ onMounted(initializeApp);
     opacity: 0;
     transform: translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -725,23 +700,28 @@ onMounted(initializeApp);
   align-items: flex-end;
   backdrop-filter: blur(10px);
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
-  min-height: 80px; /* 确保最小高度 */
+  min-height: 80px;
+  /* 确保最小高度 */
 }
 
 .chat-input .var-input {
   flex: 1;
   width: 100%;
-  min-height: 48px; /* 确保输入框有最小高度 */
+  min-height: 48px;
+  /* 确保输入框有最小高度 */
 }
 
 .chat-input .var-input textarea {
-  min-height: 48px !important; /* 确保textarea有最小高度 */
-  resize: vertical; /* 允许垂直调整大小 */
+  min-height: 48px !important;
+  /* 确保textarea有最小高度 */
+  resize: vertical;
+  /* 允许垂直调整大小 */
 }
 
 .chat-input .var-button {
   flex-shrink: 0;
-  margin-bottom: 8px; /* 与输入框底部对齐 */
+  margin-bottom: 8px;
+  /* 与输入框底部对齐 */
 }
 
 .send-button {
@@ -775,6 +755,7 @@ onMounted(initializeApp);
     opacity: 0;
     transform: translateY(20px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -834,8 +815,10 @@ onMounted(initializeApp);
   }
 
   .chat-messages {
-    padding: 20px 20px 100px 20px; /* 底部增加 padding 防止被输入框遮挡 */
-    height: 100%; /* 确保在移动端也占据全部高度 */
+    padding: 20px 20px 100px 20px;
+    /* 底部增加 padding 防止被输入框遮挡 */
+    height: 100%;
+    /* 确保在移动端也占据全部高度 */
   }
 
   .chat-message {
@@ -847,15 +830,18 @@ onMounted(initializeApp);
   .chat-input {
     padding: 16px;
     gap: 12px;
-    min-height: 70px; /* 移动端最小高度调整 */
+    min-height: 70px;
+    /* 移动端最小高度调整 */
   }
 
   .chat-input .var-input {
-    min-height: 42px; /* 移动端输入框最小高度 */
+    min-height: 42px;
+    /* 移动端输入框最小高度 */
   }
 
   .chat-input .var-input textarea {
-    min-height: 42px !important; /* 移动端textarea最小高度 */
+    min-height: 42px !important;
+    /* 移动端textarea最小高度 */
   }
 
   .chat-input .var-button {
@@ -904,8 +890,10 @@ onMounted(initializeApp);
   }
 
   .chat-messages {
-    padding: 16px 16px 90px 16px; /* 底部增加 padding 防止被输入框遮挡 */
-    height: 100%; /* 确保在移动端也占据全部高度 */
+    padding: 16px 16px 90px 16px;
+    /* 底部增加 padding 防止被输入框遮挡 */
+    height: 100%;
+    /* 确保在移动端也占据全部高度 */
   }
 
   .chat-message {
@@ -917,15 +905,18 @@ onMounted(initializeApp);
   .chat-input {
     padding: 14px;
     gap: 10px;
-    min-height: 65px; /* 小屏幕最小高度调整 */
+    min-height: 65px;
+    /* 小屏幕最小高度调整 */
   }
 
   .chat-input .var-input {
-    min-height: 40px; /* 小屏幕输入框最小高度 */
+    min-height: 40px;
+    /* 小屏幕输入框最小高度 */
   }
 
   .chat-input .var-input textarea {
-    min-height: 40px !important; /* 小屏幕textarea最小高度 */
+    min-height: 40px !important;
+    /* 小屏幕textarea最小高度 */
   }
 
   .chat-input .var-button {
@@ -976,15 +967,18 @@ onMounted(initializeApp);
   .chat-input {
     padding: 12px;
     gap: 8px;
-    min-height: 60px; /* 超小屏幕最小高度调整 */
+    min-height: 60px;
+    /* 超小屏幕最小高度调整 */
   }
 
   .chat-input .var-input {
-    min-height: 38px; /* 超小屏幕输入框最小高度 */
+    min-height: 38px;
+    /* 超小屏幕输入框最小高度 */
   }
 
   .chat-input .var-input textarea {
-    min-height: 38px !important; /* 超小屏幕textarea最小高度 */
+    min-height: 38px !important;
+    /* 超小屏幕textarea最小高度 */
   }
 
   .chat-input .var-button {
@@ -1054,7 +1048,7 @@ onMounted(initializeApp);
   background: rgba(0, 0, 0, 0.1);
   padding: 0.2em 0.4em;
   border-radius: 3px;
-  font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.9em;
 }
 
@@ -1092,9 +1086,11 @@ onMounted(initializeApp);
   0% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.8;
   }
+
   100% {
     opacity: 1;
   }

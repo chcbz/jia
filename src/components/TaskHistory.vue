@@ -1,19 +1,10 @@
 <template>
   <div>
-    <var-action-sheet
-      :actions="opMenu"
-      v-model="showOpMenu"
-      @select="onClickOpMenu"
-    >
+    <var-action-sheet :actions="opMenu" v-model="showOpMenu" @select="onClickOpMenu">
     </var-action-sheet>
 
     <div class="task-list">
-      <div
-        class="task-item"
-        v-for="item in list"
-        :key="item.id"
-        @click="doShowOpMenu(item)"
-      >
+      <div class="task-item" v-for="item in list" :key="item.id" @click="doShowOpMenu(item)">
         <div class="task-header">
           <h3>{{ item.title }}</h3>
           <span class="task-amount">{{ item.meta.source }}</span>
@@ -29,10 +20,10 @@
 </template>
 
 <script>
-import { useGlobalStore } from "../stores/global";
-import { useApiStore } from "../stores/api";
-import { useUtilStore } from "../stores/util";
-import dayjs from "dayjs";
+import { useGlobalStore } from '../stores/global';
+import { useApiStore } from '../stores/api';
+import { useUtilStore } from '../stores/util';
+import dayjs from 'dayjs';
 
 export default {
   created: function () {
@@ -42,18 +33,18 @@ export default {
 
     globalStore.setMenu({
       menus: [],
-      event: this,
+      event: this
     });
-    globalStore.setTitle(this.$t("app.task_history"));
+    globalStore.setTitle(this.$t('app.task_history'));
     globalStore.setShowBack(true);
     var baseUrl = apiStore.baseUrl;
     var jiacn = globalStore.getJiacn;
     this.$http
-      .post(baseUrl + "/task/search", {
+      .post(baseUrl + '/task/search', {
         search: {
           jiacn: jiacn,
-          historyFlag: 1,
-        },
+          historyFlag: 1
+        }
       })
       .then((res) => {
         this.list = [];
@@ -63,17 +54,13 @@ export default {
             title: element.name,
             desc: element.description,
             meta: {
-              source: "￥" + element.amount,
+              source: '￥' + element.amount,
               date:
-                dayjs(utilStore.fromTimeStamp(element.startTime)).format(
-                  "YYYY-MM-DD"
-                ) +
-                " - " +
-                dayjs(utilStore.fromTimeStamp(element.endTime)).format(
-                  "YYYY-MM-DD"
-                ),
-              other: element.crond,
-            },
+                dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') +
+                ' - ' +
+                dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
+              other: element.crond
+            }
           };
           this.list.push(taskItem);
         });
@@ -85,50 +72,50 @@ export default {
       this.showOpMenu = true;
     },
     onClickOpMenu: function (key) {
-      if (key === "del") {
+      if (key === 'del') {
         const _this = this;
         Dialog.confirm({
-          title: _this.$t("task.del_alert"),
+          title: _this.$t('task.del_alert'),
           onConfirm: () => {
             const apiStore = useApiStore();
             var baseUrl = apiStore.baseUrl;
             _this.$http
-              .get(baseUrl + "/task/delete", {
+              .get(baseUrl + '/task/delete', {
                 params: {
-                  id: _this.selectId,
-                },
+                  id: _this.selectId
+                }
               })
               .then((res) => {
-                if (res.data.code === "E0") {
+                if (res.data.code === 'E0') {
                   Dialog({
-                    title: _this.$t("app.notify"),
+                    title: _this.$t('app.notify'),
                     message: res.data.msg,
-                    confirmButtonText: _this.$t("app.confirm"),
+                    confirmButtonText: _this.$t('app.confirm'),
                     onConfirm: () => {
                       _this.$router.go(0);
-                    },
+                    }
                   });
                 } else {
                   Dialog({
-                    title: _this.$t("app.alert"),
+                    title: _this.$t('app.alert'),
                     message: res.data.msg,
-                    confirmButtonText: _this.$t("app.confirm"),
+                    confirmButtonText: _this.$t('app.confirm')
                   });
                 }
               });
-          },
+          }
         });
       }
-    },
+    }
   },
   data() {
     return {
       list: [],
-      opMenu: [{ name: "del", text: this.$t("app.del") }],
+      opMenu: [{ name: 'del', text: this.$t('app.del') }],
       showOpMenu: false,
-      selectId: 0,
+      selectId: 0
     };
-  },
+  }
 };
 </script>
 

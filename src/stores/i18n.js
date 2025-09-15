@@ -11,10 +11,10 @@ export const useI18nStore = defineStore('i18n', {
     }
   }),
   actions: {
-    setLocale(locale) {
+    setLocale (locale) {
       this.locale = locale
     },
-    t(key) {
+    t (key) {
       return this.messages[this.locale][key] || key
     }
   }

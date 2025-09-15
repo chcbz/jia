@@ -5,7 +5,7 @@ export default [
     path: '/oauth2/callback',
     name: 'OAuthCallback',
     component: {
-      async beforeRouteEnter(to, from, next) {
+      async beforeRouteEnter (to, from, next) {
         try {
           const code = to.query.code
           if (!code) throw new Error('No authorization code provided')

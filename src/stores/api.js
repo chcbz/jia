@@ -3,7 +3,7 @@ import { useUtilStore } from './util'
 import { useGlobalStore } from './global'
 
 // PKCE工具方法
-function generateRandomString(length) {
+function generateRandomString (length) {
   const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
   let result = ''
   const crypto = window.crypto || window.msCrypto
@@ -15,7 +15,7 @@ function generateRandomString(length) {
   return result
 }
 
-async function generateCodeChallenge(codeVerifier) {
+async function generateCodeChallenge (codeVerifier) {
   const encoder = new TextEncoder()
   const data = encoder.encode(codeVerifier)
   const digest = await window.crypto.subtle.digest('SHA-256', data)
@@ -31,7 +31,7 @@ export const useApiStore = defineStore('api', {
     dwzDomain: import.meta.env.VITE_DWZ_DOMAIN
   }),
   actions: {
-    async token() {
+    async token () {
       const utilStore = useUtilStore()
       const globalStore = useGlobalStore()
 
@@ -48,29 +48,29 @@ export const useApiStore = defineStore('api', {
         //   accessToken = data.access_token
         //   utilStore.setLocalStorage('api_token', accessToken, new Date().getTime() + data.expires_in * 1000 - 60000)
         // } else {
-          // PKCE流程
-          const codeVerifier = generateRandomString(64)
-          const codeChallenge = await generateCodeChallenge(codeVerifier)
-          utilStore.setLocalStorage('pkce_code_verifier', codeVerifier)
+        // PKCE流程
+        const codeVerifier = generateRandomString(64)
+        const codeChallenge = await generateCodeChallenge(codeVerifier)
+        utilStore.setLocalStorage('pkce_code_verifier', codeVerifier)
 
-          const params = new URLSearchParams({
-            response_type: 'code',
-            client_id: import.meta.env.VITE_OAUTH_CLIENT_ID,
-            scope: 'openid',
-            redirect_uri: window.location.origin + '/oauth2/callback',
-            code_challenge: codeChallenge,
-            code_challenge_method: 'S256',
-            state: window.location.pathname,
-            access_type: 'offline'
-          })
+        const params = new URLSearchParams({
+          response_type: 'code',
+          client_id: import.meta.env.VITE_OAUTH_CLIENT_ID,
+          scope: 'openid',
+          redirect_uri: window.location.origin + '/oauth2/callback',
+          code_challenge: codeChallenge,
+          code_challenge_method: 'S256',
+          state: window.location.pathname,
+          access_type: 'offline'
+        })
 
-          window.location.href = `${this.baseUrl}/oauth2/authorize?${params.toString()}`
+        window.location.href = `${this.baseUrl}/oauth2/authorize?${params.toString()}`
         // }
       }
       return accessToken
     },
 
-    async exchangeCodeForToken(code) {
+    async exchangeCodeForToken (code) {
       const utilStore = useUtilStore()
       const codeVerifier = utilStore.getLocalStorage('pkce_code_verifier')
       if (!codeVerifier) throw new Error('No code verifier found')
@@ -98,7 +98,7 @@ export const useApiStore = defineStore('api', {
       utilStore.setLocalStorage('api_token', data.access_token, new Date().getTime() + data.expires_in * 1000 - 60000)
       return data.access_token
     },
-    wxJsToken(url) {
+    wxJsToken (url) {
       const utilStore = useUtilStore()
       const globalStore = useGlobalStore()
 
@@ -118,12 +118,12 @@ export const useApiStore = defineStore('api', {
       return accessToken
     },
 
-    cleanToken() {
+    cleanToken () {
       const utilStore = useUtilStore()
       utilStore.removeLocalStorage('api_token')
     },
 
-    async getUserInfo() {
+    async getUserInfo () {
       const token = await this.token()
       const globalStore = useGlobalStore()
 
