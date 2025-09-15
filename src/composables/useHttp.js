@@ -262,7 +262,7 @@ export function useHttp(options = {}) {
   const post = (url, data, options = {}) => execute({ ...options, url, method: 'POST', data })
   const put = (url, data, options = {}) => execute({ ...options, url, method: 'PUT', data })
   const patch = (url, data, options = {}) => execute({ ...options, url, method: 'PATCH', data })
-  const del = (url, options = {}) => execute({ ...options, url, method: 'DELETE' })
+  const del = (url, options = {}) => execute({ ...options, url, method: 'DELETE' });
 
   return {
     // 响应式状态
