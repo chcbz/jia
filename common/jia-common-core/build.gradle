@@ -43,6 +43,7 @@ dependencies {
     compileOnly libs.lombok
     compileOnly libs.mvel
     testImplementation libs.junit.jupiter
+    testRuntimeOnly libs.junit.platform.launcher
     testImplementation libs.spring.webmvc
     testImplementation libs.aws.java.sdk.sns
     testImplementation libs.jackson.core

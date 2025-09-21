@@ -59,11 +59,11 @@ class OrcheServiceImplTest {
                 					"operationType": "condition",
                 					"left": {
                 						"valueType": "VARIABLE",
-                						"variableName": "stockData.region"
+                						"variableName": "areaChinaData.region"
                 					},
                 					"right": {
                 						"valueType": "VARIABLE",
-                						"variableName": "areaChinaData.region"
+                						"variableName": "stockData.region"
                 					},
                 					"operator": "="
                 				},
@@ -71,11 +71,11 @@ class OrcheServiceImplTest {
                 					"operationType": "condition",
                 					"left": {
                 						"valueType": "VARIABLE",
-                						"variableName": "stockData.repOffice"
+                						"variableName": "areaChinaData.repOffice"
                 					},
                 					"right": {
                 						"valueType": "VARIABLE",
-                						"variableName": "areaChinaData.repOffice"
+                						"variableName": "stockData.repOffice"
                 					},
                 					"operator": "="
                 				}
@@ -90,11 +90,11 @@ class OrcheServiceImplTest {
                 					"operationType": "condition",
                 					"left": {
                 						"valueType": "VARIABLE",
-                						"variableName": "completeData.region"
+                						"variableName": "areaChinaData.region"
                 					},
                 					"right": {
                 						"valueType": "VARIABLE",
-                						"variableName": "areaChinaData.region"
+                						"variableName": "completeData.region"
                 					},
                 					"operator": "="
                 				},
@@ -102,11 +102,11 @@ class OrcheServiceImplTest {
                 					"operationType": "condition",
                 					"left": {
                 						"valueType": "VARIABLE",
-                						"variableName": "completeData.repOffice"
+                						"variableName": "areaChinaData.repOffice"
                 					},
                 					"right": {
                 						"valueType": "VARIABLE",
-                						"variableName": "areaChinaData.repOffice"
+                						"variableName": "completeData.repOffice"
                 					},
                 					"operator": "="
                 				}
@@ -192,8 +192,8 @@ class OrcheServiceImplTest {
                     "num": "12"
                 }, {
                     "completeId": "3",
-                    "region": "1079",
-                    "repOffice": "5017",
+                    "region": "1080",
+                    "repOffice": "5019",
                     "num": "13"
                 }]
                 """;
@@ -209,8 +209,8 @@ class OrcheServiceImplTest {
         Assertions.assertEquals("1079", result.get(0).get("region"));
         Assertions.assertEquals("5017", result.get(0).get("repOffice"));
         Assertions.assertEquals(100.0, result.get(0).get("stock"));
-        Assertions.assertEquals(24.0, result.get(0).get("complete"));
-        Assertions.assertEquals(76.0, result.get(0).get("last"));
+        Assertions.assertEquals(11.0, result.get(0).get("complete"));
+        Assertions.assertEquals(89.0, result.get(0).get("last"));
         Assertions.assertEquals("1079", result.get(1).get("region"));
         Assertions.assertEquals("5018", result.get(1).get("repOffice"));
         Assertions.assertEquals(100.0, result.get(1).get("stock"));
@@ -219,7 +219,7 @@ class OrcheServiceImplTest {
         Assertions.assertEquals("1080", result.get(2).get("region"));
         Assertions.assertEquals("5019", result.get(2).get("repOffice"));
         Assertions.assertEquals(100.0, result.get(2).get("stock"));
-        Assertions.assertEquals(0.0, result.get(2).get("complete"));
-        Assertions.assertEquals(100.0, result.get(2).get("last"));
+        Assertions.assertEquals(13.0, result.get(2).get("complete"));
+        Assertions.assertEquals(87.0, result.get(2).get("last"));
     }
 }

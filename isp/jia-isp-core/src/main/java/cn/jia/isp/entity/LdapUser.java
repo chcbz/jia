@@ -12,7 +12,7 @@ import java.io.Serializable;
 
 @Entry(objectClasses = { "top", "person", "jiaPerson" }, base = "ou=users")
 @Data
-public class LdapUser implements Serializable {
+public final class LdapUser implements Serializable {
 
 	@Id
 	@JsonIgnore

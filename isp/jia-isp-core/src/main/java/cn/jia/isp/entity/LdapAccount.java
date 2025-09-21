@@ -11,7 +11,7 @@ import javax.naming.Name;
 
 @Entry(objectClasses = { "account", "posixAccount", "top", "shadowAccount", "sambaSamAccount", "radiusAccount" }, base = "ou=Users")
 @Data
-public class LdapAccount {
+public final class LdapAccount {
 
 	@Id
 	@JsonIgnore

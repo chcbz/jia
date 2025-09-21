@@ -31,22 +31,18 @@ public class OrcheServiceImpl implements OrcheService {
         }
 
         // 处理连接操作
-        List<Map<String, Object>> resultData = targetData;
+        List<Map<String, Object>> resultData = addEntityNamePrefix(targetData, orcheMeta.getEntityName());
         if (orcheMeta.getJoins() != null) {
             for (OrcheEntity join : orcheMeta.getJoins()) {
-                List<Map<String, Object>> joinData = data.get(join.getEntityName());
-                if (joinData == null || joinData.isEmpty()) {
-                    // 对于LEFT JOIN，即使右表为空，也要保留左表数据
-                    if (LEFT_JOIN.equalsIgnoreCase(join.getJoinType())) {
-                        resultData = handleLeftJoinWithEmptyRight(resultData, join);
-                        continue;
-                    }
-                    // 对于其他连接类型，如果右表为空，则跳过
-                    continue;
+                List<Map<String, Object>> joinData;
+                // 如果存在子连接，则进行连接操作
+                if (join.getJoins() != null) {
+                    joinData = executeOrche(data, join);
+                } else {
+                    joinData = addEntityNamePrefix(data.get(join.getEntityName()), join.getEntityName());
                 }
-
                 // 执行连接操作
-                resultData = joinData(resultData, joinData, join);
+                resultData = joinData(resultData, joinData, join, orcheMeta.getEntityName());
             }
         }
 
@@ -59,6 +55,24 @@ public class OrcheServiceImpl implements OrcheService {
         }
 
         return resultData;
+    }
+
+    private List<Map<String, Object>> addEntityNamePrefix(List<Map<String, Object>> targetData, String entityName) {
+        List<Map<String, Object>> newData = new ArrayList<>();
+        for (Map<String, Object> item : targetData) {
+            Map<String, Object> joined = new HashMap<>();
+            for (Map.Entry<String, Object> entry : item.entrySet()) {
+                String leftKey = entry.getKey();
+                if (leftKey.contains(DOT)) {
+                    int index = leftKey.indexOf(DOT);
+                    leftKey = leftKey.substring(index + 1);
+                }
+                leftKey = entityName + DOT + leftKey;
+                joined.put(leftKey, entry.getValue());
+            }
+            newData.add(joined);
+        }
+        return newData;
     }
 
     /**
@@ -103,12 +117,12 @@ public class OrcheServiceImpl implements OrcheService {
      */
     private List<Map<String, Object>> joinData(List<Map<String, Object>> leftData,
                                                List<Map<String, Object>> rightData,
-                                               OrcheEntity join) {
+                                               OrcheEntity join, String mainEntityName) {
 
         if (UNION_JOIN.equalsIgnoreCase(join.getJoinType())) {
-            return handleUnionJoin(leftData, rightData);
+            return handleUnionJoin(leftData, rightData, mainEntityName);
         } else if (LEFT_JOIN.equalsIgnoreCase(join.getJoinType())) {
-            return handleLeftJoin(leftData, rightData, join.getOperations(), join.getEntityName());
+            return handleLeftJoin(leftData, rightData, join.getOperations(), join.getCombineType());
         } else {
             return handleDefaultJoin(leftData, rightData, join.getOperations(), join.getEntityName());
         }
@@ -118,14 +132,14 @@ public class OrcheServiceImpl implements OrcheService {
      * 处理UNION连接
      */
     private List<Map<String, Object>> handleUnionJoin(List<Map<String, Object>> leftData,
-                                                      List<Map<String, Object>> rightData) {
+                                                      List<Map<String, Object>> rightData, String mainEntityName) {
         List<Map<String, Object>> result = new ArrayList<>(leftData.size() + rightData.size());
 
         // 添加左表数据
         result.addAll(leftData);
 
         // 添加右表数据
-        result.addAll(rightData);
+        result.addAll(addEntityNamePrefix(rightData, mainEntityName));
 
         return result;
     }
@@ -136,63 +150,16 @@ public class OrcheServiceImpl implements OrcheService {
     private List<Map<String, Object>> handleLeftJoin(List<Map<String, Object>> leftData,
                                                      List<Map<String, Object>> rightData,
                                                      List<OrcheOperation> operations,
-                                                     String rightEntityName) {
-        List<Map<String, Object>> result = new ArrayList<>();
-
+                                                     String combineType) {
         for (Map<String, Object> left : leftData) {
-            boolean matched = false;
-
             for (Map<String, Object> right : rightData) {
-                if (matchCondition(left, right, operations, rightEntityName)) {
-                    matched = true;
-
-                    // 添加左表数据
-                    Map<String, Object> joined = new HashMap<>(left);
-
-                    // 添加右表数据，使用右表实体名作为前缀
-                    for (Map.Entry<String, Object> entry : right.entrySet()) {
-                        String key = rightEntityName + DOT + entry.getKey();
-                        joined.put(key, entry.getValue());
-                    }
-
-                    result.add(joined);
+                if (matchCondition(left, right, operations, combineType)) {
+                    left.putAll(right);
                 }
-            }
-
-            // 左连接时，即使没有匹配也要添加左表数据
-            if (!matched) {
-                Map<String, Object> joined = new HashMap<>(left);
-
-                // 为右表字段添加null值
-                if (!rightData.isEmpty()) {
-                    Map<String, Object> sampleRight = rightData.get(0);
-                    for (String key : sampleRight.keySet()) {
-                        String prefixedKey = rightEntityName + DOT + key;
-                        joined.put(prefixedKey, null);
-                    }
-                } else if (operations != null) {
-                    // 如果右表为空，但需要为连接条件中的右表字段添加null值
-                    for (OrcheOperation operation : operations) {
-                        if (operation.getRight() != null && operation.getRight().getVariableName() != null) {
-                            String rightField = operation.getRight().getVariableName();
-                            if (rightField.contains(DOT) && rightField.startsWith(rightEntityName + DOT)) {
-                                joined.put(rightField, null);
-                            }
-                        }
-                        if (operation.getLeft() != null && operation.getLeft().getVariableName() != null) {
-                            String leftField = operation.getLeft().getVariableName();
-                            if (leftField.contains(DOT) && leftField.startsWith(rightEntityName + DOT)) {
-                                joined.put(leftField, null);
-                            }
-                        }
-                    }
-                }
-
-                result.add(joined);
             }
         }
 
-        return result;
+        return leftData;
     }
 
     /**
@@ -229,32 +196,29 @@ public class OrcheServiceImpl implements OrcheService {
      * 判断是否满足连接条件
      */
     private boolean matchCondition(Map<String, Object> leftData, Map<String, Object> rightData,
-                                   List<OrcheOperation> operations, String rightTableName) {
+                                   List<OrcheOperation> operations, String combineType) {
         if (operations == null || operations.isEmpty()) {
             return true;
         }
 
-        return evaluateOperations(leftData, rightData, operations, AND_COMBINE, rightTableName);
+        return evaluateOperations(leftData, rightData, operations, combineType);
     }
 
     /**
      * 评估操作条件
      */
     private boolean evaluateOperations(Map<String, Object> leftData, Map<String, Object> rightData,
-                                       List<OrcheOperation> operations, String combineType, String rightTableName) {
+                                       List<OrcheOperation> operations, String combineType) {
         boolean isAnd = AND_COMBINE.equalsIgnoreCase(combineType);
         boolean result = isAnd;
 
         for (OrcheOperation operation : operations) {
-            boolean opResult = COMBINE_OPERATION.equals(operation.getOperationType()) ?
-                    evaluateOperations(leftData, rightData, operation.getOperations(), operation.getCombineType(), rightTableName) :
-                    evaluateCondition(leftData, rightData, operation, rightTableName);
-
+            result = COMBINE_OPERATION.equals(operation.getOperationType()) ?
+                    evaluateOperations(leftData, rightData, operation.getOperations(), operation.getCombineType()) :
+                    evaluateCondition(leftData, operation, rightData);
             if (isAnd) {
-                result = result && opResult;
                 if (!result) break;
             } else {
-                result = result || opResult;
                 if (result) break;
             }
         }
@@ -265,14 +229,14 @@ public class OrcheServiceImpl implements OrcheService {
     /**
      * 评估单个条件
      */
-    private boolean evaluateCondition(Map<String, Object> leftData, Map<String, Object> rightData,
-                                      OrcheOperation operation, String rightTableName) {
+    private boolean evaluateCondition(Map<String, Object> leftData,
+                                      OrcheOperation operation, Map<String, Object> rightData) {
         if (operation.getLeft() == null || operation.getRight() == null) {
             return false;
         }
 
-        String leftValue = getValue(leftData, rightData, operation.getLeft().getVariableName(), rightTableName);
-        String rightValue = getValue(leftData, rightData, operation.getRight().getVariableName(), rightTableName);
+        String leftValue = getValue(leftData, operation.getLeft().getVariableName());
+        String rightValue = getValue(rightData, operation.getRight().getVariableName());
 
         if (leftValue == null || rightValue == null) {
             return handleNullComparison(leftValue, rightValue, operation.getOperator());
@@ -300,39 +264,8 @@ public class OrcheServiceImpl implements OrcheService {
     /**
      * 从数据中获取值
      */
-    private String getValue(Map<String, Object> leftData, Map<String, Object> rightData, String expression, String rightTableName) {
-        if (expression == null) {
-            return null;
-        }
-
-        // 如果是字面值，直接返回
-        if (!expression.contains(DOT)) {
-            return expression;
-        }
-
-        // 解析表达式，获取表名和字段名
-        String[] parts = expression.split("\\.");
-        if (parts.length != 2) {
-            // 如果表达式不止两部分，尝试作为字面值或简单字段处理
-            return null;
-        }
-        String tableName = parts[0];
-        String fieldName = parts[1];
-
-        // 如果表名是右表名，则从右数据中获取字段值
-        if (rightTableName.equals(tableName)) {
-            Object value = rightData.get(fieldName);
-            return value != null ? value.toString() : null;
-        } else {
-            // 否则从左数据中获取字段值
-            // 先尝试用完整表达式获取（带前缀）
-            Object value = leftData.get(expression);
-            if (value == null) {
-                // 再尝试用简单字段名获取（不带前缀）
-                value = leftData.get(fieldName);
-            }
-            return value != null ? value.toString() : null;
-        }
+    private String getValue(Map<String, Object> data, String expression) {
+        return String.valueOf(data.get(expression));
     }
 
     /**
@@ -437,23 +370,29 @@ public class OrcheServiceImpl implements OrcheService {
                     String[] parts = fieldExpr.split("\\s*-\\s*");
                     if (parts.length == 2) {
                         double sum = 0;
+                        boolean hasValue = false; // 标记是否有有效值
                         for (Map<String, Object> item : groupItems) {
                             Double leftValue = getNumericValue(item, parts[0].trim());
                             Double rightValue = getNumericValue(item, parts[1].trim());
 
                             if (leftValue != null && rightValue != null) {
                                 sum += leftValue - rightValue;
+                                hasValue = true;
                             } else if (leftValue != null) {
                                 sum += leftValue;
+                                hasValue = true;
                             } else if (rightValue != null) {
                                 sum -= rightValue;
+                                hasValue = true;
                             }
                         }
-                        resultMap.put(alias, sum);
+                        // 如果没有任何有效值，则返回0而不是null
+                        resultMap.put(alias, hasValue ? sum : 0);
                     }
                 } else {
                     // 简单字段聚合
                     Object result = AggregationUtil.sum(groupItems, fieldExpr);
+                    // 如果聚合结果为null，则返回0
                     resultMap.put(alias, result != null ? result : 0);
                 }
             } else if (expression != null && expression.startsWith("avg(") && expression.endsWith(")")) {
@@ -516,6 +455,12 @@ public class OrcheServiceImpl implements OrcheService {
             if (item.containsKey(simpleFieldName)) {
                 return item.get(simpleFieldName);
             }
+            // 尝试查找其他前缀的字段
+            for (String key : item.keySet()) {
+                if (key.endsWith(DOT + simpleFieldName)) {
+                    return item.get(key);
+                }
+            }
         }
 
         return null;
@@ -529,6 +474,10 @@ public class OrcheServiceImpl implements OrcheService {
 
         if (value != null) {
             try {
+                // 处理字符串类型的数字
+                if (value instanceof String) {
+                    return Double.parseDouble((String) value);
+                }
                 return Double.parseDouble(value.toString());
             } catch (NumberFormatException e) {
                 // 忽略无法转换为数字的值

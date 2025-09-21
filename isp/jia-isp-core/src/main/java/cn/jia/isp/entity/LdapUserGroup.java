@@ -13,7 +13,7 @@ import java.util.Set;
 
 @Entry(objectClasses = { "top", "groupOfNames", "jiaOrg" }, base = "ou=groups")
 @Data
-public class LdapUserGroup implements Serializable {
+public final class LdapUserGroup implements Serializable {
 
 	@Id
 	@JsonIgnore

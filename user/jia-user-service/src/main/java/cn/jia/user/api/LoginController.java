@@ -98,9 +98,10 @@ public class LoginController {
                 .map(session -> (DefaultSavedRequest)session.getAttribute(SAVED_REQUEST))
                 .map(savedRequest -> savedRequest.getParameterValues("client_id"))
                 .map(values -> values[0]).orElse(defaultClientId);
+        log.info("登录页面，clientId：{}", clientId);
         LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
         view.addObject("org", org);
-        view.addObject("orgLogo", Base64Util.encode(org.getLogo()));
+        view.addObject("orgLogo", Optional.ofNullable(org).map(LdapUserGroup::getLogo).map(Base64Util::encode));
         Object exception = request.getSession().getAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
         if (exception instanceof AuthenticationException) {
             view.addObject("error", ((AuthenticationException) exception).getMessage());
