@@ -12,7 +12,7 @@ import java.util.Set;
 
 @Entry(objectClasses = { "top", "posixGroup" }, base = "ou=Groups")
 @Data
-public final class LdapGroup {
+public class LdapGroup {
 
 	@Id
 	@JsonIgnore
