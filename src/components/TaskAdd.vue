@@ -66,7 +66,7 @@ import {
 } from '@varlet/ui';
 
 export default {
-  created: function () {
+  created() {
     const globalStore = useGlobalStore();
     globalStore.setMenu({
       menus: [],
@@ -76,7 +76,7 @@ export default {
     globalStore.setShowBack(true);
   },
   methods: {
-    doAdd: function () {
+    doAdd() {
       const apiStore = useApiStore();
       const globalStore = useGlobalStore();
       var baseUrl = apiStore.baseUrl;
@@ -112,14 +112,14 @@ export default {
           }
         });
     },
-    changeType: function (val) {
+    changeType(val) {
       if (val[0] === '1') {
         this.amountShow = false;
       } else {
         this.amountShow = true;
       }
     },
-    changePeriod: function (val) {
+    changePeriod(val) {
       if (val[0] === '6') {
         this.startTimeShow = true;
         this.endTimeShow = false;

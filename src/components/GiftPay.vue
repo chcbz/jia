@@ -97,19 +97,19 @@ export default {
     const apiStore = useApiStore();
     return { globalStore, apiStore };
   },
-  created: function () {
-    this.globalStore.setMenu({
-      menus: [
-        {
-          key: 'list',
-          value: this.$t('gift.order_list'),
-          fn: function () {
-            this.$router.push({ name: 'OrderList' });
-          }
-        }
-      ],
-      event: this
-    });
+  created() {
+        this.globalStore.setMenu({
+          menus: [
+            {
+              key: 'list',
+              value: this.$t('gift.order_list'),
+              fn: () => {
+                this.$router.push({ name: 'OrderList' });
+              }
+            }
+          ],
+          event: this
+        });
     this.globalStore.setTitle(this.$t('gift.title'));
     this.globalStore.setShowBack(false);
     this.globalStore.setShowMore(true);
@@ -149,10 +149,10 @@ export default {
     generateQRCode(text) {
       return QRCode.toDataURL(text, { width: 200 });
     },
-    onClickOpMenu: function (item) {
+    onClickOpMenu(item) {
       console.log(item);
     },
-    toPay: function () {
+    toPay() {
       var baseUrl = this.apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
       var appid = this.globalStore.user.appid;
@@ -217,20 +217,20 @@ export default {
           }
         });
     },
-    wxAddress: function (data) {
+    wxAddress(data) {
       var _this = this;
       _this.$wechat.openAddress({
-        success: function (res) {
+        success(res) {
           _this.consignee = res.userName;
           _this.phone = res.telNumber;
           _this.address = res.provinceName + res.cityName + res.countryName + res.detailInfo;
         },
-        cancel: function (res) {
+        cancel(res) {
           console.log('cancel weixin address selecting');
         }
       });
     },
-    weixinPay: function (data) {
+    weixinPay(data) {
       var vm = this;
       if (typeof WeixinJSBridge === 'undefined') {
         if (document.addEventListener) {
@@ -243,7 +243,7 @@ export default {
         vm.onBridgeReady(data);
       }
     },
-    onBridgeReady: function (data) {
+    onBridgeReady(data) {
       var vm = this;
       WeixinJSBridge.invoke(
         'getBrandWCPayRequest',

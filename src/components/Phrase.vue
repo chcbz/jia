@@ -125,7 +125,7 @@ import { useApiStore } from '../stores/api';
 import { useUtilStore } from '../stores/util';
 
 export default {
-  created: function () {
+  created() {
     this.globalStore = useGlobalStore();
     const utilStore = useUtilStore();
     this.globalStore.setTitle(this.$t('phrase.title'));
@@ -170,7 +170,7 @@ export default {
       });
   },
   methods: {
-    toTick: function (opt) {
+    toTick(opt) {
       if (this.hasTick) return false;
       this.hasTick = true;
       const apiStore = useApiStore();
@@ -206,7 +206,7 @@ export default {
           }
         });
     },
-    copyContent: function () {
+    copyContent() {
       var clipboard = new Clipboard('#copyBtn');
       const _this = this;
       clipboard.on('success', function (e) {
@@ -217,18 +217,18 @@ export default {
         e.clearSelection();
       });
     },
-    refreshPage: function () {
+    refreshPage() {
       window.history.go(0);
     },
-    closeWindow: function () {
+    closeWindow() {
       const utilStore = useUtilStore();
       utilStore.closeWindow();
     },
-    formatTime: function (timestamp) {
+    formatTime(timestamp) {
       const utilStore = useUtilStore();
       return utilStore.fromTimeStamp(timestamp, 'YYYY-MM-DD');
     },
-    addContent: function () {
+    addContent() {
       const apiStore = useApiStore();
       var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
@@ -256,7 +256,7 @@ export default {
           }
         });
     },
-    feedback: function () {
+    feedback() {
       const apiStore = useApiStore();
       var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
@@ -292,7 +292,7 @@ export default {
         }
       });
     },
-    payTips: function () {
+    payTips() {
       const apiStore = useApiStore();
       var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
@@ -346,7 +346,7 @@ export default {
           }
         });
     },
-    weixinPay: function (data) {
+    weixinPay(data) {
       var vm = this;
       if (typeof WeixinJSBridge === 'undefined') {
         if (document.addEventListener) {
@@ -359,7 +359,7 @@ export default {
         vm.onBridgeReady(data);
       }
     },
-    onBridgeReady: function (data) {
+    onBridgeReady(data) {
       var vm = this;
       WeixinJSBridge.invoke(
         'getBrandWCPayRequest',

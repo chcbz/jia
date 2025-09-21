@@ -35,7 +35,7 @@ export default {
     const utilStore = useUtilStore();
     return { globalStore, apiStore, utilStore };
   },
-  created: function () {
+  created() {
     this.globalStore.setTitle(this.$t('gift.order_list'));
     this.globalStore.setShowBack(true);
     this.globalStore.setShowMore(false);
@@ -71,7 +71,7 @@ export default {
       });
   },
   methods: {
-    doShowOpMenu: function (item) {
+    doShowOpMenu(item) {
       this.selectId = item.id;
       if (item.status === 1) {
         this.opMenu = [{ key: 'cancel', name: this.$t('gift.cancel') }];
@@ -80,7 +80,7 @@ export default {
       }
       this.showOpMenu = true;
     },
-    onClickOpMenu: function (item) {
+    onClickOpMenu(item) {
       if (item.key === 'del') {
         const _this = this;
         Dialog({

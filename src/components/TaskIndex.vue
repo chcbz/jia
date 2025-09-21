@@ -72,28 +72,28 @@ import { useUtilStore } from '../stores/util';
 import dayjs from 'dayjs';
 
 export default {
-  created: function () {
+  created() {
     const globalStore = useGlobalStore();
     globalStore.setMenu({
       menus: [
         {
           key: 'add',
           value: this.$t('task.add'),
-          fn: function () {
+          fn: () => {
             this.$router.push({ name: 'TaskAdd' });
           }
         },
         {
           key: 'list',
           value: this.$t('app.task_list'),
-          fn: function () {
+          fn: () => {
             this.$router.push({ name: 'TaskList' });
           }
         },
         {
           key: 'history',
           value: this.$t('app.task_history'),
-          fn: function () {
+          fn: () => {
             this.$router.push({ name: 'TaskHistory' });
           }
         }

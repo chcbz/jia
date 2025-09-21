@@ -32,7 +32,7 @@ import { useApiStore } from '../stores/api';
 import { Dialog } from '@varlet/ui';
 
 export default {
-  created: function () {
+  created() {
     this.globalStore = useGlobalStore();
     const apiStore = useApiStore();
     this.globalStore.setTitle(this.$t('vote.title'));
@@ -58,10 +58,10 @@ export default {
       });
   },
   methods: {
-    onClickOpMenu: function (key, item) {
+    onClickOpMenu(key, item) {
       console.log(item);
     },
-    toTick: function (opt) {
+    toTick(opt) {
       const apiStore = useApiStore();
       var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;

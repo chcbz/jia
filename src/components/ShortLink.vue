@@ -79,7 +79,7 @@ import { useApiStore } from '../stores/api';
 import { useUtilStore } from '../stores/util';
 
 export default {
-  created: function () {
+  created() {
     const globalStore = useGlobalStore();
     globalStore.setTitle(this.$t('dwz.title'));
     globalStore.setShowBack(false);
@@ -95,7 +95,7 @@ export default {
         return '';
       }
     },
-    toShort: function () {
+    toShort() {
       const apiStore = useApiStore();
       const globalStore = useGlobalStore();
       const utilStore = useUtilStore();
@@ -159,7 +159,7 @@ export default {
           });
         });
     },
-    toLong: function () {
+    toLong() {
       const apiStore = useApiStore();
       const globalStore = useGlobalStore();
       var baseUrl = apiStore.baseUrl;
@@ -216,7 +216,7 @@ export default {
           });
         });
     },
-    copyContent: function () {
+    copyContent() {
       if (!navigator.clipboard) {
         // Fallback for older browsers
         const textarea = document.createElement('textarea');

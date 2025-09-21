@@ -26,7 +26,7 @@ import { useUtilStore } from '../stores/util';
 import dayjs from 'dayjs';
 
 export default {
-  created: function () {
+  created() {
     const globalStore = useGlobalStore();
     const apiStore = useApiStore();
     const utilStore = useUtilStore();
@@ -67,11 +67,11 @@ export default {
       });
   },
   methods: {
-    doShowOpMenu: function (item) {
+    doShowOpMenu(item) {
       this.selectId = item.id;
       this.showOpMenu = true;
     },
-    onClickOpMenu: function (key) {
+    onClickOpMenu(key) {
       if (key === 'del') {
         const _this = this;
         Dialog.confirm({
