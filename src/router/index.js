@@ -19,6 +19,10 @@ export default [
         }
       },
       render: () => null
+    },
+    meta: {
+      title: 'app.task_list',
+      showInMenu: false
     }
   },
   {
@@ -27,7 +31,8 @@ export default [
     component: () => import('@/components/Chat'),
     meta: {
       title: 'chat.title',
-      showInMenu: true
+      showInMenu: true,
+      menuOrder: 1
     }
   },
   {
@@ -36,7 +41,8 @@ export default [
     component: () => import('@/components/TaskIndex'),
     meta: {
       title: 'app.title',
-      showInMenu: true
+      showInMenu: true,
+      menuOrder: 2
     }
   },
   {
@@ -72,7 +78,8 @@ export default [
     component: () => import('@/components/GiftPay'),
     meta: {
       title: 'gift.title',
-      showInMenu: true
+      showInMenu: true,
+      menuOrder: 3
     }
   },
   {
@@ -81,7 +88,8 @@ export default [
     component: () => import('@/components/OrderList'),
     meta: {
       title: 'gift.order_list',
-      showInMenu: true
+      showInMenu: true,
+      menuOrder: 4
     }
   },
   {
@@ -90,7 +98,8 @@ export default [
     component: () => import('@/components/VoteTick'),
     meta: {
       title: 'vote.title',
-      showInMenu: true
+      showInMenu: true,
+      menuOrder: 5
     }
   },
   {
@@ -99,7 +108,8 @@ export default [
     component: () => import('@/components/Phrase'),
     meta: {
       title: 'phrase.title',
-      showInMenu: true
+      showInMenu: true,
+      menuOrder: 6
     }
   },
   {
@@ -108,7 +118,8 @@ export default [
     component: () => import('@/components/ShortLink'),
     meta: {
       title: 'dwz.title',
-      showInMenu: true
+      showInMenu: true,
+      menuOrder: 7
     }
   },
   {

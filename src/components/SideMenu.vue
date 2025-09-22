@@ -62,7 +62,12 @@ const menuOffsetY = computed(() => (isMobile.value ? 0 : 56));
 const menuRoutes = computed(() => {
   return router
     .getRoutes()
-    .filter((route) => route.meta?.title && route.meta?.showInMenu !== false);
+    .filter((route) => route.meta?.title && route.meta?.showInMenu !== false)
+    .sort((a, b) => {
+      const orderA = a.meta?.menuOrder || 999;
+      const orderB = b.meta?.menuOrder || 999;
+      return orderA - orderB;
+    });
 });
 
 const close = () => {
