@@ -35,9 +35,6 @@ public class KefuFaqEntity extends BaseEntity {
     @Schema(description = "类型")
     private String type;
 
-    @Schema(description = "资源ID")
-    private String resourceId;
-
     @Schema(description = "应用标识符")
     private String clientId;
 

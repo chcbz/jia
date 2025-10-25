@@ -32,9 +32,6 @@ public class MatPvLogEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
-    @Schema(description = "资源ID")
-    private String resourceId;
-
     @Schema(description = "实体ID")
     private Long entityId;
 
@@ -79,6 +76,5 @@ public class MatPvLogEntity extends BaseEntity {
 
     @Schema(description = "客户端信息")
     private String userAgent;
-
 
 }

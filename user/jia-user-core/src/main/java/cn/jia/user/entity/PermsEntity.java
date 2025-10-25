@@ -32,9 +32,6 @@ public class PermsEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
-    @Schema(description = "应用标识符")
-    private String resourceId;
-
     @Schema(description = "模块")
     private String module;
 

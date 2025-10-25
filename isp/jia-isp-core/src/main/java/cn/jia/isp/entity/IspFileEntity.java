@@ -18,8 +18,6 @@ public class IspFileEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
-    private String clientId;
-
     private String name;
 
     private String uri;

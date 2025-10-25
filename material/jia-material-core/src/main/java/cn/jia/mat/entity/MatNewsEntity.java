@@ -48,9 +48,6 @@ public class MatNewsEntity extends BaseEntity {
     @Schema(description = "缩略图链接")
     private String picurl;
 
-    @Schema(description = "资源ID")
-    private String resourceId;
-
     @Schema(description = "实体ID")
     private Long entityId;
 

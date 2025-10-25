@@ -4,7 +4,7 @@
 
     <!-- 通用查询结果列 -->
     <sql id="Base_Column_List">
-        client_id, client_secret, appcn, resource_ids, authorized_grant_types, registered_redirect_uris, scope, autoapprove, access_token_validity_seconds, refresh_token_validity_seconds
+        client_id, client_secret, appcn, authorized_grant_types, registered_redirect_uris, scope, autoapprove, access_token_validity_seconds, refresh_token_validity_seconds
     </sql>
 
 </mapper>

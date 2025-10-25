@@ -50,7 +50,7 @@ public class KefuServiceImpl implements KefuService {
 	private MpTemplateService mpTemplateService;
 	@Autowired(required = false)
 	private MpUserService mpUserService;
-	@Autowired
+	@Autowired(required = false)
 	private RedisService redisService;
 
 	/**

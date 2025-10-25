@@ -4,7 +4,7 @@
 
     <!-- 通用查询结果列 -->
     <sql id="Base_Column_List">
-        id, client_id, resource_id, entity_id, jiacn, phone, email, sex, nickname, avatar, city, country, province, latitude, longitude, ip, uri, user_agent, time
+        id, client_id, entity_id, jiacn, phone, email, sex, nickname, avatar, city, country, province, latitude, longitude, ip, uri, user_agent, time
     </sql>
 
 </mapper>

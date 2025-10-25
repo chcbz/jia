@@ -7,7 +7,6 @@ import cn.jia.core.redis.RedisService;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
-import jakarta.annotation.Resource;
 import jakarta.inject.Named;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;

@@ -1,5 +1,6 @@
 dependencies {
-	implementation project(':common:jia-common-core')
+	implementation project(':common:jia-common-service')
+	implementation project(':kefu:jia-kefu-service')
 	implementation libs.spring.boot.starter.webflux
 	implementation libs.spring.ai.starter.mcp.client
 	implementation (libs.spring.ai.starter.model.zhipuai) {

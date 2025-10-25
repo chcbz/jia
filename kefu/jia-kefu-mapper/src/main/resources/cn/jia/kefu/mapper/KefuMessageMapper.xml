@@ -6,7 +6,7 @@
     <sql id="Base_Column_List">
         create_time,
         update_time,
-        id, resource_id, client_id, jiacn, name, phone, email, title, content, attachment, reply, status
+        id, client_id, jiacn, name, phone, email, title, content, attachment, reply, status
     </sql>
 
 </mapper>

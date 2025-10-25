@@ -144,7 +144,6 @@ CREATE TABLE user_role_rel (
 
 CREATE TABLE user_perms (
     id bigint NOT NULL AUTO_INCREMENT,
-    resource_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
     module varchar(30) NOT NULL COMMENT '模块',
     func varchar(50) NOT NULL COMMENT '方法',
     url varchar(100) DEFAULT NULL COMMENT '服务地址',
@@ -157,7 +156,7 @@ CREATE TABLE user_perms (
     client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
     tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
     PRIMARY KEY (id),
-    UNIQUE KEY d_c_f (module,func,resource_id) USING BTREE
+    UNIQUE KEY d_c_f (module,func,client_id,tenant_id) USING BTREE
 ) COMMENT='资源表';
 
 CREATE TABLE user_perms_rel (

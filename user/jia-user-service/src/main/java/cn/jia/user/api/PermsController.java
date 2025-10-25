@@ -98,7 +98,6 @@ public class PermsController {
     @RequestMapping(value = "/list", method = RequestMethod.POST)
     public Object list(@RequestBody JsonRequestPage<PermsEntity> page) {
         PermsEntity action = Optional.ofNullable(page.getSearch()).orElse(new PermsEntity());
-        action.setResourceId("jia-api-admin");
         PageInfo<PermsEntity> actionList = permsService.findPage(action, page.getPageSize(), page.getPageNum());
         JsonResultPage<PermsEntity> result = new JsonResultPage<>(actionList.getList());
         result.setPageNum(actionList.getPageNum());

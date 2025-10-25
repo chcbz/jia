@@ -1,5 +1,7 @@
 package cn.jia.ai.mcp.client.memory;
 
+import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.util.DateUtil;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -25,12 +27,15 @@ public class ElasticsearchChatMemoryRepository implements ChatMemoryRepository {
     }
 
     @Override
-    @Retryable(value = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
+    @Retryable(retryFor = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
     public List<String> findConversationIds() {
         try {
+            String jiacn = EsContextHolder.getContext().getJiacn();
             // Get all unique conversationIds from Elasticsearch
             return vectorStore.similaritySearch(
-                SearchRequest.builder().query("*").topK(Integer.MAX_VALUE).build())
+                SearchRequest.builder().query("*").topK(20)
+                    .filterExpression("jiacn == '" + jiacn + "'")
+                    .build())
                 .stream()
                 .map(doc -> doc.getMetadata().get("conversationId").toString())
                 .distinct()
@@ -41,18 +46,31 @@ public class ElasticsearchChatMemoryRepository implements ChatMemoryRepository {
     }
 
     @Override
-    @Retryable(value = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
+    @Retryable(retryFor = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
     public List<Message> findByConversationId(String conversationId) {
         Assert.hasText(conversationId, "conversationId cannot be null or empty");
         try {
-            return getMessages(conversationId, Integer.MAX_VALUE);
+            List<Document> docs = vectorStore.similaritySearch(
+                    SearchRequest.builder().query("*")
+                            .topK(20)
+                            .filterExpression("conversationId == '" + conversationId + "'")
+                            .build());
+
+            return docs.stream()
+                    .map(doc -> {
+                        UserMessage.Builder builder = UserMessage.builder()
+                                .text(doc.getText())
+                                .metadata(doc.getMetadata());
+                        return builder.build();
+                    })
+                    .collect(Collectors.toList());
         } catch (Exception e) {
             throw new RuntimeException("Failed to find messages by conversation ID: " + conversationId, e);
         }
     }
 
     @Override
-    @Retryable(value = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
+    @Retryable(retryFor = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
     public void saveAll(String conversationId, List<Message> messages) {
         Assert.hasText(conversationId, "conversationId cannot be null or empty");
         Assert.notNull(messages, "messages cannot be null");
@@ -63,8 +81,9 @@ public class ElasticsearchChatMemoryRepository implements ChatMemoryRepository {
                 .map(msg -> new Document(msg.getText(),
                     Map.of(
                         "conversationId", conversationId,
-                        "timestamp", System.currentTimeMillis(),
-                        "role", msg.getMessageType().name()
+                        "jiacn", EsContextHolder.getContext().getJiacn(),
+                        "createTime", DateUtil.nowTime(),
+                        "messageType", msg.getMessageType().getValue()
                     )))
                 .collect(Collectors.toList());
 
@@ -75,12 +94,12 @@ public class ElasticsearchChatMemoryRepository implements ChatMemoryRepository {
     }
 
     @Override
-    @Retryable(value = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
+    @Retryable(retryFor = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
     public void deleteByConversationId(String conversationId) {
         Assert.hasText(conversationId, "conversationId cannot be null or empty");
         try {
             List<String> ids = vectorStore.similaritySearch(
-                SearchRequest.builder().query("*")
+                SearchRequest.builder()
                     .filterExpression("conversationId == '" + conversationId + "'")
                     .build())
                 .stream()
@@ -92,23 +111,6 @@ public class ElasticsearchChatMemoryRepository implements ChatMemoryRepository {
         } catch (Exception e) {
             throw new RuntimeException("Failed to delete messages for conversation ID: " + conversationId, e);
         }
-    }
-
-    private List<Message> getMessages(String conversationId, int limit) {
-        List<Document> docs = vectorStore.similaritySearch(
-            SearchRequest.builder().query("*")
-                .topK(limit)
-                .filterExpression("conversationId == '" + conversationId + "'")
-                .build());
-
-        return docs.stream()
-            .map(doc -> {
-                UserMessage.Builder builder = UserMessage.builder()
-                    .text(doc.getText())
-                    .metadata(doc.getMetadata());
-                return builder.build();
-            })
-            .collect(Collectors.toList());
     }
 
     public static ElasticsearchChatMemoryRepositoryBuilder builder() {

@@ -7,7 +7,6 @@ import cn.jia.user.service.PermsService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -29,9 +28,6 @@ public class PermsRefreshRunner implements CommandLineRunner {
 
     @Autowired
     private PermsService permsService;
-
-    @Value("${spring.application.name:}")
-    private String resourceId;
 
     @Override
     public void run(String... arg0) {
@@ -55,7 +51,6 @@ public class PermsRefreshRunner implements CommandLineRunner {
                         methodPermsAnno.set(method.getAnnotation(PreAuthorize.class));
                         methodUrlAnno.set(method.getAnnotation(RequestMapping.class));
                         PermsEntity action = new PermsEntity();
-                        action.setResourceId(resourceId);
                         action.setStatus(EsConstants.PERMS_STATUS_ENABLE);
                         action.setModule(moduleName);
                         action.setFunc(methodUrlAnno.get().value()[0].substring(1)

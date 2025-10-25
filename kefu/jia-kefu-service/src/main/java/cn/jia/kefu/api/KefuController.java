@@ -174,24 +174,11 @@ public class KefuController {
         if (file != null && !file.isEmpty()) {
             String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);
             String filename = DateUtil.getDateString() + "_" + file.getOriginalFilename();
-            File pathFile = new File(filePath + "/kefu");
-            //noinspection ResultOfMethodCallIgnored
-            pathFile.mkdirs();
-            File f = new File(filePath + "/kefu/" + filename);
-            file.transferTo(f);
-
-            //保存文件信息
-            IspFileEntity cf = new IspFileEntity();
-            cf.setClientId(EsContextHolder.getContext().getClientId());
-            cf.setExtension(FileUtil.getExtension(filename));
-            cf.setName(file.getOriginalFilename());
-            cf.setSize(file.getSize());
-            cf.setType(IspConstants.FILE_TYPE_KEFU);
-            cf.setUri("kefu/" + filename);
-            fileService.create(cf);
+            saveIspFile(filePath, filename, file, IspConstants.FILE_TYPE_KEFU);
 
             record.setAttachment("kefu/" + filename);
         }
+        record.setJiacn(EsContextHolder.getContext().getJiacn());
         record.setClientId(EsContextHolder.getContext().getClientId());
         kefuMessageService.create(record);
         return JsonResult.success(record);
@@ -239,6 +226,12 @@ public class KefuController {
     public Object updateLogo(@RequestPart MultipartFile file) throws Exception {
         String filename = DateUtil.getDateString() + "_" + file.getOriginalFilename();
         String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);
+        IspFileEntity cf = saveIspFile(filePath, filename, file, EsConstants.FILE_TYPE_AVATAR);
+
+        return JsonResult.success(cf);
+    }
+
+    private IspFileEntity saveIspFile(String filePath, String filename, MultipartFile file, Integer fileTypeAvatar) throws IOException {
         File pathFile = new File(filePath + "/kefu");
         //noinspection ResultOfMethodCallIgnored
         pathFile.mkdirs();
@@ -251,10 +244,9 @@ public class KefuController {
         cf.setExtension(FileUtil.getExtension(filename));
         cf.setName(file.getOriginalFilename());
         cf.setSize(file.getSize());
-        cf.setType(EsConstants.FILE_TYPE_AVATAR);
+        cf.setType(fileTypeAvatar);
         cf.setUri("kefu/" + filename);
         fileService.create(cf);
-
-        return JsonResult.success(cf);
+        return cf;
     }
 }

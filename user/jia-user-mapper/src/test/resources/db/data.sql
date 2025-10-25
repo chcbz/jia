@@ -1,4 +1,4 @@
-INSERT INTO user_perms (id, resource_id, module, func, url, description, source, level, status, create_time, update_time, client_id, tenant_id) VALUES (1, 'jia-oauth', 'action', 'update', 'action/update', 'hasAuthority(''action-update'')', 1, 1, 1, 1715516216763, 1737531392773, null, null);
+INSERT INTO user_perms (id, module, func, url, description, source, level, status, create_time, update_time, client_id, tenant_id) VALUES (1, 'jia-oauth', 'action', 'update', 'action/update', 'hasAuthority(''action-update'')', 1, 1, 1, 1715516216763, 1737531392773, null, null);
 
 INSERT INTO user_perms_rel (role_id, perms_id, update_time, create_time) VALUES (1, 1, 1560767075, 1560767075);
 

@@ -6,7 +6,7 @@
     <sql id="Base_Column_List">
         update_time,
         create_time,
-        id, resource_id, module, func, url, description, source, level, status
+        id, module, func, url, description, source, level, status
     </sql>
 
 </mapper>

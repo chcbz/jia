@@ -1,5 +1,7 @@
 package cn.jia.oauth.config;
 
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.JsonUtil;
@@ -86,14 +88,28 @@ public class AuthorizationServerConfig {
 
             @Override
             public RegisteredClient findById(String id) {
-                return RegisteredClientMapper.INSTANCE.toVO(clientService.get(id));
+                OauthClientEntity clientEntity = clientService.get(id);
+                if (clientEntity == null) {
+                    return null;
+                }
+                EsContext context = EsContextHolder.getContext();
+                context.setClientId(clientEntity.getClientId());
+                context.setAppcn(clientEntity.getAppcn());
+                return RegisteredClientMapper.INSTANCE.toVO(clientEntity);
             }
 
             @Override
             public RegisteredClient findByClientId(String clientId) {
                 OauthClientEntity oauthClientEntity = new OauthClientEntity();
                 oauthClientEntity.setClientId(clientId);
-                return RegisteredClientMapper.INSTANCE.toVO(clientService.findOne(oauthClientEntity));
+                OauthClientEntity clientEntity = clientService.findOne(oauthClientEntity);
+                if (clientEntity == null) {
+                    return null;
+                }
+                EsContext context = EsContextHolder.getContext();
+                context.setClientId(clientEntity.getClientId());
+                context.setAppcn(clientEntity.getAppcn());
+                return RegisteredClientMapper.INSTANCE.toVO(clientEntity);
             }
         };
     }

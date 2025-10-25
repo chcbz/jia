@@ -54,33 +54,6 @@ compileJava {
 }
 
 test {
-    jvmArgs "-javaagent:${classpath.find { it.name.contains("testable-agent") }.absolutePath}",
-            "--add-opens=java.base/java.lang=ALL-UNNAMED",
-            "--add-opens=java.base/java.util=ALL-UNNAMED",
-            "--add-opens=java.base/java.io=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.function=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.stream=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.regex=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.logging=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.zip=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.jar=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.prefs=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.spi=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED",
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED"
+    jvmArgs "-javaagent:${classpath.find { it.name.contains("testable-agent") }.absolutePath}"
     useJUnitPlatform()
 }

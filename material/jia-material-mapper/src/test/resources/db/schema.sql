@@ -3,7 +3,6 @@ CREATE TABLE mat_media (
   title varchar(100) DEFAULT NULL COMMENT '标题',
   type int DEFAULT NULL COMMENT '类型 1图片 2语音 3视频 4缩略图 5富文本',
   url varchar(200) DEFAULT NULL COMMENT '路径',
-  resource_id varchar(50) DEFAULT NULL COMMENT '资源ID',
   entity_id bigint DEFAULT NULL COMMENT '实体ID',
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
@@ -19,7 +18,6 @@ CREATE TABLE mat_news (
   digest varchar(200) DEFAULT NULL COMMENT '摘要',
   bodyurl varchar(200) DEFAULT NULL COMMENT '正文链接',
   picurl varchar(200) DEFAULT NULL COMMENT '缩略图链接',
-  resource_id varchar(50) DEFAULT NULL COMMENT '资源ID',
   entity_id bigint DEFAULT NULL COMMENT '实体ID',
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
@@ -60,7 +58,6 @@ CREATE TABLE mat_phrase_vote (
 
 CREATE TABLE mat_pv_log (
   id bigint NOT NULL AUTO_INCREMENT,
-  resource_id varchar(50) DEFAULT NULL COMMENT '资源ID',
   entity_id bigint DEFAULT NULL COMMENT '实体ID',
   jiacn varchar(32) DEFAULT NULL COMMENT 'Jia账号',
   phone varchar(20) DEFAULT NULL COMMENT '电话',

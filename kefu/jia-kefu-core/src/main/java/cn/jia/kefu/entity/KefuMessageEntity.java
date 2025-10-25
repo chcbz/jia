@@ -32,9 +32,6 @@ public class KefuMessageEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
-    @Schema(description = "资源ID")
-    private String resourceId;
-
     @Schema(description = "Jia账号")
     private String jiacn;
 

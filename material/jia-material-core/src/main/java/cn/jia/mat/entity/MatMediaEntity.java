@@ -42,9 +42,6 @@ public class MatMediaEntity extends BaseEntity {
     @Schema(description = "路径")
     private String url;
 
-    @Schema(description = "资源ID")
-    private String resourceId;
-
     @Schema(description = "实体ID")
     private Long entityId;
 

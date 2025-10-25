@@ -1,7 +1,6 @@
 CREATE TABLE kefu_faq (
   id bigint NOT NULL AUTO_INCREMENT,
   type varchar(20) DEFAULT NULL COMMENT '类型',
-  resource_id varchar(50) DEFAULT NULL COMMENT '资源ID',
   title varchar(200) DEFAULT NULL COMMENT '标题',
   content varchar(2000) DEFAULT NULL COMMENT '内容',
   click int DEFAULT '0' COMMENT '点击量',
@@ -17,7 +16,6 @@ CREATE TABLE kefu_faq (
 
 CREATE TABLE kefu_message (
   id bigint NOT NULL AUTO_INCREMENT,
-  resource_id varchar(50) DEFAULT NULL COMMENT '资源ID',
   jiacn varchar(32) DEFAULT NULL COMMENT 'Jia账号',
   name varchar(20) DEFAULT NULL COMMENT '姓名',
   phone varchar(20) DEFAULT NULL COMMENT '电话号码',
