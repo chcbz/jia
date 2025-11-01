@@ -13,7 +13,7 @@
             'chat-message',
             msg.sender === 'user' ? 'chat-user-message' : 'chat-bot-message'
           ]"
-          v-html="DOMPurify.sanitize(marked(msg.content))"
+          v-html="DOMPurify.sanitize(marked(msg.content || ''))"
         ></div>
       </div>
       <div class="chat-input">
@@ -85,7 +85,7 @@ import { useUtilStore } from '../stores/util';
 import { useGlobalStore } from '../stores/global';
 import { useApiStore } from '../stores/api';
 import { useI18n } from 'vue-i18n';
-import { useHttp, mcpApi } from '../composables/useHttp';
+import { useHttp, mcpApi, kefuApi } from '../composables/useHttp';
 
 // 配置marked
 marked.setOptions({
@@ -121,8 +121,7 @@ const conversationId = ref(Date.now().toString());
 const conversations = ref([]);
 const showSidebar = ref(false);
 
-// 存储键和工具函数
-const STORAGE_KEY = 'chat_conversations';
+// 工具函数
 const utilStore = useUtilStore();
 const globalStore = useGlobalStore();
 const apiStore = useApiStore();
@@ -146,14 +145,38 @@ const initializeApp = () => {
 };
 
 // 会话管理函数
-const loadConversations = () => {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    conversations.value = JSON.parse(saved);
+const loadConversations = async () => {
+  try {
+    // 从服务端加载会话列表
+    const result = await kefuApi.list('/message/list', {
+      pageNum: 1,
+      pageSize: 100,
+      orderBy: 'update_time desc',
+      search: {
+        jiacn: globalStore.getJiacn
+      }
+    }, {
+      autoLoading: false,
+      onSuccess: (data) => {
+        if (data && data.data) {
+          conversations.value = data.data.map(conv => ({
+            id: conv.id,
+            title: conv.title || '新会话',
+            lastUpdated: conv.updateTime,
+            messages: []
+          }));
+        }
+      },
+      onError: (error) => {
+        console.warn('从服务端加载会话失败:', error);
+      }
+    });
+  } catch (error) {
+    console.warn('加载会话失败:', error);
   }
 };
 
-const saveConversation = () => {
+const saveConversation = async () => {
   const title = messages.value.find((m) => m.sender === 'user')?.content || '新会话';
   const existingIndex = conversations.value.findIndex((c) => c.id === conversationId.value);
 
@@ -174,15 +197,44 @@ const saveConversation = () => {
   if (conversations.value.length > 20) {
     conversations.value = conversations.value.slice(0, 20);
   }
-
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations.value));
 };
 
-const loadConversation = (id) => {
+const loadConversation = async (id) => {
   const conversation = conversations.value.find((c) => c.id === id);
   if (conversation) {
     conversationId.value = id;
-    messages.value = [...(conversation.messages || [])]; // 创建副本
+    
+    // 从服务端加载会话内容
+    try {
+      const result = await mcpApi.get('/conversation/content', id, {
+        autoLoading: false,
+        onSuccess: (data) => {
+          if (data && data.data) {
+            // 根据接口返回的数据结构处理会话内容
+            const conversationData = data.data;
+            messages.value = conversationData.messages || conversationData.content || [];
+            
+            // 确保消息格式正确
+            messages.value = messages.value.map(msg => ({
+              sender: msg.sender || msg.role || 'bot',
+              content: msg.content || msg.message || '',
+              timestamp: msg.timestamp || msg.createdAt || new Date().toISOString(),
+              conversationId: id
+            }));
+          } else {
+            // 如果服务端没有消息，清空消息
+            messages.value = [];
+          }
+        },
+        onError: (error) => {
+          console.warn('从服务端加载会话内容失败:', error);
+          messages.value = [];
+        }
+      });
+    } catch (error) {
+      console.warn('加载会话内容失败:', error);
+      messages.value = [];
+    }
   }
 };
 
@@ -193,16 +245,20 @@ const generateNewConversationId = () => {
 };
 
 // 消息处理函数
-const updateBotMessage = (content) => {
+const updateBotMessage = async (content) => {
   const lastMessage = messages.value[messages.value.length - 1];
+  let botMessage;
+  
   if (lastMessage?.sender === 'bot') {
     lastMessage.content += content;
+    botMessage = lastMessage;
   } else {
-    messages.value.push({
+    botMessage = {
       sender: 'bot',
       content,
       timestamp: new Date().toISOString()
-    });
+    };
+    messages.value.push(botMessage);
   }
   scrollToBottom();
 };
@@ -259,17 +315,33 @@ const sendMessage = async () => {
 
   try {
     // 添加用户消息
+    const userMessage = {
+      sender: 'user',
+      content: message,
+      timestamp: new Date().toISOString(),
+      conversationId: conversationId.value
+    };
+    
     messages.value = [
       ...messages.value,
-      {
-        sender: 'user',
-        content: message,
-        timestamp: new Date().toISOString(),
-        conversationId: conversationId.value
-      }
+      userMessage
     ];
 
     scrollToBottom();
+
+    // 保存用户消息到服务端
+    try {
+      await kefuApi.create('/message/create', {
+        conversationId: conversationId.value,
+        sender: 'user',
+        content: message,
+        timestamp: userMessage.timestamp
+      }, {
+        autoLoading: false
+      });
+    } catch (saveError) {
+      console.warn('保存用户消息到服务端失败:', saveError);
+    }
 
     // 使用新的 useHttp 流式功能
     const result = await mcpApi.create(
@@ -380,9 +452,6 @@ const deleteConversation = async (id, retryCount = 0) => {
           console.log('当前会话被删除，生成新会话ID');
           generateNewConversationId();
         }
-
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations.value));
-        console.log('localStorage已更新');
       },
       onError: (errorMessage) => {
         console.error('删除会话失败:', errorMessage);
@@ -673,7 +742,7 @@ onMounted(initializeApp);
   margin-left: auto;
   margin-right: 0;
   border-bottom-right-radius: 8px;
-  text-align: right;
+  text-align: left;
   box-shadow: 0 4px 12px rgba(var(--color-primary-rgb, 59, 130, 246), 0.15);
 }
 

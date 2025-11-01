@@ -298,23 +298,23 @@ export function useHttp (options = {}) {
  */
 export function createApi (basePath) {
   return {
-    list: (uri, params = {}, options = {}) =>
-      useHttp().get(`${basePath}${uri}`, { params, ...options }),
+    list: (uri, data, options = {}) =>
+      useHttp().post(`${basePath}${uri}`, data, options),
 
     get: (uri, id, options = {}) =>
-      useHttp().get(`${basePath}${uri}/${id}`, options),
+      useHttp().get(`${basePath}${uri}?id=${id}`, options),
 
     create: (uri, data, options = {}) =>
       useHttp().post(`${basePath}${uri}`, data, options),
 
-    update: (uri, id, data, options = {}) =>
-      useHttp().put(`${basePath}${uri}/${id}`, data, options),
+    update: (uri, data, options = {}) =>
+      useHttp().post(`${basePath}${uri}`, data, options),
 
     patch: (uri, id, data, options = {}) =>
       useHttp().patch(`${basePath}${uri}/${id}`, data, options),
 
     delete: (uri, id, options = {}) =>
-      useHttp().delete(`${basePath}${uri}/${id}`, options),
+      useHttp().delete(`${basePath}${uri}?id=${id}`, options),
 
     search: (uri, data, options = {}) =>
       useHttp().post(`${basePath}${uri}/search`, data, options)
