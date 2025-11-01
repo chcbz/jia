@@ -234,7 +234,7 @@ public class UserController {
     @PreAuthorize("hasAuthority('user-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
     public Object list(@RequestBody JsonRequestPage<UserVO> page) {
-        PageInfo<UserEntity> userList = userService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum());
+        PageInfo<UserEntity> userList = userService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum(), page.getOrderBy());
         List<UserVO> userVOList = new ArrayList<>();
         //隐藏密码
         for (UserEntity u : userList.getList()) {

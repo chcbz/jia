@@ -70,7 +70,7 @@ public class DictController {
     @PreAuthorize("hasAuthority('dict-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
     public Object list(@RequestBody JsonRequestPage<DictEntity> page) {
-        PageInfo<DictEntity> dictList = dictService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum());
+        PageInfo<DictEntity> dictList = dictService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum(), page.getOrderBy());
         JsonResultPage<DictEntity> result = new JsonResultPage<>(dictList.getList());
         result.setPageNum(dictList.getPageNum());
         result.setTotal(dictList.getTotal());

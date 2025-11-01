@@ -128,7 +128,7 @@ public class NewsController {
 	@PostMapping(value = "/list")
 	public Object list(@RequestBody JsonRequestPage<MatNewsReqVO> page) {
 		MatNewsReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatNewsReqVO());
-		PageInfo<MatNewsEntity> newsList = newsService.findPage(example, page.getPageSize(), page.getPageNum());
+		PageInfo<MatNewsEntity> newsList = newsService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
 //		String material_url = dictService.getValue(Constants.DICT_TYPE_MODULE_URL, Constants.MODULE_URL_MATERIAL);
 //		List<MatNewsEntity> newss = newsList.getResult().stream().map(news -> {
 //			news.setPicurl(material_url +"/"+news.getPicurl());

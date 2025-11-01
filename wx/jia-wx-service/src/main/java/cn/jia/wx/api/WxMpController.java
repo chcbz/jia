@@ -871,7 +871,7 @@ public class WxMpController {
     public Object listMpInfo(@RequestBody JsonRequestPage<MpInfoVO> page, HttpServletRequest request) {
         MpInfoVO example = Optional.ofNullable(page.getSearch()).orElse(new MpInfoVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
-        PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageSize(), page.getPageNum());
+        PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
         JsonResultPage<MpInfoEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
         result.setTotal(list.getTotal());

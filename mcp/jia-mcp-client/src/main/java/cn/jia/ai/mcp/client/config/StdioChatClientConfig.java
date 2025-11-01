@@ -33,7 +33,10 @@ public class StdioChatClientConfig {
                         Flux<String> responseFlux = chatClient.prompt(question)
                             .stream()
                             .content();
-                        responseFlux.subscribe(content -> log.info("ASSISTANT: {}", content));
+                        
+                        // 使用blockLast()等待流完成，而不是直接subscribe
+                        responseFlux.doOnNext(content -> log.info("ASSISTANT: {}", content))
+                                   .blockLast(); // 在阻塞式命令行环境中使用blockLast是可以接受的
                     } catch (Exception e) {
                         log.error("Error occurred while processing the question: {}", question, e);
                         continue;

@@ -127,7 +127,7 @@ public class GroupController {
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<GroupEntity> page) {
 		GroupEntity example = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
-		PageInfo<GroupEntity> groupList = groupService.findPage(example, page.getPageSize(), page.getPageNum());
+		PageInfo<GroupEntity> groupList = groupService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
 		JsonResultPage<GroupEntity> result = new JsonResultPage<>(groupList.getList());
 		result.setPageNum(groupList.getPageNum());
 		result.setTotal(groupList.getTotal());

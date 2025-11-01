@@ -7,6 +7,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,19 +34,29 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 .stream()
                 .content();
 
-        responseFlux.subscribe(content -> {
-            try {
-                session.sendMessage(new TextMessage(content));
-            } catch (Exception e) {
-                log.error("Error sending WebSocket message", e);
-            }
-        }, null, () -> {
-            try {
-                session.sendMessage(new TextMessage("[EOM]"));
-            } catch (Exception e) {
-                log.error("Error broadcasting message to all sessions", e);
-            }
-        });
+        // 使用concatMap处理每个响应并发送消息，避免直接subscribe
+        responseFlux
+            .concatMap(content -> {
+                try {
+                    return Mono.fromCallable(() -> {
+                        session.sendMessage(new TextMessage(content));
+                        return content;
+                    }).onErrorResume(error -> {
+                        log.error("Error sending WebSocket message", error);
+                        return Mono.empty();
+                    });
+                } catch (Exception e) {
+                    log.error("Error processing content", e);
+                    return Mono.empty();
+                }
+            })
+            .doOnComplete(() -> {
+                try {
+                    session.sendMessage(new TextMessage("[EOM]"));
+                } catch (Exception e) {
+                    log.error("Error broadcasting message to all sessions", e);
+                }
+            });
     }
 
     @Override

@@ -101,7 +101,7 @@ public class TaskController {
     public Object search(@RequestBody JsonRequestPage<TaskPlanVO> page) {
         TaskPlanVO plan = Optional.ofNullable(page.getSearch()).orElse(new TaskPlanVO());
         plan.setClientId(EsContextHolder.getContext().getClientId());
-        PageInfo<TaskPlanEntity> taskList = taskService.findPage(plan, page.getPageSize(), page.getPageNum());
+        PageInfo<TaskPlanEntity> taskList = taskService.findPage(plan, page.getPageSize(), page.getPageNum(), page.getOrderBy());
         JsonResultPage<TaskPlanEntity> result = new JsonResultPage<>(taskList.getList());
         result.setPageNum(taskList.getPageNum());
         result.setTotal(taskList.getTotal());

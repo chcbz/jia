@@ -129,7 +129,7 @@ public class DwzController {
     @RequestMapping(value = "/list", method = RequestMethod.POST)
     @ResponseBody
     public Object list(@RequestBody JsonRequestPage<DwzRecordEntity> page) {
-        PageInfo<DwzRecordEntity> list = dwzService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum());
+        PageInfo<DwzRecordEntity> list = dwzService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum(), page.getOrderBy());
         JsonResultPage<DwzRecordEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
         result.setTotal(list.getTotal());

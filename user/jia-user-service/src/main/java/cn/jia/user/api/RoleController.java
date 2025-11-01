@@ -131,7 +131,7 @@ public class RoleController {
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<RoleEntity> page) {
 		RoleEntity example = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
-		PageInfo<RoleEntity> roleList = roleService.findPage(example, page.getPageSize(), page.getPageNum());
+		PageInfo<RoleEntity> roleList = roleService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
 		JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
 		result.setPageNum(roleList.getPageNum());
 		result.setTotal(roleList.getTotal());

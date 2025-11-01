@@ -120,7 +120,7 @@ public class MediaController {
     @PostMapping(value = "/list")
     public Object list(@RequestBody JsonRequestPage<MatMediaReqVO> page) {
         MatMediaReqVO example = Optional.ofNullable(page.getSearch()).orElse(new MatMediaReqVO());
-        PageInfo<MatMediaEntity> mediaList = mediaService.findPage(example, page.getPageSize(), page.getPageNum());
+        PageInfo<MatMediaEntity> mediaList = mediaService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
         List<MatMediaResVO> medias =
                 mediaList.getList().stream().map(media -> {
                     MatMediaResVO mediaResVO = MatMediaVOMapper.INSTANCE.toVO(media);

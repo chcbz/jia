@@ -97,20 +97,7 @@ public class ElasticsearchChatMemoryRepository implements ChatMemoryRepository {
     @Retryable(retryFor = IOException.class, maxAttempts = 3, backoff = @Backoff(delay = 1000))
     public void deleteByConversationId(String conversationId) {
         Assert.hasText(conversationId, "conversationId cannot be null or empty");
-        try {
-            List<String> ids = vectorStore.similaritySearch(
-                SearchRequest.builder()
-                    .filterExpression("conversationId == '" + conversationId + "'")
-                    .build())
-                .stream()
-                .map(Document::getId)
-                .collect(Collectors.toList());
-            if (!ids.isEmpty()) {
-                vectorStore.delete(ids);
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to delete messages for conversation ID: " + conversationId, e);
-        }
+        vectorStore.delete("conversationId == '" + conversationId + "'");
     }
 
     public static ElasticsearchChatMemoryRepositoryBuilder builder() {

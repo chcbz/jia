@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.ToString;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -17,6 +18,7 @@ import java.io.Serializable;
  */
 @Setter
 @Getter
+@ToString(callSuper=true)
 @JsonInclude(value=Include.NON_NULL)
 public class JsonRequestPage<T> implements Serializable {
 	@Serial
@@ -32,14 +34,7 @@ public class JsonRequestPage<T> implements Serializable {
 	@JsonProperty("extra_search")
     private String extraSearch;
 
-    public JsonRequestPage() {
-        super();
-    }
-
-    @Override
-	public String toString() {
-		return "JsonRequestPage [draw=" + draw + ", pageNum=" + pageNum + ", pageSize=" + pageSize + ", search="
-				+ search + ", extra_search=" + extraSearch + "]";
-	}
+    /** 排序字段 */
+    private String orderBy;
 
 }
