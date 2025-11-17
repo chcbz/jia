@@ -24,7 +24,7 @@ public class EsContextHolder {
             if ("CTX".equals(cookie.getName())) {
                 EsContext esContext = JsonUtil.fromJson(ThreeDesUtil.decrypt3Des(cookie.getValue()), EsContext.class);
                 CONTEXT.set(esContext);
-                return esContext;
+                return getContext();
             }
         }
         return getContext();
@@ -33,5 +33,9 @@ public class EsContextHolder {
     public static Cookie genCookie() {
         EsContext context = getContext();
         return new Cookie("CTX", ThreeDesUtil.encrypt3Des(JsonUtil.toJson(context)));
+    }
+
+    public static void setContext(EsContext esContext) {
+    	CONTEXT.set(esContext);
     }
 }

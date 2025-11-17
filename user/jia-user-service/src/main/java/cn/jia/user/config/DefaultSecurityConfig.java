@@ -12,6 +12,7 @@ import cn.jia.core.util.PasswordUtil;
 import cn.jia.sms.common.SmsConstants;
 import cn.jia.sms.entity.SmsCodeEntity;
 import cn.jia.sms.service.SmsService;
+import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.entity.PermsEntity;
 import cn.jia.user.entity.PermsVO;
 import cn.jia.user.entity.UserEntity;
@@ -40,7 +41,6 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -157,7 +157,7 @@ public class DefaultSecurityConfig {
                         }
                     }
                     //设置登录用户所属clientId
-//                    redisTemplate.opsForValue().set("clientId_" + username, org.getClientId());
+//					redisTemplate.opsForValue().set("clientId_" + username, org.getClientId());
                 }
 
                 String password = user.getPassword();
@@ -173,7 +173,7 @@ public class DefaultSecurityConfig {
                     }
                 }
 
-                return new User(username, password, grantedAuthorities);
+                return new CustomUserDetails(user.getJiacn(), username, password, grantedAuthorities);
             }
         };
     }

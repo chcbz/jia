@@ -12,7 +12,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.version("spring", "6.2.7");
                             catalog.version("spring-boot", "3.5.0");
                             catalog.version("spring-cloud", "2025.0.0");
-                            catalog.version("spring-ai", "1.0.1");
+                            catalog.version("spring-ai", "1.0.3");
                             catalog.version("spring-security", "6.5.0");
                             catalog.version("spring-security-oauth2", "1.5.0");
                             catalog.version("weixin-java", "4.5.6.B");
@@ -55,6 +55,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring.security.web", "org.springframework.security", "spring-security-web").versionRef("spring-security");
                             catalog.library("spring.security.oauth2.client", "org.springframework.security", "spring-security-oauth2-client").versionRef("spring-security");
                             catalog.library("spring-security-oauth2-resource-server", "org.springframework.security", "spring-security-oauth2-resource-server").versionRef("spring-security");
+                            catalog.library("spring-security-oauth2-jose", "org.springframework.security", "spring-security-oauth2-jose").versionRef("spring-security");
                             catalog.library("spring-security-oauth2-authorization-server", "org.springframework.security", "spring-security-oauth2-authorization-server").versionRef("spring-security-oauth2");
                             catalog.library("spring-boot-configuration-processor", "org.springframework.boot", "spring-boot-configuration-processor").versionRef("spring-boot");
                             catalog.library("spring-boot-autoconfigure", "org.springframework.boot", "spring-boot-autoconfigure").versionRef("spring-boot");

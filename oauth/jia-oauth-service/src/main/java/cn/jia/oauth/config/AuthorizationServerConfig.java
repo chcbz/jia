@@ -8,6 +8,7 @@ import cn.jia.core.util.JsonUtil;
 import cn.jia.oauth.entity.OauthClientEntity;
 import cn.jia.oauth.service.ClientService;
 import cn.jia.oauth.vomapper.RegisteredClientMapper;
+import cn.jia.user.entity.CustomUserDetails;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,8 @@ import org.springframework.security.oauth2.server.authorization.client.Registere
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configurers.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
+import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
@@ -110,6 +113,20 @@ public class AuthorizationServerConfig {
                 context.setClientId(clientEntity.getClientId());
                 context.setAppcn(clientEntity.getAppcn());
                 return RegisteredClientMapper.INSTANCE.toVO(clientEntity);
+            }
+        };
+    }
+
+    @Bean
+    public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer() {
+        return context -> {
+            if (context.getPrincipal() != null) {
+                // 从CustomUserDetails中获取jiacn属性
+                if (context.getPrincipal().getPrincipal() instanceof CustomUserDetails customUserDetails) {
+                    if (customUserDetails.getJiacn() != null) {
+                        context.getClaims().claim("jiacn", customUserDetails.getJiacn());
+                    }
+                }
             }
         };
     }

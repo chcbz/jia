@@ -21,7 +21,7 @@ CREATE TABLE kefu_message (
   phone varchar(20) DEFAULT NULL COMMENT '电话号码',
   email varchar(100) DEFAULT NULL COMMENT '邮箱地址',
   title varchar(50) DEFAULT NULL,
-  content varchar(500) DEFAULT NULL,
+  content varchar(4000) DEFAULT NULL,
   attachment varchar(300) DEFAULT NULL,
   reply varchar(500) DEFAULT NULL COMMENT '回复内容',
   status int DEFAULT '0' COMMENT '状态 0待回复 1已回复',

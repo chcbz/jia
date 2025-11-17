@@ -1,5 +1,6 @@
 dependencies {
     api project(':common:jia-common-core')
+    api libs.spring.security.core
     api(libs.swagger.annotations)
     api(libs.mybatis.plus.annotation)
 }

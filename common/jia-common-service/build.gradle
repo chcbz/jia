@@ -18,6 +18,7 @@ dependencies {
     compileOnly(libs.spring.websocket)
     api(libs.spring.security.core)
     compileOnly(libs.spring.security.oauth2.client)
+    compileOnly(libs.spring.security.oauth2.resource.server)
     compileOnly(libs.mybatis.core)
     compileOnly(libs.pagehelper.core)
     compileOnly(libs.druid)

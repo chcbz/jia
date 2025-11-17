@@ -1,10 +1,11 @@
 package cn.jia.ai.mcp.client.config;
 
 import java.util.List;
+
+import cn.jia.ai.mcp.client.advisor.CustomerVectorStoreChatMemoryAdvisor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
-import org.springframework.ai.chat.client.advisor.vectorstore.VectorStoreChatMemoryAdvisor;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -25,7 +26,7 @@ public class ChatClientConfig {
         ToolCallbackProvider toolCallbacks = new SyncMcpToolCallbackProvider(mcpSyncClients);
         QuestionAnswerAdvisor questionAnswerAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
                 .searchRequest(SearchRequest.builder().similarityThreshold(0.8d).topK(2).build()).build();
-        VectorStoreChatMemoryAdvisor vectorStoreChatMemoryAdvisor = VectorStoreChatMemoryAdvisor.builder(vectorStore)
+        CustomerVectorStoreChatMemoryAdvisor vectorStoreChatMemoryAdvisor = CustomerVectorStoreChatMemoryAdvisor.builder(vectorStore)
                 .defaultTopK(20).build();
         RequestResponseAdvisor chatControllerAdvisor = new RequestResponseAdvisor();
         // MessageWindowChatMemory chatMemory = MessageWindowChatMemory.builder().build();
