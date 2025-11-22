@@ -188,13 +188,13 @@ const loadConversation = async (id) => {
         onSuccess: (data) => {
           if (data && data.data) {
             // 根据接口返回的数据结构处理会话内容
-            messages.value = data.data || [];
+            const msgList = data.data || [];
             
             // 确保消息格式正确
-            messages.value = messages.value.map(msg => ({
+            messages.value = msgList.map(msg => ({
               sender: msg.metadata.role || 'user',
               content: msg.text || '',
-              timestamp: msg.createTime || new Date().toISOString(),
+              timestamp: msg.metadata.timestamp || new Date().getTime(),
               conversationId: id
             }));
           } else {
@@ -231,7 +231,7 @@ const updateBotMessage = async (content) => {
     botMessage = {
       sender: 'bot',
       content,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().getTime()
     };
     messages.value.push(botMessage);
   }
@@ -296,7 +296,7 @@ const sendMessage = async () => {
     const userMessage = {
       sender: 'user',
       content: message,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date().getTime(),
       conversationId: conversationId.value
     };
     
@@ -349,7 +349,7 @@ const sendMessage = async () => {
         sender: 'system',
         content: '消息发送失败',
         isError: true,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().getTime()
       }
     ];
   }
@@ -365,7 +365,7 @@ const stopStream = async () => {
           sender: 'system',
           content: '已取消当前请求',
           isInfo: true,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().getTime()
         }
       ];
     } catch (err) {
@@ -427,7 +427,7 @@ const deleteConversation = async (id, retryCount = 0) => {
               sender: 'system',
               content: `删除会话失败${retryCount > 0 ? ` (重试 ${retryCount}/3)` : ''}`,
               isError: true,
-              timestamp: new Date().toISOString()
+              timestamp: new Date().getTime()
             }
           ];
         }
@@ -448,7 +448,7 @@ const deleteConversation = async (id, retryCount = 0) => {
           sender: 'system',
           content: `删除会话失败${retryCount > 0 ? ` (重试 ${retryCount}/3)` : ''}`,
           isError: true,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().getTime()
         }
       ];
     }
