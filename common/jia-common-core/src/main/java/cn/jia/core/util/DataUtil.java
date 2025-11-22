@@ -6,6 +6,7 @@ import org.apache.commons.lang3.StringUtils;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.Serializable;
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.InetAddress;
@@ -14,6 +15,9 @@ import java.text.DecimalFormat;
 import java.util.*;
 
 /**
+ * 数据处理工具类
+ * 提供各种数据处理方法，包括字符串处理、数字格式化、类型转换、IP获取、UUID生成等功能
+ *
  * @author chc
  */
 @Slf4j
@@ -22,9 +26,9 @@ public class DataUtil {
     /**
      * 将字符串分割成指定的字符串列表
      *
-     * @param values
-     * @param regex
-     * @return
+     * @param values 待分割的字符串
+     * @param regex  分隔符
+     * @return 分割后的字符串列表
      */
     public static List<String> toStringList(String values, String regex) {
         List<String> list = null;
@@ -43,9 +47,9 @@ public class DataUtil {
     /**
      * 将字符串分割成指定的整型数据列表，无法转换的数字不计入列表
      *
-     * @param values
-     * @param regex
-     * @return
+     * @param values 待分割的字符串
+     * @param regex  分隔符
+     * @return 分割并转换后的整型列表
      */
     public static List<Integer> toIntegerList(String values, String regex) {
         List<Integer> list = null;
@@ -66,7 +70,7 @@ public class DataUtil {
      *
      * @param d 原始数值
      * @param n 保留的小数点位数
-     * @return
+     * @return 保留指定小数位数后的数值
      */
     public static Double formatDecimal(Double d, Integer n) {
         BigDecimal b = BigDecimal.valueOf(d);
@@ -76,8 +80,8 @@ public class DataUtil {
     /**
      * 格式化价格为0.0格式
      *
-     * @param price
-     * @return
+     * @param price 待格式化的价格字符串
+     * @return 格式化后的价格字符串
      */
     public static String formatPrice(String price) {
         try {
@@ -93,8 +97,8 @@ public class DataUtil {
     /**
      * 格式化价格为0.00格式
      *
-     * @param price
-     * @return
+     * @param price 待格式化的价格字符串
+     * @return 格式化后的价格字符串
      */
     public static String formatPrice2(String price) {
         try {
@@ -112,7 +116,7 @@ public class DataUtil {
      *
      * @param param1 乘数
      * @param param2 被乘数
-     * @return
+     * @return 运算结果字符串
      */
     public static String floatMultiply(String param1, String param2) {
         String value = "";
@@ -133,7 +137,7 @@ public class DataUtil {
      *
      * @param param1 加数
      * @param param2 被加数
-     * @return
+     * @return 运算结果字符串
      */
     public static String floatAdd(String param1, String param2) {
         String value = "";
@@ -152,7 +156,8 @@ public class DataUtil {
     /**
      * 获取客户端IP
      *
-     * @return 客户端IP
+     * @param request HTTP请求对象
+     * @return 客户端IP地址
      */
     public static String getClientIp(HttpServletRequest request) {
         String ip = request.getHeader("x-forwarded-for");
@@ -190,7 +195,7 @@ public class DataUtil {
      *
      * @param numberFlag 是否是数字
      * @param length     字符串长度
-     * @return
+     * @return 随机字符串
      */
     public static String getRandom(boolean numberFlag, int length) {
         StringBuilder retStr;
@@ -221,7 +226,7 @@ public class DataUtil {
     /**
      * 产生去掉-的UUID
      *
-     * @return
+     * @return 去掉-的UUID字符串
      */
     public static String getUuid() {
         UUID uuid = UUID.randomUUID();
@@ -234,8 +239,8 @@ public class DataUtil {
     /**
      * 判断是否是整数
      *
-     * @param str
-     * @return
+     * @param str 待判断的字符串
+     * @return 是否为整数
      */
     public static boolean isInteger(String str) {
         boolean flag = false;
@@ -253,7 +258,7 @@ public class DataUtil {
      *
      * @param param1 被除数
      * @param param2 除数
-     * @return
+     * @return 百分比字符串
      */
     public static String percent(int param1, int param2) {
         String result = "0";
@@ -274,13 +279,16 @@ public class DataUtil {
         return result;
     }
 
+    /**
+     * 下划线字符
+     */
     public static final char UNDERLINE = '_';
 
     /**
      * 将驼峰格式字符串转成下划线格式
      *
-     * @param param
-     * @return
+     * @param param 驼峰格式字符串
+     * @return 下划线格式字符串
      */
     public static String camelToUnderline(String param) {
         if (param == null || "".equals(param.trim())) {
@@ -303,8 +311,8 @@ public class DataUtil {
     /**
      * 将下划线格式字符串转成驼峰格式
      *
-     * @param param
-     * @return
+     * @param param 下划线格式字符串
+     * @return 驼峰格式字符串
      */
     public static String underlineToCamel(String param) {
         if (param == null || "".equals(param.trim())) {
@@ -332,7 +340,7 @@ public class DataUtil {
      * @param lat1   起始坐标纬度
      * @param longt2 目标坐标经度
      * @param lat2   目标坐标纬度
-     * @return
+     * @return 两点间直线距离（米）
      */
     public static double getDistance(double longt1, double lat1, double longt2, double lat2) {
         // 地球的半径
@@ -348,11 +356,14 @@ public class DataUtil {
     /**
      * 将参数转化成Map
      *
-     * @param name1
-     * @param value1
-     * @param name2
-     * @param value2
-     * @return
+     * @param name1  第一个键名
+     * @param value1 第一个值
+     * @param name2  第二个键名
+     * @param value2 第二个值
+     * @param <V>    值的类型
+     * @param <V1>   第一个值的具体类型
+     * @param <V2>   第二个值的具体类型
+     * @return 包含两个键值对的Map
      */
     public static <V, V1 extends V, V2 extends V> Map<String, V> toMap(String name1, V1 value1, String name2, V2 value2) {
         return populateMap(new HashMap<>(16), name1, value1, name2, value2);
@@ -361,9 +372,11 @@ public class DataUtil {
     /**
      * 将参数转化成Map
      *
-     * @param map
-     * @param data
-     * @return
+     * @param map  目标Map
+     * @param data 键值对数组，格式为[key1, value1, key2, value2, ...]
+     * @param <K>  键的类型
+     * @param <V>  值的类型
+     * @return 填充后的Map
      */
     @SuppressWarnings("unchecked")
     private static <K, V> Map<String, V> populateMap(Map<String, V> map, Object... data) {
@@ -376,7 +389,7 @@ public class DataUtil {
     /**
      * 将元数据前补零，补后的总长度为指定的长度，以字符串的形式返回
      *
-     * @param sourceData 原数据
+     * @param sourceData   原数据
      * @param formatLength 字符总长度
      * @return 重组后的数据
      */
@@ -387,13 +400,19 @@ public class DataUtil {
     /**
      * byte 与 int 的相互转换
      *
-     * @param x int
-     * @return byte
+     * @param x int值
+     * @return byte值
      */
     public static byte intToByte(int x) {
         return (byte) x;
     }
 
+    /**
+     * byte 转换为 int
+     *
+     * @param b byte值
+     * @return int值
+     */
     public static int byteToInt(byte b) {
         //Java 总是把 byte 当做有符处理；我们可以通过将其和 0xFF 进行二进制与得到它的无符值
         return b & 0xFF;
@@ -402,8 +421,8 @@ public class DataUtil {
     /**
      * byte 数组与 int 的相互转换
      *
-     * @param b byte
-     * @return int
+     * @param b byte数组
+     * @return int值
      */
     public static int byteArrayToInt(byte[] b) {
         return b[3] & 0xFF |
@@ -412,6 +431,12 @@ public class DataUtil {
                 (b[0] & 0xFF) << 24;
     }
 
+    /**
+     * int 转换为 byte 数组
+     *
+     * @param a int值
+     * @return byte数组
+     */
     public static byte[] intToByteArray(int a) {
         return new byte[]{
                 (byte) ((a >> 24) & 0xFF),
@@ -424,8 +449,8 @@ public class DataUtil {
     /**
      * byte 数组与 long 的相互转换
      *
-     * @param data long
-     * @return byte
+     * @param data long值
+     * @return byte数组
      */
     public static byte[] longToBytes(long data) {
         byte[] bytes = new byte[8];
@@ -440,9 +465,40 @@ public class DataUtil {
         return bytes;
     }
 
+    /**
+     * byte数组转换为long
+     *
+     * @param bytes byte数组
+     * @return long值
+     */
     public static long bytesToLong(byte[] bytes) {
         return (0xffL & (long) bytes[0]) | (0xff00L & ((long) bytes[1] << 8)) | (0xff0000L & ((long) bytes[2] << 16)) | (0xff000000L & ((long) bytes[3] << 24))
                 | (0xff00000000L & ((long) bytes[4] << 32)) | (0xff0000000000L & ((long) bytes[5] << 40)) | (0xff000000000000L & ((long) bytes[6] << 48)) | (0xff00000000000000L & ((long) bytes[7] << 56));
+    }
+
+    /**
+     * 将对象转换为Map
+     *
+     * @param entity 待转换的对象
+     * @return 包含对象字段名和值的Map
+     */
+    public static Map<String, Object> objToMap(Object entity) {
+        Map<String, Object> map = new HashMap<>();
+        Class<?> clazz = entity.getClass();
+        Field[] fields = clazz.getDeclaredFields();
+
+        for (Field field : fields) {
+            field.setAccessible(true);
+            Object value;
+            try {
+                value = field.get(entity);
+            } catch (IllegalAccessException e) {
+                return null;
+            }
+            map.put(field.getName(), value);
+        }
+
+        return map;
     }
 
     public static void main(String[] args) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -26,6 +27,9 @@ public class JsonUtil {
 		MAPPER = new ObjectMapper();
 		//设置输入时忽略JSON字符串中存在而Java对象实际没有的属性
 		MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+		
+		// 添加对Duration类型的支持
+		MAPPER.registerModule(new JavaTimeModule());
 	}
 
 	/**

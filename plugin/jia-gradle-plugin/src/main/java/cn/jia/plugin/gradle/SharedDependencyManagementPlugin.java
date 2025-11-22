@@ -100,6 +100,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-test-dbunit", "com.github.springtestdbunit:spring-test-dbunit:1.3.0");
                             catalog.library("jackson-core", "com.fasterxml.jackson.core", "jackson-core").versionRef("jackson");
                             catalog.library("jackson-annotations", "com.fasterxml.jackson.core", "jackson-annotations").versionRef("jackson");
+                            catalog.library("jackson-datatype", "com.fasterxml.jackson.datatype", "jackson-datatype-jsr310").versionRef("jackson");
                             catalog.library("json", "org.json:json:20230227");
                             catalog.library("log4j", "log4j:log4j:1.2.17");
                             catalog.library("slf4j.api", "org.slf4j:slf4j-api:2.0.6");

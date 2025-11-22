@@ -2,6 +2,7 @@ dependencies {
     compileOnly libs.spring.webmvc
     compileOnly libs.aws.java.sdk.sns
     compileOnly libs.jackson.core
+    compileOnly libs.jackson.datatype
     compileOnly libs.json
     compileOnly libs.slf4j.api
     compileOnly libs.dom4j
@@ -47,6 +48,7 @@ dependencies {
     testImplementation libs.spring.webmvc
     testImplementation libs.aws.java.sdk.sns
     testImplementation libs.jackson.core
+    testImplementation libs.jackson.datatype
     testImplementation libs.json
     testImplementation libs.slf4j.api
     testImplementation libs.dom4j

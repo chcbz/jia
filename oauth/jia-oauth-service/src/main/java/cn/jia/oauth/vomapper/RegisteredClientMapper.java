@@ -2,19 +2,19 @@ package cn.jia.oauth.vomapper;
 
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.oauth.dto.ClientSettingDTO;
+import cn.jia.oauth.dto.TokenSettingDTO;
 import cn.jia.oauth.entity.OauthClientEntity;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
-import org.springframework.security.oauth2.server.authorization.settings.ConfigurationSettingNames;
 import org.springframework.security.oauth2.server.authorization.settings.OAuth2TokenFormat;
 import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
 
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -45,14 +45,14 @@ public class RegisteredClientMapper {
                 .postLogoutRedirectUris((uris) -> uris.addAll(postLogoutRedirectUris))
                 .scopes((scopes) -> scopes.addAll(clientScopes));
         // @formatter:on
-        Map<String, Object> clientSettingsMap = JsonUtil.jsonToMap(entity.getClientSettings());
-        if (clientSettingsMap != null) {
-            builder.clientSettings(ClientSettings.withSettings(clientSettingsMap).build());
+        ClientSettingDTO clientSettingDTO = JsonUtil.fromJson(entity.getClientSettings(), ClientSettingDTO.class);
+        if (clientSettingDTO != null) {
+            builder.clientSettings(ClientSettings.withSettings(clientSettingDTO.toMap()).build());
         }
-        Map<String, Object> tokenSettingsMap = JsonUtil.jsonToMap(entity.getTokenSettings());
-        if (tokenSettingsMap != null) {
-            TokenSettings.Builder tokenSettingsBuilder = TokenSettings.withSettings(tokenSettingsMap);
-            if (!tokenSettingsMap.containsKey(ConfigurationSettingNames.Token.ACCESS_TOKEN_FORMAT)) {
+        TokenSettingDTO tokenSettingDTO = JsonUtil.fromJson(entity.getTokenSettings(), TokenSettingDTO.class);
+        if (tokenSettingDTO != null) {
+            TokenSettings.Builder tokenSettingsBuilder = TokenSettings.withSettings(tokenSettingDTO.toMap());
+            if (tokenSettingDTO.getAccessTokenFormat() == null) {
                 tokenSettingsBuilder.accessTokenFormat(OAuth2TokenFormat.SELF_CONTAINED);
             }
             builder.tokenSettings(tokenSettingsBuilder.build());
