@@ -117,7 +117,7 @@ const isLoading = ref(false);
 const isStreaming = ref(false);
 const readerRef = ref(null);
 const error = ref(null);
-const conversationId = ref(Date.now().toString());
+const conversationId = ref('');
 const conversations = ref([]);
 const showSidebar = ref(false);
 
@@ -176,29 +176,6 @@ const loadConversations = async () => {
   }
 };
 
-const saveConversation = async () => {
-  const title = messages.value.find((m) => m.sender === 'user')?.content || '新会话';
-  const existingIndex = conversations.value.findIndex((c) => c.id === conversationId.value);
-
-  const conversation = {
-    id: conversationId.value,
-    title: title.substring(0, 30),
-    lastUpdated: new Date().toISOString(),
-    messages: [...messages.value] // 创建副本避免引用问题
-  };
-
-  if (existingIndex >= 0) {
-    conversations.value[existingIndex] = conversation;
-  } else {
-    conversations.value.unshift(conversation);
-  }
-
-  // 只保留最近的20个会话
-  if (conversations.value.length > 20) {
-    conversations.value = conversations.value.slice(0, 20);
-  }
-};
-
 const loadConversation = async (id) => {
   const conversation = conversations.value.find((c) => c.id === id);
   if (conversation) {
@@ -211,14 +188,13 @@ const loadConversation = async (id) => {
         onSuccess: (data) => {
           if (data && data.data) {
             // 根据接口返回的数据结构处理会话内容
-            const conversationData = data.data;
-            messages.value = conversationData.messages || conversationData.content || [];
+            messages.value = data.data || [];
             
             // 确保消息格式正确
             messages.value = messages.value.map(msg => ({
-              sender: msg.sender || msg.role || 'bot',
-              content: msg.content || msg.message || '',
-              timestamp: msg.timestamp || msg.createdAt || new Date().toISOString(),
+              sender: msg.metadata.role || 'user',
+              content: msg.text || '',
+              timestamp: msg.createTime || new Date().toISOString(),
               conversationId: id
             }));
           } else {
@@ -239,8 +215,7 @@ const loadConversation = async (id) => {
 };
 
 const generateNewConversationId = () => {
-  saveConversation();
-  conversationId.value = Date.now().toString();
+  conversationId.value = '';
   messages.value = [];
 };
 
@@ -291,9 +266,12 @@ const processBotResponse = (eventData) => {
   try {
     // 尝试解析为JSON
     const data = JSON.parse(payload);
-    const messageContent = data.v || data.content || data.message || data.text || '';
-    if (messageContent) {
-      updateBotMessage(messageContent);
+    if (data.v) {
+      updateBotMessage(data.v);
+    } else if (data.conversationId) {
+      conversationId.value = data.conversationId;
+    } else if (data.t) {
+      loadConversations();
     } else {
       console.log('No message content found in JSON:', data);
     }
@@ -329,20 +307,6 @@ const sendMessage = async () => {
 
     scrollToBottom();
 
-    // 保存用户消息到服务端
-    try {
-      await kefuApi.create('/message/create', {
-        conversationId: conversationId.value,
-        sender: 'user',
-        content: message,
-        timestamp: userMessage.timestamp
-      }, {
-        autoLoading: false
-      });
-    } catch (saveError) {
-      console.warn('保存用户消息到服务端失败:', saveError);
-    }
-
     // 使用新的 useHttp 流式功能
     const result = await mcpApi.create(
       '/chat/stream',
@@ -362,7 +326,6 @@ const sendMessage = async () => {
           isStreaming.value = false;
           isLoading.value = false;
           readerRef.value = null;
-          saveConversation();
         },
         onError: (errorMessage) => {
           console.error('发送消息失败:', errorMessage);
