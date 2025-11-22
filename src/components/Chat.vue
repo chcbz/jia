@@ -1069,6 +1069,7 @@ onMounted(initializeApp);
 /* 消息内容样式优化 */
 .chat-message :deep(p) {
   margin: 0.5em 0;
+  white-space: pre-wrap; /* 保持空格和换行 */
 }
 
 .chat-message :deep(a) {
