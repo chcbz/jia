@@ -32,9 +32,9 @@ public class ConversationController {
         ElasticsearchChatMemoryRepository repository =
                 ElasticsearchChatMemoryRepository.builder().vectorStore(vectorStore).build();
         return JsonResult.success(repository.findByConversationId(id).stream().sorted((o1, o2) ->
-                Optional.ofNullable(o1.getMetadata().get("createTime"))
+                Optional.ofNullable(o1.getMetadata().get("timestamp"))
                         .map(o -> (Long) o).orElse(0L)
-                        .compareTo(Optional.ofNullable(o2.getMetadata().get("createTime"))
+                        .compareTo(Optional.ofNullable(o2.getMetadata().get("timestamp"))
                                 .map(o -> (Long) o).orElse(0L))));
     }
 }
