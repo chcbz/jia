@@ -104,7 +104,7 @@ en:
     short: Shorten URL
     restore: Restore URL
     long_url_placeholder: Enter long URL
-    short_url_placeholder: Enter short URL (e.g. https://dwz.chaoyoufan.net/xxx) or just suffix (e.g. xxx)
+    short_url_placeholder: Enter short URL or just short code
     expire: Expiration
     subscribe_notify: This feature is only available for official account members!
     short_url_empty: Short URL cannot be empty!
@@ -230,7 +230,7 @@ zh-CN:
     short: 缩短网址
     restore: 还原网址
     long_url_placeholder: 请输入长网址
-    short_url_placeholder: 请输入短网址（如：https://dwz.chaoyoufan.net/xxx）或者直接输入后缀（如：xxx）
+    short_url_placeholder: 请输入短网址或者直接输入短码
     expire: 有效期
     subscribe_notify: 该礼品只对公众号成员开放，请先关注公众号！
     short_url_empty: 短网址不能为空！

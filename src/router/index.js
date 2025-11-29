@@ -41,7 +41,7 @@ export default [
     component: () => import('@/components/TaskIndex'),
     meta: {
       title: 'app.title',
-      showInMenu: true,
+      showInMenu: false,
       menuOrder: 2
     }
   },
@@ -78,7 +78,7 @@ export default [
     component: () => import('@/components/GiftPay'),
     meta: {
       title: 'gift.title',
-      showInMenu: true,
+      showInMenu: false,
       menuOrder: 3
     }
   },
@@ -88,7 +88,7 @@ export default [
     component: () => import('@/components/OrderList'),
     meta: {
       title: 'gift.order_list',
-      showInMenu: true,
+      showInMenu: false,
       menuOrder: 4
     }
   },

@@ -9,7 +9,7 @@
       <var-tab-item>
         <div>
           <var-input
-            type="textarea"
+            textarea 
             v-model="originalUrl"
             id="originalUrl"
             :placeholder="$t('dwz.long_url_placeholder')"
@@ -50,7 +50,7 @@
       <var-tab-item>
         <div>
           <var-input
-            type="textarea"
+            textarea 
             v-model="uri"
             id="uri"
             :placeholder="$t('dwz.short_url_placeholder')"

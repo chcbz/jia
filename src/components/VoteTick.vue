@@ -111,7 +111,7 @@ export default {
 .vote-tick-container {
   padding: 16px;
   overflow-y: auto;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  background: white;
 }
 
 .question-header {
