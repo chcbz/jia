@@ -143,7 +143,6 @@ export default {
       })
       .then((res) => {
         _this.phrase = res.data.data;
-        document.title = _this.phrase.content;
         this.$http
           .get(baseUrl + '/phrase/read', {
             params: {

@@ -97,6 +97,13 @@ const handleMenuSelect = (action) => {
 watch(() => globalStore.menu, (newMenu) => {
   updateActionMenu(newMenu)
 }, { deep: true })
+
+// 监听全局标题变化，自动更新 document.title
+watch(() => globalStore.title, (newTitle) => {
+  if (newTitle) {
+    document.title = newTitle + ' - ' + import.meta.env.VITE_APP_TITLE;
+  }
+})
 </script>
 
 <style>
