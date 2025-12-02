@@ -6,6 +6,7 @@ import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.StringUtil;
 import cn.jia.kefu.entity.KefuMessageEntity;
 import cn.jia.kefu.service.KefuMessageService;
+import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -42,7 +43,7 @@ public class ChatController {
     private final RedisService redisService;
     private final ChatClient.Builder chatClientBuilder;
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
-            帮我根据下面对话内容，输出10字以内的标题。
+            帮我根据下面对话内容，输出15字以内的问题概述。
             
             问：
             -------------------------------------------------
@@ -128,12 +129,10 @@ public class ChatController {
      * @return 处理后的内容
      */
     private String processContent(String content, boolean needSummary, StringBuilder summary) {
-        // 回车转义为换行符
-        content = content.replace("\n", "\\n");
         if (needSummary) {
             summary.append(content);
         }
-        return "{\"v\": \"" + content + "\"}";
+        return "{\"v\": \"" + StringEscapeUtils.escapeJson(content) + "\"}";
     }
 
     /**
