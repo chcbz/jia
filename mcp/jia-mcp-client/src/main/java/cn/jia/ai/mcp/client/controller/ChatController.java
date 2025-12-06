@@ -43,7 +43,7 @@ public class ChatController {
     private final RedisService redisService;
     private final ChatClient.Builder chatClientBuilder;
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
-            帮我根据下面对话内容，输出15字以内的问题概述。
+            帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
             
             问：
             -------------------------------------------------
