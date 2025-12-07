@@ -98,7 +98,7 @@ export default [
     component: () => import('@/components/VoteTick'),
     meta: {
       title: 'vote.title',
-      showInMenu: true,
+      showInMenu: false,
       menuOrder: 5
     }
   },
