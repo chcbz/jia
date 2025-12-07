@@ -12,7 +12,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.version("spring", "6.2.7");
                             catalog.version("spring-boot", "3.5.0");
                             catalog.version("spring-cloud", "2025.0.0");
-                            catalog.version("spring-ai", "1.0.3");
+                            catalog.version("spring-ai", "1.1.1");
                             catalog.version("spring-security", "6.5.0");
                             catalog.version("spring-security-oauth2", "1.5.0");
                             catalog.version("weixin-java", "4.5.6.B");

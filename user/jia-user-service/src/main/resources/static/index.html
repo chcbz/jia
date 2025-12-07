@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jia API Platform</title>
+    <style>
+        body {
+            font-family: "Microsoft YaHei", Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin: 0;
+        }
+        .content {
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,.1);
+            margin-top: 20px;
+            padding: 20px;
+            border-radius: 4px;
+        }
+        .module-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .module-card {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            transition: box-shadow 0.3s ease;
+        }
+        .module-card:hover {
+            box-shadow: 0 4px 8px rgba(0,0,0,.15);
+        }
+        .module-card h3 {
+            margin-top: 0;
+            color: #2196F3;
+        }
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Jia API 平台</h1>
+            <p>欢迎使用Jia API平台</p>
+        </header>
+        
+        <div class="content">
+            <h2>系统模块</h2>
+            <div class="module-list">
+                <div class="module-card">
+                    <h3>用户管理 (User)</h3>
+                    <p>提供用户注册、登录、权限管理等功能</p>
+                </div>
+                <div class="module-card">
+                    <h3>基础服务 (Base)</h3>
+                    <p>包含字典管理、日志记录、通知公告等基础功能</p>
+                </div>
+                <div class="module-card">
+                    <h3>短信服务 (SMS)</h3>
+                    <p>短信发送、模板管理、发送记录查询</p>
+                </div>
+                <div class="module-card">
+                    <h3>任务调度 (Task)</h3>
+                    <p>定时任务管理、执行监控</p>
+                </div>
+                <div class="module-card">
+                    <h3>工作流 (Workflow)</h3>
+                    <p>流程定义、审批流程管理</p>
+                </div>
+                <div class="module-card">
+                    <h3>微信集成 (WeChat)</h3>
+                    <p>微信公众号、小程序接口集成</p>
+                </div>
+                <div class="module-card">
+                    <h3>客服系统 (Kefu)</h3>
+                    <p>在线客服、消息推送、FAQ管理</p>
+                </div>
+                <div class="module-card">
+                    <h3>积分系统 (Point)</h3>
+                    <p>积分规则、积分记录、积分商城</p>
+                </div>
+                <div class="module-card">
+                    <h3>素材管理 (Material)</h3>
+                    <p>媒体文件、图文素材、投票管理</p>
+                </div>
+                <div class="module-card">
+                    <h3>短链接服务 (DWZ)</h3>
+                    <p>长链接转短链接服务</p>
+                </div>
+                <div class="module-card">
+                    <h3>OAuth认证</h3>
+                    <p>第三方授权登录、客户端管理</p>
+                </div>
+                <div class="module-card">
+                    <h3>ISP服务</h3>
+                    <p>网络服务相关功能</p>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>&copy; 2025 Jia API Platform. All rights reserved.</p>
+        </footer>
+    </div>
+</body>
+</html>

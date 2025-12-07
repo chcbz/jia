@@ -23,11 +23,11 @@ public class ChatClientConfig {
     @Bean
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder, VectorStore vectorStore,
             List<McpSyncClient> mcpSyncClients) {
-        ToolCallbackProvider toolCallbacks = new SyncMcpToolCallbackProvider(mcpSyncClients);
+        ToolCallbackProvider toolCallbacks = SyncMcpToolCallbackProvider.builder().mcpClients(mcpSyncClients).build();
         QuestionAnswerAdvisor questionAnswerAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
                 .searchRequest(SearchRequest.builder().similarityThreshold(0.8d).topK(2).build()).build();
-        CustomerVectorStoreChatMemoryAdvisor vectorStoreChatMemoryAdvisor = CustomerVectorStoreChatMemoryAdvisor.builder(vectorStore)
-                .defaultTopK(20).build();
+        CustomerVectorStoreChatMemoryAdvisor vectorStoreChatMemoryAdvisor =
+                CustomerVectorStoreChatMemoryAdvisor.builder(vectorStore).defaultTopK(20).build();
         RequestResponseAdvisor chatControllerAdvisor = new RequestResponseAdvisor();
         // MessageWindowChatMemory chatMemory = MessageWindowChatMemory.builder().build();
 
