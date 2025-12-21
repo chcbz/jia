@@ -111,7 +111,7 @@ export function useHttp (options = {}) {
         method: config.method,
         headers: config.headers,
         body: config.body,
-        signal: AbortSignal.timeout(60000) // 60秒超时
+        signal: AbortSignal.timeout(180000) // 180秒超时
       }
 
       // 对于 GET 请求，不要包含 body
