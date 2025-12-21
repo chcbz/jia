@@ -14,6 +14,7 @@ import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -34,7 +35,7 @@ public class SmsServiceImpl implements SmsService {
     private SmsBuyDao smsBuyDao;
     @Inject
     private SmsTemplateDao smsTemplateDao;
-    @Inject
+    @Autowired(required = false)
     private IDistributedLock distributedLock;
 
     /**
@@ -69,8 +70,8 @@ public class SmsServiceImpl implements SmsService {
         example.setStatus(SmsConstants.COMMON_ENABLE);
         List<SmsCodeEntity> smsCodeList = smsCodeDao.selectByEntity(example);
         SmsCodeEntity sc = null;
-        if (smsCodeList.size() > 0) {
-            sc = smsCodeList.get(0);
+        if (!smsCodeList.isEmpty()) {
+            sc = smsCodeList.getFirst();
         }
         return sc;
     }
@@ -135,9 +136,8 @@ public class SmsServiceImpl implements SmsService {
     public void send(SmsSendEntity smsSend) {
         smsSendDao.insert(smsSend);
         //设置最新剩余数量
-        String clientId = EsContextHolder.getContext().getClientId();
-        ValidUtil.assertNotNull(clientId, "clientId");
-        smsConfigDao.reduce(clientId);
+        ValidUtil.assertNotNull(smsSend.getClientId(), "clientId");
+        smsConfigDao.reduce(smsSend.getClientId());
     }
 
     @Override

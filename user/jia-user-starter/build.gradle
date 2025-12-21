@@ -2,6 +2,7 @@ dependencies {
     api project(':user:jia-user-service')
     api project(':user:jia-user-mapper')
     implementation project(':isp:jia-isp-mapper')
+    implementation project(':sms:jia-sms-mapper')
     api project(':common:jia-common-starter')
     implementation(libs.spring.boot.starter.data.redis)
     implementation(libs.jodd)

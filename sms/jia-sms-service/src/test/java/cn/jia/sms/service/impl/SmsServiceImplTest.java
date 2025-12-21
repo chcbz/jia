@@ -2,7 +2,6 @@ package cn.jia.sms.service.impl;
 
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
-import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.lock.IDistributedLock;
 import cn.jia.sms.dao.*;
 import cn.jia.sms.entity.*;
@@ -13,7 +12,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
-import org.mockito.Mockito;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -111,12 +109,9 @@ class SmsServiceImplTest extends BaseMockTest {
     void testSend() {
         when(smsSendDao.insert(any())).thenReturn(0);
         when(smsConfigDao.reduce(any())).thenReturn(0);
-        try (MockedStatic<EsContextHolder> mockedStatic = Mockito.mockStatic(EsContextHolder.class)) {
-            EsContext esContext = mock(EsContext.class);
-            when(esContext.getClientId()).thenReturn("clientId");
-            mockedStatic.when(EsContextHolder::getContext).thenReturn(esContext);
-            smsServiceImpl.send(new SmsSendEntity());
-        }
+        SmsSendEntity smsSendEntity = new SmsSendEntity();
+        smsSendEntity.setClientId("clientId");
+        smsServiceImpl.send(smsSendEntity);
     }
 
     @Test

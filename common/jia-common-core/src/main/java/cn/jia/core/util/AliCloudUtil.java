@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 腾讯云签名工具类
+ * 阿里云签名工具类
  * @author chc
  */
 public class AliCloudUtil {

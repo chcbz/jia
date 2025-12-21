@@ -6,7 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import javax.xml.bind.DatatypeConverter;
-import java.net.URLEncoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
@@ -111,7 +110,8 @@ public class TxCloudUtil {
         UTF8 = StandardCharsets.UTF_8;
     }
 
-    public static Map<String, Object> dnsSend(String domain, String subDomain, String value, String dnsKey, String dnsToken, String action) throws Exception{
+    public static Map<String, Object> dnsSend(String domain, String subDomain, String value, String dnsKey,
+                                              String dnsToken, String action) throws Exception{
         String apiHost = "cns.api.qcloud.com";
         String apiPath = "/v2/index.php";
         String httpMethod = "GET";
@@ -143,25 +143,5 @@ public class TxCloudUtil {
             throw new EsRuntimeException(String.valueOf(respMap.get("code")), String.valueOf(respMap.get("message")));
         }
         return respMap;
-    }
-
-    public static void main(String[] args) throws Exception {
-        String apiHost = "cns.api.qcloud.com";
-        String apiPath = "/v2/index.php";
-        String httpMethod = "GET";
-
-        TreeMap<String, String> param = new TreeMap<>();
-        param.put("Action", "RecordList");
-        param.put("domain", "czyfchina.com");
-        param.put("subDomain", "test");
-        param.put("Timestamp", "1559719918");
-        param.put("Nonce", "9999");
-        param.put("SecretId", "AKIDf8LIzWw6VfZEdmMPt77sOfgR2NTKrLUP");
-        param.put("SignatureMethod", "HmacSHA1");
-        String msg = TxCloudUtil.makeSignPlainText(param, httpMethod, apiHost, apiPath);
-        log.info(msg);
-        String sign = TxCloudUtil.sign("pdEdvFQO8ez4VjhQt88xXszrUs65vWrx", msg, "HmacSHA1");
-        param.put("Signature", URLEncoder.encode(sign, StandardCharsets.UTF_8));
-        log.info(sign);
     }
 }

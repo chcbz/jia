@@ -42,7 +42,7 @@ public class SmsCodeEntity extends BaseEntity {
     private Integer smsType;
 
     @Schema(description = "发送次数")
-    private int count;
+    private Integer count;
 
     @Schema(description = "状态 1有效 0无效")
     private Integer status;

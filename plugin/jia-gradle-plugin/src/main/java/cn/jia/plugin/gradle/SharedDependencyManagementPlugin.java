@@ -137,8 +137,9 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             // 图片压缩
                             catalog.library("thumbnailator", "net.coobird:thumbnailator:0.4.8");
                             catalog.library("ganymed-ssh2", "ch.ethz.ganymed:ganymed-ssh2:262");
-                            catalog.library("aliyun-java-sdk-core", "com.aliyun:aliyun-java-sdk-core:4.4.3");
+                            catalog.library("aliyun-java-sdk-core", "com.aliyun:aliyun-java-sdk-core:4.5.16");
                             catalog.library("aliyun-java-sdk-alidns", "com.aliyun:aliyun-java-sdk-alidns:2.0.10");
+                            catalog.library("aliyun-java-sdk-dysmsapi", "com.aliyun:aliyun-java-sdk-dysmsapi:2.1.0");
                             catalog.library("stripe-java", "com.stripe:stripe-java:4.4.0");
                             catalog.library("aws-java-sdk-sns", "com.amazonaws:aws-java-sdk-sns:1.11.98");
                             catalog.library("pdf2dom", "net.sf.cssbox:pdf2dom:1.7");

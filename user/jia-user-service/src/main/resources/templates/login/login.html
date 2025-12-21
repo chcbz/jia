@@ -62,8 +62,8 @@
                                         <span>验证码</span>
                                     </td>
                                     <td class="s_form_content">
-                                        <input type="text" name="password" id="telephoneNumberV" class="easyui-textbox" placeholder="手机号码"/>
-                                        <button type="button" class="btn btn-large btn-danger" id="phoneCode" onclick="app.createsmsCode()">获取验证码</button>
+                                        <input type="text" name="password" id="telephoneNumberV" class="easyui-textbox" placeholder="验证码"/>
+                                        <button type="button" class="btn btn-large btn-danger" id="phoneCode" onclick="app.createsmsCode(1)">获取验证码</button>
                                     </td>
                                 </tr>
                             </table>
@@ -154,7 +154,24 @@ function login() {
             password.focus();
             return false;
         }
-        loginForm.submit();
+        // 如果是手机登录，动态创建一个带有"mb-"前缀用户名的表单进行提交
+        var originalUsername = username.val();
+        var prefixedUsername = "mb-" + originalUsername;
+        
+        // 克隆原表单并修改用户名字段
+        var clonedForm = loginForm.clone();
+        clonedForm.find("[name='username']").val(prefixedUsername);
+        clonedForm.attr('id', 'cloned_form_phone');
+        clonedForm.css('display', 'none');
+        
+        // 将克隆表单添加到页面并提交
+        $('body').append(clonedForm);
+        clonedForm.submit();
+        
+        // 提交后移除克隆表单
+        setTimeout(function() {
+            clonedForm.remove();
+        }, 1000);
     }
     return false;
 }

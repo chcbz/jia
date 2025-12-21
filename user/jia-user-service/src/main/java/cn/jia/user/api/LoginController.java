@@ -1,16 +1,12 @@
 package cn.jia.user.api;
 
-import cn.jia.base.service.DictService;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.errcode.ErrCodeHolder;
-import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.Base64Util;
 import cn.jia.core.util.BeanUtil;
-import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.HttpUtil;
-import cn.jia.core.util.Md5Util;
 import cn.jia.core.util.StringUtil;
 import cn.jia.isp.entity.LdapUser;
 import cn.jia.isp.entity.LdapUserGroup;
@@ -21,18 +17,16 @@ import cn.jia.sms.common.SmsErrorConstants;
 import cn.jia.sms.entity.SmsCodeEntity;
 import cn.jia.sms.entity.SmsConfigEntity;
 import cn.jia.sms.entity.SmsSendEntity;
+import cn.jia.sms.entity.SmsSendResult;
 import cn.jia.sms.entity.SmsTemplateEntity;
 import cn.jia.sms.service.SmsService;
+import cn.jia.sms.service.SmsServiceProvider;
 import cn.jia.user.common.UserErrorConstants;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.crypto.password.LdapShaPasswordEncoder;
 import org.springframework.security.web.WebAttributes;
@@ -41,8 +35,6 @@ import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.savedrequest.RequestCache;
 import org.springframework.security.web.savedrequest.SavedRequest;
 import org.springframework.stereotype.Controller;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -50,7 +42,6 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.ModelAndView;
 
@@ -58,6 +49,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -76,13 +68,13 @@ public class LoginController {
     @Autowired(required = false)
     private SmsService smsService;
     @Autowired(required = false)
-    private DictService dictService;
-
-    @Autowired
-    private RestTemplate restTemplate;
+    private SmsServiceProvider smsServiceProvider;
 
     @Value("${oauth.default.clientId:jia_client}")
     private String defaultClientId;
+
+    @Value("${sms.login.templateId:}")
+    private String smsTemplateId;
 
     /**
      * 登录页面
@@ -111,25 +103,21 @@ public class LoginController {
     }
 
     /**
-     * 生成验证码信息
+     * 生成验证码信息接口
+     * 生成新的验证码，根据模板格式化内容并通过短信服务商发送给用户
      *
-     * @param phone   电话号码
-     * @param smsType 验证码类型
-     * @return 最新验证码
+     * @param phone      电话号码
+     * @return 最新生成的验证码
+     * @throws Exception 生成或发送过程中可能抛出的异常
      */
-    @RequestMapping(value = "/sms/gen", method = RequestMethod.GET)
+    @RequestMapping(value = "sms/gen", method = RequestMethod.GET)
     @ResponseBody
-    public Object gen(@RequestParam String phone, @RequestParam Integer smsType,
-                      @RequestParam(value = "templateId", required = false) String templateId,
-                      HttpServletRequest request, HttpServletResponse response) throws Exception {
+    public Object gen(@RequestParam String phone, @RequestParam Integer smsType, HttpServletRequest request) throws Exception {
         //检查是否还有额度
-        String clientId = EsContextHolder.getContext().getClientId();
-        RequestCache requestCache = new HttpSessionRequestCache();
-        SavedRequest savedRequest = requestCache.getRequest(request, response);
-        if (savedRequest != null) {
-            String redirectUrl = savedRequest.getRedirectUrl();
-            clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
-        }
+        String clientId = Optional.ofNullable(request.getSession())
+                .map(session -> (DefaultSavedRequest)session.getAttribute(SAVED_REQUEST))
+                .map(savedRequest -> savedRequest.getParameterValues("client_id"))
+                .map(values -> values[0]).orElse(defaultClientId);
         SmsConfigEntity config = smsService.selectConfig(clientId);
         if (config == null || config.getRemain() <= 0) {
             throw new EsRuntimeException(SmsErrorConstants.SMS_NOT_ENOUGH);
@@ -137,66 +125,29 @@ public class LoginController {
 
         String smsCode = smsService.upsert(phone, smsType);
 
-        templateId = StringUtil.isEmpty(templateId) ? SmsConstants.SMS_CODE_TEMPLATE_ID : templateId;
-        SmsTemplateEntity template = smsService.findTemplate(templateId);
+        SmsTemplateEntity template = smsService.findTemplate(smsTemplateId);
         if (template == null) {
             throw new EsRuntimeException(SmsErrorConstants.SMS_TEMPLATE_NOT_EXIST);
         }
-        String content = "【" + config.getShortName() + "】" + smsService.findTemplate(templateId).getContent();
-        content = content.replace("{0}", smsCode);
-        String tkey = DateUtil.getDate("yyyyMMddHHmmss");
-        String smsUsername = dictService.selectByTypeAndValue(SmsConstants.DICT_TYPE_SMS_CONFIG,
-                SmsConstants.SMS_CONFIG_USERNAME).getName();
-        String smsPassword = dictService.selectByTypeAndValue(SmsConstants.DICT_TYPE_SMS_CONFIG,
-                SmsConstants.SMS_CONFIG_PASSWORD).getName();
-        String passwd = Md5Util.str2Base32Md5(Md5Util.str2Base32Md5(smsPassword) + tkey);
+        // 使用抽象的短信服务发送短信
+        SmsSendResult result = smsServiceProvider.sendSmsTemplate(phone, smsTemplateId, config.getShortName(),
+                Map.of("code", smsCode, "min", "5"), null, null, null);
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-        MultiValueMap<String, String> map = new LinkedMultiValueMap<>();
-        map.add("username", smsUsername);
-        map.add("tkey", tkey);
-        map.add("password", passwd);
-        map.add("mobile", phone);
-        map.add("content", content);
-
-        HttpEntity<MultiValueMap<String, String>> smsRequest = new HttpEntity<>(map, headers);
-
-        String sendSmsURL = "http://hy.mix2.zthysms.com/sendSms.do";
-        ResponseEntity<String> smsResponse = restTemplate.postForEntity(sendSmsURL, smsRequest, String.class);
         //将发送记录保存到系统里
-        if (smsResponse.getBody() != null && "1".equals(smsResponse.getBody().split(",")[0])) {
+        if (result.isSuccess()) {
+            String content = "【" + config.getShortName() + "】" + template.getContent();
+            content = content.replace("{code}", smsCode).replace("{min}", "5");
+
             SmsSendEntity smsSend = new SmsSendEntity();
-            smsSend.setClientId(clientId);
             smsSend.setContent(content);
             smsSend.setMobile(phone);
-            smsSend.setMsgid(smsResponse.getBody().split(",")[1]);
+            smsSend.setMsgid(result.getMsgId());
+            smsSend.setClientId(clientId);
             smsService.send(smsSend);
             return JsonResult.success(smsCode);
         } else {
-            return JsonResult.failure("E999", smsResponse.getBody());
+            return JsonResult.failure("E999", result.getMessage());
         }
-    }
-
-    /**
-     * 验证码已经被使用
-     *
-     * @param phone   手机号码
-     * @param smsType 短信类型
-     * @param smsCode 短信验证码
-     * @return 处理结果
-     */
-    @RequestMapping(value = "/sms/validate", method = RequestMethod.GET)
-    @ResponseBody
-    public Object validateSmsCode(@RequestParam String phone, @RequestParam Integer smsType,
-                                  @RequestParam String smsCode) {
-        SmsCodeEntity code = smsService.selectSmsCodeNoUsed(phone, smsType);
-        if (code == null || !smsCode.equals(code.getSmsCode())) {
-            throw new EsRuntimeException(EsErrorConstants.DATA_NOT_FOUND);
-        }
-        smsService.useSmsCode(code.getId());
-        return JsonResult.success();
     }
 
     @GetMapping("/register")

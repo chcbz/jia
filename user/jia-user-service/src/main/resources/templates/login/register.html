@@ -69,7 +69,7 @@
 									</td>
 									<td class="s_form_content">
 										<input type="text" name="telephoneNumberV" id="telephoneNumberV" class="easyui-textbox easyui-validatebox" placeholder="手机号码" data-options="required:true,validType:'minLength[4]'"/>
-										<button type="button" class="btn btn-large btn-danger" id="phoneCode" onclick="app.createsmsCode()">获取验证码</button>
+										<button type="button" class="btn btn-large btn-danger" id="phoneCode" onclick="app.createsmsCode(3)">获取验证码</button>
 									</td>
 								</tr>
 								<tr>
@@ -125,7 +125,7 @@
 <!--						</li>-->
 						<li class="last">
 							<div id="errorDiv" th:inline="text" style="height: 30px; text-align: left; color: red; margin: -20px 0 10px;">[[${error == null ? '' : error}]]</div>
-							<a href="login" class="pull-left btn btn-large back">返回</a>
+							<a href="index.html" class="pull-left btn btn-large back">返回</a>
 							<button type="button" class="pull-left btn btn-large btn-primary" onclick="register()">完成</button>
 						</li>
 					</ul>

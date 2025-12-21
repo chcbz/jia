@@ -22,11 +22,6 @@ public class SmsConstants extends EsConstants {
 	public static final String EMAIL_SERVER_NAME = "NAME";
 	public static final String EMAIL_SERVER_PASSWORD = "PASSWORD";
 	public static final String EMAIL_SERVER_SMTP = "SMTP";
-	
-	/** 短信验证码默认模板ID */
-	public static final String SMS_CODE_TEMPLATE_ID = "7b54bj5g71zjd9f4z44763tgu5kijr2f";
-	/** 短信消息默认模板ID */
-	public static final String SMS_REVIEW_TEMPLATE_ID = "5snxcj6ffptr1abj5b5etecg1kuhkcdh";
 
 	/** 短信验证码类型-登录 */
 	public static final Integer SMS_CODE_TYPE_LOGIN = 1;
