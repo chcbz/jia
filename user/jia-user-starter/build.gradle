@@ -4,7 +4,7 @@ dependencies {
     implementation project(':isp:jia-isp-mapper')
     implementation project(':sms:jia-sms-mapper')
     api project(':common:jia-common-starter')
-    implementation(libs.spring.boot.starter.data.redis)
+    implementation(libs.spring.boot.starter.redisson)
     implementation(libs.jodd)
     implementation(libs.spring.boot.starter.security)
     implementation(libs.spring.boot.starter.thymeleaf)

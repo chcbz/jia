@@ -6,7 +6,7 @@ import cn.jia.core.errcode.ErrCodeHolder;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.Base64Util;
 import cn.jia.core.util.BeanUtil;
-import cn.jia.core.util.HttpUtil;
+import cn.jia.core.util.PasswordUtil;
 import cn.jia.core.util.StringUtil;
 import cn.jia.isp.entity.LdapUser;
 import cn.jia.isp.entity.LdapUserGroup;
@@ -28,12 +28,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.AuthenticationException;
-import org.springframework.security.crypto.password.LdapShaPasswordEncoder;
 import org.springframework.security.web.WebAttributes;
 import org.springframework.security.web.savedrequest.DefaultSavedRequest;
-import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
-import org.springframework.security.web.savedrequest.RequestCache;
-import org.springframework.security.web.savedrequest.SavedRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -84,21 +80,8 @@ public class LoginController {
      */
     @GetMapping("/index.html")
     public ModelAndView login(HttpServletRequest request) {
-        ModelAndView view = new ModelAndView();
+        ModelAndView view = this.initModelAndView(request);
         view.setViewName("login/login");
-        String clientId = Optional.ofNullable(request.getSession())
-                .map(session -> (DefaultSavedRequest)session.getAttribute(SAVED_REQUEST))
-                .map(savedRequest -> savedRequest.getParameterValues("client_id"))
-                .map(values -> values[0]).orElse(defaultClientId);
-        log.info("登录页面，clientId：{}", clientId);
-        LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
-        view.addObject("org", org);
-        view.addObject("orgLogo", Optional.ofNullable(org).map(LdapUserGroup::getLogo).map(Base64Util::encode));
-        Object exception = request.getSession().getAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
-        if (exception instanceof AuthenticationException) {
-            view.addObject("error", ((AuthenticationException) exception).getMessage());
-            request.getSession().removeAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
-        }
         return view;
     }
 
@@ -114,10 +97,7 @@ public class LoginController {
     @ResponseBody
     public Object gen(@RequestParam String phone, @RequestParam Integer smsType, HttpServletRequest request) throws Exception {
         //检查是否还有额度
-        String clientId = Optional.ofNullable(request.getSession())
-                .map(session -> (DefaultSavedRequest)session.getAttribute(SAVED_REQUEST))
-                .map(savedRequest -> savedRequest.getParameterValues("client_id"))
-                .map(values -> values[0]).orElse(defaultClientId);
+        String clientId = this.getClientId(request);
         SmsConfigEntity config = smsService.selectConfig(clientId);
         if (config == null || config.getRemain() <= 0) {
             throw new EsRuntimeException(SmsErrorConstants.SMS_NOT_ENOUGH);
@@ -151,13 +131,15 @@ public class LoginController {
     }
 
     @GetMapping("/register")
-    public String register() {
-        return "login/register";
+    public ModelAndView register(HttpServletRequest request) {
+        ModelAndView view = this.initModelAndView(request);
+        view.setViewName("login/register");
+        return view;
     }
 
     @PostMapping("/register")
     public ModelAndView register(LdapUser user, HttpServletRequest request, HttpServletResponse response) {
-        ModelAndView view = new ModelAndView();
+        ModelAndView view = this.initModelAndView(request);
         view.setViewName("login/register");
         view.addObject("user", user);
         List<LdapUser> userList = ldapUserService.search(user);
@@ -173,26 +155,44 @@ public class LoginController {
                 return view;
             }
         }
-        LdapShaPasswordEncoder encoder = new LdapShaPasswordEncoder();
-        user.setUserPassword(encoder.encode(new String(user.getUserPassword())).getBytes(StandardCharsets.UTF_8));
+        user.setUserPassword(PasswordUtil.encode(new String(user.getUserPassword())).getBytes(StandardCharsets.UTF_8));
         ldapUserService.create(user);
-        RequestCache requestCache = new HttpSessionRequestCache();
-        SavedRequest savedRequest = requestCache.getRequest(request, response);
-        if (savedRequest != null) {
-            String redirectUrl = savedRequest.getRedirectUrl();
-            String clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
-            LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
-            if (org != null) {
-                ldapUserGroupService.addUser(org, user.getDn());
-            }
+        String clientId = this.getClientId(request);
+        LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
+        if (org != null) {
+            ldapUserGroupService.addUser(org, user.getDn());
         }
         view.addObject("success", true);
         return view;
     }
 
     @GetMapping("/resetPassword")
-    public String resetPassword() {
-        return "login/resetPassword";
+    public ModelAndView resetPassword(HttpServletRequest request) {
+        ModelAndView view = this.initModelAndView(request);
+        view.setViewName("login/resetPassword");
+        return view;
+    }
+
+    private ModelAndView initModelAndView(HttpServletRequest request) {
+        ModelAndView view = new ModelAndView();
+        String clientId = this.getClientId(request);
+        log.info("clientId: {}", clientId);
+        LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
+        view.addObject("org", org);
+        view.addObject("orgLogo", Optional.ofNullable(org).map(LdapUserGroup::getLogo).map(Base64Util::encode));
+        Object exception = request.getSession().getAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
+        if (exception instanceof AuthenticationException) {
+            view.addObject("error", ((AuthenticationException) exception).getMessage());
+            request.getSession().removeAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
+        }
+        return view;
+    }
+
+    private String getClientId(HttpServletRequest request) {
+        return Optional.ofNullable(request.getSession())
+                .map(session -> (DefaultSavedRequest) session.getAttribute(SAVED_REQUEST))
+                .map(savedRequest -> savedRequest.getParameterValues("client_id"))
+                .map(values -> values[0]).orElse(defaultClientId);
     }
 
     /**
@@ -204,8 +204,8 @@ public class LoginController {
      */
     @PostMapping(value = "/resetPassword")
     public ModelAndView resetPassword(@RequestParam String phone, @RequestParam String smsCode,
-                                      @RequestParam String newPassword) {
-        ModelAndView view = new ModelAndView();
+                                      @RequestParam String newPassword, HttpServletRequest request) {
+        ModelAndView view = this.initModelAndView(request);
         view.setViewName("login/resetPassword");
         LdapUser example = new LdapUser();
         example.setTelephoneNumber(phone);
@@ -222,8 +222,7 @@ public class LoginController {
             return view;
         }
         smsService.useSmsCode(code.getId());
-        LdapShaPasswordEncoder encoder = new LdapShaPasswordEncoder();
-        u.setUserPassword(encoder.encode(newPassword).getBytes(StandardCharsets.UTF_8));
+        u.setUserPassword(PasswordUtil.encode(newPassword).getBytes(StandardCharsets.UTF_8));
         ldapUserService.modifyLdapUser(u);
         view.addObject("success", true);
         return view;
@@ -284,11 +283,10 @@ public class LoginController {
         if (u == null) {
             throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
         }
-        LdapShaPasswordEncoder encoder = new LdapShaPasswordEncoder();
-        if (u.getUserPassword() != null && !Arrays.equals(u.getUserPassword(), encoder.encode(oldPassword).getBytes(StandardCharsets.UTF_8))) {
+        if (u.getUserPassword() != null && !Arrays.equals(u.getUserPassword(), PasswordUtil.encode(oldPassword).getBytes(StandardCharsets.UTF_8))) {
             throw new EsRuntimeException(UserErrorConstants.OLD_PASSWORD_WRONG);
         }
-        u.setUserPassword(encoder.encode(newPassword).getBytes(StandardCharsets.UTF_8));
+        u.setUserPassword(PasswordUtil.encode(newPassword).getBytes(StandardCharsets.UTF_8));
         ldapUserService.modifyLdapUser(u);
         return JsonResult.success();
     }
