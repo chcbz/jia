@@ -4,7 +4,6 @@ import cn.jia.common.entity.BaseEntityWrapper;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import cn.jia.core.util.CollectionUtil;
 
 public class UserVOWrapper implements BaseEntityWrapper<UserVO, UserEntity> {

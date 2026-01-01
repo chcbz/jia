@@ -59,7 +59,7 @@ public class OrgServiceImpl extends BaseServiceImpl<UserOrgDao, OrgEntity> imple
 			rel.setOrgId(org.getId());
 			addList.add(rel);
 		});
-		if(addList.size() > 0) {
+		if(!addList.isEmpty()) {
 			userOrgRelDao.insertBatch(addList);
 		}
 	}
@@ -72,7 +72,7 @@ public class OrgServiceImpl extends BaseServiceImpl<UserOrgDao, OrgEntity> imple
 		
 		//查找需要取消的组织
 		orgRelList.stream().filter(orgRel -> org.getUserIds().contains(orgRel.getUserId())).forEach(cancelList::add);
-		if(cancelList.size() > 0) {
+		if(!cancelList.isEmpty()) {
 			userOrgRelDao.deleteBatchIds(cancelList);
 		}
 	}

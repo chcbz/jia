@@ -6,6 +6,8 @@ import cn.jia.core.errcode.ErrCodeHolder;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.Base64Util;
 import cn.jia.core.util.BeanUtil;
+import cn.jia.core.util.DataUtil;
+import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.PasswordUtil;
 import cn.jia.core.util.StringUtil;
 import cn.jia.isp.entity.LdapUser;
@@ -41,6 +43,7 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.ModelAndView;
 
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.Arrays;
@@ -72,6 +75,15 @@ public class LoginController {
     @Value("${sms.login.templateId:}")
     private String smsTemplateId;
 
+    @Value("${oauth.third-party.wxmp.appid:}")
+    private String wxMpAppId;
+    @Value("${oauth.third-party.weixin.appid:}")
+    private String weiXinAppId;
+    @Value("${oauth.third-party.weibo.appid:}")
+    private String weiBoAppId;
+    @Value("${oauth.third-party.github.appid:}")
+    private String githubAppId;
+
     /**
      * 登录页面
      *
@@ -79,10 +91,55 @@ public class LoginController {
      * @return 登录视图
      */
     @GetMapping("/index.html")
+
     public ModelAndView login(HttpServletRequest request) {
-        ModelAndView view = this.initModelAndView(request);
-        view.setViewName("login/login");
-        return view;
+        ModelAndView view = new ModelAndView();
+        String loginType = this.getRequestValue(request, "loginType").orElse("");
+        String loginScope = this.getRequestValue(request, "loginScope").orElse("");
+        switch (loginType) {
+            case "wxmp" -> {
+                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/wxmp", StandardCharsets.UTF_8);
+                String state = DataUtil.getRandom(true, 4);
+                String url = "https://open.weixin.qq.com/connect/oauth2/authorize?appid=" + wxMpAppId +
+                        "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + loginScope +
+                        "&state=" + state + "#wechat_redirect";
+                view.setViewName("redirect:" + url);
+                return view;
+            }
+            case "weixin" -> {
+                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String scope = "snsapi_login";
+                String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/weixin", StandardCharsets.UTF_8);
+                String state = DataUtil.getRandom(true, 4);
+                String url = "https://open.weixin.qq.com/connect/qrconnect?appid=" + weiXinAppId +
+                        "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + scope +
+                        "&state=" + state + "#wechat_redirect";
+                view.setViewName("redirect:" + url);
+                return view;
+            }
+            case "weibo" -> {
+                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/weibo", StandardCharsets.UTF_8);
+                String url = "https://api.weibo.com/oauth2/authorize?client_id=" + weiBoAppId +
+                        "&response_type=code&redirect_uri=" + redirectUri;
+                view.setViewName("redirect:" + url);
+                return view;
+            }
+            case "github" -> {
+                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/github", StandardCharsets.UTF_8);
+                String url = "https://github.com/login/oauth/authorize?client_id=" + githubAppId +
+                        "&redirect_uri=" + redirectUri + "&scope=" + loginScope;
+                view.setViewName("redirect:" + url);
+                return view;
+            }
+            default -> {
+                view = this.initModelAndView(request);
+                view.setViewName("login/login");
+                return view;
+            }
+        }
     }
 
     /**
@@ -189,10 +246,18 @@ public class LoginController {
     }
 
     private String getClientId(HttpServletRequest request) {
+        return getRequestValue(request, "client_id").orElse(defaultClientId);
+    }
+
+    private Optional<String> getRequestValue(HttpServletRequest request, String name) {
         return Optional.ofNullable(request.getSession())
-                .map(session -> (DefaultSavedRequest) session.getAttribute(SAVED_REQUEST))
-                .map(savedRequest -> savedRequest.getParameterValues("client_id"))
-                .map(values -> values[0]).orElse(defaultClientId);
+                .map(session -> session.getAttribute(SAVED_REQUEST))
+                .filter(attr -> attr instanceof DefaultSavedRequest)
+                .map(attr -> (DefaultSavedRequest) attr)
+                .map(savedRequest -> savedRequest.getParameterValues(name))
+                .filter(values -> values.length > 0)
+                .map(values -> values[0])
+                .or(() -> Optional.ofNullable(HttpUtil.getUrlValue(request.getQueryString(), name)));
     }
 
     /**

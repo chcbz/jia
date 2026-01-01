@@ -99,7 +99,7 @@ public class ImgUtil {
                 ImageIO.write(tag, formatName, new File(outputFileName));
             }
         } catch (IOException ex) {
-            ex.printStackTrace();
+            log.error("压缩图片时发生异常: {}", ex.getMessage(), ex);
         }
         return "ok";
     }
@@ -132,7 +132,7 @@ public class ImgUtil {
             String formatName = outputFileName.substring(outputFileName.lastIndexOf(".") + 1);
             ImageIO.write(img, formatName, new File(outputFileName));
         } catch (IOException ex) {
-            ex.printStackTrace();
+            log.error("截图图片时发生异常: {}", ex.getMessage(), ex);
         }
         return "ok";
     }
@@ -152,7 +152,7 @@ public class ImgUtil {
             data = new byte[in.available()];
             in.read(data);
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("读取图片字节数组时发生异常: {}", e.getMessage(), e);
         } finally {
             if (in != null) {
                 try {
@@ -296,7 +296,7 @@ public class ImgUtil {
             sourceImg = transformGray24BitMap(sourceImg);
             ImageIO.write(sourceImg, "BMP", new File(saveImageLocation));
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("HTML转图片时发生异常: {}", e.getMessage(), e);
             throw new RuntimeException("将HTML文件转换成图片异常");
         }
     }
@@ -314,13 +314,13 @@ public class ImgUtil {
 
             return baos.toByteArray();
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("从URL获取图片数据时发生异常: {}", e.getMessage(), e);
         } finally {
             if (baos != null) {
                 try {
                     baos.close();
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    log.error("关闭输出流时发生异常: {}", e.getMessage(), e);
                 }
             }
         }
@@ -355,7 +355,7 @@ public class ImgUtil {
             inStream.close();
             return outStream.toByteArray();
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("从URL获取图片数据时发生异常: {}", e.getMessage(), e);
         }
         return null;
     }
@@ -379,7 +379,7 @@ public class ImgUtil {
             inStream.close();
             return outStream.toByteArray();
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("从文件获取图片数据时发生异常: {}", e.getMessage(), e);
         }
         return null;
     }
@@ -398,7 +398,7 @@ public class ImgUtil {
             sourceImg = transformGray24BitMap(sourceImg);
             ImageIO.write(sourceImg, "BMP", new File(saveImageLocation));
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("HTML转图片时发生异常: {}", e.getMessage(), e);
             throw new RuntimeException("将HTML文件转换成图片异常");
         }
     }

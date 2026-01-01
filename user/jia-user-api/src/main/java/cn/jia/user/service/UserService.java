@@ -16,12 +16,14 @@ public interface UserService extends IBaseService<UserEntity> {
 	UserEntity findByOpenid(String openid);
 	
 	UserEntity findByPhone(String phone);
+
+	List<UserEntity> search(UserEntity user);
 	
 	PageInfo<UserEntity> search(UserEntity user, int pageNo, int pageSize);
 
 	UserEntity update(UserEntity user);
 	
-	void sync(List<UserEntity> userList) throws Exception;
+	void sync(List<UserEntity> userList);
 
 	void changePoint(String jiacn, int add);
 	

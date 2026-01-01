@@ -90,12 +90,15 @@
                             <div class="other_login textCenter" onclick="otherLogin('weixin')">
                                 <img th:src="@{'image/wechat.png'}"/>
                             </div>
+                            <div class="other_login textCenter" onclick="otherLogin('github')">
+                                <img th:src="@{'image/github.png'}"/>
+                            </div>
                             <!--  <div class="other_login">-->
                             <!--  <img th:src="@{'image/qq.png'}" />-->
                             <!--  </div>-->
-                            <div class="other_login textCenter" onclick="otherLogin('weibo')">
-                                <img th:src="@{'image/weibo.png'}"/>
-                            </div>
+<!--                            <div class="other_login textCenter" onclick="otherLogin('weibo')">-->
+<!--                                <img th:src="@{'image/weibo.png'}"/>-->
+<!--                            </div>-->
                         </div>
                     </li>
                 </ul>
@@ -176,12 +179,13 @@ function login() {
     return false;
 }
 function otherLogin(type) {
-    var loginForm = $("form[name='login_form_others']");
-    var loginAction = loginForm.attr("action");
-    loginForm.attr("action", loginAction + "?login_type=" + type);
-    var loginType = loginForm.find("[name='login_type']");
-    loginType.val(type);
-    loginForm.submit();
+    window.location.href = "index.html?loginType=" + type;
+    // var loginForm = $("form[name='login_form_others']");
+    // var loginAction = loginForm.attr("action");
+    // loginForm.attr("action", loginAction + "?login_type=" + type);
+    // var loginType = loginForm.find("[name='login_type']");
+    // loginType.val(type);
+    // loginForm.submit();
 }
 function changeLoginType() {
     var loginTypeA = $("#loginTypeA");

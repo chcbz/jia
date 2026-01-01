@@ -36,6 +36,9 @@ public final class LdapUser implements Serializable {
 	@Attribute(name = "weixinid")
 	private String weixinid;
 	
+	@Attribute(name = "githubid")
+	private String githubid;
+	
 	@Attribute(name = "telephoneNumber")
 	private String telephoneNumber;
 	

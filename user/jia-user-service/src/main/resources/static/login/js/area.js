@@ -971,34 +971,34 @@ var city = [
 
 ];
 
-function appendArea(){
-var sheng = document.createElement("select");
-sheng.setAttribute("name", "province");
-sheng.style.marginRight = '5px';
-var shi = document.createElement("select");
-shi.setAttribute("name", "city");
-shi.style.marginRight = '5px';
+function appendArea() {
+  var sheng = document.createElement("select");
+  sheng.setAttribute("name", "province");
+  sheng.style.marginRight = '5px';
+  var shi = document.createElement("select");
+  shi.setAttribute("name", "city");
+  shi.style.marginRight = '5px';
 //var qu = document.createElement("select");
-var area = document.getElementById("area");
-area.appendChild(sheng);
-area.appendChild(shi);
+  var area = document.getElementById("area");
+  area.appendChild(sheng);
+  area.appendChild(shi);
 //area.appendChild(qu);
-sheng.options[0] = new Option("请选择省","0");
-shi.options[0] = new Option("请选择市","0");
+  sheng.options[0] = new Option("选择省", "0");
+  shi.options[0] = new Option("选择市", "0");
 //qu.options[0] = new Option("请选择区");
 
 // 循环第一步,把省循环进select
-for (var i = 0; i < city.length; i++) {
-	sheng.options[sheng.length] = new Option(city[i].name,city[i].name);
-	// 循环第二步,把所有的市都循环进select
-	sheng.onchange = function(){
-		shi.options.length = 0;
-		shi.options[shi.length] = new Option("请选择市","0");
-		for (var j = 0; j < city[sheng.selectedIndex-1].city.length; j++) {
-			shi.options[shi.length] = new Option(city[sheng.selectedIndex-1].city[j].name,city[sheng.selectedIndex-1].city[j].name)
-		}
+  for (var i = 0; i < city.length; i++) {
+    sheng.options[sheng.length] = new Option(city[i].name, city[i].name);
+    // 循环第二步,把所有的市都循环进select
+    sheng.onchange = function () {
+      shi.options.length = 0;
+      shi.options[shi.length] = new Option("选择市", "0");
+      for (var j = 0; j < city[sheng.selectedIndex - 1].city.length; j++) {
+        shi.options[shi.length] = new Option(city[sheng.selectedIndex - 1].city[j].name, city[sheng.selectedIndex - 1].city[j].name)
+      }
 
-	}
+    }
 //	shi.onchange = function(){
 //		qu.options.length = 0;
 //		qu.options[qu.length] = new Option("请选择区");
@@ -1006,7 +1006,8 @@ for (var i = 0; i < city.length; i++) {
 //			qu.options[qu.length] = new Option(city[sheng.selectedIndex-1].city[shi.selectedIndex-1].area[k]);
 //		};
 //	}
-};
+  }
+  ;
 }
 
 

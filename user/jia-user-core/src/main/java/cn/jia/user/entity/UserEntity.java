@@ -43,6 +43,15 @@ public class UserEntity extends BaseEntity {
     @Schema(description = "微信openid")
     private String openid;
 
+    @Schema(description = "微信开放平台id")
+    private String weixinid;
+
+    @Schema(description = "微博平台id")
+    private String weiboid;
+
+    @Schema(description = "Github平台id")
+    private String githubid;
+
     @Schema(description = "Jia账号")
     private String jiacn;
 
@@ -69,6 +78,9 @@ public class UserEntity extends BaseEntity {
 
     @Schema(description = "省份")
     private String province;
+
+    @Schema(description = "地址")
+    private String location;
 
     @Schema(description = "纬度")
     private String latitude;

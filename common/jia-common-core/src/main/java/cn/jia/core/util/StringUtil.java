@@ -5,7 +5,6 @@ import org.springframework.util.StringUtils;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.util.Collection;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -48,7 +47,7 @@ public class StringUtil {
     }
 
     public static boolean isEmpty(final CharSequence cs) {
-        return cs == null || cs.length() == 0;
+        return cs == null || cs.isEmpty();
     }
 
     public static boolean isNotEmpty(final CharSequence cs) {
@@ -113,7 +112,7 @@ public class StringUtil {
      * 过滤不可见字符
      */
     public static String stripNonValidXmlCharacters(String input) {
-        if (input == null || ("".equals(input))) {
+        if (input == null || input.isEmpty()) {
             return "";
         }
         StringBuilder out = new StringBuilder();
@@ -133,15 +132,26 @@ public class StringUtil {
     }
 
     public static String asciiToString(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
         StringBuilder sbu = new StringBuilder();
         String[] chars = value.split(",");
         for (String aChar : chars) {
-            sbu.append((char) Integer.parseInt(aChar));
+            try {
+                sbu.append((char) Integer.parseInt(aChar.trim()));
+            } catch (NumberFormatException e) {
+                // 忽略无效的ASCII值
+                continue;
+            }
         }
         return sbu.toString();
     }
 
     public static String stringToAscii(String value) {
+        if (value == null) {
+            return null;
+        }
         StringBuilder sbu = new StringBuilder();
         char[] chars = value.toCharArray();
         for (int i = 0; i < chars.length; i++) {
@@ -186,8 +196,8 @@ public class StringUtil {
         if (strOne == null || strTwo == null) {
             return null;
         }
-        if ("".equals(strOne) || "".equals(strTwo)) {
-            return null;
+        if (strOne.isEmpty() || strTwo.isEmpty()) {
+            return "";
         }
         // 二者中较长的字符串
         String max = "";
@@ -197,20 +207,21 @@ public class StringUtil {
             max = strTwo;
             min = strOne;
         } else {
-            max = strTwo;
-            min = strOne;
+            max = strOne;
+            min = strTwo;
         }
         String current = "";
+        String result = "";
         // 遍历较短的字符串，并依次减少短字符串的字符数量，判断长字符是否包含该子串
         for (int i = 0; i < min.length(); i++) {
             for (int begin = 0, end = min.length() - i; end <= min.length(); begin++, end++) {
                 current = min.substring(begin, end);
-                if (max.contains(current)) {
-                    return current;
+                if (max.contains(current) && current.length() > result.length()) {
+                    result = current;
                 }
             }
         }
-        return null;
+        return result;
     }
 
     /**
@@ -225,7 +236,7 @@ public class StringUtil {
         if (strOne == null || strTwo == null) {
             return null;
         }
-        if ("".equals(strOne) || "".equals(strTwo)) {
+        if (strOne.isEmpty() || strTwo.isEmpty()) {
             return null;
         }
         // 矩阵的横向长度
@@ -320,8 +331,12 @@ public class StringUtil {
     }
 
     public static String fromHexString(String hexString, Charset charset) throws Exception {
-        // 用于接收转换结果
-        String result = "";
+        if (hexString == null || hexString.isEmpty()) {
+            return "";
+        }
+        if (hexString.length() % 2 != 0) {
+            throw new IllegalArgumentException("Invalid hex string: odd length");
+        }
         // 转大写
         hexString = hexString.toUpperCase();
         // 16进制字符
@@ -330,15 +345,18 @@ public class StringUtil {
         char[] hexs = hexString.toCharArray();
         // 能被16整除，肯定可以被2整除
         byte[] bytes = new byte[hexString.length() / 2];
-        int n;
 
         for (int i = 0; i < bytes.length; i++) {
-            n = hexDigital.indexOf(hexs[2 * i]) * 16 + hexDigital.indexOf(hexs[2 * i + 1]);
+            int high = hexDigital.indexOf(hexs[2 * i]);
+            int low = hexDigital.indexOf(hexs[2 * i + 1]);
+            if (high == -1 || low == -1) {
+                throw new IllegalArgumentException("Invalid hex character in string");
+            }
+            int n = high * 16 + low;
             bytes[i] = (byte) (n & 0xff);
         }
         // byte[]--&gt;String
-        result = new String(bytes, charset);
-        return result;
+        return new String(bytes, charset);
     }
 
     /**
@@ -352,8 +370,9 @@ public class StringUtil {
      * java会将其当做转义字符串所代表的含义解析出来
      */
     public static String toHexString(String str) throws Exception {
-        // 用于接收转换结果
-        String hexString = "";
+        if (str == null) {
+            return null;
+        }
         // 1.校验是否包含特殊字符内容
         // java特殊转义符
         // String[] escapeArray = {"\b","\t","\n","\f","\r","\'","\"","\\"};
@@ -377,16 +396,14 @@ public class StringUtil {
         char[] hexArray = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
         StringBuilder sb = new StringBuilder();
         // String--&gt;byte[]
-        byte[] bs = str.getBytes();
-        int bit;
+        byte[] bs = str.getBytes(StandardCharsets.UTF_8); // 指定编码避免平台差异
         for (byte b : bs) {
-            bit = (b & 0x0f0) >> 4;
-            sb.append(hexArray[bit]);
-            bit = b & 0x0f;
-            sb.append(hexArray[bit]);
+            int high = (b & 0xf0) >> 4;
+            sb.append(hexArray[high]);
+            int low = b & 0x0f;
+            sb.append(hexArray[low]);
         }
-        hexString = sb.toString();
-        return hexString;
+        return sb.toString();
     }
 
     /**
@@ -477,5 +494,20 @@ public class StringUtil {
      */
     public static String collectionToCommaDelimitedString(@Nullable Set<String> set) {
         return StringUtils.collectionToCommaDelimitedString(set);
+    }
+
+     /**
+     * 获取第一个非空的字符串
+     *
+     * @param values 字符串列表
+     * @return 字符串
+     */
+    public static String firstNotEmpty(String... values) {
+        for (String value : values) {
+            if (StringUtil.isNotEmpty(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 }

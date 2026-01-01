@@ -1,12 +1,14 @@
 package cn.jia.user.service.impl;
 
-import cn.jia.core.config.SpringContextHolder;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.ImgUtil;
 import cn.jia.core.util.PasswordUtil;
 import cn.jia.core.util.StringUtil;
 import cn.jia.isp.entity.LdapUser;
+import cn.jia.isp.entity.LdapUserGroup;
+import cn.jia.isp.service.LdapUserGroupService;
 import cn.jia.isp.service.LdapUserService;
 import cn.jia.user.common.UserConstants;
 import cn.jia.user.common.UserErrorConstants;
@@ -19,6 +21,7 @@ import cn.jia.user.service.UserService;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import cn.jia.core.util.CollectionUtil;
@@ -38,6 +41,11 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     private UserGroupRelDao userGroupRelDao;
     @Autowired(required = false)
     private LdapUserService ldapUserService;
+    @Autowired(required = false)
+    private LdapUserGroupService ldapUserGroupService;
+
+    @Value("${jia.file.path:}")
+    private String filePath;
 
     @Override
     @Transactional
@@ -47,10 +55,12 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         params.setTelephoneNumber(user.getPhone());
         params.setEmail(user.getEmail());
         params.setOpenid(user.getOpenid());
+        params.setWeixinid(user.getWeixinid());
+        params.setGithubid(user.getGithubid());
 
         List<LdapUser> ldapUserResult = ldapUserService.search(params);
         if (CollectionUtil.isNotNullOrEmpty(ldapUserResult)) {
-            user.setJiacn(String.valueOf(ldapUserResult.get(0).getUid()));
+            user.setJiacn(String.valueOf(ldapUserResult.getFirst().getUid()));
         } else {
             //将用户添加到ldap服务器
             params = new LdapUser();
@@ -63,13 +73,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             params.setTelephoneNumber(StringUtil.isEmpty(user.getPhone()) ? null : user.getPhone());
             params.setEmail(StringUtil.isEmpty(user.getEmail()) ? null : user.getEmail());
             params.setOpenid(StringUtil.isEmpty(user.getOpenid()) ? null : user.getOpenid());
+            params.setWeixinid(StringUtil.isEmpty(user.getWeixinid()) ? null : user.getWeixinid());
+            params.setGithubid(StringUtil.isEmpty(user.getGithubid()) ? null : user.getGithubid());
             params.setCountry(StringUtil.isEmpty(user.getCountry()) ? null : user.getCountry());
             params.setProvince(StringUtil.isEmpty(user.getProvince()) ? null : user.getProvince());
             params.setCity(StringUtil.isEmpty(user.getCity()) ? null : user.getCity());
             params.setSex(user.getSex());
             params.setNickname(StringUtil.isEmpty(user.getNickname()) ? null : user.getNickname());
             if (user.getAvatar() != null) {
-                String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);
                 params.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
             }
             ldapUserService.create(params);
@@ -81,6 +92,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         searchUser.setPhone(StringUtil.isEmpty(user.getPhone()) ? null : user.getPhone());
         searchUser.setEmail(StringUtil.isEmpty(user.getEmail()) ? null : user.getEmail());
         searchUser.setOpenid(StringUtil.isEmpty(user.getOpenid()) ? null : user.getOpenid());
+        searchUser.setWeixinid(StringUtil.isEmpty(user.getWeixinid()) ? null : user.getWeixinid());
+        searchUser.setGithubid(StringUtil.isEmpty(user.getGithubid()) ? null : user.getGithubid());
         List<UserEntity> curUser = baseDao.searchByExample(searchUser);
         if (CollectionUtil.isNotNullOrEmpty(curUser)) {
             throw new EsRuntimeException(UserErrorConstants.USER_HAS_EXIST);
@@ -156,14 +169,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             rel.setGroupId(groupId);
             addList.add(rel);
         });
-        if (addList.size() > 0) {
+        if (!addList.isEmpty()) {
             userGroupRelDao.insertBatch(addList);
         }
 
         // 查找需要取消的组
         groupRelList.stream().filter(groupRel ->
                 !user.getGroupIds().contains(groupRel.getGroupId())).forEach(cancelList::add);
-        if (cancelList.size() > 0) {
+        if (!cancelList.isEmpty()) {
             userGroupRelDao.deleteBatchIds(cancelList);
         }
     }
@@ -182,13 +195,13 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             rel.setOrgId(orgId);
             addList.add(rel);
         });
-        if (addList.size() > 0) {
+        if (!addList.isEmpty()) {
             userOrgRelDao.insertBatch(addList);
         }
 
         //查找需要取消的组织
         orgRelList.stream().filter(orgRel -> !user.getOrgIds().contains(orgRel.getOrgId())).forEach(cancelList::add);
-        if (cancelList.size() > 0) {
+        if (!cancelList.isEmpty()) {
             userOrgRelDao.deleteBatchIds(cancelList);
         }
     }
@@ -227,6 +240,11 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
+    public List<UserEntity> search(UserEntity user) {
+        return baseDao.searchByExample(user);
+    }
+
+    @Override
     public PageInfo<UserEntity> search(UserEntity user, int pageNo, int pageSize) {
         PageHelper.startPage(pageNo, pageSize);
         return PageInfo.of(baseDao.searchByExample(user));
@@ -235,81 +253,94 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     @Override
     public void sync(List<UserEntity> userList) {
         for (UserEntity user : userList) {
-            //查找LDAP服务器是否有该用户
-            LdapUser ldapUser = null;
-            LdapUser params = new LdapUser();
-            params.setTelephoneNumber(user.getPhone());
-            params.setEmail(user.getEmail());
-            params.setOpenid(user.getOpenid());
-
-            List<LdapUser> ldapUserResult = ldapUserService.search(params);
-            if (!ldapUserResult.isEmpty()) {
-                ldapUser = ldapUserResult.get(0);
-                ldapUser.setTelephoneNumber(StringUtil.isEmpty(user.getPhone()) ? ldapUser.getTelephoneNumber() : user.getPhone());
-                ldapUser.setEmail(StringUtil.isEmpty(user.getEmail()) ? ldapUser.getEmail() : user.getEmail());
-                ldapUser.setOpenid(StringUtil.isEmpty(user.getOpenid()) ? ldapUser.getOpenid() : user.getOpenid());
-                ldapUser.setCountry(StringUtil.isEmpty(user.getCountry()) ? ldapUser.getCountry() : user.getCountry());
-                ldapUser.setProvince(StringUtil.isEmpty(user.getProvince()) ? ldapUser.getProvince() : user.getProvince());
-                ldapUser.setCity(StringUtil.isEmpty(user.getCity()) ? ldapUser.getCity() : user.getCity());
-                ldapUser.setSex(user.getSex() == null ? ldapUser.getSex() : user.getSex());
-                ldapUser.setNickname(StringUtil.isEmpty(user.getNickname()) ? ldapUser.getNickname() : user.getNickname());
-                if (StringUtil.isNotEmpty(user.getAvatar())) {
-                    String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);
-                    ldapUser.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
-                }
-                ldapUserService.modifyLdapUser(ldapUser);
-                user.setJiacn(String.valueOf(ldapUser.getUid()));
-            }
-            //将用户添加到ldap服务器
-            if (ldapUser == null) {
-                params = new LdapUser();
-                String cn = StringUtil.isEmpty(user.getPhone()) ? (StringUtil.isEmpty(user.getEmail()) ?
-                        user.getOpenid() : user.getEmail()) : user.getPhone();
-                params.setCn(cn);
-                params.setSn(cn);
-                params.setTelephoneNumber(StringUtil.isEmpty(user.getPhone()) ? null : user.getPhone());
-                params.setEmail(StringUtil.isEmpty(user.getEmail()) ? null : user.getEmail());
-                params.setOpenid(StringUtil.isEmpty(user.getOpenid()) ? null : user.getOpenid());
-                params.setCountry(StringUtil.isEmpty(user.getCountry()) ? null : user.getCountry());
-                params.setProvince(StringUtil.isEmpty(user.getProvince()) ? null : user.getProvince());
-                params.setCity(StringUtil.isEmpty(user.getCity()) ? null : user.getCity());
-                params.setSex(user.getSex());
-                params.setNickname(StringUtil.isEmpty(user.getNickname()) ? null : user.getNickname());
-                if (user.getAvatar() != null) {
-                    String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);
-                    params.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
-                }
-                ldapUserService.create(params);
-                user.setJiacn(params.getUid());
-            }
-
-            //查找本地数据库是否有该用户，如果没有则新增，如果有则更新
-            UserEntity searchUser = new UserEntity();
-            searchUser.setJiacn(user.getJiacn());
-            searchUser.setPhone(user.getPhone());
-            searchUser.setEmail(user.getEmail());
-            searchUser.setOpenid(user.getOpenid());
-            List<UserEntity> curUser = baseDao.searchByExample(searchUser);
-            if (CollectionUtil.isNullOrEmpty(curUser)) {
-                //新增用户
-                user.setPassword(StringUtil.isNotEmpty(user.getPassword()) ? PasswordUtil.encode(user.getPassword()) : null);
-                baseDao.insert(user);
-                //设置默认角色
-                RoleRelEntity rel = new RoleRelEntity();
-                rel.setRoleId(UserConstants.DEFAULT_ROLE_ID);
-                rel.setUserId(user.getId());
-                userRoleRelDao.insert(rel);
-            } else {
-                UserEntity cu = curUser.get(0);
-                user.setId(cu.getId());
-                List<String> subscribe = new ArrayList<>(Arrays.asList(cu.getSubscribe().split(",")));
-                if (!subscribe.contains(user.getSubscribe())) {
-                    subscribe.add(user.getSubscribe());
-                    user.setSubscribe(String.join(",", subscribe));
-                }
-                baseDao.updateById(user);
-            }
+            upsert(user);
         }
+    }
+
+    @Override
+    public UserEntity upsert(UserEntity user) {
+        //查找LDAP服务器是否有该用户
+        LdapUser searchLdapUser = new LdapUser();
+        searchLdapUser.setTelephoneNumber(user.getPhone());
+        searchLdapUser.setEmail(user.getEmail());
+        searchLdapUser.setOpenid(user.getOpenid());
+        searchLdapUser.setWeixinid(user.getWeixinid());
+        searchLdapUser.setGithubid(user.getGithubid());
+
+        List<LdapUser> ldapUserResult = ldapUserService.search(searchLdapUser);
+        if (!ldapUserResult.isEmpty()) {
+            LdapUser ldapUser = ldapUserResult.getFirst();
+            ldapUser.setTelephoneNumber(StringUtil.isEmpty(user.getPhone()) ? ldapUser.getTelephoneNumber() : user.getPhone());
+            ldapUser.setEmail(StringUtil.isEmpty(user.getEmail()) ? ldapUser.getEmail() : user.getEmail());
+            ldapUser.setOpenid(StringUtil.isEmpty(user.getOpenid()) ? ldapUser.getOpenid() : user.getOpenid());
+            ldapUser.setWeixinid(StringUtil.isEmpty(user.getWeixinid()) ? ldapUser.getWeixinid() : user.getWeixinid());
+            ldapUser.setGithubid(StringUtil.isEmpty(user.getGithubid()) ? ldapUser.getGithubid() : user.getGithubid());
+            ldapUser.setCountry(StringUtil.isEmpty(user.getCountry()) ? ldapUser.getCountry() : user.getCountry());
+            ldapUser.setProvince(StringUtil.isEmpty(user.getProvince()) ? ldapUser.getProvince() : user.getProvince());
+            ldapUser.setCity(StringUtil.isEmpty(user.getCity()) ? ldapUser.getCity() : user.getCity());
+            ldapUser.setSex(user.getSex() == null ? ldapUser.getSex() : user.getSex());
+            ldapUser.setNickname(StringUtil.isEmpty(user.getNickname()) ? ldapUser.getNickname() : user.getNickname());
+            if (StringUtil.isNotEmpty(user.getAvatar())) {
+                ldapUser.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
+            }
+            ldapUserService.modifyLdapUser(ldapUser);
+            user.setJiacn(String.valueOf(ldapUser.getUid()));
+        } else {
+            LdapUser ldapUser = new LdapUser();
+            // 依次取username、phone、email、openid、weixinid、githubid
+            String cn = StringUtil.firstNotEmpty(user.getUsername(), user.getPhone(), user.getEmail(),
+                    user.getOpenid(), user.getWeixinid(), user.getGithubid());
+            ldapUser.setCn(cn);
+            ldapUser.setSn(cn);
+            ldapUser.setTelephoneNumber(StringUtil.isEmpty(user.getPhone()) ? null : user.getPhone());
+            ldapUser.setEmail(StringUtil.isEmpty(user.getEmail()) ? null : user.getEmail());
+            ldapUser.setOpenid(StringUtil.isEmpty(user.getOpenid()) ? null : user.getOpenid());
+            ldapUser.setWeixinid(StringUtil.isEmpty(user.getWeixinid()) ? null : user.getWeixinid());
+            ldapUser.setGithubid(StringUtil.isEmpty(user.getGithubid()) ? null : user.getGithubid());
+            ldapUser.setCountry(StringUtil.isEmpty(user.getCountry()) ? null : user.getCountry());
+            ldapUser.setProvince(StringUtil.isEmpty(user.getProvince()) ? null : user.getProvince());
+            ldapUser.setCity(StringUtil.isEmpty(user.getCity()) ? null : user.getCity());
+            ldapUser.setSex(user.getSex());
+            ldapUser.setNickname(StringUtil.isEmpty(user.getNickname()) ? null : user.getNickname());
+            if (user.getAvatar() != null) {
+                ldapUser.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
+            }
+            ldapUserService.create(ldapUser);
+            LdapUserGroup org = ldapUserGroupService.findByClientId(EsContextHolder.getContext().getClientId());
+            if (org != null) {
+                ldapUserGroupService.addUser(org, ldapUser.getDn());
+            }
+            user.setJiacn(ldapUser.getUid());
+        }
+        //查找本地数据库是否有该用户，如果没有则新增，如果有则更新
+        UserEntity searchUser = new UserEntity();
+        searchUser.setJiacn(user.getJiacn());
+        searchUser.setPhone(user.getPhone());
+        searchUser.setEmail(user.getEmail());
+        searchUser.setOpenid(user.getOpenid());
+        searchUser.setWeixinid(user.getWeixinid());
+        searchUser.setGithubid(user.getGithubid());
+        List<UserEntity> curUser = baseDao.searchByExample(searchUser);
+        if (CollectionUtil.isNullOrEmpty(curUser)) {
+            //新增用户
+            user.setPassword(StringUtil.isNotEmpty(user.getPassword()) ? PasswordUtil.encode(user.getPassword()) : null);
+            baseDao.insert(user);
+            //设置默认角色
+            RoleRelEntity rel = new RoleRelEntity();
+            rel.setRoleId(UserConstants.DEFAULT_ROLE_ID);
+            rel.setUserId(user.getId());
+            userRoleRelDao.insert(rel);
+        } else {
+            UserEntity cu = curUser.getFirst();
+            user.setId(cu.getId());
+            List<String> subscribe = new ArrayList<>(Arrays.asList(cu.getSubscribe().split(",")));
+            if (!subscribe.contains(user.getSubscribe())) {
+                subscribe.add(user.getSubscribe());
+                user.setSubscribe(String.join(",", subscribe));
+            }
+            baseDao.updateById(user);
+        }
+        return user;
     }
 
     @Override
@@ -384,7 +415,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             upUser.setId(user.getId());
             //如果用户还没有设置默认职位，则默认第一个职位
             if (user.getPosition() == null) {
-                upUser.setPosition(String.valueOf(orgRelList.get(0).getOrgId()));
+                upUser.setPosition(String.valueOf(orgRelList.getFirst().getOrgId()));
                 baseDao.updateById(upUser);
             } else { //如果用户当前职位已失效，则默认第一个职位
                 boolean avail = false;
@@ -395,7 +426,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
                     }
                 }
                 if (!avail) {
-                    upUser.setPosition(String.valueOf(orgRelList.get(0).getOrgId()));
+                    upUser.setPosition(String.valueOf(orgRelList.getFirst().getOrgId()));
                     baseDao.updateById(upUser);
                 }
             }

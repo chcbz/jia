@@ -4,26 +4,40 @@ import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
-import cn.jia.core.util.*;
-import cn.jia.isp.entity.LdapUser;
-import cn.jia.isp.entity.LdapUserGroup;
-import cn.jia.isp.service.LdapUserGroupService;
-import cn.jia.isp.service.LdapUserService;
+import cn.jia.core.util.CollectionUtil;
+import cn.jia.core.util.HttpUtil;
+import cn.jia.core.util.JsonUtil;
+import cn.jia.core.util.StringUtil;
+import cn.jia.isp.entity.IspFileEntity;
+import cn.jia.isp.enums.IspFileTypeEnum;
+import cn.jia.isp.service.FileService;
+import cn.jia.user.entity.UserEntity;
+import cn.jia.oauth.dto.GithubOauthTokenDTO;
+import cn.jia.oauth.dto.GithubOauthUserDTO;
+import cn.jia.oauth.dto.WeiBoOauthTokenDTO;
+import cn.jia.oauth.dto.WeiBoOauthUserDTO;
 import cn.jia.oauth.dto.WeiXinOauthTokenDTO;
 import cn.jia.oauth.dto.WeiXinOauthUserDTO;
 import cn.jia.oauth.entity.OauthClientEntity;
 import cn.jia.oauth.service.ClientService;
+import cn.jia.user.entity.PermsEntity;
+import cn.jia.user.service.PermsService;
+import cn.jia.user.service.UserService;
 import com.nimbusds.oauth2.sdk.AuthorizationRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.crypto.password.LdapShaPasswordEncoder;
-import org.springframework.security.web.WebAttributes;
 import org.springframework.security.web.authentication.WebAuthenticationDetails;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
@@ -35,11 +49,11 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.ModelAndView;
 
-import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * OAuth认证控制器
@@ -52,13 +66,11 @@ import java.util.*;
 @RequiredArgsConstructor
 public class OauthController {
     private final ClientService clientService;
-    private final LdapUserService ldapUserService;
-    private final LdapUserGroupService ldapUserGroupService;
-
+    private final UserService userService;
+    private final PermsService permsService;
+    private final FileService fileService;
     private final RestTemplate restTemplate;
 
-    @Value("${oauth.default.clientId:jia_client}")
-    private String defaultClientId;
     @Value("${oauth.third-party.wxmp.appid:}")
     private String wxMpAppId;
     @Value("${oauth.third-party.wxmp.secret:}")
@@ -71,78 +83,10 @@ public class OauthController {
     private String weiBoAppId;
     @Value("${oauth.third-party.weibo.secret:}")
     private String weiBoSecret;
-
-    /**
-     * 处理用户登录请求
-     * 根据不同的登录类型跳转到相应的认证页面
-     *
-     * @param request  HTTP请求对象
-     * @param response HTTP响应对象
-     * @return 登录视图或重定向URL
-     */
-    @GetMapping("/login")
-    public ModelAndView login(HttpServletRequest request, HttpServletResponse response) {
-        ModelAndView view = new ModelAndView();
-        view.setViewName("login/login");
-        String clientId = Optional.ofNullable(HttpUtil.getUrlValue(request.getQueryString(), "client_id"))
-                .orElse(defaultClientId);
-        String loginType = Optional.ofNullable(HttpUtil.getUrlValue(request.getQueryString(), "login_type"))
-                .orElse("");
-        String loginScope = Optional.ofNullable(HttpUtil.getUrlValue(request.getQueryString(), "login_scope"))
-                .orElse("");
-        // 原请求信息的缓存及恢复
-        RequestCache requestCache = new HttpSessionRequestCache();
-        SavedRequest savedRequest = requestCache.getRequest(request, response);
-        if (savedRequest != null) {
-            String redirectUrl = savedRequest.getRedirectUrl();
-            clientId = Optional.ofNullable(HttpUtil.getUrlValue(redirectUrl, "client_id"))
-                    .orElse(clientId);
-            loginType = Optional.ofNullable(HttpUtil.getUrlValue(redirectUrl, "login_type"))
-                    .orElse(loginType);
-            loginScope = Optional.ofNullable(HttpUtil.getUrlValue(redirectUrl, "login_scope"))
-                    .orElse("");
-        }
-        switch (loginType) {
-            case "wxmp" -> {
-                String baseUrl = "https://" + request.getServerName();
-                String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/wxmp", StandardCharsets.UTF_8);
-                String state = DataUtil.getRandom(true, 4);
-                String url = "https://open.weixin.qq.com/connect/oauth2/authorize?appid=" + wxMpAppId +
-                        "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + loginScope +
-                        "&state=" + state + "#wechat_redirect";
-                view.setViewName("redirect:" + url);
-                return view;
-            }
-            case "weixin" -> {
-                String baseUrl = "https://" + request.getServerName();
-                String scope = "snsapi_login,snsapi_userinfo";
-                String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/weixin", StandardCharsets.UTF_8);
-                String state = DataUtil.getRandom(true, 4);
-                String url = "https://open.weixin.qq.com/connect/qrconnect?appid=" + weiXinAppId +
-                        "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + scope +
-                        "&state=" + state + "#wechat_redirect";
-                view.setViewName("redirect:" + url);
-                return view;
-            }
-            case "weibo" -> {
-                String baseUrl = "https://" + request.getServerName();
-                String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/weibo", StandardCharsets.UTF_8);
-                String url = "https://api.weibo.com/oauth2/authorize?client_id=" + weiBoAppId +
-                        "&response_type=code&redirect_uri=" + redirectUri;
-                view.setViewName("redirect:" + url);
-                return view;
-            }
-        }
-        LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
-        view.addObject("org", org);
-        view.addObject("orgLogo", Base64Util.encode(org.getLogo()));
-        Object exception = request.getSession().getAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
-        if (exception instanceof AuthenticationException) {
-            view.addObject("error", ((AuthenticationException) exception).getMessage());
-            request.getSession().removeAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
-        }
-        return view;
-    }
+    @Value("${oauth.third-party.github.appid:}")
+    private String githubAppId;
+    @Value("${oauth.third-party.github.secret:}")
+    private String githubSecret;
 
     /**
      * 处理微信公众号第三方登录回调
@@ -150,13 +94,11 @@ public class OauthController {
      * @param code     授权码
      * @param state    状态参数
      * @param request  HTTP请求对象
-     * @param response HTTP响应对象
      * @return 重定向到自动登录处理
-     * @throws Exception 处理过程中可能抛出的异常
      */
     @GetMapping("/third-party/wxmp")
     public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state,
-                                 HttpServletRequest request, HttpServletResponse response) throws Exception {
+                                 HttpServletRequest request) {
         String base_url = "https://api.weixin.qq.com";
         //获取token
         String grant_type = "authorization_code";
@@ -170,8 +112,8 @@ public class OauthController {
         String openid = tokenDTO.getOpenId();
         String scope = tokenDTO.getScope();
         //保存用户信息
-        LdapUser ldapUser = new LdapUser();
-        ldapUser.setOpenid(openid);
+        UserEntity user = new UserEntity();
+        user.setOpenid(openid);
         //获取用户信息
         if (scope.contains("snsapi_userinfo")) {
             url = base_url + "/sns/userinfo?access_token=" + accessToken + "&openid=" + openid;
@@ -179,20 +121,20 @@ public class OauthController {
             if (StringUtil.isNotEmpty(Objects.requireNonNull(userDTO).getErrCode())) {
                 throw new EsRuntimeException(null, userDTO.getErrMsg());
             }
-            ldapUser.setWeixinid(userDTO.getUnionId());
+            user.setWeixinid(userDTO.getUnionId());
             String country = userDTO.getCountry();
-            ldapUser.setCountry(StringUtil.isEmpty(country) ? null : country);
+            user.setCountry(StringUtil.isEmpty(country) ? null : country);
             String province = userDTO.getProvince();
-            ldapUser.setProvince(StringUtil.isEmpty(province) ? null : province);
+            user.setProvince(StringUtil.isEmpty(province) ? null : province);
             String city = userDTO.getCity();
-            ldapUser.setCity(StringUtil.isEmpty(city) ? null : city);
-            ldapUser.setNickname(new String(userDTO.getNickname().getBytes(StandardCharsets.ISO_8859_1),
+            user.setCity(StringUtil.isEmpty(city) ? null : city);
+            user.setNickname(new String(userDTO.getNickname().getBytes(StandardCharsets.ISO_8859_1),
                     StandardCharsets.UTF_8));
-            ldapUser.setSex(userDTO.getSex());
-            ldapUser.setHeadimg(ImgUtil.fromUrl(new URL(userDTO.getHeadImgUrl())));
+            user.setSex(userDTO.getSex());
+            user.setAvatar(userDTO.getHeadImgUrl());
         }
 
-        request.getSession().setAttribute("user", ldapUser);
+        request.getSession().setAttribute("user", user);
         return "redirect:/oauth/third-party/autologin";
     }
 
@@ -202,46 +144,48 @@ public class OauthController {
      * @param code     授权码
      * @param state    状态参数
      * @param request  HTTP请求对象
-     * @param response HTTP响应对象
      * @return 重定向到自动登录处理
-     * @throws Exception 处理过程中可能抛出的异常
      */
     @GetMapping("/third-party/weixin")
     public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state,
-                                   HttpServletRequest request, HttpServletResponse response) throws Exception {
-        String base_url = "https://api.weixin.qq.com";
-        //获取token
-        String grant_type = "authorization_code";
-        String url = base_url + "/sns/oauth2/access_token?appid=" + weiXinAppId + "&secret=" + weiXinSecret +
-                "&grant_type=" + grant_type + "&code=" + code;
+                                   HttpServletRequest request) {
+        String baseUrl = "https://api.weixin.qq.com";
+        // 获取token
+        String url = baseUrl + "/sns/oauth2/access_token?appid=" + weiXinAppId + "&secret=" + weiXinSecret +
+                "&grant_type=authorization_code&code=" + code;
         WeiXinOauthTokenDTO tokenDTO = restTemplate.getForObject(url, WeiXinOauthTokenDTO.class);
-        if (StringUtil.isNotEmpty(Objects.requireNonNull(tokenDTO).getErrCode())) {
+        if (Objects.requireNonNull(tokenDTO).getErrCode() != null && !tokenDTO.getErrCode().isEmpty()) {
             throw new EsRuntimeException(null, tokenDTO.getErrMsg());
         }
         String accessToken = tokenDTO.getAccessToken();
         String openid = tokenDTO.getOpenId();
         String unionid = StringUtil.isEmpty(tokenDTO.getUnionId()) ? openid : tokenDTO.getUnionId();
-        //保存用户信息
-        LdapUser ldapUser = new LdapUser();
-        ldapUser.setWeixinid(unionid);
-        //获取用户信息
-        url = base_url + "/sns/userinfo?access_token=" + accessToken + "&openid=" + openid;
+
+        // 获取用户信息
+        url = baseUrl + "/sns/userinfo?access_token=" + accessToken + "&openid=" + openid;
         WeiXinOauthUserDTO userDTO = restTemplate.getForObject(url, WeiXinOauthUserDTO.class);
-        if (StringUtil.isNotEmpty(Objects.requireNonNull(userDTO).getErrCode())) {
+        if (Objects.requireNonNull(userDTO).getErrCode() != null && !userDTO.getErrCode().isEmpty()) {
             throw new EsRuntimeException(null, userDTO.getErrMsg());
         }
-        String country = userDTO.getCountry();
-        ldapUser.setCountry(StringUtil.isEmpty(country) ? null : country);
-        String province = userDTO.getProvince();
-        ldapUser.setProvince(StringUtil.isEmpty(province) ? null : province);
-        String city = userDTO.getCity();
-        ldapUser.setCity(StringUtil.isEmpty(city) ? null : city);
-        ldapUser.setNickname(new String(userDTO.getNickname().getBytes(StandardCharsets.ISO_8859_1),
-                StandardCharsets.UTF_8));
-        ldapUser.setSex(userDTO.getSex());
-        ldapUser.setHeadimg(ImgUtil.fromUrl(new URL(userDTO.getHeadImgUrl())));
 
-        request.getSession().setAttribute("user", ldapUser);
+        // 保存用户信息
+        UserEntity user = new UserEntity();
+        user.setWeixinid(unionid);
+        user.setOpenid(openid);
+        String country = userDTO.getCountry();
+        user.setCountry(StringUtil.isEmpty(country) ? null : country);
+        String province = userDTO.getProvince();
+        user.setProvince(StringUtil.isEmpty(province) ? null : province);
+        String city = userDTO.getCity();
+        user.setCity(StringUtil.isEmpty(city) ? null : city);
+        user.setNickname(new String(userDTO.getNickname().getBytes(StandardCharsets.ISO_8859_1),
+                StandardCharsets.UTF_8));
+        user.setSex(userDTO.getSex());
+        IspFileEntity ispFileEntity = fileService.create(userDTO.getHeadImgUrl(),
+                IspFileTypeEnum.FILE_TYPE_AVATAR, openid + ".jpg");
+        Optional.ofNullable(ispFileEntity).map(IspFileEntity::getUri).ifPresent(user::setAvatar);
+
+        request.getSession().setAttribute("user", user);
         return "redirect:/oauth/third-party/autologin";
     }
 
@@ -250,23 +194,28 @@ public class OauthController {
      *
      * @param code     授权码
      * @param request  HTTP请求对象
-     * @param response HTTP响应对象
      * @return 重定向到自动登录处理
-     * @throws Exception 处理过程中可能抛出的异常
      */
     @GetMapping("/third-party/weibo")
-    public String thirdPartyWeiBo(@RequestParam String code, HttpServletRequest request, HttpServletResponse response) throws Exception {
+    public String thirdPartyWeiBo(@RequestParam String code, HttpServletRequest request) {
         String weiBoBaseUrl = "https://api.weibo.com";
         String baseUrl = "https://" + request.getServerName();
         String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/weibo", StandardCharsets.UTF_8);
-        //获取token
-        String grant_type = "authorization_code";
+        // 获取token
         String url = weiBoBaseUrl + "/oauth2/access_token?client_id=" + weiBoAppId + "&client_secret=" + weiBoSecret +
-                "&grant_type=" + grant_type + "&code=" + code + "&redirect_uri=" + redirectUri;
-        Map<String, Object> tokenMap;
+                "&grant_type=authorization_code&code=" + code + "&redirect_uri=" + redirectUri;
+
+        // 设置请求头
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        HttpEntity<?> entity = new HttpEntity<>(headers);
+        
+        WeiBoOauthTokenDTO tokenDTO;
         try {
-            String tokenStr = restTemplate.postForObject(url, null, String.class);
-            tokenMap = JsonUtil.jsonToMap(tokenStr);
+            ResponseEntity<String> responseEntity = restTemplate.postForEntity(url, entity, String.class);
+            String tokenStr = responseEntity.getBody();
+            tokenDTO = JsonUtil.fromJson(tokenStr, WeiBoOauthTokenDTO.class);
         } catch (Exception e) {
             if (e instanceof HttpClientErrorException) {
                 String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
@@ -278,14 +227,19 @@ public class OauthController {
             }
         }
 
-        String accessToken = Objects.requireNonNull(tokenMap).get("access_token").toString();
-        String uid = tokenMap.get("uid").toString();
-        //获取用户信息
+        String accessToken = Objects.requireNonNull(tokenDTO).getAccessToken();
+        String uid = tokenDTO.getUid();
+        // 获取用户信息
         url = weiBoBaseUrl + "/2/users/show.json?access_token=" + accessToken + "&uid=" + uid;
-        Map<String, Object> userMap;
+        
+        WeiBoOauthUserDTO userDTO;
         try {
-            String userStr = restTemplate.getForObject(url, String.class);
-            userMap = JsonUtil.jsonToMap(userStr);
+            headers.clear();
+            headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+            HttpEntity<?> userEntity = new HttpEntity<>(headers);
+            ResponseEntity<String> userResponseEntity = restTemplate.exchange(url, HttpMethod.GET, userEntity, String.class);
+            String userStr = userResponseEntity.getBody();
+            userDTO = JsonUtil.fromJson(userStr, WeiBoOauthUserDTO.class);
         } catch (Exception e) {
             if (e instanceof HttpClientErrorException) {
                 String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
@@ -296,30 +250,76 @@ public class OauthController {
                 throw new EsRuntimeException();
             }
         }
-        //保存用户信息
-        LdapUser ldapUser = new LdapUser();
-        ldapUser.setWeiboid(uid);
-        List<LdapUser> list = ldapUserService.search(ldapUser);
-        if (list != null && !list.isEmpty()) {
-            ldapUser = list.get(0);
-        } else {
-            ldapUser.setCn(uid);
-            ldapUser.setSn(uid);
-        }
-        String location = Objects.requireNonNull(userMap).get("location").toString();
-        ldapUser.setLocation(StringUtil.isEmpty(location) ? null : location);
-        String province = userMap.get("province").toString();
-        ldapUser.setProvince(StringUtil.isEmpty(province) ? null : province);
-        String city = userMap.get("city").toString();
-        ldapUser.setCity(StringUtil.isEmpty(city) ? null : city);
-        String remark = userMap.get("description").toString();
-        ldapUser.setRemark(StringUtil.isEmpty(remark) ? null : remark);
-        ldapUser.setNickname(userMap.get("screen_name").toString());
-        String sex = String.valueOf(userMap.get("gender"));
-        ldapUser.setSex("m".equals(sex) ? 1 : ("f".equals(sex) ? 2 : 0));
-        ldapUser.setHeadimg(ImgUtil.fromUrl(new URL(StringUtil.valueOf(userMap.get("profile_image_url")))));
+        
+        // 保存用户信息
+        UserEntity user = new UserEntity();
+        user.setWeiboid(uid);
+        String location = Objects.requireNonNull(userDTO).getLocation();
+        user.setLocation(StringUtil.isEmpty(location) ? null : location);
+        String province = userDTO.getProvince();
+        user.setProvince(StringUtil.isEmpty(province) ? null : province);
+        String city = userDTO.getCity();
+        user.setCity(StringUtil.isEmpty(city) ? null : city);
+        String remark = userDTO.getDescription();
+        user.setRemark(StringUtil.isEmpty(remark) ? null : remark);
+        user.setNickname(userDTO.getScreenName());
+        String sex = userDTO.getGender();
+        user.setSex("m".equals(sex) ? 1 : ("f".equals(sex) ? 2 : 0));
+        IspFileEntity ispFileEntity = fileService.create(userDTO.getProfileImageUrl(),
+                IspFileTypeEnum.FILE_TYPE_AVATAR, uid + ".jpg");
+        Optional.ofNullable(ispFileEntity).map(IspFileEntity::getUri).ifPresent(user::setAvatar);
+        request.getSession().setAttribute("user", user);
+        return "redirect:/oauth/third-party/autologin";
+    }
 
-        request.getSession().setAttribute("user", ldapUser);
+    /**
+     * 处理GitHub第三方登录回调
+     *
+     * @param code     授权码
+     * @param request  HTTP请求对象
+     * @return 重定向到自动登录处理
+     */
+    @GetMapping("/third-party/github")
+    public String thirdPartyGithub(@RequestParam String code, HttpServletRequest request) {
+        String githubBaseUrl = "https://github.com";
+        String apiBaseUrl = "https://api.github.com";
+        // 获取token
+        String url = githubBaseUrl + "/login/oauth/access_token?client_id=" + githubAppId + "&client_secret=" + githubSecret +
+                "&code=" + code;
+
+        // 设置请求头，接收JSON格式的响应
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        HttpEntity<?> entity = new HttpEntity<>(headers);
+        ResponseEntity<String> responseEntity = restTemplate.postForEntity(url, entity, String.class);
+        String tokenStr = responseEntity.getBody();
+        GithubOauthTokenDTO tokenDTO = JsonUtil.fromJson(tokenStr, GithubOauthTokenDTO.class);
+        String accessToken = Objects.requireNonNull(tokenDTO).getAccessToken();
+        // 获取用户信息
+        url = apiBaseUrl + "/user";
+        headers.clear();
+        headers.setBearerAuth(accessToken);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        HttpEntity<?> userEntity = new HttpEntity<>(headers);
+        ResponseEntity<String> userResponseEntity = restTemplate.exchange(url, HttpMethod.GET, userEntity, String.class);
+        String userStr = userResponseEntity.getBody();
+        GithubOauthUserDTO userDTO = JsonUtil.fromJson(userStr, GithubOauthUserDTO.class);
+        if (userDTO == null) {
+            return "redirect:/login/index.html";
+        }
+        // 保存用户信息
+        UserEntity user = new UserEntity();
+        user.setGithubid(String.valueOf(userDTO.getId())); // 使用GitHub ID作为UID
+        user.setUsername(userDTO.getLogin());
+        user.setNickname(userDTO.getName() != null ? userDTO.getName() : userDTO.getLogin());
+        user.setEmail(userDTO.getEmail());
+        IspFileEntity ispFileEntity = fileService.create(userDTO.getAvatar_url(),
+                IspFileTypeEnum.FILE_TYPE_AVATAR, userDTO.getId() + ".jpg");
+        Optional.ofNullable(ispFileEntity).map(IspFileEntity::getUri).ifPresent(user::setAvatar);
+        user.setLocation(userDTO.getLocation());
+        user.setRemark(userDTO.getBio());
+
+        request.getSession().setAttribute("user", user);
         return "redirect:/oauth/third-party/autologin";
     }
 
@@ -329,63 +329,50 @@ public class OauthController {
      * @param request  HTTP请求对象
      * @param response HTTP响应对象
      * @return 重定向到原始请求地址或登录页
-     * @throws Exception 处理过程中可能抛出的异常
      */
     @GetMapping("/third-party/autologin")
-    public String thirdPartyAutoLogin(HttpServletRequest request, HttpServletResponse response) throws Exception {
-        LdapUser user = (LdapUser) request.getSession().getAttribute("user");
-        LdapUser ldapUser;
-        //保存用户信息
-        List<LdapUser> list = ldapUserService.search(user);
-        if (CollectionUtil.isNotNullOrEmpty(list)) {
-            ldapUser = list.get(0);
-            BeanUtil.copyPropertiesIgnoreNull(user, ldapUser);
-            ldapUserService.modifyLdapUser(ldapUser);
-        } else {
-            ldapUser = user;
-            ldapUser.setUid(DataUtil.getUuid());
-            ldapUser.setCn(ldapUser.getCn() == null ? ldapUser.getUid() : ldapUser.getCn());
-            ldapUser.setSn(ldapUser.getSn() == null ? ldapUser.getUid() : ldapUser.getSn());
-            String password = DataUtil.getRandom(false, 8);
-            LdapShaPasswordEncoder encoder = new LdapShaPasswordEncoder();
-            ldapUser.setUserPassword(encoder.encode(password).getBytes(StandardCharsets.UTF_8));
-            ldapUserService.create(ldapUser);
-        }
-        //自动登录
-        UsernamePasswordAuthenticationToken token = new UsernamePasswordAuthenticationToken(ldapUser.getUid(), new String(ldapUser.getUserPassword(), StandardCharsets.UTF_8));
-        try {
-            token.setDetails(new WebAuthenticationDetails(request));
-//            Authentication authenticatedUser = authenticationManager.authenticate(token);
-//
-//            SecurityContextHolder.getContext().setAuthentication(authenticatedUser);
-            request.getSession().setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, SecurityContextHolder.getContext());
-        } catch (AuthenticationException e) {
-            log.error(e.getMessage(), e);
-            return "redirect:/oauth/login";
-        }
+    public String thirdPartyAutoLogin(HttpServletRequest request, HttpServletResponse response) {
+        UserEntity user = (UserEntity) request.getSession().getAttribute("user");
         RequestCache requestCache = new HttpSessionRequestCache();
         SavedRequest savedRequest = requestCache.getRequest(request, response);
-        if (savedRequest != null) {
-            String redirectUrl = savedRequest.getRedirectUrl();
-            String clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
-            LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
-            if (org != null) {
-                ldapUserGroupService.addUser(org, ldapUser.getDn());
-            }
-            return "redirect:" + redirectUrl;
+        if (savedRequest == null) {
+            return "redirect:/login/index.html";
         }
-        return "redirect:/oauth/login";
+        String redirectUrl = savedRequest.getRedirectUrl();
+        String clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
+        EsContextHolder.getContext().setClientId(clientId);
+        //保存用户信息
+        user = userService.upsert(user);
+        //自动登录
+        // 用户已经在第三方登录中验证，直接创建已认证的Authentication对象
+        // 获取用户的所有权限
+        Collection<? extends GrantedAuthority> authorities = new ArrayList<>();
+        if (user.getId() != null) {
+            List<PermsEntity> authList = permsService.findByUserId(user.getId());
+            if (CollectionUtil.isNotNullOrEmpty(authList)) {
+                authorities = authList.stream()
+                    .map(p -> new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc()))
+                    .collect(Collectors.toList());
+            }
+        }
+        UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
+            user.getUsername(), null, authorities
+        );
+        authToken.setDetails(new WebAuthenticationDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(authToken);
+        request.getSession().setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
+                SecurityContextHolder.getContext());
+        return "redirect:" + redirectUrl;
     }
 
     /**
      * 获取访问确认页面
      *
      * @param model   模型数据
-     * @param request HTTP请求对象
      * @return 访问确认视图
      */
     @RequestMapping("/confirm_access")
-    public ModelAndView getAccessConfirmation(Map<String, Object> model, HttpServletRequest request) {
+    public ModelAndView getAccessConfirmation(Map<String, Object> model) {
         AuthorizationRequest authorizationRequest = (AuthorizationRequest) model.get("authorizationRequest");
         ModelAndView view = new ModelAndView();
         view.setViewName("oauth/authorize");

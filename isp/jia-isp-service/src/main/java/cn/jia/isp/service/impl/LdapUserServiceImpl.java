@@ -94,6 +94,15 @@ public class LdapUserServiceImpl implements LdapUserService {
             if (person.getEmail() != null) {
                 subCriteria.or("email").is(person.getEmail());
             }
+            if (person.getWeixinid() != null) {
+                subCriteria.or("weixinid").is(person.getWeixinid());
+            }
+            if (person.getWeiboid() != null) {
+                subCriteria.or("weiboid").is(person.getWeiboid());
+            }
+            if (person.getGithubid() != null) {
+                subCriteria.or("githubid").is(person.getGithubid());
+            }
             criteria.and(subCriteria);
             return ldapTemplate.find(criteria, LdapUser.class);
         } catch (Exception e) {

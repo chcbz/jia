@@ -1,47 +1,68 @@
-#wrapper{
+#wrapper {
     margin-top: 30px;
 }
+
 .aw-login-box {
     width: 100%;
     max-width: 450px;
 }
+
 .aw-login-box .mod-body .content {
     width: 100%;
     text-align: center;
 }
+
 .aw-login-box .mod-body {
     min-height: 380px;
     padding: 50px 60px;
 }
-.aw-login-box .mod-body .side-bar{
+
+.aw-login-box .mod-body .side-bar {
     width: 230px;
 }
-.aw-login-box .mod-body .side-bar{
+
+.aw-login-box .mod-body .side-bar {
     height: -webkit-fill-available;
     padding: 60px 0 60px 30px;
 }
-.back{
+
+.back {
     background-color: #8a8a8b;
     margin-right: 10px;
-    color:#fff!important;
+    color: #fff !important;
 }
-#area select { background: transparent; padding: 5px; font-size: 14px; border: 1px solid #ccc; height: 34px;}
+
+#area select {
+    background: transparent;
+    padding: 5px;
+    font-size: 14px;
+    border: 1px solid #ccc;
+    height: 34px;
+    width: 115px;
+}
 
 .last {
     float: right;
 }
-.last .btn-primary{
+
+.last .btn-primary {
     width: 264px;
 }
 
 @media screen and (max-width: 450px) {
-    .last .btn-primary{
+    .last .btn-primary {
         width: 144px;
+    }
+    #area select {
+        width: 75px;
     }
 }
 
 @media screen and (max-width: 350px) {
-    .last .btn-primary{
+    .last .btn-primary {
         width: 114px;
+    }
+    #area select {
+        width: 75px;
     }
 }

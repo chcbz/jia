@@ -1,6 +1,7 @@
 package cn.jia.isp.service;
 
 import cn.jia.isp.entity.IspFileEntity;
+import cn.jia.isp.enums.IspFileTypeEnum;
 import com.github.pagehelper.PageInfo;
 
 /**
@@ -57,4 +58,14 @@ public interface FileService {
      * @return 对应URI的文件实体，如果找不到则返回null
      */
 	IspFileEntity findByUri(String uri);
+
+    /**
+     * 根据URL创建文件
+     *
+     * @param url 文件的URL地址
+     * @param fileType 文件类型
+     * @param fileName 文件名
+     * @return 创建后的文件实体，如果创建失败则返回null
+     */
+    IspFileEntity create(String url, IspFileTypeEnum fileType, String fileName);
 }

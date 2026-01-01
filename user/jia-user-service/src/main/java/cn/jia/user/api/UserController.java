@@ -203,11 +203,10 @@ public class UserController {
      *
      * @param userList 用户列表
      * @return 同步结果
-     * @throws Exception 同步异常
      */
     @PreAuthorize("hasAuthority('user-sync')")
     @RequestMapping(value = "/sync", method = RequestMethod.POST)
-    public Object sync(@RequestBody List<UserEntity> userList) throws Exception {
+    public Object sync(@RequestBody List<UserEntity> userList) {
         userService.sync(userList);
         return JsonResult.success();
     }

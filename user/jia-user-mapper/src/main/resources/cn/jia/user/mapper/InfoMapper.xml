@@ -6,7 +6,7 @@
     <sql id="Base_Column_List">
         create_time,
         update_time,
-        id, username, password, openid, jiacn, phone, email, sex, nickname, avatar, city, country, province,
+        id, username, password, openid, weixinid, weiboid, githubid, jiacn, phone, email, sex, nickname, avatar, city, country, province,
         latitude, longitude, point, referrer, birthday, tel, weixin, qq, position, status, remark, msg_type, subscribe
     </sql>
 
@@ -31,10 +31,19 @@
         from user_info
         where 1 = 2
         <if test="openid != null">
-            or openid LIKE CONCAT('%',#{openid,jdbcType=VARCHAR},'%')
+            or openid = #{openid,jdbcType=VARCHAR}
+        </if>
+        <if test="weixinid != null">
+            or weixinid = #{weixinid,jdbcType=VARCHAR}
+        </if>
+        <if test="weiboid != null">
+            or weiboid = #{weiboid,jdbcType=VARCHAR}
+        </if>
+        <if test="githubid != null">
+            or githubid = #{githubid,jdbcType=VARCHAR}
         </if>
         <if test="jiacn != null">
-            or jiacn LIKE CONCAT('%',#{jiacn,jdbcType=VARCHAR},'%')
+            or jiacn = #{jiacn,jdbcType=VARCHAR}
         </if>
         <if test="phone != null">
             or phone LIKE CONCAT('%',#{phone,jdbcType=VARCHAR},'%')

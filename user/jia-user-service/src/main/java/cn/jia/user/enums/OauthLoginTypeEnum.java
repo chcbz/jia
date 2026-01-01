@@ -1,4 +1,4 @@
-package cn.jia.oauth.enums;
+package cn.jia.user.enums;
 
 import lombok.Getter;
 
