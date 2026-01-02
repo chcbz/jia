@@ -98,7 +98,8 @@ public class LoginController {
         String loginScope = this.getRequestValue(request, "loginScope").orElse("");
         switch (loginType) {
             case "wxmp" -> {
-                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String baseUrl = "https://" + request.getServerName() +
+                        (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/wxmp", StandardCharsets.UTF_8);
                 String state = DataUtil.getRandom(true, 4);
                 String url = "https://open.weixin.qq.com/connect/oauth2/authorize?appid=" + wxMpAppId +
@@ -108,7 +109,8 @@ public class LoginController {
                 return view;
             }
             case "weixin" -> {
-                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String baseUrl = "https://" + request.getServerName() +
+                        (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String scope = "snsapi_login";
                 String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/weixin", StandardCharsets.UTF_8);
                 String state = DataUtil.getRandom(true, 4);
@@ -119,7 +121,8 @@ public class LoginController {
                 return view;
             }
             case "weibo" -> {
-                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String baseUrl = "https://" + request.getServerName() +
+                        (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/weibo", StandardCharsets.UTF_8);
                 String url = "https://api.weibo.com/oauth2/authorize?client_id=" + weiBoAppId +
                         "&response_type=code&redirect_uri=" + redirectUri;
@@ -127,7 +130,8 @@ public class LoginController {
                 return view;
             }
             case "github" -> {
-                String baseUrl = "https://" + request.getServerName() + (request.getServerPort() == 80 ? "" : ":" + request.getServerPort());
+                String baseUrl = "https://" + request.getServerName() +
+                        (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/github", StandardCharsets.UTF_8);
                 String url = "https://github.com/login/oauth/authorize?client_id=" + githubAppId +
                         "&redirect_uri=" + redirectUri + "&scope=" + loginScope;
