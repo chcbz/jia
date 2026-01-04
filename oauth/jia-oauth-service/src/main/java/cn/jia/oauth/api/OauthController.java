@@ -97,8 +97,7 @@ public class OauthController {
      * @return 重定向到自动登录处理
      */
     @GetMapping("/third-party/wxmp")
-    public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state,
-                                 HttpServletRequest request) {
+    public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
         log.info("处理微信公众号第三方登录回调，code: {}, state: {}", code, state);
         String base_url = "https://api.weixin.qq.com";
         //获取token
@@ -106,7 +105,29 @@ public class OauthController {
         String url = base_url + "/sns/oauth2/access_token?appid=" + wxMpAppId + "&secret=" + wxMpSecret +
                 "&grant_type=" + grant_type + "&code=" + code;
         log.debug("请求微信API获取token，URL: {}", url);
-        WeiXinOauthTokenDTO tokenDTO = restTemplate.getForObject(url, WeiXinOauthTokenDTO.class);
+        
+        // 设置请求头，确保接收JSON格式响应
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        HttpEntity<?> entity = new HttpEntity<>(headers);
+        
+        WeiXinOauthTokenDTO tokenDTO;
+        try {
+            ResponseEntity<String> responseEntity = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+            String tokenStr = responseEntity.getBody();
+            tokenDTO = JsonUtil.fromJson(tokenStr, WeiXinOauthTokenDTO.class);
+        } catch (Exception e) {
+            if (e instanceof HttpClientErrorException) {
+                String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
+                log.error("获取微信公众号token失败: {}", errMsg);
+                Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
+                throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("errcode")));
+            } else {
+                log.error("获取微信公众号token时发生异常", e);
+                throw new EsRuntimeException();
+            }
+        }
+        
         if (StringUtil.isNotEmpty(Objects.requireNonNull(tokenDTO).getErrCode())) {
             log.error("获取微信公众号token失败，错误码: {}, 错误信息: {}", tokenDTO.getErrCode(), tokenDTO.getErrMsg());
             throw new EsRuntimeException(null, tokenDTO.getErrMsg());
@@ -122,7 +143,24 @@ public class OauthController {
         if (scope.contains("snsapi_userinfo")) {
             url = base_url + "/sns/userinfo?access_token=" + accessToken + "&openid=" + openid;
             log.debug("请求微信API获取用户信息，URL: {}", url);
-            WeiXinOauthUserDTO userDTO = restTemplate.getForObject(url, WeiXinOauthUserDTO.class);
+            
+            WeiXinOauthUserDTO userDTO;
+            try {
+                ResponseEntity<String> userResponseEntity = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+                String userStr = userResponseEntity.getBody();
+                userDTO = JsonUtil.fromJson(userStr, WeiXinOauthUserDTO.class);
+            } catch (Exception e) {
+                if (e instanceof HttpClientErrorException) {
+                    String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
+                    log.error("获取微信公众号用户信息失败: {}", errMsg);
+                    Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
+                    throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("errcode")));
+                } else {
+                    log.error("获取微信公众号用户信息时发生异常", e);
+                    throw new EsRuntimeException();
+                }
+            }
+            
             if (StringUtil.isNotEmpty(Objects.requireNonNull(userDTO).getErrCode())) {
                 log.error("获取微信公众号用户信息失败，错误码: {}, 错误信息: {}", userDTO.getErrCode(), userDTO.getErrMsg());
                 throw new EsRuntimeException(null, userDTO.getErrMsg());
@@ -155,51 +193,49 @@ public class OauthController {
      * @return 重定向到自动登录处理
      */
     @GetMapping("/third-party/weixin")
-    public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state,
-                                   HttpServletRequest request) {
+    public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
         log.info("处理微信第三方登录回调，code: {}, state: {}", code, state);
         String baseUrl = "https://api.weixin.qq.com";
         // 获取token
         String url = baseUrl + "/sns/oauth2/access_token?appid=" + weiXinAppId + "&secret=" + weiXinSecret +
                 "&grant_type=authorization_code&code=" + code;
         log.debug("请求微信API获取token，URL: {}", url);
-        WeiXinOauthTokenDTO tokenDTO = restTemplate.getForObject(url, WeiXinOauthTokenDTO.class);
+        
+        // 设置请求头，确保接收JSON格式响应
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        HttpEntity<?> entity = new HttpEntity<>(headers);
+        
+        WeiXinOauthTokenDTO tokenDTO;
+        try {
+            ResponseEntity<String> responseEntity = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+            String tokenStr = responseEntity.getBody();
+            tokenDTO = JsonUtil.fromJson(tokenStr, WeiXinOauthTokenDTO.class);
+        } catch (Exception e) {
+            if (e instanceof HttpClientErrorException) {
+                String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
+                log.error("获取微信token失败: {}", errMsg);
+                Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
+                throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("errcode")));
+            } else {
+                log.error("获取微信token时发生异常", e);
+                throw new EsRuntimeException();
+            }
+        }
+        
         if (Objects.requireNonNull(tokenDTO).getErrCode() != null && !tokenDTO.getErrCode().isEmpty()) {
             log.error("获取微信token失败，错误码: {}, 错误信息: {}", tokenDTO.getErrCode(), tokenDTO.getErrMsg());
             throw new EsRuntimeException(null, tokenDTO.getErrMsg());
         }
-        String accessToken = tokenDTO.getAccessToken();
         String openid = tokenDTO.getOpenId();
         String unionid = StringUtil.isEmpty(tokenDTO.getUnionId()) ? openid : tokenDTO.getUnionId();
         log.debug("微信token获取成功，openid: {}, unionid: {}", openid, unionid);
-
-        // 获取用户信息
-        url = baseUrl + "/sns/userinfo?access_token=" + accessToken + "&openid=" + openid;
-        log.debug("请求微信API获取用户信息，URL: {}", url);
-        WeiXinOauthUserDTO userDTO = restTemplate.getForObject(url, WeiXinOauthUserDTO.class);
-        if (Objects.requireNonNull(userDTO).getErrCode() != null && !userDTO.getErrCode().isEmpty()) {
-            log.error("获取微信用户信息失败，错误码: {}, 错误信息: {}", userDTO.getErrCode(), userDTO.getErrMsg());
-            throw new EsRuntimeException(null, userDTO.getErrMsg());
-        }
 
         // 保存用户信息
         UserEntity user = new UserEntity();
         user.setWeixinid(unionid);
         user.setOpenid(openid);
-        String country = userDTO.getCountry();
-        user.setCountry(StringUtil.isEmpty(country) ? null : country);
-        String province = userDTO.getProvince();
-        user.setProvince(StringUtil.isEmpty(province) ? null : province);
-        String city = userDTO.getCity();
-        user.setCity(StringUtil.isEmpty(city) ? null : city);
-        user.setNickname(new String(userDTO.getNickname().getBytes(StandardCharsets.ISO_8859_1),
-                StandardCharsets.UTF_8));
-        user.setSex(userDTO.getSex());
-        IspFileEntity ispFileEntity = fileService.create(userDTO.getHeadImgUrl(),
-                IspFileTypeEnum.FILE_TYPE_AVATAR, openid + ".jpg");
-        Optional.ofNullable(ispFileEntity).map(IspFileEntity::getUri).ifPresent(user::setAvatar);
-        log.debug("微信用户信息获取成功，昵称: {}", user.getNickname());
-
+        
         request.getSession().setAttribute("user", user);
         log.info("微信第三方登录回调处理完成，用户openid: {}", openid);
         return "redirect:/oauth/third-party/autologin";
@@ -393,7 +429,7 @@ public class OauthController {
             }
         }
         UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-            user.getUsername(), null, authorities
+            user.getJiacn(), null, authorities
         );
         authToken.setDetails(new WebAuthenticationDetails(request));
         SecurityContextHolder.getContext().setAuthentication(authToken);
