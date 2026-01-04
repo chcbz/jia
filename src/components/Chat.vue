@@ -137,7 +137,7 @@ const shouldShowEmptyState = computed(() => !hasMessages.value && !isLoading.val
 
 // 初始化
 const initializeApp = () => {
-  globalStore.setTitle(t('chat.title'));
+  globalStore.setTitle(t('chat.new_session'));
   globalStore.setShowBack(false);
   globalStore.setShowMore(true);
 
@@ -180,6 +180,7 @@ const loadConversation = async (id) => {
   const conversation = conversations.value.find((c) => c.id === id);
   if (conversation) {
     conversationId.value = id;
+    globalStore.setTitle(conversation.title);
     
     // 从服务端加载会话内容
     try {
@@ -271,6 +272,7 @@ const processBotResponse = (eventData) => {
     } else if (data.conversationId) {
       conversationId.value = data.conversationId;
     } else if (data.t) {
+      globalStore.setTitle(data.t);
       loadConversations();
     } else {
       console.log('No message content found in JSON:', data);
