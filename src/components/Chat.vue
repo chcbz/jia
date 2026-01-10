@@ -4,7 +4,7 @@
       <div class="chat-messages" ref="messagesRef">
         <div v-if="shouldShowEmptyState" class="chat-empty-state">
           <p>开始与JiA智能助手对话吧！</p>
-          <p class="chat-empty-hint">输入您的问题或想法，我将尽力为您解答</p>
+          <p class="chat-empty-hint">{{ randomPhrase }}</p>
         </div>
         <div
           v-for="(msg, index) in messages"
@@ -85,7 +85,7 @@ import { useUtilStore } from '../stores/util';
 import { useGlobalStore } from '../stores/global';
 import { useApiStore } from '../stores/api';
 import { useI18n } from 'vue-i18n';
-import { useHttp, mcpApi, kefuApi } from '../composables/useHttp';
+import { useHttp, mcpApi, kefuApi, phraseApi } from '../composables/useHttp';
 
 // 配置marked
 marked.setOptions({
@@ -120,6 +120,7 @@ const error = ref(null);
 const conversationId = ref('');
 const conversations = ref([]);
 const showSidebar = ref(false);
+const randomPhrase = ref('输入您的问题或想法，我将尽力为您解答'); // 默认文本
 
 // 工具函数
 const utilStore = useUtilStore();
@@ -136,12 +137,38 @@ const sortedConversations = computed(() =>
 const shouldShowEmptyState = computed(() => !hasMessages.value && !isLoading.value);
 
 // 初始化
-const initializeApp = () => {
+const initializeApp = async () => {
   globalStore.setTitle(t('chat.new_session'));
   globalStore.setShowBack(false);
   globalStore.setShowMore(true);
 
+  // 加载随机短语
+  await loadRandomPhrase();
+  
   loadConversations();
+};
+
+// 加载随机短语
+const loadRandomPhrase = async () => {
+  try {
+    phraseApi.list('/get/random', {
+      jiacn: globalStore.getJiacn
+    }, {
+      autoLoading: false,
+      onSuccess: (data) => {
+        if (data && data.data) {
+          randomPhrase.value = data.data.content
+          phraseApi.get('/read', data.data.id);
+        }
+      },
+      onError: (error) => {
+        console.warn('从服务端加载会话失败:', error);
+      }
+    });
+  } catch (error) {
+    console.warn('加载随机短语失败:', error);
+    // 保持默认文本
+  }
 };
 
 // 会话管理函数
