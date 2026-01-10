@@ -1,5 +1,6 @@
 package cn.jia.oauth.api;
 
+import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.exception.EsErrorConstants;
@@ -24,6 +25,7 @@ import cn.jia.user.entity.PermsEntity;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
 import com.nimbusds.oauth2.sdk.AuthorizationRequest;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -435,6 +437,11 @@ public class OauthController {
         SecurityContextHolder.getContext().setAuthentication(authToken);
         request.getSession().setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
                 SecurityContextHolder.getContext());
+        EsContext context = EsContextHolder.getContext();
+        context.setUsername(user.getUsername());
+        context.setJiacn(user.getJiacn());
+        Cookie cookie = EsContextHolder.genCookie();
+        response.addCookie(cookie);
         log.info("第三方登录自动登录流程完成，重定向到: {}", redirectUrl);
         return "redirect:" + redirectUrl;
     }
