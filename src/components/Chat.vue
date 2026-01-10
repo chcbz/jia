@@ -80,7 +80,7 @@
 <script setup>
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { ref, onMounted, computed, watch, getCurrentInstance } from 'vue';
+import { ref, onMounted, computed, watch, onUnmounted } from 'vue';
 import { useUtilStore } from '../stores/util';
 import { useGlobalStore } from '../stores/global';
 import { useApiStore } from '../stores/api';
@@ -121,6 +121,8 @@ const conversationId = ref('');
 const conversations = ref([]);
 const showSidebar = ref(false);
 const randomPhrase = ref('输入您的问题或想法，我将尽力为您解答'); // 默认文本
+const userScrolledUp = ref(false); // 用户是否手动向上滚动
+const lastScrollTop = ref(0); // 上一次滚动位置
 
 // 工具函数
 const utilStore = useUtilStore();
@@ -407,10 +409,30 @@ const stopStream = async () => {
   }
 };
 
+// 处理滚动事件
+const handleScroll = () => {
+  if (!messagesRef.value) return;
+  
+  const currentScrollTop = messagesRef.value.scrollTop;
+  const scrollHeight = messagesRef.value.scrollHeight;
+  const clientHeight = messagesRef.value.clientHeight;
+  
+  // 检测用户是否向上滚动
+  if (currentScrollTop < lastScrollTop.value) {
+    // 用户向上滚动
+    userScrolledUp.value = true;
+  } else if (currentScrollTop + clientHeight >= scrollHeight - 10) {
+    // 用户滚动到底部（留10px的容差）
+    userScrolledUp.value = false;
+  }
+  
+  lastScrollTop.value = currentScrollTop;
+};
+
 // UI 交互函数
 const scrollToBottom = () => {
   requestAnimationFrame(() => {
-    if (messagesRef.value) {
+    if (messagesRef.value && !userScrolledUp.value) {
       messagesRef.value.scrollTop = messagesRef.value.scrollHeight;
     }
   });
@@ -497,7 +519,26 @@ watch(
 );
 
 // 生命周期钩子
-onMounted(initializeApp);
+onMounted(() => {
+  initializeApp();
+  
+  // 添加滚动事件监听器
+  const setupScrollListener = () => {
+    if (messagesRef.value) {
+      messagesRef.value.addEventListener('scroll', handleScroll);
+    }
+  };
+  
+  // 使用 nextTick 确保 DOM 已渲染
+  setTimeout(setupScrollListener, 100);
+});
+
+// 组件卸载时移除事件监听器
+onUnmounted(() => {
+  if (messagesRef.value) {
+    messagesRef.value.removeEventListener('scroll', handleScroll);
+  }
+});
 </script>
 
 <style scoped>
