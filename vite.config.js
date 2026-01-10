@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueJsx from '@vitejs/plugin-vue-jsx'
 import path from 'path'
+import fs from 'fs'
 import yaml from '@rollup/plugin-yaml'
 import { visualizer } from 'rollup-plugin-visualizer'
 import viteCompression from 'vite-plugin-compression'
@@ -64,6 +65,11 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 8080,
       open: false,
+      https: {
+        key: fs.readFileSync('localhost.key'),
+        cert: fs.readFileSync('localhost.crt'),
+        passphrase: 'changeit'
+      },
       proxy: {
         '/api': {
           target: env.VITE_API_BASE_URL,
