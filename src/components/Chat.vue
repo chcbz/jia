@@ -189,7 +189,7 @@ const loadConversations = async () => {
       onSuccess: (data) => {
         if (data && data.data) {
           conversations.value = data.data.map(conv => ({
-            id: conv.id,
+            id: conv.id.toString(),
             title: conv.title || '新会话',
             lastUpdated: conv.updateTime,
             messages: []
@@ -245,6 +245,7 @@ const loadConversation = async (id) => {
 };
 
 const generateNewConversationId = () => {
+  globalStore.setTitle(t('chat.new_session'));
   conversationId.value = '';
   messages.value = [];
 };
@@ -461,7 +462,6 @@ const deleteConversation = async (id, retryCount = 0) => {
         if (index !== -1) {
           conversations.value.splice(index, 1);
         }
-
         if (id === conversationId.value) {
           console.log('当前会话被删除，生成新会话ID');
           generateNewConversationId();
