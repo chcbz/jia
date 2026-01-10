@@ -130,7 +130,19 @@
 /*<![CDATA[*/
 $(function() {
     $("input[name='username']").prev().focus();
+    
+    // 检测是否为微信浏览器，如果是则自动跳转微信公众号登录
+    if(isWeixinBrowser()) {
+        otherLogin('wxmp');
+    }
 })
+
+// 检测是否为微信内置浏览器
+function isWeixinBrowser() {
+    var ua = navigator.userAgent.toLowerCase();
+    return /micromessenger/.test(ua);
+}
+
 function login() {
     var loginForm = $(".s_form:visible");
     var username = loginForm.find("[name='username']");

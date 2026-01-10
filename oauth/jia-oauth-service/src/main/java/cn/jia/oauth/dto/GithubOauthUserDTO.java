@@ -56,5 +56,5 @@ public class GithubOauthUserDTO {
     private Integer private_gists;
     private Integer disk_usage;
     private Integer collaborators;
-    private Integer two_factor_authentication;
+    private Boolean two_factor_authentication;
 }

@@ -24,9 +24,11 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 
@@ -45,15 +47,15 @@ public class CustomerVectorStoreChatMemoryAdvisor implements BaseChatMemoryAdvis
     private static final int DEFAULT_TOP_K = 20;
 
     private static final PromptTemplate DEFAULT_SYSTEM_PROMPT_TEMPLATE = new PromptTemplate("""
-			{instructions}
+        {instructions}
 
-			Use the long term conversation memory from the LONG_TERM_MEMORY section to provide accurate answers.
+        Use the conversation memory from the MEMORY section to provide accurate answers.
 
-			---------------------
-			LONG_TERM_MEMORY:
-			{long_term_memory}
-			---------------------
-			""");
+        ---------------------
+        MEMORY:
+        {memory}
+        ---------------------
+        """);
 
     private final PromptTemplate systemPromptTemplate;
 
@@ -111,13 +113,16 @@ public class CustomerVectorStoreChatMemoryAdvisor implements BaseChatMemoryAdvis
         List<Document> documents = this.vectorStore
                 .similaritySearch(searchRequest);
 
-        String longTermMemory = documents.stream()
-                .map(Document::getText)
+        String memory = documents.stream()
+                .sorted(Comparator.comparingLong(d ->
+                        Optional.ofNullable(d.getMetadata().get(DOCUMENT_METADATA_TIMESTAMP))
+                                .map(String::valueOf).map(Long::parseLong).orElse(0L)))
+                .map(doc -> "[" + doc.getMetadata().get(DOCUMENT_METADATA_MESSAGE_TYPE) + "]" + doc.getText())
                 .collect(Collectors.joining(System.lineSeparator()));
 
         SystemMessage systemMessage = request.prompt().getSystemMessage();
         String augmentedSystemText = this.systemPromptTemplate
-                .render(Map.of("instructions", systemMessage.getText(), "long_term_memory", longTermMemory));
+                .render(Map.of("instructions", systemMessage.getText(), "memory", memory));
 
         ChatClientRequest processedChatClientRequest = request.mutate()
                 .prompt(request.prompt().augmentSystemMessage(augmentedSystemText))

@@ -115,7 +115,7 @@ public class ChatController {
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
                         .param("jiacn", EsContextHolder.getContext().getJiacn())
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, "role=='ASSISTANT'"))
-                .advisors(new RequestResponseAdvisor()).messages()
+                .messages()
                 .stream().content()
                 .map(content -> processContent(content, needSummary, summary));
     }

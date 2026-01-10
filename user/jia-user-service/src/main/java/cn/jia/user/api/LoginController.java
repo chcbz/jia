@@ -95,15 +95,15 @@ public class LoginController {
     public ModelAndView login(HttpServletRequest request) {
         ModelAndView view = new ModelAndView();
         String loginType = this.getRequestValue(request, "loginType").orElse("");
-        String loginScope = this.getRequestValue(request, "loginScope").orElse("");
         switch (loginType) {
             case "wxmp" -> {
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
+                String scope = "snsapi_userinfo";
                 String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/wxmp", StandardCharsets.UTF_8);
                 String state = DataUtil.getRandom(true, 4);
                 String url = "https://open.weixin.qq.com/connect/oauth2/authorize?appid=" + wxMpAppId +
-                        "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + loginScope +
+                        "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + scope +
                         "&state=" + state + "#wechat_redirect";
                 view.setViewName("redirect:" + url);
                 return view;
@@ -132,9 +132,10 @@ public class LoginController {
             case "github" -> {
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
+                String scope = "user,user:email,repo";
                 String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/github", StandardCharsets.UTF_8);
                 String url = "https://github.com/login/oauth/authorize?client_id=" + githubAppId +
-                        "&redirect_uri=" + redirectUri + "&scope=" + loginScope;
+                        "&redirect_uri=" + redirectUri + "&scope=" + scope;
                 view.setViewName("redirect:" + url);
                 return view;
             }
