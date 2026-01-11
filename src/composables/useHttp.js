@@ -361,7 +361,7 @@ export function createApi (basePath) {
       useHttp().post(`${basePath}${uri}`, data, options),
 
     getById: (uri, id, options = {}) =>
-      useHttp().get(`${basePath}${uri}?id=${id}`, options),
+      useHttp().get(`${basePath}${uri}?id=${id}`, {}, options),
 
     get: (uri, params, options = {}) =>
       useHttp().get(`${basePath}${uri}`, params, options),
