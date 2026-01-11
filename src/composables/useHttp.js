@@ -4,6 +4,39 @@ import { useGlobalStore } from '../stores/global'
 import { useUtilStore } from '../stores/util'
 
 /**
+ * 创建超时信号，兼容不支持 AbortSignal.timeout() 的浏览器
+ * @param {number} milliseconds - 超时时间（毫秒）
+ * @returns {Object} 包含 signal 和 cleanup 函数的对象
+ */
+function createTimeoutSignal (milliseconds) {
+  // 如果浏览器原生支持 AbortSignal.timeout，直接使用
+  if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+    const signal = AbortSignal.timeout(milliseconds)
+    return {
+      signal,
+      cleanup: () => {} // 原生实现不需要清理
+    }
+  }
+
+  // 否则使用 AbortController 和 setTimeout 实现
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    controller.abort(new DOMException(`Request timed out after ${milliseconds}ms`, 'AbortError'))
+  }, milliseconds)
+
+  // 清理定时器，避免内存泄漏
+  const signal = controller.signal
+  const cleanup = () => {
+    clearTimeout(timeoutId)
+  }
+
+  // 当信号被中止时，也清除定时器（作为后备）
+  signal.addEventListener('abort', cleanup, { once: true })
+
+  return { signal, cleanup }
+}
+
+/**
  * 可复用的 HTTP 请求组合式函数
  * @param {Object} options - 配置选项
  * @param {string} options.url - 请求URL（相对路径）
@@ -62,6 +95,9 @@ export function useHttp (options = {}) {
     }
     error.value = null
 
+    // 声明 timeoutSignal 变量，使其在 finally 块中可访问
+    let timeoutSignal = null
+
     try {
       // 准备请求配置
       const headers = { ...customHeaders }
@@ -107,11 +143,12 @@ export function useHttp (options = {}) {
       }
 
       // 使用 fetch API 替代 axios，特别是为了支持 stream
+      timeoutSignal = createTimeoutSignal(180000) // 180秒超时
       const fetchConfig = {
         method: config.method,
         headers: config.headers,
         body: config.body,
-        signal: AbortSignal.timeout(180000) // 180秒超时
+        signal: timeoutSignal.signal
       }
 
       // 对于 GET 请求，不要包含 body
@@ -248,6 +285,11 @@ export function useHttp (options = {}) {
       throw err
 
     } finally {
+      // 清理超时定时器
+      if (timeoutSignal && timeoutSignal.cleanup) {
+        timeoutSignal.cleanup()
+      }
+      
       if (autoLoading) {
         loading.value = false
       }
