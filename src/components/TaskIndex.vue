@@ -70,6 +70,7 @@ import { useGlobalStore } from '../stores/global';
 import { useApiStore } from '../stores/api';
 import { useUtilStore } from '../stores/util';
 import dayjs from 'dayjs';
+import { taskApi } from '../composables/useHttp';
 
 export default {
   created() {
@@ -177,87 +178,71 @@ export default {
     onChange(val) {
       const valTimeStart = dayjs(val).startOf('day').unix();
       const valTimeEnd = dayjs(val).endOf('day').unix();
-      const apiStore = useApiStore();
       const globalStore = useGlobalStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = globalStore.getJiacn;
-      this.$http
-        .post(baseUrl + '/task/item/search', {
-          search: {
-            jiacn: jiacn,
-            status: 1,
-            timeStart: valTimeStart,
-            timeEnd: valTimeEnd
-          }
-        })
-        .then((res) => {
-          this.listPlan = res.data.data;
-          this.totalMoney = 0;
-        });
+      taskApi.search('/item/search', {
+        search: {
+          jiacn: jiacn,
+          status: 1,
+          timeStart: valTimeStart,
+          timeEnd: valTimeEnd
+        }
+      }).then((res) => {
+        this.listPlan = res.data;
+        this.totalMoney = 0;
+      });
     },
     fetchTasks() {
       const firstDay = this.currentDate.startOf('month');
       const lastDay = this.currentDate.endOf('month');
-      const apiStore = useApiStore();
       const globalStore = useGlobalStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = globalStore.getJiacn;
 
-      this.$http
-        .post(baseUrl + '/task/item/search', {
-          search: {
-            jiacn: jiacn,
-            timeStart: firstDay.unix(),
-            timeEnd: lastDay.unix()
-          }
-        })
-        .then((res) => {
-          this.highlightDates = res.data.data.map((item) =>
-            dayjs.unix(item.executeTime).format('YYYY-MM-DD')
-          );
-        });
+      taskApi.search('/item/search', {
+        search: {
+          jiacn: jiacn,
+          timeStart: firstDay.unix(),
+          timeEnd: lastDay.unix()
+        }
+      }).then((res) => {
+        this.highlightDates = res.data.map((item) =>
+          dayjs.unix(item.executeTime).format('YYYY-MM-DD')
+        );
+      });
     },
     doShowDetail(item) {
-      const apiStore = useApiStore();
       const utilStore = useUtilStore();
-      var baseUrl = apiStore.baseUrl;
-      this.$http
-        .get(baseUrl + '/task/get', {
-          params: {
-            id: item.planId
+      taskApi.getById('/get', item.planId).then((res) => {
+        this.detail = [];
+        let period = {
+          0: '长期',
+          1: '每年',
+          2: '每月',
+          3: '每周',
+          5: '每日',
+          11: '每小时',
+          12: '每分钟',
+          13: '每秒',
+          6: '指定日期'
+        };
+        let taskItem = {
+          id: item.id,
+          title: item.name,
+          desc: item.description,
+          meta: {
+            source: item.type > 1 ? '￥' + item.amount : '',
+            date:
+              item.type > 1
+                ? dayjs.unix(item.executeTime).format('YYYY-MM-DD')
+                : dayjs.unix(res.data.startTime).format('YYYY-MM-DD') +
+                  ' ~ ' +
+                  dayjs.unix(res.data.endTime).format('YYYY-MM-DD'),
+            other: item.crond == null ? period[item.period] : item.crond
           }
-        })
-        .then((res) => {
-          this.detail = [];
-          let period = {
-            0: '长期',
-            1: '每年',
-            2: '每月',
-            3: '每周',
-            5: '每日',
-            11: '每小时',
-            12: '每分钟',
-            13: '每秒',
-            6: '指定日期'
-          };
-          let taskItem = {
-            id: item.id,
-            title: item.name,
-            desc: item.description,
-            meta: {
-              source: item.type > 1 ? '￥' + item.amount : '',
-              date:
-                item.type > 1
-                  ? dayjs.unix(item.executeTime).format('YYYY-MM-DD')
-                  : dayjs.unix(res.data.data.startTime).format('YYYY-MM-DD') +
-                    ' ~ ' +
-                    dayjs.unix(res.data.data.endTime).format('YYYY-MM-DD'),
-              other: item.crond == null ? period[item.period] : item.crond
-            }
-          };
-          this.detail.push(taskItem);
-          this.taskDetailShow = true;
-        });
+        };
+        this.detail.push(taskItem);
+        this.taskDetailShow = true;
+      });
     },
     typeDict(key) {
       let value;

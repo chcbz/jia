@@ -28,72 +28,68 @@
 
 <script>
 import { useGlobalStore } from '../stores/global';
-import { useApiStore } from '../stores/api';
 import { Dialog } from '@varlet/ui';
+import { voteApi } from '../composables/useHttp';
 
 export default {
   created() {
     this.globalStore = useGlobalStore();
-    const apiStore = useApiStore();
     this.globalStore.setTitle(this.$t('vote.title'));
     this.globalStore.setShowBack(false);
     this.globalStore.setShowMore(false);
-    var baseUrl = apiStore.baseUrl;
     var jiacn = this.globalStore.getJiacn;
     const _this = this;
-    this.$http
-      .get(baseUrl + '/vote/get/random', {
-        params: {
-          jiacn: jiacn
+    
+    // 使用 voteApi 替换 $http
+    voteApi.get('/random', {
+        jiacn: jiacn
+    })
+    .then((res) => {
+      _this.question = res.data;
+      for (var i = 0; i < _this.question.items.length; i++) {
+        _this.totalNum += _this.question.items[i].num;
+        if (_this.question.items[i].tick === 1) {
+          _this.rightNum = _this.question.items[i].num;
         }
-      })
-      .then((res) => {
-        _this.question = res.data.data;
-        for (var i = 0; i < _this.question.items.length; i++) {
-          _this.totalNum += _this.question.items[i].num;
-          if (_this.question.items[i].tick === 1) {
-            _this.rightNum = _this.question.items[i].num;
-          }
-        }
-      });
+      }
+    });
   },
   methods: {
     onClickOpMenu(key, item) {
       console.log(item);
     },
     toTick(opt) {
-      const apiStore = useApiStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
       const _this = this;
-      this.$http
-        .post(baseUrl + '/vote/tick', {
-          jiacn: jiacn,
-          questionId: this.question.id,
-          opt: opt
-        })
-        .then((res) => {
-          if (res.data.data) {
-            Dialog({
-              title: _this.$t('app.notify'),
-              message: _this.$t('vote.right_alert', {
-                point: _this.question.point
-              }),
-              confirmButtonText: _this.$t('app.confirm'),
-              onConfirm: () => {
-                _this.$router.go(0);
-              }
-            });
-          } else {
-            Dialog({
-              title: _this.$t('app.alert'),
-              message: _this.$t('vote.wrong_alert', {
-                opt: _this.question.opt
-              }),
-              confirmButtonText: _this.$t('app.confirm')
-            });
-          }
-        });
+      
+      // 使用 voteApi 替换 $http
+      voteApi.post('/tick', {
+        jiacn: jiacn,
+        questionId: this.question.id,
+        opt: opt
+      })
+      .then((res) => {
+        if (res.data) {
+          Dialog({
+            title: _this.$t('app.notify'),
+            message: _this.$t('vote.right_alert', {
+              point: _this.question.point
+            }),
+            confirmButtonText: _this.$t('app.confirm'),
+            onConfirm: () => {
+              _this.$router.go(0);
+            }
+          });
+        } else {
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: _this.$t('vote.wrong_alert', {
+              opt: _this.question.opt
+            }),
+            confirmButtonText: _this.$t('app.confirm')
+          });
+        }
+      });
     }
   },
   data() {

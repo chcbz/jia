@@ -24,6 +24,7 @@ import { useGlobalStore } from '../stores/global';
 import { useApiStore } from '../stores/api';
 import { useUtilStore } from '../stores/util';
 import dayjs from 'dayjs';
+import { taskApi } from '../composables/useHttp';
 
 export default {
   created() {
@@ -37,34 +38,31 @@ export default {
     });
     globalStore.setTitle(this.$t('app.task_history'));
     globalStore.setShowBack(true);
-    var baseUrl = apiStore.baseUrl;
     var jiacn = globalStore.getJiacn;
-    this.$http
-      .post(baseUrl + '/task/search', {
-        search: {
-          jiacn: jiacn,
-          historyFlag: 1
-        }
-      })
-      .then((res) => {
-        this.list = [];
-        res.data.data.forEach((element) => {
-          let taskItem = {
-            id: element.id,
-            title: element.name,
-            desc: element.description,
-            meta: {
-              source: '￥' + element.amount,
-              date:
-                dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') +
-                ' - ' +
-                dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
-              other: element.crond
-            }
-          };
-          this.list.push(taskItem);
-        });
+    taskApi.search('/search', {
+      search: {
+        jiacn: jiacn,
+        historyFlag: 1
+      }
+    }).then((res) => {
+      this.list = [];
+      res.data.forEach((element) => {
+        let taskItem = {
+          id: element.id,
+          title: element.name,
+          desc: element.description,
+          meta: {
+            source: '￥' + element.amount,
+            date:
+              dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') +
+              ' - ' +
+              dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
+            other: element.crond
+          }
+        };
+        this.list.push(taskItem);
       });
+    });
   },
   methods: {
     doShowOpMenu(item) {
@@ -77,16 +75,8 @@ export default {
         Dialog.confirm({
           title: _this.$t('task.del_alert'),
           onConfirm: () => {
-            const apiStore = useApiStore();
-            var baseUrl = apiStore.baseUrl;
-            _this.$http
-              .get(baseUrl + '/task/delete', {
-                params: {
-                  id: _this.selectId
-                }
-              })
-              .then((res) => {
-                if (res.data.code === 'E0') {
+            taskApi.delete('/delete', _this.selectId).then((res) => {
+              if (res.code === 'E0') {
                   Dialog({
                     title: _this.$t('app.notify'),
                     message: res.data.msg,

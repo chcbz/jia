@@ -71,7 +71,7 @@ export function useHttp (options = {}) {
     headers: {}
   }
 
-  const execute = async (executeOptions = {}) => {
+  const execute = async (executeOptions = {}, retryCount = 0) => {
     const mergedOptions = { ...defaultOptions, ...options, ...executeOptions }
 
     const {
@@ -274,8 +274,25 @@ export function useHttp (options = {}) {
       if (err.name === 'AbortError') {
         error.value = '请求超时'
       } else if (err.status === 401 && needAuth) {
+        // 清理旧的 token
         apiStore.cleanToken()
         console.warn('Authentication expired, token cleaned')
+        
+        // 如果还没有重试过，尝试重新获取 token 并重试请求
+        if (retryCount === 0) {
+          console.log('Attempting to refresh token and retry request...')
+          try {
+            // 重新获取 token
+            await apiStore.token()
+            // 重试请求，增加重试计数
+            return await execute(executeOptions, retryCount + 1)
+          } catch (refreshError) {
+            console.error('Failed to refresh token:', refreshError)
+            // token 刷新失败，继续抛出原始错误
+          }
+        } else {
+          console.warn('Already retried once, not retrying again')
+        }
       }
 
       if (onError) {
@@ -300,7 +317,7 @@ export function useHttp (options = {}) {
   }
 
   // 快捷方法
-  const get = (url, options = {}) => execute({ ...options, url, method: 'GET' })
+  const get = (url, params, options = {}) => execute({ ...options, url, method: 'GET', params })
   const post = (url, data, options = {}) => execute({ ...options, url, method: 'POST', data })
   const put = (url, data, options = {}) => execute({ ...options, url, method: 'PUT', data })
   const patch = (url, data, options = {}) => execute({ ...options, url, method: 'PATCH', data })
@@ -343,8 +360,11 @@ export function createApi (basePath) {
     list: (uri, data, options = {}) =>
       useHttp().post(`${basePath}${uri}`, data, options),
 
-    get: (uri, id, options = {}) =>
+    getById: (uri, id, options = {}) =>
       useHttp().get(`${basePath}${uri}?id=${id}`, options),
+
+    get: (uri, params, options = {}) =>
+      useHttp().get(`${basePath}${uri}`, params, options),
 
     create: (uri, data, options = {}) =>
       useHttp().post(`${basePath}${uri}`, data, options),
@@ -359,7 +379,7 @@ export function createApi (basePath) {
       useHttp().delete(`${basePath}${uri}?id=${id}`, options),
 
     search: (uri, data, options = {}) =>
-      useHttp().post(`${basePath}${uri}/search`, data, options)
+      useHttp().post(`${basePath}${uri}`, data, options)
   }
 }
 
@@ -371,3 +391,6 @@ export const voteApi = createApi('/vote')
 export const tipApi = createApi('/tip')
 export const kefuApi = createApi('/kefu')
 export const mcpApi = createApi('/mcp')
+export const dwzApi = createApi('/dwz')
+export const giftApi = createApi('/gift')
+export const wxApi = createApi('/wx')

@@ -85,7 +85,7 @@ import { useUtilStore } from '../stores/util';
 import { useGlobalStore } from '../stores/global';
 import { useApiStore } from '../stores/api';
 import { useI18n } from 'vue-i18n';
-import { useHttp, mcpApi, kefuApi, phraseApi } from '../composables/useHttp';
+import { mcpApi, kefuApi, phraseApi } from '../composables/useHttp';
 
 // 配置marked
 marked.setOptions({
@@ -160,7 +160,7 @@ const loadRandomPhrase = async () => {
       onSuccess: (data) => {
         if (data && data.data) {
           randomPhrase.value = data.data.content
-          phraseApi.get('/read', data.data.id);
+          phraseApi.getById('/read', data.data.id);
         }
       },
       onError: (error) => {
@@ -213,7 +213,7 @@ const loadConversation = async (id) => {
     
     // 从服务端加载会话内容
     try {
-      const result = await mcpApi.get('/conversation/content', id, {
+      const result = await mcpApi.getById('/conversation/content', id, {
         autoLoading: false,
         onSuccess: (data) => {
           if (data && data.data) {

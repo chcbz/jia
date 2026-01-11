@@ -24,9 +24,11 @@
 
 <script>
 import dayjs from 'dayjs';
+import { Dialog } from '@varlet/ui';
 import { useGlobalStore } from '@/stores/global';
 import { useApiStore } from '@/stores/api';
 import { useUtilStore } from '@/stores/util';
+import { giftApi } from '@/composables/useHttp';
 
 export default {
   setup() {
@@ -39,36 +41,33 @@ export default {
     this.globalStore.setTitle(this.$t('gift.order_list'));
     this.globalStore.setShowBack(true);
     this.globalStore.setShowMore(false);
-    var baseUrl = this.apiStore.baseUrl;
     var jiacn = this.globalStore.getJiacn;
-    this.$http
-      .post(baseUrl + '/gift/usage/list/user/' + jiacn, {
-        pageNum: 1,
-        pageSize: 999
-      })
-      .then((res) => {
-        const _this = this;
-        this.list = [];
-        res.data.data.forEach((element) => {
-          let orderItem = {
-            id: element.id,
-            title: element.name,
-            desc: element.description,
-            status: element.status,
-            meta: {
-              source: element.point ? element.point + _this.$t('gift.point') : '￥' + element.price,
-              date: dayjs(this.utilStore.fromTimeStamp(element.time)).format('YYYY-MM-DD'),
-              other:
-                _this.$t('gift.quantity_title', {
-                  quantity: element.quantity
-                }) +
-                '　' +
-                _this.statusMap[element.status]
-            }
-          };
-          this.list.push(orderItem);
-        });
+    giftApi.search('/usage/list/user/' + jiacn, {
+      pageNum: 1,
+      pageSize: 999
+    }).then((res) => {
+      const _this = this;
+      this.list = [];
+      res.data.forEach((element) => {
+        let orderItem = {
+          id: element.id,
+          title: element.name,
+          desc: element.description,
+          status: element.status,
+          meta: {
+            source: element.point ? element.point + _this.$t('gift.point') : '￥' + element.price,
+            date: dayjs(this.utilStore.fromTimeStamp(element.time)).format('YYYY-MM-DD'),
+            other:
+              _this.$t('gift.quantity_title', {
+                quantity: element.quantity
+              }) +
+              '　' +
+              _this.statusMap[element.status]
+          }
+        };
+        this.list.push(orderItem);
       });
+    });
   },
   methods: {
     doShowOpMenu(item) {
@@ -87,9 +86,8 @@ export default {
           title: _this.$t('gift.del_alert'),
           message: '',
           onConfirm: () => {
-            var baseUrl = _this.apiStore.baseUrl;
-            _this.$http.post(baseUrl + '/gift/usage/delete/' + _this.selectId, {}).then((res) => {
-              if (res.data.code === 'E0') {
+            giftApi.delete('/usage/delete/' + _this.selectId).then((res) => {
+              if (res.code === 'E0') {
                 Dialog({
                   title: _this.$t('app.notify'),
                   message: res.data.msg,
@@ -112,9 +110,8 @@ export default {
           title: _this.$t('gift.cancel_alert'),
           message: '',
           onConfirm: () => {
-            var baseUrl = _this.apiStore.baseUrl;
-            _this.$http.post(baseUrl + '/gift/usage/cancel/' + _this.selectId, {}).then((res) => {
-              if (res.data.code === 'E0') {
+            giftApi.update('/usage/cancel/' + _this.selectId, {}).then((res) => {
+              if (res.code === 'E0') {
                 Dialog({
                   title: _this.$t('app.notify'),
                   message: res.data.msg,

@@ -121,8 +121,9 @@
 <script>
 import Clipboard from 'clipboard';
 import { useGlobalStore } from '../stores/global';
-import { useApiStore } from '../stores/api';
 import { useUtilStore } from '../stores/util';
+import { phraseApi, userApi, kefuApi, tipApi, wxApi } from '../composables/useHttp';
+import { Dialog } from '@varlet/ui';
 
 export default {
   created() {
@@ -132,48 +133,40 @@ export default {
     document.title = this.$t('phrase.title_sub');
     this.globalStore.setShowBack(false);
     this.globalStore.setShowMore(false);
-    const apiStore = useApiStore();
     this.utilStore = utilStore;
-    var baseUrl = apiStore.baseUrl;
     var jiacn = this.globalStore.getJiacn;
     const _this = this;
-    this.$http
-      .post(baseUrl + '/phrase/get/random', {
-        jiacn: jiacn
-      })
+    
+    // 使用 phraseApi 替换 $http
+    phraseApi.post('/get/random', {
+      jiacn: jiacn
+    })
+    .then((res) => {
+      _this.phrase = res.data;
+      // 阅读计数
+      phraseApi.getById('/read', res.data.id)
       .then((res) => {
-        _this.phrase = res.data.data;
-        this.$http
-          .get(baseUrl + '/phrase/read', {
-            params: {
-              id: res.data.data.id
-            }
-          })
-          .then((res) => {
-            _this.phrase.pv++;
-          });
-        if (_this.phrase.jiacn) {
-          this.$http
-            .get(baseUrl + '/user/get', {
-              params: {
-                type: 'cn',
-                key: _this.phrase.jiacn
-              }
-            })
-            .then((res) => {
-              if (res.data.code === 'E0') {
-                _this.author = res.data.data.nickname;
-              }
-            });
-        }
+        _this.phrase.pv++;
       });
+      if (_this.phrase.jiacn) {
+        // 获取作者信息
+        userApi.get('/get', {
+            type: 'cn',
+            key: _this.phrase.jiacn
+          }
+        )
+        .then((res) => {
+          if (res.data.code === 'E0') {
+            _this.author = res.data.data.nickname;
+          }
+        });
+      }
+    });
   },
   methods: {
     toTick(opt) {
       if (this.hasTick) return false;
       this.hasTick = true;
-      const apiStore = useApiStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
       const _this = this;
       if (!jiacn) {
@@ -187,23 +180,23 @@ export default {
         });
         return false;
       }
-      this.$http
-        .post(baseUrl + '/phrase/vote', {
-          jiacn: jiacn,
-          phraseId: this.phrase.id,
-          vote: opt
-        })
-        .then((res) => {
-          if (res.data.code === 'E0') {
-            if (opt === 1) {
-              _this.phrase.up++;
-              _this.$refs.upvote.$el.classList.add('voted');
-            } else {
-              _this.phrase.down++;
-              _this.$refs.downvote.$el.classList.add('voted');
-            }
+      // 使用 phraseApi 替换 $http
+      phraseApi.post('/vote', {
+        jiacn: jiacn,
+        phraseId: this.phrase.id,
+        vote: opt
+      })
+      .then((res) => {
+        if (res.data.code === 'E0') {
+          if (opt === 1) {
+            _this.phrase.up++;
+            _this.$refs.upvote.$el.classList.add('voted');
+          } else {
+            _this.phrase.down++;
+            _this.$refs.downvote.$el.classList.add('voted');
           }
-        });
+        }
+      });
     },
     copyContent() {
       var clipboard = new Clipboard('#copyBtn');
@@ -228,36 +221,32 @@ export default {
       return utilStore.fromTimeStamp(timestamp, 'YYYY-MM-DD');
     },
     addContent() {
-      const apiStore = useApiStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
       const _this = this;
-      this.$http
-        .post(baseUrl + '/phrase/create', {
-          jiacn: jiacn,
-          content: this.newContent.trim(),
-          tag: '毒鸡汤'
-        })
-        .then((res) => {
-          if (res.data.code === 'E0') {
-            _this.newContent = '';
-            _this.addDialogShow = false;
-            Dialog({
-              title: _this.$t('app.notify'),
-              message: _this.$t('phrase.add_success')
-            });
-          } else {
-            _this.addDialogShow = false;
-            Dialog({
-              title: _this.$t('app.alert'),
-              message: res.data.msg
-            });
-          }
-        });
+      // 使用 phraseApi 替换 $http
+      phraseApi.post('/create', {
+        jiacn: jiacn,
+        content: this.newContent.trim(),
+        tag: '毒鸡汤'
+      })
+      .then((res) => {
+        if (res.data.code === 'E0') {
+          _this.newContent = '';
+          _this.addDialogShow = false;
+          Dialog({
+            title: _this.$t('app.notify'),
+            message: _this.$t('phrase.add_success')
+          });
+        } else {
+          _this.addDialogShow = false;
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: res.data.msg
+          });
+        }
+      });
     },
     feedback() {
-      const apiStore = useApiStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
       const _this = this;
       if (!jiacn) {
@@ -279,7 +268,8 @@ export default {
       formData.append('email', _this.fbEmail);
       formData.append('title', _this.fbTitle);
       formData.append('content', _this.fbContent);
-      this.$http.post(baseUrl + '/kefu/message/create', formData).then((res) => {
+      // 使用 kefuApi 替换 $http
+      kefuApi.post('/message/create', formData).then((res) => {
         if (res.data.code === 'E0') {
           _this.fbTitle = '';
           _this.fbContent = '';
@@ -292,8 +282,6 @@ export default {
       });
     },
     payTips() {
-      const apiStore = useApiStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = this.globalStore.getJiacn;
       var appid = this.globalStore.user.appid;
       const _this = this;
@@ -309,41 +297,39 @@ export default {
         });
         return false;
       }
-      this.$http
-        .post(baseUrl + '/tip/create', {
-          type: 1,
-          entityId: this.phrase.id,
-          price: 100,
-          jiacn: jiacn,
-          status: 0
-        })
+      // 使用 tipApi 替换 $http
+      tipApi.post('/create', {
+        type: 1,
+        entityId: this.phrase.id,
+        price: 100,
+        jiacn: jiacn,
+        status: 0
+      })
         .then((res) => {
           if (res.data.code === 'E0') {
-            _this.$http
-              .get(baseUrl + '/wx/pay/createOrder', {
-                params: {
-                  outTradeNo: 'TIP' + (Array(7).join('0') + res.data.data.id).slice(-7),
-                  tradeType: 'JSAPI',
-                  appid: appid
-                }
-              })
-              .then((res) => {
-                if (res.data) {
-                  _this.weixinPay(res.data);
-                } else {
-                  Dialog({
-                    title: _this.$t('app.alert'),
-                    message: res.data.msg
-                  });
-                }
-              });
-          } else {
-            Dialog({
-              title: _this.$t('app.alert'),
-              message: res.data.msg
+            // 使用 wxApi 调用微信支付 API
+            wxApi.get('/pay/createOrder', {
+              outTradeNo: 'TIP' + (Array(7).join('0') + res.data.data.id).slice(-7),
+              tradeType: 'JSAPI',
+              appid: appid
+            })
+            .then((res) => {
+              if (res.data) {
+                _this.weixinPay(res.data);
+              } else {
+                Dialog({
+                  title: _this.$t('app.alert'),
+                  message: res.data.msg
+                });
+              }
             });
-          }
-        });
+        } else {
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: res.data.msg
+          });
+        }
+      });
     },
     weixinPay(data) {
       var vm = this;

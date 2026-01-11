@@ -55,6 +55,7 @@
 import { useGlobalStore } from '../stores/global';
 import { useApiStore } from '../stores/api';
 import { useUtilStore } from '../stores/util';
+import { taskApi } from '../composables/useHttp';
 import {
   Picker as VarPicker,
   Input as VarInput,
@@ -77,40 +78,36 @@ export default {
   },
   methods: {
     doAdd() {
-      const apiStore = useApiStore();
       const globalStore = useGlobalStore();
-      var baseUrl = apiStore.baseUrl;
       var jiacn = globalStore.getJiacn;
-      this.$http
-        .post(baseUrl + '/task/create', {
-          jiacn: jiacn,
-          type: this.type[0],
-          period: this.period[0],
-          crond: this.crond,
-          name: this.name,
-          description: this.description,
-          startTime: useUtilStore().toTimeStamp(new Date(this.start_time)),
-          endTime: useUtilStore().toTimeStamp(new Date(this.end_time)),
-          lunar: this.lunar,
-          amount: this.amount,
-          remind: this.remind
-        })
-        .then((res) => {
-          if (res.data.code === 'E0') {
-            Dialog({
-              title: this.$t('app.notify'),
-              message: res.data.msg,
-              confirmButtonText: this.$t('app.confirm')
-            });
-            this.$router.go(-1);
-          } else {
-            Dialog({
-              title: this.$t('app.alert'),
-              message: res.data.msg,
-              confirmButtonText: this.$t('app.confirm')
-            });
-          }
-        });
+      taskApi.create('/create', {
+        jiacn: jiacn,
+        type: this.type[0],
+        period: this.period[0],
+        crond: this.crond,
+        name: this.name,
+        description: this.description,
+        startTime: useUtilStore().toTimeStamp(new Date(this.start_time)),
+        endTime: useUtilStore().toTimeStamp(new Date(this.end_time)),
+        lunar: this.lunar,
+        amount: this.amount,
+        remind: this.remind
+      }).then((res) => {
+        if (res.code === 'E0') {
+          Dialog({
+            title: this.$t('app.notify'),
+            message: res.msg,
+            confirmButtonText: this.$t('app.confirm')
+          });
+          this.$router.go(-1);
+        } else {
+          Dialog({
+            title: this.$t('app.alert'),
+            message: res.msg,
+            confirmButtonText: this.$t('app.confirm')
+          });
+        }
+      });
     },
     changeType(val) {
       if (val[0] === '1') {
