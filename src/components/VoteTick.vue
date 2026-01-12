@@ -43,13 +43,14 @@ export default {
     // 使用 voteApi 替换 $http
     voteApi.get('/random', {
         jiacn: jiacn
-    })
-    .then((res) => {
-      _this.question = res.data;
-      for (var i = 0; i < _this.question.items.length; i++) {
-        _this.totalNum += _this.question.items[i].num;
-        if (_this.question.items[i].tick === 1) {
-          _this.rightNum = _this.question.items[i].num;
+    }, {
+      onSuccess: (data) => {
+        _this.question = data.data;
+        for (var i = 0; i < _this.question.items.length; i++) {
+          _this.totalNum += _this.question.items[i].num;
+          if (_this.question.items[i].tick === 1) {
+            _this.rightNum = _this.question.items[i].num;
+          }
         }
       }
     });
@@ -67,27 +68,28 @@ export default {
         jiacn: jiacn,
         questionId: this.question.id,
         opt: opt
-      })
-      .then((res) => {
-        if (res.data) {
-          Dialog({
-            title: _this.$t('app.notify'),
-            message: _this.$t('vote.right_alert', {
-              point: _this.question.point
-            }),
-            confirmButtonText: _this.$t('app.confirm'),
-            onConfirm: () => {
-              _this.$router.go(0);
-            }
-          });
-        } else {
-          Dialog({
-            title: _this.$t('app.alert'),
-            message: _this.$t('vote.wrong_alert', {
-              opt: _this.question.opt
-            }),
-            confirmButtonText: _this.$t('app.confirm')
-          });
+      }, {
+        onSuccess: (data) => {
+          if (data.data) {
+            Dialog({
+              title: _this.$t('app.notify'),
+              message: _this.$t('vote.right_alert', {
+                point: _this.question.point
+              }),
+              confirmButtonText: _this.$t('app.confirm'),
+              onConfirm: () => {
+                _this.$router.go(0);
+              }
+            });
+          } else {
+            Dialog({
+              title: _this.$t('app.alert'),
+              message: _this.$t('vote.wrong_alert', {
+                opt: _this.question.opt
+              }),
+              confirmButtonText: _this.$t('app.confirm')
+            });
+          }
         }
       });
     }

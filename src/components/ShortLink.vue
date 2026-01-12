@@ -139,22 +139,25 @@ export default {
         jiacn: jiacn,
         orig: _this.originalUrl,
         expireTime: expireTime
-      }).then((res) => {
-        if (res.code === 'E0') {
-          _this.shortUrl = apiStore.dwzDomain + res.data;
-        } else {
+      }, {
+        onSuccess: (data) => {
+          if (data.code === 'E0') {
+            _this.shortUrl = apiStore.dwzDomain + data.data;
+          } else {
+            Dialog({
+              title: _this.$t('app.alert'),
+              message: data.msg,
+              confirmButtonText: _this.$t('app.confirm')
+            });
+          }
+        },
+        onError: (errorMessage, error) => {
           Dialog({
             title: _this.$t('app.alert'),
-            message: res.msg,
+            message: _this.$t('dwz.network_error'),
             confirmButtonText: _this.$t('app.confirm')
           });
         }
-      }).catch((err) => {
-        Dialog({
-          title: _this.$t('app.alert'),
-          message: _this.$t('dwz.network_error'),
-          confirmButtonText: _this.$t('app.confirm')
-        });
       });
     },
     toLong() {
@@ -189,22 +192,25 @@ export default {
       if (uri.indexOf('/') !== -1) {
         uri = uri.substring(uri.lastIndexOf('/') + 1);
       }
-      dwzApi.get('/restore', { uri: uri }).then((res) => {
-        if (res.code === 'E0') {
-          _this.longUrl = res.data;
-        } else {
+      dwzApi.get('/restore', { uri: uri }, {
+        onSuccess: (data) => {
+          if (data.code === 'E0') {
+            _this.longUrl = data.data;
+          } else {
+            Dialog({
+              title: _this.$t('app.alert'),
+              message: data.msg,
+              confirmButtonText: _this.$t('app.confirm')
+            });
+          }
+        },
+        onError: (errorMessage, error) => {
           Dialog({
             title: _this.$t('app.alert'),
-            message: res.msg,
+            message: _this.$t('dwz.network_error'),
             confirmButtonText: _this.$t('app.confirm')
           });
         }
-      }).catch((err) => {
-        Dialog({
-          title: _this.$t('app.alert'),
-          message: _this.$t('dwz.network_error'),
-          confirmButtonText: _this.$t('app.confirm')
-        });
       });
     },
     copyContent() {

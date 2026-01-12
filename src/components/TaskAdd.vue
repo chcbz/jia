@@ -92,20 +92,22 @@ export default {
         lunar: this.lunar,
         amount: this.amount,
         remind: this.remind
-      }).then((res) => {
-        if (res.code === 'E0') {
-          Dialog({
-            title: this.$t('app.notify'),
-            message: res.msg,
-            confirmButtonText: this.$t('app.confirm')
-          });
-          this.$router.go(-1);
-        } else {
-          Dialog({
-            title: this.$t('app.alert'),
-            message: res.msg,
-            confirmButtonText: this.$t('app.confirm')
-          });
+      }, {
+        onSuccess: (data) => {
+          if (data.code === 'E0') {
+            Dialog({
+              title: this.$t('app.notify'),
+              message: data.msg,
+              confirmButtonText: this.$t('app.confirm')
+            });
+            this.$router.go(-1);
+          } else {
+            Dialog({
+              title: this.$t('app.alert'),
+              message: data.msg,
+              confirmButtonText: this.$t('app.confirm')
+            });
+          }
         }
       });
     },

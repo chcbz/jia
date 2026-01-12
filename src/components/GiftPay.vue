@@ -115,24 +115,28 @@ export default {
     this.globalStore.setShowBack(false);
     this.globalStore.setShowMore(true);
     var appid = this.globalStore.user.appid;
-    giftApi.getById('/get', this.$route.query.id).then((res) => {
-      let data = res.data;
-      this.giftId = data.id;
-      this.picUrl = data.picUrl;
-      this.name = data.name;
-      this.description = data.description;
-      this.point = data.point;
-      this.price = data.price / 100;
-      this.quantity = data.quantity;
-      this.virtual = data.virtual;
-      document.title = this.name + ' - ' + this.globalStore.title;
+    giftApi.getById('/get', this.$route.query.id, {
+      onSuccess: (data) => {
+        let giftData = data.data;
+        this.giftId = giftData.id;
+        this.picUrl = giftData.picUrl;
+        this.name = giftData.name;
+        this.description = giftData.description;
+        this.point = giftData.point;
+        this.price = giftData.price / 100;
+        this.quantity = giftData.quantity;
+        this.virtual = giftData.virtual;
+        document.title = this.name + ' - ' + this.globalStore.title;
+      }
     });
     // 生成二维码
     wxApi.get('/pay/scanPay/qrcodeLink', {
       productId: 'GIF' + (Array(7).join('0') + this.$route.query.id).slice(-7),
       appid: appid
-    }).then((res) => {
-      this.qrcodeUrl = res.data;
+    }, {
+      onSuccess: (data) => {
+        this.qrcodeUrl = data.data;
+      }
     });
   },
   methods: {
@@ -167,38 +171,42 @@ export default {
       phone: this.phone,
       address: this.address,
       status: 1
-    }).then((res) => {
-      if (res.code === 'E0') {
-        if (_this.payMoney === 0) {
-          Dialog({
-            title: _this.$t('app.notify'),
-            message: _this.$t('gift.pay_notify'),
-            onConfirm: () => {
-              _this.$router.go(0);
-            }
-          });
+    }, {
+      onSuccess: (data) => {
+        if (data.code === 'E0') {
+          if (_this.payMoney === 0) {
+            Dialog({
+              title: _this.$t('app.notify'),
+              message: _this.$t('gift.pay_notify'),
+              onConfirm: () => {
+                _this.$router.go(0);
+              }
+            });
+          } else {
+            // 使用 wxApi 调用微信支付 API
+            wxApi.get('/pay/createOrder', {
+              outTradeNo: 'GIF' + (Array(7).join('0') + data.data.data.id).slice(-7),
+              tradeType: 'JSAPI',
+              appid: appid
+            }, {
+              onSuccess: (wxData) => {
+                if (wxData.data) {
+                  _this.weixinPay(wxData.data);
+                } else {
+                  Dialog({
+                    title: _this.$t('app.alert'),
+                    message: wxData.msg
+                  });
+                }
+              }
+            });
+          }
         } else {
-          // 使用 wxApi 调用微信支付 API
-          wxApi.get('/pay/createOrder', {
-            outTradeNo: 'GIF' + (Array(7).join('0') + res.data.id).slice(-7),
-            tradeType: 'JSAPI',
-            appid: appid
-          }).then((res) => {
-            if (res.data) {
-              _this.weixinPay(res.data);
-            } else {
-              Dialog({
-                title: _this.$t('app.alert'),
-                message: res.msg
-              });
-            }
+          Dialog({
+            title: _this.$t('app.alert'),
+            message: data.msg
           });
         }
-      } else {
-        Dialog({
-          title: _this.$t('app.alert'),
-          message: res.msg
-        });
       }
     });
     },

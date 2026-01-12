@@ -187,9 +187,11 @@ export default {
           timeStart: valTimeStart,
           timeEnd: valTimeEnd
         }
-      }).then((res) => {
-        this.listPlan = res.data;
-        this.totalMoney = 0;
+      }, {
+        onSuccess: (data) => {
+          this.listPlan = data.data;
+          this.totalMoney = 0;
+        }
       });
     },
     fetchTasks() {
@@ -204,44 +206,48 @@ export default {
           timeStart: firstDay.unix(),
           timeEnd: lastDay.unix()
         }
-      }).then((res) => {
-        this.highlightDates = res.data.map((item) =>
-          dayjs.unix(item.executeTime).format('YYYY-MM-DD')
-        );
+      }, {
+        onSuccess: (data) => {
+          this.highlightDates = data.data.map((item) =>
+            dayjs.unix(item.executeTime).format('YYYY-MM-DD')
+          );
+        }
       });
     },
     doShowDetail(item) {
       const utilStore = useUtilStore();
-      taskApi.getById('/get', item.planId).then((res) => {
-        this.detail = [];
-        let period = {
-          0: '长期',
-          1: '每年',
-          2: '每月',
-          3: '每周',
-          5: '每日',
-          11: '每小时',
-          12: '每分钟',
-          13: '每秒',
-          6: '指定日期'
-        };
-        let taskItem = {
-          id: item.id,
-          title: item.name,
-          desc: item.description,
-          meta: {
-            source: item.type > 1 ? '￥' + item.amount : '',
-            date:
-              item.type > 1
-                ? dayjs.unix(item.executeTime).format('YYYY-MM-DD')
-                : dayjs.unix(res.data.startTime).format('YYYY-MM-DD') +
-                  ' ~ ' +
-                  dayjs.unix(res.data.endTime).format('YYYY-MM-DD'),
-            other: item.crond == null ? period[item.period] : item.crond
-          }
-        };
-        this.detail.push(taskItem);
-        this.taskDetailShow = true;
+      taskApi.getById('/get', item.planId, {
+        onSuccess: (data) => {
+          this.detail = [];
+          let period = {
+            0: '长期',
+            1: '每年',
+            2: '每月',
+            3: '每周',
+            5: '每日',
+            11: '每小时',
+            12: '每分钟',
+            13: '每秒',
+            6: '指定日期'
+          };
+          let taskItem = {
+            id: item.id,
+            title: item.name,
+            desc: item.description,
+            meta: {
+              source: item.type > 1 ? '￥' + item.amount : '',
+              date:
+                item.type > 1
+                  ? dayjs.unix(item.executeTime).format('YYYY-MM-DD')
+                  : dayjs.unix(data.data.startTime).format('YYYY-MM-DD') +
+                    ' ~ ' +
+                    dayjs.unix(data.data.endTime).format('YYYY-MM-DD'),
+              other: item.crond == null ? period[item.period] : item.crond
+            }
+          };
+          this.detail.push(taskItem);
+          this.taskDetailShow = true;
+        }
       });
     },
     typeDict(key) {

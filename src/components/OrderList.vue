@@ -45,28 +45,30 @@ export default {
     giftApi.search('/usage/list/user/' + jiacn, {
       pageNum: 1,
       pageSize: 999
-    }).then((res) => {
-      const _this = this;
-      this.list = [];
-      res.data.forEach((element) => {
-        let orderItem = {
-          id: element.id,
-          title: element.name,
-          desc: element.description,
-          status: element.status,
-          meta: {
-            source: element.point ? element.point + _this.$t('gift.point') : '￥' + element.price,
-            date: dayjs(this.utilStore.fromTimeStamp(element.time)).format('YYYY-MM-DD'),
-            other:
-              _this.$t('gift.quantity_title', {
-                quantity: element.quantity
-              }) +
-              '　' +
-              _this.statusMap[element.status]
-          }
-        };
-        this.list.push(orderItem);
-      });
+    }, {
+      onSuccess: (data) => {
+        const _this = this;
+        this.list = [];
+        data.data.forEach((element) => {
+          let orderItem = {
+            id: element.id,
+            title: element.name,
+            desc: element.description,
+            status: element.status,
+            meta: {
+              source: element.point ? element.point + _this.$t('gift.point') : '￥' + element.price,
+              date: dayjs(this.utilStore.fromTimeStamp(element.time)).format('YYYY-MM-DD'),
+              other:
+                _this.$t('gift.quantity_title', {
+                  quantity: element.quantity
+                }) +
+                '　' +
+                _this.statusMap[element.status]
+            }
+          };
+          this.list.push(orderItem);
+        });
+      }
     });
   },
   methods: {
@@ -86,20 +88,22 @@ export default {
           title: _this.$t('gift.del_alert'),
           message: '',
           onConfirm: () => {
-            giftApi.delete('/usage/delete/' + _this.selectId).then((res) => {
-              if (res.code === 'E0') {
-                Dialog({
-                  title: _this.$t('app.notify'),
-                  message: res.data.msg,
-                  onConfirm: () => {
-                    _this.$router.go(0);
-                  }
-                });
-              } else {
-                Dialog({
-                  title: _this.$t('app.alert'),
-                  message: res.data.msg
-                });
+            giftApi.delete('/usage/delete/' + _this.selectId, {
+              onSuccess: (data) => {
+                if (data.code === 'E0') {
+                  Dialog({
+                    title: _this.$t('app.notify'),
+                    message: data.data.msg,
+                    onConfirm: () => {
+                      _this.$router.go(0);
+                    }
+                  });
+                } else {
+                  Dialog({
+                    title: _this.$t('app.alert'),
+                    message: data.data.msg
+                  });
+                }
               }
             });
           }
@@ -110,20 +114,22 @@ export default {
           title: _this.$t('gift.cancel_alert'),
           message: '',
           onConfirm: () => {
-            giftApi.update('/usage/cancel/' + _this.selectId, {}).then((res) => {
-              if (res.code === 'E0') {
-                Dialog({
-                  title: _this.$t('app.notify'),
-                  message: res.data.msg,
-                  onConfirm: () => {
-                    _this.$router.go(0);
-                  }
-                });
-              } else {
-                Dialog({
-                  title: _this.$t('app.alert'),
-                  message: res.data.msg
-                });
+            giftApi.update('/usage/cancel/' + _this.selectId, {}, {
+              onSuccess: (data) => {
+                if (data.code === 'E0') {
+                  Dialog({
+                    title: _this.$t('app.notify'),
+                    message: data.data.msg,
+                    onConfirm: () => {
+                      _this.$router.go(0);
+                    }
+                  });
+                } else {
+                  Dialog({
+                    title: _this.$t('app.alert'),
+                    message: data.data.msg
+                  });
+                }
               }
             });
           }

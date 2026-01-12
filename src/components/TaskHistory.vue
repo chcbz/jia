@@ -25,6 +25,7 @@ import { useApiStore } from '../stores/api';
 import { useUtilStore } from '../stores/util';
 import dayjs from 'dayjs';
 import { taskApi } from '../composables/useHttp';
+import { Dialog } from '@varlet/ui';
 
 export default {
   created() {
@@ -44,24 +45,26 @@ export default {
         jiacn: jiacn,
         historyFlag: 1
       }
-    }).then((res) => {
-      this.list = [];
-      res.data.forEach((element) => {
-        let taskItem = {
-          id: element.id,
-          title: element.name,
-          desc: element.description,
-          meta: {
-            source: '￥' + element.amount,
-            date:
-              dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') +
-              ' - ' +
-              dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
-            other: element.crond
-          }
-        };
-        this.list.push(taskItem);
-      });
+    }, {
+      onSuccess: (data) => {
+        this.list = [];
+        data.data.forEach((element) => {
+          let taskItem = {
+            id: element.id,
+            title: element.name,
+            desc: element.description,
+            meta: {
+              source: '￥' + element.amount,
+              date:
+                dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') +
+                ' - ' +
+                dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
+              other: element.crond
+            }
+          };
+          this.list.push(taskItem);
+        });
+      }
     });
   },
   methods: {
@@ -75,11 +78,12 @@ export default {
         Dialog.confirm({
           title: _this.$t('task.del_alert'),
           onConfirm: () => {
-            taskApi.delete('/delete', _this.selectId).then((res) => {
-              if (res.code === 'E0') {
+            taskApi.delete('/delete', _this.selectId, {
+              onSuccess: (data) => {
+                if (data.code === 'E0') {
                   Dialog({
                     title: _this.$t('app.notify'),
-                    message: res.data.msg,
+                    message: data.data.msg,
                     confirmButtonText: _this.$t('app.confirm'),
                     onConfirm: () => {
                       _this.$router.go(0);
@@ -88,11 +92,12 @@ export default {
                 } else {
                   Dialog({
                     title: _this.$t('app.alert'),
-                    message: res.data.msg,
+                    message: data.data.msg,
                     confirmButtonText: _this.$t('app.confirm')
                   });
                 }
-              });
+              }
+            });
           }
         });
       }

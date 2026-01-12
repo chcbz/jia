@@ -138,28 +138,30 @@ export default {
     const _this = this;
     
     // 使用 phraseApi 替换 $http
-    phraseApi.post('/get/random', {
+    phraseApi.list('/get/random', {
       jiacn: jiacn
-    })
-    .then((res) => {
-      _this.phrase = res.data;
-      // 阅读计数
-      phraseApi.getById('/read', res.data.id)
-      .then((res) => {
-        _this.phrase.pv++;
-      });
-      if (_this.phrase.jiacn) {
-        // 获取作者信息
-        userApi.get('/get', {
-            type: 'cn',
-            key: _this.phrase.jiacn
-          }
-        )
-        .then((res) => {
-          if (res.data.code === 'E0') {
-            _this.author = res.data.data.nickname;
+    }, {
+      onSuccess: (data) => {
+        _this.phrase = data.data;
+        // 阅读计数
+        phraseApi.getById('/read', data.data.id, {
+          onSuccess: () => {
+            _this.phrase.pv++;
           }
         });
+        if (_this.phrase.jiacn) {
+          // 获取作者信息
+          userApi.get('/get', {
+            type: 'cn',
+            key: _this.phrase.jiacn
+          }, {
+            onSuccess: (userData) => {
+              if (userData.code === 'E0') {
+                _this.author = userData.data.nickname;
+              }
+            }
+          });
+        }
       }
     });
   },
@@ -181,19 +183,20 @@ export default {
         return false;
       }
       // 使用 phraseApi 替换 $http
-      phraseApi.post('/vote', {
+      phraseApi.list('/vote', {
         jiacn: jiacn,
         phraseId: this.phrase.id,
         vote: opt
-      })
-      .then((res) => {
-        if (res.data.code === 'E0') {
-          if (opt === 1) {
-            _this.phrase.up++;
-            _this.$refs.upvote.$el.classList.add('voted');
-          } else {
-            _this.phrase.down++;
-            _this.$refs.downvote.$el.classList.add('voted');
+      }, {
+        onSuccess: (data) => {
+          if (data.code === 'E0') {
+            if (opt === 1) {
+              _this.phrase.up++;
+              _this.$refs.upvote.$el.classList.add('voted');
+            } else {
+              _this.phrase.down++;
+              _this.$refs.downvote.$el.classList.add('voted');
+            }
           }
         }
       });
@@ -224,25 +227,26 @@ export default {
       var jiacn = this.globalStore.getJiacn;
       const _this = this;
       // 使用 phraseApi 替换 $http
-      phraseApi.post('/create', {
+      phraseApi.create('/create', {
         jiacn: jiacn,
         content: this.newContent.trim(),
         tag: '毒鸡汤'
-      })
-      .then((res) => {
-        if (res.data.code === 'E0') {
-          _this.newContent = '';
-          _this.addDialogShow = false;
-          Dialog({
-            title: _this.$t('app.notify'),
-            message: _this.$t('phrase.add_success')
-          });
-        } else {
-          _this.addDialogShow = false;
-          Dialog({
-            title: _this.$t('app.alert'),
-            message: res.data.msg
-          });
+      }, {
+        onSuccess: (data) => {
+          if (data.code === 'E0') {
+            _this.newContent = '';
+            _this.addDialogShow = false;
+            Dialog({
+              title: _this.$t('app.notify'),
+              message: _this.$t('phrase.add_success')
+            });
+          } else {
+            _this.addDialogShow = false;
+            Dialog({
+              title: _this.$t('app.alert'),
+              message: data.msg
+            });
+          }
         }
       });
     },
@@ -269,15 +273,17 @@ export default {
       formData.append('title', _this.fbTitle);
       formData.append('content', _this.fbContent);
       // 使用 kefuApi 替换 $http
-      kefuApi.post('/message/create', formData).then((res) => {
-        if (res.data.code === 'E0') {
-          _this.fbTitle = '';
-          _this.fbContent = '';
-          _this.fbDialogShow = false;
-          Dialog({
-            title: _this.$t('app.notify'),
-            message: _this.$t('phrase.feedback_success')
-          });
+      kefuApi.post('/message/create', formData, {
+        onSuccess: (data) => {
+          if (data.code === 'E0') {
+            _this.fbTitle = '';
+            _this.fbContent = '';
+            _this.fbDialogShow = false;
+            Dialog({
+              title: _this.$t('app.notify'),
+              message: _this.$t('phrase.feedback_success')
+            });
+          }
         }
       });
     },
@@ -304,30 +310,32 @@ export default {
         price: 100,
         jiacn: jiacn,
         status: 0
-      })
-        .then((res) => {
-          if (res.data.code === 'E0') {
+      }, {
+        onSuccess: (data) => {
+          if (data.code === 'E0') {
             // 使用 wxApi 调用微信支付 API
             wxApi.get('/pay/createOrder', {
-              outTradeNo: 'TIP' + (Array(7).join('0') + res.data.data.id).slice(-7),
+              outTradeNo: 'TIP' + (Array(7).join('0') + data.data.id).slice(-7),
               tradeType: 'JSAPI',
               appid: appid
-            })
-            .then((res) => {
-              if (res.data) {
-                _this.weixinPay(res.data);
-              } else {
-                Dialog({
-                  title: _this.$t('app.alert'),
-                  message: res.data.msg
-                });
+            }, {
+              onSuccess: (wxData) => {
+                if (wxData.data) {
+                  _this.weixinPay(wxData.data);
+                } else {
+                  Dialog({
+                    title: _this.$t('app.alert'),
+                    message: wxData.msg
+                  });
+                }
               }
             });
-        } else {
-          Dialog({
-            title: _this.$t('app.alert'),
-            message: res.data.msg
-          });
+          } else {
+            Dialog({
+              title: _this.$t('app.alert'),
+              message: data.msg
+            });
+          }
         }
       });
     },
