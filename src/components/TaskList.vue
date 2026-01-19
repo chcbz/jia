@@ -63,7 +63,6 @@ import { useApiStore } from '../stores/api'
 import { useUtilStore } from '../stores/util'
 import dayjs from 'dayjs'
 import { taskApi } from '../composables/useHttp'
-import { Dialog, List as VarList, Cell as VarCell, Icon as VarIcon, Empty as VarEmpty } from '@varlet/ui'
 
 // 路由器
 const router = useRouter()
