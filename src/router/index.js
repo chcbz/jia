@@ -41,7 +41,7 @@ export default [
     component: () => import('@/components/TaskIndex'),
     meta: {
       title: 'app.title',
-      showInMenu: false,
+      showInMenu: true,
       menuOrder: 2
     }
   },

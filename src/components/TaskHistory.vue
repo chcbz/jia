@@ -1,152 +1,318 @@
 <template>
-  <div>
-    <var-action-sheet :actions="opMenu" v-model="showOpMenu" @select="onClickOpMenu">
-    </var-action-sheet>
-
-    <div class="task-list">
-      <div class="task-item" v-for="item in list" :key="item.id" @click="doShowOpMenu(item)">
-        <div class="task-header">
-          <h3>{{ item.title }}</h3>
-          <span class="task-amount">{{ item.meta.source }}</span>
-        </div>
-        <div class="task-desc">{{ item.desc }}</div>
-        <div class="task-meta">
-          <span>{{ item.meta.date }}</span>
-          <span>{{ item.meta.other }}</span>
-        </div>
+  <div class="task-history-container">
+    <var-action-sheet 
+      :actions="opMenu" 
+      v-model="showOpMenu" 
+      @select="onClickOpMenu"
+    />
+    
+    <div class="tasks-section" v-if="list.length > 0">
+      <div class="tasks-header">
+        <h3>{{ t('app.task_history') }}</h3>
+        <span class="tasks-count">{{ list.length }} 个历史任务</span>
       </div>
+      
+      <div class="tasks-list-container">
+        <var-list>
+          <var-cell
+            v-for="item in list"
+            :key="item.id"
+            ripple
+            @click="doShowOpMenu(item)"
+          >
+            <template #title>
+              <div class="task-title">
+                <span class="task-type-badge" :class="getTaskTypeClass(item.type)">
+                  {{ typeDict(item.type) }}
+                </span>
+                <span class="task-name">{{ item.name }}</span>
+              </div>
+            </template>
+            <template #description>
+              <div class="task-description">
+                <span class="task-desc-text">{{ item.description || item.name }}</span>
+                <span class="task-time">
+                  {{ formatTaskTime(item) }}
+                </span>
+              </div>
+            </template>
+            <template #extra>
+              <div class="task-extra">
+                <span v-if="item.amount > 0" class="task-amount">
+                  ￥{{ formatAmount(item.amount) }}
+                </span>
+                <var-icon name="chevron-right" size="16" />
+              </div>
+            </template>
+          </var-cell>
+        </var-list>
+      </div>
+    </div>
+
+    <div v-else class="empty-tasks">
+      <var-empty description="暂无历史任务" />
     </div>
   </div>
 </template>
 
-<script>
-import { useGlobalStore } from '../stores/global';
-import { useApiStore } from '../stores/api';
-import { useUtilStore } from '../stores/util';
-import dayjs from 'dayjs';
-import { taskApi } from '../composables/useHttp';
-import { Dialog } from '@varlet/ui';
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { useGlobalStore } from '../stores/global'
+import { useApiStore } from '../stores/api'
+import { useUtilStore } from '../stores/util'
+import dayjs from 'dayjs'
+import { taskApi } from '../composables/useHttp'
 
-export default {
-  created() {
-    const globalStore = useGlobalStore();
-    const apiStore = useApiStore();
-    const utilStore = useUtilStore();
+// 路由器
+const router = useRouter()
+const { t } = useI18n()
 
-    globalStore.setMenu({
-      menus: [],
-      event: this
-    });
-    globalStore.setTitle(this.$t('app.task_history'));
-    globalStore.setShowBack(true);
-    var jiacn = globalStore.getJiacn;
-    taskApi.search('/search', {
-      search: {
-        jiacn: jiacn,
-        historyFlag: 1
-      }
-    }, {
-      onSuccess: (data) => {
-        this.list = [];
-        data.data.forEach((element) => {
-          let taskItem = {
-            id: element.id,
-            title: element.name,
-            desc: element.description,
-            meta: {
-              source: '￥' + element.amount,
-              date:
-                dayjs(utilStore.fromTimeStamp(element.startTime)).format('YYYY-MM-DD') +
-                ' - ' +
-                dayjs(utilStore.fromTimeStamp(element.endTime)).format('YYYY-MM-DD'),
-              other: element.crond
-            }
-          };
-          this.list.push(taskItem);
-        });
-      }
-    });
-  },
-  methods: {
-    doShowOpMenu(item) {
-      this.selectId = item.id;
-      this.showOpMenu = true;
-    },
-    onClickOpMenu(key) {
-      if (key === 'del') {
-        const _this = this;
-        Dialog.confirm({
-          title: _this.$t('task.del_alert'),
-          onConfirm: () => {
-            taskApi.delete('/delete', _this.selectId, {
-              onSuccess: (data) => {
-                if (data.code === 'E0') {
-                  Dialog({
-                    title: _this.$t('app.notify'),
-                    message: data.data.msg,
-                    confirmButtonText: _this.$t('app.confirm'),
-                    onConfirm: () => {
-                      _this.$router.go(0);
-                    }
-                  });
-                } else {
-                  Dialog({
-                    title: _this.$t('app.alert'),
-                    message: data.data.msg,
-                    confirmButtonText: _this.$t('app.confirm')
-                  });
-                }
-              }
-            });
-          }
-        });
-      }
-    }
-  },
-  data() {
-    return {
-      list: [],
-      opMenu: [{ name: 'del', text: this.$t('app.del') }],
-      showOpMenu: false,
-      selectId: 0
-    };
+// Pinia stores
+const globalStore = useGlobalStore()
+const apiStore = useApiStore()
+const utilStore = useUtilStore()
+
+// 响应式数据
+const list = ref([])
+const opMenu = ref([{ name: 'del', text: t('app.del') }])
+const showOpMenu = ref(false)
+const selectId = ref(0)
+const currentTask = ref(null)
+
+// 常量
+const periodMap = {
+  0: '长期',
+  1: '每年',
+  2: '每月',
+  3: '每周',
+  5: '每日',
+  11: '每小时',
+  12: '每分钟',
+  13: '每秒',
+  6: '指定日期'
+}
+
+// 方法
+const doShowOpMenu = (item) => {
+  selectId.value = item.id
+  currentTask.value = item
+  showOpMenu.value = true
+}
+
+const typeDict = (type) => {
+  return type > 1 ? t('task.type_pay') : t('task.type_notify')
+}
+
+const getTaskTypeClass = (type) => {
+  return type > 1 ? 'type-pay' : 'type-notify'
+}
+
+const formatTaskTime = (task) => {
+  try {
+    const start = dayjs(utilStore.fromTimeStamp(task.startTime))
+    const end = dayjs(utilStore.fromTimeStamp(task.endTime))
+    
+    // 通知任务显示时间段
+    return `${start.format('YYYY-MM-DD HH:mm')} ~ ${end.format('YYYY-MM-DD HH:mm')}`
+  } catch (error) {
+    return '时间未知'
   }
-};
+}
+
+const formatAmount = (amount) => {
+  return Number(amount).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })
+}
+
+const onClickOpMenu = (key) => {
+  if (key === 'del') {
+    Dialog.confirm({
+      title: t('task.del_alert'),
+      message: `确定要删除历史任务 "${currentTask.value?.name}" 吗？`,
+      onConfirm: () => {
+        taskApi.delete('/delete', selectId.value, {
+          onSuccess: (data) => {
+            if (data.code === 'E0') {
+              Dialog({
+                title: t('app.notify'),
+                message: data.data.msg,
+                confirmButtonText: t('app.confirm'),
+                onConfirm: () => {
+                  // 重新加载数据
+                  fetchTasks()
+                }
+              })
+            } else {
+              Dialog({
+                title: t('app.alert'),
+                message: data.data.msg,
+                confirmButtonText: t('app.confirm')
+              })
+            }
+          },
+          onError: (error) => {
+            Dialog({
+              title: t('app.error'),
+              message: t('app.network_error'),
+              confirmButtonText: t('app.confirm')
+            })
+            console.error('删除历史任务失败:', error)
+          }
+        })
+      }
+    })
+  }
+  showOpMenu.value = false
+}
+
+const fetchTasks = () => {
+  const jiacn = globalStore.getJiacn
+  
+  taskApi.search('/search', {
+    search: {
+      jiacn: jiacn,
+      historyFlag: 1
+    }
+  }, {
+    onSuccess: (data) => {
+      list.value = Array.isArray(data.data) ? data.data : []
+    },
+    onError: (error) => {
+      console.error('获取历史任务失败:', error)
+      list.value = []
+    }
+  })
+}
+
+// 生命周期
+onMounted(() => {
+  globalStore.setTitle(t('app.task_history'))
+  globalStore.setShowBack(true)
+  
+  fetchTasks()
+})
 </script>
 
 <style scoped>
-.task-list {
-  padding: 10px;
+.task-history-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  padding: 16px;
 }
-.task-item {
-  margin-bottom: 15px;
-  padding: 15px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-.task-header {
+
+.tasks-section {
+  background: white;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
   display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
 }
-.task-header h3 {
-  margin: 0;
+
+.tasks-header {
+  padding: 20px 20px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.tasks-header h3 {
+  margin: 0 0 8px 0;
   font-size: 16px;
+  font-weight: 600;
+  color: #333;
 }
-.task-amount {
+
+.tasks-count {
+  font-size: 12px;
+  color: #999;
+}
+
+.tasks-list-container {
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 180px);
+}
+
+.task-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-type-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.task-type-badge.type-pay {
+  background: #fff5f5;
   color: #ff6b6b;
-  font-weight: bold;
 }
-.task-desc {
+
+.task-type-badge.type-notify {
+  background: #f0f9ff;
+  color: #4dabf7;
+}
+
+.task-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.task-description {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.task-desc-text {
+  font-size: 13px;
   color: #666;
-  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.task-time {
+  font-size: 12px;
+  color: #999;
+}
+
+.task-extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-amount {
+  font-weight: 600;
+  color: #ff6b6b;
   font-size: 14px;
 }
-.task-meta {
-  display: flex;
-  justify-content: space-between;
-  color: #999;
-  font-size: 12px;
+
+.empty-tasks {
+  margin: 32px 16px;
+  text-align: center;
+}
+
+/* 响应式调整 */
+@media (max-width: 375px) {
+  .task-history-container {
+    padding: 12px;
+  }
+  
+  .tasks-header {
+    padding: 16px 16px 10px;
+  }
+  
+  .tasks-header h3 {
+    font-size: 15px;
+  }
 }
 </style>

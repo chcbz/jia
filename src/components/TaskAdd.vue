@@ -1,216 +1,416 @@
 <template>
-  <div>
-    <div>
-      <var-picker
-        :title="$t('task.type')"
-        :columns="typeList"
-        v-model="type"
-        @change="changeType"
-      />
-      <var-picker
-        :title="$t('task.period')"
-        :columns="periodList"
-        v-model="period"
-        @change="changePeriod"
-      />
-      <var-input :label="$t('task.name')" v-model="name" />
-      <var-textarea :label="$t('task.description')" v-model="description" :rows="3" />
-      <var-date-picker
-        v-model="start_time"
-        :max-date="new Date(2100, 0, 1)"
-        format="YYYY-MM-DD HH:mm"
-        :minute-list="['00', '15', '30', '45']"
-        :title="$t('task.start_time')"
-        v-show="startTimeShow"
-      />
-      <var-date-picker
-        v-model="end_time"
-        :max-date="new Date(2100, 0, 1)"
-        format="YYYY-MM-DD HH:mm"
-        :minute-list="['00', '15', '30', '45']"
-        :title="$t('task.end_time')"
-        v-show="endTimeShow"
-      />
-      <var-switch :label="$t('task.lunar')" v-model="lunar" :active-value="1" :inactive-value="0" />
-      <var-input
-        :label="$t('task.amount')"
-        v-model="amount"
-        type="tel"
-        :maxlength="6"
-        v-show="amountShow"
-      />
-      <var-switch
-        :label="$t('task.remind')"
-        v-model="remind"
-        :active-value="1"
-        :inactive-value="0"
-      />
-      <br />
-      <var-button type="primary" @click="doAdd">{{ $t('app.save') }}</var-button>
+  <div class="task-add-container">
+    <div class="form-card">
+      <div class="form-section">
+        <h3 class="section-title">{{ t('task.basic_info') }}</h3>
+        <var-picker
+          :title="t('task.type')"
+          :columns="typeList"
+          v-model="type"
+          @change="changeType"
+          class="form-field"
+        />
+        <var-picker
+          :title="t('task.period')"
+          :columns="periodList"
+          v-model="period"
+          @change="changePeriod"
+          class="form-field"
+        />
+        <var-input 
+          :label="t('task.name')" 
+          v-model="name" 
+          class="form-field"
+          :placeholder="t('task.name_placeholder')"
+        />
+        <var-input 
+          :label="t('task.description')" 
+          v-model="description" 
+          textarea 
+          :rows="3" 
+          class="form-field"
+          :placeholder="t('task.description_placeholder')"
+        />
+      </div>
+
+      <div class="form-section" v-show="startTimeShow || endTimeShow">
+        <h3 class="section-title">{{ t('task.time_info') }}</h3>
+        <var-date-picker
+          v-model="start_time"
+          :max-date="new Date(2100, 0, 1)"
+          format="YYYY-MM-DD HH:mm"
+          :minute-list="['00', '15', '30', '45']"
+          :title="t('task.start_time')"
+          v-show="startTimeShow"
+          class="form-field"
+        />
+        <var-date-picker
+          v-model="end_time"
+          :max-date="new Date(2100, 0, 1)"
+          format="YYYY-MM-DD HH:mm"
+          :minute-list="['00', '15', '30', '45']"
+          :title="t('task.end_time')"
+          v-show="endTimeShow"
+          class="form-field"
+        />
+      </div>
+
+      <div class="form-section">
+        <h3 class="section-title">{{ t('task.other_info') }}</h3>
+        <var-switch 
+          :label="t('task.lunar')" 
+          v-model="lunar" 
+          :active-value="1" 
+          :inactive-value="0" 
+          class="form-field"
+        />
+        <var-input
+          :label="t('task.amount')"
+          v-model="amount"
+          type="tel"
+          :maxlength="6"
+          v-show="amountShow"
+          class="form-field"
+          :placeholder="t('task.amount_placeholder')"
+        />
+        <var-switch
+          :label="t('task.remind')"
+          v-model="remind"
+          :active-value="1"
+          :inactive-value="0"
+          class="form-field"
+        />
+      </div>
+
+      <div class="form-actions">
+        <var-button 
+          type="primary" 
+          block 
+          @click="doAdd" 
+          :loading="loading"
+          class="submit-button"
+        >
+          {{ t('app.save') }}
+        </var-button>
+      </div>
     </div>
   </div>
 </template>
 
-<script>
-import { useGlobalStore } from '../stores/global';
-import { useApiStore } from '../stores/api';
-import { useUtilStore } from '../stores/util';
-import { taskApi } from '../composables/useHttp';
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { useGlobalStore } from '../stores/global'
+import { useApiStore } from '../stores/api'
+import { useUtilStore } from '../stores/util'
+import { taskApi } from '../composables/useHttp'
 import {
   Picker as VarPicker,
   Input as VarInput,
-  Textarea as VarTextarea,
   DatePicker as VarDatePicker,
   Switch as VarSwitch,
   Button as VarButton,
   Dialog
-} from '@varlet/ui';
+} from '@varlet/ui'
 
-export default {
-  created() {
-    const globalStore = useGlobalStore();
-    globalStore.setMenu({
-      menus: [],
-      event: this
-    });
-    globalStore.setTitle(this.$t('app.task_add'));
-    globalStore.setShowBack(true);
+// 路由器
+const router = useRouter()
+const { t } = useI18n()
+
+// Pinia stores
+const globalStore = useGlobalStore()
+const apiStore = useApiStore()
+const utilStore = useUtilStore()
+
+// 响应式数据
+const type = ref([])
+const period = ref([])
+const crond = ref('')
+const name = ref('')
+const description = ref('')
+const start_time = ref('')
+const startTimeShow = ref(false)
+const end_time = ref('')
+const endTimeShow = ref(false)
+const amount = ref(null)
+const amountShow = ref(false)
+const remind = ref('1')
+const lunar = ref('0')
+const loading = ref(false)
+
+// 计算属性（需要在响应式数据之后定义）
+const typeList = ref([
+  {
+    text: t('task.type_notify'),
+    value: '1'
   },
-  methods: {
-    doAdd() {
-      const globalStore = useGlobalStore();
-      var jiacn = globalStore.getJiacn;
-      taskApi.create('/create', {
-        jiacn: jiacn,
-        type: this.type[0],
-        period: this.period[0],
-        crond: this.crond,
-        name: this.name,
-        description: this.description,
-        startTime: useUtilStore().toTimeStamp(new Date(this.start_time)),
-        endTime: useUtilStore().toTimeStamp(new Date(this.end_time)),
-        lunar: this.lunar,
-        amount: this.amount,
-        remind: this.remind
-      }, {
-        onSuccess: (data) => {
-          if (data.code === 'E0') {
-            Dialog({
-              title: this.$t('app.notify'),
-              message: data.msg,
-              confirmButtonText: this.$t('app.confirm')
-            });
-            this.$router.go(-1);
-          } else {
-            Dialog({
-              title: this.$t('app.alert'),
-              message: data.msg,
-              confirmButtonText: this.$t('app.confirm')
-            });
-          }
-        }
-      });
-    },
-    changeType(val) {
-      if (val[0] === '1') {
-        this.amountShow = false;
-      } else {
-        this.amountShow = true;
-      }
-    },
-    changePeriod(val) {
-      if (val[0] === '6') {
-        this.startTimeShow = true;
-        this.endTimeShow = false;
-        this.end_time = '';
-      } else if (val[0] === '0') {
-        this.startTimeShow = false;
-        this.endTimeShow = false;
-        this.start_time = '';
-        this.end_time = '';
-      } else {
-        this.startTimeShow = true;
-        this.endTimeShow = true;
-      }
-    }
+  {
+    text: t('task.type_target'),
+    value: '2'
   },
-  data() {
-    return {
-      type: [],
-      period: [],
-      crond: '',
-      name: '',
-      description: '',
-      start_time: '',
-      startTimeShow: false,
-      end_time: '',
-      endTimeShow: false,
-      amount: null,
-      amountShow: false,
-      remind: '1',
-      lunar: '0',
-      typeList: [
-        {
-          text: this.$t('task.type_notify'),
-          value: '1'
-        },
-        {
-          text: this.$t('task.type_target'),
-          value: '2'
-        },
-        {
-          text: this.$t('task.type_repayment'),
-          value: '3'
-        },
-        {
-          text: this.$t('task.type_fixed_income'),
-          value: '4'
-        }
-      ],
-      periodList: [
-        {
-          text: this.$t('task.period_long_term'),
-          value: '0'
-        },
-        {
-          text: this.$t('task.period_yearly'),
-          value: '1'
-        },
-        {
-          text: this.$t('task.period_monthly'),
-          value: '2'
-        },
-        {
-          text: this.$t('task.period_weekly'),
-          value: '3'
-        },
-        {
-          text: this.$t('task.period_daily'),
-          value: '5'
-        },
-        {
-          text: this.$t('task.period_hourly'),
-          value: '11'
-        },
-        {
-          text: this.$t('task.period_minutely'),
-          value: '12'
-        },
-        {
-          text: this.$t('task.period_secondly'),
-          value: '13'
-        },
-        {
-          text: this.$t('task.period_specific_date'),
-          value: '6'
-        }
-      ]
-    };
+  {
+    text: t('task.type_repayment'),
+    value: '3'
+  },
+  {
+    text: t('task.type_fixed_income'),
+    value: '4'
   }
-};
+])
+
+const periodList = ref([
+  {
+    text: t('task.period_long_term'),
+    value: '0'
+  },
+  {
+    text: t('task.period_yearly'),
+    value: '1'
+  },
+  {
+    text: t('task.period_monthly'),
+    value: '2'
+  },
+  {
+    text: t('task.period_weekly'),
+    value: '3'
+  },
+  {
+    text: t('task.period_daily'),
+    value: '5'
+  },
+  {
+    text: t('task.period_hourly'),
+    value: '11'
+  },
+  {
+    text: t('task.period_minutely'),
+    value: '12'
+  },
+  {
+    text: t('task.period_secondly'),
+    value: '13'
+  },
+  {
+    text: t('task.period_specific_date'),
+    value: '6'
+  }
+])
+
+// 方法
+const doAdd = () => {
+  // 表单验证
+  if (!name.value.trim()) {
+    Dialog({
+      title: t('app.alert'),
+      message: t('task.name_required'),
+      confirmButtonText: t('app.confirm')
+    })
+    return
+  }
+
+  if (type.value.length === 0) {
+    Dialog({
+      title: t('app.alert'),
+      message: t('task.type_required'),
+      confirmButtonText: t('app.confirm')
+    })
+    return
+  }
+
+  if (period.value.length === 0) {
+    Dialog({
+      title: t('app.alert'),
+      message: t('task.period_required'),
+      confirmButtonText: t('app.confirm')
+    })
+    return
+  }
+
+  loading.value = true
+  const jiacn = globalStore.getJiacn
+  
+  // 准备数据
+  const taskData = {
+    jiacn: jiacn,
+    type: type.value[0],
+    period: period.value[0],
+    crond: crond.value,
+    name: name.value.trim(),
+    description: description.value.trim(),
+    lunar: lunar.value,
+    amount: amount.value || 0,
+    remind: remind.value
+  }
+
+  // 添加时间数据（如果有）
+  if (start_time.value) {
+    taskData.startTime = utilStore.toTimeStamp(new Date(start_time.value))
+  }
+  if (end_time.value) {
+    taskData.endTime = utilStore.toTimeStamp(new Date(end_time.value))
+  }
+
+  taskApi.create('/create', taskData, {
+    onSuccess: (data) => {
+      loading.value = false
+      if (data.code === 'E0') {
+        Dialog({
+          title: t('app.notify'),
+          message: data.msg,
+          confirmButtonText: t('app.confirm'),
+          onConfirm: () => {
+            router.go(-1)
+          }
+        })
+      } else {
+        Dialog({
+          title: t('app.alert'),
+          message: data.msg,
+          confirmButtonText: t('app.confirm')
+        })
+      }
+    },
+    onError: (error) => {
+      loading.value = false
+      Dialog({
+        title: t('app.error'),
+        message: t('app.network_error'),
+        confirmButtonText: t('app.confirm')
+      })
+      console.error('创建任务失败:', error)
+    }
+  })
+}
+
+const changeType = (val) => {
+  if (val[0] === '1') {
+    amountShow.value = false
+  } else {
+    amountShow.value = true
+  }
+}
+
+const changePeriod = (val) => {
+  if (val[0] === '6') {
+    startTimeShow.value = true
+    endTimeShow.value = false
+    end_time.value = ''
+  } else if (val[0] === '0') {
+    startTimeShow.value = false
+    endTimeShow.value = false
+    start_time.value = ''
+    end_time.value = ''
+  } else {
+    startTimeShow.value = true
+    endTimeShow.value = true
+  }
+}
+
+// 生命周期
+onMounted(() => {
+  globalStore.setTitle(t('app.task_add'))
+  globalStore.setShowBack(true)
+})
 </script>
+
 <style scoped>
-.picker-buttons {
-  margin: 0 15px;
+.task-add-container {
+  padding: 16px;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+}
+
+.form-card {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.form-section {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.form-section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.section-title {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+}
+
+.section-title::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 2px;
+  margin-right: 8px;
+}
+
+.form-field {
+  margin-bottom: 16px;
+}
+
+.form-field:last-child {
+  margin-bottom: 0;
+}
+
+.form-actions {
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.submit-button {
+  height: 48px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+}
+
+.submit-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+}
+
+.submit-button:active {
+  transform: translateY(0);
+}
+
+/* 响应式调整 */
+@media (max-width: 375px) {
+  .task-add-container {
+    padding: 12px;
+  }
+  
+  .form-card {
+    padding: 20px;
+  }
+  
+  .form-section {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+  }
+  
+  .section-title {
+    font-size: 15px;
+    margin-bottom: 12px;
+  }
 }
 </style>

@@ -99,18 +99,17 @@ export default {
     return { globalStore, apiStore };
   },
   created() {
-        this.globalStore.setMenu({
-          menus: [
-            {
-              key: 'list',
-              value: this.$t('gift.order_list'),
-              fn: () => {
-                this.$router.push({ name: 'OrderList' });
-              }
-            }
-          ],
-          event: this
-        });
+    this.globalStore.setMenu({
+      menus: [
+        {
+          key: 'list',
+          value: this.$t('gift.order_list'),
+          fn: () => {
+            this.$router.push({ name: 'OrderList' });
+          }
+        }
+      ]
+    });
     this.globalStore.setTitle(this.$t('gift.title'));
     this.globalStore.setShowBack(false);
     this.globalStore.setShowMore(true);

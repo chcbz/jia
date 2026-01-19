@@ -50,24 +50,6 @@ export const useGlobalStore = defineStore('global', {
       utilStore.setLocalStorage('jiacn', id, new Date().getTime() + 7 * 24 * 60 * 60 * 1000)
       this.user.jiacn = id
     },
-    setMenu (payload) {
-      this.menu = {}
-      this.showMore = payload.menus.length > 0
-      payload.menus.forEach((item) => {
-        this.menu[item.key] = item.value
-        if (payload.event) {
-          // Try both $root.$on and direct $on for compatibility
-          if (payload.event.$root?.$on) {
-            payload.event.$root.$on('toMenu_' + item.key, item.fn)
-          } else if (payload.event.$on) {
-            payload.event.$on('toMenu_' + item.key, item.fn)
-          }
-        }
-      })
-    },
-    toMenu (payload) {
-      payload.event.$root.$emit('toMenu_' + payload.key)
-    },
     setTitle (title) {
       this.title = title
     },

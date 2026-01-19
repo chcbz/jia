@@ -1,11 +1,13 @@
 <template>
   <div class="app-container">
-    <var-app-bar
-      :title="title"
-      :left-arrow="leftOptions.showBack"
-      @click-left="$router.back()"
-    >
+    <var-app-bar :title="title">
       <template #left>
+        <var-icon
+          v-if="leftOptions.showBack"
+          name="chevron-left"
+          @click.stop="$router.back()"
+          class="back-icon"
+        />
         <var-icon
           v-if="!leftOptions.showBack"
           name="menu"
@@ -23,15 +25,6 @@
       </template>
     </var-app-bar>
 
-    <var-action-sheet
-      v-if="actionMenu.length > 0"
-      :actions="actionMenu"
-      v-model="showActionMenu"
-      @select="handleMenuSelect"
-    />
-
-    <!-- <var-loading v-model="isLoading" type="circle" color="var(--color-primary)"/> -->
-
     <side-menu v-model="showSideMenu" style="height: 0px;"/>
 
     <div class="app-content" :class="{'show-menu': showSideMenu}">
@@ -42,13 +35,6 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import {
-  AppBar as VarAppBar,
-  Loading as VarLoading,
-  Icon as VarIcon,
-  Menu as VarMenu,
-  ActionSheet as VarActionSheet
-} from '@varlet/ui'
 import SideMenu from '@/components/SideMenu'
 import { useGlobalStore } from '@/stores/global'
 import { useUtilStore } from '@/stores/util'
@@ -56,6 +42,7 @@ import { useUtilStore } from '@/stores/util'
 const globalStore = useGlobalStore()
 const utilStore = useUtilStore()
 
+// Action Sheet 相关状态
 const showActionMenu = ref(false)
 const actionMenu = ref([])
 
@@ -74,29 +61,10 @@ const showSideMenu = computed({
 })
 const showMore = computed(() => globalStore.showMore)
 
-const updateActionMenu = (menu) => {
-  actionMenu.value = Object.keys(menu).map(key => ({
-    name: key,
-    text: menu[key]
-  }))
-}
-
 const handleMoreClick = () => {
-  // 直接触发右侧边栏显示
-  globalStore.toggleRightSidebar()
+  // 同时更新右侧边栏状态
+  globalStore.showRightSidebar = true
 }
-
-const handleMenuSelect = (action) => {
-  globalStore.toMenu({
-    key: action.name,
-    event: null
-  })
-  showActionMenu.value = false
-}
-
-watch(() => globalStore.menu, (newMenu) => {
-  updateActionMenu(newMenu)
-}, { deep: true })
 
 // 监听全局标题变化，自动更新 document.title
 watch(() => globalStore.title, (newTitle) => {
@@ -121,6 +89,7 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  position: relative;
 }
 
 .app-content {
@@ -135,11 +104,25 @@ html, body {
 .menu-icon {
   margin-right: 12px;
   cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.back-icon {
+  margin-right: 12px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
 }
 
 .more-icon {
   margin-left: 12px;
   cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.menu-icon:hover,
+.back-icon:hover,
+.more-icon:hover {
+  transform: scale(1.1);
 }
 
 @media (min-width: 768px) {
