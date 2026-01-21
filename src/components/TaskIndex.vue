@@ -1,153 +1,149 @@
 <template>
-  <div style="height: 100%">
-    <var-action-sheet
-      :actions="actionSheetActions"
-      v-model:show="showActionSheet"
-      @select="handleActionSelect"
-      @update:show="onActionSheetShowChange"
-    />
-    <div class="calendar-container" v-if="showCalendar">
-      <div class="calendar-header">
-        <var-button text @click="prevMonth">
-          <var-icon name="chevron-left" />
-        </var-button>
-        <h2>{{ currentMonth }}</h2>
-        <var-button text @click="nextMonth">
-          <var-icon name="chevron-right" />
-        </var-button>
+  <var-action-sheet
+    :actions="actionSheetActions"
+    v-model:show="showActionSheet"
+    @select="handleActionSelect"
+    @update:show="onActionSheetShowChange"
+  />
+  <div class="calendar-container" v-if="showCalendar">
+    <div class="calendar-header">
+      <var-button text @click="prevMonth">
+        <var-icon name="chevron-left" />
+      </var-button>
+      <h2>{{ currentMonth }}</h2>
+      <var-button text @click="nextMonth">
+        <var-icon name="chevron-right" />
+      </var-button>
+    </div>
+
+    <div class="calendar-grid">
+      <div class="calendar-weekdays">
+        <div v-for="day in weekdays" :key="day" class="weekday">
+          {{ day }}
+        </div>
       </div>
 
-      <div class="calendar-grid">
-        <div class="calendar-weekdays">
-          <div v-for="day in weekdays" :key="day" class="weekday">
-            {{ day }}
-          </div>
-        </div>
-
-        <div class="calendar-days">
-          <div
-            v-for="day in calendarDays"
-            :key="day.date"
-            :class="[
-              'day',
-              {
-                today: day.isToday,
-                'current-month': day.isCurrentMonth,
-                'has-tasks': day.taskCount > 0,
-                'selected': selectedDate === day.date && day.isCurrentMonth
-              }
-            ]"
-            @click="selectCalendarDay(day)"
-          >
-            <div class="day-number">{{ day.day }}</div>
-            <div v-if="day.taskCount > 0" class="task-indicator">
-              <div v-if="day.taskCount > 0" class="task-type-dots">
-                <span 
-                  v-if="day.payCount > 0" 
-                  class="type-dot type-pay"
-                  :style="{ opacity: Math.min(day.payCount / 3, 1) }"
-                ></span>
-                <span 
-                  v-if="day.notifyCount > 0" 
-                  class="type-dot type-notify"
-                  :style="{ opacity: Math.min(day.notifyCount / 3, 1) }"
-                ></span>
-              </div>
+      <div class="calendar-days">
+        <div
+          v-for="day in calendarDays"
+          :key="day.date"
+          :class="[
+            'day',
+            {
+              today: day.isToday,
+              'current-month': day.isCurrentMonth,
+              'has-tasks': day.taskCount > 0,
+              'selected': selectedDate === day.date && day.isCurrentMonth
+            }
+          ]"
+          @click="selectCalendarDay(day)"
+        >
+          <div class="day-number">{{ day.day }}</div>
+          <div v-if="day.taskCount > 0" class="task-indicator">
+            <div v-if="day.taskCount > 0" class="task-type-dots">
+              <span 
+                v-if="day.payCount > 0" 
+                class="type-dot type-pay"
+                :style="{ opacity: Math.min(day.payCount / 3, 1) }"
+              ></span>
+              <span 
+                v-if="day.notifyCount > 0" 
+                class="type-dot type-notify"
+                :style="{ opacity: Math.min(day.notifyCount / 3, 1) }"
+              ></span>
             </div>
           </div>
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- 任务列表区域 -->
-    <div class="tasks-section" v-if="listPlan.length > 0">
-      <div class="tasks-header">
-        <h3>{{ formatSelectedDate }}</h3>
-        <span class="tasks-count">{{ listPlan.length }} 个任务</span>
-      </div>
-      <!-- 添加滚动容器 -->
-      <div class="list-scroll-container">
-        <var-list class="tasks-list">
-          <var-cell
-            v-for="item in listPlan"
-            :key="item.id"
-            ripple
-            @click="doShowDetail(item)"
-          >
-            <template #title>
-              <div class="task-title">
-                <span class="task-type-badge" :class="getTaskTypeClass(item.type)">
-                  {{ typeDict(item.type) }}
-                </span>
-                <span class="task-name">{{ item.name }}</span>
-              </div>
-            </template>
-            <template #description>
-              <div class="task-description">
-                <span v-if="item.description" class="task-desc-text">{{ item.description }}</span>
-                <span class="task-time">
-                  {{ formatTaskTime(item) }}
-                </span>
-              </div>
-            </template>
-            <template #extra>
-              <div class="task-extra">
-                <span v-if="item.amount > 0" class="task-amount">
-                  ￥{{ formatAmount(item.amount) }}
-                </span>
-                <var-icon name="chevron-right" size="16" />
-              </div>
-            </template>
-          </var-cell>
-        </var-list>
-      </div>
+  <!-- 任务列表区域 -->
+  <div class="tasks-section" v-if="listPlan.length > 0">
+    <div class="tasks-header">
+      <h3>{{ formatSelectedDate }}</h3>
+      <span class="tasks-count">{{ listPlan.length }} 个任务</span>
     </div>
-
-    <div v-else class="empty-tasks">
-      <var-empty description="暂无任务" />
-    </div>
-
-    <!-- 任务详情弹窗 -->
-    <var-dialog v-model="taskDetailShow" :title="currentTask?.name">
-      <div class="task-detail-content" v-if="currentTask">
-        <div class="detail-section">
-          <h4>任务信息</h4>
-          <div class="detail-item">
-            <span class="detail-label">任务类型:</span>
-            <span class="detail-value">{{ typeDict(currentTask.type) }}</span>
+    <!-- 添加滚动容器 -->
+    <var-list class="tasks-list">
+      <var-cell
+        v-for="item in listPlan"
+        :key="item.id"
+        ripple
+        @click="doShowDetail(item)"
+      >
+        <template #title>
+          <div class="task-title">
+            <span class="task-type-badge" :class="getTaskTypeClass(item.type)">
+              {{ typeDict(item.type) }}
+            </span>
+            <span class="task-name">{{ item.name }}</span>
           </div>
-          <div class="detail-item" v-if="currentTask.description">
-            <span class="detail-label">描述:</span>
-            <span class="detail-value">{{ currentTask.description }}</span>
-          </div>
-          <div class="detail-item" v-if="currentTask.amount > 0">
-            <span class="detail-label">金额:</span>
-            <span class="detail-value amount">￥{{ formatAmount(currentTask.amount) }}</span>
-          </div>
-        </div>
-        
-        <div class="detail-section">
-          <h4>时间信息</h4>
-          <div class="detail-item">
-            <span class="detail-label">执行时间:</span>
-            <span class="detail-value">
-              {{ formatTaskTime(currentTask, true) }}
+        </template>
+        <template #description>
+          <div class="task-description">
+            <span v-if="item.description" class="task-desc-text">{{ item.description }}</span>
+            <span class="task-time">
+              {{ formatTaskTime(item) }}
             </span>
           </div>
-          <div class="detail-item" v-if="taskDetailData.periodText">
-            <span class="detail-label">重复周期:</span>
-            <span class="detail-value">{{ taskDetailData.periodText }}</span>
+        </template>
+        <template #extra>
+          <div class="task-extra">
+            <span v-if="item.amount > 0" class="task-amount">
+              ￥{{ formatAmount(item.amount) }}
+            </span>
+            <var-icon name="chevron-right" size="16" />
           </div>
+        </template>
+      </var-cell>
+    </var-list>
+  </div>
+
+  <div v-else class="empty-tasks">
+    <var-empty description="暂无任务" />
+  </div>
+
+  <!-- 任务详情弹窗 -->
+  <var-dialog v-model="taskDetailShow" :title="currentTask?.name">
+    <div class="task-detail-content" v-if="currentTask">
+      <div class="detail-section">
+        <h4>任务信息</h4>
+        <div class="detail-item">
+          <span class="detail-label">任务类型:</span>
+          <span class="detail-value">{{ typeDict(currentTask.type) }}</span>
         </div>
-        
-        <div class="detail-actions">
-          <var-button type="primary" block @click="taskDetailShow = false">
-            关闭
-          </var-button>
+        <div class="detail-item" v-if="currentTask.description">
+          <span class="detail-label">描述:</span>
+          <span class="detail-value">{{ currentTask.description }}</span>
+        </div>
+        <div class="detail-item" v-if="currentTask.amount > 0">
+          <span class="detail-label">金额:</span>
+          <span class="detail-value amount">￥{{ formatAmount(currentTask.amount) }}</span>
         </div>
       </div>
-    </var-dialog>
-  </div>
+      
+      <div class="detail-section">
+        <h4>时间信息</h4>
+        <div class="detail-item">
+          <span class="detail-label">执行时间:</span>
+          <span class="detail-value">
+            {{ formatTaskTime(currentTask, true) }}
+          </span>
+        </div>
+        <div class="detail-item" v-if="taskDetailData.periodText">
+          <span class="detail-label">重复周期:</span>
+          <span class="detail-value">{{ taskDetailData.periodText }}</span>
+        </div>
+      </div>
+      
+      <div class="detail-actions">
+        <var-button type="primary" block @click="taskDetailShow = false">
+          关闭
+        </var-button>
+      </div>
+    </div>
+  </var-dialog>
 </template>
 
 <script setup>
@@ -546,17 +542,17 @@ onMounted(() => {
 
 /* 任务列表样式 */
 .tasks-section {
-  margin: 0 16px;
+  margin: 0 16px 16px;
   background: white;
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
   display: flex;
   flex-direction: column;
-  /* 动态高度：根据屏幕高度自适应 */
-  height: calc(100vh - 320px);
-  min-height: 300px;
-  max-height: 500px;
+  /* 使用 flex 布局填充剩余空间 */
+  flex: 1 1 auto;
+  min-height: 200px;
+  max-height: none;
 }
 
 .tasks-header {
@@ -577,21 +573,12 @@ onMounted(() => {
   color: #999;
 }
 
-/* 滚动容器 */
-.list-scroll-container {
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-}
-
 .tasks-list {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  position: relative;
+  position: relative;
 }
 
 /* 任务单元格样式 */
@@ -767,8 +754,7 @@ onMounted(() => {
   }
   
   .tasks-section {
-    height: calc(100vh - 280px);
-    min-height: 250px;
+    min-height: 180px;
   }
   
   .tasks-header {
@@ -778,14 +764,13 @@ onMounted(() => {
 
 @media (min-width: 376px) and (max-width: 768px) {
   .tasks-section {
-    height: calc(100vh - 300px);
+    min-height: 220px;
   }
 }
 
 @media (min-width: 769px) {
   .tasks-section {
-    height: calc(100vh - 350px);
-    max-height: 600px;
+    min-height: 250px;
   }
 }
 </style>
