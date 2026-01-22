@@ -1,6 +1,6 @@
 <template>
   <div class="phrase-container">
-    <var-dialog v-model="addDialogShow">
+    <var-dialog v-model:show="addDialogShow">
       <div class="cell-group">
         <var-input
           type="textarea"
@@ -18,7 +18,7 @@
       </div>
     </var-dialog>
 
-    <var-dialog v-model="fbDialogShow">
+    <var-dialog v-model:show="fbDialogShow">
       <div class="cell-group">
         <var-input
           :placeholder="$t('phrase.feedback_title_placeholder')"

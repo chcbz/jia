@@ -2,7 +2,7 @@
   <div class="task-history-container">
     <var-action-sheet 
       :actions="opMenu" 
-      v-model="showOpMenu" 
+      v-model:show="showOpMenu" 
       @select="onClickOpMenu"
     />
     
@@ -20,7 +20,7 @@
             ripple
             @click="doShowOpMenu(item)"
           >
-            <template #title>
+            <template #default>
               <div class="task-title">
                 <span class="task-type-badge" :class="getTaskTypeClass(item.type)">
                   {{ typeDict(item.type) }}
@@ -30,10 +30,10 @@
             </template>
             <template #description>
               <div class="task-description">
-                <span class="task-desc-text">{{ item.description || item.name }}</span>
                 <span class="task-time">
                   {{ formatTaskTime(item) }}
                 </span>
+                <span v-if="item.description" class="task-desc-text">{{ item.description }}</span>
               </div>
             </template>
             <template #extra>
@@ -76,7 +76,9 @@ const utilStore = useUtilStore()
 
 // 响应式数据
 const list = ref([])
-const opMenu = ref([{ name: 'del', text: t('app.del') }])
+const opMenu = ref([
+  { name: t('app.del'), key: 'del' }
+])
 const showOpMenu = ref(false)
 const selectId = ref(0)
 const currentTask = ref(null)
@@ -268,9 +270,11 @@ onMounted(() => {
 
 .task-description {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .task-desc-text {
@@ -282,6 +286,7 @@ onMounted(() => {
 .task-time {
   font-size: 12px;
   color: #999;
+  flex-shrink: 0;
 }
 
 .task-extra {

@@ -1,10 +1,10 @@
 <template>
   <div>
-    <var-action-sheet :actions="opMenu" v-model="showOpMenu" @select="onClickOpMenu" />
+    <var-action-sheet :actions="opMenu" v-model:show="showOpMenu" @select="onClickOpMenu" />
 
     <var-list>
       <var-cell v-for="item in list" :key="item.id" @click="doShowOpMenu(item)">
-        <template #title>
+        <template #default>
           {{ item.title }}
         </template>
         <template #description>

@@ -1,11 +1,11 @@
 <template>
   <div class="task-list-container">
-    <var-action-sheet 
-      :actions="opMenu" 
-      v-model:show="showOpMenu" 
-      @select="onClickOpMenu"
-      @update:show="onActionSheetShowChange"
-    />
+  <var-action-sheet
+    :actions="actionSheetActions"
+    v-model:show="showActionSheet"
+    @select="handleActionSelect"
+    @update:show="onActionSheetShowChange"
+  />
     
     <div class="tasks-section" v-if="list.length > 0">
       <div class="tasks-header">
@@ -13,39 +13,41 @@
         <span class="tasks-count">{{ list.length }} 个任务</span>
       </div>
       
-      <var-list>
-        <var-cell
-          v-for="item in list"
-          :key="item.id"
-          ripple
-          @click="doShowOpMenu(item)"
-        >
-          <template #title>
-            <div class="task-title">
-              <span class="task-type-badge" :class="getTaskTypeClass(item.type)">
-                {{ typeDict(item.type) }}
-              </span>
-              <span class="task-name">{{ item.name }}</span>
-            </div>
-          </template>
-          <template #description>
-            <div class="task-description">
-              <span v-if="item.description" class="task-desc-text">{{ item.description }}</span>
-              <span class="task-time">
-                {{ formatTaskTime(item) }}
-              </span>
-            </div>
-          </template>
-          <template #extra>
-            <div class="task-extra">
-              <span v-if="item.amount > 0" class="task-amount">
-                ￥{{ formatAmount(item.amount) }}
-              </span>
-              <var-icon name="chevron-right" size="16" />
-            </div>
-          </template>
-        </var-cell>
-      </var-list>
+      <div class="tasks-list-container">
+        <var-list>
+          <var-cell
+            v-for="item in list"
+            :key="item.id"
+            ripple
+            @click="doShowOpMenu(item)"
+          >
+            <template #default>
+              <div class="task-title">
+                <span class="task-type-badge" :class="getTaskTypeClass(item.type)">
+                  {{ typeDict(item.type) }}
+                </span>
+                <span class="task-name">{{ item.name }}</span>
+              </div>
+            </template>
+            <template #description>
+              <div class="task-description">
+                <span class="task-time">
+                  {{ formatTaskTime(item) }}
+                </span>
+                <span v-if="item.description" class="task-desc-text">{{ item.description }}</span>
+              </div>
+            </template>
+            <template #extra>
+              <div class="task-extra">
+                <span v-if="item.amount > 0" class="task-amount">
+                  ￥{{ formatAmount(item.amount) }}
+                </span>
+                <var-icon name="chevron-right" size="16" />
+              </div>
+            </template>
+          </var-cell>
+        </var-list>
+      </div>
     </div>
 
     <div v-else class="empty-tasks">
@@ -82,6 +84,11 @@ const opMenu = ref([
 const showOpMenu = ref(false)
 const selectId = ref(0)
 const currentTask = ref(null)
+const showActionSheet = ref(false)
+const actionSheetActions = ref([
+  { name: t('task.add'), key: 'add' },
+  { name: t('app.task_history'), key: 'history' }
+])
 
 // 常量
 const periodMap = {
@@ -212,13 +219,6 @@ const onClickOpMenu = (action) => {
   showOpMenu.value = false
 }
 
-const onActionSheetShowChange = (show) => {
-  // 当 action sheet 隐藏且右侧边栏当前显示时，触发 toggleRightSidebar
-  if (!show && globalStore.showRightSidebar) {
-    globalStore.toggleRightSidebar()
-  }
-}
-
 const fetchTasks = () => {
   const jiacn = globalStore.getJiacn
   const now = utilStore.toTimeStamp(new Date())
@@ -240,37 +240,42 @@ const fetchTasks = () => {
   })
 }
 
+
+// ActionSheet 处理
+const handleActionSelect = (action) => {
+  switch (action.key) {
+    case 'add':
+      router.push({ name: 'TaskAdd' })
+      break
+    case 'list':
+      router.push({ name: 'TaskList' })
+      break
+    case 'history':
+      router.push({ name: 'TaskHistory' })
+      break
+  }
+}
+
+const onActionSheetShowChange = (show) => {
+  // 当 action sheet 隐藏且右侧边栏当前显示时，触发 toggleRightSidebar
+  if (!show && globalStore.showRightSidebar) {
+    globalStore.toggleRightSidebar()
+  }
+}
+
 // 监听右侧边栏显示状态
 watch(
   () => globalStore.showRightSidebar,
   (newValue) => {
-    showOpMenu.value = newValue
+    showActionSheet.value = newValue
   }
 )
 
 // 生命周期
 onMounted(() => {
-  globalStore.setMenu({
-    menus: [
-      {
-        key: 'add',
-        value: t('task.add'),
-        fn: () => {
-          router.push({ name: 'TaskAdd' })
-        }
-      },
-      {
-        key: 'history',
-        value: t('task.history'),
-        fn: () => {
-          router.push({ name: 'TaskHistory' })
-        }
-      }
-    ]
-  })
   globalStore.setTitle(t('app.task_list'))
   globalStore.setShowBack(true)
-  globalStore.setShowMore(true)
+  globalStore.setShowMore(false)
   
   fetchTasks()
 })
@@ -288,6 +293,9 @@ onMounted(() => {
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
 }
 
 .tasks-header {
@@ -305,6 +313,12 @@ onMounted(() => {
 .tasks-count {
   font-size: 12px;
   color: #999;
+}
+
+.tasks-list-container {
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 180px);
 }
 
 .task-title {
@@ -338,9 +352,11 @@ onMounted(() => {
 
 .task-description {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .task-desc-text {
@@ -352,6 +368,7 @@ onMounted(() => {
 .task-time {
   font-size: 12px;
   color: #999;
+  flex-shrink: 0;
 }
 
 .task-extra {

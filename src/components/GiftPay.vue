@@ -1,12 +1,12 @@
 <template>
   <div style="background-color: #ffffff">
-    <var-action-sheet :actions="opMenu" v-model="showOpMenu" @select="onClickOpMenu" />
+    <var-action-sheet :actions="opMenu" v-model:show="showOpMenu" @select="onClickOpMenu" />
 
     <var-card>
       <template #image>
         <img :src="picUrl" style="width: 100%" />
       </template>
-      <template #title>
+      <template #default>
         <p style="font-size: 14px; line-height: 1.2">{{ name }}</p>
       </template>
       <template #description>

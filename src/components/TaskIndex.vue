@@ -72,7 +72,7 @@
         ripple
         @click="doShowDetail(item)"
       >
-        <template #title>
+        <template #default>
           <div class="task-title">
             <span class="task-type-badge" :class="getTaskTypeClass(item.type)">
               {{ typeDict(item.type) }}
@@ -82,10 +82,10 @@
         </template>
         <template #description>
           <div class="task-description">
-            <span v-if="item.description" class="task-desc-text">{{ item.description }}</span>
             <span class="task-time">
               {{ formatTaskTime(item) }}
             </span>
+            <span v-if="item.description" class="task-desc-text">{{ item.description }}</span>
           </div>
         </template>
         <template #extra>
@@ -105,7 +105,7 @@
   </div>
 
   <!-- 任务详情弹窗 -->
-  <var-dialog v-model="taskDetailShow" :title="currentTask?.name">
+  <var-dialog v-model:show="taskDetailShow" :title="currentTask?.name" :confirm-button="false" :cancel-button="false">
     <div class="task-detail-content" v-if="currentTask">
       <div class="detail-section">
         <h4>任务信息</h4>
@@ -616,9 +616,11 @@ onMounted(() => {
 
 .task-description {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .task-desc-text {
@@ -635,6 +637,7 @@ onMounted(() => {
 .task-time {
   font-size: 12px;
   color: #999;
+  flex-shrink: 0;
 }
 
 .task-extra {
