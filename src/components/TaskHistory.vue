@@ -194,6 +194,7 @@ const fetchTasks = () => {
 onMounted(() => {
   globalStore.setTitle(t('app.task_history'))
   globalStore.setShowBack(true)
+  globalStore.setShowMore(false)
   
   fetchTasks()
 })

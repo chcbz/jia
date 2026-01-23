@@ -1,85 +1,91 @@
 <template>
   <div class="task-add-container">
     <div class="form-card">
-      <div class="form-section">
-        <h3 class="section-title">{{ t('task.basic_info') }}</h3>
-        <var-picker
-          :title="t('task.type')"
-          :columns="typeList"
-          v-model="type"
-          @change="changeType"
-          class="form-field"
-        />
-        <var-picker
-          :title="t('task.period')"
-          :columns="periodList"
-          v-model="period"
-          @change="changePeriod"
-          class="form-field"
-        />
-        <var-input 
-          :label="t('task.name')" 
-          v-model="name" 
-          class="form-field"
-          :placeholder="t('task.name_placeholder')"
-        />
-        <var-input 
-          :label="t('task.description')" 
-          v-model="description" 
-          textarea 
-          :rows="3" 
-          class="form-field"
-          :placeholder="t('task.description_placeholder')"
-        />
-      </div>
+      <div class="form-content">
+        <div class="form-section">
+          <h3 class="section-title">{{ t('task.basic_info') }}</h3>
+          <var-select
+            :placeholder="t('task.type')"
+            :options="typeOptions"
+            v-model="type"
+            @change="changeType"
+            class="form-field"
+            label-key="text"
+            value-key="value"
+          />
+          <var-select
+            :placeholder="t('task.period')"
+            :options="periodOptions"
+            v-model="period"
+            @change="changePeriod"
+            class="form-field"
+            label-key="text"
+            value-key="value"
+          />
+          <var-input 
+            :label="t('task.name')" 
+            v-model="name" 
+            class="form-field"
+            :placeholder="t('task.name_placeholder')"
+          />
+          <var-input 
+            :label="t('task.description')" 
+            v-model="description" 
+            textarea 
+            :rows="3" 
+            class="form-field"
+            :placeholder="t('task.description_placeholder')"
+          />
+        </div>
 
-      <div class="form-section" v-show="startTimeShow || endTimeShow">
-        <h3 class="section-title">{{ t('task.time_info') }}</h3>
-        <var-date-picker
-          v-model="start_time"
-          :max-date="new Date(2100, 0, 1)"
-          format="YYYY-MM-DD HH:mm"
-          :minute-list="['00', '15', '30', '45']"
-          :title="t('task.start_time')"
-          v-show="startTimeShow"
-          class="form-field"
-        />
-        <var-date-picker
-          v-model="end_time"
-          :max-date="new Date(2100, 0, 1)"
-          format="YYYY-MM-DD HH:mm"
-          :minute-list="['00', '15', '30', '45']"
-          :title="t('task.end_time')"
-          v-show="endTimeShow"
-          class="form-field"
-        />
-      </div>
+        <div class="form-section" v-show="startTimeShow || endTimeShow">
+          <h3 class="section-title">{{ t('task.time_info') }}</h3>
+          <var-date-picker
+            v-model="start_time"
+            :max-date="new Date(2100, 0, 1)"
+            format="YYYY-MM-DD HH:mm"
+            :minute-list="['00', '15', '30', '45']"
+            :title="t('task.start_time')"
+            v-show="startTimeShow"
+            class="form-field"
+          />
+          <var-date-picker
+            v-model="end_time"
+            :max-date="new Date(2100, 0, 1)"
+            format="YYYY-MM-DD HH:mm"
+            :minute-list="['00', '15', '30', '45']"
+            :title="t('task.end_time')"
+            v-show="endTimeShow"
+            class="form-field"
+          />
+        </div>
 
-      <div class="form-section">
-        <h3 class="section-title">{{ t('task.other_info') }}</h3>
-        <var-switch 
-          :label="t('task.lunar')" 
-          v-model="lunar" 
-          :active-value="1" 
-          :inactive-value="0" 
-          class="form-field"
-        />
-        <var-input
-          :label="t('task.amount')"
-          v-model="amount"
-          type="tel"
-          :maxlength="6"
-          v-show="amountShow"
-          class="form-field"
-          :placeholder="t('task.amount_placeholder')"
-        />
-        <var-switch
-          :label="t('task.remind')"
-          v-model="remind"
-          :active-value="1"
-          :inactive-value="0"
-          class="form-field"
-        />
+        <div class="form-section">
+          <h3 class="section-title">{{ t('task.other_info') }}</h3>
+          <var-switch 
+            :label="t('task.lunar')" 
+            v-model="lunar" 
+            :active-value="1" 
+            :inactive-value="0" 
+            class="form-field"
+          />
+          <var-input
+            :label="t('task.amount')"
+            v-model="amount"
+            type="tel"
+            :maxlength="6"
+            v-show="amountShow"
+            class="form-field"
+            :placeholder="t('task.amount_placeholder')"
+          />
+          <var-switch
+            :label="t('task.remind')"
+            v-model="remind"
+            :active-value="1"
+            :inactive-value="0"
+            class="form-field"
+          />
+        </div>
       </div>
 
       <div class="form-actions">
@@ -98,21 +104,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { Dialog } from '@varlet/ui'
 import { useGlobalStore } from '../stores/global'
 import { useApiStore } from '../stores/api'
 import { useUtilStore } from '../stores/util'
 import { taskApi } from '../composables/useHttp'
-import {
-  Picker as VarPicker,
-  Input as VarInput,
-  DatePicker as VarDatePicker,
-  Switch as VarSwitch,
-  Button as VarButton,
-  Dialog
-} from '@varlet/ui'
 
 // 路由器
 const router = useRouter()
@@ -124,9 +123,8 @@ const apiStore = useApiStore()
 const utilStore = useUtilStore()
 
 // 响应式数据
-const type = ref([])
-const period = ref([])
-const crond = ref('')
+const type = ref('')
+const period = ref('')
 const name = ref('')
 const description = ref('')
 const start_time = ref('')
@@ -135,12 +133,12 @@ const end_time = ref('')
 const endTimeShow = ref(false)
 const amount = ref(null)
 const amountShow = ref(false)
-const remind = ref('1')
-const lunar = ref('0')
+const remind = ref(1)  // 改为数字类型以匹配Switch组件的active-value
+const lunar = ref(0)   // 改为数字类型以匹配Switch组件的inactive-value
 const loading = ref(false)
 
-// 计算属性（需要在响应式数据之后定义）
-const typeList = ref([
+// 计算属性
+const typeOptions = ref([
   {
     text: t('task.type_notify'),
     value: '1'
@@ -159,7 +157,7 @@ const typeList = ref([
   }
 ])
 
-const periodList = ref([
+const periodOptions = ref([
   {
     text: t('task.period_long_term'),
     value: '0'
@@ -234,9 +232,8 @@ const doAdd = () => {
   // 准备数据
   const taskData = {
     jiacn: jiacn,
-    type: type.value[0],
-    period: period.value[0],
-    crond: crond.value,
+    type: type.value || '',
+    period: period.value || '',
     name: name.value.trim(),
     description: description.value.trim(),
     lunar: lunar.value,
@@ -244,12 +241,18 @@ const doAdd = () => {
     remind: remind.value
   }
 
-  // 添加时间数据（如果有）
-  if (start_time.value) {
-    taskData.startTime = utilStore.toTimeStamp(new Date(start_time.value))
+  // 添加时间数据（如果有有效值）
+  if (start_time.value && start_time.value.trim()) {
+    const startDate = new Date(start_time.value)
+    if (!isNaN(startDate.getTime())) {
+      taskData.startTime = utilStore.toTimeStamp(startDate)
+    }
   }
-  if (end_time.value) {
-    taskData.endTime = utilStore.toTimeStamp(new Date(end_time.value))
+  if (end_time.value && end_time.value.trim()) {
+    const endDate = new Date(end_time.value)
+    if (!isNaN(endDate.getTime())) {
+      taskData.endTime = utilStore.toTimeStamp(endDate)
+    }
   }
 
   taskApi.create('/create', taskData, {
@@ -285,7 +288,7 @@ const doAdd = () => {
 }
 
 const changeType = (val) => {
-  if (val[0] === '1') {
+  if (val === '1') {
     amountShow.value = false
   } else {
     amountShow.value = true
@@ -293,11 +296,11 @@ const changeType = (val) => {
 }
 
 const changePeriod = (val) => {
-  if (val[0] === '6') {
+  if (val === '6') {
     startTimeShow.value = true
     endTimeShow.value = false
     end_time.value = ''
-  } else if (val[0] === '0') {
+  } else if (val === '0') {
     startTimeShow.value = false
     endTimeShow.value = false
     start_time.value = ''
@@ -327,6 +330,9 @@ onMounted(() => {
   border-radius: 16px;
   padding: 24px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
 }
 
 .form-section {
@@ -368,10 +374,18 @@ onMounted(() => {
   margin-bottom: 0;
 }
 
+.form-content {
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 220px);
+  padding-right: 4px;
+}
+
 .form-actions {
   margin-top: 32px;
   padding-top: 20px;
   border-top: 1px solid #f0f0f0;
+  flex-shrink: 0;
 }
 
 .submit-button {

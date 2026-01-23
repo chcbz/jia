@@ -18,18 +18,26 @@ en:
     read: Read
     copy: Copy
     confirm: Confirm
+    error: Error
+    network_error: Network error
   task:
+    basic_info: Basic Information
     type: Task Type
     type_notify: Regular Reminder
     type_pay: Payment
     period: Task Period
     crond: Cron Expression
     name: Task Name
+    name_placeholder: Please enter task name
     description: Task Description
+    description_placeholder: Please enter task description
+    time_info: Time Information
     lunar: Lunar Calendar
     start_time: Start Time
     end_time: End Time
+    other_info: Other Information
     amount: Amount
+    amount_placeholder: Please enter amount
     remind: Remind
     del_alert: Confirm to delete task?
     history: Task History
@@ -49,6 +57,9 @@ en:
     period_minutely: Minutely
     period_secondly: Secondly
     period_specific_date: Specific Date
+    name_required: Task name is required
+    type_required: Task type is required
+    period_required: Task period is required
   gift:
     title: Gift Exchange
     pay: Direct Payment
@@ -144,18 +155,26 @@ zh-CN:
     read: 阅读
     copy: 复制
     confirm: 确认
+    error: 错误
+    network_error: 网络错误
   task:
+    basic_info: 基础信息
     type: 任务类型
     type_notify: 常规提醒
     type_pay: 支出
     period: 任务周期
     crond: 周期表达式
     name: 任务名称
+    name_placeholder: 请输入任务名称
     description: 任务描述
+    description_placeholder: 请输入任务描述
+    time_info: 时间信息
     lunar: 农历周期
     start_time: 开始时间
     end_time: 结束时间
+    other_info: 其他信息
     amount: 数量/金额
+    amount_placeholder: 请输入数量/金额
     remind: 是否提醒
     del_alert: 确定删除任务？
     history: 历史任务
@@ -175,6 +194,9 @@ zh-CN:
     period_minutely: 每分钟
     period_secondly: 每秒
     period_specific_date: 指定日期
+    name_required: 任务名称不能为空
+    type_required: 请选择任务类型
+    period_required: 请选择任务周期
   gift:
     title: 礼品兑换
     pay: 直接支付
