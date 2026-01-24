@@ -116,7 +116,7 @@ public class RoleController {
 	 * @return 删除结果
 	 */
 	@PreAuthorize("hasAuthority('role-delete')")
-	@RequestMapping(value = "/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/delete", method = RequestMethod.DELETE)
 	public Object delete(@RequestParam(name = "id") Long id) {
 		roleService.delete(id);
 		return JsonResult.success();

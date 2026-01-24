@@ -112,7 +112,7 @@ public class GroupController {
 	 * @return 结果
 	 */
 	@PreAuthorize("hasAuthority('group-delete')")
-	@RequestMapping(value = "/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/delete", method = RequestMethod.DELETE)
 	public Object delete(@RequestParam(name = "id") Long id) {
 		groupService.delete(id);
 		return JsonResult.success();

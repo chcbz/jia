@@ -87,7 +87,7 @@ public class PvLogController {
 	 * @return 处理结果
 	 */
 	@PreAuthorize("hasAuthority('pvlog-delete')")
-	@RequestMapping(value = "/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/delete", method = RequestMethod.DELETE)
 	public Object delete(@RequestParam(name = "id") Long id) {
 		pvLogService.delete(id);
 		return JsonResult.success();

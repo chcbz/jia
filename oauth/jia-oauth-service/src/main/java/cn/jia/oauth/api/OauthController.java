@@ -174,8 +174,7 @@ public class OauthController {
             user.setProvince(StringUtil.isEmpty(province) ? null : province);
             String city = userDTO.getCity();
             user.setCity(StringUtil.isEmpty(city) ? null : city);
-            user.setNickname(new String(userDTO.getNickname().getBytes(StandardCharsets.ISO_8859_1),
-                    StandardCharsets.UTF_8));
+            user.setNickname(userDTO.getNickname());
             user.setSex(userDTO.getSex());
             user.setAvatar(userDTO.getHeadImgUrl());
             log.debug("微信公众号用户信息获取成功，昵称: {}", user.getNickname());

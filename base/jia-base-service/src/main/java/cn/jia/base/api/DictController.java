@@ -84,7 +84,7 @@ public class DictController {
      * @return
      */
     @PreAuthorize("hasAuthority('dict-delete')")
-    @RequestMapping(value = "/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/delete", method = RequestMethod.DELETE)
     public Object delete(@RequestParam("id") Long id) {
         dictService.delete(id);
         return JsonResult.success();

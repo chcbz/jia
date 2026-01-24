@@ -113,7 +113,7 @@ public class DwzController {
      * @param id 短链接ID
      * @return 处理结果
      */
-    @RequestMapping(value = "/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/delete", method = RequestMethod.DELETE)
     @ResponseBody
     public Object delete(@RequestParam(name = "id") Long id) {
         dwzService.delete(id);

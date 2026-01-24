@@ -218,7 +218,7 @@ public class UserController {
      * @return 删除结果
      */
     @PreAuthorize("hasAuthority('user-delete')")
-    @RequestMapping(value = "/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/delete", method = RequestMethod.DELETE)
     public Object delete(@RequestParam(name = "id") Long id) {
         userService.delete(id);
         return JsonResult.success();

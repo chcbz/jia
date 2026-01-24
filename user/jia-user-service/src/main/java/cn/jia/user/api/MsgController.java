@@ -96,7 +96,7 @@ public class MsgController {
 	 * @return 结果
 	 */
 //	@PreAuthorize("hasAuthority('msg-delete')")
-	@RequestMapping(value = "/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/delete", method = RequestMethod.DELETE)
 	public Object delete(@RequestParam(name = "id") Long id) {
 		msgService.delete(id);
 		return JsonResult.success();

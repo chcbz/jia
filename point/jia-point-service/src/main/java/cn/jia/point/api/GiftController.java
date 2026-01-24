@@ -68,7 +68,7 @@ public class GiftController {
 	 * @return
 	 */
 	@PreAuthorize("hasAuthority('gift-delete')")
-	@RequestMapping(value = "/delete", method = RequestMethod.GET)
+	@RequestMapping(value = "/delete", method = RequestMethod.DELETE)
 	public Object delete(@RequestParam(name = "id") Long id) {
 		giftService.delete(id);
 		return JsonResult.success();

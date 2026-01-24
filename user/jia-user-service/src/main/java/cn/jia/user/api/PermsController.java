@@ -83,7 +83,7 @@ public class PermsController {
      * @return 资源信息
      */
     @PreAuthorize("hasAuthority('action-delete')")
-    @RequestMapping(value = "/delete", method = RequestMethod.GET)
+    @RequestMapping(value = "/delete", method = RequestMethod.DELETE)
     public Object delete(@RequestParam(name = "id") Integer id) {
         permsService.delete(id);
         return JsonResult.success();

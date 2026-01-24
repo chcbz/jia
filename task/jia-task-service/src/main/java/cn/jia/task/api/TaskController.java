@@ -11,6 +11,7 @@ import cn.jia.task.entity.TaskPlanVO;
 import cn.jia.task.service.TaskService;
 import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Optional;
@@ -31,7 +32,7 @@ public class TaskController {
      * @param id 任务ID
      * @return JsonResult
      */
-    /*@PreAuthorize("hasAuthority('task-get')")*/
+    @PreAuthorize("hasAuthority('task-get')")
     @RequestMapping(value = "/get", method = RequestMethod.GET)
     public Object findById(@RequestParam(name = "id") Long id) throws Exception {
         TaskPlanEntity task = taskService.get(id);
@@ -44,7 +45,7 @@ public class TaskController {
      * @param task 任务信息
      * @return JsonResult
      */
-    /*@PreAuthorize("hasAuthority('task-create')")*/
+    @PreAuthorize("hasAuthority('task-create')")
     @RequestMapping(value = "/create", method = RequestMethod.POST)
     public Object create(@RequestBody TaskPlanEntity task) {
         task.setClientId(EsContextHolder.getContext().getClientId());
@@ -58,7 +59,7 @@ public class TaskController {
      * @param task 任务信息
      * @return JsonResult
      */
-    /*@PreAuthorize("hasAuthority('task-update')")*/
+    @PreAuthorize("hasAuthority('task-update')")
     @RequestMapping(value = "/update", method = RequestMethod.POST)
     public Object update(@RequestBody TaskPlanEntity task) {
         taskService.update(task);
@@ -71,8 +72,8 @@ public class TaskController {
      * @param id 任务ID
      * @return JsonResult
      */
-    /*@PreAuthorize("hasAuthority('task-delete')")*/
-    @RequestMapping(value = "/delete", method = RequestMethod.GET)
+    @PreAuthorize("hasAuthority('task-delete')")
+    @RequestMapping(value = "/delete", method = RequestMethod.DELETE)
     public Object delete(@RequestParam(name = "id") Long id) {
         taskService.delete(id);
         return JsonResult.success();
@@ -84,8 +85,8 @@ public class TaskController {
      * @param id 任务ID
      * @return JsonResult
      */
-    /*@PreAuthorize("hasAuthority('task-cancel')")*/
-    @RequestMapping(value = "/cancel", method = RequestMethod.GET)
+    @PreAuthorize("hasAuthority('task-cancel')")
+    @RequestMapping(value = "/cancel", method = RequestMethod.DELETE)
     public Object cancel(@RequestParam(name = "id") Long id) {
         taskService.cancel(id);
         return JsonResult.success();
@@ -96,7 +97,7 @@ public class TaskController {
      *
      * @return 任务列表
      */
-    /*@PreAuthorize("hasAuthority('task-search')")*/
+    @PreAuthorize("hasAuthority('task-search')")
     @RequestMapping(value = "/search", method = RequestMethod.POST)
     public Object search(@RequestBody JsonRequestPage<TaskPlanVO> page) {
         TaskPlanVO plan = Optional.ofNullable(page.getSearch()).orElse(new TaskPlanVO());
