@@ -38,53 +38,89 @@
           />
         </div>
 
-        <div class="form-section" v-show="startTimeShow || endTimeShow">
-          <h3 class="section-title">{{ t('task.time_info') }}</h3>
-          <var-date-picker
+        <div class="form-section" v-show="startTimeShow">
+          <h3 class="section-title">{{ t('task.start_time') }}</h3>
+          <var-input
             v-model="start_time"
-            :max-date="new Date(2100, 0, 1)"
-            format="YYYY-MM-DD HH:mm"
-            :minute-list="['00', '15', '30', '45']"
-            :title="t('task.start_time')"
-            v-show="startTimeShow"
+            readonly
+            @click="openStartDatePicker"
             class="form-field"
-          />
-          <var-date-picker
-            v-model="end_time"
-            :max-date="new Date(2100, 0, 1)"
-            format="YYYY-MM-DD HH:mm"
-            :minute-list="['00', '15', '30', '45']"
-            :title="t('task.end_time')"
-            v-show="endTimeShow"
-            class="form-field"
+            :placeholder="t('task.select_date_time')"
           />
         </div>
 
+        <div class="form-section" v-show="endTimeShow">
+          <h3 class="section-title">{{ t('task.end_time') }}</h3>
+          <var-input
+            v-model="end_time"
+            readonly
+            @click="openEndDatePicker"
+            class="form-field"
+            :placeholder="t('task.select_date_time')"
+          />
+        </div>
+
+        <!-- 日期选择器弹窗 -->
+        <var-dialog
+          style="width: 90%; margin: 0 auto;"
+          dialog-class="date-picker-dialog"
+          v-model:show="showDatePicker"
+          :title="t('task.select_date')"
+          @confirm="onPickerDateConfirm"
+          @cancel="showDatePicker = false"
+        >
+          <var-date-picker
+            v-model="pickerDate"
+            :max-date="new Date(2100, 0, 1)"
+          />
+        </var-dialog>
+
+        <!-- 时间选择器弹窗 -->
+        <var-dialog
+          width="100%"
+          dialog-class="time-picker-dialog"
+          v-model:show="showTimePicker"
+          :title="t('task.select_time')"
+          @confirm="onPickerTimeConfirm"
+          @cancel="showTimePicker = false"
+        >
+          <var-time-picker
+            v-model="pickerTime"
+            format="24hr"
+          />
+        </var-dialog>
+
         <div class="form-section">
           <h3 class="section-title">{{ t('task.other_info') }}</h3>
-          <var-switch 
-            :label="t('task.lunar')" 
-            v-model="lunar" 
-            :active-value="1" 
-            :inactive-value="0" 
-            class="form-field"
-          />
-          <var-input
-            :label="t('task.amount')"
-            v-model="amount"
-            type="tel"
-            :maxlength="6"
-            v-show="amountShow"
-            class="form-field"
-            :placeholder="t('task.amount_placeholder')"
-          />
-          <var-switch
-            :label="t('task.remind')"
-            v-model="remind"
-            :active-value="1"
-            :inactive-value="0"
-            class="form-field"
-          />
+          <div>
+            {{ t('task.lunar') }}
+            <var-switch 
+              v-model="lunar" 
+              :active-value="1" 
+              :inactive-value="0" 
+              class="form-field"
+            />
+          </div>
+          <div v-show="amountShow">
+            {{ t('task.amount') }}
+            <var-input
+              v-model="amount"
+              type="tel"
+              :maxlength="6"
+              v-show="amountShow"
+              class="form-field"
+              :placeholder="t('task.amount_placeholder')"
+            />
+          </div>
+          <div>
+            {{ t('task.remind') }}
+            <var-switch
+              v-model="remind"
+              :active-value="1"
+              :inactive-value="0"
+              class="form-field"
+            />
+          </div>
         </div>
       </div>
 
@@ -112,6 +148,7 @@ import { useGlobalStore } from '../stores/global'
 import { useApiStore } from '../stores/api'
 import { useUtilStore } from '../stores/util'
 import { taskApi } from '../composables/useHttp'
+import dayjs from 'dayjs'
 
 // 路由器
 const router = useRouter()
@@ -136,6 +173,15 @@ const amountShow = ref(false)
 const remind = ref(1)  // 改为数字类型以匹配Switch组件的active-value
 const lunar = ref(0)   // 改为数字类型以匹配Switch组件的inactive-value
 const loading = ref(false)
+
+// 日期时间选择相关
+const showDatePicker = ref(false)
+const showTimePicker = ref(false)
+
+// 日期时间临时存储
+const pickerTimeRef = ref('')
+const pickerDate = ref('')
+const pickerTime = ref('')
 
 // 计算属性
 const typeOptions = ref([
@@ -311,6 +357,62 @@ const changePeriod = (val) => {
   }
 }
 
+// 日期时间选择方法
+const openStartDatePicker = () => {
+  // 如果已有开始时间，解析为日期
+  if (start_time.value) {
+    try {
+      const dateTime = dayjs(start_time.value)
+      pickerDate.value = dateTime.format('YYYY-MM-DD')
+      pickerTime.value = dateTime.format('HH:mm')
+    } catch (error) {
+      console.warn('解析开始时间失败:', error)
+      pickerDate.value = dayjs().format('YYYY-MM-DD')
+      pickerTime.value = dayjs().format('HH:mm')
+    }
+  } else {
+    pickerDate.value = dayjs().format('YYYY-MM-DD')
+    pickerTime.value = dayjs().format('HH:mm')
+  }
+  pickerTimeRef.value = 'start_time'
+  showDatePicker.value = true
+}
+
+const openEndDatePicker = () => {
+  // 如果已有结束时间，解析为日期
+  if (end_time.value) {
+    try {
+      const dateTime = dayjs(end_time.value)
+      pickerDate.value = dateTime.format('YYYY-MM-DD')
+      pickerTime.value = dateTime.format('HH:mm')
+    } catch (error) {
+      console.warn('解析结束时间失败:', error)
+      pickerDate.value = dayjs().add(1, 'day').format('YYYY-MM-DD')
+      pickerTime.value = dayjs().format('HH:mm')
+    }
+  } else {
+    pickerDate.value = dayjs().add(1, 'day').format('YYYY-MM-DD')
+    pickerTime.value = dayjs().format('HH:mm')
+  }
+  pickerTimeRef.value = 'end_time'
+  showDatePicker.value = true
+}
+
+const onPickerDateConfirm = () => {
+  showDatePicker.value = false
+  showTimePicker.value = true
+}
+
+const onPickerTimeConfirm = () => {
+  showTimePicker.value = false
+  // 组合日期和时间
+  if (pickerTimeRef.value === 'end_time') {
+    end_time.value = `${pickerDate.value} ${pickerTime.value}`
+  } else if (pickerTimeRef.value === 'start_time') {
+    start_time.value = `${pickerDate.value} ${pickerTime.value}`
+  }
+}
+
 // 生命周期
 onMounted(() => {
   globalStore.setTitle(t('app.task_add'))
@@ -405,6 +507,17 @@ onMounted(() => {
 
 .submit-button:active {
   transform: translateY(0);
+}
+
+/* 日期时间选择器弹窗样式 */
+.date-picker-dialog {
+  width: 100%;
+  min-height: 300px;
+}
+
+.time-picker-dialog {
+  width: 100%;
+  min-height: 200px;
 }
 
 /* 响应式调整 */

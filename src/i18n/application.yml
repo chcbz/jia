@@ -60,6 +60,9 @@ en:
     name_required: Task name is required
     type_required: Task type is required
     period_required: Task period is required
+    select_date_time: Select date and time
+    select_date: Select date
+    select_time: Select time
   gift:
     title: Gift Exchange
     pay: Direct Payment
@@ -197,6 +200,9 @@ zh-CN:
     name_required: 任务名称不能为空
     type_required: 请选择任务类型
     period_required: 请选择任务周期
+    select_date_time: 选择日期时间
+    select_date: 选择日期
+    select_time: 选择时间
   gift:
     title: 礼品兑换
     pay: 直接支付
