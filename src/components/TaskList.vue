@@ -1,11 +1,10 @@
 <template>
   <div class="task-list-container">
-  <var-action-sheet
-    :actions="actionSheetActions"
-    v-model:show="showActionSheet"
-    @select="handleActionSelect"
-    @update:show="onActionSheetShowChange"
-  />
+    <var-action-sheet 
+      :actions="opMenu" 
+      v-model:show="showOpMenu" 
+      @select="onClickOpMenu"
+    />
     
     <div class="tasks-section" v-if="list.length > 0">
       <div class="tasks-header">
@@ -64,6 +63,7 @@ import { useGlobalStore } from '../stores/global'
 import { useApiStore } from '../stores/api'
 import { useUtilStore } from '../stores/util'
 import dayjs from 'dayjs'
+import { Dialog } from '@varlet/ui';
 import { taskApi } from '../composables/useHttp'
 
 // 路由器
@@ -84,11 +84,6 @@ const opMenu = ref([
 const showOpMenu = ref(false)
 const selectId = ref(0)
 const currentTask = ref(null)
-const showActionSheet = ref(false)
-const actionSheetActions = ref([
-  { name: t('task.add'), key: 'add' },
-  { name: t('app.task_history'), key: 'history' }
-])
 
 // 常量
 const periodMap = {
@@ -111,11 +106,23 @@ const doShowOpMenu = (item) => {
 }
 
 const typeDict = (type) => {
-  return type > 1 ? t('task.type_pay') : t('task.type_notify')
+  const typeMap = {
+    1: t('task.type_notify'),
+    2: t('task.type_target'),
+    3: t('task.type_repayment'),
+    4: t('task.type_fixed_income')
+  }
+  return typeMap[type] || t('task.type_notify')
 }
 
 const getTaskTypeClass = (type) => {
-  return type > 1 ? 'type-pay' : 'type-notify'
+  const classMap = {
+    1: 'type-notify',
+    2: 'type-target',
+    3: 'type-repayment',
+    4: 'type-income'
+  }
+  return classMap[type] || 'type-notify'
 }
 
 const formatTaskTime = (task) => {
@@ -144,9 +151,13 @@ const formatAmount = (amount) => {
 
 const onClickOpMenu = (action) => {
   if (action.key === 'del') {
-    Dialog.confirm({
+    Dialog({
       title: t('task.del_alert'),
       message: `确定要删除任务 "${currentTask.value?.name}" 吗？`,
+      confirmButton: true,
+      cancelButton: true,
+      confirmButtonText: t('app.confirm'),
+      cancelButtonText: t('app.cancel'),
       onConfirm: () => {
         taskApi.delete('/delete', selectId.value, {
           onSuccess: (data) => {
@@ -180,9 +191,13 @@ const onClickOpMenu = (action) => {
       }
     })
   } else if (action.key === 'cancel') {
-    Dialog.confirm({
+    Dialog({
       title: t('task.cancel_alert'),
       message: `确定要取消任务 "${currentTask.value?.name}" 吗？`,
+      confirmButton: true,
+      cancelButton: true,
+      confirmButtonText: t('app.confirm'),
+      cancelButtonText: t('app.cancel'),
       onConfirm: () => {
         taskApi.delete('/cancel', selectId.value, {
           onSuccess: (data) => {
@@ -239,37 +254,6 @@ const fetchTasks = () => {
     }
   })
 }
-
-
-// ActionSheet 处理
-const handleActionSelect = (action) => {
-  switch (action.key) {
-    case 'add':
-      router.push({ name: 'TaskAdd' })
-      break
-    case 'list':
-      router.push({ name: 'TaskList' })
-      break
-    case 'history':
-      router.push({ name: 'TaskHistory' })
-      break
-  }
-}
-
-const onActionSheetShowChange = (show) => {
-  // 当 action sheet 隐藏且右侧边栏当前显示时，触发 toggleRightSidebar
-  if (!show && globalStore.showRightSidebar) {
-    globalStore.toggleRightSidebar()
-  }
-}
-
-// 监听右侧边栏显示状态
-watch(
-  () => globalStore.showRightSidebar,
-  (newValue) => {
-    showActionSheet.value = newValue
-  }
-)
 
 // 生命周期
 onMounted(() => {
@@ -335,14 +319,24 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.task-type-badge.type-pay {
-  background: #fff5f5;
-  color: #ff6b6b;
-}
-
 .task-type-badge.type-notify {
   background: #f0f9ff;
   color: #4dabf7;
+}
+
+.task-type-badge.type-target {
+  background: #fff7e6;
+  color: #fa8c16;
+}
+
+.task-type-badge.type-repayment {
+  background: #fff2f0;
+  color: #f5222d;
+}
+
+.task-type-badge.type-income {
+  background: #f6ffed;
+  color: #52c41a;
 }
 
 .task-name {

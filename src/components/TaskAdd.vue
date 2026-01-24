@@ -92,33 +92,30 @@
 
         <div class="form-section">
           <h3 class="section-title">{{ t('task.other_info') }}</h3>
-          <div>
+          <div class="form-field">
             {{ t('task.lunar') }}
             <var-switch 
               v-model="lunar" 
               :active-value="1" 
-              :inactive-value="0" 
-              class="form-field"
+              :inactive-value="0"
             />
           </div>
-          <div v-show="amountShow">
+          <div class="form-field" v-show="amountShow">
             {{ t('task.amount') }}
             <var-input
               v-model="amount"
               type="tel"
               :maxlength="6"
               v-show="amountShow"
-              class="form-field"
               :placeholder="t('task.amount_placeholder')"
             />
           </div>
-          <div>
+          <div class="form-field">
             {{ t('task.remind') }}
             <var-switch
               v-model="remind"
               :active-value="1"
               :inactive-value="0"
-              class="form-field"
             />
           </div>
         </div>

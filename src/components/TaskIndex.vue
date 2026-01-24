@@ -42,14 +42,24 @@
           <div v-if="day.taskCount > 0" class="task-indicator">
             <div v-if="day.taskCount > 0" class="task-type-dots">
               <span 
-                v-if="day.payCount > 0" 
-                class="type-dot type-pay"
-                :style="{ opacity: Math.min(day.payCount / 3, 1) }"
+                v-if="day.typeCounts.notify > 0" 
+                class="type-dot type-notify"
+                :style="{ opacity: Math.min(day.typeCounts.notify / 3, 1) }"
               ></span>
               <span 
-                v-if="day.notifyCount > 0" 
-                class="type-dot type-notify"
-                :style="{ opacity: Math.min(day.notifyCount / 3, 1) }"
+                v-if="day.typeCounts.target > 0" 
+                class="type-dot type-target"
+                :style="{ opacity: Math.min(day.typeCounts.target / 3, 1) }"
+              ></span>
+              <span 
+                v-if="day.typeCounts.repayment > 0" 
+                class="type-dot type-repayment"
+                :style="{ opacity: Math.min(day.typeCounts.repayment / 3, 1) }"
+              ></span>
+              <span 
+                v-if="day.typeCounts.income > 0" 
+                class="type-dot type-income"
+                :style="{ opacity: Math.min(day.typeCounts.income / 3, 1) }"
               ></span>
             </div>
           </div>
@@ -147,7 +157,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
@@ -242,8 +252,17 @@ const calendarDays = computed(() => {
 
 // 方法
 const createDayObject = (date, dateStr, today, dayTasks, isCurrentMonth) => {
-  const payCount = dayTasks.filter(task => task.type > 1).length
-  const notifyCount = dayTasks.filter(task => task.type <= 1).length
+  // 统计各种类型的任务数量
+  const typeCounts = {
+    notify: dayTasks.filter(task => task.type === 1).length,
+    target: dayTasks.filter(task => task.type === 2).length,
+    repayment: dayTasks.filter(task => task.type === 3).length,
+    income: dayTasks.filter(task => task.type === 4).length
+  }
+  
+  // 向后兼容：payCount 和 notifyCount
+  const payCount = typeCounts.target + typeCounts.repayment + typeCounts.income
+  const notifyCount = typeCounts.notify
   
   return {
     date: dateStr,
@@ -252,7 +271,8 @@ const createDayObject = (date, dateStr, today, dayTasks, isCurrentMonth) => {
     isToday: dateStr === today,
     taskCount: dayTasks.length,
     payCount,
-    notifyCount
+    notifyCount,
+    typeCounts
   }
 }
 
@@ -345,11 +365,23 @@ const doShowDetail = async (item) => {
 }
 
 const typeDict = (type) => {
-  return type > 1 ? t('task.type_pay') : t('task.type_notify')
+  const typeMap = {
+    1: t('task.type_notify'),
+    2: t('task.type_target'),
+    3: t('task.type_repayment'),
+    4: t('task.type_fixed_income')
+  }
+  return typeMap[type] || t('task.type_notify')
 }
 
 const getTaskTypeClass = (type) => {
-  return type > 1 ? 'type-pay' : 'type-notify'
+  const classMap = {
+    1: 'type-notify',
+    2: 'type-target',
+    3: 'type-repayment',
+    4: 'type-income'
+  }
+  return classMap[type] || 'type-notify'
 }
 
 const formatTaskTime = (task, full = false) => {
@@ -532,12 +564,20 @@ onMounted(() => {
   border-radius: 50%;
 }
 
-.type-dot.type-pay {
-  background: #ff6b6b;
-}
-
 .type-dot.type-notify {
   background: #4dabf7;
+}
+
+.type-dot.type-target {
+  background: #fa8c16;
+}
+
+.type-dot.type-repayment {
+  background: #f5222d;
+}
+
+.type-dot.type-income {
+  background: #52c41a;
 }
 
 /* 任务列表样式 */
@@ -596,14 +636,24 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.task-type-badge.type-pay {
-  background: #fff5f5;
-  color: #ff6b6b;
-}
-
 .task-type-badge.type-notify {
   background: #f0f9ff;
   color: #4dabf7;
+}
+
+.task-type-badge.type-target {
+  background: #fff7e6;
+  color: #fa8c16;
+}
+
+.task-type-badge.type-repayment {
+  background: #fff2f0;
+  color: #f5222d;
+}
+
+.task-type-badge.type-income {
+  background: #f6ffed;
+  color: #52c41a;
 }
 
 .task-name {

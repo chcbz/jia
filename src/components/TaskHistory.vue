@@ -63,6 +63,7 @@ import { useGlobalStore } from '../stores/global'
 import { useApiStore } from '../stores/api'
 import { useUtilStore } from '../stores/util'
 import dayjs from 'dayjs'
+import { Dialog } from '@varlet/ui'
 import { taskApi } from '../composables/useHttp'
 
 // 路由器
@@ -104,11 +105,23 @@ const doShowOpMenu = (item) => {
 }
 
 const typeDict = (type) => {
-  return type > 1 ? t('task.type_pay') : t('task.type_notify')
+  const typeMap = {
+    1: t('task.type_notify'),
+    2: t('task.type_target'),
+    3: t('task.type_repayment'),
+    4: t('task.type_fixed_income')
+  }
+  return typeMap[type] || t('task.type_notify')
 }
 
 const getTaskTypeClass = (type) => {
-  return type > 1 ? 'type-pay' : 'type-notify'
+  const classMap = {
+    1: 'type-notify',
+    2: 'type-target',
+    3: 'type-repayment',
+    4: 'type-income'
+  }
+  return classMap[type] || 'type-notify'
 }
 
 const formatTaskTime = (task) => {
@@ -132,9 +145,13 @@ const formatAmount = (amount) => {
 
 const onClickOpMenu = (key) => {
   if (key === 'del') {
-    Dialog.confirm({
+    Dialog({
       title: t('task.del_alert'),
       message: `确定要删除历史任务 "${currentTask.value?.name}" 吗？`,
+      confirmButton: true,
+      cancelButton: true,
+      confirmButtonText: t('app.confirm'),
+      cancelButtonText: t('app.cancel'),
       onConfirm: () => {
         taskApi.delete('/delete', selectId.value, {
           onSuccess: (data) => {
@@ -254,14 +271,24 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.task-type-badge.type-pay {
-  background: #fff5f5;
-  color: #ff6b6b;
-}
-
 .task-type-badge.type-notify {
   background: #f0f9ff;
   color: #4dabf7;
+}
+
+.task-type-badge.type-target {
+  background: #fff7e6;
+  color: #fa8c16;
+}
+
+.task-type-badge.type-repayment {
+  background: #fff2f0;
+  color: #f5222d;
+}
+
+.task-type-badge.type-income {
+  background: #f6ffed;
+  color: #52c41a;
 }
 
 .task-name {

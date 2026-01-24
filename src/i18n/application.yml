@@ -186,7 +186,7 @@ zh-CN:
     del: 删除任务
     cancel: 取消任务
     type_target: 目标
-    type_repayment: 还款计划
+    type_repayment: 固定支出
     type_fixed_income: 固定收入
     period_long_term: 长期
     period_yearly: 每年
