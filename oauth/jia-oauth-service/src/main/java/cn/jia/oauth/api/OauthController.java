@@ -9,9 +9,6 @@ import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
-import cn.jia.isp.entity.IspFileEntity;
-import cn.jia.isp.enums.IspFileTypeEnum;
-import cn.jia.isp.service.FileService;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.oauth.dto.GithubOauthTokenDTO;
 import cn.jia.oauth.dto.GithubOauthUserDTO;
@@ -70,7 +67,6 @@ public class OauthController {
     private final ClientService clientService;
     private final UserService userService;
     private final PermsService permsService;
-    private final FileService fileService;
     private final RestTemplate restTemplate;
 
     @Value("${oauth.third-party.wxmp.appid:}")
@@ -324,9 +320,7 @@ public class OauthController {
         user.setNickname(userDTO.getScreenName());
         String sex = userDTO.getGender();
         user.setSex("m".equals(sex) ? 1 : ("f".equals(sex) ? 2 : 0));
-        IspFileEntity ispFileEntity = fileService.create(userDTO.getProfileImageUrl(),
-                IspFileTypeEnum.FILE_TYPE_AVATAR, uid + ".jpg");
-        Optional.ofNullable(ispFileEntity).map(IspFileEntity::getUri).ifPresent(user::setAvatar);
+        Optional.ofNullable(userDTO.getProfileImageUrl()).ifPresent(user::setAvatar);
         log.debug("微博用户信息获取成功，昵称: {}", user.getNickname());
         
         request.getSession().setAttribute("user", user);
@@ -380,9 +374,7 @@ public class OauthController {
         user.setUsername(userDTO.getLogin());
         user.setNickname(userDTO.getName() != null ? userDTO.getName() : userDTO.getLogin());
         user.setEmail(userDTO.getEmail());
-        IspFileEntity ispFileEntity = fileService.create(userDTO.getAvatar_url(),
-                IspFileTypeEnum.FILE_TYPE_AVATAR, userDTO.getId() + ".jpg");
-        Optional.ofNullable(ispFileEntity).map(IspFileEntity::getUri).ifPresent(user::setAvatar);
+        Optional.ofNullable(userDTO.getAvatar_url()).ifPresent(user::setAvatar);
         user.setLocation(userDTO.getLocation());
         user.setRemark(userDTO.getBio());
         log.debug("GitHub用户信息获取成功，用户名: {}", user.getUsername());

@@ -1,5 +1,6 @@
 package cn.jia.isp.service.impl;
 
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.FileUtil;
 import cn.jia.core.util.ImgUtil;
@@ -75,6 +76,8 @@ public class FileServiceImpl implements FileService {
 
 		//保存文件信息
 		IspFileEntity cf = new IspFileEntity();
+		cf.init4Creation();
+		cf.setClientId(EsContextHolder.getContext().getClientId());
 		cf.setExtension(FileUtil.getExtension(actualFileName));
 		cf.setName(fileName);
 		cf.setSize((long) b.length);
