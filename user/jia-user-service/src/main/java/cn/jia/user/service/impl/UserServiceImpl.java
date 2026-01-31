@@ -503,10 +503,10 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
      */
     private void handleNewUserCreation(UserEntity user) {
         String avatarFileUri = Optional.ofNullable(user.getAvatar()).orElse("");
-        if (!avatarFileUri.startsWith(filePath)) {
+        if (avatarFileUri.startsWith("http")) {
             IspFileEntity ispFileEntity = fileService.create(avatarFileUri,
                     IspFileTypeEnum.FILE_TYPE_AVATAR, user.getJiacn() + ".jpg");
-            user.setAvatar(filePath + "/" + ispFileEntity.getUri());
+            user.setAvatar(ispFileEntity.getUri());
         }
         user.setPassword(StringUtil.isNotEmpty(user.getPassword()) ? PasswordUtil.encode(user.getPassword()) : null);
         baseDao.insert(user);
