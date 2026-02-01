@@ -50,7 +50,7 @@ public class CmsController {
         String clientId = EsSecurityHandler.checkClientId(request);
         CmsTableEntity example = page.getSearch() == null ? new CmsTableEntity() : page.getSearch();
         example.setClientId(clientId);
-        PageInfo<CmsTableEntity> cmsList = cmsService.listTable(example, page.getPageNum(), page.getPageSize());
+        PageInfo<CmsTableEntity> cmsList = cmsService.listTable(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<CmsTableEntity> result = new JsonResultPage<>(cmsList.getList());
         result.setPageNum(cmsList.getPageNum());
         result.setTotal(cmsList.getTotal());
@@ -119,7 +119,7 @@ public class CmsController {
     public Object listColumn(@RequestBody JsonRequestPage<CmsColumnEntity> page, HttpServletRequest request) {
         EsSecurityHandler.checkClientId(request);
         CmsColumnEntity example = page.getSearch();
-        PageInfo<CmsColumnEntity> cmsList = cmsService.listColumn(example, page.getPageNum(), page.getPageSize());
+        PageInfo<CmsColumnEntity> cmsList = cmsService.listColumn(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<CmsColumnEntity> result = new JsonResultPage<>(cmsList.getList());
         result.setPageNum(cmsList.getPageNum());
         result.setTotal(cmsList.getTotal());
@@ -231,7 +231,7 @@ public class CmsController {
         example.setClientId(clientId);
         CmsConfigEntity config = cmsService.selectConfig(clientId);
         example.setName("cms_" + config.getTablePrefix() + "_" + example.getName());
-        PageInfo<Map<String, Object>> cmsList = cmsService.listRow(example, page.getPageNum(), page.getPageSize());
+        PageInfo<Map<String, Object>> cmsList = cmsService.listRow(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<Map<String, Object>> result = new JsonResultPage<>(cmsList.getList());
         result.setPageNum(cmsList.getPageNum());
         result.setTotal(cmsList.getTotal());
@@ -272,7 +272,7 @@ public class CmsController {
         record.setTableName("cms_" + config.getTablePrefix() + "_" + record.getTableName());
         CmsColumnEntity example = new CmsColumnEntity();
         example.setTableId(table.getId());
-        List<CmsColumnEntity> columns = cmsService.listColumn(example, 1, Integer.MAX_VALUE).getList();
+        List<CmsColumnEntity> columns = cmsService.listColumn(example, 1, Integer.MAX_VALUE, null).getList();
         String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);
         for (CmsColumnEntity c : columns) {
             for (CmsRowEntity r : record.getRows()) {
@@ -337,7 +337,7 @@ public class CmsController {
         example.setTableId(table.getId());
 
         // 获取列列表
-        List<CmsColumnEntity> columns = cmsService.listColumn(example, 1, Integer.MAX_VALUE).getList();
+        List<CmsColumnEntity> columns = cmsService.listColumn(example, 1, Integer.MAX_VALUE, null).getList();
 
         // 获取文件路径配置
         String filePath = SpringContextHolder.getProperty("jia.file.path", String.class);

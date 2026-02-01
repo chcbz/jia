@@ -8,7 +8,7 @@ import com.github.pagehelper.PageInfo;
 import java.util.List;
 
 public interface GroupService extends IBaseService<GroupEntity> {
-	PageInfo<GroupEntity> findPage(GroupEntity example, int pageNo, int pageSize);
+	PageInfo<GroupEntity> findPage(GroupEntity example, int pageNum, int pageSize, String orderBy);
 	
 	List<GroupEntity> findByUserId(Long userId);
 	

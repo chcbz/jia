@@ -291,7 +291,7 @@ public class WxMpController {
                 newsMessage.setToUserName(message.getFromUser());
                 PointGiftVO example = new PointGiftVO();
                 example.setStatus(WxConstants.COMMON_ENABLE);
-                PageInfo<PointGiftEntity> pointResult = giftService.list(1, 8, example);
+                PageInfo<PointGiftEntity> pointResult = giftService.list(1, 8, example, null);
                 for (PointGiftEntity gift : pointResult.getList()) {
                     WxMpXmlOutNewsMessage.Item item = new WxMpXmlOutNewsMessage.Item();
                     item.setDescription(String.valueOf(gift.getDescription()));
@@ -871,7 +871,7 @@ public class WxMpController {
     public Object listMpInfo(@RequestBody JsonRequestPage<MpInfoVO> page, HttpServletRequest request) {
         MpInfoVO example = Optional.ofNullable(page.getSearch()).orElse(new MpInfoVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
-        PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
+        PageInfo<MpInfoEntity> list = mpInfoService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<MpInfoEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
         result.setTotal(list.getTotal());

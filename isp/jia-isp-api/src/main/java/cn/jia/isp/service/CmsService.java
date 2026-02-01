@@ -14,11 +14,11 @@ public interface CmsService {
      * 获取表格列表
      *
      * @param example 查询示例
-     * @param pageNo  页码
+     * @param pageNum  页码
      * @param pageSize 每页大小
      * @return 表格信息分页结果
      */
-	PageInfo<CmsTableEntity> listTable(CmsTableEntity example, int pageNo, int pageSize);
+	PageInfo<CmsTableEntity> listTable(CmsTableEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新表格
@@ -64,11 +64,11 @@ public interface CmsService {
      * 获取列列表
      *
      * @param example 查询示例
-     * @param pageNo  页码
+     * @param pageNum  页码
      * @param pageSize 每页大小
      * @return 列信息分页结果
      */
-	PageInfo<CmsColumnEntity> listColumn(CmsColumnEntity example, int pageNo, int pageSize);
+	PageInfo<CmsColumnEntity> listColumn(CmsColumnEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新列
@@ -128,11 +128,11 @@ public interface CmsService {
      * 获取行数据列表
      *
      * @param example 查询示例
-     * @param pageNo  页码
+     * @param pageNum  页码
      * @param pageSize 每页大小
      * @return 行数据分页结果
      */
-	PageInfo<Map<String, Object>> listRow(CmsRowExample example, int pageNo, int pageSize);
+	PageInfo<Map<String, Object>> listRow(CmsRowExample example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新行数据

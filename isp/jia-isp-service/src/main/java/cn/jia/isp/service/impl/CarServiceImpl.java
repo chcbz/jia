@@ -29,8 +29,8 @@ public class CarServiceImpl implements CarService {
 	private CarBrandVersionDao carBrandVersionDao;
 	
 	@Override
-	public PageInfo<CarBrandEntity> listBrand(CarBrandEntity example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<CarBrandEntity> listBrand(CarBrandEntity example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(carBrandDao.selectByEntity(example));
 	}
 	@Override
@@ -60,8 +60,8 @@ public class CarServiceImpl implements CarService {
 	}
 	
 	@Override
-	public PageInfo<CarBrandAudiEntity> listBrandAudi(CarBrandAudiEntity example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<CarBrandAudiEntity> listBrandAudi(CarBrandAudiEntity example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(carBrandAudiDao.selectByEntity(example));
 	}
 	@Override
@@ -85,8 +85,8 @@ public class CarServiceImpl implements CarService {
 	}
 	
 	@Override
-	public PageInfo<CarBrandMfEntity> listBrandMf(CarBrandMfEntity example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<CarBrandMfEntity> listBrandMf(CarBrandMfEntity example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(carBrandMfDao.selectByEntity(example));
 	}
 	@Override
@@ -110,8 +110,8 @@ public class CarServiceImpl implements CarService {
 	}
 	
 	@Override
-	public PageInfo<CarBrandVersionEntity> listBrandVersion(CarBrandVersionEntity example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<CarBrandVersionEntity> listBrandVersion(CarBrandVersionEntity example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(carBrandVersionDao.selectByEntity(example));
 	}
 	@Override

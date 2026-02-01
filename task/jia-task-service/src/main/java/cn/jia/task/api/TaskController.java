@@ -102,7 +102,7 @@ public class TaskController {
     public Object search(@RequestBody JsonRequestPage<TaskPlanVO> page) {
         TaskPlanVO plan = Optional.ofNullable(page.getSearch()).orElse(new TaskPlanVO());
         plan.setClientId(EsContextHolder.getContext().getClientId());
-        PageInfo<TaskPlanEntity> taskList = taskService.findPage(plan, page.getPageSize(), page.getPageNum(), page.getOrderBy());
+        PageInfo<TaskPlanEntity> taskList = taskService.findPage(plan, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<TaskPlanEntity> result = new JsonResultPage<>(taskList.getList());
         result.setPageNum(taskList.getPageNum());
         result.setTotal(taskList.getTotal());
@@ -117,7 +117,7 @@ public class TaskController {
     @RequestMapping(value = "/item/search", method = RequestMethod.POST)
     public Object searchItem(@RequestBody JsonRequestPage<TaskDetailVO> page) {
         TaskDetailVO item = Optional.ofNullable(page.getSearch()).orElse(new TaskDetailVO());
-        PageInfo<TaskDetailEntity> taskList = taskService.findItems(item, page.getPageNum(), page.getPageSize());
+        PageInfo<TaskDetailEntity> taskList = taskService.findItems(item, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<TaskDetailEntity> result = new JsonResultPage<>(taskList.getList());
         result.setPageNum(taskList.getPageNum());
         result.setTotal(taskList.getTotal());

@@ -68,9 +68,9 @@ public class GiftServiceImpl implements GiftService {
 	}
 
 	@Override
-	public PageInfo<PointGiftEntity> list(int pageNo, int pageSize, PointGiftVO example) {
+	public PageInfo<PointGiftEntity> list(int pageNum, int pageSize, PointGiftVO example, String orderBy) {
 		example = example == null ? new PointGiftVO() : example;
-		PageHelper.startPage(pageNo, pageSize);
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		List<PointGiftEntity> list = pointGiftDao.selectByEntity(example);
 		return PageInfo.of(list);
 	}
@@ -167,8 +167,8 @@ public class GiftServiceImpl implements GiftService {
 	 * 获取礼品的兑换情况
 	 */
 	@Override
-	public PageInfo<PointGiftUsageEntity> usageListByGift(int pageNum, int pageSize, Long giftId) {
-		PageHelper.startPage(pageNum, pageSize);
+	public PageInfo<PointGiftUsageEntity> usageListByGift(int pageNum, int pageSize, Long giftId, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		List<PointGiftUsageEntity> list = pointGiftUsageDao.listByGift(giftId);
 		return PageInfo.of(list);
 	}
@@ -177,8 +177,8 @@ public class GiftServiceImpl implements GiftService {
 	 * 获取用户的礼品兑换情况
 	 */
 	@Override
-	public PageInfo<PointGiftUsageEntity> usageListByUser(int pageNum, int pageSize, String jiacn) {
-		PageHelper.startPage(pageNum, pageSize);
+	public PageInfo<PointGiftUsageEntity> usageListByUser(int pageNum, int pageSize, String jiacn, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		List<PointGiftUsageEntity> list = pointGiftUsageDao.listByUser(jiacn);
 		return PageInfo.of(list);
 	}

@@ -55,7 +55,7 @@ public class GroupController {
 	@RequestMapping(value = "/get/users", method = RequestMethod.POST)
 	public Object findUsers(@RequestBody JsonRequestPage<GroupEntity> page) {
 		GroupEntity group = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
-		PageInfo<UserEntity> userList = userService.listByGroupId(group.getId(), page.getPageSize(), page.getPageNum());
+		PageInfo<UserEntity> userList = userService.listByGroupId(group.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
 		result.setPageNum(userList.getPageNum());
 		result.setTotal(userList.getTotal());
@@ -72,7 +72,7 @@ public class GroupController {
 	@RequestMapping(value = "/get/roles", method = RequestMethod.POST)
 	public Object findRoles(@RequestBody JsonRequestPage<GroupEntity> page) {
 		GroupEntity group = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
-		PageInfo<RoleEntity> roleList = roleService.listByGroupId(group.getId(), page.getPageSize(), page.getPageNum());
+		PageInfo<RoleEntity> roleList = roleService.listByGroupId(group.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
 		result.setPageNum(roleList.getPageNum());
 		result.setTotal(roleList.getTotal());
@@ -127,7 +127,7 @@ public class GroupController {
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<GroupEntity> page) {
 		GroupEntity example = Optional.ofNullable(page.getSearch()).orElse(new GroupEntity());
-		PageInfo<GroupEntity> groupList = groupService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
+		PageInfo<GroupEntity> groupList = groupService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<GroupEntity> result = new JsonResultPage<>(groupList.getList());
 		result.setPageNum(groupList.getPageNum());
 		result.setTotal(groupList.getTotal());

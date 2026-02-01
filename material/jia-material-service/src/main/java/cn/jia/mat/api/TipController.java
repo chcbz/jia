@@ -77,7 +77,7 @@ public class TipController {
 	 */
 	@PostMapping(value = "/list")
 	public Object list(@RequestBody JsonRequestPage<MatTipEntity> page) {
-		PageInfo<MatTipEntity> list = tipService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum(), page.getOrderBy());
+		PageInfo<MatTipEntity> list = tipService.findPage(page.getSearch(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<MatTipEntity> result = new JsonResultPage<>(list.getList());
 		result.setPageNum(list.getPageNum());
 		result.setTotal(list.getTotal());

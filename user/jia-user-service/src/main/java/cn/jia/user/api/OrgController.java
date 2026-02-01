@@ -118,8 +118,7 @@ public class OrgController {
 	public Object findUsers(@RequestBody JsonRequestPage<UserVO> page) {
 		UserVO example = Optional.ofNullable(page.getSearch()).orElse(new UserVO());
 		ValidUtil.assertNotNull(example, UserErrorConstants.PARAMETER_INCORRECT.getCode());
-		PageInfo<UserEntity> userList = userService.listByOrgId(example.getOrgId(), page.getPageSize(),
-				page.getPageNum());
+		PageInfo<UserEntity> userList = userService.listByOrgId(example.getOrgId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
 		result.setPageNum(userList.getPageNum());
 		result.setTotal(userList.getTotal());
@@ -169,7 +168,8 @@ public class OrgController {
 	@PreAuthorize("hasAuthority('org-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<OrgEntity> page) {
-		PageInfo<OrgEntity> orgList = orgService.list(page.getPageNum(), page.getPageSize());
+		String orderBy = page.getOrderBy();
+		PageInfo<OrgEntity> orgList = orgService.list(page.getPageNum(), page.getPageSize(), orderBy);
 		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
 		result.setPageNum(orgList.getPageNum());
 		result.setTotal(orgList.getTotal());
@@ -185,7 +185,8 @@ public class OrgController {
 	@RequestMapping(value = "/list/sub", method = RequestMethod.POST)
 	public Object listSub(@RequestBody JsonRequestPage<OrgEntity> page) {
 		OrgEntity org = Optional.ofNullable(page.getSearch()).orElse(new OrgEntity());
-		PageInfo<OrgEntity> orgList = orgService.listSub(org.getId(), page.getPageNum(), page.getPageSize());
+		String orderBy = page.getOrderBy();
+		PageInfo<OrgEntity> orgList = orgService.listSub(org.getId(), page.getPageNum(), page.getPageSize(), orderBy);
 		JsonResultPage<OrgEntity> result = new JsonResultPage<>(orgList.getList());
 		result.setPageNum(orgList.getPageNum());
 		result.setTotal(orgList.getTotal());

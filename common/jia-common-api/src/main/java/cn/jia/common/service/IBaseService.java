@@ -20,7 +20,7 @@ public interface IBaseService<T> {
 
     List<T> findList(T query);
 
-    PageInfo<T> findPage(T query, int pageSize, int pageNo);
+    PageInfo<T> findPage(T query, int pageNum, int pageSize);
 
-    PageInfo<T> findPage(T query, int pageSize, int pageNo, String orderBy);
+    PageInfo<T> findPage(T query, int pageNum, int pageSize, String orderBy);
 }

@@ -70,8 +70,8 @@ public class WorkflowServiceImpl implements WorkflowService {
     }
 
     @Override
-    public Page<Deployment> getDeployment(DeploymentExample example, int pageNo, int pageSize) {
-        Page<Deployment> page = new Page<>(pageNo, pageSize);
+    public Page<Deployment> getDeployment(DeploymentExample example, int pageNum, int pageSize, String orderBy) {
+        Page<Deployment> page = new Page<>(pageNum, pageSize);
         DeploymentQuery query = repositoryService.createDeploymentQuery().tenantIdIn(EsContextHolder.getContext().getClientId());
         if (example != null) {
             if (example.getName() != null) {
@@ -80,7 +80,7 @@ public class WorkflowServiceImpl implements WorkflowService {
         }
         query.orderByDeploymentTime().desc();
         page.setTotal(query.count());
-        page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
+        page.addAll(query.listPage((pageNum - 1) * pageSize, pageSize));
         return page;
     }
 
@@ -105,8 +105,8 @@ public class WorkflowServiceImpl implements WorkflowService {
     }
 
     @Override
-    public Page<ProcessDefinition> getProcessDefinition(ProcessDefinitionExample example, int pageNo, int pageSize) {
-        Page<ProcessDefinition> page = new Page<>(pageNo, pageSize);
+    public Page<ProcessDefinition> getProcessDefinition(ProcessDefinitionExample example, int pageNum, int pageSize, String orderBy) {
+        Page<ProcessDefinition> page = new Page<>(pageNum, pageSize);
         ProcessDefinitionQuery query = repositoryService.createProcessDefinitionQuery().tenantIdIn(EsContextHolder.getContext().getClientId());
         if (StringUtil.isNotEmpty(example.getKey())) {
             query.processDefinitionKeyLike("%" + example.getKey() + "%");
@@ -126,7 +126,7 @@ public class WorkflowServiceImpl implements WorkflowService {
         query.orderByDeploymentId().desc();
 
         page.setTotal(query.count());
-        page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
+        page.addAll(query.listPage((pageNum - 1) * pageSize, pageSize));
         return page;
     }
 
@@ -162,8 +162,8 @@ public class WorkflowServiceImpl implements WorkflowService {
     }
 
     @Override
-    public Page<Task> getTasks(TaskExample example, int pageNo, int pageSize) {
-        Page<Task> page = new Page<>(pageNo, pageSize);
+    public Page<Task> getTasks(TaskExample example, int pageNum, int pageSize, String orderBy) {
+        Page<Task> page = new Page<>(pageNum, pageSize);
         TaskQuery query = taskService.createTaskQuery();
         if (example != null) {
             if (StringUtil.isNotEmpty(example.getAssignee())) {
@@ -193,7 +193,7 @@ public class WorkflowServiceImpl implements WorkflowService {
         }
         query.tenantIdIn(EsContextHolder.getContext().getClientId()).orderByTaskCreateTime().desc();
         page.setTotal(query.count());
-        page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
+        page.addAll(query.listPage((pageNum - 1) * pageSize, pageSize));
         return page;
     }
 
@@ -260,8 +260,8 @@ public class WorkflowServiceImpl implements WorkflowService {
     }
 
     @Override
-    public Page<HistoricTaskInstance> getHistorys(TaskExample example, int pageNo, int pageSize) {
-        Page<HistoricTaskInstance> page = new Page<>(pageNo, pageSize);
+    public Page<HistoricTaskInstance> getHistorys(TaskExample example, int pageNum, int pageSize, String orderBy) {
+        Page<HistoricTaskInstance> page = new Page<>(pageNum, pageSize);
         HistoricTaskInstanceQuery query = historyService.createHistoricTaskInstanceQuery();
         if (example != null) {
             if (StringUtil.isNotEmpty(example.getAssignee())) {
@@ -286,16 +286,16 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         query = query.tenantIdIn(EsContextHolder.getContext().getClientId()).finished().orderByTaskDueDate().desc();
         page.setTotal(query.count());
-        page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
+        page.addAll(query.listPage((pageNum - 1) * pageSize, pageSize));
         return page;
     }
 
     @Override
-    public Page<HistoricTaskInstance> getHistorysByBusinessKey(String businessKey, int pageNo, int pageSize) {
-        Page<HistoricTaskInstance> page = new Page<>(pageNo, pageSize);
+    public Page<HistoricTaskInstance> getHistorysByBusinessKey(String businessKey, int pageNum, int pageSize, String orderBy) {
+        Page<HistoricTaskInstance> page = new Page<>(pageNum, pageSize);
         HistoricTaskInstanceQuery query = historyService.createHistoricTaskInstanceQuery().processInstanceBusinessKey(businessKey).tenantIdIn(EsContextHolder.getContext().getClientId()).finished().orderByHistoricTaskInstanceEndTime().asc();
         page.setTotal(query.count());
-        page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
+        page.addAll(query.listPage((pageNum - 1) * pageSize, pageSize));
         return page;
     }
 
@@ -305,8 +305,8 @@ public class WorkflowServiceImpl implements WorkflowService {
     }
 
     @Override
-    public Page<HistoricProcessInstance> getHistoricProcessInstances(ProcessInstanceExample example, int pageNo, int pageSize) {
-        Page<HistoricProcessInstance> page = new Page<>(pageNo, pageSize);
+    public Page<HistoricProcessInstance> getHistoricProcessInstances(ProcessInstanceExample example, int pageNum, int pageSize, String orderBy) {
+        Page<HistoricProcessInstance> page = new Page<>(pageNum, pageSize);
         HistoricProcessInstanceQuery query = historyService.createHistoricProcessInstanceQuery();
         if (example != null) {
             if (StringUtil.isNotEmpty(example.getApplicant())) {
@@ -337,7 +337,7 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         query.tenantIdIn(EsContextHolder.getContext().getClientId()).orderByProcessInstanceStartTime().desc();
         page.setTotal(query.count());
-        page.addAll(query.listPage((pageNo - 1) * pageSize, pageSize));
+        page.addAll(query.listPage((pageNum - 1) * pageSize, pageSize));
         return page;
     }
 

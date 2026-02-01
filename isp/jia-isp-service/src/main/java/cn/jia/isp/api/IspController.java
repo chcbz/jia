@@ -49,7 +49,7 @@ public class IspController {
         String clientId = EsSecurityHandler.checkClientId(request);
         IspServerEntity example = Optional.ofNullable(page.getSearch()).orElse(new IspServerEntity());
         example.setClientId(clientId);
-        PageInfo<IspServerEntity> ispList = ispService.listServer(example, page.getPageNum(), page.getPageSize());
+        PageInfo<IspServerEntity> ispList = ispService.listServer(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<IspServerEntity> result = new JsonResultPage<>(ispList.getList());
         result.setPageNum(ispList.getPageNum());
         result.setTotal(ispList.getTotal());
@@ -165,7 +165,7 @@ public class IspController {
         IspServerEntity ispServer = new IspServerEntity();
         ispServer.setServerName(name);
         ispServer.setClientId(EsSecurityHandler.clientId(request));
-        PageInfo<IspServerEntity> list = ispService.listServer(ispServer, 1, 1);
+        PageInfo<IspServerEntity> list = ispService.listServer(ispServer, 1, 1, null);
         if (list.getSize() == 0) {
             throw new EsRuntimeException(IspErrorConstants.DATA_NOT_FOUND);
         }
@@ -175,7 +175,7 @@ public class IspController {
 
         IspDomainEntity ispDomain = new IspDomainEntity();
         ispDomain.setServerId(ispServer.getId());
-        PageInfo<IspDomainEntity> domainList = ispService.listDomain(ispDomain, 1, Integer.MAX_VALUE);
+        PageInfo<IspDomainEntity> domainList = ispService.listDomain(ispDomain, 1, Integer.MAX_VALUE, null);
         for (IspDomainEntity record : domainList.getList()) {
             String[] domainSplit = record.getDomainName().split("\\.");
             String domainName = domainSplit[domainSplit.length - 2] + "." + domainSplit[domainSplit.length - 1];

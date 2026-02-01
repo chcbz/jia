@@ -52,14 +52,14 @@ public class RoleServiceImpl extends BaseServiceImpl<UserRoleDao, RoleEntity> im
     }
 
     @Override
-    public PageInfo<RoleEntity> listByUserId(Long userId, int pageSize, int pageNum) {
-        PageHelper.startPage(pageNum, pageSize);
+    public PageInfo<RoleEntity> listByUserId(Long userId, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(baseDao.selectByUserId(userId));
     }
 
     @Override
-    public PageInfo<RoleEntity> listByGroupId(Long groupId, int pageSize, int pageNum) {
-        PageHelper.startPage(pageNum, pageSize);
+    public PageInfo<RoleEntity> listByGroupId(Long groupId, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(baseDao.selectByGroupId(groupId));
     }
 
@@ -114,8 +114,8 @@ public class RoleServiceImpl extends BaseServiceImpl<UserRoleDao, RoleEntity> im
     }
 
     @Override
-    public PageInfo<PermsRelEntity> listPerms(Long roleId, int pageSize, int pageNum) {
-        PageHelper.startPage(pageNum, pageSize);
+    public PageInfo<PermsRelEntity> listPerms(Long roleId, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(userPermsRelDao.selectByRoleId(roleId));
     }
 }

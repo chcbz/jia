@@ -169,7 +169,7 @@ public class SmsController {
     public Object listSend(@RequestBody JsonRequestPage<SmsSendVO> page, HttpServletRequest request) {
         SmsSendVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsSendVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
-        PageInfo<SmsSendEntity> list = smsService.listSend(example, page.getPageNum(), page.getPageSize());
+        PageInfo<SmsSendEntity> list = smsService.listSend(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<SmsSendEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
         result.setTotal(list.getTotal());
@@ -275,7 +275,7 @@ public class SmsController {
     @RequestMapping(value = "/reply/list", method = RequestMethod.POST)
     public Object listReply(@RequestBody JsonRequestPage<SmsReplyEntity> page, HttpServletRequest request) {
         SmsReplyEntity example = Optional.ofNullable(page.getSearch()).orElse(new SmsReplyEntity());
-        PageInfo<SmsReplyEntity> list = smsService.listReply(example, page.getPageNum(), page.getPageSize());
+        PageInfo<SmsReplyEntity> list = smsService.listReply(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<SmsReplyEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
         result.setTotal(list.getTotal());
@@ -376,7 +376,7 @@ public class SmsController {
     public Object listTemplate(@RequestBody JsonRequestPage<SmsTemplateVO> page, HttpServletRequest request) {
         SmsTemplateVO example = Optional.ofNullable(page.getSearch()).orElse(new SmsTemplateVO());
         example.setClientId(EsContextHolder.getContext().getClientId());
-        PageInfo<SmsTemplateEntity> list = smsService.listTemplate(example, page.getPageNum(), page.getPageSize());
+        PageInfo<SmsTemplateEntity> list = smsService.listTemplate(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
         JsonResultPage<SmsTemplateEntity> result = new JsonResultPage<>(list.getList());
         result.setPageNum(list.getPageNum());
         result.setTotal(list.getTotal());

@@ -10,9 +10,24 @@ import java.util.List;
 public interface OrgService extends IBaseService<OrgEntity> {
 	OrgEntity findParent(Long id);
 
-	PageInfo<OrgEntity> list(int pageNo, int pageSize);
-	
-	PageInfo<OrgEntity> listSub(Long orgId, int pageNo, int pageSize);
+	/**
+	 * 获取组织架构列表
+	 * @param pageNum 页码
+	 * @param pageSize 每页数量
+	 * @param orderBy 排序字段
+	 * @return 组织架构列表
+	 */
+	PageInfo<OrgEntity> list(int pageNum, int pageSize, String orderBy);
+
+	/**
+	 * 获取子组织架构列表
+	 * @param parentId 父级ID
+	 * @param pageNum 页码
+	 * @param pageSize 每页数量
+	 * @param orderBy 排序字段
+	 * @return 子组织架构列表
+	 */
+	PageInfo<OrgEntity> listSub(Long parentId, int pageNum, int pageSize, String orderBy);
 	
 	List<OrgEntity> findByUserId(Long userId);
 

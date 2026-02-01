@@ -34,8 +34,8 @@ public class IspServiceImpl implements IspService {
     private IspDomainDao ispDomainDao;
 
     @Override
-    public PageInfo<IspServerEntity> listServer(IspServerEntity example, int pageNo, int pageSize) {
-        PageHelper.startPage(pageNo, pageSize);
+    public PageInfo<IspServerEntity> listServer(IspServerEntity example, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(ispServerDao.selectByEntity(example));
     }
 
@@ -95,8 +95,8 @@ public class IspServiceImpl implements IspService {
     }
 
     @Override
-    public PageInfo<IspDomainEntity> listDomain(IspDomainEntity example, int pageNo, int pageSize) {
-        PageHelper.startPage(pageNo, pageSize);
+    public PageInfo<IspDomainEntity> listDomain(IspDomainEntity example, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(ispDomainDao.selectByEntity(example));
     }
 }

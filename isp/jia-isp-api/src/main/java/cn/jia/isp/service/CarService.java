@@ -14,11 +14,11 @@ public interface CarService {
     /**
      * 查询品牌列表
      * @param example 查询条件
-     * @param pageNo 页码
+     * @param pageNum 页码
      * @param pageSize 每页记录数
      * @return 包含品牌列表的 PageInfo 对象
      */
-    PageInfo<CarBrandEntity> listBrand(CarBrandEntity example, int pageNo, int pageSize);
+    PageInfo<CarBrandEntity> listBrand(CarBrandEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新品牌
@@ -51,11 +51,11 @@ public interface CarService {
     /**
      * 查询 Audi 品牌列表
      * @param example 查询条件
-     * @param pageNo 页码
+     * @param pageNum 页码
      * @param pageSize 每页记录数
      * @return 包含 Audi 品牌列表的 PageInfo 对象
      */
-    PageInfo<CarBrandAudiEntity> listBrandAudi(CarBrandAudiEntity example, int pageNo, int pageSize);
+    PageInfo<CarBrandAudiEntity> listBrandAudi(CarBrandAudiEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新 Audi 品牌
@@ -88,11 +88,11 @@ public interface CarService {
     /**
      * 查询 MF 品牌列表
      * @param example 查询条件
-     * @param pageNo 页码
+     * @param pageNum 页码
      * @param pageSize 每页记录数
      * @return 包含 MF 品牌列表的 PageInfo 对象
      */
-    PageInfo<CarBrandMfEntity> listBrandMf(CarBrandMfEntity example, int pageNo, int pageSize);
+    PageInfo<CarBrandMfEntity> listBrandMf(CarBrandMfEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新 MF 品牌
@@ -125,11 +125,11 @@ public interface CarService {
     /**
      * 查询品牌版本列表
      * @param example 查询条件
-     * @param pageNo 页码
+     * @param pageNum 页码
      * @param pageSize 每页记录数
      * @return 包含品牌版本列表的 PageInfo 对象
      */
-    PageInfo<CarBrandVersionEntity> listBrandVersion(CarBrandVersionEntity example, int pageNo, int pageSize);
+    PageInfo<CarBrandVersionEntity> listBrandVersion(CarBrandVersionEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新品牌版本

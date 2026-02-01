@@ -69,7 +69,8 @@ public class WorkflowController {
     @RequestMapping(value = "/deployment/list", method = RequestMethod.POST)
     public Object getDeployment(@RequestBody JsonRequestPage<DeploymentExample> page) {
         DeploymentExample example = Optional.ofNullable(page.getSearch()).orElse(new DeploymentExample());
-        Page<Deployment> list = workflowService.getDeployment(example, page.getPageNum(), page.getPageSize());
+        String orderBy = page.getOrderBy();
+        Page<Deployment> list = workflowService.getDeployment(example, page.getPageNum(), page.getPageSize(), orderBy);
         List<Map<String, Object>> deployments = new ArrayList<>();
         for (Deployment d : list) {
             Map<String, Object> deployment = new HashMap<>();
@@ -163,7 +164,8 @@ public class WorkflowController {
     @RequestMapping(value = "/definition/list", method = RequestMethod.POST)
     public Object getDefinition(@RequestBody JsonRequestPage<ProcessDefinitionExample> page) {
         ProcessDefinitionExample example = Optional.ofNullable(page.getSearch()).orElse(new ProcessDefinitionExample());
-        Page<ProcessDefinition> list = workflowService.getProcessDefinition(example, page.getPageNum(), page.getPageSize());
+        String orderBy = page.getOrderBy();
+        Page<ProcessDefinition> list = workflowService.getProcessDefinition(example, page.getPageNum(), page.getPageSize(), orderBy);
         List<Map<String, Object>> deployments = new ArrayList<>();
         for (ProcessDefinition d : list) {
             Map<String, Object> deployment = new HashMap<>();
@@ -295,7 +297,8 @@ public class WorkflowController {
     @PostMapping(value = "/list/wait")
     public Object listWait(@RequestBody JsonRequestPage<TaskExample> page) {
         TaskExample example = Optional.ofNullable(page.getSearch()).orElse(new TaskExample());
-        Page<Task> taskList = workflowService.getTasks(example, page.getPageNum(), page.getPageSize());
+        String orderBy = page.getOrderBy();
+        Page<Task> taskList = workflowService.getTasks(example, page.getPageNum(), page.getPageSize(), orderBy);
         List<Map<String, Object>> tasks = new ArrayList<>();
         for (Task task : taskList) {
             Map<String, Object> t = new HashMap<>();
@@ -332,7 +335,8 @@ public class WorkflowController {
     @PostMapping(value = "/list/history")
     public Object listHistory(@RequestBody JsonRequestPage<TaskExample> page) {
         TaskExample example = Optional.ofNullable(page.getSearch()).orElse(new TaskExample());
-        Page<HistoricTaskInstance> taskList = workflowService.getHistorys(example, page.getPageNum(), page.getPageSize());
+        String orderBy = page.getOrderBy();
+        Page<HistoricTaskInstance> taskList = workflowService.getHistorys(example, page.getPageNum(), page.getPageSize(), orderBy);
         List<Map<String, Object>> tasks = new ArrayList<>();
         for (HistoricTaskInstance task : taskList) {
             Map<String, Object> t = new HashMap<>();
@@ -365,8 +369,9 @@ public class WorkflowController {
      */
     @PostMapping(value = "/list/process")
     public Object listHistoryByBusinessKey(@RequestBody JsonRequestPage<String> page) {
+        String orderBy = page.getOrderBy();
         Page<HistoricTaskInstance> taskList =
-				workflowService.getHistorysByBusinessKey(page.getSearch(), page.getPageNum(), page.getPageSize());
+                workflowService.getHistorysByBusinessKey(page.getSearch(), page.getPageNum(), page.getPageSize(), orderBy);
         List<Map<String, Object>> tasks = new ArrayList<>();
         for (HistoricTaskInstance task : taskList) {
             Map<String, Object> t = new HashMap<>();
@@ -407,8 +412,9 @@ public class WorkflowController {
     @PostMapping(value = "/list/my")
     public Object listHistoricProcessInstances(@RequestBody JsonRequestPage<ProcessInstanceExample> page, HttpServletRequest request) {
         ProcessInstanceExample example = Optional.ofNullable(page.getSearch()).orElse(new ProcessInstanceExample());
+        String orderBy = page.getOrderBy();
         Page<HistoricProcessInstance> instanceList =
-				workflowService.getHistoricProcessInstances(example, page.getPageNum(), page.getPageSize());
+                workflowService.getHistoricProcessInstances(example, page.getPageNum(), page.getPageSize(), orderBy);
         List<Map<String, Object>> instances = new ArrayList<>();
         for (HistoricProcessInstance instance : instanceList) {
             Map<String, Object> t = new HashMap<>();

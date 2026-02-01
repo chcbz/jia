@@ -14,11 +14,11 @@ public interface IspService {
      * 根据示例对象查询服务器列表，并进行分页。
      *
      * @param example 查询条件示例对象，包含查询所需条件。
-     * @param pageNo  页码，表示查询结果的第几页。
+     * @param pageNum  页码，表示查询结果的第几页。
      * @param pageSize 每页大小，表示每页包含的记录数。
      * @return 返回包含服务器实体的分页信息。
      */
-    PageInfo<IspServerEntity> listServer(IspServerEntity example, int pageNo, int pageSize);
+    PageInfo<IspServerEntity> listServer(IspServerEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 创建新的服务器记录。
@@ -56,9 +56,9 @@ public interface IspService {
      * 根据示例对象查询域名列表，并进行分页。
      *
      * @param example 查询条件示例对象，包含查询所需条件。
-     * @param pageNo  页码，表示查询结果的第几页。
+     * @param pageNum  页码，表示查询结果的第几页。
      * @param pageSize 每页大小，表示每页包含的记录数。
      * @return 返回包含域名实体的分页信息。
      */
-    PageInfo<IspDomainEntity> listDomain(IspDomainEntity example, int pageNo, int pageSize);
+    PageInfo<IspDomainEntity> listDomain(IspDomainEntity example, int pageNum, int pageSize, String orderBy);
 }

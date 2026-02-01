@@ -128,7 +128,7 @@ class SmsServiceImplTest extends BaseMockTest {
         SmsSendEntity smsSendEntity = new SmsSendEntity();
         when(smsSendDao.selectByEntity(any())).thenReturn(List.of(smsSendEntity));
 
-        PageInfo<SmsSendEntity> result = smsServiceImpl.listSend(new SmsSendVO(), 1, 1);
+        PageInfo<SmsSendEntity> result = smsServiceImpl.listSend(new SmsSendVO(), 1, 1, "update_time desc");
         Assertions.assertEquals(1, result.getSize());
         Assertions.assertEquals(smsSendEntity, result.getList().get(0));
     }
@@ -145,7 +145,7 @@ class SmsServiceImplTest extends BaseMockTest {
         SmsReplyEntity smsReplyEntity = new SmsReplyEntity();
         when(smsReplyDao.selectByEntity(any())).thenReturn(List.of(smsReplyEntity));
 
-        PageInfo<SmsReplyEntity> result = smsServiceImpl.listReply(smsReplyEntity, 1, 1);
+        PageInfo<SmsReplyEntity> result = smsServiceImpl.listReply(smsReplyEntity, 1, 1, "update_time desc");
         Assertions.assertEquals(1, result.getSize());
         Assertions.assertEquals(smsReplyEntity, result.getList().get(0));
     }
@@ -234,7 +234,7 @@ class SmsServiceImplTest extends BaseMockTest {
         SmsTemplateEntity smsTemplateEntity = new SmsTemplateEntity();
         when(smsTemplateDao.selectByEntity(any())).thenReturn(List.of(smsTemplateEntity));
 
-        PageInfo<SmsTemplateEntity> result = smsServiceImpl.listTemplate(new SmsTemplateVO(), 1, 1);
+        PageInfo<SmsTemplateEntity> result = smsServiceImpl.listTemplate(new SmsTemplateVO(), 1, 1, null);
         Assertions.assertEquals(1, result.getSize());
         Assertions.assertEquals(smsTemplateEntity, result.getList().get(0));
     }

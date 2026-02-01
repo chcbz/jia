@@ -38,11 +38,11 @@ public interface WorkflowService {
 	
 	/**
 	 * 分页获取工作流列表
-	 * @param pageNo
+	 * @param pageNum
 	 * @param pageSize
 	 * @return
 	 */
-	Page<Deployment> getDeployment(DeploymentExample example, int pageNo, int pageSize);
+	Page<Deployment> getDeployment(DeploymentExample example, int pageNum, int pageSize, String orderBy);
 	
 	/**
 	 * 根据ID获取工作流
@@ -67,11 +67,11 @@ public interface WorkflowService {
 	/**
 	 * 获取工作流定义列表
 	 * @param example
-	 * @param pageNo
+	 * @param pageNum
 	 * @param pageSize
 	 * @return
 	 */
-	Page<ProcessDefinition> getProcessDefinition(ProcessDefinitionExample example, int pageNo, int pageSize);
+	Page<ProcessDefinition> getProcessDefinition(ProcessDefinitionExample example, int pageNum, int pageSize, String orderBy);
 	
 	/**
 	 * 获取工作流定义信息
@@ -125,11 +125,11 @@ public interface WorkflowService {
 	/**
 	 * 分页显示某个人的任务列表
 	 * @param example
-	 * @param pageNo
+	 * @param pageNum
 	 * @param pageSize
 	 * @return
 	 */
-	Page<Task> getTasks(TaskExample example, int pageNo, int pageSize);
+	Page<Task> getTasks(TaskExample example, int pageNum, int pageSize, String orderBy);
 	
 	/**
 	 * 根据业务编号查找当前用户的最新任务
@@ -211,20 +211,20 @@ public interface WorkflowService {
 	/**
 	 * 分页显示历史审批列表
 	 * @param example
-	 * @param pageNo
+	 * @param pageNum
 	 * @param pageSize
 	 * @return
 	 */
-	Page<HistoricTaskInstance> getHistorys(TaskExample example, int pageNo, int pageSize);
+	Page<HistoricTaskInstance> getHistorys(TaskExample example, int pageNum, int pageSize, String orderBy);
 	
 	/**
 	 * 根据业务编码分页显示历史审批列表
 	 * @param businessKey
-	 * @param pageNo
+	 * @param pageNum
 	 * @param pageSize
 	 * @return
 	 */
-	Page<HistoricTaskInstance> getHistorysByBusinessKey(String businessKey, int pageNo, int pageSize);
+	Page<HistoricTaskInstance> getHistorysByBusinessKey(String businessKey, int pageNum, int pageSize, String orderBy);
 	
 	/**
 	 * 获取历史实例列表
@@ -236,11 +236,11 @@ public interface WorkflowService {
 	/**
 	 * 分页显示历史实例列表
 	 * @param example
-	 * @param pageNo
+	 * @param pageNum
 	 * @param pageSize
 	 * @return
 	 */
-	Page<HistoricProcessInstance> getHistoricProcessInstances(ProcessInstanceExample example, int pageNo, int pageSize);
+	Page<HistoricProcessInstance> getHistoricProcessInstances(ProcessInstanceExample example, int pageNum, int pageSize, String orderBy);
 	
 	/**
      * 根据Task中的流程实例的ID，来获取对应的流程实例

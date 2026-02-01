@@ -41,9 +41,9 @@ public class TaskSchedule {
         example.setTimeStart(now);
         example.setTimeEnd(now + 10 * 60 - 1);
         PageInfo<TaskDetailEntity> taskList;
-        int pageNo = 1;
+        int pageNum = 1;
         do {
-            taskList = taskService.findItems(example, pageNo++, 500);
+            taskList = taskService.findItems(example, pageNum++, 500, null);
             for (TaskDetailEntity vo : taskList.getList()) {
                 UserEntity user = userService.findByJiacn(vo.getJiacn());
                 if (user != null) {

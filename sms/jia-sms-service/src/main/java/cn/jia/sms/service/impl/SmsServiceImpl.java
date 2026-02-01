@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 
 @Named
 public class SmsServiceImpl implements SmsService {
@@ -146,8 +147,8 @@ public class SmsServiceImpl implements SmsService {
     }
 
     @Override
-    public PageInfo<SmsSendEntity> listSend(SmsSendVO example, int pageNo, int pageSize) {
-        PageHelper.startPage(pageNo, pageSize, "update_time desc");
+    public PageInfo<SmsSendEntity> listSend(SmsSendVO example, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, Optional.ofNullable(orderBy).orElse("update_time desc"));
         return PageInfo.of(smsSendDao.selectByEntity(example));
     }
 
@@ -157,8 +158,8 @@ public class SmsServiceImpl implements SmsService {
     }
 
     @Override
-    public PageInfo<SmsReplyEntity> listReply(SmsReplyEntity example, int pageNo, int pageSize) {
-        PageHelper.startPage(pageNo, pageSize, "update_time desc");
+    public PageInfo<SmsReplyEntity> listReply(SmsReplyEntity example, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, Optional.ofNullable(orderBy).orElse("update_time desc"));
         return PageInfo.of(smsReplyDao.selectByEntity(example));
     }
 
@@ -241,8 +242,8 @@ public class SmsServiceImpl implements SmsService {
     }
 
     @Override
-    public PageInfo<SmsTemplateEntity> listTemplate(SmsTemplateVO example, int pageNo, int pageSize) {
-        PageHelper.startPage(pageNo, pageSize);
+    public PageInfo<SmsTemplateEntity> listTemplate(SmsTemplateVO example, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(smsTemplateDao.selectByEntity(example));
     }
 

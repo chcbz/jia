@@ -68,7 +68,7 @@ class FileServiceImplTest {
     void testList() {
         when(ispFileDao.selectByEntity(any())).thenReturn(List.of(new IspFileEntity()));
 
-        PageInfo<IspFileEntity> result = fileServiceImpl.list(new IspFileEntity(), 0, 0);
+        PageInfo<IspFileEntity> result = fileServiceImpl.list(new IspFileEntity(), 0, 0, null);
         Assertions.assertEquals(result.getSize(), 1);
     }
 }

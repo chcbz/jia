@@ -60,7 +60,7 @@ public class RoleController {
 	public Object findUsers(@RequestBody JsonRequestPage<RoleEntity> page) {
 		RoleEntity role = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
 		ValidUtil.assertNotNull(role, UserErrorConstants.PARAMETER_INCORRECT.getCode());
-		PageInfo<UserEntity> userList = userService.listByRoleId(role.getId(), page.getPageSize(), page.getPageNum());
+		PageInfo<UserEntity> userList = userService.listByRoleId(role.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<UserEntity> result = new JsonResultPage<>(userList.getList());
 		result.setPageNum(userList.getPageNum());
 		result.setTotal(userList.getTotal());
@@ -76,7 +76,7 @@ public class RoleController {
 	@RequestMapping(value = "/get/perms", method = RequestMethod.POST)
 	public Object findPerms(@RequestBody JsonRequestPage<RoleEntity> page) {
 		RoleEntity role = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
-		PageInfo<PermsRelEntity> permsList = roleService.listPerms(role.getId(), page.getPageSize(), page.getPageNum());
+		PageInfo<PermsRelEntity> permsList = roleService.listPerms(role.getId(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		PermsVO permsVO = new PermsVO();
 		permsVO.setIdList(permsList.getList().stream().map(PermsRelEntity::getPermsId).collect(Collectors.toList()));
 		List<PermsEntity> list = permsService.findList(permsVO);
@@ -131,7 +131,7 @@ public class RoleController {
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<RoleEntity> page) {
 		RoleEntity example = Optional.ofNullable(page.getSearch()).orElse(new RoleEntity());
-		PageInfo<RoleEntity> roleList = roleService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
+		PageInfo<RoleEntity> roleList = roleService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
 		result.setPageNum(roleList.getPageNum());
 		result.setTotal(roleList.getTotal());

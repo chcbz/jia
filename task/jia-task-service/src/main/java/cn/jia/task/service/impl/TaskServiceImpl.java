@@ -105,8 +105,8 @@ public class TaskServiceImpl extends BaseServiceImpl<TaskPlanDao, TaskPlanEntity
 	}
 
 	@Override
-	public PageInfo<TaskDetailEntity> findItems(TaskDetailVO example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<TaskDetailEntity> findItems(TaskDetailVO example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(taskDetailDao.selectByEntity(example));
 	}
 

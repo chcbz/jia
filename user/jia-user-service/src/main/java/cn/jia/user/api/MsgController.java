@@ -135,7 +135,7 @@ public class MsgController {
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<MsgEntity> page) {
 		MsgEntity example = Optional.ofNullable(page.getSearch()).orElse(new MsgEntity());
-		PageInfo<MsgEntity> msgList = msgService.findPage(example, page.getPageSize(), page.getPageNum(), page.getOrderBy());
+		PageInfo<MsgEntity> msgList = msgService.findPage(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<MsgEntity> result = new JsonResultPage<>(msgList.getList());
 		result.setPageNum(msgList.getPageNum());
 		result.setTotal(msgList.getTotal());

@@ -30,14 +30,14 @@ public class OrgServiceImpl extends BaseServiceImpl<UserOrgDao, OrgEntity> imple
 	private UserRoleDao userRoleDao;
 
 	@Override
-	public PageInfo<OrgEntity> list(int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<OrgEntity> list(int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(baseDao.selectAll());
 	}
 
 	@Override
-	public PageInfo<OrgEntity> listSub(Long orgId, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<OrgEntity> listSub(Long orgId, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(baseDao.selectByParentId(orgId));
 	}
 

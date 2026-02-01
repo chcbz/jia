@@ -42,7 +42,7 @@ public class CarController {
 		String clientId = EsSecurityHandler.checkClientId(request);
 		CarBrandEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandEntity());
 		example.setClientId(clientId);
-		PageInfo<CarBrandEntity> carList = carService.listBrand(example, page.getPageNum(), page.getPageSize());
+		PageInfo<CarBrandEntity> carList = carService.listBrand(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<CarBrandEntity> result = new JsonResultPage<>(carList.getList());
 		result.setPageNum(carList.getPageNum());
 		result.setTotal(carList.getTotal());
@@ -110,7 +110,7 @@ public class CarController {
 	public Object listBrandAudi(@RequestBody JsonRequestPage<CarBrandAudiEntity> page, HttpServletRequest request) {
 		EsSecurityHandler.checkClientId(request);
 		CarBrandAudiEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandAudiEntity());
-		PageInfo<CarBrandAudiEntity> carList = carService.listBrandAudi(example, page.getPageNum(), page.getPageSize());
+		PageInfo<CarBrandAudiEntity> carList = carService.listBrandAudi(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<CarBrandAudiEntity> result = new JsonResultPage<>(carList.getList());
 		result.setPageNum(carList.getPageNum());
 		result.setTotal(carList.getTotal());
@@ -178,7 +178,7 @@ public class CarController {
 	public Object listBrandVersion(@RequestBody JsonRequestPage<CarBrandVersionEntity> page, HttpServletRequest request) {
 		EsSecurityHandler.checkClientId(request);
 		CarBrandVersionEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandVersionEntity());
-		PageInfo<CarBrandVersionEntity> carList = carService.listBrandVersion(example, page.getPageNum(), page.getPageSize());
+		PageInfo<CarBrandVersionEntity> carList = carService.listBrandVersion(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<CarBrandVersionEntity> result = new JsonResultPage<>(carList.getList());
 		result.setPageNum(carList.getPageNum());
 		result.setTotal(carList.getTotal());
@@ -246,7 +246,7 @@ public class CarController {
 	public Object listBrandMf(@RequestBody JsonRequestPage<CarBrandMfEntity> page, HttpServletRequest request) {
 		EsSecurityHandler.checkClientId(request);
 		CarBrandMfEntity example = Optional.ofNullable(page.getSearch()).orElse(new CarBrandMfEntity());
-		PageInfo<CarBrandMfEntity> carList = carService.listBrandMf(example, page.getPageNum(), page.getPageSize());
+		PageInfo<CarBrandMfEntity> carList = carService.listBrandMf(example, page.getPageNum(), page.getPageSize(), page.getOrderBy());
 		JsonResultPage<CarBrandMfEntity> result = new JsonResultPage<>(carList.getList());
 		result.setPageNum(carList.getPageNum());
 		result.setTotal(carList.getTotal());

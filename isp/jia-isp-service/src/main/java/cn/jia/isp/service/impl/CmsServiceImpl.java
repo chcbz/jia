@@ -28,8 +28,8 @@ public class CmsServiceImpl implements CmsService {
 	private CmsRowDao cmsRowDao;
 	
 	@Override
-	public PageInfo<CmsTableEntity> listTable(CmsTableEntity example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<CmsTableEntity> listTable(CmsTableEntity example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(cmsTableDao.selectByEntity(example));
 	}
 	@Override
@@ -71,8 +71,8 @@ public class CmsServiceImpl implements CmsService {
 	}
 	
 	@Override
-	public PageInfo<CmsColumnEntity> listColumn(CmsColumnEntity example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<CmsColumnEntity> listColumn(CmsColumnEntity example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(cmsColumnDao.selectByEntity(example));
 	}
 	@Override
@@ -110,8 +110,8 @@ public class CmsServiceImpl implements CmsService {
 	}
 	
 	@Override
-	public PageInfo<Map<String, Object>> listRow(CmsRowExample example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<Map<String, Object>> listRow(CmsRowExample example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(cmsRowDao.selectByExample(example));
 	}
 	@Override

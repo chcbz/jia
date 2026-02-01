@@ -15,7 +15,7 @@ public interface MatVoteService {
 
 	void delete(Long id);
 	
-	PageInfo<MatVoteEntity> list(int pageNo, int pageSize, MatVoteReqVO example);
+	PageInfo<MatVoteEntity> list(int pageNum, int pageSize, MatVoteReqVO example, String orderBy);
 	
 	List<MatVoteTickEntity> findTickByJiacn(MatVoteTickEntity voteTick);
 

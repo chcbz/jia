@@ -9,5 +9,5 @@ import com.github.pagehelper.PageInfo;
 public interface TaskService extends IBaseService<TaskPlanEntity> {
 	void cancel(Long id);
 
-	PageInfo<TaskDetailEntity> findItems(TaskDetailVO example, int pageNo, int pageSize);
+	PageInfo<TaskDetailEntity> findItems(TaskDetailVO example, int pageNum, int pageSize, String orderBy);
 }

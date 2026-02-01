@@ -30,11 +30,11 @@ public interface FileService {
      * 列出与示例文件实体匹配的文件记录列表
      *
      * @param example 示例文件实体，用于指定查询条件
-     * @param pageNo 页码，用于分页查询
+     * @param pageNum 页码，用于分页查询
      * @param pageSize 每页大小，用于分页查询
      * @return 包含文件实体的分页信息
      */
-	PageInfo<IspFileEntity> list(IspFileEntity example, int pageNo, int pageSize);
+	PageInfo<IspFileEntity> list(IspFileEntity example, int pageNum, int pageSize, String orderBy);
 
     /**
      * 更新文件记录

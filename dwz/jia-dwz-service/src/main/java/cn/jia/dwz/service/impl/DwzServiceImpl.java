@@ -33,8 +33,8 @@ public class DwzServiceImpl extends BaseServiceImpl<DwzRecordDao, DwzRecordEntit
         dwzRecord.setJiacn(jiacn);
         dwzRecord.setOrig(orig);
         List<DwzRecordEntity> list = baseDao.selectByEntity(dwzRecord);
-        if (list.size() > 0) {
-            return list.get(0).getUri();
+        if (!list.isEmpty()) {
+            return list.getFirst().getUri();
         } else {
             dwzRecord.setUri(DataUtil.getRandom(false, 8));
             Long now = DateUtil.nowTime();

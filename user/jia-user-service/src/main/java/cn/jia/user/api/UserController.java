@@ -127,7 +127,7 @@ public class UserController {
     public Object findRoles(@RequestBody JsonRequestPage<UserEntity> page) {
         UserEntity user = Optional.ofNullable(page.getSearch()).orElse(new UserEntity());
         ValidUtil.assertNotNull(user);
-        PageInfo<RoleEntity> roleList = roleService.listByUserId(user.getId(), page.getPageSize(), page.getPageNum());
+        PageInfo<RoleEntity> roleList = roleService.listByUserId(user.getId(), page.getPageNum(), page.getPageSize(), null);
         JsonResultPage<RoleEntity> result = new JsonResultPage<>(roleList.getList());
         result.setPageNum(roleList.getPageNum());
         result.setTotal(roleList.getTotal());
@@ -233,7 +233,7 @@ public class UserController {
     @PreAuthorize("hasAuthority('user-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
     public Object list(@RequestBody JsonRequestPage<UserVO> page) {
-        PageInfo<UserEntity> userList = userService.findPage(page.getSearch(), page.getPageSize(), page.getPageNum(), page.getOrderBy());
+        PageInfo<UserEntity> userList = userService.findPage(page.getSearch(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
         List<UserVO> userVOList = new ArrayList<>();
         //隐藏密码
         for (UserEntity u : userList.getList()) {
@@ -259,7 +259,8 @@ public class UserController {
     @PreAuthorize("hasAuthority('user-search')")
     @RequestMapping(value = "/search", method = RequestMethod.POST)
     public Object search(@RequestBody JsonRequestPage<UserEntity> page) {
-        PageInfo<UserEntity> userList = userService.search(page.getSearch(), page.getPageNum(), page.getPageSize());
+        String orderBy = page.getOrderBy();
+        PageInfo<UserEntity> userList = userService.search(page.getSearch(), page.getPageNum(), page.getPageSize(), orderBy);
         //隐藏密码
         for (UserEntity u : userList.getList()) {
             u.setPassword("******");
@@ -426,8 +427,8 @@ public class UserController {
         // 更新授权信息
         OrgEntity org = orgService.get(position);
         if (org != null) {
-            for (RoleEntity role : roleService.listByUserId(user.getId(), Integer.MAX_VALUE, 1).getList()) {
-                List<PermsRelEntity> authList = roleService.listPerms(role.getId(), Integer.MAX_VALUE, 1).getList();
+            for (RoleEntity role : roleService.listByUserId(user.getId(), 1, Integer.MAX_VALUE, null).getList()) {
+                List<PermsRelEntity> authList = roleService.listPerms(role.getId(), 1, Integer.MAX_VALUE, null).getList();
                 if (CollectionUtil.isNullOrEmpty(authList)) {
                     continue;
                 }

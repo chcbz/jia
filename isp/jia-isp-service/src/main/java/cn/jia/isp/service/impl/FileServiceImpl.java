@@ -55,8 +55,8 @@ public class FileServiceImpl implements FileService {
 	}
 
 	@Override
-	public PageInfo<IspFileEntity> list(IspFileEntity example, int pageNo, int pageSize) {
-		PageHelper.startPage(pageNo, pageSize);
+	public PageInfo<IspFileEntity> list(IspFileEntity example, int pageNum, int pageSize, String orderBy) {
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(ispFileDao.selectByEntity(example));
 	}
 

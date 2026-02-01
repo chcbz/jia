@@ -167,7 +167,7 @@ class TaskServiceImplTest extends BaseMockTest {
         TaskDetailEntity taskDetailEntity = new TaskDetailEntity();
         when(taskDetailDao.selectByEntity(any())).thenReturn(List.of(taskDetailEntity));
 
-        PageInfo<TaskDetailEntity> result = taskServiceImpl.findItems(new TaskDetailVO(), 0, 0);
+        PageInfo<TaskDetailEntity> result = taskServiceImpl.findItems(new TaskDetailVO(), 0, 0, null);
         assertEquals(taskDetailEntity, result.getList().get(0));
     }
 

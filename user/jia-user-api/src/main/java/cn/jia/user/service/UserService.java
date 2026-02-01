@@ -19,7 +19,7 @@ public interface UserService extends IBaseService<UserEntity> {
 
 	List<UserEntity> search(UserEntity user);
 	
-	PageInfo<UserEntity> search(UserEntity user, int pageNo, int pageSize);
+	PageInfo<UserEntity> search(UserEntity user, int pageNum, int pageSize, String orderBy);
 
 	UserEntity update(UserEntity user);
 	
@@ -33,11 +33,11 @@ public interface UserService extends IBaseService<UserEntity> {
 	
 	void changeOrg(UserVO user);
 	
-	PageInfo<UserEntity> listByRoleId(Long roleId, int pageNo, int pageSize);
+	PageInfo<UserEntity> listByRoleId(Long roleId, int pageNum, int pageSize, String orderBy);
 	
-	PageInfo<UserEntity> listByGroupId(Long groupId, int pageNo, int pageSize);
+	PageInfo<UserEntity> listByGroupId(Long groupId, int pageNum, int pageSize, String orderBy);
 	
-	PageInfo<UserEntity> listByOrgId(Long orgId, int pageNo, int pageSize);
+	PageInfo<UserEntity> listByOrgId(Long orgId, int pageNum, int pageSize, String orderBy);
 	
 	List<Long> findRoleIds(Long userId);
 	

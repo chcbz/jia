@@ -76,11 +76,11 @@ public interface SmsService {
 	/**
 	 * 获取短信发送记录列表
 	 * @param example 查询条件
-	 * @param pageNo 页码
+	 * @param pageNum 页码
 	 * @param pageSize 每页数量
 	 * @return 分页结果
 	 */
-	PageInfo<SmsSendEntity> listSend(SmsSendVO example, int pageNo, int pageSize);
+	PageInfo<SmsSendEntity> listSend(SmsSendVO example, int pageNum, int pageSize, String orderBy);
 	
 	/**
 	 * 处理短信回复
@@ -91,11 +91,11 @@ public interface SmsService {
 	/**
 	 * 获取短信回复记录列表
 	 * @param example 查询条件
-	 * @param pageNo 页码
+	 * @param pageNum 页码
 	 * @param pageSize 每页数量
 	 * @return 分页结果
 	 */
-	PageInfo<SmsReplyEntity> listReply(SmsReplyEntity example, int pageNo, int pageSize);
+	PageInfo<SmsReplyEntity> listReply(SmsReplyEntity example, int pageNum, int pageSize, String orderBy);
 	
 	/**
 	 * 根据客户端ID查找短信配置
@@ -154,10 +154,10 @@ public interface SmsService {
 	/**
 	 * 获取短信模板列表
 	 * @param example 查询条件
-	 * @param pageNo 页码
+	 * @param pageNum 页码
 	 * @param pageSize 每页数量
 	 * @return 分页结果
 	 */
-	PageInfo<SmsTemplateEntity> listTemplate(SmsTemplateVO example, int pageNo, int pageSize);
+	PageInfo<SmsTemplateEntity> listTemplate(SmsTemplateVO example, int pageNum, int pageSize, String orderBy);
 	
 }

@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 @Service
 public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> implements UserService {
@@ -134,18 +135,18 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
-    public PageInfo<UserEntity> listByRoleId(Long roleId, int pageSize, int pageNum) {
-        return getPageInfo(pageNum, pageSize, () -> baseDao.selectByRole(roleId));
+    public PageInfo<UserEntity> listByRoleId(Long roleId, int pageNum, int pageSize, String orderBy) {
+        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectByRole(roleId));
     }
 
     @Override
-    public PageInfo<UserEntity> listByGroupId(Long groupId, int pageSize, int pageNum) {
-        return getPageInfo(pageNum, pageSize, () -> baseDao.selectByGroup(groupId));
+    public PageInfo<UserEntity> listByGroupId(Long groupId, int pageNum, int pageSize, String orderBy) {
+        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectByGroup(groupId));
     }
 
     @Override
-    public PageInfo<UserEntity> listByOrgId(Long orgId, int pageSize, int pageNum) {
-        return getPageInfo(pageNum, pageSize, () -> baseDao.selectByOrg(orgId));
+    public PageInfo<UserEntity> listByOrgId(Long orgId, int pageNum, int pageSize, String orderBy) {
+        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectByOrg(orgId));
     }
 
     @Override
@@ -169,8 +170,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
-    public PageInfo<UserEntity> search(UserEntity user, int pageNo, int pageSize) {
-        return getPageInfo(pageNo, pageSize, () -> baseDao.searchByExample(user));
+    public PageInfo<UserEntity> search(UserEntity user, int pageNum, int pageSize, String orderBy) {
+        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.searchByExample(user));
     }
 
     @Override
@@ -408,8 +409,8 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
      * @param dataSupplier 数据提供者
      * @return 分页信息
      */
-    private PageInfo<UserEntity> getPageInfo(int pageNum, int pageSize, java.util.function.Supplier<List<UserEntity>> dataSupplier) {
-        PageHelper.startPage(pageNum, pageSize);
+    private PageInfo<UserEntity> getPageInfo(int pageNum, int pageSize, String orderBy, Supplier<List<UserEntity>> dataSupplier) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(dataSupplier.get());
     }
 

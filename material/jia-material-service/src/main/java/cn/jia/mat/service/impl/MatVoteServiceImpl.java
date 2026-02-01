@@ -97,12 +97,12 @@ public class MatVoteServiceImpl implements MatVoteService {
 	}
 
 	@Override
-	public PageInfo<MatVoteEntity> list(int pageNo, int pageSize, MatVoteReqVO example) {
+	public PageInfo<MatVoteEntity> list(int pageNum, int pageSize, MatVoteReqVO example, String orderBy) {
 		if(example == null) {
 			example = new MatVoteReqVO();
 		}
 		example.setClientId(EsContextHolder.getContext().getClientId());
-		PageHelper.startPage(pageNo, pageSize);
+		PageHelper.startPage(pageNum, pageSize, orderBy);
 		return PageInfo.of(matVoteDao.selectByEntity(example));
 	}
 

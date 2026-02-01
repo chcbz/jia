@@ -14,7 +14,7 @@ public interface GiftService {
 
     void delete(Long id);
 
-    PageInfo<PointGiftEntity> list(int pageNo, int pageSize, PointGiftVO example);
+    PageInfo<PointGiftEntity> list(int pageNum, int pageSize, PointGiftVO example, String orderBy);
 
     void usage(PointGiftUsageEntity record) throws Exception;
 
@@ -22,7 +22,7 @@ public interface GiftService {
 
     void usageDelete(Long giftUsageId);
 
-    PageInfo<PointGiftUsageEntity> usageListByGift(int pageNum, int pageSize, Long giftId);
+    PageInfo<PointGiftUsageEntity> usageListByGift(int pageNum, int pageSize, Long giftId, String orderBy);
 
-    PageInfo<PointGiftUsageEntity> usageListByUser(int pageNum, int pageSize, String jiacn);
+    PageInfo<PointGiftUsageEntity> usageListByUser(int pageNum, int pageSize, String jiacn, String orderBy);
 }

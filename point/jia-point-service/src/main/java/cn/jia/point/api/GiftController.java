@@ -81,7 +81,7 @@ public class GiftController {
 //	@PreAuthorize("hasAuthority('gift-list')")
 	@RequestMapping(value = "/list", method = RequestMethod.POST)
 	public Object list(@RequestBody JsonRequestPage<PointGiftVO> page) {
-		PageInfo<PointGiftEntity> giftList = giftService.list(page.getPageNum(), page.getPageSize(), page.getSearch());
+		PageInfo<PointGiftEntity> giftList = giftService.list(page.getPageNum(), page.getPageSize(), page.getSearch(), page.getOrderBy());
 		JsonResultPage<PointGiftEntity> result = new JsonResultPage<>(giftList.getList());
 		result.setPageNum(giftList.getPageNum());
 		result.setTotal(giftList.getTotal());
@@ -138,7 +138,7 @@ public class GiftController {
 //	@PreAuthorize("hasAuthority('gift-usage_list_gift')")
 	@RequestMapping(value = "/usage/list/gift/{giftId}", method = RequestMethod.POST)
 	public Object usageListByGift(@RequestBody JsonRequestPage<PointGiftUsageEntity> page, @PathVariable Long giftId) {
-		PageInfo<PointGiftUsageEntity> usageList = giftService.usageListByGift(page.getPageNum(), page.getPageSize(), giftId);
+		PageInfo<PointGiftUsageEntity> usageList = giftService.usageListByGift(page.getPageNum(), page.getPageSize(), giftId, page.getOrderBy());
 		JsonResultPage<PointGiftUsageEntity> result = new JsonResultPage<>(usageList.getList());
 		result.setPageNum(usageList.getPageNum());
 		result.setTotal(usageList.getTotal());
@@ -154,7 +154,7 @@ public class GiftController {
 //	@PreAuthorize("hasAuthority('gift-usage_list_user')")
 	@RequestMapping(value = "/usage/list/user/{user}", method = RequestMethod.POST)
 	public Object usageListByUser(@RequestBody JsonRequestPage<PointGiftUsageEntity> page, @PathVariable String user) {
-		PageInfo<PointGiftUsageEntity> usageList = giftService.usageListByUser(page.getPageNum(), page.getPageSize(), user);
+		PageInfo<PointGiftUsageEntity> usageList = giftService.usageListByUser(page.getPageNum(), page.getPageSize(), user, page.getOrderBy());
 		JsonResultPage<PointGiftUsageEntity> result = new JsonResultPage<>(usageList.getList());
 		result.setPageNum(usageList.getPageNum());
 		result.setTotal(usageList.getTotal());

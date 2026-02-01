@@ -53,13 +53,13 @@ public abstract class BaseServiceImpl<D extends IBaseDao<T>, T extends BaseEntit
     }
 
     @Override
-    public PageInfo<T> findPage(T query, int pageSize, int pageNo) {
-        PageHelper.startPage(pageNo, pageSize);
+    public PageInfo<T> findPage(T query, int pageNum, int pageSize) {
+        PageHelper.startPage(pageNum, pageSize);
         return PageInfo.of(baseDao.selectByEntity(query));
     }
     @Override
-    public PageInfo<T> findPage(T query, int pageSize, int pageNo, String orderBy) {
-        PageHelper.startPage(pageNo, pageSize, orderBy);
+    public PageInfo<T> findPage(T query, int pageNum, int pageSize, String orderBy) {
+        PageHelper.startPage(pageNum, pageSize, orderBy);
         return PageInfo.of(baseDao.selectByEntity(query));
     }
 
