@@ -69,6 +69,7 @@ var app = (function () {
             // 倒计时结束
             $("#" + val).removeAttr("disabled");
             $("#" + val).addClass("btn-danger");
+            $("#" + val).removeClass("btn-default");
             $("#" + val).html("获取验证码");
             sc.countdown = 60;
             sc.countdownEndTime = 0;
