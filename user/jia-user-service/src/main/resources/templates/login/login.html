@@ -75,7 +75,15 @@
                     <li class="last">
                         <!--  <wb:login-button type="3,2" onlogin="login" onlogout="logout">登录按钮</wb:login-button>-->
                         <div id="errorDiv" th:inline="text" style="height: 30px; text-align: left; color: red; margin: -20px 0 10px;">[[${error == null ? '' : error}]]</div>
-                        <button type="button" class="pull-left btn btn-large btn-primary" onclick="return login()">登录 </button>
+                        
+                        <!-- 登录加载提示 -->
+                        <div id="loadingDiv" class="loading-overlay" style="display: none;">
+                            <div class="loading-content">
+                                <div class="loading-spinner"></div>
+                            </div>
+                        </div>
+                        
+                        <button type="button" class="pull-left btn btn-large btn-primary" id="loginBtn" onclick="return login()">登录 </button>
                         <a id="loginTypeA" href="javascript:void(0);" style="float: left;" rel="phone" onclick="changeLoginType()">手机登录</a>
                         <!--	<label><input type="checkbox" value="1" name="net_auto_login" />记住我</label>-->
                         <a href="resetPassword" style="float: right;">忘记密码</a>
@@ -148,6 +156,10 @@ function login() {
     var username = loginForm.find("[name='username']");
     var password = loginForm.find("[name='password']");
     var loginType = loginForm.find("[name='loginType']");
+    
+    // 隐藏错误信息
+    $("#errorDiv").text('');
+    
     if(loginType.val() == "password") {
         if (!username.val()) {
             $("#errorDiv").text('用户名不能为空!');
@@ -158,7 +170,6 @@ function login() {
             password.prev().focus();
             return false;
         }
-        loginForm.submit();
     } else if(loginType.val() == "phone") {
         if (!username.val()) {
             $("#errorDiv").text('手机号码不能为空!');
@@ -169,6 +180,14 @@ function login() {
             password.focus();
             return false;
         }
+    }
+    
+    // 显示加载提示，禁用登录按钮
+    showLoading();
+    
+    if(loginType.val() == "password") {
+        loginForm.submit();
+    } else if(loginType.val() == "phone") {
         // 如果是手机登录，动态创建一个带有"mb-"前缀用户名的表单进行提交
         var originalUsername = username.val();
         var prefixedUsername = "mb-" + originalUsername;
@@ -188,10 +207,47 @@ function login() {
             clonedForm.remove();
         }, 1000);
     }
+    
     return false;
 }
+
+// 显示加载提示
+function showLoading() {
+    $('#loginBtn').prop('disabled', true);
+    $('#loginBtn').text('登录中...');
+    $('#loadingDiv').fadeIn(200);
+    
+    // 禁用第三方登录图标
+    $('.other_login').addClass('disabled');
+    $('.other_login img').css('pointer-events', 'none');
+}
+
+// 隐藏加载提示
+function hideLoading() {
+    $('#loginBtn').prop('disabled', false);
+    $('#loginBtn').text('登录');
+    $('#loadingDiv').fadeOut(200);
+    
+    // 启用第三方登录图标
+    $('.other_login').removeClass('disabled');
+    $('.other_login img').css('pointer-events', 'auto');
+}
+
+// 页面加载完成后如果有错误信息，隐藏加载提示
+$(document).ready(function() {
+    if ($('#errorDiv').text().trim() !== '') {
+        hideLoading();
+    }
+});
 function otherLogin(type) {
-    window.location.href = "index.html?loginType=" + type;
+    // 显示加载提示
+    showLoading();
+    
+    // 添加短暂延迟以显示加载效果
+    setTimeout(function() {
+        window.location.href = "index.html?loginType=" + type;
+    }, 300);
+    
     // var loginForm = $("form[name='login_form_others']");
     // var loginAction = loginForm.attr("action");
     // loginForm.attr("action", loginAction + "?login_type=" + type);

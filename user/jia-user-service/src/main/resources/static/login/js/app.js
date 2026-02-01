@@ -104,9 +104,17 @@ var app = (function () {
             smsType = 1;
         }
         if (!app.varfilyphone()) return;
+        
+        // 显示获取验证码的加载状态
+        var phoneCodeBtn = $("#phoneCode");
+        var originalText = phoneCodeBtn.text();
+        phoneCodeBtn.prop('disabled', true);
+        phoneCodeBtn.removeClass('btn-danger');
+        phoneCodeBtn.addClass('btn-default');
+        phoneCodeBtn.text('发送中...');
+        
         // 重置倒计时结束时间
         sc.countdownEndTime = 0;
-        app.settime("phoneCode");
         var phone = $("#telephoneNumber").val();
         var data = {
             "phone": phone,
@@ -121,13 +129,25 @@ var app = (function () {
             success: function (msg) {
                 if (msg.msg == "ok") {
                     $("#errorDiv").text("");
-                    $.messager.alert('成功提示', "短息已发送，请注意查收!");
+                    $.messager.alert('成功提示', "短信已发送，请注意查收!");
+                    // 启动倒计时
+                    app.settime("phoneCode");
                 } else {
                     $("#errorDiv").text("获取失败");
+                    // 恢复按钮状态
+                    phoneCodeBtn.prop('disabled', false);
+                    phoneCodeBtn.addClass('btn-danger');
+                    phoneCodeBtn.removeClass('btn-default');
+                    phoneCodeBtn.text(originalText);
                 }
             },
             error: function () {
                 $("#errorDiv").text("获取失败");
+                // 恢复按钮状态
+                phoneCodeBtn.prop('disabled', false);
+                phoneCodeBtn.addClass('btn-danger');
+                phoneCodeBtn.removeClass('btn-default');
+                phoneCodeBtn.text(originalText);
             }
         });
     };

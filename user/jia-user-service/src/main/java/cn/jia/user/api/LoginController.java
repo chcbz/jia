@@ -91,7 +91,6 @@ public class LoginController {
      * @return 登录视图
      */
     @GetMapping("/index.html")
-
     public ModelAndView login(HttpServletRequest request) {
         ModelAndView view = new ModelAndView();
         String loginType = this.getRequestValue(request, "loginType").orElse("");

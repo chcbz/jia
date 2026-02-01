@@ -27,6 +27,17 @@
     cursor: pointer;
     width: 60px;
     height: auto;
+    transition: transform 0.2s ease;
+}
+
+.other_login img:hover {
+    transform: scale(1.1);
+}
+
+.other_login.disabled img {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none !important;
 }
 
 .aw-login-box .mod-body .content ul li.last {
@@ -53,4 +64,61 @@
 
 #login_form {
     margin-top: 34px
+}
+
+/* 登录加载提示样式 - 全页面蒙层 */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.7);
+    z-index: 9999;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.loading-content {
+    text-align: center;
+    padding: 0 40px;
+    border-radius: 8px;
+    min-width: 200px;
+}
+
+.loading-spinner {
+    display: inline-block;
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #428bca;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 15px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* 登录按钮禁用状态 */
+.btn-primary:disabled {
+    background-color: #cccccc;
+    border-color: #cccccc;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/* 验证码按钮加载状态 */
+.btn-default {
+    background-color: #f5f5f5;
+    border-color: #cccccc;
+    color: #333;
+}
+
+.btn-default:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
