@@ -18,7 +18,7 @@
   "dependencies": {
     "@varlet/ui": "^3.10.9",
     "@vueuse/core": "^13.5.0",
-    "axios": "^1.10.0",
+    "axios": "^1.13.5",
     "consola": "^3.4.2",
     "dayjs": "^1.11.10",
     "dompurify": "^3.2.6",
