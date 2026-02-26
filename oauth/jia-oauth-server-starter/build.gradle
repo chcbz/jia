@@ -5,12 +5,11 @@ dependencies {
     implementation project(':user:jia-user-mapper')
     implementation project(':isp:jia-isp-mapper')
     implementation project(':sms:jia-sms-mapper')
-    implementation(libs.spring.boot.starter.oauth2.authorization.server) {
-        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-web'
-    }
+    implementation(libs.spring.boot.starter.oauth2.authorization.server)
     implementation(libs.spring.boot.starter.thymeleaf)
     implementation(libs.spring.boot.starter.redisson)
+    implementation(libs.spring.boot.starter.data.ldap)
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-oauth-server-starter'

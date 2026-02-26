@@ -14,13 +14,17 @@ import cn.jia.mat.entity.MatPhraseVoteEntity;
 import cn.jia.mat.service.MatPhraseService;
 import cn.jia.point.common.PointConstants;
 import cn.jia.point.service.PointService;
+import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.search.Hit;
+import co.elastic.clients.elasticsearch.core.search.HitsMetadata;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.stereotype.Service;
 
 import java.io.Serializable;
+import java.util.List;
+import java.util.Optional;
 
 @Slf4j
 @Service
@@ -41,13 +45,15 @@ public class MatPhraseServiceImpl extends BaseServiceImpl<MatPhraseDao, MatPhras
     @Override
     public MatPhraseEntity create(MatPhraseEntity phrase) {
         //判断是否有相似的短语
-        SearchHits<?> hits = elasticsearchService.searchMatch(
+        SearchResponse<MatPhraseEntity> searchResponse = elasticsearchService.searchMatch(
                 indexName, "content", phrase.getContent(), MatPhraseEntity.class);
-        if (hits == null) {
+        if (searchResponse == null) {
             throw new EsRuntimeException(MatErrorConstants.ES_SERVICE_ERROR);
         }
-        if (hits.getMaxScore() > 40) {
-            throw new EsRuntimeException(MatErrorConstants.PHRASE_HAS_EXIST, hits.getSearchHit(0).getContent());
+        Double maxScore = Optional.ofNullable(searchResponse.hits()).map(HitsMetadata::maxScore).orElse(0D);
+        if (maxScore > 40) {
+            throw new EsRuntimeException(MatErrorConstants.PHRASE_HAS_EXIST,
+                    Optional.ofNullable(searchResponse.hits().hits()).map(List::getFirst).map(Hit::source).map(MatPhraseEntity::getContent));
         }
 
         matPhraseDao.insert(phrase);

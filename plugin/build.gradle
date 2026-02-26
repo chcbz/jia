@@ -1,2 +1,48 @@
-version = '1.1.1-SNAPSHOT'
-description = 'jia-plugin'
+allprojects {
+    group = 'cn.jia'
+}
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'maven-publish'
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+    }
+    tasks.named('test') {
+        useJUnitPlatform()
+    }
+    // 移除 afterEvaluate，直接在 publishing 块中配置，利用延迟配置特性
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+            }
+        }
+        repositories {
+            maven {
+                // 显式命名仓库以确保生成的任务名称明确
+                name = "Maven"
+                // 使用 provider 延迟计算 URL，确保读取到正确的版本信息
+                url = provider {
+                    version.toString().endsWith('SNAPSHOT')
+                            ? rootProject.ext.snapshotsRepoUrl
+                            : rootProject.ext.releasesRepoUrl
+                }
+                credentials {
+                    username = rootProject.ext.repoUsername
+                    password = rootProject.ext.repoPassword
+                }
+            }
+        }
+    }
+}
+// 使用任务配置避让，避免在配置阶段实例化所有子项目任务
+tasks.register('publishAllToLocal') {
+    dependsOn subprojects.collect { it.tasks.named('publishToMavenLocal') }
+}
+tasks.register('publishAllToMavenRepository') {
+    // 任务名称规则：publish${PublicationName}PublicationTo${RepositoryName}Repository
+    // 此处对应仓库名为 "Maven"，生成的任务名为 publishMavenJavaPublicationToMavenRepository
+    // 若需发布所有出版物，可使用 publishAllPublicationsToMavenRepository
+    dependsOn subprojects.collect { it.tasks.named('publishAllPublicationsToMavenRepository') }
+}

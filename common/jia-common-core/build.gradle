@@ -1,8 +1,6 @@
 dependencies {
     compileOnly libs.spring.webmvc
-    compileOnly libs.aws.java.sdk.sns
-    compileOnly libs.jackson.core
-    compileOnly libs.jackson.datatype
+    compileOnly libs.jackson.databind
     compileOnly libs.json
     compileOnly libs.slf4j.api
     compileOnly libs.dom4j
@@ -17,7 +15,6 @@ dependencies {
     compileOnly libs.commons.lang3
     compileOnly libs.httpclient
     compileOnly libs.jedis
-    compileOnly libs.java.jwt
     compileOnly libs.jodd
     compileOnly libs.zxing.core
     compileOnly libs.zxing.javase
@@ -36,8 +33,7 @@ dependencies {
     compileOnly libs.poi.scratchpad
     compileOnly libs.poi.ooxml.core
     compileOnly libs.xdocreport
-    compileOnly libs.poi.ooxml.schemas
-    compileOnly libs.ooxml.schemas
+    compileOnly libs.poi.ooxml.full
     compileOnly libs.mybatis.core
     compileOnly libs.swagger.annotations
     compileOnly libs.mybatis.plus.annotation
@@ -46,9 +42,7 @@ dependencies {
     testImplementation libs.junit.jupiter
     testRuntimeOnly libs.junit.platform.launcher
     testImplementation libs.spring.webmvc
-    testImplementation libs.aws.java.sdk.sns
-    testImplementation libs.jackson.core
-    testImplementation libs.jackson.datatype
+    testImplementation libs.jackson.databind
     testImplementation libs.json
     testImplementation libs.slf4j.api
     testImplementation libs.dom4j
@@ -63,7 +57,6 @@ dependencies {
     testImplementation libs.commons.lang3
     testImplementation libs.httpclient
     testImplementation libs.jedis
-    testImplementation libs.java.jwt
     testImplementation libs.jodd
     testImplementation libs.zxing.core
     testImplementation libs.zxing.javase
@@ -82,11 +75,10 @@ dependencies {
     testImplementation libs.poi.scratchpad
     testImplementation libs.poi.ooxml.core
     testImplementation libs.xdocreport
-    testImplementation libs.poi.ooxml.schemas
-    testImplementation libs.ooxml.schemas
+    testImplementation libs.poi.ooxml.full
     testImplementation libs.mybatis.core
     testImplementation libs.mvel
     testImplementation libs.lombok
 }
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-common-core'

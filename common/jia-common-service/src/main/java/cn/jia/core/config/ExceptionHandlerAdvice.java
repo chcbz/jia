@@ -1,4 +1,4 @@
-package cn.jia.base.config;
+package cn.jia.core.config;
 
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.Result;

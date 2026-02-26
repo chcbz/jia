@@ -1,4 +1,4 @@
-package cn.jia.base.config;
+package cn.jia.core.config;
 
 import cn.jia.core.filter.EsContextFilter;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;

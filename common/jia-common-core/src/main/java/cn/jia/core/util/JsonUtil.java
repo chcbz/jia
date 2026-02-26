@@ -1,13 +1,13 @@
 package cn.jia.core.util;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JavaType;
+import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.*;
 
@@ -24,12 +24,13 @@ public class JsonUtil {
 	private static final ObjectMapper MAPPER;
 
 	static {
-		MAPPER = new ObjectMapper();
-		//设置输入时忽略JSON字符串中存在而Java对象实际没有的属性
-		MAPPER.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-		
-		// 添加对Duration类型的支持
-		MAPPER.registerModule(new JavaTimeModule());
+		MAPPER = JsonMapper.builder()
+				.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+				.build();
+	}
+
+	public static ObjectMapper getMapper() {
+		return MAPPER;
 	}
 
 	/**

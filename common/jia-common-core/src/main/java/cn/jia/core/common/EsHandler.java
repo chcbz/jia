@@ -2,10 +2,10 @@ package cn.jia.core.common;
 
 import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.Md5Util;
 import cn.jia.core.util.StringUtil;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -203,15 +203,8 @@ public class EsHandler {
 		headers.setContentType(MediaType.APPLICATION_JSON);
 		//  将提交的数据转换为String
 		//  最好通过bean注入的方式获取ObjectMapper
-		ObjectMapper mapper = new ObjectMapper();
-		String value;
-		try {
-			value = mapper.writeValueAsString(params);
-			return new HttpEntity<String>(value, headers);
-		} catch (JsonProcessingException e) {
-			e.printStackTrace();
-		}
-		return null;
+		String value = JsonUtil.toJson(params);
+		return new HttpEntity<>(value, headers);
 	}
 
 	public static HttpEntity<String> genRestEntity(Object params, String token) {
@@ -221,13 +214,7 @@ public class EsHandler {
 		//  将提交的数据转换为String
 		//  最好通过bean注入的方式获取ObjectMapper
 		ObjectMapper mapper = new ObjectMapper();
-		String value;
-		try {
-			value = mapper.writeValueAsString(params);
-			return new HttpEntity<String>(value, headers);
-		} catch (JsonProcessingException e) {
-			e.printStackTrace();
-		}
-		return null;
+		String value = JsonUtil.toJson(params);
+		return new HttpEntity<String>(value, headers);
 	}
 }

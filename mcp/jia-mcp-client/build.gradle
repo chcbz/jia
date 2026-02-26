@@ -11,6 +11,7 @@ dependencies {
 	implementation libs.spring.ai.starter.vector.store.elasticsearch
 	// implementation 'org.springframework.ai:spring-ai-starter-vector-store-redis'
 	implementation libs.spring.ai.advisors.vector.store
+	implementation libs.spring.ai.agent.utils
 	compileOnly libs.spring.boot.starter.websocket
 	compileOnly libs.spring.security.oauth2.client
 //	implementation 'org.springframework.retry:spring-retry'
@@ -18,5 +19,5 @@ dependencies {
 	testImplementation project(':common:jia-common-test')
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-mcp-client'

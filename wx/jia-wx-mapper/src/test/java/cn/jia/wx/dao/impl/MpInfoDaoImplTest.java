@@ -5,13 +5,12 @@ import cn.jia.test.BaseDbUnitTest;
 import cn.jia.test.DbUnitHelper;
 import cn.jia.wx.dao.MpInfoDao;
 import cn.jia.wx.entity.MpInfoEntity;
-import com.github.springtestdbunit.annotation.DatabaseOperation;
-import com.github.springtestdbunit.annotation.DatabaseSetup;
 import jakarta.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
+import org.springframework.test.context.jdbc.Sql;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -23,7 +22,7 @@ class MpInfoDaoImplTest extends BaseDbUnitTest {
     private Resource mpInfoJson;
 
     @Test
-    @DatabaseSetup(value = "classpath:testObject/mp_info_init.xml", type = DatabaseOperation.CLEAN_INSERT)
+    @Sql(scripts = "/testObject/mp_info_init.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
     void findById() {
         MpInfoEntity mpInfoEntity = mpInfoDao.selectById(2);
         assertNotNull(mpInfoEntity);

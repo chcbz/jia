@@ -70,7 +70,7 @@ class GiftServiceImplTest extends BaseMockTest {
     void testList() {
         when(pointGiftDao.selectByEntity(any())).thenReturn(List.of(new PointGiftEntity()));
 
-        PageInfo<PointGiftEntity> result = giftServiceImpl.list(1, 1, new PointGiftVO());
+        PageInfo<PointGiftEntity> result = giftServiceImpl.list(1, 1, new PointGiftVO(), null);
         Assertions.assertEquals(1, result.getSize());
     }
 
@@ -126,7 +126,7 @@ class GiftServiceImplTest extends BaseMockTest {
     void testUsageListByGift() {
         when(pointGiftUsageDao.listByGift(anyLong())).thenReturn(List.of(new PointGiftUsageEntity()));
 
-        PageInfo<PointGiftUsageEntity> result = giftServiceImpl.usageListByGift(1, 1, 1L);
+        PageInfo<PointGiftUsageEntity> result = giftServiceImpl.usageListByGift(1, 1, 1L, null);
         Assertions.assertEquals(1, result.getSize());
     }
 
@@ -134,7 +134,7 @@ class GiftServiceImplTest extends BaseMockTest {
     void testUsageListByUser() {
         when(pointGiftUsageDao.listByUser(anyString())).thenReturn(List.of(new PointGiftUsageEntity()));
 
-        PageInfo<PointGiftUsageEntity> result = giftServiceImpl.usageListByUser(1, 1, "jiacn");
+        PageInfo<PointGiftUsageEntity> result = giftServiceImpl.usageListByUser(1, 1, "jiacn", null);
         Assertions.assertEquals(1, result.getSize());
     }
 }

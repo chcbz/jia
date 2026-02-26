@@ -9,7 +9,6 @@ import org.camunda.bpm.engine.TaskService;
 import org.camunda.bpm.engine.delegate.*;
 import org.camunda.bpm.engine.impl.el.JuelExpression;
 import jakarta.inject.Inject;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -34,7 +33,6 @@ public class RestListener implements ExecutionListener, TaskListener {
 	private JuelExpression method;
 	private JuelExpression params;
 	@Inject
-	@Qualifier("singleRestTemplate")
 	private RestTemplate restTemplate;
 	@Inject
 	private TaskService taskService;

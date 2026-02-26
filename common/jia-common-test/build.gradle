@@ -6,12 +6,10 @@ dependencies {
         exclude module: 'mybatis-spring'
         exclude group: 'org.springframework.boot'
     }
-    api(libs.spring.boot.starter.web) {
-        exclude module: 'spring-boot-starter-tomcat'
-    }
-    api libs.spring.boot.starter.undertow
+    api(libs.spring.boot.starter.web)
     api libs.spring.boot.starter.data.jdbc
     api libs.spring.boot.starter.data.redis
+    api libs.spring.boot.starter.elasticsearch
     api libs.spring.boot.starter.redisson
     api (libs.pagehelper.spring.boot.starter) {
         exclude group: 'org.mybatis.spring.boot', module: 'mybatis-spring-boot-starter'
@@ -24,22 +22,23 @@ dependencies {
     api(libs.dbunit) {
         exclude module: 'junit'
     }
-    api libs.spring.test.dbunit
     api libs.mockito.core
-    api libs.embedded.redis
     api libs.testcontainers.junit
     api libs.testcontainers.rabbitmq
+    api libs.redis.server
     api libs.testable.all
     annotationProcessor libs.testable.processor
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-common-test'
 
 compileJava {
     options.fork = true
+    options.encoding = 'UTF-8'
+    options.compilerArgs.addAll(['-Xlint:-options', '-Xlint:-deprecation', '-Xlint:-unchecked', '-Xlint:-rawtypes', '-Xlint:-serial'])
     options.forkOptions.jvmArgs = ['--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED',
                                    '--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED',
                                    '--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED',

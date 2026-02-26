@@ -1,5 +1,6 @@
 package cn.jia.core.config;
 
+import cn.jia.core.util.JsonUtil;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
@@ -12,7 +13,7 @@ import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
@@ -101,7 +102,7 @@ public class RedisCacheConfig implements CachingConfigurer {
      *
      * @return value值序列化方式
      */
-    private GenericJackson2JsonRedisSerializer valueSerializer() {
-        return new GenericJackson2JsonRedisSerializer();
+    private GenericJacksonJsonRedisSerializer valueSerializer() {
+        return new GenericJacksonJsonRedisSerializer(JsonUtil.getMapper());
     }
 }

@@ -8,11 +8,11 @@ dependencies {
     api project(':common:jia-common-service')
     implementation(libs.thumbnailator)
     implementation(libs.commons.fileupload)
-    compileOnly(libs.spring.elasticsearch)
+    compileOnly(libs.elasticsearch)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-material-service'

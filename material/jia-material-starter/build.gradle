@@ -2,8 +2,8 @@ dependencies {
     api project(':material:jia-material-service')
     api project(':material:jia-material-mapper')
     api project(':common:jia-common-starter')
-    implementation(libs.spring.boot.starter.data.elasticsearch)
+    implementation(libs.spring.boot.starter.elasticsearch)
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-material-starter'

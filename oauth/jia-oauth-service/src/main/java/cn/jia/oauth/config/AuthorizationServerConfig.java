@@ -20,11 +20,11 @@ import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
-import org.springframework.security.oauth2.server.authorization.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
-import org.springframework.security.oauth2.server.authorization.config.annotation.web.configurers.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
 import org.springframework.security.web.SecurityFilterChain;
@@ -44,17 +44,13 @@ public class AuthorizationServerConfig {
     @Bean
     @Order(1)
     public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http) throws Exception {
-        // 创建 OAuth2 授权服务器配置器
-        OAuth2AuthorizationServerConfigurer authorizationServerConfigurer =
-                OAuth2AuthorizationServerConfigurer.authorizationServer();
-
-        // 配置安全策略
-        http.securityMatcher(authorizationServerConfigurer.getEndpointsMatcher())
-                .with(authorizationServerConfigurer, (authorizationServer) -> authorizationServer
-                        .oidc(Customizer.withDefaults())
-                        .authorizationEndpoint(endpointConfigurer ->
-                                endpointConfigurer.consentPage("/oauth/confirm_access"))
-                )
+        http.oauth2AuthorizationServer((authorizationServer) -> {
+                    http.securityMatcher(authorizationServer.getEndpointsMatcher());
+                    authorizationServer
+                            .oidc(Customizer.withDefaults())    // Enable OpenID Connect 1.0
+                            .authorizationEndpoint(endpointConfigurer ->
+                                    endpointConfigurer.consentPage("/oauth/confirm_access"));
+                })
                 .authorizeHttpRequests((authorize) -> authorize.anyRequest().authenticated())
                 .exceptionHandling(configurer ->
                         configurer.defaultAuthenticationEntryPointFor((request, response, authException) -> {
@@ -156,8 +152,8 @@ public class AuthorizationServerConfig {
         }
     }
 
-//    @Bean
-//    public AuthorizationServerSettings authorizationServerSettings() {
-//        return AuthorizationServerSettings.builder().build();
-//    }
+    @Bean
+    public AuthorizationServerSettings authorizationServerSettings() {
+        return AuthorizationServerSettings.builder().build();
+    }
 }

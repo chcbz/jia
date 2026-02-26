@@ -26,9 +26,9 @@ target/
 *.iml
 
 # Gradle File
-/.gradle/
+.gradle/
 /gradle/
 build/
-/gradlew
-/gradlew.bat
+gradlew
+gradlew.bat
 /.vscode/

@@ -3,6 +3,8 @@ package cn.jia.user.service.impl;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.PasswordUtil;
 import cn.jia.isp.entity.LdapUser;
+import cn.jia.isp.entity.LdapUserGroup;
+import cn.jia.isp.service.LdapUserGroupService;
 import cn.jia.isp.service.LdapUserService;
 import cn.jia.test.BaseMockTest;
 import cn.jia.user.common.UserErrorConstants;
@@ -34,6 +36,8 @@ class UserServiceImplTest extends BaseMockTest {
     UserGroupRelDao userGroupRelDao;
     @Mock
     LdapUserService ldapUserService;
+    @Mock
+    LdapUserGroupService ldapUserGroupService;
     @Mock
     UserInfoDao userInfoDao;
     @InjectMocks
@@ -119,7 +123,7 @@ class UserServiceImplTest extends BaseMockTest {
     void testListByRoleId() {
         UserEntity userEntity = new UserEntity();
         when(userInfoDao.selectByRole(anyLong())).thenReturn(List.of(userEntity));
-        PageInfo<UserEntity> result = userServiceImpl.listByRoleId(1L, 10, 1);
+        PageInfo<UserEntity> result = userServiceImpl.listByRoleId(1L, 10, 1, null);
         Assertions.assertEquals(userEntity, result.getList().get(0));
     }
 
@@ -127,7 +131,7 @@ class UserServiceImplTest extends BaseMockTest {
     void testListByGroupId() {
         UserEntity userEntity = new UserEntity();
         when(userInfoDao.selectByGroup(anyLong())).thenReturn(List.of(userEntity));
-        PageInfo<UserEntity> result = userServiceImpl.listByGroupId(1L, 10, 1);
+        PageInfo<UserEntity> result = userServiceImpl.listByGroupId(1L, 10, 1, null);
         Assertions.assertEquals(userEntity, result.getList().get(0));
     }
 
@@ -135,7 +139,7 @@ class UserServiceImplTest extends BaseMockTest {
     void testListByOrgId() {
         UserEntity userEntity = new UserEntity();
         when(userInfoDao.selectByOrg(anyLong())).thenReturn(List.of(userEntity));
-        PageInfo<UserEntity> result = userServiceImpl.listByOrgId(1L, 10, 1);
+        PageInfo<UserEntity> result = userServiceImpl.listByOrgId(1L, 10, 1, null);
         Assertions.assertEquals(userEntity, result.getList().get(0));
     }
 
@@ -167,7 +171,7 @@ class UserServiceImplTest extends BaseMockTest {
     void testSearch() {
         UserEntity userEntity = new UserEntity();
         when(userInfoDao.searchByExample(any())).thenReturn(List.of(userEntity));
-        PageInfo<UserEntity> result = userServiceImpl.search(new UserEntity(), 10, 1);
+        PageInfo<UserEntity> result = userServiceImpl.search(new UserEntity(), 10, 1, null);
         Assertions.assertEquals(userEntity, result.getList().get(0));
     }
 
@@ -175,6 +179,7 @@ class UserServiceImplTest extends BaseMockTest {
     void testSync() {
         when(ldapUserService.create(any())).thenReturn(new LdapUser("uid"));
         when(ldapUserService.search(any())).thenReturn(Collections.emptyList());
+        when(ldapUserGroupService.findByClientId(any())).thenReturn(new LdapUserGroup());
         when(userInfoDao.insert(any())).thenReturn(1);
         when(userInfoDao.searchByExample(any())).thenReturn(Collections.emptyList());
         when(userRoleRelDao.insert(any())).thenReturn(1);

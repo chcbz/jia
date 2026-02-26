@@ -2,7 +2,7 @@ package cn.jia.test;
 
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StreamUtil;
-import com.fasterxml.jackson.core.type.TypeReference;
+import tools.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
 import org.dbunit.database.DatabaseConnection;
 import org.dbunit.database.IDatabaseConnection;

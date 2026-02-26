@@ -53,7 +53,7 @@ class RoleServiceImplTest extends BaseMockTest {
     void testListByUserId() {
         RoleEntity roleEntity = new RoleEntity();
         when(userRoleDao.selectByUserId(anyLong())).thenReturn(List.of(roleEntity));
-        PageInfo<RoleEntity> result = roleServiceImpl.listByUserId(1L, 10, 1);
+        PageInfo<RoleEntity> result = roleServiceImpl.listByUserId(1L, 10, 1, null);
         Assertions.assertNotNull(result);
         Assertions.assertEquals(roleEntity, result.getList().get(0));
     }
@@ -62,7 +62,7 @@ class RoleServiceImplTest extends BaseMockTest {
     void testListByGroupId() {
         RoleEntity roleEntity = new RoleEntity();
         when(userRoleDao.selectByGroupId(anyLong())).thenReturn(List.of(roleEntity));
-        PageInfo<RoleEntity> result = roleServiceImpl.listByGroupId(1L, 10, 1);
+        PageInfo<RoleEntity> result = roleServiceImpl.listByGroupId(1L, 10, 1, null);
         Assertions.assertNotNull(result);
         Assertions.assertEquals(roleEntity, result.getList().get(0));
     }
@@ -99,7 +99,7 @@ class RoleServiceImplTest extends BaseMockTest {
         PermsRelEntity permsRelEntity = new PermsRelEntity();
         when(userPermsRelDao.selectByRoleId(anyLong())).thenReturn(List.of(permsRelEntity));
 
-        PageInfo<PermsRelEntity> result = roleServiceImpl.listPerms(1L, 10, 1);
+        PageInfo<PermsRelEntity> result = roleServiceImpl.listPerms(1L, 10, 1, null);
         Assertions.assertNotNull(result);
         Assertions.assertEquals(permsRelEntity, result.getList().get(0));
     }

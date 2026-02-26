@@ -1,4 +1,4 @@
-package cn.jia.base.config;
+package cn.jia.core.config;
 
 import cn.jia.core.redis.RedisService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;

@@ -74,7 +74,9 @@ class SmsServiceImplTest extends BaseMockTest {
 
     @Test
     void testUpsert() {
-        when(smsCodeDao.selectByEntity(any())).thenReturn(List.of(new SmsCodeEntity()));
+        SmsCodeEntity smsCodeEntity = new SmsCodeEntity();
+        smsCodeEntity.setCount(0);
+        when(smsCodeDao.selectByEntity(any())).thenReturn(List.of(smsCodeEntity));
         when(smsCodeDao.updateById(any())).thenReturn(1);
         when(distributedLock.lock(any())).thenReturn(null);
 

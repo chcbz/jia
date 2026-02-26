@@ -5,16 +5,16 @@ dependencies {
     api project(':sms:jia-sms-api')
     api project(':isp:jia-isp-api')
     api project(':common:jia-common-service')
-//    implementation(libs.spring.security.config)
+    implementation(libs.spring.security.config)
     implementation(libs.jodd)
     implementation(libs.spring.ldap)
     implementation(libs.spring.security.oauth2.authorization.server)
     compileOnly(libs.spring.security.oauth2.client)
-//    implementation(libs.spring.redis)
+    implementation(libs.spring.redis)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-oauth-service'

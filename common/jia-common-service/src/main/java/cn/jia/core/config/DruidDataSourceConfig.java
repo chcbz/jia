@@ -1,26 +1,18 @@
-package cn.jia.base.config;
+package cn.jia.core.config;
 
-import java.sql.SQLException;
-
-import javax.sql.DataSource;
-
-import jakarta.inject.Inject;
+import cn.jia.core.datasource.DruidSource;
+import com.alibaba.druid.pool.DruidDataSource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 
-import com.alibaba.druid.pool.DruidDataSource;
-
-import cn.jia.core.datasource.DruidSource;
+import javax.sql.DataSource;
+import java.sql.SQLException;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(DruidDataSource.class)
 public class DruidDataSourceConfig {
-	@Inject
-	private DruidSource config;
-	
 	@Bean // 声明其为Bean实例
 	@ConfigurationProperties(prefix = "spring.datasource")
 	public DruidSource druidSource(){
@@ -28,9 +20,7 @@ public class DruidDataSourceConfig {
 	}
 
 	@Bean // 声明其为Bean实例
-	@Primary // 在同样的DataSource中，首先使用被标注的DataSource
-	@ConfigurationProperties(prefix = "spring.datasource")
-	public DataSource dataSource() throws SQLException {
+	public DataSource dataSource(DruidSource config) throws SQLException {
 		DruidDataSource datasource = new DruidDataSource();
 
 		datasource.setUrl(config.getDbUrl());

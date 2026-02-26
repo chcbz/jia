@@ -1,10 +1,9 @@
 plugins {
-    id 'cn.jia.jia-dependency-management' version '1.1.1-SNAPSHOT'
+    id 'cn.jia.jia-dependency-management' version '1.1.2-SNAPSHOT'
 }
 
 rootProject.name = 'jia'
 
-include 'plugin:jia-gradle-plugin'
 include 'common:jia-common-core', 'common:jia-common-api', 'common:jia-common-test', 'common:jia-common-mapper',
         'common:jia-common-service', 'common:jia-common-starter'
 include 'base:jia-base-core', 'base:jia-base-api', 'base:jia-base-service', 'base:jia-base-mapper',

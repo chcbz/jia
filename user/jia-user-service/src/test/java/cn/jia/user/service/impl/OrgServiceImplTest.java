@@ -45,7 +45,7 @@ class OrgServiceImplTest extends BaseMockTest {
     void testList() {
         OrgEntity orgEntity = new OrgEntity();
         when(userOrgDao.selectAll()).thenReturn(List.of(orgEntity));
-        PageInfo<OrgEntity> result = orgServiceImpl.list(1, 10);
+        PageInfo<OrgEntity> result = orgServiceImpl.list(1, 10, null);
         assertEquals(orgEntity, result.getList().get(0));
     }
 
@@ -53,7 +53,7 @@ class OrgServiceImplTest extends BaseMockTest {
     void testListSub() {
         OrgEntity orgEntity = new OrgEntity();
         when(userOrgDao.selectByParentId(anyLong())).thenReturn(List.of(orgEntity));
-        PageInfo<OrgEntity> result = orgServiceImpl.listSub(1L, 1, 10);
+        PageInfo<OrgEntity> result = orgServiceImpl.listSub(1L, 1, 10, null);
         assertEquals(orgEntity, result.getList().get(0));
 
         ArgumentCaptor<Long> captor = ArgumentCaptor.forClass(Long.class);

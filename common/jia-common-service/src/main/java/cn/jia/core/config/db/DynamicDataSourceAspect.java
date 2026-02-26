@@ -1,10 +1,9 @@
 package cn.jia.core.config.db;
 
-import com.alibaba.druid.pool.DruidDataSource;
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Before;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -14,7 +13,7 @@ import org.springframework.stereotype.Component;
 @Aspect
 @Order(-10)
 @Component
-@ConditionalOnClass(DruidDataSource.class)
+@ConditionalOnProperty(name = "dynamic.datasource.enable", havingValue = "true")
 public class DynamicDataSourceAspect {
 
     @Before("execution(* cn.jia.*.service.*.*(..))")

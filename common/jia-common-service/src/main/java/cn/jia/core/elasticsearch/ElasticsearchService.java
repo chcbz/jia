@@ -1,41 +1,61 @@
 package cn.jia.core.elasticsearch;
 
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch.core.DeleteResponse;
+import co.elastic.clients.elasticsearch.core.SearchResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.elasticsearch.client.elc.NativeQuery;
-import org.springframework.data.elasticsearch.client.elc.Queries;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.data.elasticsearch.core.SearchHits;
-import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+
+import java.io.IOException;
 
 @Slf4j
 public class ElasticsearchService {
-
     @Autowired
-    ElasticsearchOperations elasticsearchOperations;
+    private ElasticsearchClient elasticsearchClient;
 
     /**
-     * 查询最大匹配值
+     * 查询最大匹配值（match 查询）
      *
-     * @param index 索引
-     * @param field 查询标题
+     * @param index 索引名
+     * @param field 字段名
      * @param value 查询内容
-     * @return 查询结果
+     * @param clazz 结果类型
+     * @return 搜索结果列表（仅返回 source 转换后的对象）
      */
-    public <T>  SearchHits<T> searchMatch(String index, String field, String value, Class<T> clazz) {
-        NativeQuery query = NativeQuery.builder()
-                .withQuery(Queries.matchQueryAsQuery(field, value, null, null)).build();
-        return elasticsearchOperations.search(query, clazz, IndexCoordinates.of(index));
+    public <T> SearchResponse<T> searchMatch(String index, String field, String value, Class<T> clazz) {
+        try {
+            return elasticsearchClient.search(s -> s
+                            .index(index)
+                            .query(q -> q
+                                    .match(m -> m
+                                            .field(field)
+                                            .query(value)
+                                    )
+                            ),
+                    clazz
+            );
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
-     * 删除索引中的某个id
+     * 删除索引中的某个文档
      *
-     * @param id id
-     * @param index 索引
-     * @return 被删除的id
+     * @param id    文档ID
+     * @param index 索引名
+     * @return 被删除的文档ID（若成功）
      */
     public String delete(String id, String index) {
-        return elasticsearchOperations.delete(id, IndexCoordinates.of(index));
+        try {
+            DeleteResponse response = elasticsearchClient.delete(d -> d
+                    .index(index)
+                    .id(id)
+            );
+            return response.id();
+        } catch (IOException e) {
+            log.error("Elasticsearch delete failed", e);
+            throw new RuntimeException("Delete failed", e);
+        }
     }
 }

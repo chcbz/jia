@@ -7,9 +7,6 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
 
-import java.io.Serial;
-import java.io.Serializable;
-
 /**
  * 分页查询返回实体
  * @author chcbz
@@ -20,9 +17,7 @@ import java.io.Serializable;
 @Getter
 @ToString(callSuper=true)
 @JsonInclude(value=Include.NON_NULL)
-public class JsonRequestPage<T> implements Serializable {
-	@Serial
-	private static final long serialVersionUID = -7995644969484016692L;
+public class JsonRequestPage<T>{
 	/** 请求的序列，用来跟客户端保持同步 */
     private Integer draw;
     /** 页码 */

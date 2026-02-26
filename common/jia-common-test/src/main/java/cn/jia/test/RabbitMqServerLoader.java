@@ -2,7 +2,6 @@ package cn.jia.test;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -13,7 +12,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * @author chc
  */
 @Slf4j
-@Component
 @Testcontainers
 public class RabbitMqServerLoader {
     @Value("${spring.rabbitmq.port:5672}")

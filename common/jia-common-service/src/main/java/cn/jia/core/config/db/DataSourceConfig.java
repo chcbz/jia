@@ -4,9 +4,7 @@ import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.datasource.DruidSource;
 import cn.jia.core.util.BeanUtil;
 import cn.jia.core.util.StringUtil;
-import com.alibaba.druid.pool.DruidDataSource;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -18,14 +16,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnClass(DruidDataSource.class)
+@ConditionalOnProperty(name = "dynamic.datasource.enable", havingValue = "true")
 public class DataSourceConfig {
-    @Bean // 声明其为Bean实例
-    @ConfigurationProperties(prefix = "spring.datasource")
-    public DruidSource druidSource() {
-        return new DruidSource();
-    }
-
     public Map<Object, Object> druidSourceMulti(DruidSource druidSource) {
         Map<Object, Object> druidSourceMap = new HashMap<>();
         int i = 1;

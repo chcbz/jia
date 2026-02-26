@@ -2,11 +2,16 @@ dependencies {
     api project(':oauth:jia-oauth-service')
     api project(':common:jia-common-mapper')
     testImplementation project(':common:jia-common-test')
+    testImplementation project(':user:jia-user-mapper')
+    testImplementation project(':isp:jia-isp-mapper')
+    testImplementation project(':sms:jia-sms-mapper')
     testImplementation libs.mybatis.plus.generator
+    testImplementation(libs.spring.boot.starter.oauth2.authorization.server)
+    testImplementation(libs.spring.boot.starter.data.ldap)
     testImplementation libs.spring.boot.starter.freemarker
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-oauth-mapper'

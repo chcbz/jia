@@ -1,4 +1,4 @@
-package cn.jia.base.config;
+package cn.jia.sms.config;
 
 
 import org.springframework.amqp.core.Queue;

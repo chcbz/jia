@@ -1,7 +1,7 @@
 package cn.jia.core.util;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.SerializationFeature;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -10,6 +10,7 @@ import org.apache.http.client.methods.*;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import tools.jackson.databind.json.JsonMapper;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -68,20 +69,14 @@ public class CyberPayUtil {
         log.info("URI: " + uri);
         log.info(testInfo);
         if(!StringUtils.isEmpty(payload)) {
-            try {
-                tree = mapper.readValue(payload,Object.class);
-                log.info("RequestBody: " + mapper.writerWithDefaultPrettyPrinter().writeValueAsString(tree));
-            } catch (IOException e) {
-                log.error(e.getMessage());
-            }
+            tree = mapper.readValue(payload,Object.class);
+            log.info("RequestBody: " + mapper.writerWithDefaultPrettyPrinter().writeValueAsString(tree));
         }
     }
 	
 	protected static ObjectMapper getObjectMapperInstance() {
-        ObjectMapper mapper = new ObjectMapper();
-        // format json
-        mapper.configure(SerializationFeature.INDENT_OUTPUT, true);
-        return mapper;
+        return JsonMapper.builder()
+        .configure(SerializationFeature.INDENT_OUTPUT, true).build();
     }
 
 	/*private static void logResponse(CloseableHttpResponse response) throws IOException {

@@ -15,6 +15,7 @@ import cn.jia.mat.entity.MatMediaResVO;
 import cn.jia.mat.service.MatMediaService;
 import cn.jia.mat.vomapper.MatMediaVOMapper;
 import com.github.pagehelper.PageInfo;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import net.coobird.thumbnailator.Thumbnails;
 import net.coobird.thumbnailator.geometry.Positions;
@@ -23,7 +24,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.servlet.http.HttpServletResponse;
 import java.io.*;
 import java.util.List;
 import java.util.Optional;

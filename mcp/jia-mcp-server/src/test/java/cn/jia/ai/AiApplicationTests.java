@@ -1,10 +1,9 @@
 package cn.jia.ai;
 
+import cn.jia.test.BaseDbUnitTest;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
 
-@SpringBootTest
-class AiApplicationTests {
+class AiApplicationTests extends BaseDbUnitTest {
 
 	@Test
 	void contextLoads() {

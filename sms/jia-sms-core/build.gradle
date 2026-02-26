@@ -4,5 +4,5 @@ dependencies {
     api(libs.mybatis.plus.annotation)
 }
 
-version = '1.1.1-SNAPSHOT'
+version = '1.1.2-SNAPSHOT'
 description = 'jia-sms-core'

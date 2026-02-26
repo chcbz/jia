@@ -70,9 +70,10 @@ public class MybatisGeneratorTest extends BaseDbUnitTest {
                                 .enableChainModel()
                                 .enableLombok().disableSerialVersionUID()
                                 .columnNaming(NamingStrategy.underline_to_camel)
-                                .naming(NamingStrategy.underline_to_camel))
+                                .naming(NamingStrategy.underline_to_camel)
+                                .controllerBuilder().template("")
+                )
                 .templateEngine(new FreemarkerTemplateEngine()) // 使用Freemarker引擎模板，默认的是Velocity引擎模板
-                .templateConfig(builder -> builder.controller(""))
                 .execute();
     }
 }

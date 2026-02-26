@@ -1,16 +1,14 @@
 package cn.jia.test;
 
+import com.github.microwww.redis.RedisServer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import redis.embedded.RedisExecProvider;
-import redis.embedded.RedisServer;
-import redis.embedded.RedisServerBuilder;
-import redis.embedded.util.OS;
-import redis.embedded.util.OSDetector;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+
+import java.io.IOException;
 
 /**
  * 内置Redis服务器加载
@@ -19,6 +17,9 @@ import jakarta.annotation.PreDestroy;
 @Slf4j
 @Component
 public class RedisServerLoader {
+
+    @Value("${spring.data.redis.host}")
+    private String redisHost;
 
     @Value("${spring.data.redis.port}")
     private int redisPort;
@@ -33,17 +34,10 @@ public class RedisServerLoader {
      *
      */
     @PostConstruct
-    public void startRedis() {
+    public void startRedis() throws IOException {
         log.info("redis server is starting...");
-        RedisExecProvider customProvider = RedisExecProvider.defaultProvider();
-        RedisServerBuilder builder = RedisServer.builder().redisExecProvider(customProvider)
-                .setting("bind 127.0.0.1").port(redisPort).setting("daemonize no").setting("appendonly no")
-                .setting("requirepass " + redisPassword);
-        if (OS.WINDOWS.equals(OSDetector.getOS())) {
-            builder.setting("maxheap 200m");
-        }
-        redisServer = builder.build();
-        redisServer.start();
+        redisServer = new RedisServer();
+        redisServer.listener(redisHost, redisPort);
         log.info("redis server has started");
     }
 
@@ -53,7 +47,7 @@ public class RedisServerLoader {
     @PreDestroy
     public void stopRedis() {
         log.info("redis server is stopping...");
-        redisServer.stop();
+//        redisServer.stop();
         log.info("redis server has stopped.");
     }
 }

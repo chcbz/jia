@@ -3,21 +3,21 @@ package cn.jia.oauth.dto;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.JsonDeserializer;
-import com.fasterxml.jackson.databind.JsonSerializer;
-import com.fasterxml.jackson.databind.SerializerProvider;
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.JsonGenerator;
+import tools.jackson.core.JsonParser;
+import tools.jackson.databind.DeserializationContext;
+import tools.jackson.databind.SerializationContext;
+import tools.jackson.databind.ValueDeserializer;
+import tools.jackson.databind.ValueSerializer;
+import tools.jackson.databind.annotation.JsonDeserialize;
+import tools.jackson.databind.annotation.JsonSerialize;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.server.authorization.settings.OAuth2TokenFormat;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -56,9 +56,9 @@ public class TokenSettingDTO {
     private OAuth2TokenFormat accessTokenFormat;
     
     // SignatureAlgorithm的序列化器
-    public static class SignatureAlgorithmSerializer extends JsonSerializer<SignatureAlgorithm> {
+    public static class SignatureAlgorithmSerializer extends ValueSerializer<SignatureAlgorithm> {
         @Override
-        public void serialize(SignatureAlgorithm value, JsonGenerator gen, SerializerProvider serializers) throws IOException {
+        public void serialize(SignatureAlgorithm value, JsonGenerator gen, SerializationContext ctxt) throws JacksonException {
             if (value != null) {
                 gen.writeString(value.getName());
             } else {
@@ -68,9 +68,9 @@ public class TokenSettingDTO {
     }
     
     // SignatureAlgorithm的反序列化器
-    public static class SignatureAlgorithmDeserializer extends JsonDeserializer<SignatureAlgorithm> {
+    public static class SignatureAlgorithmDeserializer extends ValueDeserializer<SignatureAlgorithm> {
         @Override
-        public SignatureAlgorithm deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+        public SignatureAlgorithm deserialize(JsonParser p, DeserializationContext ctxt) throws JacksonException {
             String value = p.getValueAsString();
             if (value != null && !value.isEmpty()) {
                 return SignatureAlgorithm.from(value);
@@ -80,9 +80,9 @@ public class TokenSettingDTO {
     }
     
     // OAuth2TokenFormat的序列化器
-    public static class OAuth2TokenFormatSerializer extends JsonSerializer<OAuth2TokenFormat> {
+    public static class OAuth2TokenFormatSerializer extends ValueSerializer<OAuth2TokenFormat> {
         @Override
-        public void serialize(OAuth2TokenFormat value, JsonGenerator gen, SerializerProvider serializers) throws IOException {
+        public void serialize(OAuth2TokenFormat value, JsonGenerator gen, SerializationContext ctxt) throws JacksonException {
             if (value != null) {
                 gen.writeString(value.getValue());
             } else {
@@ -92,9 +92,9 @@ public class TokenSettingDTO {
     }
     
     // OAuth2TokenFormat的反序列化器
-    public static class OAuth2TokenFormatDeserializer extends JsonDeserializer<OAuth2TokenFormat> {
+    public static class OAuth2TokenFormatDeserializer extends ValueDeserializer<OAuth2TokenFormat> {
         @Override
-        public OAuth2TokenFormat deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+        public OAuth2TokenFormat deserialize(JsonParser p, DeserializationContext ctxt) throws JacksonException {
             String value = p.getValueAsString();
             if (value != null && !value.isEmpty()) {
                 return new OAuth2TokenFormat(value);

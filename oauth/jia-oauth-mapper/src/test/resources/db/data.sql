@@ -1,4 +1,4 @@
-insert into jia_dev.oauth_client (id, client_id, client_id_issued_at, client_secret, client_secret_expires_at,
+insert into oauth_client (id, client_id, client_id_issued_at, client_secret, client_secret_expires_at,
                                   client_name, client_authentication_methods, authorization_grant_types, redirect_uris,
                                   post_logout_redirect_uris, scopes, client_settings, token_settings, create_time,
                                   update_time, tenant_id, appcn)
