@@ -9,6 +9,7 @@ import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.oauth.dto.GithubOauthTokenDTO;
 import cn.jia.oauth.dto.GithubOauthUserDTO;
@@ -22,7 +23,6 @@ import cn.jia.user.entity.PermsEntity;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
 import com.nimbusds.oauth2.sdk.AuthorizationRequest;
-import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -421,8 +421,9 @@ public class OauthController {
                 log.debug("获取到用户权限数量: {}", authorities.size());
             }
         }
+        CustomUserDetails userDetails = new CustomUserDetails(user.getJiacn(), user.getUsername(), null, authorities);
         UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-            user.getJiacn(), null, authorities
+                userDetails, null, authorities
         );
         authToken.setDetails(new WebAuthenticationDetails(request));
         SecurityContextHolder.getContext().setAuthentication(authToken);
@@ -431,8 +432,6 @@ public class OauthController {
         EsContext context = EsContextHolder.getContext();
         context.setUsername(user.getUsername());
         context.setJiacn(user.getJiacn());
-        Cookie cookie = EsContextHolder.genCookie();
-        response.addCookie(cookie);
         log.info("第三方登录自动登录流程完成，重定向到: {}", redirectUrl);
         return "redirect:" + redirectUrl;
     }

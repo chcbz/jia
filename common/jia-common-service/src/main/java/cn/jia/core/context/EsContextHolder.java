@@ -32,7 +32,10 @@ public class EsContextHolder {
 
     public static Cookie genCookie() {
         EsContext context = getContext();
-        return new Cookie("CTX", ThreeDesUtil.encrypt3Des(JsonUtil.toJson(context)));
+        Cookie ctx = new Cookie("CTX", ThreeDesUtil.encrypt3Des(JsonUtil.toJson(context)));
+        ctx.setHttpOnly(true);
+        ctx.setPath("/");
+        return ctx;
     }
 
     public static void setContext(EsContext esContext) {

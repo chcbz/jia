@@ -183,11 +183,22 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
 
     @Override
     public UserEntity upsert(UserEntity user) {
-        // 处理LDAP用户
-        handleLdapUserUpsert(user);
-        
         // 处理本地用户
-        handleLocalUserUpsert(user);
+        UserEntity searchUser = new UserEntity();
+        searchUser.setJiacn(user.getJiacn());
+        searchUser.setPhone(user.getPhone());
+        searchUser.setEmail(user.getEmail());
+        searchUser.setOpenid(user.getOpenid());
+        searchUser.setWeixinid(user.getWeixinid());
+        searchUser.setGithubid(user.getGithubid());
+        List<UserEntity> curUser = baseDao.searchByExample(searchUser);
+
+        if (CollectionUtil.isNullOrEmpty(curUser)) {
+            handleNewUserCreation(user);
+        } else {
+            handleExistingUserUpdate(user, curUser.getFirst());
+        }
+
         return user;
     }
 
@@ -282,14 +293,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         if (CollectionUtil.isNotNullOrEmpty(ldapUserResult)) {
             user.setJiacn(String.valueOf(ldapUserResult.getFirst().getUid()));
         } else {
-            String cn = StringUtil.isEmpty(user.getPhone()) ?
-                    (StringUtil.isEmpty(user.getEmail()) ? user.getOpenid() : user.getEmail()) :
-                    user.getPhone();
-            params.setUid(cn);
-            params.setCn(cn);
-            params.setSn(cn);
-            setLdapUserAttributes(params, user);
-            ldapUserService.create(params);
+            createNewLdapUser(user);
             user.setJiacn(params.getUid());
         }
     }
@@ -311,7 +315,11 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         ldapUser.setSex(user.getSex());
         ldapUser.setNickname(StringUtil.isEmpty(user.getNickname()) ? null : user.getNickname());
         if (user.getAvatar() != null) {
-            ldapUser.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
+            if (user.getAvatar().startsWith("http")) {
+                ldapUser.setHeadimg(ImgUtil.fromUrl(user.getAvatar()));
+            } else {
+                ldapUser.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
+            }
         }
     }
 
@@ -415,32 +423,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     /**
-     * 处理LDAP用户更新或插入
-     * @param user 用户实体
-     */
-    private void handleLdapUserUpsert(UserEntity user) {
-        LdapUser searchLdapUser = new LdapUser();
-        searchLdapUser.setTelephoneNumber(user.getPhone());
-        searchLdapUser.setEmail(user.getEmail());
-        searchLdapUser.setOpenid(user.getOpenid());
-        searchLdapUser.setWeixinid(user.getWeixinid());
-        searchLdapUser.setGithubid(user.getGithubid());
-
-        List<LdapUser> ldapUserResult = ldapUserService.search(searchLdapUser);
-        if (!ldapUserResult.isEmpty()) {
-            updateExistingLdapUser(ldapUserResult.getFirst(), user);
-            user.setJiacn(String.valueOf(ldapUserResult.getFirst().getUid()));
-        } else {
-            createNewLdapUser(user);
-        }
-    }
-
-    /**
      * 更新现有的LDAP用户
-     * @param ldapUser LDAP用户
      * @param user 用户实体
      */
-    private void updateExistingLdapUser(LdapUser ldapUser, UserEntity user) {
+    private void updateExistingLdapUser(UserEntity user) {
+        LdapUser ldapUser = ldapUserService.findByUid(user.getJiacn());
+        if (ldapUser == null) {
+            return;
+        }
         ldapUser.setTelephoneNumber(StringUtil.isEmpty(user.getPhone()) ? ldapUser.getTelephoneNumber() : user.getPhone());
         ldapUser.setEmail(StringUtil.isEmpty(user.getEmail()) ? ldapUser.getEmail() : user.getEmail());
         ldapUser.setOpenid(StringUtil.isEmpty(user.getOpenid()) ? ldapUser.getOpenid() : user.getOpenid());
@@ -451,9 +441,6 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         ldapUser.setCity(StringUtil.isEmpty(user.getCity()) ? ldapUser.getCity() : user.getCity());
         ldapUser.setSex(user.getSex() == null ? ldapUser.getSex() : user.getSex());
         ldapUser.setNickname(StringUtil.isEmpty(user.getNickname()) ? ldapUser.getNickname() : user.getNickname());
-        if (StringUtil.isNotEmpty(user.getAvatar())) {
-            ldapUser.setHeadimg(ImgUtil.fromFile(new File(filePath + "/" + user.getAvatar())));
-        }
         ldapUserService.modifyLdapUser(ldapUser);
     }
 
@@ -461,7 +448,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
      * 创建新的LDAP用户
      * @param user 用户实体
      */
-    private void createNewLdapUser(UserEntity user) {
+    private LdapUser createNewLdapUser(UserEntity user) {
         LdapUser ldapUser = new LdapUser();
         String cn = StringUtil.firstNotEmpty(user.getUsername(), user.getPhone(), user.getEmail(),
                 user.getOpenid(), user.getWeixinid(), user.getGithubid());
@@ -474,28 +461,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         if (org != null) {
             ldapUserGroupService.addUser(org, ldapUser.getDn());
         }
-        user.setJiacn(ldapUser.getUid());
-    }
-
-    /**
-     * 处理本地用户更新或插入
-     * @param user 用户实体
-     */
-    private void handleLocalUserUpsert(UserEntity user) {
-        UserEntity searchUser = new UserEntity();
-        searchUser.setJiacn(user.getJiacn());
-        searchUser.setPhone(user.getPhone());
-        searchUser.setEmail(user.getEmail());
-        searchUser.setOpenid(user.getOpenid());
-        searchUser.setWeixinid(user.getWeixinid());
-        searchUser.setGithubid(user.getGithubid());
-        List<UserEntity> curUser = baseDao.searchByExample(searchUser);
-        
-        if (CollectionUtil.isNullOrEmpty(curUser)) {
-            handleNewUserCreation(user);
-        } else {
-            handleExistingUserUpdate(user, curUser.getFirst());
-        }
+        return ldapUser;
     }
 
     /**
@@ -503,6 +469,35 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
      * @param user 用户实体
      */
     private void handleNewUserCreation(UserEntity user) {
+        LdapUser searchLdapUser = new LdapUser();
+        searchLdapUser.setTelephoneNumber(user.getPhone());
+        searchLdapUser.setEmail(user.getEmail());
+        searchLdapUser.setOpenid(user.getOpenid());
+        searchLdapUser.setWeixinid(user.getWeixinid());
+        searchLdapUser.setGithubid(user.getGithubid());
+
+        List<LdapUser> ldapUserResult = ldapUserService.search(searchLdapUser);
+        LdapUser ldapUser;
+        if (ldapUserResult.isEmpty()) {
+            ldapUser = createNewLdapUser(user);
+        } else {
+            ldapUser = ldapUserResult.getFirst();
+        }
+        user.setJiacn(ldapUser.getUid());
+        Optional.ofNullable(user.getGithubid()).ifPresentOrElse(githubid -> {}, () -> user.setGithubid(ldapUser.getGithubid()));
+        Optional.ofNullable(user.getOpenid()).ifPresentOrElse(openid -> {}, () -> user.setOpenid(ldapUser.getOpenid()));
+        Optional.ofNullable(user.getWeixinid()).ifPresentOrElse(weixinid -> {}, () -> user.setWeixinid(ldapUser.getWeixinid()));
+        Optional.ofNullable(user.getPhone()).ifPresentOrElse(phone -> {}, () -> user.setPhone(ldapUser.getTelephoneNumber()));
+        Optional.ofNullable(user.getEmail()).ifPresentOrElse(email -> {}, () -> user.setEmail(ldapUser.getEmail()));
+        Optional.ofNullable(user.getNickname()).ifPresentOrElse(nickname -> {}, () -> user.setNickname(ldapUser.getNickname()));
+        Optional.ofNullable(user.getCountry()).ifPresentOrElse(country -> {}, () -> user.setCountry(ldapUser.getCountry()));
+        Optional.ofNullable(user.getProvince()).ifPresentOrElse(province -> {}, () -> user.setProvince(ldapUser.getProvince()));
+        Optional.ofNullable(user.getCity()).ifPresentOrElse(city -> {}, () -> user.setCity(ldapUser.getCity()));
+        Optional.ofNullable(user.getSex()).ifPresentOrElse(sex -> {}, () -> user.setSex(ldapUser.getSex()));
+        Optional.ofNullable(user.getLocation()).ifPresentOrElse(location -> {}, () -> user.setLocation(ldapUser.getLocation()));
+        Optional.ofNullable(user.getRemark()).ifPresentOrElse(remark -> {}, () -> user.setRemark(ldapUser.getRemark()));
+        Optional.ofNullable(user.getTel()).ifPresentOrElse(tel -> {}, () -> user.setTel(ldapUser.getTelephoneNumber()));
+
         String avatarFileUri = Optional.ofNullable(user.getAvatar()).orElse("");
         if (avatarFileUri.startsWith("http")) {
             IspFileEntity ispFileEntity = fileService.create(avatarFileUri,
@@ -510,6 +505,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
             user.setAvatar(ispFileEntity.getUri());
         }
         user.setPassword(StringUtil.isNotEmpty(user.getPassword()) ? PasswordUtil.encode(user.getPassword()) : null);
+
         baseDao.insert(user);
         RoleRelEntity rel = new RoleRelEntity();
         rel.setRoleId(UserConstants.DEFAULT_ROLE_ID);
@@ -525,11 +521,16 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     private void handleExistingUserUpdate(UserEntity user, UserEntity existingUser) {
         user.setId(existingUser.getId());
         List<String> subscribe = new ArrayList<>(Arrays.asList(existingUser.getSubscribe().split(",")));
-        if (!subscribe.contains(user.getSubscribe())) {
+        if (StringUtil.isNotEmpty(user.getSubscribe()) && !subscribe.contains(user.getSubscribe())) {
             subscribe.add(user.getSubscribe());
             user.setSubscribe(String.join(",", subscribe));
         }
         baseDao.updateById(user);
+        // 更新LDAP用户信息
+        user.setJiacn(existingUser.getJiacn());
+        user.setUsername(existingUser.getUsername());
+        user.setUpdateTime(existingUser.getUpdateTime());
+        updateExistingLdapUser(user);
     }
 
     /**

@@ -43,13 +43,15 @@ public class AuthorizationServerConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http) {
         http.oauth2AuthorizationServer((authorizationServer) -> {
                     http.securityMatcher(authorizationServer.getEndpointsMatcher());
                     authorizationServer
                             .oidc(Customizer.withDefaults())    // Enable OpenID Connect 1.0
                             .authorizationEndpoint(endpointConfigurer ->
-                                    endpointConfigurer.consentPage("/oauth/confirm_access"));
+                                    endpointConfigurer.consentPage("/oauth/confirm_access")
+                            )
+                    ;
                 })
                 .authorizeHttpRequests((authorize) -> authorize.anyRequest().authenticated())
                 .exceptionHandling(configurer ->
