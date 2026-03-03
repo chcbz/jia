@@ -23,6 +23,8 @@ import reactor.core.publisher.Flux;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import cn.jia.ai.mcp.client.handler.dto.ChatMessageDTO;
+import reactor.core.publisher.FluxSink;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.Map;
 
@@ -70,11 +72,31 @@ public class ChatController {
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
         Flux<String> aiStream = createAIStream(chatMessage, conversationId, needSummary, summary);
 
-        return aiStream.takeUntilOther(cancelSignal)
-                .doOnError(error -> log.error("Error processing chat response", error))
-                .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\"}")))
-                .concatWith(Flux.defer(() ->
-                        handleSummary(needSummary, chatMessage.getContent(), summary.toString(), conversationId)));
+        // 使用 Flux.create 将后台流与客户端响应连接
+        return Flux.create(emitter -> {
+            // 构建完整的后台处理流
+            // 将数据推送给客户端，如果客户端已断开，该操作会被忽略
+            // 正常完成
+            Flux<String> backendStream = aiStream
+                    .takeUntilOther(cancelSignal)                     // Redis 取消信号
+                    .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\"}")))
+                    .concatWith(Flux.defer(() -> handleSummary(needSummary, chatMessage.getContent(), summary.toString(), conversationId)))
+                    .doOnNext(emitter::next)
+                    .doOnError(error -> {
+                        log.error("Error processing chat response", error);
+                        emitter.error(error);                         // 错误仍可传递（若客户端还在）
+                    })
+                    .doOnComplete(emitter::complete)
+                    .subscribeOn(Schedulers.boundedElastic());        // 在独立线程池执行，不阻塞 Netty
+
+            // 立即订阅后台流，启动处理（不受客户端生命周期影响）
+            backendStream.subscribe();
+
+            // 客户端断开连接时，仅停止发射数据，后台流继续运行
+            emitter.onDispose(() ->
+                    log.debug("Client disconnected, backend processing continues for conversation: {}", conversationId)
+            );
+        }, FluxSink.OverflowStrategy.BUFFER);  // 使用 BUFFER 避免背压导致数据丢失
     }
 
     /**
