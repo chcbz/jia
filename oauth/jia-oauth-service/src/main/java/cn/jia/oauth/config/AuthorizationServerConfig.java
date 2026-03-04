@@ -118,11 +118,14 @@ public class AuthorizationServerConfig {
     @Bean
     public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer() {
         return context -> {
+            String clientId = context.getRegisteredClient().getClientId();
+            context.getClaims().claim("client_id", clientId);
             if (context.getPrincipal() != null) {
                 // 从CustomUserDetails中获取jiacn属性
                 if (context.getPrincipal().getPrincipal() instanceof CustomUserDetails customUserDetails) {
                     if (customUserDetails.getJiacn() != null) {
                         context.getClaims().claim("jiacn", customUserDetails.getJiacn());
+                        context.getClaims().claim("username", customUserDetails.getUsername());
                     }
                 }
             }
