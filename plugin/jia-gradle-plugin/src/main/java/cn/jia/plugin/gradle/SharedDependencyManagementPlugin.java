@@ -18,7 +18,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.version("spring-security-oauth2", "7.0.2");
 
                             // === Spring社区相关 ===
-                            catalog.version("spring-ai-agent-utils", "0.4.2");
+                            catalog.version("spring-ai-agent-utils", "0.5.0");
 
                             // === 数据库相关 ===
                             catalog.version("mybatis-plus", "3.5.16");
