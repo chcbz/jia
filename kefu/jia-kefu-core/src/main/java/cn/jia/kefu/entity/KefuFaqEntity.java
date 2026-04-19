@@ -38,10 +38,13 @@ public class KefuFaqEntity extends BaseEntity {
     @Schema(description = "应用标识符")
     private String clientId;
 
-    @Schema(description = "标题")
+    @Schema(description = "会话 ID")
+    private String conversationId;
+
+    @Schema(description = "标题/用户问题")
     private String title;
 
-    @Schema(description = "内容")
+    @Schema(description = "内容/系统回复")
     private String content;
 
     @Schema(description = "点击量")

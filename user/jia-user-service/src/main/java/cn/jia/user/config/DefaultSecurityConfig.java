@@ -85,7 +85,7 @@ public class DefaultSecurityConfig {
     @Bean
     @Order(100)
     @DependsOn("userPermitProperties")
-    public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) {
         http.authorizeHttpRequests((authorize) -> {
                     List<String> ignoreUris = SpringContextHolder.getBean(UserPermitProperties.class).getIgnoreUris();
                     if (CollectionUtil.isNotNullOrEmpty(ignoreUris)) {

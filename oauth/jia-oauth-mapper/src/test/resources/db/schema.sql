@@ -18,3 +18,20 @@ CREATE TABLE oauth_client (
     appcn varchar(32) DEFAULT NULL COMMENT '应用标识码',
     PRIMARY KEY (id)
 );
+
+CREATE TABLE oauth_api_key (
+    id VARCHAR(100) NOT NULL,
+    client_id VARCHAR(100) NOT NULL COMMENT '客户端ID',
+    jiacn varchar(32) DEFAULT NULL COMMENT 'Jia账号',
+    api_key VARCHAR(255) NOT NULL COMMENT 'API密钥',
+    key_name VARCHAR(100) COMMENT '密钥名称',
+    status int DEFAULT '1' COMMENT '状态 1有效 0无效',
+    expire_time BIGINT COMMENT '过期时间',
+    description VARCHAR(500) COMMENT '描述',
+    create_time BIGINT COMMENT '创建时间',
+    update_time BIGINT COMMENT '更新时间',
+    tenant_id VARCHAR(100) COMMENT '租户ID',
+    PRIMARY KEY (id),
+    INDEX idx_api_key (api_key),
+    INDEX idx_client_id (client_id)
+) COMMENT='OAuth API密钥表';

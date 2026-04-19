@@ -22,4 +22,4 @@ include 'task:jia-task-core', 'task:jia-task-api', 'task:jia-task-service', 'tas
 include 'user:jia-user-core', 'user:jia-user-api', 'user:jia-user-service', 'user:jia-user-mapper', 'user:jia-user-starter'
 include 'workflow:jia-workflow-core', 'workflow:jia-workflow-api', 'workflow:jia-workflow-service', 'workflow:jia-workflow-starter'
 include 'wx:jia-wx-core', 'wx:jia-wx-api', 'wx:jia-wx-service', 'wx:jia-wx-mapper'
-include 'mcp:jia-mcp-client', 'mcp:jia-mcp-client-starter', 'mcp:jia-mcp-server'
+include 'agent:jia-agent-service', 'agent:jia-agent-starter'

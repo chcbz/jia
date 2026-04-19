@@ -5,6 +5,9 @@ dependencies {
     implementation(libs.aliyun.java.sdk.dysmsapi)
     implementation(libs.spring.boot.starter.amqp)
     implementation(libs.spring.boot.starter.redisson)
+    implementation(libs.spring.boot.starter.websocket) {
+        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-tomcat'
+    }
     api project(':common:jia-common-starter')
 }
 

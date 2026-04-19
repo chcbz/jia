@@ -13,7 +13,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.version("spring", "7.0.2");
                             catalog.version("spring-boot", "4.0.1");
                             catalog.version("spring-cloud", "2025.1.1");
-                            catalog.version("spring-ai", "2.0.0-M2");
+                            catalog.version("spring-ai", "2.0.0-M4");
                             catalog.version("spring-security", "7.0.2");
                             catalog.version("spring-security-oauth2", "7.0.2");
 
@@ -188,6 +188,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-ai-starter-model-zhipuai", "org.springframework.ai", "spring-ai-starter-model-zhipuai").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-deepseek", "org.springframework.ai", "spring-ai-starter-model-deepseek").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-ollama", "org.springframework.ai", "spring-ai-starter-model-ollama").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-model-minimax", "org.springframework.ai", "spring-ai-starter-model-minimax").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-vector-store-elasticsearch", "org.springframework.ai", "spring-ai-starter-vector-store-elasticsearch").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-vector-store-redis", "org.springframework.ai", "spring-ai-starter-vector-store-redis").versionRef("spring-ai");
                             catalog.library("spring-ai-advisors-vector-store", "org.springframework.ai", "spring-ai-advisors-vector-store").versionRef("spring-ai");

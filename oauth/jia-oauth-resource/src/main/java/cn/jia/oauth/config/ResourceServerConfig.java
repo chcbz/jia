@@ -56,11 +56,10 @@ public class ResourceServerConfig {
      *
      * @param http HttpSecurity对象，用于配置安全策略
      * @return SecurityFilterChain 安全过滤链
-     * @throws Exception 配置过程中可能抛出的异常
      */
     @Bean
     @Order(2)
-    public SecurityFilterChain resourceServerSecurityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain resourceServerSecurityFilterChain(HttpSecurity http) {
         List<String> resourceUris = SpringContextHolder.getBean(OauthResourceProperties.class).getUris();
         http
                 .securityMatcher(resourceUris.toArray(new String[0]))
