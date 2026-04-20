@@ -1,0 +1,61 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+context: |
+  ## Tech Stack
+  - **Framework**: Spring Cloud 微服务架构
+  - **Language**: Java 17+
+  - **Build Tool**: Gradle 8.0+
+  - **Database**: MySQL 5.7+ / MyBatis Plus
+  - **Cache**: Redis
+  - **ORM**: MyBatis Plus
+  - **API Doc**: Swagger/OpenAPI 3.0
+  - **Workflow**: Camunda
+  - **Auth**: OAuth 2.0 / Spring Security
+  - **Lombok**: 用于简化代码
+  
+  ## Project Domain
+  Jia 是一个基于 Spring Cloud 的微服务 DevOps 云服务管理框架，提供后台管理 + 服务接口 + 门户首页的全套解决方案
+  
+  ## Module Structure (模块分层架构)
+  每个业务模块遵循5层架构：
+  - *-api: 对外暴露的Service接口定义
+  - *-core: 实体类(Entity)、常量(Constants)、枚举(Enum)、DTO等核心定义
+  - *-mapper: 数据访问层（MyBatis Mapper接口）
+  - *-service: 业务逻辑层实现
+  - *-starter: 自动配置和Spring Boot Starter
+  
+  ## Package Naming Convention
+  - 基础包名：cn.jia
+  - 模块包名：cn.jia.{module}
+  - 示例：cn.jia.user.service, cn.jia.workflow.service
+  
+  ## Base Entity Fields
+  - createTime: 创建时间 (Long timestamp)
+  - updateTime: 更新时间 (Long timestamp)
+  - tenantId: 租户ID (String)
+  - clientId: 应用标识符 (String)
+  
+  ## Code Conventions
+  - 使用 @Data, @Accessors(chain = true) 实现链式调用
+  - 使用 @Schema 用于Swagger文档注解
+  - Service层使用DAO接口进行数据访问
+  - 使用 MapStruct 进行对象映射
+
+# Per-artifact rules (optional)
+rules:
+  proposal:
+    - Keep proposals under 500 words
+    - Always include a "Non-goals" section
+    - Reference existing modules when applicable
+  tasks:
+    - Break tasks into chunks of max 2 hours
+    - Reference module structure for implementation location
+  spec:
+    - Use "##" for main sections
+    - Use "###" for subsections
+    - Include module impact analysis
+    - Reference existing similar specs for patterns
+
