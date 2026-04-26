@@ -1,5 +1,6 @@
 package cn.jia.core.exception;
 
+import cn.jia.core.annotation.ErrorCodeModule;
 import lombok.Getter;
 
 /**
@@ -8,6 +9,7 @@ import lombok.Getter;
  * @author chenzg
  *
  */
+@ErrorCodeModule("基础模块")
 public class EsErrorConstants {
 	@Getter
 	String code;

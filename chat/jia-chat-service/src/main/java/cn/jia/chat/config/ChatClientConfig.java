@@ -2,8 +2,9 @@ package cn.jia.chat.config;
 
 import java.util.List;
 
-import cn.jia.chat.memory.DatabaseChatMemoryRepository;
-import cn.jia.kefu.service.KefuChatMessageService;
+import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
+import cn.jia.chat.advisor.RequestResponseAdvisor;
+import cn.jia.chat.dao.ChatMessageDao;
 import org.springaicommunity.agent.tools.GrepTool;
 import org.springaicommunity.agent.tools.ShellTools;
 import org.springaicommunity.agent.tools.SkillsTool;
@@ -12,11 +13,8 @@ import org.springaicommunity.agent.tools.TodoWriteTool;
 import org.springaicommunity.agent.tools.task.TaskTool;
 import org.springaicommunity.agent.tools.task.claude.ClaudeSubagentType;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
-import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -26,18 +24,17 @@ import org.springframework.context.annotation.Configuration;
 
 import lombok.extern.slf4j.Slf4j;
 import io.modelcontextprotocol.client.McpSyncClient;
-import cn.jia.chat.advisor.RequestResponseAdvisor;
 
 @Slf4j
 @Configuration
 public class ChatClientConfig {
-    @Value("${chat.skills.dirs}")
+    @Value("${agent.skills.dirs:}")
     private String[] skillsRootDirectories;
 
     @Bean
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             List<McpSyncClient> mcpSyncClients, VectorStore vectorStore,
-            KefuChatMessageService kefuChatMessageService) {
+            ChatMessageDao chatMessageDao) {
         // 使用 QuestionAnswerAdvisor + 自动配置的 ElasticsearchVectorStore 实现长效记忆检索(基于向量相似度)
         QuestionAnswerAdvisor longTermMemoryAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
                 .searchRequest(SearchRequest.builder()
@@ -46,15 +43,10 @@ public class ChatClientConfig {
                         .build())
                 .build();
         
-        // 使用 DatabaseChatMemoryRepository 实现上下文记忆(替代 CustomerVectorStoreChatMemoryAdvisor)
-        DatabaseChatMemoryRepository dbChatMemoryRepository = DatabaseChatMemoryRepository.builder()
-                .kefuChatMessageService(kefuChatMessageService)
-                .build();
-        ChatMemory contextChatMemory = MessageWindowChatMemory.builder()
-                .chatMemoryRepository(dbChatMemoryRepository)
+        // 使用 DatabaseChatMemoryAdvisor 实现上下文记忆
+        DatabaseChatMemoryAdvisor contextMemoryAdvisor = DatabaseChatMemoryAdvisor.builder(chatMessageDao)
                 .maxMessages(10)
                 .build();
-        MessageChatMemoryAdvisor contextMemoryAdvisor = MessageChatMemoryAdvisor.builder(contextChatMemory).build();
         
         RequestResponseAdvisor chatControllerAdvisor = new RequestResponseAdvisor();
         // Configure Task tool with Claude sub-agents

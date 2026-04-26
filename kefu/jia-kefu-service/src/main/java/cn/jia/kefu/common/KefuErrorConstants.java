@@ -1,5 +1,6 @@
 package cn.jia.kefu.common;
 
+import cn.jia.core.annotation.ErrorCodeModule;
 import cn.jia.core.exception.EsErrorConstants;
 
 /**
@@ -7,6 +8,7 @@ import cn.jia.core.exception.EsErrorConstants;
  * @author chc
  * @since 2021/2/1
  */
+@ErrorCodeModule("客服模块")
 public class KefuErrorConstants extends EsErrorConstants {
     public KefuErrorConstants(String code, String message) {
         super(code, message);

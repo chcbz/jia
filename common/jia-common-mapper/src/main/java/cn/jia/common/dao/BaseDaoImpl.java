@@ -171,11 +171,17 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
     protected void appendQueryWrapper(T entity, QueryWrapper<T> queryWrapper) {
         try {
             String extendWrapperClass = entity.getClass().getName() + "Wrapper";
+            // GraalVM Native Image 兼容: 使用更安全的类加载方式
+            // reflect-config.json 中已配置 BaseDaoImpl 的反射访问
             Class<?> clazz = Class.forName(extendWrapperClass);
             Constructor<?> constructor = clazz.getDeclaredConstructor();
+            constructor.setAccessible(true);
             BaseEntityWrapper<T, T> entityWrapper = (BaseEntityWrapper) constructor.newInstance();
             entityWrapper.appendQueryWrapper(entity, queryWrapper);
-        } catch (Exception ignored) {
+        } catch (ClassNotFoundException | NoSuchMethodException ignored) {
+            // Wrapper 类不存在或无默认构造函数时静默忽略，保持向后兼容
+        } catch (Exception e) {
+            // 其他异常静默忽略
         }
     }
 

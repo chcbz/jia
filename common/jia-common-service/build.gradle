@@ -22,6 +22,7 @@ dependencies {
     compileOnly(libs.mybatis.core)
     compileOnly(libs.pagehelper.core)
     compileOnly(libs.druid)
+    annotationProcessor project(':common:jia-common-core')
     testImplementation project(':common:jia-common-test')
     testImplementation(libs.spring.boot.starter.elasticsearch)
     testAnnotationProcessor libs.lombok

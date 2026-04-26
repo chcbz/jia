@@ -4,6 +4,7 @@ dependencies {
     testImplementation project(':common:jia-common-test')
     testImplementation libs.mybatis.plus.generator
     testImplementation libs.spring.boot.starter.freemarker
+    testImplementation libs.spring.boot.starter.data.redis
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

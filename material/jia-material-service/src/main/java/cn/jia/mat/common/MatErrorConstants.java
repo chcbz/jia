@@ -1,5 +1,6 @@
 package cn.jia.mat.common;
 
+import cn.jia.core.annotation.ErrorCodeModule;
 import cn.jia.core.exception.EsErrorConstants;
 
 /**
@@ -8,6 +9,7 @@ import cn.jia.core.exception.EsErrorConstants;
  * @author chc
  * @since 2017年12月8日 下午2:47:56
  */
+@ErrorCodeModule("素材模块")
 public class MatErrorConstants extends EsErrorConstants {
     public MatErrorConstants(String code, String message) {
         super(code, message);

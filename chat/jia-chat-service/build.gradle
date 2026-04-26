@@ -1,6 +1,6 @@
 dependencies {
-	implementation project(':common:jia-common-service')
-	implementation project(':kefu:jia-kefu-service')
+	api project(':common:jia-common-service')
+	api project(':chat:jia-chat-api')
 	implementation libs.spring.boot.starter.webflux
 	implementation libs.spring.ai.starter.mcp.client
 	compileOnly (libs.spring.ai.starter.model.zhipuai) {

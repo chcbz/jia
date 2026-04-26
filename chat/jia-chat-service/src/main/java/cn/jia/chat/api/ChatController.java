@@ -1,12 +1,14 @@
-package cn.jia.chat.controller;
+package cn.jia.chat.api;
 
+import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.StringUtil;
-import cn.jia.kefu.entity.KefuMessageEntity;
 import cn.jia.chat.service.ChatConversationService;
-import cn.jia.kefu.service.KefuMessageService;
+import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
@@ -29,6 +31,7 @@ import reactor.core.publisher.FluxSink;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Agent聊天控制器
@@ -38,11 +41,10 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/chat/chat")
+@RequestMapping("/chat")
 @RequiredArgsConstructor
 public class ChatController {
     private final ChatClient chatClient;
-    private final KefuMessageService kefuMessageService;
     private final ChatConversationService chatConversationService;
     private final RedisService redisService;
     private final ChatClient.Builder chatClientBuilder;
@@ -67,10 +69,10 @@ public class ChatController {
      */
     @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> handleChat(@RequestBody ChatMessageDTO chatMessage) {
-        KefuMessageEntity message = getOrCreateMessage(chatMessage);
-        boolean needSummary = StringUtil.isBlank(message.getTitle());
+        ChatConversationEntity conversation = getOrCreateConversation(chatMessage);
+        boolean needSummary = StringUtil.isBlank(conversation.getTitle());
         StringBuilder summary = new StringBuilder();
-        String conversationId = String.valueOf(message.getId());
+        String conversationId = String.valueOf(conversation.getId());
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
         Flux<String> aiStream = createAIStream(chatMessage, conversationId, needSummary, summary);
@@ -108,17 +110,16 @@ public class ChatController {
      * @param chatMessage 聊天消息DTO
      * @return 消息实体
      */
-    private KefuMessageEntity getOrCreateMessage(ChatMessageDTO chatMessage) {
-        KefuMessageEntity message;
+    private ChatConversationEntity getOrCreateConversation(ChatMessageDTO chatMessage) {
+        ChatConversationEntity message;
         if (StringUtil.isBlank(chatMessage.getConversationId())) {
-            message = new KefuMessageEntity();
+            message = new ChatConversationEntity();
             message.setStatus(0);
             message.setJiacn(EsContextHolder.getContext().getJiacn());
             message.setClientId(EsContextHolder.getContext().getClientId());
-            message.setContent(chatMessage.getContent());
-            message = kefuMessageService.create(message);
+            message = chatConversationService.create(message);
         } else {
-            message = kefuMessageService.get(chatMessage.getConversationId());
+            message = chatConversationService.get(chatMessage.getConversationId());
         }
         return message;
     }
@@ -134,7 +135,7 @@ public class ChatController {
      */
     private Flux<String> createAIStream(ChatMessageDTO chatMessage, String conversationId, boolean needSummary, StringBuilder summary) {
         // 构建过滤表达式: 同时过滤 jiacn 和 role
-        String jiacn = EsContextHolder.getContext().getJiacn();
+        String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
         String filterExpression = "metadata.jiacn == '" + jiacn + "' AND role == 'ASSISTANT'";
         
         return chatClient.prompt(
@@ -142,6 +143,7 @@ public class ChatController {
                 .advisors(advisor -> advisor
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
                         .param("jiacn", jiacn)
+                        .param("clientId", EsContextHolder.getContext().getClientId())
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, filterExpression))
                 .messages()
                 .stream().content()
@@ -178,10 +180,11 @@ public class ChatController {
         String title = chatClientBuilder.build().prompt(
                         SUMMARY_PROMPT_TEMPLATE.create(Map.of("question", question, "answer", answer)))
                 .call().content();
-        KefuMessageEntity upMessage = new KefuMessageEntity();
+        ChatConversationEntity upMessage = new ChatConversationEntity();
         upMessage.setId(Long.valueOf(conversationId));
         upMessage.setTitle(title);
-        kefuMessageService.update(upMessage);
+        upMessage.setStatus(1);
+        chatConversationService.update(upMessage);
         return Flux.just("{\"t\": \"" + title + "\"}");
     }
 
@@ -218,6 +221,26 @@ public class ChatController {
      */
     @RequestMapping(value = "/conversation/content", method = RequestMethod.GET)
     public Object getConversationContent(@RequestParam(name = "id") String id) {
-        return JsonResult.success(chatConversationService.getConversationContent(id));
+        return JsonResult.success(chatConversationService.findByConversationId(id));
+    }
+
+    /**
+     * 分页查询会话列表
+     *
+     * @param page 分页请求参数，包含查询条件、页码、每页大小和排序字段
+     * @return 分页结果，包含会话列表和总数
+     */
+    @RequestMapping(value = "/conversation/list", method = RequestMethod.POST)
+    public Object listConversations(@RequestBody JsonRequestPage<ChatConversationEntity> page) {
+        PageInfo<ChatConversationEntity> pageInfo = chatConversationService.findPage(
+                page.getSearch(), 
+                page.getPageNum(), 
+                page.getPageSize(), 
+                page.getOrderBy()
+        );
+        JsonResultPage<ChatConversationEntity> result = new JsonResultPage<>(pageInfo.getList());
+        result.setPageNum(pageInfo.getPageNum());
+        result.setTotal(pageInfo.getTotal());
+        return result;
     }
 }

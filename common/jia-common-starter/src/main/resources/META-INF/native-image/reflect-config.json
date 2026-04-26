@@ -1,0 +1,133 @@
+[
+  {
+    "name": "cn.jia.core.util.DataUtil",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "cn.jia.core.common.EsSecurityHandler",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "queriedMethods": [
+      {"name": "username"},
+      {"name": "clientId"},
+      {"name": "getClientIdFromAuthentication", "parameterTypes": ["org.springframework.security.core.Authentication"]}
+    ]
+  },
+  {
+    "name": "org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken$JwtAuthenticationTokenChecker",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "io.jsonwebtoken.impl.DefaultJwtParser",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.jsonwebtoken.JwtParser",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "cn.jia.common.dao.BaseDaoImpl",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "cn.jia.core.entity.BaseEntity",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "fields": [
+      {"name": "createTime"},
+      {"name": "updateTime"},
+      {"name": "tenantId"},
+      {"name": "clientId"}
+    ]
+  },
+  {
+    "name": "cn.jia.core.dao.IBaseDao",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "cn.jia.core.config.SpringContextHolder",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "queriedMethods": [
+      {"name": "getBean", "parameterTypes": ["java.lang.String"]},
+      {"name": "getBean", "parameterTypes": ["java.lang.Class"]},
+      {"name": "getProperty", "parameterTypes": ["java.lang.String", "java.lang.Class"]}
+    ]
+  },
+  {
+    "name": "cn.jia.core.errcode.ErrCodeHolder",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "queriedMethods": [
+      {"name": "getMessage", "parameterTypes": ["java.lang.String"]},
+      {"name": "getMessage", "parameterTypes": ["cn.jia.core.exception.EsErrorConstants"]}
+    ]
+  },
+  {
+    "name": "cn.jia.core.exception.EsErrorConstants",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "queriedMethods": [
+      {"name": "getCode"},
+      {"name": "getMessage"}
+    ]
+  },
+  {
+    "name": "cn.jia.wx.service.PayOrderParse",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "cn.jia.wx.service.PayOrderParseService",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "cn.jia.wx.service.AbstractPayOrderParseService",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.baomidou.mybatisplus.core.conditions.query.QueryWrapper",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.baomidou.mybatisplus.core.metadata.TableInfoHelper",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.baomidou.mybatisplus.core.metadata.TableInfo",
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.baomidou.mybatisplus.extension.toolkit.SqlHelper",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.baomidou.mybatisplus.core.toolkit.ReflectionKit",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "tools.jackson.databind.ObjectMapper",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "tools.jackson.databind.JavaType",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "org.apache.ibatis.session.SqlSession",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "org.apache.ibatis.binding.MapperMethod",
+    "allDeclaredMethods": true
+  }
+]

@@ -1,5 +1,6 @@
 package cn.jia.point.common;
 
+import cn.jia.core.annotation.ErrorCodeModule;
 import cn.jia.core.exception.EsErrorConstants;
 
 /**
@@ -7,6 +8,7 @@ import cn.jia.core.exception.EsErrorConstants;
  * @author chc
  * @since 2017年12月8日 下午2:47:56
  */
+@ErrorCodeModule("积分模块")
 public class PointErrorConstants extends EsErrorConstants {
 	public PointErrorConstants(String code, String message) {
 		super(code, message);

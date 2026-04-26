@@ -7,6 +7,7 @@ Jia 是一个基于 Spring Cloud 的微服务 DevOps 云服务管理框架，提
 - **当前版本**: 1.1.2-SNAPSHOT
 - **Git仓库**: https://gitee.com/chcbz/jia.git
 - **基础包名**: cn.jia
+- **最后更新**: 2026-04-24
 
 ## 技术栈
 
@@ -21,27 +22,29 @@ Jia 是一个基于 Spring Cloud 的微服务 DevOps 云服务管理框架，提
 | 工作流 | Camunda |
 | 认证 | OAuth 2.0 / Spring Security |
 | API文档 | Swagger/OpenAPI 3.0 |
+| AI集成 | Spring AI |
+| 向量存储 | Elasticsearch |
 
 ## 模块列表
 
 ### 业务模块
 
-| 模块 | 说明 | 包含子模块 |
-|------|------|-------------|
-| common | 通用模块 | api, core, mapper, service, starter, test |
-| base | 基础服务 | api, core, mapper, service, starter |
-| user | 用户中心 | api, core, mapper, service, starter |
-| oauth | 认证授权 | api, core, mapper, service, resource, server-starter, client-starter, resource-starter |
-| workflow | 工作流 | api, core, service, starter |
-| kefu | 客服 | api, core, mapper, service |
-| material | 素材管理 | api, core, mapper, service, starter |
-| sms | 短信 | api, core, mapper, service, starter |
-| task | 任务调度 | api, core, mapper, service, starter |
-| point | 积分 | api, core, mapper, service |
-| isp | ISP服务 | api, core, mapper, service, starter |
-| dwz | 短网址 | api, core, mapper, service, starter |
-| wx | 微信 | api, core, mapper, service |
-| chat | 聊天 | api, core, mapper, service, starter |
+| 模块 | 说明 | 包含子模块 | 核心依赖 |
+|------|------|------------|----------|
+| common | 通用模块 | api, core, mapper, service, starter, test | - |
+| base | 基础服务 | api, core, mapper, service, starter | common |
+| user | 用户中心 | api, core, mapper, service, starter | common, oauth |
+| oauth | 认证授权 | api, core, mapper, service, resource | common, user |
+| workflow | 工作流 | api, core, service, starter | common, user, base |
+| kefu | 客服 | api, core, mapper, service | common |
+| material | 素材管理 | api, core, mapper, service, starter | common |
+| sms | 短信 | api, core, mapper, service, starter | common |
+| task | 任务调度 | api, core, mapper, service, starter | common |
+| point | 积分 | api, core, mapper, service | common |
+| isp | ISP服务 | api, core, mapper, service, starter | common |
+| dwz | 短网址 | api, core, mapper, service, starter | common |
+| wx | 微信 | api, core, mapper, service | common |
+| chat | 聊天 | api, core, mapper, service, starter | common, task, elasticsearch |
 
 ### 工具模块
 
@@ -62,6 +65,8 @@ module/
 └── jia-{module}-starter/     # Starter层 - 自动配置
 ```
 
+**说明**: 部分模块根据业务需求可能有增减，如oauth模块包含resource、server-starter、client-starter等额外子模块。
+
 ### 包结构规范
 
 ```
@@ -74,7 +79,8 @@ cn.jia.{module}
 ├── mapper/        # MyBatis Mapper
 ├── config/        # 配置类
 ├── handler/       # 控制器/Handler
-└── common/        # 公共工具类
+├── common/        # 公共工具类
+└── job/           # 任务处理器（task等模块）
 ```
 
 ## 核心组件规范
@@ -92,23 +98,121 @@ public class BaseEntity implements Serializable {
 }
 ```
 
-### Service层规范
+### BaseDaoImpl 通用DAO实现
+
+提供基于MyBatis Plus的通用数据访问实现：
+
+```java
+public class BaseDaoImpl<T> {
+    // CRUD基础操作
+    public T selectById(Serializable id);
+    public List<T> selectList(wrapper);
+    public int insert(T entity);
+    public int updateById(T entity);
+    public int deleteById(Serializable id);
+}
+```
+
+### 统一响应格式
+
+使用 `JsonResult<T>` 封装API响应：
+
+```java
+public class JsonResult<T> implements Serializable {
+    private Integer code;       // 状态码
+    private String msg;         // 消息
+    private T data;             // 数据
+    private Long time;          // 时间戳
+    
+    // 静态工厂方法
+    public static <T> JsonResult<T> success(T data);
+    public static <T> JsonResult<T> fail(String msg);
+    public static <T> JsonResult<T> fail(Integer code, String msg);
+}
+```
+
+### 分页查询
+
+使用 `JsonRequestPage` 处理分页请求：
+
+```java
+public class JsonRequestPage {
+    private Integer page;        // 当前页
+    private Integer size;        // 每页大小
+    private String sort;         // 排序字段
+    private String order;        // 排序方向
+}
+```
+
+## Service层规范
 
 - Service接口定义在 `*-api` 模块
 - Service实现类在 `*-service` 模块
 - 使用 `@Service` 注解标记
 - 注入依赖使用构造器注入或 `@Autowired`
 
-### DAO层规范
+## DAO层规范
 
-- DAO接口定义在 `*-service` 模块
-- DAO实现类在 `*-mapper` 模块
+- DAO接口定义在 `*-service` 模块（cn.jia.{module}.dao包）
+- DAO实现类在 `*-mapper` 模块（cn.jia.{module}.dao.impl包）
 - 使用 `@Repository` 注解标记
 
-### Mapper层规范
+## Mapper层规范
 
 - MyBatis Mapper XML文件与Mapper接口在同一包
 - 使用MyBatis Plus增强功能
+
+## 异常处理规范
+
+### 异常类层次
+
+```
+EsCheckedException (受检异常)
+    └── 业务特定异常
+EsRuntimeException (运行时异常)
+    └── 业务特定异常
+ValidationException (参数校验异常)
+```
+
+### 错误码规范
+
+各模块定义 `*ErrorConstants` 类，继承 `EsErrorConstants`：
+
+```java
+@ErrorCodeModule("模块名")
+public class XxxErrorConstants extends EsErrorConstants {
+    public static final int XXX_ERROR = 1_000_000;
+}
+```
+
+## 模块间依赖关系图
+
+```
+                    ┌─────────────┐
+                    │   common    │
+                    │  (核心基础) │
+                    └──────┬──────┘
+                           │
+        ┌──────────┬───────┼───────┬──────────┬──────────┐
+        │          │       │       │          │          │
+    ┌───▼───┐  ┌───▼───┐ ┌─▼─────┐┌▼───────┐┌▼───────┐┌▼───────┐
+    │ base  │  │ user  │ │ oauth ││  sms   ││  dwz   ││  isp   │
+    └───────┘  └──┬───┘ └───┬───┘└────────┘└────────┘└────────┘
+                  │         │
+           ┌──────▼─────────▼──────┐
+           │       workflow        │
+           │       (工作流)        │
+           └───────────────────────┘
+
+    ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐  ┌───────┐
+    │  kefu │  │material│  │ point │  │   wx  │  │  chat │
+    └───────┘  └───────┘  └───────┘  └───────┘  └───┬───┘
+                                                      │
+                                              ┌───────▼───────┐
+                                              │     task      │
+                                              │   (任务调度)   │
+                                              └───────────────┘
+```
 
 ## 构建与发布
 
@@ -142,3 +246,16 @@ dependencies {
 - [认证授权模块规格](./modules/jia-oauth-module-spec.md)
 - [工作流模块规格](./modules/jia-workflow-module-spec.md)
 - [聊天模块规格](./modules/jia-chat-module-spec.md)
+- [任务调度模块规格](./modules/jia-task-module-spec.md)
+- [客服模块规格](./modules/jia-kefu-module-spec.md)
+- [通用模块规格](./modules/jia-common-module-spec.md)
+- [基础服务模块规格](./modules/jia-base-module-spec.md)
+- [聊天长效记忆规格](./modules/jia-chat-longterm-memory-spec.md)
+
+## 变更记录
+
+| 日期 | 版本 | 变更内容 |
+|------|------|----------|
+| 2026-04-24 | 1.1.2 | 完善模块依赖关系，更新包结构规范 |
+| 2026-04-24 | 1.1.2 | 添加异常处理规范和错误码规范 |
+| 2026-04-24 | 1.1.2 | 添加chat模块与task模块的依赖关系 |

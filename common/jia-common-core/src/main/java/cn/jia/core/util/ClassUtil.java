@@ -12,23 +12,70 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 /**
+ * GraalVM Native Image 兼容的工具类
  * @author chc
  */
 @Slf4j
 public class ClassUtil {
+    
     /**
-     * 根据类路径获取类
+     * GraalVM Native Image 模式标记
+     * 在编译时可通过 -Dgraalvm.native.mode=true 启用
+     */
+    private static final boolean GRAALVM_NATIVE_MODE = 
+        System.getProperty("graalvm.native.mode") != null || 
+        System.getProperty("org.graalvm.nativeimage.SubstrateInvocationTransition") != null;
+    
+    /**
+     * 注册的类名映射表（用于 GraalVM Native Image 模式）
+     * 在静态初始化时预加载已知类
+     */
+    private static final Map<String, Class<?>> REGISTERED_CLASSES = new ConcurrentHashMap<>();
+    
+    static {
+        // 注册已知的基础类
+        registerClass("cn.jia.core.entity.BaseEntity");
+        registerClass("cn.jia.core.common.EsSecurityHandler");
+    }
+    
+    /**
+     * 注册类到映射表（GraalVM Native Image 兼容）
+     */
+    private static void registerClass(String className) {
+        try {
+            Class<?> clazz = Class.forName(className);
+            REGISTERED_CLASSES.put(className, clazz);
+        } catch (Throwable e) {
+            // 静默忽略，编译时可能不可用
+        }
+    }
+    
+    /**
+     * GraalVM 安全的方式获取类
+     * 在 Native Image 模式下优先使用预注册类
      *
      * @param className 类名
      * @return 类
      */
     public static Class<?> forName(String className) {
+        // 先检查预注册类
+        Class<?> registered = REGISTERED_CLASSES.get(className);
+        if (registered != null) {
+            return registered;
+        }
+        
+        // 非 GraalVM 模式或未注册的类，使用传统方式
         try {
-            return Class.forName(className);
+            Class<?> clazz = Class.forName(className);
+            // 缓存以便后续使用
+            REGISTERED_CLASSES.putIfAbsent(className, clazz);
+            return clazz;
         } catch (Throwable e) {
             log.error("无法获取类：{}", className);
             return null;

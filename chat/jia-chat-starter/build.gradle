@@ -1,8 +1,9 @@
 dependencies {
-	api project(':chat:jia-chat-service')
-	api project(':kefu:jia-kefu-mapper')
+	api project(':chat:jia-chat-mapper')
 	api project(':common:jia-common-starter')
 	implementation(libs.spring.boot.starter.data.redis)
+	implementation (libs.spring.ai.starter.model.zhipuai)
+	implementation libs.spring.ai.starter.model.deepseek
 }
 
 version = '1.1.2-SNAPSHOT'

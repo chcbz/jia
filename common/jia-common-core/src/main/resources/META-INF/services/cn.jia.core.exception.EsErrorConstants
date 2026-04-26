@@ -1,0 +1,7 @@
+# SPI Service Provider Configuration
+# 此文件列出所有 EsErrorConstants 实现类，供 ServiceLoader 发现
+cn.jia.core.exception.EsErrorConstants
+
+# 注意：此文件已被 ErrCodeHolder Spring Bean 方式替代
+# 错误码收集现在通过 Spring 依赖注入自动完成
+# 参见 cn.jia.core.errcode.ErrCodeHolder

@@ -32,3 +32,5 @@ build/
 gradlew
 gradlew.bat
 /.vscode/
+/.cline/
+/.clinerules/

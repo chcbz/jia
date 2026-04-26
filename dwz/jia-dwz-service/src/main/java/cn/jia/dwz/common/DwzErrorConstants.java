@@ -1,5 +1,6 @@
 package cn.jia.dwz.common;
 
+import cn.jia.core.annotation.ErrorCodeModule;
 import cn.jia.core.exception.EsErrorConstants;
 
 /**
@@ -7,6 +8,7 @@ import cn.jia.core.exception.EsErrorConstants;
  * @author chc
  * @since 2017年12月8日 下午2:47:56
  */
+@ErrorCodeModule("短链接模块")
 public class DwzErrorConstants extends EsErrorConstants {
 	public DwzErrorConstants(String code, String message) {
 		super(code, message);

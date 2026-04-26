@@ -1,0 +1,19 @@
+{
+  "resources": {
+    "includes": [
+      "META-INF/spring/**",
+      "META-INF/spring.factories",
+      "META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports",
+      "META-INF/resources/**",
+      "static/**",
+      "**.xml",
+      "**.properties",
+      "**.yml",
+      "**.yaml"
+    ],
+    "excludes": [
+      "**.jar"
+    ]
+  },
+  "bundles": []
+}
