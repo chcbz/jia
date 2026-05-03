@@ -1,6 +1,8 @@
 dependencies {
 	api project(':chat:jia-chat-mapper')
 	api project(':common:jia-common-starter')
+	api project(':task:jia-task-mapper')
+	implementation(libs.spring.boot.starter.elasticsearch)
 	implementation(libs.spring.boot.starter.data.redis)
 	implementation (libs.spring.ai.starter.model.zhipuai)
 	implementation libs.spring.ai.starter.model.deepseek

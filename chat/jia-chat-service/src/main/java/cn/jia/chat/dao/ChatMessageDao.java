@@ -38,4 +38,39 @@ public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
      * @param conversationId 会话ID
      */
     void deleteByConversationId(String conversationId);
+
+    /**
+     * 查询待同步的会话ID列表
+     *
+     * @param syncStatus 同步状态
+     * @param limit 查询数量限制
+     * @return 会话ID列表
+     */
+    List<String> findPendingConversationIds(String syncStatus, int limit);
+
+    /**
+     * 根据会话ID更新同步状态
+     *
+     * @param conversationId 会话ID
+     * @param syncStatus 同步状态
+     */
+    void updateSyncStatusByConversationId(String conversationId, String syncStatus);
+
+    /**
+     * 查询待清理的过期消息（用于数据清理）
+     *
+     * @param beforeTime 创建时间阈值
+     * @param limit 查询数量限制
+     * @return 消息ID列表
+     */
+    List<Long> findExpiredMessageIds(long beforeTime, int limit);
+
+    /**
+     * 查询活跃用户列表（在指定时间后有消息的用户）
+     *
+     * @param sinceTime 起始时间
+     * @return 用户标识列表
+     */
+    List<String> findActiveJiacns(long sinceTime);
+
 }

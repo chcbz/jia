@@ -8,7 +8,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * <p>
@@ -49,5 +51,65 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
         if (list != null && !list.isEmpty()) {
             deleteBatchIds(list.stream().map(ChatMessageEntity::getId).toList());
         }
+    }
+
+    @Override
+    public List<String> findPendingConversationIds(String syncStatus, int limit) {
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(ChatMessageEntity::getSyncStatus, syncStatus)
+               .orderByAsc(ChatMessageEntity::getCreateTime)
+               .last("LIMIT " + limit);
+        List<ChatMessageEntity> list = baseMapper.selectList(wrapper);
+        if (list != null && !list.isEmpty()) {
+            return list.stream()
+                    .map(ChatMessageEntity::getConversationId)
+                    .distinct()
+                    .toList();
+        }
+        return Collections.emptyList();
+    }
+
+    @Override
+    public void updateSyncStatusByConversationId(String conversationId, String syncStatus) {
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(ChatMessageEntity::getConversationId, conversationId);
+        List<ChatMessageEntity> list = baseMapper.selectList(wrapper);
+        if (list != null && !list.isEmpty()) {
+            list.forEach(entity -> entity.setSyncStatus(syncStatus));
+            updateBatchById(list);
+        }
+    }
+
+    @Override
+    public List<Long> findExpiredMessageIds(long beforeTime, int limit) {
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.lt(ChatMessageEntity::getCreateTime, beforeTime)
+               .select(ChatMessageEntity::getId)
+               .orderByAsc(ChatMessageEntity::getId)
+               .last("LIMIT " + limit);
+        List<ChatMessageEntity> list = baseMapper.selectList(wrapper);
+        if (list != null && !list.isEmpty()) {
+            return list.stream().map(ChatMessageEntity::getId).toList();
+        }
+        return Collections.emptyList();
+    }
+
+    @Override
+    public List<String> findActiveJiacns(long sinceTime) {
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.gt(ChatMessageEntity::getCreateTime, sinceTime)
+               .select(ChatMessageEntity::getJiacn);
+        List<ChatMessageEntity> list = baseMapper.selectList(wrapper);
+        if (list != null && !list.isEmpty()) {
+            // 去重
+            Set<String> jiacnSet = new HashSet<>();
+            for (ChatMessageEntity entity : list) {
+                if (entity.getJiacn() != null) {
+                    jiacnSet.add(entity.getJiacn());
+                }
+            }
+            return List.copyOf(jiacnSet);
+        }
+        return Collections.emptyList();
     }
 }

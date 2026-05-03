@@ -1,6 +1,8 @@
 dependencies {
+	api project(':common:jia-common-core')
 	api project(':common:jia-common-service')
 	api project(':chat:jia-chat-api')
+	compileOnly project(':task:jia-task-core')
 	implementation libs.spring.boot.starter.webflux
 	implementation libs.spring.ai.starter.mcp.client
 	compileOnly (libs.spring.ai.starter.model.zhipuai) {
@@ -9,9 +11,10 @@ dependencies {
 	compileOnly libs.spring.ai.starter.model.deepseek
 	compileOnly libs.spring.ai.starter.model.ollama
 	compileOnly libs.spring.ai.starter.model.minimax
-	implementation libs.spring.ai.starter.vector.store.elasticsearch
+	compileOnly(libs.spring.boot.starter.elasticsearch)
+//	implementation libs.spring.ai.starter.vector.store.elasticsearch
 	// implementation 'org.springframework.ai:spring-ai-starter-vector-store-redis'
-	implementation libs.spring.ai.advisors.vector.store
+	compileOnly libs.spring.ai.advisors.vector.store
 	implementation libs.spring.ai.agent.utils
 	compileOnly libs.spring.boot.starter.websocket
 	compileOnly libs.spring.security.oauth2.client

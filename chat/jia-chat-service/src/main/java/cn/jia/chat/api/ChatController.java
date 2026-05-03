@@ -136,6 +136,7 @@ public class ChatController {
     private Flux<String> createAIStream(ChatMessageDTO chatMessage, String conversationId, boolean needSummary, StringBuilder summary) {
         // 构建过滤表达式: 同时过滤 jiacn 和 role
         String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
+        String clientId = Optional.ofNullable(EsContextHolder.getContext().getClientId()).orElse("jia_client");
         String filterExpression = "metadata.jiacn == '" + jiacn + "' AND role == 'ASSISTANT'";
         
         return chatClient.prompt(
@@ -143,7 +144,7 @@ public class ChatController {
                 .advisors(advisor -> advisor
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
                         .param("jiacn", jiacn)
-                        .param("clientId", EsContextHolder.getContext().getClientId())
+                        .param("clientId", clientId)
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, filterExpression))
                 .messages()
                 .stream().content()
@@ -242,5 +243,17 @@ public class ChatController {
         result.setPageNum(pageInfo.getPageNum());
         result.setTotal(pageInfo.getTotal());
         return result;
+    }
+
+    /**
+     * 修改会话标题
+     *
+     * @param entity 包含会话ID和新标题的实体对象
+     * @return 操作结果
+     */
+    @RequestMapping(value = "/conversation/update", method = RequestMethod.POST)
+    public Object updateConversation(@RequestBody ChatConversationEntity entity) {
+        chatConversationService.update(entity);
+        return JsonResult.success();
     }
 }

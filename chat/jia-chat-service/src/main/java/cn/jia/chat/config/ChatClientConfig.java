@@ -3,8 +3,10 @@ package cn.jia.chat.config;
 import java.util.List;
 
 import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
+import cn.jia.chat.advisor.LongTermMemoryAdvisor;
 import cn.jia.chat.advisor.RequestResponseAdvisor;
 import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.memory.MemoryRepository;
 import org.springaicommunity.agent.tools.GrepTool;
 import org.springaicommunity.agent.tools.ShellTools;
 import org.springaicommunity.agent.tools.SkillsTool;
@@ -14,10 +16,7 @@ import org.springaicommunity.agent.tools.task.TaskTool;
 import org.springaicommunity.agent.tools.task.claude.ClaudeSubagentType;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,19 +27,17 @@ import io.modelcontextprotocol.client.McpSyncClient;
 @Slf4j
 @Configuration
 public class ChatClientConfig {
-    @Value("${agent.skills.dirs:}")
+    @Value("${chat.agent.skills.dirs:}")
     private String[] skillsRootDirectories;
 
     @Bean
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
-            List<McpSyncClient> mcpSyncClients, VectorStore vectorStore,
+            List<McpSyncClient> mcpSyncClients, MemoryRepository memoryRepository,
             ChatMessageDao chatMessageDao) {
-        // 使用 QuestionAnswerAdvisor + 自动配置的 ElasticsearchVectorStore 实现长效记忆检索(基于向量相似度)
-        QuestionAnswerAdvisor longTermMemoryAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
-                .searchRequest(SearchRequest.builder()
-                        .similarityThreshold(0.8d)
-                        .topK(5)
-                        .build())
+        // 使用 LongTermMemoryAdvisor 实现长效记忆检索(带会话权重)
+        LongTermMemoryAdvisor longTermMemoryAdvisor = LongTermMemoryAdvisor.builder(memoryRepository)
+                .memoryTopK(2)
+                .similarityThreshold(0.75)
                 .build();
         
         // 使用 DatabaseChatMemoryAdvisor 实现上下文记忆

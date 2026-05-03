@@ -46,4 +46,7 @@ public class ChatMessageEntity extends BaseEntity {
 
     @Schema(description = "用户ID（冗余字段，便于长效记忆汇总）")
     private String jiacn;
+
+    @Schema(description = "同步状态（PENDING-待同步/SYNCED-已同步）")
+    private String syncStatus;
 }

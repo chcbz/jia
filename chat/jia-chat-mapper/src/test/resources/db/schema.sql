@@ -29,6 +29,7 @@ CREATE TABLE chat_message (
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
   tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
   jiacn varchar(50) DEFAULT NULL COMMENT '用户ID（冗余字段，便于长效记忆汇总）',
+  sync_status varchar(20) DEFAULT NULL COMMENT '同步状态（PENDING-待同步/SYNCED-已同步）',
   PRIMARY KEY (id),
   KEY idx_conversation_id (conversation_id),
   KEY idx_tenant_id (tenant_id),
