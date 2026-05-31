@@ -1,5 +1,5 @@
 dependencies {
-    api project(':chat:jia-chat-service')
+    api project(':chat:jia-chat-api')
     api project(':common:jia-common-mapper')
     testImplementation project(':common:jia-common-test')
     testImplementation libs.mybatis.plus.generator

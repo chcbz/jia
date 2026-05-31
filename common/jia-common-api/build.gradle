@@ -1,5 +1,6 @@
 dependencies {
     api project(':common:jia-common-core')
+    api(libs.spring.tx)
     api(libs.swagger.annotations)
     api(libs.pagehelper.core)
 }

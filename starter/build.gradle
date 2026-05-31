@@ -1,0 +1,68 @@
+plugins {
+    id 'org.springframework.boot' version '4.0.1'
+}
+
+dependencies {
+    api project(':common:jia-common-starter')
+    api project(':base:jia-base-starter')
+    api project(':dwz:jia-dwz-starter')
+    api project(':isp:jia-isp-starter')
+    api project(':material:jia-material-starter')
+    api project(':oauth:jia-oauth-client-starter')
+    api project(':oauth:jia-oauth-resource-starter')
+    api project(':oauth:jia-oauth-server-starter')
+    api project(':sms:jia-sms-starter')
+    api project(':task:jia-task-starter')
+    api project(':user:jia-user-starter')
+    api project(':workflow:jia-workflow-starter')
+    api project(':chat:jia-chat-starter')
+
+    api project(':agent:jia-agent-service')
+    api project(':agent:jia-agent-mapper')
+    api project(':kefu:jia-kefu-service')
+    api project(':kefu:jia-kefu-mapper')
+    api project(':point:jia-point-service')
+    api project(':point:jia-point-mapper')
+    api project(':wx:jia-wx-service')
+    api project(':wx:jia-wx-mapper')
+
+    implementation(libs.spring.boot.starter.redisson)
+    implementation(libs.spring.boot.starter.thymeleaf)
+    implementation(libs.spring.boot.starter.data.redis)
+    implementation(libs.spring.boot.starter.data.ldap)
+    implementation(libs.spring.boot.starter.cache)
+    implementation(libs.spring.boot.starter.security)
+    implementation(libs.spring.security.oauth2.authorization.server)
+    implementation(libs.spring.boot.starter.oauth2.resource.server)
+    implementation(libs.spring.boot.starter.oauth2.client)
+    implementation(libs.spring.boot.starter.elasticsearch)
+    implementation(libs.spring.boot.starter.amqp)
+    implementation(libs.spring.boot.starter.actuator)
+    implementation(libs.spring.boot.starter.websocket)
+    implementation(libs.spring.ai.starter.model.minimax)
+    implementation(libs.spring.ai.starter.model.zhipuai)
+    implementation(libs.spring.ai.starter.model.deepseek)
+    implementation(libs.spring.ai.starter.model.openai)
+    implementation(libs.camunda)
+    implementation(libs.jodd)
+
+    testImplementation project(':common:jia-common-test')
+    testImplementation(libs.spring.boot.starter.test)
+    testImplementation(libs.junit.jupiter)
+    testAnnotationProcessor libs.lombok
+    testCompileOnly libs.lombok
+}
+
+version = '1.1.2-SNAPSHOT'
+description = 'starter'
+
+jar {
+    enabled = false
+}
+
+bootJar {
+    mainClass = 'cn.jia.JiaApplication'
+    manifest {
+        attributes 'Start-Class': 'cn.jia.JiaApplication'
+    }
+}

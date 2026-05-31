@@ -1,0 +1,6 @@
+<dataset>
+    <wx_mp_template TEMPLATE_ID="M2LBQMr4BSujBWs5s8xgHcdtNCD69N0q9sO5-EmPnuU" CLIENT_ID="jia_client"
+                    APPID="wxd59557202ddff2d5" TITLE="工作提醒" PRIMARY_INDUSTRY="金融业" DEPUTY_INDUSTRY="保险"
+                    CONTENT="{{first.DATA}}\n\n提醒类型：{{keyword1.DATA}}\n\n提醒内容：{{keyword2.DATA}}\n\n{{remark.DATA}}"
+                    STATUS="1" CREATE_TIME="1" UPDATE_TIME="1"/>
+</dataset>

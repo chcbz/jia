@@ -13,6 +13,7 @@ import org.springframework.security.oauth2.server.authorization.settings.OAuth2T
 import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
@@ -111,7 +112,7 @@ public class RegisteredClientMapper {
         }
 
         public static Set<String> toStringSet(String str) {
-            return str == null ? null : StringUtil.commaDelimitedListToSet(str);
+            return str == null ? Collections.emptySet() : StringUtil.commaDelimitedListToSet(str);
         }
 
         public static Date instantToDate(Instant instant) {

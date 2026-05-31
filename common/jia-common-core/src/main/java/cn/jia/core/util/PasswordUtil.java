@@ -55,8 +55,8 @@ public class PasswordUtil {
             return false;
         }
         if (!BCRYPT_PATTERN.matcher(encodedPassword).matches()) {
-            log.warn("Encoded password does not look like BCrypt");
-            return false;
+            log.warn("Encoded password does not look like BCrypt, falling back to legacy plain-text comparison");
+            return rawPassword.toString().equals(encodedPassword);
         }
         return BCrypt.checkpw(rawPassword.toString(), encodedPassword);
     }

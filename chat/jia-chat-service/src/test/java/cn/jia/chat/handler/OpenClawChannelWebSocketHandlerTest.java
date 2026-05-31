@@ -1,0 +1,138 @@
+package cn.jia.chat.handler;
+
+import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.entity.AgentRegisterDTO;
+import cn.jia.agent.entity.AgentRegisterResultDTO;
+import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskReportDTO;
+import cn.jia.agent.service.AgentService;
+import cn.jia.test.BaseMockTest;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
+    @Mock
+    ChatClient chatClient;
+    @Mock
+    AgentService agentService;
+    @Mock
+    ObjectProvider<AgentService> agentServiceProvider;
+    @Mock
+    WebSocketSession session;
+
+    @Test
+    void handlesAgentRegisterAssignAndReport() throws Exception {
+        when(session.getId()).thenReturn("session-001");
+        when(session.isOpen()).thenReturn(true);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+
+        AgentTaskDTO assigned = new AgentTaskDTO();
+        assigned.setId("task-001");
+        assigned.setStatus(AgentConstants.TASK_STATUS_ASSIGNED);
+        assigned.setAssignedAgentId("agent-001");
+        assigned.setAssignedAgentName("Wu Yong");
+        when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class))).thenReturn(assigned);
+
+        AgentTaskDTO running = new AgentTaskDTO();
+        running.setId("task-001");
+        running.setStatus(AgentConstants.TASK_STATUS_RUNNING);
+        running.setAssignedAgentId("agent-001");
+        running.setAssignedAgentName("Wu Yong");
+        when(agentService.reportTask(any(String.class), any(AgentTaskReportDTO.class))).thenReturn(running);
+
+        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ping\",\"requestId\":\"ping-1\"}"));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong","abilities":["planning","analysis"]}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"task.assign","requestId":"assign-1","taskId":"task-001","agentId":"agent-001","allowQueue":false}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"task.report","requestId":"report-1","taskId":"task-001","agentId":"agent-001","status":"running","currentTaskTitle":"Verify"}
+                """));
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(5)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+
+        assertTrue(messages.contains("\"type\":\"connected\""));
+        assertTrue(messages.contains("\"agent.register\""));
+        assertTrue(messages.contains("\"type\":\"pong\""));
+        assertTrue(messages.contains("\"type\":\"agent_registered\""));
+        assertTrue(messages.contains("\"type\":\"task_assigned\""));
+        assertTrue(messages.contains("\"type\":\"task_reported\""));
+        assertTrue(messages.contains("\"status\":\"running\""));
+    }
+
+    @Test
+    void returnsAgentErrorCodeForControlMessageFailures() throws Exception {
+        when(session.isOpen()).thenReturn(true);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
+                .thenThrow(new TestAgentException(AgentErrorConstants.AGENT_OFFLINE, "Agent is offline"));
+
+        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"task.assign","requestId":"assign-1","taskId":"task-001","agentId":"agent-001"}
+                """));
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(messageCaptor.capture());
+        String message = messageCaptor.getValue().getPayload();
+        assertTrue(message.contains("\"type\":\"error\""));
+        assertTrue(message.contains("\"code\":\"AGENT_OFFLINE\""));
+        assertTrue(message.contains("\"message\":\"Agent is offline\""));
+    }
+
+    @Test
+    void extractsConversationTypeFromPayload() throws Exception {
+        when(session.getId()).thenReturn("session-juyi");
+        when(session.isOpen()).thenReturn(true);
+
+        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider);
+        handler.afterConnectionEstablished(session);
+
+        // Send a ping with conversationType to verify copyTrace passes it through in the echo (pong)
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"ping","requestId":"ping-juyi","conversationType":"juyiting","conversationId":"juyi-1"}
+                """));
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+
+        assertTrue(messages.contains("\"type\":\"connected\""));
+        assertTrue(messages.contains("\"type\":\"pong\""));
+        assertTrue(messages.contains("\"conversationType\":\"juyiting\""));
+        assertTrue(messages.contains("\"requestId\":\"ping-juyi\""));
+    }
+
+    static class TestAgentException extends RuntimeException {
+        private final String code;
+
+        TestAgentException(String code, String message) {
+            super(message);
+            this.code = code;
+        }
+
+        public String getCode() {
+            return code;
+        }
+    }
+}

@@ -187,6 +187,7 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-ai-starter-mcp-server", "org.springframework.ai", "spring-ai-starter-mcp-server").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-zhipuai", "org.springframework.ai", "spring-ai-starter-model-zhipuai").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-deepseek", "org.springframework.ai", "spring-ai-starter-model-deepseek").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-model-openai", "org.springframework.ai", "spring-ai-starter-model-openai").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-ollama", "org.springframework.ai", "spring-ai-starter-model-ollama").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-model-minimax", "org.springframework.ai", "spring-ai-starter-model-minimax").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-vector-store-elasticsearch", "org.springframework.ai", "spring-ai-starter-vector-store-elasticsearch").versionRef("spring-ai");

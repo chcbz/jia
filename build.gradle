@@ -59,3 +59,67 @@ tasks.register('publishAllToMavenRepository') {
     // 若需发布所有出版物，可使用 publishAllPublicationsToMavenRepository
     dependsOn subprojects.collect { it.tasks.named('publishAllPublicationsToMavenRepository') }
 }
+
+tasks.register('validateLayering') {
+    group = 'verification'
+    description = 'Validates module layering: service -> mapper -> api/core.'
+
+    doLast {
+        def violations = []
+
+        fileTree(rootDir) {
+            include '**/jia-*-mapper/build.gradle'
+            exclude 'build/**'
+        }.each { buildFile ->
+            buildFile.eachLine { line ->
+                if (line =~ /^\s*(api|implementation|compileOnly|runtimeOnly)\s+project\(':.*:jia-.*-service'\)/) {
+                    violations << "${rootDir.toPath().relativize(buildFile.toPath())}: mapper module must not depend on service module"
+                }
+            }
+        }
+
+        fileTree(rootDir) {
+            include '**/jia-*-api/build.gradle'
+            exclude 'build/**'
+        }.each { buildFile ->
+            buildFile.eachLine { line ->
+                if (line =~ /^\s*(api|implementation|compileOnly|runtimeOnly)\s+project\(':.*:jia-.*-service'\)/) {
+                    violations << "${rootDir.toPath().relativize(buildFile.toPath())}: api module must not depend on service module"
+                }
+            }
+        }
+
+        fileTree(rootDir) {
+            include '**/jia-*-service/src/main/java/**/dao/*.java'
+            exclude '**/build/**'
+        }.each { sourceFile ->
+            violations << "${rootDir.toPath().relativize(sourceFile.toPath())}: DAO interfaces belong in mapper modules"
+        }
+
+        def commonMapper = file('common/jia-common-mapper/build.gradle')
+        if (commonMapper.exists() && commonMapper.text.contains("project(':common:jia-common-service')")) {
+            violations << "common/jia-common-mapper/build.gradle: common mapper must not depend on common service"
+        }
+
+        fileTree(rootDir) {
+            include '**/jia-*-service/build.gradle'
+            exclude 'common/**'
+            exclude 'build/**'
+        }.each { buildFile ->
+            buildFile.eachLine { line ->
+                if (line =~ /^\s*api\s+project\(':common:jia-common-service'\)/) {
+                    violations << "${rootDir.toPath().relativize(buildFile.toPath())}: service module must not expose common-service with api"
+                }
+            }
+        }
+
+        def legacyBaseDao = file('common/jia-common-service/src/main/java/cn/jia/core/dao/IBaseDao.java')
+        if (legacyBaseDao.exists()) {
+            violations << "common/jia-common-service/src/main/java/cn/jia/core/dao/IBaseDao.java: IBaseDao belongs in common-api"
+        }
+
+        if (!violations.empty) {
+            throw new GradleException("Layering violations:\n - " + violations.join('\n - '))
+        }
+    }
+}

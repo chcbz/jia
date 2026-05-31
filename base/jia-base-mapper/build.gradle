@@ -1,7 +1,8 @@
 dependencies {
-    api project(':base:jia-base-service')
+    api project(':base:jia-base-api')
     api project(':common:jia-common-mapper')
     testImplementation project(':common:jia-common-test')
+    testImplementation project(':common:jia-common-service')
     testImplementation libs.mybatis.plus.generator
     testImplementation libs.spring.boot.starter.freemarker
     testAnnotationProcessor libs.lombok

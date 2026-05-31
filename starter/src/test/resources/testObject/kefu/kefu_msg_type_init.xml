@@ -1,0 +1,22 @@
+<dataset>
+    <kefu_msg_type ID="1" CLIENT_ID="jia_client" TYPE_CODE="vote" TYPE_NAME="每日一题" TYPE_CATEGORY="wxmp"
+                   WX_TEMPLATE_ID="M2LBQMr4BSujBWs5s8xgHcdtNCD69N0q9sO5-EmPnuU"
+                   WX_TEMPLATE="[{&quot;name&quot;:&quot;first&quot;,&quot;value&quot;:&quot;每天答题时间(两小时有效)\n\n#0#\n\n#1#\n&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword1&quot;,&quot;value&quot;:&quot;知识普及&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword2&quot;,&quot;value&quot;:&quot;请回复正确答案，退订回复TD&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;remark&quot;,&quot;value&quot;:&quot;&quot;,&quot;color&quot;:&quot;#173177&quot;}]"
+                   WX_TEMPLATE_TXT="每天答题时间(两小时有效)\n#0#\n\n#1#\n\n请回复正确答案，退订回复TD" SMS_TEMPLATE_ID="" STATUS="1"
+                   CREATE_TIME="1584175547" UPDATE_TIME="1584177170"/>
+    <kefu_msg_type ID="2" CLIENT_ID="jia_client" TYPE_CODE="gift_delivery" TYPE_NAME="礼品发货通知" TYPE_CATEGORY="admin"
+                   WX_TEMPLATE_ID="M2LBQMr4BSujBWs5s8xgHcdtNCD69N0q9sO5-EmPnuU"
+                   WX_TEMPLATE="[{&quot;name&quot;:&quot;first&quot;,&quot;value&quot;:&quot;您的礼品#1#已经出货，请留意。&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword1&quot;,&quot;value&quot;:&quot;礼品发货通知&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword2&quot;,&quot;value&quot;:&quot;请及时处理&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;remark&quot;,&quot;value&quot;:&quot;&quot;,&quot;color&quot;:&quot;#173177&quot;}]"
+                   SMS_TEMPLATE_ID="" STATUS="1" CREATE_TIME="1584175547" UPDATE_TIME="1584177170"/>
+    <kefu_msg_type ID="3" CLIENT_ID="jia_client" TYPE_CODE="gift_usage" TYPE_NAME="礼品下单通知" TYPE_CATEGORY="point"
+                   WX_TEMPLATE_ID="M2LBQMr4BSujBWs5s8xgHcdtNCD69N0q9sO5-EmPnuU"
+                   WX_TEMPLATE="[{&quot;name&quot;:&quot;first&quot;,&quot;value&quot;:&quot;有新的下单信息，请及时处理！&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword1&quot;,&quot;value&quot;:&quot;礼品下单通知&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword2&quot;,&quot;value&quot;:&quot;请及时处理&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;remark&quot;,&quot;value&quot;:&quot;&quot;,&quot;color&quot;:&quot;#173177&quot;}]"
+                   SMS_TEMPLATE_ID="" STATUS="1" CREATE_TIME="1584175547" UPDATE_TIME="1584177170"/>
+    <kefu_msg_type ID="4" CLIENT_ID="jia_client" TYPE_CODE="task" TYPE_NAME="任务通知" TYPE_CATEGORY="task"
+                   WX_TEMPLATE_ID="M2LBQMr4BSujBWs5s8xgHcdtNCD69N0q9sO5-EmPnuU"
+                   WX_TEMPLATE="[{&quot;name&quot;:&quot;first&quot;,&quot;value&quot;:&quot;亲爱的#0#,您有新的待办任务，请及时处理。&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword1&quot;,&quot;value&quot;:&quot;#1#&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;keyword2&quot;,&quot;value&quot;:&quot;#2#&quot;,&quot;color&quot;:&quot;#173177&quot;},{&quot;name&quot;:&quot;remark&quot;,&quot;value&quot;:&quot;#3#&quot;,&quot;color&quot;:&quot;#173177&quot;}]"
+                   SMS_TEMPLATE_ID="" STATUS="1" CREATE_TIME="1584175547" UPDATE_TIME="1584177170"/>
+    <kefu_msg_type ID="5" CLIENT_ID="jia_client" TYPE_CODE="phrase" TYPE_NAME="每日一句" TYPE_CATEGORY="phrase"
+                   WX_TEMPLATE_TXT="#0#" SMS_TEMPLATE_ID="" STATUS="1" CREATE_TIME="1584175547"
+                   UPDATE_TIME="1584177170"/>
+</dataset>

@@ -1,0 +1,11 @@
+dependencies {
+    api project(':agent:jia-agent-api')
+    implementation project(':agent:jia-agent-mapper')
+    compileOnly project(':task:jia-task-core')
+    compileOnly project(':task:jia-task-api')
+    implementation project(':common:jia-common-service')
+    testImplementation project(':common:jia-common-test')
+}
+
+version = '1.1.2-SNAPSHOT'
+description = 'jia-agent-service'

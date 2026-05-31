@@ -3,7 +3,8 @@ dependencies {
     api project(':user:jia-user-api')
     api project(':kefu:jia-kefu-api')
     api project(':wx:jia-wx-api')
-    api project(':common:jia-common-service')
+    implementation project(':common:jia-common-service')
+    implementation project(':point:jia-point-mapper')
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok

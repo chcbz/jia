@@ -1,7 +1,9 @@
 dependencies {
 	api project(':common:jia-common-core')
-	api project(':common:jia-common-service')
+	implementation project(':common:jia-common-service')
 	api project(':chat:jia-chat-api')
+	implementation project(':chat:jia-chat-mapper')
+	implementation project(':agent:jia-agent-api')
 	compileOnly project(':task:jia-task-core')
 	implementation libs.spring.boot.starter.webflux
 	implementation libs.spring.ai.starter.mcp.client
@@ -9,6 +11,7 @@ dependencies {
 		exclude group: 'org.springframework.ai', module: 'spring-ai-autoconfigure-model-image-observation'
 	}
 	compileOnly libs.spring.ai.starter.model.deepseek
+	compileOnly libs.spring.ai.starter.model.openai
 	compileOnly libs.spring.ai.starter.model.ollama
 	compileOnly libs.spring.ai.starter.model.minimax
 	compileOnly(libs.spring.boot.starter.elasticsearch)
@@ -21,6 +24,9 @@ dependencies {
 //	implementation 'org.springframework.retry:spring-retry'
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')
+	testImplementation libs.spring.ai.starter.mcp.client
+	testImplementation libs.spring.ai.starter.model.openai
+	testImplementation libs.spring.boot.starter.websocket
 }
 
 version = '1.1.2-SNAPSHOT'

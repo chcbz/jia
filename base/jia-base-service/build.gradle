@@ -1,6 +1,7 @@
 dependencies {
     api project(':base:jia-base-api')
-    api project(':common:jia-common-service')
+    implementation project(':common:jia-common-service')
+    implementation project(':base:jia-base-mapper')
     implementation(libs.spring.boot.starter.data.redis)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok

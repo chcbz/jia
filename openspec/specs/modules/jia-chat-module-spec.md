@@ -233,7 +233,7 @@ public class ChatMessageDTO implements Serializable {
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | id | bigint | 主键ID（自增） |
-| conversation_id | bigint | 会话ID（外键） |
+| conversation_id | varchar(100) | 会话ID；支持数值型会话 ID 和 OpenClaw 字符串会话 ID |
 | message_type | varchar(20) | 消息类型（USER/ASSISTANT/SYSTEM） |
 | content | text | 消息内容 |
 | metadata | text | 消息元数据（JSON格式） |

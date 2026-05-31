@@ -1,7 +1,8 @@
 dependencies {
-    api project(':task:jia-task-service')
+    api project(':task:jia-task-api')
     api project(':common:jia-common-mapper')
     testImplementation project(':common:jia-common-test')
+    testImplementation project(':common:jia-common-service')
     testImplementation libs.mybatis.plus.generator
     testImplementation libs.spring.boot.starter.freemarker
     testImplementation libs.spring.boot.starter.data.redis

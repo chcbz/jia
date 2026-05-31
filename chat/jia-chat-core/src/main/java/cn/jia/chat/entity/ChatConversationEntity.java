@@ -4,6 +4,7 @@ import cn.jia.core.entity.BaseEntity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -36,6 +37,10 @@ public class ChatConversationEntity extends BaseEntity {
 
     @Schema(description = "用户ID")
     private String jiacn;
+
+    @Schema(description = "会话类型（normal-普通/juyiting-聚义厅）")
+    @TableField(exist = false)
+    private String conversationType;
 
     @Schema(description = "会话状态（ACTIVE/CLOSED）")
     private Integer status;

@@ -1,7 +1,8 @@
 dependencies {
     api project(':base:jia-base-api')
     api project(':sms:jia-sms-api')
-    api project(':common:jia-common-service')
+    implementation project(':common:jia-common-service')
+    implementation project(':sms:jia-sms-mapper')
     implementation(libs.spring.rabbit)
     compileOnly(libs.spring.boot.starter.amqp)
     compileOnly(libs.aliyun.java.sdk.core)

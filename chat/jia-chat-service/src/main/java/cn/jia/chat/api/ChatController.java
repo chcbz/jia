@@ -44,6 +44,9 @@ import java.util.Optional;
 @RequestMapping("/chat")
 @RequiredArgsConstructor
 public class ChatController {
+    public static final String CONVERSATION_TYPE_NORMAL = "normal";
+    public static final String CONVERSATION_TYPE_JUYITING = "juyiting";
+
     private final ChatClient chatClient;
     private final ChatConversationService chatConversationService;
     private final RedisService redisService;
@@ -77,39 +80,30 @@ public class ChatController {
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
         Flux<String> aiStream = createAIStream(chatMessage, conversationId, needSummary, summary);
 
-        // 使用 Flux.create 将后台流与客户端响应连接
         return Flux.create(emitter -> {
-            // 构建完整的后台处理流
-            // 将数据推送给客户端，如果客户端已断开，该操作会被忽略
-            // 正常完成
             Flux<String> backendStream = aiStream
-                    .takeUntilOther(cancelSignal)                     // Redis 取消信号
-                    .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\"}")))
+                    .takeUntilOther(cancelSignal)
+                    .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
                     .concatWith(Flux.defer(() -> handleSummary(needSummary, chatMessage.getContent(), summary.toString(), conversationId)))
                     .doOnNext(emitter::next)
                     .doOnError(error -> {
                         log.error("Error processing chat response", error);
-                        emitter.error(error);                         // 错误仍可传递（若客户端还在）
+                        String errorMsg = error.getMessage() != null ? error.getMessage() : "Stream error";
+                        String escapedMsg = errorMsg.replace("\\", "\\\\").replace("\"", "\\\"");
+                        emitter.next("{\"error\": \"" + escapedMsg + "\", \"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}");
+                        emitter.complete();
                     })
                     .doOnComplete(emitter::complete)
-                    .subscribeOn(Schedulers.boundedElastic());        // 在独立线程池执行，不阻塞 Netty
+                    .subscribeOn(Schedulers.boundedElastic());
 
-            // 立即订阅后台流，启动处理（不受客户端生命周期影响）
             backendStream.subscribe();
 
-            // 客户端断开连接时，仅停止发射数据，后台流继续运行
             emitter.onDispose(() ->
                     log.debug("Client disconnected, backend processing continues for conversation: {}", conversationId)
             );
-        }, FluxSink.OverflowStrategy.BUFFER);  // 使用 BUFFER 避免背压导致数据丢失
+        }, FluxSink.OverflowStrategy.BUFFER);
     }
 
-    /**
-     * 获取或创建消息实体
-     *
-     * @param chatMessage 聊天消息DTO
-     * @return 消息实体
-     */
     private ChatConversationEntity getOrCreateConversation(ChatMessageDTO chatMessage) {
         ChatConversationEntity message;
         if (StringUtil.isBlank(chatMessage.getConversationId())) {
@@ -117,6 +111,11 @@ public class ChatController {
             message.setStatus(0);
             message.setJiacn(EsContextHolder.getContext().getJiacn());
             message.setClientId(EsContextHolder.getContext().getClientId());
+            message.setConversationType(
+                    StringUtil.isNotBlank(chatMessage.getConversationType())
+                            ? chatMessage.getConversationType()
+                            : CONVERSATION_TYPE_NORMAL
+            );
             message = chatConversationService.create(message);
         } else {
             message = chatConversationService.get(chatMessage.getConversationId());
@@ -124,17 +123,22 @@ public class ChatController {
         return message;
     }
 
-    /**
-     * 创建AI流
-     *
-     * @param chatMessage    聊天消息DTO
-     * @param conversationId 会话ID
-     * @param needSummary    是否需要总结
-     * @param summary        总结内容构建器
-     * @return AI流
-     */
+    private String resolveConversationTypeStr(ChatMessageDTO chatMessage) {
+        if (chatMessage == null || StringUtil.isBlank(chatMessage.getConversationType())) {
+            return CONVERSATION_TYPE_NORMAL;
+        }
+        return chatMessage.getConversationType();
+    }
+    private String resolveConversationType(ChatConversationEntity conversation) {
+        if (conversation == null) {
+            return CONVERSATION_TYPE_NORMAL;
+        }
+        return StringUtil.isNotBlank(conversation.getConversationType())
+                ? conversation.getConversationType()
+                : CONVERSATION_TYPE_NORMAL;
+    }
+
     private Flux<String> createAIStream(ChatMessageDTO chatMessage, String conversationId, boolean needSummary, StringBuilder summary) {
-        // 构建过滤表达式: 同时过滤 jiacn 和 role
         String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
         String clientId = Optional.ofNullable(EsContextHolder.getContext().getClientId()).orElse("jia_client");
         String filterExpression = "metadata.jiacn == '" + jiacn + "' AND role == 'ASSISTANT'";
@@ -145,20 +149,15 @@ public class ChatController {
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
                         .param("jiacn", jiacn)
                         .param("clientId", clientId)
+                        .param("conversationType", resolveConversationTypeStr(chatMessage))
+                        .param("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse(""))
+                        .param("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse(""))
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, filterExpression))
                 .messages()
                 .stream().content()
                 .map(content -> processContent(content, needSummary, summary));
     }
 
-    /**
-     * 处理内容
-     *
-     * @param content     内容
-     * @param needSummary 是否需要总结
-     * @param summary     总结内容构建器
-     * @return 处理后的内容
-     */
     private String processContent(String content, boolean needSummary, StringBuilder summary) {
         if (needSummary) {
             summary.append(content);
@@ -166,14 +165,6 @@ public class ChatController {
         return "{\"v\": \"" + StringEscapeUtils.escapeJson(content) + "\"}";
     }
 
-    /**
-     * 处理总结
-     *
-     * @param needSummary    是否需要总结
-     * @param answer         总结内容
-     * @param conversationId 会话ID
-     * @return Flux流
-     */
     private Flux<String> handleSummary(boolean needSummary, String question, String answer, String conversationId) {
         if (!needSummary) {
             return Flux.empty();
@@ -189,50 +180,27 @@ public class ChatController {
         return Flux.just("{\"t\": \"" + title + "\"}");
     }
 
-    /**
-     * 停止指定会话的流传输
-     *
-     * @param chatMessage 包含会话ID的DTO对象
-     * @return 操作结果
-     */
     @RequestMapping(value = "/stop_stream", method = RequestMethod.POST)
     public Object stopStream(@RequestBody ChatMessageDTO chatMessage) {
-        // 发布停止信号到Redis频道
         redisService.publishSignal(chatMessage.getConversationId()).subscribe();
         return JsonResult.success();
     }
 
-    /**
-     * 删除指定会话
-     *
-     * @param id 会话ID
-     * @return 操作结果
-     */
     @RequestMapping(value = "/conversation/delete", method = RequestMethod.DELETE)
     public Object deleteConversation(@RequestParam(name = "id") String id) {
         chatConversationService.deleteConversation(id);
         return JsonResult.success();
     }
 
-    /**
-     * 获取会话消息内容
-     *
-     * @param id 会话ID
-     * @return 会话消息列表
-     */
     @RequestMapping(value = "/conversation/content", method = RequestMethod.GET)
     public Object getConversationContent(@RequestParam(name = "id") String id) {
         return JsonResult.success(chatConversationService.findByConversationId(id));
     }
 
-    /**
-     * 分页查询会话列表
-     *
-     * @param page 分页请求参数，包含查询条件、页码、每页大小和排序字段
-     * @return 分页结果，包含会话列表和总数
-     */
     @RequestMapping(value = "/conversation/list", method = RequestMethod.POST)
     public Object listConversations(@RequestBody JsonRequestPage<ChatConversationEntity> page) {
+        // conversationType can be passed directly in the search entity
+        // e.g. {"search": {"conversationType": "juyiting"}}
         PageInfo<ChatConversationEntity> pageInfo = chatConversationService.findPage(
                 page.getSearch(), 
                 page.getPageNum(), 
@@ -245,12 +213,6 @@ public class ChatController {
         return result;
     }
 
-    /**
-     * 修改会话标题
-     *
-     * @param entity 包含会话ID和新标题的实体对象
-     * @return 操作结果
-     */
     @RequestMapping(value = "/conversation/update", method = RequestMethod.POST)
     public Object updateConversation(@RequestBody ChatConversationEntity entity) {
         chatConversationService.update(entity);

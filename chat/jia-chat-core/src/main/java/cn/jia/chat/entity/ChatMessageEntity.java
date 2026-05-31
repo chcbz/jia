@@ -4,6 +4,7 @@ import cn.jia.core.entity.BaseEntity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -49,4 +50,16 @@ public class ChatMessageEntity extends BaseEntity {
 
     @Schema(description = "同步状态（PENDING-待同步/SYNCED-已同步）")
     private String syncStatus;
+
+    @Schema(description = "会话类型（normal-普通/juyiting-聚义厅）")
+    @TableField(exist = false)
+    private String conversationType;
+
+    @Schema(description = "发送者类型（user/agent/system）")
+    @TableField(exist = false)
+    private String senderType;
+
+    @Schema(description = "发送者名称（用户昵称或Agent名称）")
+    @TableField(exist = false)
+    private String senderName;
 }

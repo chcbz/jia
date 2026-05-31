@@ -1,5 +1,5 @@
 dependencies {
-    api project(':common:jia-common-service')
+    api project(':common:jia-common-api')
     api libs.pagehelper.core
     api libs.mybatis.plus.core
     api libs.swagger.annotations

@@ -1,7 +1,8 @@
 dependencies {
-    api project(':wx:jia-wx-service')
+    api project(':wx:jia-wx-api')
     api project(':common:jia-common-mapper')
     testImplementation project(':common:jia-common-test')
+    testImplementation project(':common:jia-common-service')
     testImplementation project(':base:jia-base-api')
     testImplementation project(':user:jia-user-api')
     testImplementation project(':oauth:jia-oauth-api')

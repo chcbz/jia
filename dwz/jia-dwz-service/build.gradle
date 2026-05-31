@@ -1,6 +1,7 @@
 dependencies {
     api project(':dwz:jia-dwz-api')
-    api project(':common:jia-common-service')
+    implementation project(':common:jia-common-service')
+    implementation project(':dwz:jia-dwz-mapper')
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok

@@ -195,6 +195,9 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             entity.setContent(message.getText());
             // 设置同步状态为 PENDING，标记该会话需要同步到向量库
             entity.setSyncStatus("PENDING");
+            entity.setConversationType(String.valueOf(context.getOrDefault("conversationType", "normal")));
+            entity.setSenderType(String.valueOf(context.getOrDefault("senderType", "")));
+            entity.setSenderName(String.valueOf(context.getOrDefault("senderName", "")));
 
             Map<String, Object> metadata = new HashMap<>(context);
             Optional.of(message.getMetadata()).ifPresent(metadata::putAll);

@@ -219,7 +219,12 @@ public class LoginController {
         user.setUserPassword(PasswordUtil.encode(new String(user.getUserPassword())).getBytes(StandardCharsets.UTF_8));
         ldapUserService.create(user);
         String clientId = this.getClientId(request);
-        LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
+        LdapUserGroup org = null;
+        try {
+            org = ldapUserGroupService.findByClientId(clientId);
+        } catch (Exception e) {
+            log.warn("Failed to load org info for clientId {}: {}", clientId, e.getMessage());
+        }
         if (org != null) {
             ldapUserGroupService.addUser(org, user.getDn());
         }
@@ -238,7 +243,12 @@ public class LoginController {
         ModelAndView view = new ModelAndView();
         String clientId = this.getClientId(request);
         log.info("clientId: {}", clientId);
-        LdapUserGroup org = ldapUserGroupService.findByClientId(clientId);
+        LdapUserGroup org = null;
+        try {
+            org = ldapUserGroupService.findByClientId(clientId);
+        } catch (Exception e) {
+            log.warn("Failed to load org info for clientId {}: {}", clientId, e.getMessage());
+        }
         view.addObject("org", org);
         view.addObject("orgLogo", Optional.ofNullable(org).map(LdapUserGroup::getLogo).map(Base64Util::encode));
         Object exception = request.getSession().getAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);

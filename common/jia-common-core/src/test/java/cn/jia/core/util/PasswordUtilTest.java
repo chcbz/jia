@@ -3,6 +3,7 @@ package cn.jia.core.util;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PasswordUtilTest {
@@ -15,5 +16,11 @@ class PasswordUtilTest {
         assertNotEquals(hash, hash1);
         assertTrue(PasswordUtil.validatePassword("123", hash));
         assertTrue(PasswordUtil.validatePassword("123", hash1));
+    }
+
+    @Test
+    void validateLegacyPlainTextPassword() {
+        assertTrue(PasswordUtil.validatePassword("123", "123"));
+        assertFalse(PasswordUtil.validatePassword("1234", "123"));
     }
 }

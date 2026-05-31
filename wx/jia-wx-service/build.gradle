@@ -8,6 +8,7 @@ dependencies {
     api project(':kefu:jia-kefu-api')
     api project(':material:jia-material-api')
     implementation project(':common:jia-common-service')
+    implementation project(':wx:jia-wx-mapper')
     implementation(libs.weixin.java.mp)
     implementation(libs.weixin.java.pay)
     implementation(libs.spring.redis)

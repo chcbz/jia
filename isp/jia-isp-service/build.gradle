@@ -1,7 +1,8 @@
 dependencies {
     api project(':isp:jia-isp-api')
     api project(':oauth:jia-oauth-api')
-    api project(':common:jia-common-service')
+    implementation project(':common:jia-common-service')
+    implementation project(':isp:jia-isp-mapper')
     implementation(libs.spring.ldap)
     implementation(libs.ganymed.ssh2)
     implementation(libs.mvel)

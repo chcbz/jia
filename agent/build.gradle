@@ -1,0 +1,10 @@
+version = '1.1.2-SNAPSHOT'
+description = 'jia-agent'
+
+tasks.register('publishAllToLocal') {
+    dependsOn subprojects.collect { it.tasks.named('publishToMavenLocal') }
+}
+
+tasks.register('publishAllToMavenRepository') {
+    dependsOn subprojects.collect { it.tasks.named('publishAllPublicationsToMavenRepository') }
+}
