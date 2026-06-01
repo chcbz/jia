@@ -19,6 +19,7 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class WebSocketConfig implements WebSocketConfigurer {
     private final ChatClient chatClient;
     private final OpenClawChannelWebSocketHandler openClawChannelWebSocketHandler;
+    private final OpenClawApiKeyHandshakeInterceptor openClawApiKeyHandshakeInterceptor;
 
     @Value("${jia.chat.service.websocket.allowed-origin-patterns:*}")
     private String[] allowedOriginPatterns;
@@ -28,6 +29,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         registry.addHandler(new ChatWebSocketHandler(chatClient), "/ws/chat")
                 .setAllowedOriginPatterns(allowedOriginPatterns);
         registry.addHandler(openClawChannelWebSocketHandler, "/ws/openclaw/channel")
+                .addInterceptors(openClawApiKeyHandshakeInterceptor)
                 .setAllowedOriginPatterns(allowedOriginPatterns);
     }
 }

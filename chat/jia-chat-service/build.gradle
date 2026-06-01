@@ -4,6 +4,7 @@ dependencies {
 	api project(':chat:jia-chat-api')
 	implementation project(':chat:jia-chat-mapper')
 	implementation project(':agent:jia-agent-api')
+	compileOnly project(':oauth:jia-oauth-api')
 	compileOnly project(':task:jia-task-core')
 	implementation libs.spring.boot.starter.webflux
 	implementation libs.spring.ai.starter.mcp.client
