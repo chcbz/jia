@@ -28,7 +28,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(new ChatWebSocketHandler(chatClient), "/ws/chat")
                 .setAllowedOriginPatterns(allowedOriginPatterns);
-        registry.addHandler(openClawChannelWebSocketHandler, "/ws/openclaw/channel")
+        registry.addHandler(openClawChannelWebSocketHandler, "/ws/agent/channel")
                 .addInterceptors(openClawApiKeyHandshakeInterceptor)
                 .setAllowedOriginPatterns(allowedOriginPatterns);
     }

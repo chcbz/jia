@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * WebSocket channel for OpenClaw clients.
+ * WebSocket channel for external agent clients.
  *
  * <p>Inbound messages are JSON objects with a {@code type} field:
  * {@code chat}, {@code stop}, {@code ping}, {@code agent.register},
@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 @Component
 public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implements AgentEventPublisher {
-    private static final String CHANNEL = "openclaw";
+    private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
 
@@ -87,7 +87,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             case "agent.status", "agent_status_update" -> updateAgentStatus(session, payload);
             case "task.assign", "task_assign" -> assignTask(session, payload);
             case "task.report", "task_report" -> reportTask(session, payload);
-            default -> sendError(session, payload, "Unsupported openclaw channel message type: " + type);
+            default -> sendError(session, payload, "Unsupported agent channel message type: " + type);
         }
     }
 
