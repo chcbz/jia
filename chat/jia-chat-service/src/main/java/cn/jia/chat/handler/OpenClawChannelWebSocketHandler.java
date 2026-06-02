@@ -25,9 +25,13 @@ import reactor.core.scheduler.Schedulers;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -51,6 +55,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
+    private final Map<String, String> sessionAgentIds = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
     public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider) {
@@ -94,6 +99,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sessions.remove(session.getId());
+        sessionAgentIds.remove(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -212,6 +218,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             request.setEndpoint(asString(payload.get("endpoint")));
             request.setAbilities(asStringList(payload.get("abilities")));
             AgentRegisterResultDTO result = agentService.register(request);
+            sessionAgentIds.put(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
             event.put("status", result.getStatus());
@@ -236,6 +243,9 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
             request.setErrorMessage(asString(payload.get("errorMessage")));
             AgentRuntimeDTO agent = agentService.updateStatus(agentId, request);
+            if (agent.getAgentId() != null) {
+                sessionAgentIds.put(session.getId(), agent.getAgentId());
+            }
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", agent.getAgentId());
             event.put("status", agent.getStatus());
@@ -369,6 +379,31 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
 
     private void broadcastEvent(String type, Map<String, ?> payload) {
         sessions.values().forEach(session -> sendEvent(session, type, payload));
+    }
+
+    public List<AgentRuntimeDTO> getConnectedAgents() {
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            return List.of();
+        }
+
+        Set<String> connectedAgentIds = new LinkedHashSet<>();
+        sessions.forEach((sessionId, session) -> {
+            String agentId = sessionAgentIds.get(sessionId);
+            if (session.isOpen() && agentId != null && !agentId.isBlank()) {
+                connectedAgentIds.add(agentId);
+            }
+        });
+
+        List<AgentRuntimeDTO> connectedAgents = new ArrayList<>();
+        for (String agentId : connectedAgentIds) {
+            try {
+                connectedAgents.add(agentService.get(agentId));
+            } catch (Exception e) {
+                log.warn("Unable to resolve connected agent {}", agentId, e);
+            }
+        }
+        return connectedAgents;
     }
 
     private void putIfPresent(Map<String, Object> target, String key, Object value) {
