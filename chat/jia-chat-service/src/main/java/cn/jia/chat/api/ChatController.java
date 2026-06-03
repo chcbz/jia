@@ -1,6 +1,7 @@
 package cn.jia.chat.api;
 
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.handler.OpenClawChannelWebSocketHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -8,6 +9,7 @@ import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.StringUtil;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ChatConversationEventBroker;
 import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
@@ -30,6 +32,7 @@ import cn.jia.chat.handler.dto.ChatMessageDTO;
 import reactor.core.publisher.FluxSink;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -51,6 +54,8 @@ public class ChatController {
     private final ChatConversationService chatConversationService;
     private final RedisService redisService;
     private final ChatClient.Builder chatClientBuilder;
+    private final OpenClawChannelWebSocketHandler openClawChannelWebSocketHandler;
+    private final ChatConversationEventBroker chatConversationEventBroker;
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
             帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
             
@@ -78,10 +83,12 @@ public class ChatController {
         String conversationId = String.valueOf(conversation.getId());
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
+        Flux<String> agentDelivery = relayDirectAgentMessage(chatMessage, conversationId);
         Flux<String> aiStream = createAIStream(chatMessage, conversationId, needSummary, summary);
 
         return Flux.create(emitter -> {
-            Flux<String> backendStream = aiStream
+            Flux<String> backendStream = agentDelivery
+                    .concatWith(aiStream)
                     .takeUntilOther(cancelSignal)
                     .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
                     .concatWith(Flux.defer(() -> handleSummary(needSummary, chatMessage.getContent(), summary.toString(), conversationId)))
@@ -152,10 +159,47 @@ public class ChatController {
                         .param("conversationType", resolveConversationTypeStr(chatMessage))
                         .param("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse(""))
                         .param("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse(""))
+                        .param("selectedAgentId", Optional.ofNullable(selectedAgentId(chatMessage)).orElse(""))
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, filterExpression))
                 .messages()
                 .stream().content()
                 .map(content -> processContent(content, needSummary, summary));
+    }
+
+    private Flux<String> relayDirectAgentMessage(ChatMessageDTO chatMessage, String conversationId) {
+        String selectedAgentId = selectedAgentId(chatMessage);
+        if (!CONVERSATION_TYPE_JUYITING.equals(resolveConversationTypeStr(chatMessage))
+                || StringUtil.isBlank(selectedAgentId)) {
+            return Flux.empty();
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("conversationId", conversationId);
+        payload.put("conversationType", CONVERSATION_TYPE_JUYITING);
+        payload.put("agentId", selectedAgentId);
+        payload.put("content", chatMessage.getContent());
+        payload.put("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
+        payload.put("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
+        payload.put("metadata", Optional.ofNullable(chatMessage.getMetadata()).orElse(Map.of()));
+        payload.put("timestamp", System.currentTimeMillis());
+
+        boolean delivered = openClawChannelWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
+        return Flux.just("{\"agentDelivery\":{\"agentId\":\"" + escapeJson(selectedAgentId)
+                + "\",\"delivered\":" + delivered + "},\"conversationId\":\""
+                + escapeJson(conversationId) + "\",\"conversationType\":\""
+                + CONVERSATION_TYPE_JUYITING + "\"}");
+    }
+
+    private String selectedAgentId(ChatMessageDTO chatMessage) {
+        if (chatMessage == null || chatMessage.getMetadata() == null) {
+            return null;
+        }
+        Object value = chatMessage.getMetadata().get("selectedAgentId");
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private String escapeJson(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private String processContent(String content, boolean needSummary, StringBuilder summary) {
@@ -195,6 +239,12 @@ public class ChatController {
     @RequestMapping(value = "/conversation/content", method = RequestMethod.GET)
     public Object getConversationContent(@RequestParam(name = "id") String id) {
         return JsonResult.success(chatConversationService.findByConversationId(id));
+    }
+
+    @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<String> conversationEvents(@RequestParam(name = "id") String id) {
+        return chatConversationEventBroker.stream(id)
+                .map(event -> "data: " + event + "\n\n");
     }
 
     @RequestMapping(value = "/conversation/list", method = RequestMethod.POST)

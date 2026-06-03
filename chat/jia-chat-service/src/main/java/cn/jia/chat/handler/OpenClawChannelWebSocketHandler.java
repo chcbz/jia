@@ -9,6 +9,9 @@ import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentService;
+import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.core.util.JsonUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -53,14 +56,19 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
 
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
+    private final ChatMessageDao chatMessageDao;
+    private final ChatConversationEventBroker chatConversationEventBroker;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, String> sessionAgentIds = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
-    public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider) {
+    public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+            ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker) {
         this.chatClient = chatClient;
         this.agentServiceProvider = agentServiceProvider;
+        this.chatMessageDao = chatMessageDao;
+        this.chatConversationEventBroker = chatConversationEventBroker;
     }
 
     @Override
@@ -70,7 +78,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
                 "sessionId", session.getId(),
                 "channel", CHANNEL,
                 "capabilities", new String[] {"chat.stream", "chat.stop", "ping", "agent.register",
-                        "agent.status", "task.assign", "task.report", "task.event"}));
+                        "agent.status", "agent.message", "task.assign", "task.report", "task.event"}));
     }
 
     @Override
@@ -90,6 +98,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             case "chat" -> startChatStream(session, payload);
             case "agent.register", "agent_register" -> registerAgent(session, payload);
             case "agent.status", "agent_status_update" -> updateAgentStatus(session, payload);
+            case "agent.message", "agent.reply", "agent_message" -> saveAgentMessage(session, payload);
             case "task.assign", "task_assign" -> assignTask(session, payload);
             case "task.report", "task_report" -> reportTask(session, payload);
             default -> sendError(session, payload, "Unsupported agent channel message type: " + type);
@@ -305,6 +314,67 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
         }
     }
 
+    private void saveAgentMessage(WebSocketSession session, Map<String, Object> payload) {
+        String conversationId = asString(payload.get("conversationId"));
+        String content = asString(payload.get("content"));
+        String registeredAgentId = sessionAgentIds.get(session.getId());
+        String agentId = Optional.ofNullable(asString(payload.get("agentId"))).orElse(registeredAgentId);
+        if (conversationId == null || conversationId.isBlank()) {
+            sendError(session, payload, "conversationId is required");
+            return;
+        }
+        if (content == null || content.isBlank()) {
+            sendError(session, payload, "content is required");
+            return;
+        }
+        if (registeredAgentId == null || registeredAgentId.isBlank()) {
+            sendError(session, payload, "AGENT_NOT_REGISTERED", "Agent must register before sending messages");
+            return;
+        }
+        if (!registeredAgentId.equals(agentId)) {
+            sendError(session, payload, "AGENT_ID_MISMATCH", "agentId does not match the registered WebSocket session");
+            return;
+        }
+
+        String conversationType = Optional.ofNullable(asString(payload.get("conversationType"))).orElse("juyiting");
+        String senderName = Optional.ofNullable(asString(payload.get("senderName")))
+                .orElse(Optional.ofNullable(asString(payload.get("agentName"))).orElse(agentId));
+        String jiacn = Optional.ofNullable(asString(payload.get("jiacn"))).orElse("Anonymous");
+        String clientId = Optional.ofNullable(asString(payload.get("clientId"))).orElse("openclaw");
+
+        ChatMessageEntity entity = new ChatMessageEntity();
+        entity.init4Creation();
+        entity.setJiacn(jiacn);
+        entity.setClientId(clientId);
+        entity.setConversationId(conversationId);
+        entity.setMessageType("ASSISTANT");
+        entity.setContent(content);
+        entity.setSyncStatus("PENDING");
+        entity.setConversationType(conversationType);
+        entity.setSenderType("agent");
+        entity.setSenderName(senderName);
+
+        Map<String, Object> metadata = copyTrace(payload);
+        metadata.put("agentId", agentId);
+        metadata.put("senderType", "agent");
+        metadata.put("senderName", senderName);
+        metadata.put("conversationType", conversationType);
+        entity.setMetadata(JsonUtil.toJson(metadata));
+        chatMessageDao.insert(entity);
+
+        Map<String, Object> event = copyTrace(payload);
+        event.put("messageId", entity.getId());
+        event.put("conversationId", conversationId);
+        event.put("conversationType", conversationType);
+        event.put("agentId", agentId);
+        event.put("senderType", "agent");
+        event.put("senderName", senderName);
+        event.put("content", content);
+        sendEvent(session, "agent_message_saved", event);
+        broadcastEvent("agent_message", event);
+        chatConversationEventBroker.publish(conversationId, event);
+    }
+
     private String streamKey(WebSocketSession session, String requestId, String conversationId) {
         return session.getId() + ":" + Optional.ofNullable(requestId).orElse(conversationId);
     }
@@ -379,6 +449,23 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
 
     private void broadcastEvent(String type, Map<String, ?> payload) {
         sessions.values().forEach(session -> sendEvent(session, type, payload));
+    }
+
+    public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
+        if (agentId == null || agentId.isBlank()) {
+            return false;
+        }
+        for (Map.Entry<String, String> entry : sessionAgentIds.entrySet()) {
+            if (!agentId.equals(entry.getValue())) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session != null && session.isOpen()) {
+                sendEvent(session, "agent_direct_message", payload);
+                return true;
+            }
+        }
+        return false;
     }
 
     public List<AgentRuntimeDTO> getConnectedAgents() {
