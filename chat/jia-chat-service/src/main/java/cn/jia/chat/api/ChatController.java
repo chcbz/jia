@@ -83,11 +83,13 @@ public class ChatController {
         String conversationId = String.valueOf(conversation.getId());
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
-        Flux<String> agentDelivery = relayDirectAgentMessage(chatMessage, conversationId);
-        Flux<String> aiStream = createAIStream(chatMessage, conversationId, needSummary, summary);
+        AgentDeliveryResult agentDelivery = relayDirectAgentMessage(chatMessage, conversationId);
+        Flux<String> aiStream = agentDelivery.delivered()
+                ? Flux.empty()
+                : createAIStream(chatMessage, conversationId, needSummary, summary);
 
         return Flux.create(emitter -> {
-            Flux<String> backendStream = agentDelivery
+            Flux<String> backendStream = agentDelivery.stream()
                     .concatWith(aiStream)
                     .takeUntilOther(cancelSignal)
                     .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
@@ -166,11 +168,11 @@ public class ChatController {
                 .map(content -> processContent(content, needSummary, summary));
     }
 
-    private Flux<String> relayDirectAgentMessage(ChatMessageDTO chatMessage, String conversationId) {
+    private AgentDeliveryResult relayDirectAgentMessage(ChatMessageDTO chatMessage, String conversationId) {
         String selectedAgentId = selectedAgentId(chatMessage);
         if (!CONVERSATION_TYPE_JUYITING.equals(resolveConversationTypeStr(chatMessage))
                 || StringUtil.isBlank(selectedAgentId)) {
-            return Flux.empty();
+            return new AgentDeliveryResult(false, false, Flux.empty());
         }
 
         Map<String, Object> payload = new HashMap<>();
@@ -184,10 +186,11 @@ public class ChatController {
         payload.put("timestamp", System.currentTimeMillis());
 
         boolean delivered = openClawChannelWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
-        return Flux.just("{\"agentDelivery\":{\"agentId\":\"" + escapeJson(selectedAgentId)
+        Flux<String> stream = Flux.just("{\"agentDelivery\":{\"agentId\":\"" + escapeJson(selectedAgentId)
                 + "\",\"delivered\":" + delivered + "},\"conversationId\":\""
                 + escapeJson(conversationId) + "\",\"conversationType\":\""
                 + CONVERSATION_TYPE_JUYITING + "\"}");
+        return new AgentDeliveryResult(true, delivered, stream);
     }
 
     private String selectedAgentId(ChatMessageDTO chatMessage) {
@@ -267,5 +270,8 @@ public class ChatController {
     public Object updateConversation(@RequestBody ChatConversationEntity entity) {
         chatConversationService.update(entity);
         return JsonResult.success();
+    }
+
+    private record AgentDeliveryResult(boolean attempted, boolean delivered, Flux<String> stream) {
     }
 }
