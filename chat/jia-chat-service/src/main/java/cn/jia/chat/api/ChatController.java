@@ -1,7 +1,10 @@
 package cn.jia.chat.api;
 
+import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.OpenClawChannelWebSocketHandler;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -10,6 +13,7 @@ import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.StringUtil;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.service.BuiltinHallAgentSupport;
 import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
@@ -25,6 +29,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
+import reactor.core.Disposable;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,6 +61,8 @@ public class ChatController {
     private final ChatClient.Builder chatClientBuilder;
     private final OpenClawChannelWebSocketHandler openClawChannelWebSocketHandler;
     private final ChatConversationEventBroker chatConversationEventBroker;
+    private final BuiltinHallAgentSupport builtinHallAgentSupport;
+    private final ChatMessageDao chatMessageDao;
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
             帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
             
@@ -83,7 +90,7 @@ public class ChatController {
         String conversationId = String.valueOf(conversation.getId());
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
-        AgentDeliveryResult agentDelivery = relayDirectAgentMessage(chatMessage, conversationId);
+        AgentDeliveryResult agentDelivery = relayDirectAgentMessage(chatMessage, conversationId, needSummary, summary);
         Flux<String> aiStream = agentDelivery.delivered()
                 ? Flux.empty()
                 : createAIStream(chatMessage, conversationId, needSummary, summary);
@@ -168,11 +175,18 @@ public class ChatController {
                 .map(content -> processContent(content, needSummary, summary));
     }
 
-    private AgentDeliveryResult relayDirectAgentMessage(ChatMessageDTO chatMessage, String conversationId) {
+    private AgentDeliveryResult relayDirectAgentMessage(ChatMessageDTO chatMessage, String conversationId, boolean needSummary, StringBuilder summary) {
         String selectedAgentId = selectedAgentId(chatMessage);
         if (!CONVERSATION_TYPE_JUYITING.equals(resolveConversationTypeStr(chatMessage))
                 || StringUtil.isBlank(selectedAgentId)) {
             return new AgentDeliveryResult(false, false, Flux.empty());
+        }
+
+        saveDirectUserMessage(chatMessage, conversationId);
+
+        if (builtinHallAgentSupport.isBuiltinAgent(selectedAgentId)) {
+            return new AgentDeliveryResult(true, true,
+                    createBuiltinSongJiangStream(chatMessage, conversationId, needSummary, summary));
         }
 
         Map<String, Object> payload = new HashMap<>();
@@ -185,20 +199,184 @@ public class ChatController {
         payload.put("metadata", Optional.ofNullable(chatMessage.getMetadata()).orElse(Map.of()));
         payload.put("timestamp", System.currentTimeMillis());
 
-        boolean delivered = openClawChannelWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
-        Flux<String> stream = Flux.just("{\"agentDelivery\":{\"agentId\":\"" + escapeJson(selectedAgentId)
-                + "\",\"delivered\":" + delivered + "},\"conversationId\":\""
-                + escapeJson(conversationId) + "\",\"conversationType\":\""
-                + CONVERSATION_TYPE_JUYITING + "\"}");
+        boolean delivered = openClawChannelWebSocketHandler.isAgentConnected(selectedAgentId);
+        Flux<String> stream = delivered
+                ? Flux.create(emitter -> {
+                    final Disposable[] subscriptionRef = new Disposable[1];
+                    Disposable disposable = chatConversationEventBroker.stream(conversationId)
+                            .filter(this::isDirectAgentEvent)
+                            .subscribe(eventJson -> {
+                                emitter.next(eventJson);
+                                if (isDirectAgentFinalEvent(eventJson)) {
+                                    Disposable current = subscriptionRef[0];
+                                    if (current != null && !current.isDisposed()) {
+                                        current.dispose();
+                                    }
+                                    emitter.complete();
+                                }
+                            }, emitter::error);
+                    subscriptionRef[0] = disposable;
+
+                    boolean sent = openClawChannelWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
+                    emitter.next("{\"agentDelivery\":{\"agentId\":\"" + escapeJson(selectedAgentId)
+                            + "\",\"delivered\":" + sent + "},\"conversationId\":\""
+                            + escapeJson(conversationId) + "\",\"conversationType\":\""
+                            + CONVERSATION_TYPE_JUYITING + "\"}");
+
+                    if (!sent) {
+                        disposable.dispose();
+                        emitter.complete();
+                    }
+
+                    emitter.onDispose(disposable);
+                }, FluxSink.OverflowStrategy.BUFFER)
+                : Flux.just("{\"agentDelivery\":{\"agentId\":\"" + escapeJson(selectedAgentId)
+                        + "\",\"delivered\":false},\"conversationId\":\""
+                        + escapeJson(conversationId) + "\",\"conversationType\":\""
+                        + CONVERSATION_TYPE_JUYITING + "\"}");
         return new AgentDeliveryResult(true, delivered, stream);
     }
 
+    private Flux<String> createBuiltinSongJiangStream(ChatMessageDTO chatMessage, String conversationId, boolean needSummary, StringBuilder summary) {
+        StringBuilder answer = new StringBuilder();
+        Flux<String> deliveryEvent = Flux.just(buildAgentDeliveryEventJson(conversationId, builtinHallAgentSupport.defaultAgentId(), true));
+
+        Flux<String> deltaStream = chatClient.prompt(
+                        Prompt.builder().messages(UserMessage.builder().text(chatMessage.getContent()).build()).build())
+                .advisors(advisor -> advisor
+                        .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .param("jiacn", Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous"))
+                        .param("clientId", Optional.ofNullable(EsContextHolder.getContext().getClientId()).orElse("jia_client"))
+                        .param("conversationType", CONVERSATION_TYPE_JUYITING)
+                        .param("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"))
+                        .param("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"))
+                        .param("selectedAgentId", builtinHallAgentSupport.defaultAgentId())
+                        .param(QuestionAnswerAdvisor.FILTER_EXPRESSION,
+                                "metadata.jiacn == '" + Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous") + "' AND role == 'ASSISTANT'"))
+                .messages()
+                .stream().content()
+                .map(chunk -> {
+                    if (needSummary) {
+                        summary.append(chunk);
+                    }
+                    answer.append(chunk);
+                    Map<String, Object> event = buildAgentEvent("agent_message_delta", conversationId, chunk, null);
+                    chatConversationEventBroker.publish(conversationId, event);
+                    return JsonUtil.toJson(event);
+                });
+
+        Flux<String> finalEvent = Flux.defer(() -> {
+            String content = answer.toString();
+            ChatMessageEntity entity = saveBuiltinAgentMessage(conversationId, content);
+            Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
+            String eventJson = JsonUtil.toJson(event);
+            chatConversationEventBroker.publish(conversationId, event);
+            return Flux.just(eventJson);
+        });
+        return deliveryEvent.concatWith(deltaStream).concatWith(finalEvent);
+    }
+
+    private boolean isDirectAgentEvent(String eventJson) {
+        if (StringUtil.isBlank(eventJson)) {
+            return false;
+        }
+        return eventJson.contains("\"type\":\"agent_message_delta\"")
+                || eventJson.contains("\"type\":\"agent_message\"");
+    }
+
+    private boolean isDirectAgentFinalEvent(String eventJson) {
+        return StringUtil.isNotBlank(eventJson) && eventJson.contains("\"type\":\"agent_message\"");
+    }
+
+    private String buildAgentDeliveryEventJson(String conversationId, String agentId, boolean delivered) {
+        return "{\"agentDelivery\":{\"agentId\":\"" + escapeJson(agentId)
+                + "\",\"delivered\":" + delivered + "},\"conversationId\":\""
+                + escapeJson(conversationId) + "\",\"conversationType\":\""
+                + CONVERSATION_TYPE_JUYITING + "\"}";
+    }
+
+    private String buildAgentEventJson(String type, String conversationId, String content, Object messageId) {
+        return JsonUtil.toJson(buildAgentEvent(type, conversationId, content, messageId));
+    }
+
+    private Map<String, Object> buildAgentEvent(String type, String conversationId, String content, Object messageId) {
+        Map<String, Object> event = new HashMap<>();
+        event.put("type", type);
+        event.put("conversationId", conversationId);
+        event.put("conversationType", CONVERSATION_TYPE_JUYITING);
+        event.put("agentId", builtinHallAgentSupport.defaultAgentId());
+        event.put("senderType", "agent");
+        event.put("senderName", BuiltinHallAgentSupport.SONGJIANG_NAME);
+        event.put("content", content);
+        event.put("timestamp", System.currentTimeMillis());
+        if (messageId != null) {
+            event.put("messageId", messageId);
+        }
+        return event;
+    }
+
+    private ChatMessageEntity saveBuiltinAgentMessage(String conversationId, String content) {
+        ChatMessageEntity entity = new ChatMessageEntity();
+        entity.init4Creation();
+        entity.setJiacn(Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous"));
+        entity.setClientId(Optional.ofNullable(EsContextHolder.getContext().getClientId()).orElse("jia_client"));
+        entity.setConversationId(conversationId);
+        entity.setMessageType("ASSISTANT");
+        entity.setContent(content);
+        entity.setSyncStatus("PENDING");
+        entity.setConversationType(CONVERSATION_TYPE_JUYITING);
+        entity.setSenderType("agent");
+        entity.setSenderName(BuiltinHallAgentSupport.SONGJIANG_NAME);
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("agentId", builtinHallAgentSupport.defaultAgentId());
+        metadata.put("senderType", "agent");
+        metadata.put("senderName", BuiltinHallAgentSupport.SONGJIANG_NAME);
+        metadata.put("conversationId", conversationId);
+        metadata.put("conversationType", CONVERSATION_TYPE_JUYITING);
+        entity.setMetadata(JsonUtil.toJson(metadata));
+        chatMessageDao.insert(entity);
+        return entity;
+    }
+
+    private void saveDirectUserMessage(ChatMessageDTO chatMessage, String conversationId) {
+        ChatMessageEntity entity = new ChatMessageEntity();
+        entity.init4Creation();
+        entity.setJiacn(Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous"));
+        entity.setClientId(Optional.ofNullable(EsContextHolder.getContext().getClientId()).orElse("jia_client"));
+        entity.setConversationId(conversationId);
+        entity.setMessageType("USER");
+        entity.setContent(chatMessage.getContent());
+        entity.setSyncStatus("PENDING");
+        entity.setConversationType(CONVERSATION_TYPE_JUYITING);
+        entity.setSenderType(Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
+        entity.setSenderName(Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("conversationId", conversationId);
+        metadata.put("conversationType", CONVERSATION_TYPE_JUYITING);
+        metadata.put("selectedAgentId", selectedAgentId(chatMessage));
+        if (chatMessage.getMetadata() != null) {
+            metadata.putAll(chatMessage.getMetadata());
+        }
+        entity.setMetadata(JsonUtil.toJson(metadata));
+        chatMessageDao.insert(entity);
+    }
+
     private String selectedAgentId(ChatMessageDTO chatMessage) {
-        if (chatMessage == null || chatMessage.getMetadata() == null) {
+        if (chatMessage == null) {
             return null;
         }
-        Object value = chatMessage.getMetadata().get("selectedAgentId");
-        return value == null ? null : String.valueOf(value);
+        if (chatMessage.getMetadata() != null) {
+            Object value = chatMessage.getMetadata().get("selectedAgentId");
+            if (value != null && StringUtil.isNotBlank(String.valueOf(value))) {
+                return String.valueOf(value);
+            }
+        }
+        if (CONVERSATION_TYPE_JUYITING.equals(resolveConversationTypeStr(chatMessage))) {
+            return builtinHallAgentSupport.defaultAgentId();
+        }
+        return null;
     }
 
     private String escapeJson(String value) {

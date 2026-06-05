@@ -99,6 +99,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             case "agent.register", "agent_register" -> registerAgent(session, payload);
             case "agent.status", "agent_status_update" -> updateAgentStatus(session, payload);
             case "agent.message", "agent.reply", "agent_message" -> saveAgentMessage(session, payload);
+            case "agent.message.delta", "agent_message_delta" -> publishAgentMessageDelta(session, payload);
             case "task.assign", "task_assign" -> assignTask(session, payload);
             case "task.report", "task_report" -> reportTask(session, payload);
             default -> sendError(session, payload, "Unsupported agent channel message type: " + type);
@@ -363,6 +364,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
         chatMessageDao.insert(entity);
 
         Map<String, Object> event = copyTrace(payload);
+        event.put("type", "agent_message");
         event.put("messageId", entity.getId());
         event.put("conversationId", conversationId);
         event.put("conversationType", conversationType);
@@ -372,6 +374,36 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
         event.put("content", content);
         sendEvent(session, "agent_message_saved", event);
         broadcastEvent("agent_message", event);
+        chatConversationEventBroker.publish(conversationId, event);
+    }
+
+    private void publishAgentMessageDelta(WebSocketSession session, Map<String, Object> payload) {
+        String conversationId = asString(payload.get("conversationId"));
+        String content = asString(payload.get("content"));
+        String registeredAgentId = sessionAgentIds.get(session.getId());
+        String agentId = Optional.ofNullable(asString(payload.get("agentId"))).orElse(registeredAgentId);
+        if (conversationId == null || conversationId.isBlank() || content == null || content.isBlank()) {
+            return;
+        }
+        if (registeredAgentId == null || registeredAgentId.isBlank() || !registeredAgentId.equals(agentId)) {
+            return;
+        }
+
+        String conversationType = Optional.ofNullable(asString(payload.get("conversationType"))).orElse("juyiting");
+        String senderName = Optional.ofNullable(asString(payload.get("senderName")))
+                .orElse(Optional.ofNullable(asString(payload.get("agentName"))).orElse(agentId));
+
+        Map<String, Object> event = copyTrace(payload);
+        event.put("type", "agent_message_delta");
+        event.put("conversationId", conversationId);
+        event.put("conversationType", conversationType);
+        event.put("agentId", agentId);
+        event.put("senderType", "agent");
+        event.put("senderName", senderName);
+        event.put("content", content);
+        putIfPresent(event, "phase", payload.get("phase"));
+        putIfPresent(event, "chunkIndex", payload.get("chunkIndex"));
+        putIfPresent(event, "chunkCount", payload.get("chunkCount"));
         chatConversationEventBroker.publish(conversationId, event);
     }
 
@@ -462,6 +494,22 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             WebSocketSession session = sessions.get(entry.getKey());
             if (session != null && session.isOpen()) {
                 sendEvent(session, "agent_direct_message", payload);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isAgentConnected(String agentId) {
+        if (agentId == null || agentId.isBlank()) {
+            return false;
+        }
+        for (Map.Entry<String, String> entry : sessionAgentIds.entrySet()) {
+            if (!agentId.equals(entry.getValue())) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session != null && session.isOpen()) {
                 return true;
             }
         }
