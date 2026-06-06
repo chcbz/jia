@@ -60,7 +60,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
     private final ChatConversationEventBroker chatConversationEventBroker;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
-    private final Map<String, String> sessionAgentIds = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
     public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
@@ -228,7 +228,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             request.setEndpoint(asString(payload.get("endpoint")));
             request.setAbilities(asStringList(payload.get("abilities")));
             AgentRegisterResultDTO result = agentService.register(request);
-            sessionAgentIds.put(session.getId(), result.getAgentId());
+            rememberSessionAgent(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
             event.put("status", result.getStatus());
@@ -254,7 +254,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             request.setErrorMessage(asString(payload.get("errorMessage")));
             AgentRuntimeDTO agent = agentService.updateStatus(agentId, request);
             if (agent.getAgentId() != null) {
-                sessionAgentIds.put(session.getId(), agent.getAgentId());
+                rememberSessionAgent(session.getId(), agent.getAgentId());
             }
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", agent.getAgentId());
@@ -318,8 +318,8 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
     private void saveAgentMessage(WebSocketSession session, Map<String, Object> payload) {
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
-        String registeredAgentId = sessionAgentIds.get(session.getId());
-        String agentId = Optional.ofNullable(asString(payload.get("agentId"))).orElse(registeredAgentId);
+        Set<String> registeredAgentIds = registeredAgentIds(session.getId());
+        String agentId = resolveSessionAgentId(session.getId(), asString(payload.get("agentId")));
         if (conversationId == null || conversationId.isBlank()) {
             sendError(session, payload, "conversationId is required");
             return;
@@ -328,11 +328,16 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             sendError(session, payload, "content is required");
             return;
         }
-        if (registeredAgentId == null || registeredAgentId.isBlank()) {
+        if (registeredAgentIds.isEmpty()) {
             sendError(session, payload, "AGENT_NOT_REGISTERED", "Agent must register before sending messages");
             return;
         }
-        if (!registeredAgentId.equals(agentId)) {
+        if (agentId == null || agentId.isBlank()) {
+            sendError(session, payload, "AGENT_ID_REQUIRED",
+                    "agentId is required when multiple agents share the same WebSocket session");
+            return;
+        }
+        if (!registeredAgentIds.contains(agentId)) {
             sendError(session, payload, "AGENT_ID_MISMATCH", "agentId does not match the registered WebSocket session");
             return;
         }
@@ -380,12 +385,12 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
     private void publishAgentMessageDelta(WebSocketSession session, Map<String, Object> payload) {
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
-        String registeredAgentId = sessionAgentIds.get(session.getId());
-        String agentId = Optional.ofNullable(asString(payload.get("agentId"))).orElse(registeredAgentId);
+        Set<String> registeredAgentIds = registeredAgentIds(session.getId());
+        String agentId = resolveSessionAgentId(session.getId(), asString(payload.get("agentId")));
         if (conversationId == null || conversationId.isBlank() || content == null || content.isBlank()) {
             return;
         }
-        if (registeredAgentId == null || registeredAgentId.isBlank() || !registeredAgentId.equals(agentId)) {
+        if (registeredAgentIds.isEmpty() || agentId == null || !registeredAgentIds.contains(agentId)) {
             return;
         }
 
@@ -487,8 +492,8 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
         if (agentId == null || agentId.isBlank()) {
             return false;
         }
-        for (Map.Entry<String, String> entry : sessionAgentIds.entrySet()) {
-            if (!agentId.equals(entry.getValue())) {
+        for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
+            if (!entry.getValue().contains(agentId)) {
                 continue;
             }
             WebSocketSession session = sessions.get(entry.getKey());
@@ -504,8 +509,8 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
         if (agentId == null || agentId.isBlank()) {
             return false;
         }
-        for (Map.Entry<String, String> entry : sessionAgentIds.entrySet()) {
-            if (!agentId.equals(entry.getValue())) {
+        for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
+            if (!entry.getValue().contains(agentId)) {
                 continue;
             }
             WebSocketSession session = sessions.get(entry.getKey());
@@ -524,9 +529,11 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
 
         Set<String> connectedAgentIds = new LinkedHashSet<>();
         sessions.forEach((sessionId, session) -> {
-            String agentId = sessionAgentIds.get(sessionId);
-            if (session.isOpen() && agentId != null && !agentId.isBlank()) {
-                connectedAgentIds.add(agentId);
+            Set<String> agentIds = sessionAgentIds.get(sessionId);
+            if (session.isOpen() && agentIds != null) {
+                agentIds.stream()
+                        .filter(agentId -> agentId != null && !agentId.isBlank())
+                        .forEach(connectedAgentIds::add);
             }
         });
 
@@ -539,6 +546,28 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             }
         }
         return connectedAgents;
+    }
+
+    private void rememberSessionAgent(String sessionId, String agentId) {
+        if (sessionId == null || sessionId.isBlank() || agentId == null || agentId.isBlank()) {
+            return;
+        }
+        sessionAgentIds.computeIfAbsent(sessionId, key -> ConcurrentHashMap.newKeySet()).add(agentId);
+    }
+
+    private Set<String> registeredAgentIds(String sessionId) {
+        return Optional.ofNullable(sessionAgentIds.get(sessionId)).orElseGet(Set::of);
+    }
+
+    private String resolveSessionAgentId(String sessionId, String requestedAgentId) {
+        if (requestedAgentId != null && !requestedAgentId.isBlank()) {
+            return requestedAgentId;
+        }
+        Set<String> agentIds = registeredAgentIds(sessionId);
+        if (agentIds.size() == 1) {
+            return agentIds.iterator().next();
+        }
+        return null;
     }
 
     private void putIfPresent(Map<String, Object> target, String key, Object value) {

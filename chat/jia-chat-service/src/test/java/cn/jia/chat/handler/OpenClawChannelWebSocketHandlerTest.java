@@ -21,7 +21,9 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 import java.util.Map;
+import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.argThat;
@@ -203,6 +205,58 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"type\":\"agent_message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("此事须先探明虚实。"));
+    }
+
+    @Test
+    void supportsMultipleAgentsOnSharedSession() throws Exception {
+        when(session.getId()).thenReturn("session-001");
+        when(session.isOpen()).thenReturn(true);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenAnswer(invocation -> {
+                    AgentRegisterDTO request = invocation.getArgument(0);
+                    return new AgentRegisterResultDTO(request.getAgentId(), "token-" + request.getAgentId(),
+                            AgentConstants.STATUS_ONLINE);
+                });
+        when(agentService.get("songjiang")).thenReturn(runtime("songjiang", "宋江"));
+        when(agentService.get("wuyong")).thenReturn(runtime("wuyong", "吴用"));
+
+        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-1","agentId":"songjiang","name":"宋江"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-2","agentId":"wuyong","name":"吴用"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.message","requestId":"reply-2","conversationId":"2001","conversationType":"juyiting","agentId":"wuyong","senderName":"吴用","content":"请先盘点当前局势。"}
+                """));
+
+        boolean delivered = handler.sendDirectMessageToAgent("songjiang", Map.of(
+                "conversationId", "2001",
+                "conversationType", "juyiting",
+                "content", "@宋江 请定夺"));
+
+        Set<String> connectedAgentIds = handler.getConnectedAgents().stream()
+                .map(agent -> agent.getAgentId())
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertTrue(delivered);
+        assertEquals(Set.of("songjiang", "wuyong"), connectedAgentIds);
+        verify(chatMessageDao).insert(argThat((ChatMessageEntity message) ->
+                "2001".equals(message.getConversationId())
+                        && "请先盘点当前局势。".equals(message.getContent())
+                        && message.getMetadata().contains("\"agentId\":\"wuyong\"")));
+    }
+
+    private cn.jia.agent.entity.AgentRuntimeDTO runtime(String agentId, String name) {
+        cn.jia.agent.entity.AgentRuntimeDTO dto = new cn.jia.agent.entity.AgentRuntimeDTO();
+        dto.setAgentId(agentId);
+        dto.setName(name);
+        dto.setStatus(AgentConstants.STATUS_ONLINE);
+        return dto;
     }
 
     static class TestAgentException extends RuntimeException {
