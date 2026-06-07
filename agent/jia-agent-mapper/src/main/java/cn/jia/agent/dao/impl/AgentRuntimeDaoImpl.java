@@ -31,4 +31,15 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
         wrapper.orderByDesc(AgentRuntimeEntity::getLastSeenAt);
         return baseMapper.selectList(wrapper);
     }
+
+    @Override
+    public List<AgentRuntimeEntity> findHeartbeatTimedOut(long cutoffTime) {
+        return baseMapper.selectList(new LambdaQueryWrapper<AgentRuntimeEntity>()
+                .ne(AgentRuntimeEntity::getStatus, "offline")
+                .and(wrapper -> wrapper
+                        .isNull(AgentRuntimeEntity::getLastSeenAt)
+                        .or()
+                        .lt(AgentRuntimeEntity::getLastSeenAt, cutoffTime))
+                .orderByAsc(AgentRuntimeEntity::getLastSeenAt));
+    }
 }

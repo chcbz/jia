@@ -16,7 +16,13 @@ public class AgentTaskDTO implements Serializable {
     private String description;
     private String status;
     private List<String> requiredAbilities;
+    private Integer reward;
     private String assignedAgentId;
     private String assignedAgentName;
+    private Long createdAt;
     private Long updatedAt;
+    private Long assignedAt;
+    private Long startedAt;
+    private Long completedAt;
+    private String failureReason;
 }

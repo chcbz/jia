@@ -1,11 +1,40 @@
 # 聚义厅 - AI Agent 协作模块规格说明书
 
-> **文档状态**：草稿 v0.8
+> **文档状态**：草稿 v0.9
 > **创建日期**：2025年
-> **最后更新**：2026-05-30
+> **最后更新**：2026-06-07
 > **目标读者**：产品团队、前端开发、后端开发
 > **版本**：MVP
 > **依赖关系**：基于 jia-api-project-spec.md、jia-chat-longterm-memory-spec.md 和 cyf-web-kit 聚义厅前端规格扩展
+
+---
+
+## 2026-06-07 后端优化完成度与验证记录
+
+已完成：
+
+- Chat 会话与消息实体已补齐 `conversation_type`、`sender_type`、`sender_name` 等字段映射，支撑聚义厅会话与 Agent/系统发送者展示。
+- OpenClaw Channel WebSocket 已支持 `chat`、`chat.stream`、`stop`、`chat.stop`，并修复事件返回包装顺序。
+- Agent 任务 DTO 已补齐悬赏金额、创建/分配/开始/完成时间与失败原因等字段。
+- 已启用 Agent 心跳超时自动离线监控，新增 `AgentStatusMonitor` 并在启动类启用调度。
+- 已新增 `HallAnnouncementService`，Agent 状态与任务事件可持久化为聚义厅系统消息。
+- 能力评估一期已落地实体、DAO、Mapper、Service、Controller 与 SQL 初始化文件，提供 `/agent/evaluate`、`/agent/compare`、`/agent/evaluation/*` 等接口。
+- 灰度配置模型已调整为 `spring.ai.openai.chat.options.model=gpt5.4`。
+
+验证结果：
+
+- `.\gradlew.bat :starter:compileJava :chat:jia-chat-service:test :agent:jia-agent-service:test` 通过。
+- 前端已能通过构建并在浏览器进入 `https://localhost:8080/juyiting` 验证聚义厅页面与聊天弹窗。
+
+当前阻塞：
+
+- 后端灰度环境启动仍缺少正确的 Jasypt 解密口令，`spring.datasource.password` 中的 `ENC(...)` 无法解密，导致灰度运行时绑定 datasource 配置失败。
+- 在提供正确的 `jasypt.encryptor.password` 或对应环境变量之前，不能宣称灰度后端已完整启动通过。
+
+后续建议：
+
+- 为能力评估接口补充专门单元测试/集成测试，覆盖评分、对比、最新记录、统计与删除路径。
+- 在灰度环境补齐密钥后，继续完成真实 OpenClaw Agent 连接、`@Agent` 消息投递与前端回显的端到端验证。
 
 ---
 
@@ -111,6 +140,49 @@
 - 前端管理界面（由外部前端项目实现）
 - Agent 客户端 SDK（由外部提供）
 - 自动抢单、复杂派单策略和工作流编排（后续可复用 workflow 模块）
+
+### 2.2 前端协作链路优化（2026-06-07）
+
+现有聚义厅前端的世界观表达已经成立，但高频调度链路存在入口分散、上下文隐藏和任务指派不闭环的问题。本轮规格将前端协作体验收敛为一条主路径：
+
+```text
+选好汉 -> 看悬赏 -> 发传令 -> 指派/回报
+```
+
+#### 2.2.1 用户建议评估结论
+
+| 建议 | 结论 | 规格处理 |
+|------|------|----------|
+| 启用常驻操作栏，减少重复入口 | 采纳 | `BottomDock` 或等价常驻操作栏成为主操作入口；顶部图标、地图房间和热点保留为辅助入口 |
+| 固定展示当前好汉和当前任务 | 采纳 | 页面底部或右下角必须展示“双上下文锁定”卡片，并同步到聊天与指派动作 |
+| 悬赏榜推荐 Agent 行内直接 `选中/指派/传令` | 采纳 | 前端必须支持 `assignTask(task, agent)` 显式指派，不再依赖隐藏的 `selectedAgent` |
+| 聊天面板强化对象、任务、连接状态和快捷模板 | 采纳 | 聊天顶部展示上下文，输入区提供 `汇报状态`、`评估风险`、`接令确认` 三类模板 |
+| 大厅只展示前 12 个 Agent 的问题 | 调整采纳 | 舞台继续展示高活跃 Agent，但必须显示“另有 N 位在偏厅候命”，名册提供筛选 |
+| 拆分 `JuyiHall.vue` | 采纳但分阶段 | 先完成体验闭环，再拆 `HallStage.vue`、`useHallConversation.js`、`useHallData.js`，避免体验改造和重构互相放大风险 |
+| 实时推送替代主动刷新、能力评估报告 | 暂缓 | 作为后续增强，不纳入本轮前端主链路优化的验收门槛 |
+
+#### 2.2.2 主操作入口
+
+- 聚义厅页面必须有一个常驻主操作栏，至少包含 `名册`、`悬赏`、`传令` 三个入口。
+- 常驻操作栏必须显示当前激活面板，并在移动端保持可触达；如果空间不足，允许收敛为底部抽屉或浮动按钮组。
+- 顶部图标、地图房间和场景热点是辅助入口，不得成为唯一可发现的主路径。
+- 操作栏应展示聚义厅关键摘要：在线好汉数、悬赏数、当前选中好汉、当前选中任务。
+
+#### 2.2.3 双上下文锁定
+
+前端必须维护两个显式上下文：
+
+| 上下文 | 字段 | 作用 |
+|------|------|------|
+| 当前好汉 | `selectedAgentId`、`selectedAgentName`、`status`、`abilities` | 聊天定向、任务指派、详情查看 |
+| 当前任务 | `selectedTaskId`、`selectedTaskTitle`、`status`、`requiredAbilities` | 聊天议事、悬赏详情、任务指派 |
+
+上下文展示要求：
+
+- 未选择时显示明确空态，例如“未选好汉”“未选悬赏”，不能让按钮静默失效。
+- 选择推荐 Agent 时必须同步更新当前好汉卡；选择悬赏时必须同步更新当前任务卡。
+- 发传令时，请求 `metadata` 必须带上 `selectedAgentId`、`mentionAgentIds`、`selectedTaskId`，没有对应上下文时字段可为空但键名应保持稳定。
+- 关闭当前好汉或当前任务时，只清理对应上下文，不应重置另一个上下文。
 
 ---
 
@@ -324,6 +396,27 @@ WebSocket 下行事件：
 
 如果 Chat 模块短期不扩展 DTO，MVP 可将这些字段放入 ChatMessageEntity 的 `metadata` JSON 中。
 
+### 4.3.2 聚义厅传令面板交互契约
+
+聚义厅传令面板必须让用户在发送前看见“对谁说、围绕什么任务说、当前连接是否可用”。
+
+| 区域 | 必须展示/支持 | 说明 |
+|------|---------------|------|
+| 顶部上下文 | 当前对象、当前任务、连接/同步状态 | 当前对象来自 `selectedAgent` 或 `@Agent`；当前任务来自 `selectedTask` |
+| 快捷模板 | `汇报状态`、`评估风险`、`接令确认` | 点击后向输入框插入带上下文的文本，不直接发送 |
+| 消息分层 | 用户消息、Agent 消息、系统公告、流式回复 | 使用稳定 class 或 message type，便于样式和测试识别 |
+| @Agent 区 | 允许快速选择目标 Agent | 选择后同步 `selectedAgent`，并更新 `mentionAgentIds` |
+
+快捷模板示例：
+
+| 模板 | 输入内容规则 |
+|------|--------------|
+| `汇报状态` | `请汇报「{selectedTaskTitle}」当前进展、阻塞点和下一步。` |
+| `评估风险` | `请评估「{selectedTaskTitle}」的主要风险、依赖和可回滚方案。` |
+| `接令确认` | `请确认是否接令「{selectedTaskTitle}」，并说明预计完成方式。` |
+
+当未选择任务时，模板中的任务名使用“当前议题”；当未选择 Agent 时，模板面向“全体好汉”。
+
 ### 4.4 OpenClaw Channel WebSocket 服务端
 
 Chat 模块提供面向 OpenClaw Channel 的 WebSocket 服务端入口，用于外部 OpenClaw 客户端建立长连接并以 JSON 事件方式驱动聚义厅会话。
@@ -531,7 +624,32 @@ public class AgentTaskMeta {
 - 所需能力与 Agent `abilities` 无交集时返回 `AGENT_ABILITY_MISMATCH`。
 - 任务分配、开始、完成、失败必须产生 `task_event`，并可同步写入聚义厅系统公告。
 
-### 5.5 前端悬赏榜查询契约
+### 5.5 悬赏榜显式指派交互契约
+
+悬赏榜不得依赖“当前已选中好汉”作为唯一指派前置条件。前端推荐人选区域必须支持对每个 Agent 直接操作。
+
+| 操作 | 行为 | 结果 |
+|------|------|------|
+| `选中` | 将推荐 Agent 写入 `selectedAgent` | 当前好汉卡更新，悬赏详情保持不变 |
+| `指派` | 调用 `assignTask(task, agent)` | 请求 `/agent/tasks/{taskId}/assign`，body 显式传入 `agentId` |
+| `传令` | 打开传令面板并带入 Agent 与任务上下文 | 输入框可预填议事文本，metadata 带 `selectedAgentId` 和 `selectedTaskId` |
+
+按钮文案必须包含目标 Agent 名称，例如“指派给 吴用”。如果用户使用当前好汉快捷指派，按钮文案也必须显式显示目标，例如“指派给当前好汉：吴用”，不能只显示“指派当前好汉”。
+
+接口层保持现有后端契约：
+
+```http
+POST /agent/tasks/{taskId}/assign
+```
+
+```json
+{
+  "agentId": "agent-001",
+  "allowQueue": false
+}
+```
+
+### 5.6 前端悬赏榜查询契约
 
 后端应提供面向悬赏榜的聚合查询，减少前端分别拉 Task、Agent、统计数据后自行拼装。
 
@@ -956,6 +1074,25 @@ INSERT INTO dialogue_template (persona_id, persona_name, dialogue_type, content,
 | SmartWebFetchTool | 智能网页抓取 | spring-ai-agent-utils |
 | TodoWriteTool | 待办事项管理 | spring-ai-agent-utils |
 
+### 8.3 前端页面拆分边界
+
+`JuyiHall.vue` 当前承担地图舞台、面板编排、数据加载、聊天流、任务指派和 toast 等职责。为了支持后续持续迭代，前端应按以下边界逐步拆分：
+
+| 单元 | 职责 | 主要输入/输出 |
+|------|------|---------------|
+| `HallStage.vue` | 地图舞台、Agent 站位、偏厅候命提示、地图控制 | 输入 Agent 列表和选中态；输出 `select-agent`、`open-panel` |
+| `BottomDock.vue` / `ContextDock.vue` | 常驻主操作栏和双上下文卡 | 输入当前好汉、当前任务、统计数；输出 `open-panel`、`clear-agent`、`clear-task` |
+| `BountyPanel.vue` | 悬赏筛选、详情、推荐 Agent 行内操作 | 输出 `select-task`、`select-agent`、`assign-task(task, agent)`、`brief-task(task, agent)` |
+| `ChatPanel.vue` | 传令上下文、快捷模板、消息展示、输入 | 输出 `mention-agent`、`apply-template`、`send-message` |
+| `useHallData.js` | Agent/任务加载、筛选、状态归一化 | 暴露 `agents`、`tasks`、`loadAgents`、`loadTasks`、筛选计算 |
+| `useHallConversation.js` | 会话列表、消息加载、流式发送、轮询/事件流 | 暴露 `messages`、`sendHallMessage`、`loadHallMessages`、连接状态 |
+
+拆分约束：
+
+- 第一阶段允许先在 `JuyiHall.vue` 内完成行为闭环，但新增方法签名应提前使用 `assignTask(task, agent)`、`briefTask(task, agent)`。
+- 抽 composable 时不得改变请求 payload 字段；测试应先固定行为，再做拆分。
+- `HallStage.vue` 只处理视觉舞台，不直接调用 API。
+
 ---
 
 ## 9. 目录结构
@@ -1016,14 +1153,18 @@ agent/                           # Agent 模块（新建）
 - [x] OpenClaw Channel 支持 chat、stop、ping、agent.register、agent.status、task.assign、task.report、agent_status、task_event
 - [x] 水浒风格台词系统，作为非阻塞增强字段返回
 - [ ] 与现有 ChatClientConfig、Task 模块和 LongTermMemoryAdvisor 集成（当前已接入 AgentTaskMeta 与事件桥，Task/Chat 深度联动待补）
+- [ ] `cyf-web-kit` 聚义厅页面完成主操作栏、双上下文锁定、显式任务指派和传令模板
+- [ ] 聚义厅页面在超过 12 个 Agent 时展示偏厅候命数量，并通过名册筛选查看全量 Agent
 
 ### 10.2 暂不实现（后续版本）
 
-- [ ] 前端管理界面（由 `cyf-web-kit` 实现）
+- [ ] 独立前端管理后台页面（聚义厅体验页由 `cyf-web-kit` 实现）
 - [ ] 自动抢单和复杂派单策略
-- [ ] Agent 自由活动动画和气泡闲聊
+- [ ] 更复杂的 Agent 自由活动动画和气泡闲聊
 - [ ] 108 将完整配置
 - [ ] 复杂 Agent 协作编排系统
+- [ ] 实时推送完全替代主动刷新
+- [ ] Agent 详情内的完整能力评估报告
 
 ### 10.3 前后端联调验收标准
 
@@ -1033,8 +1174,25 @@ agent/                           # Agent 模块（新建）
 - [ ] 对 `offline/error` Agent 分配任务时，后端返回明确错误码。
 - [ ] 聚义厅聊天会话可以通过 `conversationType=juyiting` 或 metadata 从普通聊天中筛选。
 - [ ] OpenClaw Channel 的 `agent_status` 和 `task_event` 事件字段与本规格一致。
+- [ ] 页面常驻操作栏可打开 `名册`、`悬赏`、`传令`，且当前激活入口有可见状态。
+- [ ] 页面同时展示当前好汉和当前任务；清空任一上下文不会清空另一个上下文。
+- [ ] 悬赏榜推荐 Agent 行内可直接“指派给 XXX”，请求体包含对应 `agentId`，无需用户先手动选中该 Agent。
+- [ ] 传令面板顶部展示当前对象、当前任务和连接/同步状态；发送 metadata 包含 `selectedAgentId`、`mentionAgentIds`、`selectedTaskId`。
+- [ ] `汇报状态`、`评估风险`、`接令确认` 三个快捷模板能插入带上下文的文本，且不会自动发送。
+- [ ] 当 Agent 总数超过舞台展示上限时，舞台显示“另有 N 位在偏厅候命”或等价提示，名册仍可筛选全量 Agent。
 
-### 10.4 本轮验证状态
+### 10.4 前端协作链路实施路线
+
+| 阶段 | 目标 | 主要工作 | 验证 |
+|------|------|----------|------|
+| 第 1 阶段 | 选人和指派闭环 | 启用/扩展常驻操作栏；新增当前任务摘要；悬赏榜推荐 Agent 行内 `选中/指派/传令`；`assignTask(task, agent)` 显式传参 | 源码契约测试 + `npm run test`；浏览器手工验证指派请求体 |
+| 第 2 阶段 | 传令有上下文 | ChatPanel 顶部展示当前对象、当前任务、连接状态；新增 3 个快捷模板；系统/Agent/用户消息分层更清晰 | 组件/源码契约测试；发送请求 metadata 验证 |
+| 第 3 阶段 | 页面职责拆分 | 抽 `HallStage.vue`、`ContextDock.vue`、`useHallData.js`、`useHallConversation.js`；保留原 API payload 和事件名 | 回归第 1、2 阶段测试；`npm run build` |
+| 第 4 阶段 | 后续增强 | 偏厅候命聚合、实时推送增强、Agent 能力报告入口 | 独立立项，不阻塞本轮体验闭环 |
+
+推荐优先落地第 1、2 阶段；第 3 阶段应在行为测试固定后执行，避免重构时改变用户可见行为。
+
+### 10.5 本轮验证状态
 
 - [x] `:agent:jia-agent-service:test` 覆盖注册、离线分配拒绝、任务上报触发 Agent 状态和任务事件。
 - [x] `:agent:*:compileJava`、`:chat:jia-chat-service:compileJava`、`:chat:jia-chat-starter:compileJava` 通过。
@@ -1406,6 +1564,7 @@ jia.agent.task.default-reward=0
 | v0.6 | 2026-05-30 | 对齐 cyf-web-kit 前端规格，补充 Agent 运行时、悬赏榜、状态事件、API 错误码和联调验收标准 | AI |
 | v0.7 | 2026-05-30 | 实施：新增 agent 模块、Agent API、DAO/SQL、任务元数据、OpenClaw 事件桥和服务级验证；标注剩余 Chat/Task 深度联动缺口 | AI |
 | v0.8 | 2026-05-30 | 优化：OpenClaw Channel 增加 Agent 注册、状态上报、任务分配和任务上报；完成 jia_dev HTTP/WebSocket 联调验证 | AI |
+| v0.9 | 2026-06-07 | 评审聚义厅前端协作链路建议，新增主操作栏、双上下文锁定、显式指派、传令模板、Agent 溢出展示、页面拆分和实施路线规格 | AI |
 
 ---
 

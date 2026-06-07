@@ -94,6 +94,25 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
+    void supportsSpecChatTypeAliases() throws Exception {
+        when(session.getId()).thenReturn("session-chat");
+        when(session.isOpen()).thenReturn(true);
+
+        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"chat.stop","requestId":"stop-1","conversationId":"juyi-1"}
+                """));
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"type\":\"stopped\""));
+        assertTrue(messages.contains("\"conversationId\":\"juyi-1\""));
+    }
+
+    @Test
     void returnsAgentErrorCodeForControlMessageFailures() throws Exception {
         when(session.isOpen()).thenReturn(true);
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
@@ -122,8 +141,6 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
-
-        // Send a ping with conversationType to verify copyTrace passes it through in the echo (pong)
         handler.handleTextMessage(session, new TextMessage("""
                 {"type":"ping","requestId":"ping-juyi","conversationType":"juyiting","conversationId":"juyi-1"}
                 """));
@@ -156,7 +173,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         boolean delivered = handler.sendDirectMessageToAgent("agent-001", Map.of(
                 "conversationId", "1001",
                 "conversationType", "juyiting",
-                "content", "@吴用 请回话"));
+                "content", "@Wu Yong please reply"));
 
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(3)).sendMessage(messageCaptor.capture());
@@ -165,7 +182,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         assertTrue(delivered);
         assertTrue(messages.contains("\"type\":\"agent_direct_message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
-        assertTrue(messages.contains("@吴用 请回话"));
+        assertTrue(messages.contains("@Wu Yong please reply"));
     }
 
     @Test
@@ -183,19 +200,21 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         handler.handleTextMessage(session, new TextMessage("""
-                {"type":"agent.message","requestId":"reply-1","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"吴用","content":"此事须先探明虚实。"}
+                {"type":"agent.message","requestId":"reply-1","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"Wu Yong","content":"Inspect the current state first."}
                 """));
 
         verify(chatMessageDao).insert(argThat((ChatMessageEntity message) ->
                 "1001".equals(message.getConversationId())
                         && "ASSISTANT".equals(message.getMessageType())
-                        && "此事须先探明虚实。".equals(message.getContent())
-                        && message.getMetadata().contains("\"agentId\":\"agent-001\"")
-                        && message.getMetadata().contains("\"senderName\":\"吴用\"")));
+                        && "Inspect the current state first.".equals(message.getContent())
+                        && "juyiting".equals(message.getConversationType())
+                        && "agent".equals(message.getSenderType())
+                        && "Wu Yong".equals(message.getSenderName())
+                        && message.getMetadata().contains("\"agentId\":\"agent-001\"")));
         verify(chatConversationEventBroker).publish(org.mockito.Mockito.eq("1001"), argThat(event ->
                 "agent-001".equals(event.get("agentId"))
-                        && "吴用".equals(event.get("senderName"))
-                        && "此事须先探明虚实。".equals(event.get("content"))));
+                        && "Wu Yong".equals(event.get("senderName"))
+                        && "Inspect the current state first.".equals(event.get("content"))));
 
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
@@ -204,7 +223,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"type\":\"agent_message_saved\""));
         assertTrue(messages.contains("\"type\":\"agent_message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
-        assertTrue(messages.contains("此事须先探明虚实。"));
+        assertTrue(messages.contains("Inspect the current state first."));
     }
 
     @Test

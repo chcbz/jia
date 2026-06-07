@@ -52,14 +52,14 @@ public class ChatMessageEntity extends BaseEntity {
     private String syncStatus;
 
     @Schema(description = "会话类型（normal-普通/juyiting-聚义厅）")
-    @TableField(exist = false)
+    @TableField("conversation_type")
     private String conversationType;
 
     @Schema(description = "发送者类型（user/agent/system）")
-    @TableField(exist = false)
+    @TableField("sender_type")
     private String senderType;
 
     @Schema(description = "发送者名称（用户昵称或Agent名称）")
-    @TableField(exist = false)
+    @TableField("sender_name")
     private String senderName;
 }

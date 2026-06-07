@@ -7,6 +7,7 @@ import cn.jia.chat.handler.OpenClawChannelWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.redis.RedisService;
@@ -18,6 +19,7 @@ import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -41,6 +43,8 @@ class ChatControllerTest extends BaseMockTest {
     @Mock
     ChatConversationEventBroker chatConversationEventBroker;
     @Mock
+    BuiltinHallAgentSupport builtinHallAgentSupport;
+    @Mock
     ChatMessageDao chatMessageDao;
 
     @AfterEach
@@ -62,7 +66,11 @@ class ChatControllerTest extends BaseMockTest {
 
         when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
+        when(openClawChannelWebSocketHandler.isAgentConnected("agent-wuyong")).thenReturn(true);
         when(openClawChannelWebSocketHandler.sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class))).thenReturn(true);
+        when(chatConversationEventBroker.stream("1001")).thenReturn(Flux.just("""
+                {"type":"agent_message","conversationId":"1001","conversationType":"juyiting","agentId":"agent-wuyong","senderType":"agent","senderName":"Wu Yong","content":"ok"}
+                """).delayElements(Duration.ofMillis(10)));
 
         ChatController controller = new ChatController(
                 chatClient,
@@ -71,6 +79,7 @@ class ChatControllerTest extends BaseMockTest {
                 chatClientBuilder,
                 openClawChannelWebSocketHandler,
                 chatConversationEventBroker,
+                builtinHallAgentSupport,
                 chatMessageDao
         );
 

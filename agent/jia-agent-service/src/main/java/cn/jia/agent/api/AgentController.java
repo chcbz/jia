@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.entity.AbilityCompareRequestDTO;
+import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
@@ -9,6 +11,7 @@ import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
+import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
@@ -35,6 +38,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AgentController {
     private final AgentService agentService;
+    private final AbilityEvaluationService abilityEvaluationService;
 
     @PostMapping("/register")
     public Object register(@RequestBody AgentRegisterDTO request) {
@@ -99,9 +103,34 @@ public class AgentController {
         return JsonResult.success(agentService.reportTask(taskId, request));
     }
 
+    @PostMapping("/evaluate")
+    public Object evaluate(@RequestBody AbilityEvaluationRequestDTO request) {
+        return JsonResult.success(abilityEvaluationService.evaluate(request));
+    }
+
+    @PostMapping("/compare")
+    public Object compare(@RequestBody AbilityCompareRequestDTO request) {
+        return JsonResult.success(abilityEvaluationService.compare(request));
+    }
+
+    @GetMapping("/evaluation/{agentName}")
+    public Object evaluationHistory(@PathVariable String agentName) {
+        return JsonResult.success(abilityEvaluationService.history(agentName));
+    }
+
+    @GetMapping("/evaluation/latest/{agentName}")
+    public Object latestEvaluation(@PathVariable String agentName) {
+        return JsonResult.success(abilityEvaluationService.latest(agentName));
+    }
+
+    @GetMapping("/evaluation/stats")
+    public Object evaluationStats() {
+        return JsonResult.success(abilityEvaluationService.stats());
+    }
+
     @DeleteMapping("/evaluation/{id}")
     public Object deleteEvaluation(@PathVariable Long id) {
-        log.debug("Ability evaluation delete is not implemented yet: {}", id);
+        abilityEvaluationService.delete(id);
         return JsonResult.success();
     }
 

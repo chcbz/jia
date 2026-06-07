@@ -12,9 +12,11 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.service.HallAnnouncementService;
 import cn.jia.core.util.JsonUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
@@ -58,6 +60,7 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ChatMessageDao chatMessageDao;
     private final ChatConversationEventBroker chatConversationEventBroker;
+    private final HallAnnouncementService hallAnnouncementService;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
@@ -65,10 +68,18 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
 
     public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
             ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker) {
+        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker, null);
+    }
+
+    @Autowired
+    public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+            ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
+            HallAnnouncementService hallAnnouncementService) {
         this.chatClient = chatClient;
         this.agentServiceProvider = agentServiceProvider;
         this.chatMessageDao = chatMessageDao;
         this.chatConversationEventBroker = chatConversationEventBroker;
+        this.hallAnnouncementService = hallAnnouncementService;
     }
 
     @Override
@@ -94,8 +105,8 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
         String type = asString(payload.getOrDefault("type", "chat"));
         switch (type) {
             case "ping" -> sendEvent(session, "pong", copyTrace(payload));
-            case "stop" -> stopStream(session, payload);
-            case "chat" -> startChatStream(session, payload);
+            case "stop", "chat.stop" -> stopStream(session, payload);
+            case "chat", "chat.stream" -> startChatStream(session, payload);
             case "agent.register", "agent_register" -> registerAgent(session, payload);
             case "agent.status", "agent_status_update" -> updateAgentStatus(session, payload);
             case "agent.message", "agent.reply", "agent_message" -> saveAgentMessage(session, payload);
@@ -441,12 +452,12 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
             return;
         }
         Map<String, Object> event = new HashMap<>();
-        event.put("type", type);
-        event.put("channel", CHANNEL);
-        event.put("timestamp", System.currentTimeMillis());
         if (payload != null) {
             event.putAll(payload);
         }
+        event.put("type", type);
+        event.put("channel", CHANNEL);
+        event.put("timestamp", System.currentTimeMillis());
         try {
             synchronized (session) {
                 session.sendMessage(new TextMessage(JsonUtil.toJson(event)));
@@ -468,6 +479,9 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
                     "id", Optional.ofNullable(agent.getCurrentTaskId()).orElse(""),
                     "title", Optional.ofNullable(agent.getCurrentTaskTitle()).orElse("")));
         }
+        if (hallAnnouncementService != null) {
+            hallAnnouncementService.recordAgentStatus(payload);
+        }
         broadcastEvent("agent_status", payload);
     }
 
@@ -481,6 +495,9 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
         payload.put("assignedAgentId", task.getAssignedAgentId());
         payload.put("assignedAgentName", task.getAssignedAgentName());
         payload.put("updatedAt", Optional.ofNullable(task.getUpdatedAt()).orElse(System.currentTimeMillis()));
+        if (hallAnnouncementService != null) {
+            hallAnnouncementService.recordTaskEvent(eventType, payload);
+        }
         broadcastEvent("task_event", payload);
     }
 

@@ -39,7 +39,7 @@ public class ChatConversationEntity extends BaseEntity {
     private String jiacn;
 
     @Schema(description = "会话类型（normal-普通/juyiting-聚义厅）")
-    @TableField(exist = false)
+    @TableField("conversation_type")
     private String conversationType;
 
     @Schema(description = "会话状态（ACTIVE/CLOSED）")

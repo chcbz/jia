@@ -24,6 +24,8 @@ import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.task.entity.TaskPlanEntity;
+import cn.jia.task.service.TaskService;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +47,7 @@ public class AgentServiceImpl implements AgentService {
     private final AgentTaskMetaDao agentTaskMetaDao;
     private final DialogueTemplateDao dialogueTemplateDao;
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
+    private final ObjectProvider<TaskService> taskServiceProvider;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -311,13 +314,51 @@ public class AgentServiceImpl implements AgentService {
         dto.setTitle(meta.getTaskId());
         dto.setStatus(meta.getRewardStatus());
         dto.setRequiredAbilities(parseList(meta.getRequiredAbilities()));
+        dto.setReward(meta.getReward());
         dto.setAssignedAgentId(meta.getAssignedAgentId());
         if (!StringUtil.isBlank(meta.getAssignedAgentId())) {
             AgentRuntimeEntity agent = agentRuntimeDao.findByAgentId(meta.getAssignedAgentId());
             dto.setAssignedAgentName(agent == null ? null : agent.getName());
         }
+        dto.setCreatedAt(meta.getCreateTime());
         dto.setUpdatedAt(meta.getUpdateTime());
+        dto.setAssignedAt(meta.getAssignedAt());
+        dto.setStartedAt(meta.getStartedAt());
+        dto.setCompletedAt(meta.getCompletedAt());
+        dto.setFailureReason(meta.getFailureReason());
+        enrichTaskPlan(dto, meta.getTaskId());
         return dto;
+    }
+
+    private void enrichTaskPlan(AgentTaskDTO dto, String taskId) {
+        if (StringUtil.isBlank(taskId)) {
+            return;
+        }
+        TaskService taskService = taskServiceProvider.getIfAvailable();
+        if (taskService == null) {
+            return;
+        }
+        try {
+            TaskPlanEntity task = taskService.get(Long.valueOf(taskId));
+            if (task == null) {
+                return;
+            }
+            if (!StringUtil.isBlank(task.getName())) {
+                dto.setTitle(task.getName());
+            }
+            dto.setDescription(task.getDescription());
+            if (dto.getReward() == null && task.getAmount() != null) {
+                dto.setReward(task.getAmount().intValue());
+            }
+            if (dto.getCreatedAt() == null) {
+                dto.setCreatedAt(task.getCreateTime());
+            }
+            if (dto.getUpdatedAt() == null) {
+                dto.setUpdatedAt(task.getUpdateTime());
+            }
+        } catch (NumberFormatException ignored) {
+            // AgentTaskMeta may use external string IDs from OpenClaw.
+        }
     }
 
     private List<String> parseList(String json) {

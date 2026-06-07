@@ -16,10 +16,11 @@ import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.task.service.TaskService;
 import cn.jia.test.BaseMockTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -46,9 +47,16 @@ class AgentServiceImplTest extends BaseMockTest {
     @Mock
     ObjectProvider<AgentEventPublisher> eventPublisherProvider;
     @Mock
+    ObjectProvider<TaskService> taskServiceProvider;
+    @Mock
     AgentEventPublisher eventPublisher;
-    @InjectMocks
     AgentServiceImpl agentService;
+
+    @BeforeEach
+    void setUpAgentService() {
+        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentTaskMetaDao, dialogueTemplateDao,
+                eventPublisherProvider, taskServiceProvider);
+    }
 
     @Test
     void registerCreatesOnlineAgentAndPublishesStatus() {

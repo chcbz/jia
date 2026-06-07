@@ -9,4 +9,6 @@ public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
     AgentRuntimeEntity findByAgentId(String agentId);
 
     List<AgentRuntimeEntity> findByStatusAndAbility(String status, String ability);
+
+    List<AgentRuntimeEntity> findHeartbeatTimedOut(long cutoffTime);
 }

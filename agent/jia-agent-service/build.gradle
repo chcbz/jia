@@ -5,6 +5,8 @@ dependencies {
     compileOnly project(':task:jia-task-api')
     implementation project(':common:jia-common-service')
     testImplementation project(':common:jia-common-test')
+    testImplementation project(':task:jia-task-core')
+    testImplementation project(':task:jia-task-api')
 }
 
 version = '1.1.2-SNAPSHOT'
