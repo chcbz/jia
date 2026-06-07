@@ -1,0 +1,12 @@
+{
+  "name": "codex-ws-agent",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node agent-client.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
