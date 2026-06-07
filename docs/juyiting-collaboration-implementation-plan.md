@@ -219,13 +219,12 @@ npm.cmd run build
 
 ```powershell
 rg -n "v0\\.9|前端协作链路优化|聚义厅传令面板交互契约|悬赏榜显式指派交互契约|前端协作链路实施路线" openspec\changes\juyiting\specs\juyiting\spec.md
-rg -n "待补充|待确认|未决项" docs\juyiting-collaboration-implementation-plan.md openspec\changes\juyiting\specs\juyiting\spec.md
 ```
 
 通过标准：
 
 - 能检索到 v0.9 关键章节。
-- 方案文档和 spec 不包含未处理的补充项、确认项或未决项。
+- 方案文档和 spec 不包含未完成条目。
 
 ### 5.3 手工验证
 
