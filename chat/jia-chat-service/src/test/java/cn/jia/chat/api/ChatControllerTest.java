@@ -3,7 +3,7 @@ package cn.jia.chat.api;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
-import cn.jia.chat.handler.OpenClawChannelWebSocketHandler;
+import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
@@ -39,7 +39,7 @@ class ChatControllerTest extends BaseMockTest {
     @Mock
     ChatClient.Builder chatClientBuilder;
     @Mock
-    OpenClawChannelWebSocketHandler openClawChannelWebSocketHandler;
+    AgentWebSocketHandler agentWebSocketHandler;
     @Mock
     ChatConversationEventBroker chatConversationEventBroker;
     @Mock
@@ -66,8 +66,8 @@ class ChatControllerTest extends BaseMockTest {
 
         when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
-        when(openClawChannelWebSocketHandler.isAgentConnected("agent-wuyong")).thenReturn(true);
-        when(openClawChannelWebSocketHandler.sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class))).thenReturn(true);
+        when(agentWebSocketHandler.isAgentConnected("agent-wuyong")).thenReturn(true);
+        when(agentWebSocketHandler.sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class))).thenReturn(true);
         when(chatConversationEventBroker.stream("1001")).thenReturn(Flux.just("""
                 {"type":"agent_message","conversationId":"1001","conversationType":"juyiting","agentId":"agent-wuyong","senderType":"agent","senderName":"Wu Yong","content":"ok"}
                 """).delayElements(Duration.ofMillis(10)));
@@ -77,7 +77,7 @@ class ChatControllerTest extends BaseMockTest {
                 chatConversationService,
                 redisService,
                 chatClientBuilder,
-                openClawChannelWebSocketHandler,
+                agentWebSocketHandler,
                 chatConversationEventBroker,
                 builtinHallAgentSupport,
                 chatMessageDao
@@ -94,7 +94,7 @@ class ChatControllerTest extends BaseMockTest {
 
         ArgumentCaptor<ChatMessageEntity> messageCaptor = ArgumentCaptor.forClass(ChatMessageEntity.class);
         verify(chatMessageDao).insert(messageCaptor.capture());
-        verify(openClawChannelWebSocketHandler).sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class));
+        verify(agentWebSocketHandler).sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class));
 
         ChatMessageEntity saved = messageCaptor.getValue();
         assertTrue("1001".equals(saved.getConversationId()));

@@ -30,7 +30,7 @@ import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
+class AgentWebSocketHandlerTest extends BaseMockTest {
     @Mock
     ChatClient chatClient;
     @Mock
@@ -66,7 +66,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         running.setAssignedAgentName("Wu Yong");
         when(agentService.reportTask(any(String.class), any(AgentTaskReportDTO.class))).thenReturn(running);
 
-        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage("{\"type\":\"ping\",\"requestId\":\"ping-1\"}"));
@@ -98,7 +98,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         when(session.getId()).thenReturn("session-chat");
         when(session.isOpen()).thenReturn(true);
 
-        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage("""
@@ -119,7 +119,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
                 .thenThrow(new TestAgentException(AgentErrorConstants.AGENT_OFFLINE, "Agent is offline"));
 
-        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.handleTextMessage(session, new TextMessage("""
                 {"type":"task.assign","requestId":"assign-1","taskId":"task-001","agentId":"agent-001"}
@@ -138,7 +138,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         when(session.getId()).thenReturn("session-juyi");
         when(session.isOpen()).thenReturn(true);
 
-        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage("""
@@ -163,7 +163,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
 
-        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage("""
@@ -193,7 +193,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
 
-        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage("""
@@ -240,7 +240,7 @@ class OpenClawChannelWebSocketHandlerTest extends BaseMockTest {
         when(agentService.get("songjiang")).thenReturn(runtime("songjiang", "宋江"));
         when(agentService.get("wuyong")).thenReturn(runtime("wuyong", "吴用"));
 
-        OpenClawChannelWebSocketHandler handler = new OpenClawChannelWebSocketHandler(chatClient, agentServiceProvider,
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage("""

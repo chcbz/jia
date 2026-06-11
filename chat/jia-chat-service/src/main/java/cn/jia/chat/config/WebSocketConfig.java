@@ -5,7 +5,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import cn.jia.chat.handler.ChatWebSocketHandler;
-import cn.jia.chat.handler.OpenClawChannelWebSocketHandler;
+import cn.jia.chat.handler.AgentWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
@@ -18,8 +18,8 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 @ConditionalOnProperty(name = "jia.chat.service.websocket.enable", havingValue = "true")
 public class WebSocketConfig implements WebSocketConfigurer {
     private final ChatClient chatClient;
-    private final OpenClawChannelWebSocketHandler openClawChannelWebSocketHandler;
-    private final OpenClawApiKeyHandshakeInterceptor openClawApiKeyHandshakeInterceptor;
+    private final AgentWebSocketHandler agentWebSocketHandler;
+    private final ApiKeyHandshakeInterceptor apiKeyHandshakeInterceptor;
 
     @Value("${jia.chat.service.websocket.allowed-origin-patterns:*}")
     private String[] allowedOriginPatterns;
@@ -28,8 +28,8 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(new ChatWebSocketHandler(chatClient), "/ws/chat")
                 .setAllowedOriginPatterns(allowedOriginPatterns);
-        registry.addHandler(openClawChannelWebSocketHandler, "/ws/agent/channel")
-                .addInterceptors(openClawApiKeyHandshakeInterceptor)
+        registry.addHandler(agentWebSocketHandler, "/ws/agent/channel")
+                .addInterceptors(apiKeyHandshakeInterceptor)
                 .setAllowedOriginPatterns(allowedOriginPatterns);
     }
 }

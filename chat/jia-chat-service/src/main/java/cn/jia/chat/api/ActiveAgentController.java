@@ -1,7 +1,7 @@
 package cn.jia.chat.api;
 
 import cn.jia.agent.entity.AgentRuntimeDTO;
-import cn.jia.chat.handler.OpenClawChannelWebSocketHandler;
+import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.core.entity.JsonResult;
 import lombok.RequiredArgsConstructor;
@@ -16,16 +16,16 @@ import java.util.List;
 @RequestMapping("/agent")
 @RequiredArgsConstructor
 public class ActiveAgentController {
-    private final OpenClawChannelWebSocketHandler openClawChannelWebSocketHandler;
+    private final AgentWebSocketHandler agentWebSocketHandler;
     private final BuiltinHallAgentSupport builtinHallAgentSupport;
 
     @GetMapping("/active")
     public Object activeAgents() {
-        List<AgentRuntimeDTO> agents = new ArrayList<>(openClawChannelWebSocketHandler.getConnectedAgents());
+        List<AgentRuntimeDTO> agents = new ArrayList<>(agentWebSocketHandler.getConnectedAgents());
         boolean hasSongJiang = agents.stream()
                 .anyMatch(agent -> BuiltinHallAgentSupport.SONGJIANG_AGENT_ID.equals(agent.getAgentId()));
         if (!hasSongJiang) {
-            agents.add(0, builtinHallAgentSupport.defaultAgent());
+            agents.addFirst(builtinHallAgentSupport.defaultAgent());
         }
         return JsonResult.success(agents);
     }

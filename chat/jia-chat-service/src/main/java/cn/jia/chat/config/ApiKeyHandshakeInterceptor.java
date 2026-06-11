@@ -26,7 +26,7 @@ import java.util.Map;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class OpenClawApiKeyHandshakeInterceptor implements HandshakeInterceptor {
+public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
     private static final String API_KEY_HEADER = "X-API-Key";
     private static final String API_KEY_PARAM = "api_key";
 

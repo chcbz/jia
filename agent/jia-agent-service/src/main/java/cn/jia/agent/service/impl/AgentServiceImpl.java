@@ -89,6 +89,19 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    public PageInfo<AgentRuntimeDTO> listRoster(String status, String ability, int pageNum, int pageSize) {
+        return list(status, ability, pageNum, pageSize);
+    }
+
+    @Override
+    public List<AgentRuntimeDTO> listMapAgents() {
+        return agentRuntimeDao.findMapVisible()
+                .stream()
+                .map(this::toRuntimeDTO)
+                .toList();
+    }
+
+    @Override
     public AgentRuntimeDTO get(String agentId) {
         return toRuntimeDTO(requireAgent(agentId));
     }

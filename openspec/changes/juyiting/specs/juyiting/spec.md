@@ -2,7 +2,7 @@
 
 > **文档状态**：草稿 v0.9
 > **创建日期**：2025年
-> **最后更新**：2026-06-07
+> **最后更新**：2026-06-11
 > **目标读者**：产品团队、前端开发、后端开发
 > **版本**：MVP
 > **依赖关系**：基于 jia-api-project-spec.md、jia-chat-longterm-memory-spec.md 和 cyf-web-kit 聚义厅前端规格扩展
@@ -28,13 +28,14 @@
 
 当前阻塞：
 
-- 后端灰度环境启动仍缺少正确的 Jasypt 解密口令，`spring.datasource.password` 中的 `ENC(...)` 无法解密，导致灰度运行时绑定 datasource 配置失败。
-- 在提供正确的 `jasypt.encryptor.password` 或对应环境变量之前，不能宣称灰度后端已完整启动通过。
+- 后端灰度环境已确认本地 Jasypt 解密口令：`cyf0519`。
+- 本地启动命令：`.\gradlew.bat :starter:bootRun --args="--spring.profiles.active=grey --jasypt.encryptor.password=cyf0519"`。
+- 2026-06-11 验证结果：`https://localhost:10018` 可监听，日志出现 `Started JiaApplication`；未登录访问 `/agent/map`、`/agent/roster` 返回 `401` 属于认证拦截。
 
 后续建议：
 
 - 为能力评估接口补充专门单元测试/集成测试，覆盖评分、对比、最新记录、统计与删除路径。
-- 在灰度环境补齐密钥后，继续完成真实 OpenClaw Agent 连接、`@Agent` 消息投递与前端回显的端到端验证。
+- 继续完成真实 OpenClaw Agent 连接、`@Agent` 消息投递与前端回显的端到端验证。
 
 ---
 

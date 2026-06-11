@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.entity.AgentRosterSearchDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
@@ -51,6 +52,18 @@ public class AgentController {
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "50") int pageSize) {
         return page(agentService.list(status, ability, pageNum, pageSize));
+    }
+
+    @GetMapping("/map")
+    public Object mapAgents() {
+        return JsonResult.success(agentService.listMapAgents());
+    }
+
+    @PostMapping("/roster")
+    public Object roster(@RequestBody AgentRosterSearchDTO request) {
+        int pageNum = request.getPageNum() == null ? 1 : request.getPageNum();
+        int pageSize = request.getPageSize() == null ? 50 : request.getPageSize();
+        return page(agentService.listRoster(request.getStatus(), request.getAbility(), pageNum, pageSize));
     }
 
     @GetMapping("/{agentId}")

@@ -3,7 +3,7 @@ package cn.jia.chat.api;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
-import cn.jia.chat.handler.OpenClawChannelWebSocketHandler;
+import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -59,7 +59,7 @@ public class ChatController {
     private final ChatConversationService chatConversationService;
     private final RedisService redisService;
     private final ChatClient.Builder chatClientBuilder;
-    private final OpenClawChannelWebSocketHandler openClawChannelWebSocketHandler;
+    private final AgentWebSocketHandler agentWebSocketHandler;
     private final ChatConversationEventBroker chatConversationEventBroker;
     private final BuiltinHallAgentSupport builtinHallAgentSupport;
     private final ChatMessageDao chatMessageDao;
@@ -199,7 +199,7 @@ public class ChatController {
         payload.put("metadata", Optional.ofNullable(chatMessage.getMetadata()).orElse(Map.of()));
         payload.put("timestamp", System.currentTimeMillis());
 
-        boolean delivered = openClawChannelWebSocketHandler.isAgentConnected(selectedAgentId);
+        boolean delivered = agentWebSocketHandler.isAgentConnected(selectedAgentId);
         Flux<String> stream = delivered
                 ? Flux.create(emitter -> {
                     final Disposable[] subscriptionRef = new Disposable[1];
@@ -217,7 +217,7 @@ public class ChatController {
                             }, emitter::error);
                     subscriptionRef[0] = disposable;
 
-                    boolean sent = openClawChannelWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
+                    boolean sent = agentWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
                     emitter.next("{\"agentDelivery\":{\"agentId\":\"" + escapeJson(selectedAgentId)
                             + "\",\"delivered\":" + sent + "},\"conversationId\":\""
                             + escapeJson(conversationId) + "\",\"conversationType\":\""

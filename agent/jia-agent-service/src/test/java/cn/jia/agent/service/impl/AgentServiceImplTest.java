@@ -108,6 +108,25 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void listRosterFiltersByStatusWithoutPublishingRuntimeStatus() {
+        AgentRuntimeEntity agent = new AgentRuntimeEntity();
+        agent.setAgentId("agent-001");
+        agent.setName("Wu Yong");
+        agent.setStatus(AgentConstants.STATUS_OFFLINE);
+        when(agentRuntimeDao.findByStatusAndAbility(AgentConstants.STATUS_OFFLINE, "planning"))
+                .thenReturn(List.of(agent));
+
+        List<AgentRuntimeDTO> result = agentService.listRoster(AgentConstants.STATUS_OFFLINE, "planning", 1, 20)
+                .getList();
+
+        assertEquals(1, result.size());
+        assertEquals("agent-001", result.getFirst().getAgentId());
+        assertEquals(AgentConstants.STATUS_OFFLINE, result.getFirst().getStatus());
+        verify(agentRuntimeDao).findByStatusAndAbility(AgentConstants.STATUS_OFFLINE, "planning");
+        verify(eventPublisherProvider, never()).getIfAvailable();
+    }
+
+    @Test
     void reportRunningUpdatesAgentBusyAndPublishesTaskEvent() {
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setId(1L);

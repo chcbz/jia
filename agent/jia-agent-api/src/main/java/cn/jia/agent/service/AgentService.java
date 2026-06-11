@@ -19,6 +19,10 @@ public interface AgentService {
 
     PageInfo<AgentRuntimeDTO> list(String status, String ability, int pageNum, int pageSize);
 
+    PageInfo<AgentRuntimeDTO> listRoster(String status, String ability, int pageNum, int pageSize);
+
+    List<AgentRuntimeDTO> listMapAgents();
+
     AgentRuntimeDTO get(String agentId);
 
     AgentRuntimeDTO updateStatus(String agentId, AgentStatusDTO request);

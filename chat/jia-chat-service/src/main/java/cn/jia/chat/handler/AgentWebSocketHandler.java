@@ -51,7 +51,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Slf4j
 @Component
-public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implements AgentEventPublisher {
+public class AgentWebSocketHandler extends TextWebSocketHandler implements AgentEventPublisher {
     private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
@@ -66,15 +66,15 @@ public class OpenClawChannelWebSocketHandler extends TextWebSocketHandler implem
     private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
-    public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
-            ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker) {
+    public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+                                 ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker) {
         this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker, null);
     }
 
     @Autowired
-    public OpenClawChannelWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
-            ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
-            HallAnnouncementService hallAnnouncementService) {
+    public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+                                 ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
+                                 HallAnnouncementService hallAnnouncementService) {
         this.chatClient = chatClient;
         this.agentServiceProvider = agentServiceProvider;
         this.chatMessageDao = chatMessageDao;

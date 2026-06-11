@@ -1,6 +1,7 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.mapper.AgentRuntimeMapper;
 import cn.jia.common.dao.BaseDaoImpl;
@@ -30,6 +31,13 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
         }
         wrapper.orderByDesc(AgentRuntimeEntity::getLastSeenAt);
         return baseMapper.selectList(wrapper);
+    }
+
+    @Override
+    public List<AgentRuntimeEntity> findMapVisible() {
+        return baseMapper.selectList(new LambdaQueryWrapper<AgentRuntimeEntity>()
+                .ne(AgentRuntimeEntity::getStatus, AgentConstants.STATUS_OFFLINE)
+                .orderByDesc(AgentRuntimeEntity::getLastSeenAt));
     }
 
     @Override
