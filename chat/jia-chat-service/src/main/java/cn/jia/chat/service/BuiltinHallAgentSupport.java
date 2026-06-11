@@ -15,7 +15,7 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class BuiltinHallAgentSupport implements ApplicationRunner {
-    public static final String SONGJIANG_AGENT_ID = "builtin-songjiang";
+    public static final String SONGJIANG_AGENT_ID = AgentConstants.BUILTIN_SONGJIANG_AGENT_ID;
     public static final String SONGJIANG_NAME = "宋江";
     public static final String SONGJIANG_ENDPOINT = "builtin://juyiting/songjiang";
     private static final List<String> SONGJIANG_ABILITIES = List.of("coordination", "dispatch", "planning", "briefing");

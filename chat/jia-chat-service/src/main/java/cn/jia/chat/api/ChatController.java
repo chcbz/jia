@@ -273,7 +273,19 @@ public class ChatController {
             chatConversationEventBroker.publish(conversationId, event);
             return Flux.just(eventJson);
         });
-        return deliveryEvent.concatWith(deltaStream).concatWith(finalEvent);
+        Flux<String> agentStream = deltaStream.concatWith(finalEvent)
+                .onErrorResume(error -> {
+                    log.warn("Builtin SongJiang stream failed, using fallback reply", error);
+                    String content = "诸位稍安，宋江已收到传令。此事先记入议程，待诸位好汉回报后再作定夺。";
+                    if (needSummary) {
+                        summary.append(content);
+                    }
+                    ChatMessageEntity entity = saveBuiltinAgentMessage(conversationId, content);
+                    Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
+                    chatConversationEventBroker.publish(conversationId, event);
+                    return Flux.just(JsonUtil.toJson(event));
+                });
+        return deliveryEvent.concatWith(agentStream);
     }
 
     private boolean isDirectAgentEvent(String eventJson) {

@@ -30,6 +30,9 @@ public class AgentStatusMonitor {
     public void markHeartbeatTimedOutAgentsOffline() {
         long cutoffTime = System.currentTimeMillis() - heartbeatTimeoutSeconds * 1000;
         for (AgentRuntimeEntity agent : agentRuntimeDao.findHeartbeatTimedOut(cutoffTime)) {
+            if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId())) {
+                continue;
+            }
             log.debug("Marking heartbeat timed out agent offline: {}", agent.getAgentId());
             agent.setStatus(AgentConstants.STATUS_OFFLINE);
             agent.setCurrentTaskId(null);

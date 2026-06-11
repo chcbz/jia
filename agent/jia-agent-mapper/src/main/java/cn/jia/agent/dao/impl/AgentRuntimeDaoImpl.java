@@ -44,6 +44,7 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     public List<AgentRuntimeEntity> findHeartbeatTimedOut(long cutoffTime) {
         return baseMapper.selectList(new LambdaQueryWrapper<AgentRuntimeEntity>()
                 .ne(AgentRuntimeEntity::getStatus, "offline")
+                .ne(AgentRuntimeEntity::getAgentId, AgentConstants.BUILTIN_SONGJIANG_AGENT_ID)
                 .and(wrapper -> wrapper
                         .isNull(AgentRuntimeEntity::getLastSeenAt)
                         .or()
