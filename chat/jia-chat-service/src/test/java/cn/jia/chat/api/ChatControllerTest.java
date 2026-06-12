@@ -5,6 +5,7 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
+import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
@@ -46,6 +47,8 @@ class ChatControllerTest extends BaseMockTest {
     BuiltinHallAgentSupport builtinHallAgentSupport;
     @Mock
     ChatMessageDao chatMessageDao;
+    @Mock
+    MemoryRepository memoryRepository;
 
     @AfterEach
     void tearDown() {
@@ -80,7 +83,8 @@ class ChatControllerTest extends BaseMockTest {
                 agentWebSocketHandler,
                 chatConversationEventBroker,
                 builtinHallAgentSupport,
-                chatMessageDao
+                chatMessageDao,
+                memoryRepository
         );
 
         ChatMessageDTO request = new ChatMessageDTO();

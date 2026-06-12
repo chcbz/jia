@@ -11,6 +11,8 @@ import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.StringUtil;
+import cn.jia.chat.memory.MemoryDocument;
+import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
@@ -38,6 +40,7 @@ import reactor.core.publisher.FluxSink;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -63,6 +66,7 @@ public class ChatController {
     private final ChatConversationEventBroker chatConversationEventBroker;
     private final BuiltinHallAgentSupport builtinHallAgentSupport;
     private final ChatMessageDao chatMessageDao;
+    private final MemoryRepository memoryRepository;
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
             帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
             
@@ -462,6 +466,81 @@ public class ChatController {
         return JsonResult.success();
     }
 
+    @RequestMapping(value = "/library/search", method = RequestMethod.POST)
+    public Object searchLibrary(@RequestBody LibrarySearchRequest request) {
+        if (request == null || StringUtil.isBlank(request.getKeyword())) {
+            return JsonResult.success(List.of());
+        }
+        String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
+        int topK = Optional.ofNullable(request.getTopK()).filter(value -> value > 0).orElse(8);
+        double threshold = Optional.ofNullable(request.getSimilarityThreshold()).orElse(0.2D);
+        List<MemoryDocument> documents = memoryRepository.searchWithConversationBoost(
+                jiacn,
+                request.getKeyword(),
+                request.getConversationId(),
+                topK,
+                threshold
+        );
+        String sourceType = Optional.ofNullable(request.getSourceType()).orElse("");
+        return JsonResult.success(documents.stream()
+                .filter(document -> matchesLibrarySource(document, sourceType))
+                .map(this::toLibrarySearchResult)
+                .toList());
+    }
+
+    private boolean matchesLibrarySource(MemoryDocument document, String sourceType) {
+        if (document == null || StringUtil.isBlank(sourceType)) {
+            return true;
+        }
+        String summaryType = Optional.ofNullable(document.getSummaryType()).orElse("");
+        if ("meeting".equals(sourceType)) {
+            return "conversation".equals(summaryType)
+                    || "daily_summary".equals(summaryType)
+                    || "weekly_summary".equals(summaryType)
+                    || "monthly_summary".equals(summaryType);
+        }
+        if ("project".equals(sourceType)) {
+            return "project".equals(summaryType)
+                    || "project".equals(document.getTopic())
+                    || Optional.ofNullable(document.getCategories()).orElse(List.of()).contains("project");
+        }
+        return "memory".equals(sourceType);
+    }
+
+    private LibrarySearchResult toLibrarySearchResult(MemoryDocument document) {
+        LibrarySearchResult result = new LibrarySearchResult();
+        result.setId(document.getId());
+        result.setConversationId(document.getConversationId());
+        result.setContent(document.getContent());
+        result.setSummaryType(document.getSummaryType());
+        result.setTopic(document.getTopic());
+        result.setCategories(document.getCategories());
+        result.setTimestamp(document.getTimestamp());
+        result.setScore(document.getScore());
+        return result;
+    }
+
     private record AgentDeliveryResult(boolean attempted, boolean delivered, Flux<String> stream) {
+    }
+
+    @lombok.Data
+    private static class LibrarySearchRequest {
+        private String keyword;
+        private String sourceType;
+        private String conversationId;
+        private Integer topK;
+        private Double similarityThreshold;
+    }
+
+    @lombok.Data
+    private static class LibrarySearchResult {
+        private String id;
+        private String conversationId;
+        private String content;
+        private String summaryType;
+        private String topic;
+        private List<String> categories;
+        private Long timestamp;
+        private Double score;
     }
 }
