@@ -474,13 +474,19 @@ public class ChatController {
         String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
         int topK = Optional.ofNullable(request.getTopK()).filter(value -> value > 0).orElse(8);
         double threshold = Optional.ofNullable(request.getSimilarityThreshold()).orElse(0.2D);
-        List<MemoryDocument> documents = memoryRepository.searchWithConversationBoost(
-                jiacn,
-                request.getKeyword(),
-                request.getConversationId(),
-                topK,
-                threshold
-        );
+        List<MemoryDocument> documents;
+        try {
+            documents = Optional.ofNullable(memoryRepository.searchWithConversationBoost(
+                    jiacn,
+                    request.getKeyword(),
+                    request.getConversationId(),
+                    topK,
+                    threshold
+            )).orElse(List.of());
+        } catch (Exception e) {
+            log.warn("Library search failed, return empty results. jiacn={}, keyword={}", jiacn, request.getKeyword(), e);
+            return JsonResult.success(List.of());
+        }
         String sourceType = Optional.ofNullable(request.getSourceType()).orElse("");
         return JsonResult.success(documents.stream()
                 .filter(document -> matchesLibrarySource(document, sourceType))

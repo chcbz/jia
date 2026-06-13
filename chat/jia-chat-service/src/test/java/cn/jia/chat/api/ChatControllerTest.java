@@ -5,6 +5,7 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
+import cn.jia.core.entity.JsonResult;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
@@ -20,12 +21,19 @@ import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
 import reactor.core.publisher.Flux;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -107,5 +115,50 @@ class ChatControllerTest extends BaseMockTest {
         assertTrue(saved.getMetadata().contains("\"selectedAgentId\":\"agent-wuyong\""));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"agentDelivery\"")));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"conversationId\": \"1001\"")));
+    }
+
+    @Test
+    void searchLibraryReturnsEmptyResultsWhenMemorySearchFails() throws Exception {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        EsContextHolder.setContext(context);
+
+        when(memoryRepository.searchWithConversationBoost(anyString(), anyString(), any(), anyInt(), anyDouble()))
+                .thenThrow(new IllegalStateException("memory index unavailable"));
+
+        ChatController controller = new ChatController(
+                chatClient,
+                chatConversationService,
+                redisService,
+                chatClientBuilder,
+                agentWebSocketHandler,
+                chatConversationEventBroker,
+                builtinHallAgentSupport,
+                chatMessageDao,
+                memoryRepository
+        );
+
+        JsonResult<?> result = invokeSearchLibrary(controller, "宋江");
+
+        assertEquals("E0", result.getCode());
+        assertEquals(List.of(), result.getData());
+    }
+
+    private JsonResult<?> invokeSearchLibrary(ChatController controller, String keyword) throws Exception {
+        Class<?> requestClass = Class.forName("cn.jia.chat.api.ChatController$LibrarySearchRequest");
+        Constructor<?> constructor = requestClass.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        Object request = constructor.newInstance();
+        setField(requestClass, request, "keyword", keyword);
+        setField(requestClass, request, "topK", 8);
+
+        Method method = ChatController.class.getDeclaredMethod("searchLibrary", requestClass);
+        return (JsonResult<?>) method.invoke(controller, request);
+    }
+
+    private void setField(Class<?> targetClass, Object target, String fieldName, Object value) throws Exception {
+        Field field = targetClass.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(target, value);
     }
 }
