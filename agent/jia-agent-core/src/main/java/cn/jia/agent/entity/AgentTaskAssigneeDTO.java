@@ -4,14 +4,13 @@ import lombok.Data;
 
 import java.io.Serial;
 import java.io.Serializable;
-import java.util.List;
 
 @Data
-public class AgentTaskAssignDTO implements Serializable {
+public class AgentTaskAssigneeDTO implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
 
     private String agentId;
-    private List<String> agentIds;
-    private Boolean allowQueue;
+    private String agentName;
+    private String status;
 }

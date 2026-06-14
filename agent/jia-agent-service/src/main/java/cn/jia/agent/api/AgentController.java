@@ -8,7 +8,9 @@ import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRosterSearchDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
@@ -106,6 +108,21 @@ public class AgentController {
         return page(agentService.searchTasks(request));
     }
 
+    @PostMapping("/tasks/status-counts")
+    public Object countTasksByStatus(@RequestBody AgentTaskSearchDTO request) {
+        return JsonResult.success(agentService.countTasksByStatus(request));
+    }
+
+    @PostMapping("/tasks")
+    public Object createTask(@RequestBody AgentTaskCreateDTO request) {
+        return JsonResult.success(agentService.createTask(request));
+    }
+
+    @GetMapping("/tasks/{taskId}")
+    public Object getTask(@PathVariable String taskId) {
+        return JsonResult.success(agentService.getTask(taskId));
+    }
+
     @PostMapping("/tasks/{taskId}/assign")
     public Object assignTask(@PathVariable String taskId, @RequestBody AgentTaskAssignDTO request) {
         return JsonResult.success(agentService.assignTask(taskId, request));
@@ -114,6 +131,21 @@ public class AgentController {
     @PostMapping("/tasks/{taskId}/report")
     public Object reportTask(@PathVariable String taskId, @RequestBody AgentTaskReportDTO request) {
         return JsonResult.success(agentService.reportTask(taskId, request));
+    }
+
+    @PostMapping("/tasks/{taskId}/notes")
+    public Object addTaskNote(@PathVariable String taskId, @RequestBody AgentTaskNoteDTO request) {
+        return JsonResult.success(agentService.addTaskNote(taskId, request));
+    }
+
+    @GetMapping("/tasks/{taskId}/notes")
+    public Object listTaskNotes(@PathVariable String taskId) {
+        return JsonResult.success(agentService.listTaskNotes(taskId));
+    }
+
+    @PostMapping("/tasks/{taskId}/archive")
+    public Object archiveTask(@PathVariable String taskId) {
+        return JsonResult.success(agentService.archiveTask(taskId));
     }
 
     @PostMapping("/evaluate")

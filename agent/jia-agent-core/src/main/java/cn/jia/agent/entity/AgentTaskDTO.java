@@ -19,6 +19,9 @@ public class AgentTaskDTO implements Serializable {
     private Integer reward;
     private String assignedAgentId;
     private String assignedAgentName;
+    private List<String> assignedAgentIds;
+    private List<AgentTaskAssigneeDTO> assignees;
+    private List<AgentActionDispatchResultDTO> actionDispatchResults;
     private Long createdAt;
     private Long updatedAt;
     private Long assignedAt;

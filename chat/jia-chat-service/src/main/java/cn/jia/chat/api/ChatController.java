@@ -494,6 +494,44 @@ public class ChatController {
                 .toList());
     }
 
+    @RequestMapping(value = "/library/documents", method = RequestMethod.POST)
+    public Object saveLibraryDocument(@RequestBody LibraryDocumentRequest request) {
+        if (request == null || StringUtil.isBlank(request.getContent())) {
+            return JsonResult.failure("LIBRARY_DOCUMENT_EMPTY", "library document content is required");
+        }
+        String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
+        String title = Optional.ofNullable(request.getTitle()).orElse("").trim();
+        String content = StringUtil.isBlank(title)
+                ? request.getContent()
+                : title + "\n\n" + request.getContent();
+
+        MemoryDocument document = new MemoryDocument();
+        document.setJiacn(jiacn);
+        document.setConversationId(request.getConversationId());
+        document.setContent(content);
+        document.setSummaryType(Optional.ofNullable(request.getSourceType())
+                .filter(StringUtil::isNotBlank)
+                .orElse("project"));
+        document.setTopic(Optional.ofNullable(request.getTopic()).orElse("project"));
+        document.setCategories(Optional.ofNullable(request.getCategories()).orElse(List.of("project", "juyiting")));
+        document.setTimestamp(System.currentTimeMillis());
+
+        try {
+            memoryRepository.save(document);
+        } catch (Exception e) {
+            log.warn("Library document save failed. jiacn={}, title={}", jiacn, title, e);
+            return JsonResult.failure("LIBRARY_DOCUMENT_SAVE_FAILED", "library document save failed");
+        }
+
+        return JsonResult.success(Map.of(
+                "title", title,
+                "summaryType", document.getSummaryType(),
+                "topic", document.getTopic(),
+                "categories", document.getCategories(),
+                "timestamp", document.getTimestamp()
+        ));
+    }
+
     private boolean matchesLibrarySource(MemoryDocument document, String sourceType) {
         if (document == null || StringUtil.isBlank(sourceType)) {
             return true;
@@ -536,6 +574,16 @@ public class ChatController {
         private String conversationId;
         private Integer topK;
         private Double similarityThreshold;
+    }
+
+    @lombok.Data
+    private static class LibraryDocumentRequest {
+        private String title;
+        private String content;
+        private String sourceType;
+        private String topic;
+        private List<String> categories;
+        private String conversationId;
     }
 
     @lombok.Data

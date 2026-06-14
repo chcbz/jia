@@ -7,11 +7,12 @@ import java.io.Serializable;
 import java.util.List;
 
 @Data
-public class AgentTaskAssignDTO implements Serializable {
+public class AgentTaskCreateDTO implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
 
-    private String agentId;
-    private List<String> agentIds;
-    private Boolean allowQueue;
+    private String title;
+    private String description;
+    private List<String> requiredAbilities;
+    private Integer reward;
 }

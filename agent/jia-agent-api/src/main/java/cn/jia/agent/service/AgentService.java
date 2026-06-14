@@ -6,13 +6,16 @@ import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import com.github.pagehelper.PageInfo;
 
 import java.util.List;
+import java.util.Map;
 
 public interface AgentService {
     AgentRegisterResultDTO register(AgentRegisterDTO request);
@@ -39,7 +42,19 @@ public interface AgentService {
 
     PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request);
 
+    Map<String, Long> countTasksByStatus(AgentTaskSearchDTO request);
+
+    AgentTaskDTO createTask(AgentTaskCreateDTO request);
+
+    AgentTaskDTO getTask(String taskId);
+
     AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
 
     AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request);
+
+    AgentTaskNoteDTO addTaskNote(String taskId, AgentTaskNoteDTO request);
+
+    List<AgentTaskNoteDTO> listTaskNotes(String taskId);
+
+    AgentTaskDTO archiveTask(String taskId);
 }

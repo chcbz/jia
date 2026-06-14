@@ -2,6 +2,8 @@ package cn.jia.chat.handler;
 
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.entity.AgentActionDispatchResultDTO;
+import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
@@ -183,6 +185,49 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"type\":\"agent_direct_message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("@Wu Yong please reply"));
+    }
+
+    @Test
+    void publishesAgentActionIntentToRegisteredAgentSession() throws Exception {
+        when(session.getId()).thenReturn("session-action");
+        when(session.isOpen()).thenReturn(true);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
+                """));
+
+        AgentActionIntentDTO intent = new AgentActionIntentDTO();
+        intent.setIntentId("intent-task-1");
+        intent.setActorAgentId("agent-001");
+        intent.setActionType("task_briefing");
+        intent.setTaskId("task-001");
+        intent.setTargetAgentIds(java.util.List.of("agent-001"));
+        intent.setConversationType("juyiting");
+        intent.setInstruction("Read the bounty task and report the next plan.");
+        intent.setReason("Task assigned");
+        intent.setAutonomyLevel("assist");
+        intent.setRequiresApproval(false);
+
+        AgentActionDispatchResultDTO result = handler.publishAgentAction(intent);
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(3)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+
+        assertEquals("dispatched", result.getStatus());
+        assertEquals("agent-001", result.getTargetAgentId());
+        assertTrue(messages.contains("\"type\":\"agent_direct_message\""));
+        assertTrue(messages.contains("\"messageType\":\"agent.action\""));
+        assertTrue(messages.contains("\"conversationType\":\"juyiting\""));
+        assertTrue(messages.contains("\"actionType\":\"task_briefing\""));
+        assertTrue(messages.contains("\"taskId\":\"task-001\""));
+        assertTrue(messages.contains("Read the bounty task and report the next plan."));
     }
 
     @Test

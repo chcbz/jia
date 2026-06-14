@@ -86,3 +86,19 @@ CREATE TABLE IF NOT EXISTS agent_task_meta (
     KEY idx_agent_task_meta_status (reward_status),
     KEY idx_agent_task_meta_agent_id (assigned_agent_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent任务扩展元数据表';
+CREATE TABLE IF NOT EXISTS agent_task_note (
+    id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    task_id             VARCHAR(100) NOT NULL COMMENT '关联悬赏任务ID',
+    author_id           VARCHAR(100) DEFAULT NULL COMMENT '纪要作者ID',
+    author_type         VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'user/agent/system',
+    note_type           VARCHAR(20) NOT NULL DEFAULT 'summary' COMMENT 'summary/report/meeting/system',
+    content             TEXT NOT NULL COMMENT '纪要内容',
+    created_at          BIGINT NOT NULL COMMENT '纪要创建时间',
+    create_time         BIGINT DEFAULT NULL COMMENT '创建时间',
+    update_time         BIGINT DEFAULT NULL COMMENT '更新时间',
+    tenant_id           VARCHAR(50) DEFAULT NULL COMMENT '租户ID',
+    client_id           VARCHAR(50) DEFAULT NULL COMMENT '客户端ID',
+    PRIMARY KEY (id),
+    KEY idx_agent_task_note_task_id (task_id),
+    KEY idx_agent_task_note_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent任务纪要表';

@@ -5,17 +5,27 @@ import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
+import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
+import cn.jia.agent.entity.AgentActionDispatchResultDTO;
+import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentStatsDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.AgentTaskNoteDTO;
+import cn.jia.agent.entity.AgentTaskNoteEntity;
 import cn.jia.agent.entity.AgentTaskReportDTO;
+import cn.jia.agent.entity.AgentTaskSearchDTO;
+import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.task.service.TaskService;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,10 +35,12 @@ import org.mockito.Mock;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
@@ -43,18 +55,23 @@ class AgentServiceImplTest extends BaseMockTest {
     @Mock
     AgentTaskMetaDao agentTaskMetaDao;
     @Mock
+    AgentTaskNoteDao agentTaskNoteDao;
+    @Mock
     DialogueTemplateDao dialogueTemplateDao;
     @Mock
     ObjectProvider<AgentEventPublisher> eventPublisherProvider;
     @Mock
     ObjectProvider<TaskService> taskServiceProvider;
     @Mock
+    TaskService taskService;
+    @Mock
     AgentEventPublisher eventPublisher;
     AgentServiceImpl agentService;
 
     @BeforeEach
     void setUpAgentService() {
-        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentTaskMetaDao, dialogueTemplateDao,
+        EsContextHolder.setContext(new EsContext());
+        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentTaskMetaDao, agentTaskNoteDao, dialogueTemplateDao,
                 eventPublisherProvider, taskServiceProvider);
     }
 
@@ -87,6 +104,251 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(eventPublisher).publishAgentStatus(eventCaptor.capture());
         assertEquals("agent-001", eventCaptor.getValue().getAgentId());
         assertEquals(AgentConstants.STATUS_ONLINE, eventCaptor.getValue().getStatus());
+    }
+
+    @Test
+    void createTaskCreatesTaskPlanAndOpenAgentTaskMeta() {
+        when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+        request.setTitle("Inspect archive search with a title that exceeds task plan name");
+        request.setDescription("Verify library retrieval");
+        request.setRequiredAbilities(List.of("research", "debug"));
+        request.setReward(30);
+
+        AgentTaskDTO result = agentService.createTask(request);
+
+        assertEquals(AgentConstants.TASK_STATUS_OPEN, result.getStatus());
+        assertEquals("Inspect archive search with a title that exceeds task plan name", result.getTitle());
+        assertEquals(List.of("research", "debug"), result.getRequiredAbilities());
+
+        ArgumentCaptor<TaskPlanEntity> planCaptor = ArgumentCaptor.forClass(TaskPlanEntity.class);
+        verify(taskService).create(planCaptor.capture());
+        assertEquals(30, planCaptor.getValue().getName().length());
+        assertEquals("Inspect archive search with a ", planCaptor.getValue().getName());
+        assertEquals("Verify library retrieval", planCaptor.getValue().getDescription());
+        assertEquals("juyiting", planCaptor.getValue().getJiacn());
+
+        ArgumentCaptor<AgentTaskMetaEntity> metaCaptor = ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
+        verify(agentTaskMetaDao).insert(metaCaptor.capture());
+        assertEquals(AgentConstants.TASK_STATUS_OPEN, metaCaptor.getValue().getRewardStatus());
+        verify(eventPublisher).publishTaskEvent(eq("task_created"), any(AgentTaskDTO.class));
+    }
+
+    @Test
+    void assignTaskAcceptsMultipleAgentsAndReturnsAssignees() {
+        AgentRuntimeEntity wuYong = new AgentRuntimeEntity();
+        wuYong.setAgentId("agent-wuyong");
+        wuYong.setName("Wu Yong");
+        wuYong.setStatus(AgentConstants.STATUS_ONLINE);
+        wuYong.setAbilities("[\"planning\"]");
+
+        AgentRuntimeEntity linChong = new AgentRuntimeEntity();
+        linChong.setAgentId("agent-linchong");
+        linChong.setName("Lin Chong");
+        linChong.setStatus(AgentConstants.STATUS_ONLINE);
+        linChong.setAbilities("[\"execute\"]");
+
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(wuYong);
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(linChong);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentIds(List.of("agent-wuyong", "agent-linchong"));
+
+        AgentTaskDTO result = agentService.assignTask("task-001", request);
+
+        assertEquals(AgentConstants.TASK_STATUS_ASSIGNED, result.getStatus());
+        assertEquals(List.of("agent-wuyong", "agent-linchong"), result.getAssignedAgentIds());
+        assertEquals(2, result.getAssignees().size());
+        assertEquals("Wu Yong", result.getAssignees().get(0).getAgentName());
+
+        ArgumentCaptor<AgentTaskMetaEntity> metaCaptor = ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
+        verify(agentTaskMetaDao).updateById(metaCaptor.capture());
+        assertEquals("[\"agent-wuyong\",\"agent-linchong\"]", metaCaptor.getValue().getAssignedAgentId());
+        verify(eventPublisher).publishTaskEvent(eq("task_assigned"), any(AgentTaskDTO.class));
+    }
+
+    @Test
+    void assignTaskCreatesTaskBriefingActionForEachAssigneeAndExposesDispatchResults() {
+        AgentRuntimeEntity wuYong = new AgentRuntimeEntity();
+        wuYong.setAgentId("agent-wuyong");
+        wuYong.setName("Wu Yong");
+        wuYong.setStatus(AgentConstants.STATUS_ONLINE);
+
+        AgentRuntimeEntity linChong = new AgentRuntimeEntity();
+        linChong.setAgentId("agent-linchong");
+        linChong.setName("Lin Chong");
+        linChong.setStatus(AgentConstants.STATUS_ONLINE);
+
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(wuYong);
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(linChong);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        when(eventPublisher.publishAgentAction(any(AgentActionIntentDTO.class))).thenAnswer(invocation -> {
+            AgentActionIntentDTO intent = invocation.getArgument(0);
+            AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
+            result.setIntentId(intent.getIntentId());
+            result.setTaskId(intent.getTaskId());
+            result.setTargetAgentId(intent.getActorAgentId());
+            result.setStatus("dispatched");
+            return result;
+        });
+
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentIds(List.of("agent-wuyong", "agent-linchong", "agent-wuyong"));
+
+        AgentTaskDTO result = agentService.assignTask("task-001", request);
+
+        ArgumentCaptor<AgentActionIntentDTO> intentCaptor = ArgumentCaptor.forClass(AgentActionIntentDTO.class);
+        verify(eventPublisher, org.mockito.Mockito.times(2)).publishAgentAction(intentCaptor.capture());
+        List<AgentActionIntentDTO> intents = intentCaptor.getAllValues();
+        assertEquals(List.of("agent-wuyong", "agent-linchong"), intents.stream().map(AgentActionIntentDTO::getActorAgentId).toList());
+        assertTrue(intents.stream().allMatch(intent -> "task_briefing".equals(intent.getActionType())));
+        assertTrue(intents.stream().allMatch(intent -> "juyiting".equals(intent.getConversationType())));
+        assertTrue(intents.stream().allMatch(intent -> !intent.getRequiresApproval()));
+        assertEquals(2, result.getActionDispatchResults().size());
+        assertTrue(result.getActionDispatchResults().stream().allMatch(dispatch -> "dispatched".equals(dispatch.getStatus())));
+    }
+
+    @Test
+    void assignTaskQueuesOfflineAgentWhenQueueIsAllowed() {
+        AgentRuntimeEntity offlineAgent = new AgentRuntimeEntity();
+        offlineAgent.setAgentId("agent-offline");
+        offlineAgent.setName("Offline Agent");
+        offlineAgent.setStatus(AgentConstants.STATUS_OFFLINE);
+        when(agentRuntimeDao.findByAgentId("agent-offline")).thenReturn(offlineAgent);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentId("agent-offline");
+        request.setAllowQueue(true);
+
+        AgentTaskDTO result = agentService.assignTask("task-001", request);
+
+        verify(eventPublisher, never()).publishAgentAction(any(AgentActionIntentDTO.class));
+        assertEquals(1, result.getActionDispatchResults().size());
+        AgentActionDispatchResultDTO dispatch = result.getActionDispatchResults().getFirst();
+        assertEquals("agent-offline", dispatch.getTargetAgentId());
+        assertEquals("queued", dispatch.getStatus());
+        assertEquals("Agent offline or not connected", dispatch.getMessage());
+    }
+
+    @Test
+    void archiveTaskMarksTaskArchivedWithoutUpdatingAgentRuntime() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
+        meta.setAssignedAgentId("agent-wuyong");
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+
+        AgentTaskDTO result = agentService.archiveTask("task-001");
+
+        assertEquals(AgentConstants.TASK_STATUS_ARCHIVED, result.getStatus());
+        verify(agentTaskMetaDao).updateById(meta);
+        verify(agentRuntimeDao, never()).updateById(any());
+        verify(eventPublisher).publishTaskEvent(eq("task_archived"), any(AgentTaskDTO.class));
+    }
+
+    @Test
+    void addTaskNoteStoresNoteAndListTaskNotesReturnsSavedNotes() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+
+        AgentTaskNoteDTO request = new AgentTaskNoteDTO();
+        request.setAuthorId("chcbz");
+        request.setAuthorType("user");
+        request.setNoteType("summary");
+        request.setContent("接口联调完成，后续观察藏经阁入库。");
+
+        AgentTaskNoteDTO created = agentService.addTaskNote("task-001", request);
+
+        ArgumentCaptor<AgentTaskNoteEntity> noteCaptor = ArgumentCaptor.forClass(AgentTaskNoteEntity.class);
+        verify(agentTaskNoteDao).insert(noteCaptor.capture());
+        AgentTaskNoteEntity saved = noteCaptor.getValue();
+        assertEquals("task-001", saved.getTaskId());
+        assertEquals("chcbz", saved.getAuthorId());
+        assertEquals("user", saved.getAuthorType());
+        assertEquals("summary", saved.getNoteType());
+        assertEquals("接口联调完成，后续观察藏经阁入库。", saved.getContent());
+        assertNotNull(saved.getCreatedAt());
+        assertEquals(saved.getCreatedAt(), created.getCreatedAt());
+
+        AgentTaskNoteEntity oldNote = new AgentTaskNoteEntity();
+        oldNote.setTaskId("task-001");
+        oldNote.setAuthorId("wuyong");
+        oldNote.setAuthorType("agent");
+        oldNote.setNoteType("report");
+        oldNote.setContent("先前纪要");
+        oldNote.setCreatedAt(100L);
+
+        AgentTaskNoteEntity newNote = new AgentTaskNoteEntity();
+        newNote.setTaskId("task-001");
+        newNote.setAuthorId("chcbz");
+        newNote.setAuthorType("user");
+        newNote.setNoteType("summary");
+        newNote.setContent("最新纪要");
+        newNote.setCreatedAt(200L);
+        when(agentTaskNoteDao.findByTaskId("task-001")).thenReturn(List.of(oldNote, newNote));
+
+        List<AgentTaskNoteDTO> notes = agentService.listTaskNotes("task-001");
+
+        assertEquals(2, notes.size());
+        assertEquals("先前纪要", notes.get(0).getContent());
+        assertEquals("最新纪要", notes.get(1).getContent());
+        verify(agentTaskNoteDao).findByTaskId("task-001");
+    }
+
+    @Test
+    void countTasksByStatusIgnoresSelectedStatusAndKeepsAbilityAndKeywordFilters() {
+        AgentTaskMetaEntity assigned = new AgentTaskMetaEntity();
+        assigned.setTaskId("reward-001");
+        assigned.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
+
+        AgentTaskMetaEntity running = new AgentTaskMetaEntity();
+        running.setTaskId("reward-002");
+        running.setRewardStatus(AgentConstants.TASK_STATUS_RUNNING);
+
+        AgentTaskMetaEntity otherKeyword = new AgentTaskMetaEntity();
+        otherKeyword.setTaskId("daily-003");
+        otherKeyword.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
+
+        when(agentTaskMetaDao.search(null, "planning")).thenReturn(List.of(assigned, running, otherKeyword));
+
+        AgentTaskSearchDTO request = new AgentTaskSearchDTO();
+        request.setStatus(AgentConstants.TASK_STATUS_ASSIGNED);
+        request.setAbility("planning");
+        request.setKeyword("reward");
+
+        Map<String, Long> counts = agentService.countTasksByStatus(request);
+
+        assertEquals(2L, counts.get("total"));
+        assertEquals(1L, counts.get(AgentConstants.TASK_STATUS_ASSIGNED));
+        assertEquals(1L, counts.get(AgentConstants.TASK_STATUS_RUNNING));
+        assertEquals(0L, counts.get(AgentConstants.TASK_STATUS_COMPLETED));
+        verify(agentTaskMetaDao).search(null, "planning");
     }
 
     @Test

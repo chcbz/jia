@@ -6,6 +6,7 @@ import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.chat.memory.MemoryDocument;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
@@ -144,6 +145,44 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals(List.of(), result.getData());
     }
 
+    @Test
+    void seedLibraryDocumentStoresProjectMemory() throws Exception {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        EsContextHolder.setContext(context);
+
+        ChatController controller = new ChatController(
+                chatClient,
+                chatConversationService,
+                redisService,
+                chatClientBuilder,
+                agentWebSocketHandler,
+                chatConversationEventBroker,
+                builtinHallAgentSupport,
+                chatMessageDao,
+                memoryRepository
+        );
+
+        JsonResult<?> result = invokeSeedLibraryDocument(
+                controller,
+                "聚义厅本地启动说明",
+                "后端灰度启动命令包含 jasypt.encryptor.password=cyf0519",
+                "local-startup",
+                List.of("project", "juyiting", "public-beta")
+        );
+
+        ArgumentCaptor<MemoryDocument> documentCaptor = ArgumentCaptor.forClass(MemoryDocument.class);
+        verify(memoryRepository).save(documentCaptor.capture());
+        MemoryDocument document = documentCaptor.getValue();
+        assertEquals("tester", document.getJiacn());
+        assertEquals("project", document.getSummaryType());
+        assertEquals("local-startup", document.getTopic());
+        assertEquals(List.of("project", "juyiting", "public-beta"), document.getCategories());
+        assertTrue(document.getContent().contains("聚义厅本地启动说明"));
+        assertTrue(document.getContent().contains("cyf0519"));
+        assertEquals("E0", result.getCode());
+    }
+
     private JsonResult<?> invokeSearchLibrary(ChatController controller, String keyword) throws Exception {
         Class<?> requestClass = Class.forName("cn.jia.chat.api.ChatController$LibrarySearchRequest");
         Constructor<?> constructor = requestClass.getDeclaredConstructor();
@@ -153,6 +192,21 @@ class ChatControllerTest extends BaseMockTest {
         setField(requestClass, request, "topK", 8);
 
         Method method = ChatController.class.getDeclaredMethod("searchLibrary", requestClass);
+        return (JsonResult<?>) method.invoke(controller, request);
+    }
+
+    private JsonResult<?> invokeSeedLibraryDocument(ChatController controller, String title, String content,
+                                                    String topic, List<String> categories) throws Exception {
+        Class<?> requestClass = Class.forName("cn.jia.chat.api.ChatController$LibraryDocumentRequest");
+        Constructor<?> constructor = requestClass.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        Object request = constructor.newInstance();
+        setField(requestClass, request, "title", title);
+        setField(requestClass, request, "content", content);
+        setField(requestClass, request, "topic", topic);
+        setField(requestClass, request, "categories", categories);
+
+        Method method = ChatController.class.getDeclaredMethod("saveLibraryDocument", requestClass);
         return (JsonResult<?>) method.invoke(controller, request);
     }
 

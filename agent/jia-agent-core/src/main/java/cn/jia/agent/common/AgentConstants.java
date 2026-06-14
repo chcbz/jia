@@ -14,6 +14,7 @@ public final class AgentConstants {
     public static final String TASK_STATUS_RUNNING = "running";
     public static final String TASK_STATUS_COMPLETED = "completed";
     public static final String TASK_STATUS_FAILED = "failed";
+    public static final String TASK_STATUS_ARCHIVED = "archived";
 
     private AgentConstants() {
     }

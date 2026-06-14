@@ -1,6 +1,8 @@
 package cn.jia.chat.handler;
 
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.entity.AgentActionDispatchResultDTO;
+import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
@@ -499,6 +501,50 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             hallAnnouncementService.recordTaskEvent(eventType, payload);
         }
         broadcastEvent("task_event", payload);
+    }
+
+    @Override
+    public AgentActionDispatchResultDTO publishAgentAction(AgentActionIntentDTO intent) {
+        if (intent == null || intent.getActorAgentId() == null || intent.getActorAgentId().isBlank()) {
+            AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
+            result.setStatus("failed");
+            result.setMessage("actorAgentId is required");
+            return result;
+        }
+        Map<String, Object> payload = buildAgentActionPayload(intent);
+        boolean delivered = sendDirectMessageToAgent(intent.getActorAgentId(), payload);
+        AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
+        result.setIntentId(intent.getIntentId());
+        result.setTaskId(intent.getTaskId());
+        result.setTargetAgentId(intent.getActorAgentId());
+        result.setStatus(delivered ? "dispatched" : "queued");
+        result.setMessage(delivered ? "dispatched" : "Agent offline or not connected");
+        if (delivered) {
+            result.setDispatchedAt(System.currentTimeMillis());
+        }
+        return result;
+    }
+
+    private Map<String, Object> buildAgentActionPayload(AgentActionIntentDTO intent) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", "agent.action");
+        payload.put("messageType", "agent.action");
+        payload.put("requestId", intent.getIntentId());
+        payload.put("conversationId", Optional.ofNullable(intent.getTaskId()).orElse(intent.getIntentId()));
+        payload.put("conversationType", Optional.ofNullable(intent.getConversationType()).orElse("juyiting"));
+        payload.put("agentId", intent.getActorAgentId());
+        payload.put("actionType", intent.getActionType());
+        payload.put("content", intent.getInstruction());
+
+        Map<String, Object> metadata = new HashMap<>();
+        putIfPresent(metadata, "taskId", intent.getTaskId());
+        putIfPresent(metadata, "targetAgentIds", intent.getTargetAgentIds());
+        putIfPresent(metadata, "reason", intent.getReason());
+        putIfPresent(metadata, "autonomyLevel", intent.getAutonomyLevel());
+        putIfPresent(metadata, "requiresApproval", intent.getRequiresApproval());
+        metadata.put("autonomy", true);
+        payload.put("metadata", metadata);
+        return payload;
     }
 
     private void broadcastEvent(String type, Map<String, ?> payload) {
