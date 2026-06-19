@@ -1,5 +1,7 @@
 package cn.jia.core.util;
 
+import cn.jia.core.security.SensitiveDataSanitizer;
+import cn.jia.core.security.SensitiveSanitizeConfig;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JavaType;
@@ -47,6 +49,14 @@ public class JsonUtil {
 			log.error(e.getMessage(), e);
 		} 
         return null;
+	}
+
+	public static String toSafeJson(Object obj) {
+		return toSafeJson(obj, SensitiveSanitizeConfig.defaults());
+	}
+
+	public static String toSafeJson(Object obj, SensitiveSanitizeConfig config) {
+		return toJson(SensitiveDataSanitizer.sanitize(obj, config));
 	}
 
 	/**

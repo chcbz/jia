@@ -462,7 +462,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         event.put("timestamp", System.currentTimeMillis());
         try {
             synchronized (session) {
-                session.sendMessage(new TextMessage(JsonUtil.toJson(event)));
+                session.sendMessage(new TextMessage(JsonUtil.toSafeJson(event)));
             }
         } catch (Exception e) {
             log.error("Error sending OpenClaw channel event", e);

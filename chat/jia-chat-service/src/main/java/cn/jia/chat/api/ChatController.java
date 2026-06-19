@@ -266,14 +266,14 @@ public class ChatController {
                     answer.append(chunk);
                     Map<String, Object> event = buildAgentEvent("agent_message_delta", conversationId, chunk, null);
                     chatConversationEventBroker.publish(conversationId, event);
-                    return JsonUtil.toJson(event);
+                    return JsonUtil.toSafeJson(event);
                 });
 
         Flux<String> finalEvent = Flux.defer(() -> {
             String content = answer.toString();
             ChatMessageEntity entity = saveBuiltinAgentMessage(conversationId, content);
             Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
-            String eventJson = JsonUtil.toJson(event);
+            String eventJson = JsonUtil.toSafeJson(event);
             chatConversationEventBroker.publish(conversationId, event);
             return Flux.just(eventJson);
         });
@@ -287,7 +287,7 @@ public class ChatController {
                     ChatMessageEntity entity = saveBuiltinAgentMessage(conversationId, content);
                     Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
                     chatConversationEventBroker.publish(conversationId, event);
-                    return Flux.just(JsonUtil.toJson(event));
+                    return Flux.just(JsonUtil.toSafeJson(event));
                 });
         return deliveryEvent.concatWith(agentStream);
     }
@@ -312,7 +312,7 @@ public class ChatController {
     }
 
     private String buildAgentEventJson(String type, String conversationId, String content, Object messageId) {
-        return JsonUtil.toJson(buildAgentEvent(type, conversationId, content, messageId));
+        return JsonUtil.toSafeJson(buildAgentEvent(type, conversationId, content, messageId));
     }
 
     private Map<String, Object> buildAgentEvent(String type, String conversationId, String content, Object messageId) {

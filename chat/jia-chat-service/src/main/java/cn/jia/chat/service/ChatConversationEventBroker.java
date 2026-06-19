@@ -32,7 +32,7 @@ public class ChatConversationEventBroker {
         if (eventSink == null) {
             return;
         }
-        eventSink.sink.tryEmitNext(JsonUtil.toJson(event));
+        eventSink.sink.tryEmitNext(JsonUtil.toSafeJson(event));
     }
 
     private static class EventSink {

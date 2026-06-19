@@ -73,7 +73,7 @@ public class HttpRequestLogInterceptor implements HandlerInterceptor {
                 String paramName = enums.nextElement();
                 paramMap.put(paramName, httpRequest.getParameter(paramName));
             }
-            return JsonUtil.toJson(Map.of("param", paramMap));
+            return JsonUtil.toSafeJson(Map.of("param", paramMap));
         } catch (Exception e) {
             log.warn("请求参数序列化失败", e);
             return "{}";
