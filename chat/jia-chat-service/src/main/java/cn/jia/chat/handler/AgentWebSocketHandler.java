@@ -590,15 +590,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             return List.of();
         }
 
-        Set<String> connectedAgentIds = new LinkedHashSet<>();
-        sessions.forEach((sessionId, session) -> {
-            Set<String> agentIds = sessionAgentIds.get(sessionId);
-            if (session.isOpen() && agentIds != null) {
-                agentIds.stream()
-                        .filter(agentId -> agentId != null && !agentId.isBlank())
-                        .forEach(connectedAgentIds::add);
-            }
-        });
+        Set<String> connectedAgentIds = connectedAgentIds();
 
         List<AgentRuntimeDTO> connectedAgents = new ArrayList<>();
         for (String agentId : connectedAgentIds) {
@@ -609,6 +601,20 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             }
         }
         return connectedAgents;
+    }
+
+    @Override
+    public Set<String> connectedAgentIds() {
+        Set<String> connectedAgentIds = new LinkedHashSet<>();
+        sessions.forEach((sessionId, session) -> {
+            Set<String> agentIds = sessionAgentIds.get(sessionId);
+            if (session.isOpen() && agentIds != null) {
+                agentIds.stream()
+                        .filter(agentId -> agentId != null && !agentId.isBlank())
+                        .forEach(connectedAgentIds::add);
+            }
+        });
+        return connectedAgentIds;
     }
 
     private void rememberSessionAgent(String sessionId, String agentId) {

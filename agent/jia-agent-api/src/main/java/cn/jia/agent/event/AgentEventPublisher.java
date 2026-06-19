@@ -5,11 +5,17 @@ import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 
+import java.util.Set;
+
 public interface AgentEventPublisher {
     default void publishAgentStatus(AgentRuntimeDTO agent) {
     }
 
     default void publishTaskEvent(String eventType, AgentTaskDTO task) {
+    }
+
+    default Set<String> connectedAgentIds() {
+        return Set.of();
     }
 
     default AgentActionDispatchResultDTO publishAgentAction(AgentActionIntentDTO intent) {
