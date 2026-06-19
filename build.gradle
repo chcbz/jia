@@ -9,7 +9,7 @@ subprojects {
         implementation libs.jakarta.inject.api
         implementation libs.jakarta.annotation.api
         implementation libs.mapstruct.core
-        compileOnly 'com.intellij:annotations:+@jar'
+        compileOnly 'org.jetbrains:annotations:24.1.0'
         annotationProcessor libs.lombok
         annotationProcessor libs.mapstruct.processor
         compileOnly libs.lombok
