@@ -12,7 +12,7 @@ dependencies {
 		exclude group: 'org.springframework.ai', module: 'spring-ai-autoconfigure-model-image-observation'
 	}
 	compileOnly libs.spring.ai.starter.model.deepseek
-	compileOnly libs.spring.ai.starter.model.openai
+	compileOnly "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	compileOnly libs.spring.ai.starter.model.ollama
 	compileOnly libs.spring.ai.starter.model.minimax
 	compileOnly(libs.spring.boot.starter.elasticsearch)
@@ -26,7 +26,7 @@ dependencies {
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')
 	testImplementation libs.spring.ai.starter.mcp.client
-	testImplementation libs.spring.ai.starter.model.openai
+	testImplementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	testImplementation libs.spring.boot.starter.websocket
 }
 

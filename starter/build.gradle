@@ -42,7 +42,7 @@ dependencies {
     implementation(libs.spring.ai.starter.model.minimax)
     implementation(libs.spring.ai.starter.model.zhipuai)
     implementation(libs.spring.ai.starter.model.deepseek)
-    implementation(libs.spring.ai.starter.model.openai)
+    implementation("org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}")
     implementation(libs.camunda)
     implementation(libs.jodd)
 
