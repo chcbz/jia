@@ -11,7 +11,6 @@
 .mtj.tmp/
 
 # Package Files #
-*.jar
 *.war
 *.nar
 *.ear
@@ -27,7 +26,6 @@ target/
 
 # Gradle File
 .gradle/
-/gradle/
 build/
 /.vscode/
 /.cline/
