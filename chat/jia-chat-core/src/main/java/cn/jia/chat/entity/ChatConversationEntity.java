@@ -42,6 +42,22 @@ public class ChatConversationEntity extends BaseEntity {
     @TableField("conversation_type")
     private String conversationType;
 
+    @Schema(description = "conversation scope type: public/bounty/private")
+    @TableField("conversation_scope_type")
+    private String conversationScopeType;
+
+    @Schema(description = "conversation scope key for juyiting isolation")
+    @TableField("conversation_scope_key")
+    private String conversationScopeKey;
+
+    @Schema(description = "juyiting bounty task id")
+    @TableField("task_id")
+    private String taskId;
+
+    @Schema(description = "juyiting private target agent id")
+    @TableField("target_agent_id")
+    private String targetAgentId;
+
     @Schema(description = "会话状态（ACTIVE/CLOSED）")
     private Integer status;
 }

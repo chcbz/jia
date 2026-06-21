@@ -7,6 +7,10 @@ CREATE TABLE chat_conversation (
   jiacn varchar(50) DEFAULT NULL COMMENT '用户ID（多租户标识）',
   status int DEFAULT 0 COMMENT '会话状态（0-活跃/1-关闭）',
   conversation_type varchar(20) DEFAULT 'normal' COMMENT '会话类型（normal-普通/juyiting-聚义厅）',
+  conversation_scope_type varchar(20) DEFAULT NULL COMMENT 'juyiting scope type',
+  conversation_scope_key varchar(120) DEFAULT NULL COMMENT 'juyiting scope key',
+  task_id varchar(64) DEFAULT NULL COMMENT 'juyiting task id',
+  target_agent_id varchar(100) DEFAULT NULL COMMENT 'juyiting private target agent id',
   create_time bigint DEFAULT NULL COMMENT '创建时间戳',
   update_time bigint DEFAULT NULL COMMENT '更新时间戳',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
@@ -16,7 +20,8 @@ CREATE TABLE chat_conversation (
   KEY idx_tenant_id (tenant_id),
   KEY idx_status (status),
   KEY idx_create_time (create_time),
-  KEY idx_conversation_type (conversation_type)
+  KEY idx_conversation_type (conversation_type),
+  KEY idx_conversation_scope (conversation_type, conversation_scope_type, conversation_scope_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天会话表';
 
 -- 聊天消息表
