@@ -29,8 +29,6 @@ target/
 .gradle/
 /gradle/
 build/
-gradlew
-gradlew.bat
 /.vscode/
 /.cline/
 /.clinerules/
