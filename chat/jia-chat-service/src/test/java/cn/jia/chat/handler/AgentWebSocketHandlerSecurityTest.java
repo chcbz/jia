@@ -41,6 +41,10 @@ class AgentWebSocketHandlerSecurityTest extends BaseMockTest {
     void sendEventSanitizesSensitiveFieldsBeforeWebSocketOutput() throws Exception {
         when(session.getId()).thenReturn("session-001");
         when(session.isOpen()).thenReturn(true);
+        when(session.getAttributes()).thenReturn(new java.util.HashMap<>(Map.of(
+                "agentId", "agent-001",
+                "clientId", "jia_client",
+                "jiacn", "juyiting")));
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "registration-token", AgentConstants.STATUS_ONLINE));

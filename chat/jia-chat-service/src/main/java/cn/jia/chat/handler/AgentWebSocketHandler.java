@@ -15,6 +15,8 @@ import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.HallAnnouncementService;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -41,6 +43,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 /**
  * WebSocket channel for external agent clients.
@@ -90,6 +93,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         sendEvent(session, "connected", Map.of(
                 "sessionId", session.getId(),
                 "channel", CHANNEL,
+                "agentId", Optional.ofNullable(sessionAgentId(session)).orElse(""),
                 "capabilities", new String[] {"chat.stream", "chat.stop", "ping", "agent.register",
                         "agent.status", "agent.message", "task.assign", "task.report", "task.event"}));
     }
@@ -233,14 +237,19 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             return;
         }
         try {
+            String agentId = requireAllowedSessionAgentId(session, payload);
+            if (agentId == null) {
+                return;
+            }
             AgentRegisterDTO request = new AgentRegisterDTO();
-            request.setAgentId(asString(payload.get("agentId")));
+            request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
             request.setAvatar(asString(payload.get("avatar")));
             request.setPersonaName(asString(payload.get("personaName")));
+            request.setPersonaCode(asString(payload.get("personaCode")));
             request.setEndpoint(asString(payload.get("endpoint")));
             request.setAbilities(asStringList(payload.get("abilities")));
-            AgentRegisterResultDTO result = agentService.register(request);
+            AgentRegisterResultDTO result = withSessionContext(session, () -> agentService.register(request));
             rememberSessionAgent(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
@@ -259,13 +268,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             return;
         }
         try {
-            String agentId = asString(payload.get("agentId"));
+            String agentId = requireAllowedSessionAgentId(session, payload);
+            if (agentId == null) {
+                return;
+            }
             AgentStatusDTO request = new AgentStatusDTO();
             request.setStatus(asString(payload.get("status")));
             request.setCurrentTaskId(asString(payload.get("currentTaskId")));
             request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
             request.setErrorMessage(asString(payload.get("errorMessage")));
-            AgentRuntimeDTO agent = agentService.updateStatus(agentId, request);
+            AgentRuntimeDTO agent = withSessionContext(session, () -> agentService.updateStatus(agentId, request));
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
             }
@@ -288,10 +300,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         }
         try {
             String taskId = asString(payload.get("taskId"));
+            String agentId = requireAllowedSessionAgentId(session, payload);
+            if (agentId == null) {
+                return;
+            }
             AgentTaskAssignDTO request = new AgentTaskAssignDTO();
-            request.setAgentId(asString(payload.get("agentId")));
+            request.setAgentId(agentId);
             request.setAllowQueue(asBoolean(payload.get("allowQueue")));
-            AgentTaskDTO task = agentService.assignTask(taskId, request);
+            AgentTaskDTO task = withSessionContext(session, () -> agentService.assignTask(taskId, request));
             Map<String, Object> event = copyTrace(payload);
             event.put("taskId", task.getId());
             event.put("status", task.getStatus());
@@ -311,12 +327,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         }
         try {
             String taskId = asString(payload.get("taskId"));
+            String agentId = requireAllowedSessionAgentId(session, payload);
+            if (agentId == null) {
+                return;
+            }
             AgentTaskReportDTO request = new AgentTaskReportDTO();
-            request.setAgentId(asString(payload.get("agentId")));
+            request.setAgentId(agentId);
             request.setStatus(asString(payload.get("status")));
             request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
             request.setFailureReason(asString(payload.get("failureReason")));
-            AgentTaskDTO task = agentService.reportTask(taskId, request);
+            AgentTaskDTO task = withSessionContext(session, () -> agentService.reportTask(taskId, request));
             Map<String, Object> event = copyTrace(payload);
             event.put("taskId", task.getId());
             event.put("status", task.getStatus());
@@ -332,7 +352,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
         Set<String> registeredAgentIds = registeredAgentIds(session.getId());
-        String agentId = resolveSessionAgentId(session.getId(), asString(payload.get("agentId")));
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        if (agentId == null) {
+            return;
+        }
         if (conversationId == null || conversationId.isBlank()) {
             sendError(session, payload, "conversationId is required");
             return;
@@ -358,8 +381,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         String conversationType = Optional.ofNullable(asString(payload.get("conversationType"))).orElse("juyiting");
         String senderName = Optional.ofNullable(asString(payload.get("senderName")))
                 .orElse(Optional.ofNullable(asString(payload.get("agentName"))).orElse(agentId));
-        String jiacn = Optional.ofNullable(asString(payload.get("jiacn"))).orElse("Anonymous");
-        String clientId = Optional.ofNullable(asString(payload.get("clientId"))).orElse("openclaw");
+        String jiacn = Optional.ofNullable(sessionJiacn(session))
+                .orElse(Optional.ofNullable(asString(payload.get("jiacn"))).orElse("Anonymous"));
+        String clientId = Optional.ofNullable(sessionClientId(session))
+                .orElse(Optional.ofNullable(asString(payload.get("clientId"))).orElse("openclaw"));
 
         ChatMessageEntity entity = new ChatMessageEntity();
         entity.init4Creation();
@@ -399,7 +424,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
         Set<String> registeredAgentIds = registeredAgentIds(session.getId());
-        String agentId = resolveSessionAgentId(session.getId(), asString(payload.get("agentId")));
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        if (agentId == null) {
+            return;
+        }
         if (conversationId == null || conversationId.isBlank() || content == null || content.isBlank()) {
             return;
         }
@@ -628,21 +656,53 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         return Optional.ofNullable(sessionAgentIds.get(sessionId)).orElseGet(Set::of);
     }
 
-    private String resolveSessionAgentId(String sessionId, String requestedAgentId) {
-        if (requestedAgentId != null && !requestedAgentId.isBlank()) {
-            return requestedAgentId;
-        }
-        Set<String> agentIds = registeredAgentIds(sessionId);
-        if (agentIds.size() == 1) {
-            return agentIds.iterator().next();
-        }
-        return null;
-    }
-
     private void putIfPresent(Map<String, Object> target, String key, Object value) {
         if (value != null) {
             target.put(key, value);
         }
+    }
+
+    private String requireAllowedSessionAgentId(WebSocketSession session, Map<String, Object> payload) {
+        String allowedAgentId = sessionAgentId(session);
+        String requestedAgentId = asString(payload.get("agentId"));
+        if (allowedAgentId == null || allowedAgentId.isBlank()) {
+            sendError(session, payload, "AGENT_ID_REQUIRED", "agentId is required in WebSocket handshake");
+            return null;
+        }
+        if (requestedAgentId != null && !requestedAgentId.isBlank() && !allowedAgentId.equals(requestedAgentId)) {
+            sendError(session, payload, "AGENT_ID_MISMATCH", "agentId does not match the WebSocket handshake");
+            return null;
+        }
+        return allowedAgentId;
+    }
+
+    private <T> T withSessionContext(WebSocketSession session, Supplier<T> action) {
+        EsContext context = new EsContext();
+        context.setClientId(sessionClientId(session));
+        context.setJiacn(sessionJiacn(session));
+        EsContextHolder.setContext(context);
+        try {
+            return action.get();
+        } finally {
+            EsContextHolder.setContext(new EsContext());
+        }
+    }
+
+    private String sessionAgentId(WebSocketSession session) {
+        return sessionAttribute(session, "agentId");
+    }
+
+    private String sessionClientId(WebSocketSession session) {
+        return sessionAttribute(session, "clientId");
+    }
+
+    private String sessionJiacn(WebSocketSession session) {
+        return sessionAttribute(session, "jiacn");
+    }
+
+    private String sessionAttribute(WebSocketSession session, String key) {
+        Object value = session.getAttributes().get(key);
+        return value == null ? null : String.valueOf(value);
     }
 
     private String asString(Object value) {

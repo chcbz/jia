@@ -25,7 +25,10 @@ public class AgentRuntimeEntity extends BaseEntity {
     private String agentId;
     private String name;
     private String avatar;
+    private String ownerJiacn;
+    private String personaCode;
     private String personaName;
+    private Long bindingId;
     private String abilities;
     private String endpoint;
     private String tokenHash;

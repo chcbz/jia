@@ -5,4 +5,6 @@ import cn.jia.core.dao.IBaseDao;
 
 public interface AgentPersonaDao extends IBaseDao<AgentPersonaEntity> {
     AgentPersonaEntity findByName(String name);
+
+    AgentPersonaEntity findByCode(String personaCode);
 }

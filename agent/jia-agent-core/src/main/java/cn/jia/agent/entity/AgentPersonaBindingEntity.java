@@ -14,28 +14,17 @@ import java.io.Serial;
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
-@TableName("agent_persona")
-@Schema(name = "AgentPersona对象", description = "聚义厅Agent人设")
-public class AgentPersonaEntity extends BaseEntity {
+@TableName("agent_persona_binding")
+@Schema(name = "AgentPersonaBinding对象", description = "聚义厅人物绑定关系")
+public class AgentPersonaBindingEntity extends BaseEntity {
     @Serial
     private static final long serialVersionUID = 1L;
 
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
+    private String jiacn;
     private String personaCode;
-    private Integer rankNo;
-    private String starName;
-    private String name;
-    private String title;
-    private String avatar;
-    private String visualConfig;
-    private String abilities;
-    private String personality;
-    private String speakingStyle;
-    private String background;
-    private Integer power;
-    private Integer intelligence;
-    private Integer leadership;
-    private Boolean active;
-    private Boolean systemAgent;
+    private String agentId;
+    private Long boundAt;
+    private Integer status;
 }

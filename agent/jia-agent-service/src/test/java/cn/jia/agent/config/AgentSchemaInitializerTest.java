@@ -7,6 +7,8 @@ import org.mockito.Mock;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 
 class AgentSchemaInitializerTest extends BaseMockTest {
@@ -17,12 +19,15 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     void runCreatesTaskNoteTableIfMissing() {
         AgentSchemaInitializer initializer = new AgentSchemaInitializer(jdbcTemplate);
 
-        initializer.run(null);
+        initializer.afterPropertiesSet();
 
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate).execute(sqlCaptor.capture());
-        String sql = sqlCaptor.getValue();
+        verify(jdbcTemplate, atLeastOnce()).execute(sqlCaptor.capture());
+        String sql = String.join("\n", sqlCaptor.getAllValues());
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_note"));
         assertTrue(sql.contains("idx_agent_task_note_task_id"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_persona_binding"));
+        assertTrue(sql.contains("uk_agent_binding_active_persona"));
+        verify(jdbcTemplate, atLeastOnce()).update(any(String.class), any(Object[].class));
     }
 }

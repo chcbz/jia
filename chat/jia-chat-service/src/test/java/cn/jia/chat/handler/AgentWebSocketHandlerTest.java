@@ -48,8 +48,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void handlesAgentRegisterAssignAndReport() throws Exception {
-        when(session.getId()).thenReturn("session-001");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-001", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
@@ -116,7 +115,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void returnsAgentErrorCodeForControlMessageFailures() throws Exception {
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-001", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
                 .thenThrow(new TestAgentException(AgentErrorConstants.AGENT_OFFLINE, "Agent is offline"));
@@ -159,8 +158,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void sendsDirectMessageToRegisteredAgentSession() throws Exception {
-        when(session.getId()).thenReturn("session-001");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-001", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
@@ -189,8 +187,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void publishesAgentActionIntentToRegisteredAgentSession() throws Exception {
-        when(session.getId()).thenReturn("session-action");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-action", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
@@ -232,8 +229,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void savesAgentMessageFromRegisteredSession() throws Exception {
-        when(session.getId()).thenReturn("session-001");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-001", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
@@ -272,9 +268,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
-    void supportsMultipleAgentsOnSharedSession() throws Exception {
-        when(session.getId()).thenReturn("session-001");
-        when(session.isOpen()).thenReturn(true);
+    void rejectsDifferentAgentOnSharedSession() throws Exception {
+        stubAgentSession("session-001", "agent-001");
+        when(agentService.get("agent-001")).thenReturn(runtime("agent-001", "吴用"));
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenAnswer(invocation -> {
@@ -282,37 +278,36 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                     return new AgentRegisterResultDTO(request.getAgentId(), "token-" + request.getAgentId(),
                             AgentConstants.STATUS_ONLINE);
                 });
-        when(agentService.get("songjiang")).thenReturn(runtime("songjiang", "宋江"));
-        when(agentService.get("wuyong")).thenReturn(runtime("wuyong", "吴用"));
 
         AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
         handler.afterConnectionEstablished(session);
         handler.handleTextMessage(session, new TextMessage("""
-                {"type":"agent.register","requestId":"reg-1","agentId":"songjiang","name":"宋江"}
+                {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"吴用"}
                 """));
         handler.handleTextMessage(session, new TextMessage("""
-                {"type":"agent.register","requestId":"reg-2","agentId":"wuyong","name":"吴用"}
+                {"type":"agent.register","requestId":"reg-2","agentId":"agent-002","name":"林冲"}
                 """));
         handler.handleTextMessage(session, new TextMessage("""
-                {"type":"agent.message","requestId":"reply-2","conversationId":"2001","conversationType":"juyiting","agentId":"wuyong","senderName":"吴用","content":"请先盘点当前局势。"}
+                {"type":"agent.message","requestId":"reply-2","conversationId":"2001","conversationType":"juyiting","agentId":"agent-002","senderName":"林冲","content":"请先盘点当前局势。"}
                 """));
 
-        boolean delivered = handler.sendDirectMessageToAgent("songjiang", Map.of(
+        boolean delivered = handler.sendDirectMessageToAgent("agent-001", Map.of(
                 "conversationId", "2001",
                 "conversationType", "juyiting",
-                "content", "@宋江 请定夺"));
+                "content", "@吴用 请定夺"));
 
         Set<String> connectedAgentIds = handler.getConnectedAgents().stream()
                 .map(agent -> agent.getAgentId())
                 .collect(java.util.stream.Collectors.toSet());
 
         assertTrue(delivered);
-        assertEquals(Set.of("songjiang", "wuyong"), connectedAgentIds);
-        verify(chatMessageDao).insert(argThat((ChatMessageEntity message) ->
-                "2001".equals(message.getConversationId())
-                        && "请先盘点当前局势。".equals(message.getContent())
-                        && message.getMetadata().contains("\"agentId\":\"wuyong\"")));
+        assertEquals(Set.of("agent-001"), connectedAgentIds);
+        verify(chatMessageDao, org.mockito.Mockito.never()).insert(any());
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"code\":\"AGENT_ID_MISMATCH\""));
     }
 
     private cn.jia.agent.entity.AgentRuntimeDTO runtime(String agentId, String name) {
@@ -321,6 +316,15 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         dto.setName(name);
         dto.setStatus(AgentConstants.STATUS_ONLINE);
         return dto;
+    }
+
+    private void stubAgentSession(String sessionId, String agentId) {
+        org.mockito.Mockito.lenient().when(session.getId()).thenReturn(sessionId);
+        org.mockito.Mockito.lenient().when(session.isOpen()).thenReturn(true);
+        org.mockito.Mockito.lenient().when(session.getAttributes()).thenReturn(new java.util.HashMap<>(Map.of(
+                "agentId", agentId,
+                "clientId", "jia_client",
+                "jiacn", "juyiting")));
     }
 
     static class TestAgentException extends RuntimeException {

@@ -34,9 +34,25 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     }
 
     @Override
-    public List<AgentRuntimeEntity> findMapVisible() {
+    public List<AgentRuntimeEntity> findRosterByOwner(String clientId, String jiacn, String status, String ability) {
+        LambdaQueryWrapper<AgentRuntimeEntity> wrapper = new LambdaQueryWrapper<AgentRuntimeEntity>()
+                .eq(AgentRuntimeEntity::getClientId, clientId)
+                .eq(AgentRuntimeEntity::getOwnerJiacn, jiacn);
+        if (!StringUtil.isBlank(status)) {
+            wrapper.eq(AgentRuntimeEntity::getStatus, status);
+        }
+        if (!StringUtil.isBlank(ability)) {
+            wrapper.like(AgentRuntimeEntity::getAbilities, "\"" + ability + "\"");
+        }
+        wrapper.orderByAsc(AgentRuntimeEntity::getPersonaCode);
+        return baseMapper.selectList(wrapper);
+    }
+
+    @Override
+    public List<AgentRuntimeEntity> findMapVisible(String clientId) {
         return baseMapper.selectList(new LambdaQueryWrapper<AgentRuntimeEntity>()
-                .ne(AgentRuntimeEntity::getStatus, AgentConstants.STATUS_OFFLINE)
+                .eq(AgentRuntimeEntity::getClientId, clientId)
+                .in(AgentRuntimeEntity::getStatus, AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY)
                 .orderByDesc(AgentRuntimeEntity::getLastSeenAt));
     }
 

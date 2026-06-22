@@ -61,6 +61,22 @@ public class AgentController {
         return JsonResult.success(agentService.listMapAgents());
     }
 
+    @GetMapping("/personas/catalog")
+    public Object personaCatalog() {
+        return JsonResult.success(agentService.listPersonaCatalog());
+    }
+
+    @PostMapping("/personas/{personaCode}/bind")
+    public Object bindPersona(@PathVariable String personaCode) {
+        return JsonResult.success(agentService.bindPersona(personaCode));
+    }
+
+    @DeleteMapping("/personas/{personaCode}/bind")
+    public Object unbindPersona(@PathVariable String personaCode) {
+        agentService.unbindPersona(personaCode);
+        return JsonResult.success();
+    }
+
     @PostMapping("/roster")
     public Object roster(@RequestBody AgentRosterSearchDTO request) {
         int pageNum = request.getPageNum() == null ? 1 : request.getPageNum();

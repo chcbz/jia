@@ -1,5 +1,6 @@
 package cn.jia.chat.config;
 
+import cn.jia.agent.service.AgentService;
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -29,8 +30,12 @@ import java.util.Map;
 public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
     private static final String API_KEY_HEADER = "X-API-Key";
     private static final String API_KEY_PARAM = "api_key";
+    private static final String AGENT_ID_HEADER = "X-Agent-Id";
+    private static final String AGENT_ID_PARAM = "agent_id";
+    private static final String AGENT_ID_CAMEL_PARAM = "agentId";
 
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
+    private final ObjectProvider<AgentService> agentServiceProvider;
 
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
@@ -54,12 +59,34 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
             return false;
         }
 
+        String agentId = getAgentId(request);
+        if (StringUtil.isEmpty(agentId)) {
+            response.setStatusCode(HttpStatus.BAD_REQUEST);
+            return false;
+        }
+
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            log.warn("Reject OpenClaw websocket handshake: AgentService is unavailable");
+            response.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+            return false;
+        }
+
         attributes.put("clientId", apiKeyEntity.getClientId());
         attributes.put("jiacn", apiKeyEntity.getJiacn());
         attributes.put("apiKeyName", apiKeyEntity.getKeyName());
+        attributes.put("agentId", agentId);
         EsContext context = EsContextHolder.getContext();
         context.setClientId(apiKeyEntity.getClientId());
         context.setJiacn(apiKeyEntity.getJiacn());
+        try {
+            agentService.requireApiKeyOwnedAgent(apiKeyEntity.getClientId(), apiKeyEntity.getJiacn(), agentId);
+        } catch (Exception e) {
+            log.warn("Reject OpenClaw websocket handshake: agent ownership validation failed, agentId={}, clientId={}, jiacn={}",
+                    agentId, apiKeyEntity.getClientId(), apiKeyEntity.getJiacn());
+            response.setStatusCode(HttpStatus.FORBIDDEN);
+            return false;
+        }
         return true;
     }
 
@@ -81,6 +108,28 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
             }
         }
         return UriComponentsBuilder.fromUri(request.getURI()).build().getQueryParams().getFirst(API_KEY_PARAM);
+    }
+
+    private String getAgentId(ServerHttpRequest request) {
+        List<String> values = request.getHeaders().get(AGENT_ID_HEADER);
+        if (values != null && !values.isEmpty() && !StringUtil.isEmpty(values.get(0))) {
+            return values.get(0);
+        }
+        if (request instanceof ServletServerHttpRequest servletRequest) {
+            String value = servletRequest.getServletRequest().getParameter(AGENT_ID_PARAM);
+            if (!StringUtil.isEmpty(value)) {
+                return value;
+            }
+            value = servletRequest.getServletRequest().getParameter(AGENT_ID_CAMEL_PARAM);
+            if (!StringUtil.isEmpty(value)) {
+                return value;
+            }
+        }
+        String value = UriComponentsBuilder.fromUri(request.getURI()).build().getQueryParams().getFirst(AGENT_ID_PARAM);
+        if (!StringUtil.isEmpty(value)) {
+            return value;
+        }
+        return UriComponentsBuilder.fromUri(request.getURI()).build().getQueryParams().getFirst(AGENT_ID_CAMEL_PARAM);
     }
 
     private boolean isValid(OauthApiKeyEntity apiKeyEntity) {

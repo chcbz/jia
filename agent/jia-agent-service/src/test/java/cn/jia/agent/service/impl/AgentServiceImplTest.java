@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
@@ -9,6 +10,8 @@ import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
+import cn.jia.agent.entity.AgentPersonaBindingEntity;
+import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
@@ -53,6 +56,8 @@ class AgentServiceImplTest extends BaseMockTest {
     @Mock
     AgentPersonaDao agentPersonaDao;
     @Mock
+    AgentPersonaBindingDao agentPersonaBindingDao;
+    @Mock
     AgentTaskMetaDao agentTaskMetaDao;
     @Mock
     AgentTaskNoteDao agentTaskNoteDao;
@@ -71,18 +76,21 @@ class AgentServiceImplTest extends BaseMockTest {
     @BeforeEach
     void setUpAgentService() {
         EsContextHolder.setContext(new EsContext());
-        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentTaskMetaDao, agentTaskNoteDao, dialogueTemplateDao,
-                eventPublisherProvider, taskServiceProvider);
+        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider);
     }
 
     @Test
     void registerCreatesOnlineAgentAndPublishesStatus() {
+        AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
+        AgentPersonaEntity persona = persona("wuyong", "吴用", "智多星");
+        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId("jia_client", "juyiting", "agent-001")).thenReturn(binding);
+        when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(null);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
-        request.setName("Wu Yong");
         request.setAbilities(List.of("planning", "research"));
         request.setEndpoint("wss://example.com/openclaw/agent-001");
 
@@ -96,6 +104,10 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(agentRuntimeDao).insert(entityCaptor.capture());
         AgentRuntimeEntity saved = entityCaptor.getValue();
         assertEquals("agent-001", saved.getAgentId());
+        assertEquals("吴用", saved.getName());
+        assertEquals("wuyong", saved.getPersonaCode());
+        assertEquals("juyiting", saved.getOwnerJiacn());
+        assertEquals("jia_client", saved.getClientId());
         assertEquals(AgentConstants.STATUS_ONLINE, saved.getStatus());
         assertNotNull(saved.getLastSeenAt());
         assertNotNull(saved.getTokenHash());
@@ -143,12 +155,14 @@ class AgentServiceImplTest extends BaseMockTest {
         wuYong.setName("Wu Yong");
         wuYong.setStatus(AgentConstants.STATUS_ONLINE);
         wuYong.setAbilities("[\"planning\"]");
+        markOwned(wuYong);
 
         AgentRuntimeEntity linChong = new AgentRuntimeEntity();
         linChong.setAgentId("agent-linchong");
         linChong.setName("Lin Chong");
         linChong.setStatus(AgentConstants.STATUS_ONLINE);
         linChong.setAbilities("[\"execute\"]");
+        markOwned(linChong);
 
         when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(wuYong);
         when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(linChong);
@@ -182,11 +196,13 @@ class AgentServiceImplTest extends BaseMockTest {
         wuYong.setAgentId("agent-wuyong");
         wuYong.setName("Wu Yong");
         wuYong.setStatus(AgentConstants.STATUS_ONLINE);
+        markOwned(wuYong);
 
         AgentRuntimeEntity linChong = new AgentRuntimeEntity();
         linChong.setAgentId("agent-linchong");
         linChong.setName("Lin Chong");
         linChong.setStatus(AgentConstants.STATUS_ONLINE);
+        markOwned(linChong);
 
         when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(wuYong);
         when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(linChong);
@@ -229,6 +245,7 @@ class AgentServiceImplTest extends BaseMockTest {
         offlineAgent.setAgentId("agent-offline");
         offlineAgent.setName("Offline Agent");
         offlineAgent.setStatus(AgentConstants.STATUS_OFFLINE);
+        markOwned(offlineAgent);
         when(agentRuntimeDao.findByAgentId("agent-offline")).thenReturn(offlineAgent);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
@@ -356,6 +373,7 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentRuntimeEntity agent = new AgentRuntimeEntity();
         agent.setAgentId("agent-001");
         agent.setStatus(AgentConstants.STATUS_OFFLINE);
+        markOwned(agent);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(agent);
 
         AgentTaskAssignDTO request = new AgentTaskAssignDTO();
@@ -375,7 +393,7 @@ class AgentServiceImplTest extends BaseMockTest {
         agent.setAgentId("agent-001");
         agent.setName("Wu Yong");
         agent.setStatus(AgentConstants.STATUS_OFFLINE);
-        when(agentRuntimeDao.findByStatusAndAbility(AgentConstants.STATUS_OFFLINE, "planning"))
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", AgentConstants.STATUS_OFFLINE, "planning"))
                 .thenReturn(List.of(agent));
 
         List<AgentRuntimeDTO> result = agentService.listRoster(AgentConstants.STATUS_OFFLINE, "planning", 1, 20)
@@ -384,7 +402,7 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(1, result.size());
         assertEquals("agent-001", result.getFirst().getAgentId());
         assertEquals(AgentConstants.STATUS_OFFLINE, result.getFirst().getStatus());
-        verify(agentRuntimeDao).findByStatusAndAbility(AgentConstants.STATUS_OFFLINE, "planning");
+        verify(agentRuntimeDao).findRosterByOwner("jia_client", "juyiting", AgentConstants.STATUS_OFFLINE, "planning");
         verify(eventPublisherProvider, never()).getIfAvailable();
     }
 
@@ -402,6 +420,7 @@ class AgentServiceImplTest extends BaseMockTest {
         agent.setAgentId("agent-001");
         agent.setName("Wu Yong");
         agent.setStatus(AgentConstants.STATUS_ONLINE);
+        markOwned(agent);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(agent);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
@@ -437,6 +456,7 @@ class AgentServiceImplTest extends BaseMockTest {
         agent.setAgentId("agent-001");
         agent.setName("Wu Yong");
         agent.setStatus(AgentConstants.STATUS_ONLINE);
+        markOwned(agent);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(agent);
 
         AgentTaskMetaEntity completed = new AgentTaskMetaEntity();
@@ -456,5 +476,34 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(1, stats.getCompletedTaskCount());
         assertEquals(1, stats.getFailedTaskCount());
         assertEquals(60L, stats.getAverageDurationSeconds());
+    }
+
+    private void markOwned(AgentRuntimeEntity agent) {
+        agent.setClientId("jia_client");
+        agent.setOwnerJiacn("juyiting");
+        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId("jia_client", "juyiting", agent.getAgentId()))
+                .thenReturn(binding(agent.getAgentId(), agent.getPersonaCode() == null ? agent.getAgentId() : agent.getPersonaCode()));
+    }
+
+    private AgentPersonaBindingEntity binding(String agentId, String personaCode) {
+        AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
+        binding.setId(1L);
+        binding.setClientId("jia_client");
+        binding.setJiacn("juyiting");
+        binding.setAgentId(agentId);
+        binding.setPersonaCode(personaCode);
+        binding.setStatus(AgentConstants.BINDING_STATUS_ACTIVE);
+        return binding;
+    }
+
+    private AgentPersonaEntity persona(String code, String name, String title) {
+        AgentPersonaEntity persona = new AgentPersonaEntity();
+        persona.setPersonaCode(code);
+        persona.setName(name);
+        persona.setTitle(title);
+        persona.setAbilities("[\"planning\",\"research\"]");
+        persona.setActive(true);
+        persona.setSystemAgent(false);
+        return persona;
     }
 }

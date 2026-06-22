@@ -15,4 +15,11 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
                 .eq(AgentPersonaEntity::getName, name)
                 .last("limit 1"));
     }
+
+    @Override
+    public AgentPersonaEntity findByCode(String personaCode) {
+        return baseMapper.selectOne(new LambdaQueryWrapper<AgentPersonaEntity>()
+                .eq(AgentPersonaEntity::getPersonaCode, personaCode)
+                .last("limit 1"));
+    }
 }

@@ -26,6 +26,14 @@ public interface AgentService {
 
     List<AgentRuntimeDTO> listMapAgents();
 
+    List<AgentRuntimeDTO> listPersonaCatalog();
+
+    AgentRuntimeDTO bindPersona(String personaCode);
+
+    void unbindPersona(String personaCode);
+
+    AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId);
+
     AgentRuntimeDTO get(String agentId);
 
     AgentRuntimeDTO updateStatus(String agentId, AgentStatusDTO request);
