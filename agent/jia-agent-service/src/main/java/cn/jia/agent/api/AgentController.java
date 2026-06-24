@@ -1,8 +1,10 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AbilityCompareRequestDTO;
 import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
+import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRosterSearchDTO;
@@ -12,6 +14,7 @@ import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
+import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.service.AbilityEvaluationService;
@@ -61,14 +64,24 @@ public class AgentController {
         return JsonResult.success(agentService.listMapAgents());
     }
 
+    @GetMapping("/capabilities")
+    public Object capabilities() {
+        List<AgentCapabilityDTO> capabilities = agentService.listCapabilities();
+        return JsonResult.success(capabilities);
+    }
+
     @GetMapping("/personas/catalog")
     public Object personaCatalog() {
         return JsonResult.success(agentService.listPersonaCatalog());
     }
 
     @PostMapping("/personas/{personaCode}/bind")
-    public Object bindPersona(@PathVariable String personaCode) {
-        return JsonResult.success(agentService.bindPersona(personaCode));
+    public Object bindPersona(@PathVariable String personaCode,
+            @RequestBody(required = false) AgentPersonaBindRequestDTO request) {
+        if (request == null || request.getMode() == null || request.getMode().isBlank()) {
+            return JsonResult.success(agentService.bindPersona(personaCode));
+        }
+        return JsonResult.success(agentService.bindPersona(personaCode, request.getMode()));
     }
 
     @DeleteMapping("/personas/{personaCode}/bind")
@@ -142,6 +155,17 @@ public class AgentController {
     @PostMapping("/tasks/{taskId}/assign")
     public Object assignTask(@PathVariable String taskId, @RequestBody AgentTaskAssignDTO request) {
         return JsonResult.success(agentService.assignTask(taskId, request));
+    }
+
+    @PostMapping("/tasks/{taskId}/recommend")
+    public Object recommendTaskAssignees(@PathVariable String taskId) {
+        List<AgentTaskRecommendationDTO> recommendations = agentService.recommendTaskAssignees(taskId);
+        return JsonResult.success(recommendations);
+    }
+
+    @PostMapping("/tasks/{taskId}/auto-assign")
+    public Object autoAssignTask(@PathVariable String taskId, @RequestBody(required = false) AgentTaskAssignDTO request) {
+        return JsonResult.success(agentService.autoAssignTask(taskId, request == null ? new AgentTaskAssignDTO() : request));
     }
 
     @PostMapping("/tasks/{taskId}/report")

@@ -17,6 +17,7 @@ import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentStatsDTO;
+import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
@@ -270,6 +271,83 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void listCapabilitiesIncludesOwnedAgentsAndSongjiangLeaderProfile() {
+        AgentRuntimeEntity wuYong = new AgentRuntimeEntity();
+        wuYong.setAgentId("agent-wuyong");
+        wuYong.setName("吴用");
+        wuYong.setPersonaCode("wuyong");
+        wuYong.setStatus(AgentConstants.STATUS_ONLINE);
+        wuYong.setAbilities("[\"planning\",\"analysis\"]");
+        wuYong.setClientId("jia_client");
+        wuYong.setOwnerJiacn("juyiting");
+
+        AgentPersonaEntity songjiang = persona("songjiang", "宋江", "及时雨");
+        songjiang.setSystemAgent(true);
+        songjiang.setAbilities("[\"coordination\",\"dispatch\",\"planning\",\"briefing\"]");
+
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null)).thenReturn(List.of(wuYong));
+        when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona("wuyong", "吴用", "智多星"));
+        when(agentPersonaDao.findByCode(AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE)).thenReturn(songjiang);
+
+        var result = agentService.listCapabilities();
+
+        assertEquals(2, result.size());
+        assertEquals("agent-wuyong", result.get(0).getAgentId());
+        assertTrue(result.get(0).getRoles().contains("planner"));
+        assertEquals(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, result.get(1).getAgentId());
+        assertTrue(result.get(1).getRoles().contains("leader"));
+        assertEquals("宋江首领负责议事、拆解、派令、追踪和复盘。", result.get(1).getCollaborationHint());
+    }
+
+    @Test
+    void recommendTaskAssigneesRanksByAbilityAndAvailability() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setRequiredAbilities("[\"planning\"]");
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+
+        AgentRuntimeEntity planner = runtimeAgent("agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\",\"analysis\"]");
+        AgentRuntimeEntity executor = runtimeAgent("agent-linchong", "林冲", AgentConstants.STATUS_ONLINE, "[\"execution\"]");
+        AgentRuntimeEntity busyPlanner = runtimeAgent("agent-busy", "忙碌好汉", AgentConstants.STATUS_BUSY, "[\"planning\"]");
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+                .thenReturn(List.of(executor, busyPlanner, planner));
+
+        List<AgentTaskRecommendationDTO> result = agentService.recommendTaskAssignees("task-001");
+
+        assertEquals(2, result.size());
+        assertEquals("agent-wuyong", result.getFirst().getAgent().getAgentId());
+        assertEquals(100, result.getFirst().getAbilityScore());
+        assertTrue(result.getFirst().getReason().contains("宋江首领建议"));
+        assertEquals("agent-busy", result.get(1).getAgent().getAgentId());
+    }
+
+    @Test
+    void autoAssignTaskSelectsOnlineAgentsThatCoverRequiredAbilities() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setRequiredAbilities("[\"planning\",\"execution\"]");
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+
+        AgentRuntimeEntity planner = ownedAgent("agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        AgentRuntimeEntity executor = ownedAgent("agent-linchong", "林冲", AgentConstants.STATUS_ONLINE, "[\"execution\"]");
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null)).thenReturn(List.of(planner, executor));
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(planner);
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(executor);
+
+        AgentTaskDTO result = agentService.autoAssignTask("task-001", new AgentTaskAssignDTO());
+
+        assertEquals(AgentConstants.TASK_STATUS_ASSIGNED, result.getStatus());
+        assertEquals(List.of("agent-wuyong", "agent-linchong"), result.getAssignedAgentIds());
+        ArgumentCaptor<AgentTaskMetaEntity> metaCaptor = ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
+        verify(agentTaskMetaDao).updateById(metaCaptor.capture());
+        assertEquals("[\"agent-wuyong\",\"agent-linchong\"]", metaCaptor.getValue().getAssignedAgentId());
+    }
+
+    @Test
     void archiveTaskMarksTaskArchivedWithoutUpdatingAgentRuntime() {
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setId(1L);
@@ -483,6 +561,22 @@ class AgentServiceImplTest extends BaseMockTest {
         agent.setOwnerJiacn("juyiting");
         when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId("jia_client", "juyiting", agent.getAgentId()))
                 .thenReturn(binding(agent.getAgentId(), agent.getPersonaCode() == null ? agent.getAgentId() : agent.getPersonaCode()));
+    }
+
+    private AgentRuntimeEntity ownedAgent(String agentId, String name, String status, String abilities) {
+        AgentRuntimeEntity agent = runtimeAgent(agentId, name, status, abilities);
+        markOwned(agent);
+        return agent;
+    }
+
+    private AgentRuntimeEntity runtimeAgent(String agentId, String name, String status, String abilities) {
+        AgentRuntimeEntity agent = new AgentRuntimeEntity();
+        agent.setAgentId(agentId);
+        agent.setName(name);
+        agent.setPersonaCode(agentId);
+        agent.setStatus(status);
+        agent.setAbilities(abilities);
+        return agent;
     }
 
     private AgentPersonaBindingEntity binding(String agentId, String personaCode) {

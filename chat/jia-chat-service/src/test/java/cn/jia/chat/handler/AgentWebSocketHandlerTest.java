@@ -2,6 +2,7 @@ package cn.jia.chat.handler;
 
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
@@ -22,6 +23,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -225,6 +227,37 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"actionType\":\"task_briefing\""));
         assertTrue(messages.contains("\"taskId\":\"task-001\""));
         assertTrue(messages.contains("Read the bounty task and report the next plan."));
+    }
+
+    @Test
+    void sendsCapabilityIndexToAgentSession() throws Exception {
+        stubAgentSession("session-capability", "agent-wuyong");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+
+        AgentCapabilityDTO capability = new AgentCapabilityDTO();
+        capability.setAgentId("agent-wuyong");
+        capability.setName("吴用");
+        capability.setAbilities(List.of("planning", "analysis"));
+        capability.setRoles(List.of("planner"));
+        capability.setStatus(AgentConstants.STATUS_ONLINE);
+        capability.setCollaborationHint("适合任务拆解、方案评审、风险判断和协同安排。");
+        when(agentService.listCapabilities()).thenReturn(List.of(capability));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"capability.lookup","requestId":"cap-1","agentId":"agent-wuyong"}
+                """));
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+
+        assertTrue(messages.contains("\"type\":\"agent_capability_index\""));
+        assertTrue(messages.contains("\"agentId\":\"agent-wuyong\""));
+        assertTrue(messages.contains("\"planning\""));
+        assertTrue(messages.contains("\"planner\""));
     }
 
     @Test

@@ -2,9 +2,11 @@ package cn.jia.agent.event;
 
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
+import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 
+import java.util.List;
 import java.util.Set;
 
 public interface AgentEventPublisher {
@@ -12,6 +14,9 @@ public interface AgentEventPublisher {
     }
 
     default void publishTaskEvent(String eventType, AgentTaskDTO task) {
+    }
+
+    default void publishCapabilityIndex(List<AgentCapabilityDTO> capabilities) {
     }
 
     default Set<String> connectedAgentIds() {

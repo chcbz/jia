@@ -1,5 +1,6 @@
 package cn.jia.chat.handler;
 
+import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
@@ -95,7 +96,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 "channel", CHANNEL,
                 "agentId", Optional.ofNullable(sessionAgentId(session)).orElse(""),
                 "capabilities", new String[] {"chat.stream", "chat.stop", "ping", "agent.register",
-                        "agent.status", "agent.message", "task.assign", "task.report", "task.event"}));
+                        "agent.status", "agent.message", "task.assign", "task.report", "task.event",
+                        "capability.index", "capability.lookup"}));
     }
 
     @Override
@@ -119,6 +121,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             case "agent.message.delta", "agent_message_delta" -> publishAgentMessageDelta(session, payload);
             case "task.assign", "task_assign" -> assignTask(session, payload);
             case "task.report", "task_report" -> reportTask(session, payload);
+            case "capability.lookup", "capability_lookup" -> sendCapabilityIndex(session, payload);
             default -> sendError(session, payload, "Unsupported agent channel message type: " + type);
         }
     }
@@ -256,6 +259,22 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             event.put("status", result.getStatus());
             event.put("token", result.getToken());
             sendEvent(session, "agent_registered", event);
+            sendCapabilityIndex(session, payload);
+        } catch (Exception e) {
+            sendError(session, payload, errorCode(e), e.getMessage());
+        }
+    }
+
+    private void sendCapabilityIndex(WebSocketSession session, Map<String, Object> payload) {
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            sendError(session, payload, "AGENT_SERVICE_UNAVAILABLE", "Agent service is unavailable");
+            return;
+        }
+        try {
+            Map<String, Object> event = copyTrace(payload);
+            event.put("agents", withSessionContext(session, agentService::listCapabilities));
+            sendEvent(session, "agent_capability_index", event);
         } catch (Exception e) {
             sendError(session, payload, errorCode(e), e.getMessage());
         }
@@ -532,6 +551,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     }
 
     @Override
+    public void publishCapabilityIndex(List<AgentCapabilityDTO> capabilities) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("agents", Optional.ofNullable(capabilities).orElseGet(List::of));
+        payload.put("updatedAt", System.currentTimeMillis());
+        broadcastEvent("agent_capability_index", payload);
+    }
+
+    @Override
     public AgentActionDispatchResultDTO publishAgentAction(AgentActionIntentDTO intent) {
         if (intent == null || intent.getActorAgentId() == null || intent.getActorAgentId().isBlank()) {
             AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
@@ -570,6 +597,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         putIfPresent(metadata, "reason", intent.getReason());
         putIfPresent(metadata, "autonomyLevel", intent.getAutonomyLevel());
         putIfPresent(metadata, "requiresApproval", intent.getRequiresApproval());
+        putIfPresent(metadata, "context", intent.getContext());
         metadata.put("autonomy", true);
         payload.put("metadata", metadata);
         return payload;
