@@ -32,6 +32,7 @@ import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
+import com.github.pagehelper.PageInfo;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -447,6 +448,75 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(1L, counts.get(AgentConstants.TASK_STATUS_RUNNING));
         assertEquals(0L, counts.get(AgentConstants.TASK_STATUS_COMPLETED));
         verify(agentTaskMetaDao).search(null, "planning");
+    }
+
+    @Test
+    void searchTasksMatchesKeywordAgainstEnrichedTitleAndDescription() {
+        when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
+
+        AgentTaskMetaEntity first = new AgentTaskMetaEntity();
+        first.setTaskId("1");
+        first.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        first.setRequiredAbilities("[\"planning\"]");
+
+        AgentTaskMetaEntity second = new AgentTaskMetaEntity();
+        second.setTaskId("2");
+        second.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        second.setRequiredAbilities("[\"review\"]");
+
+        TaskPlanEntity firstPlan = new TaskPlanEntity();
+        firstPlan.setName("夜探祝家庄");
+        firstPlan.setDescription("先探路，再回厅前公议");
+        TaskPlanEntity secondPlan = new TaskPlanEntity();
+        secondPlan.setName("整理案卷");
+        secondPlan.setDescription("普通归档");
+
+        when(agentTaskMetaDao.search(null, null)).thenReturn(List.of(first, second));
+        when(taskService.get(1L)).thenReturn(firstPlan);
+        when(taskService.get(2L)).thenReturn(secondPlan);
+
+        AgentTaskSearchDTO request = new AgentTaskSearchDTO();
+        request.setKeyword("祝家庄");
+
+        PageInfo<AgentTaskDTO> result = agentService.searchTasks(request);
+
+        assertEquals(1, result.getList().size());
+        assertEquals("1", result.getList().getFirst().getId());
+        assertEquals("夜探祝家庄", result.getList().getFirst().getTitle());
+        assertEquals(1L, result.getTotal());
+    }
+
+    @Test
+    void searchTasksPaginatesAfterKeywordFiltering() {
+        when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
+
+        AgentTaskMetaEntity first = new AgentTaskMetaEntity();
+        first.setTaskId("1");
+        first.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+
+        AgentTaskMetaEntity second = new AgentTaskMetaEntity();
+        second.setTaskId("2");
+        second.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+
+        TaskPlanEntity firstPlan = new TaskPlanEntity();
+        firstPlan.setName("无关榜文");
+        TaskPlanEntity secondPlan = new TaskPlanEntity();
+        secondPlan.setName("巡山榜文");
+
+        when(agentTaskMetaDao.search(null, null)).thenReturn(List.of(first, second));
+        when(taskService.get(1L)).thenReturn(firstPlan);
+        when(taskService.get(2L)).thenReturn(secondPlan);
+
+        AgentTaskSearchDTO request = new AgentTaskSearchDTO();
+        request.setKeyword("巡山");
+        request.setPageNum(1);
+        request.setPageSize(1);
+
+        PageInfo<AgentTaskDTO> result = agentService.searchTasks(request);
+
+        assertEquals(1, result.getList().size());
+        assertEquals("2", result.getList().getFirst().getId());
+        assertEquals(1L, result.getTotal());
     }
 
     @Test

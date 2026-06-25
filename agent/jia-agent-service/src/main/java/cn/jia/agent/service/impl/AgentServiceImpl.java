@@ -343,13 +343,13 @@ public class AgentServiceImpl implements AgentService {
     public PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request) {
         int pageNum = Optional.ofNullable(request.getPageNum()).orElse(1);
         int pageSize = Optional.ofNullable(request.getPageSize()).orElse(20);
-        PageHelper.startPage(pageNum, pageSize);
+        String keyword = request.getKeyword();
         List<AgentTaskDTO> tasks = agentTaskMetaDao.search(request.getStatus(), request.getAbility())
                 .stream()
-                .filter(task -> StringUtil.isBlank(request.getKeyword()) || String.valueOf(task.getTaskId()).contains(request.getKeyword()))
                 .map(this::toTaskDTO)
+                .filter(task -> matchesTaskKeyword(task, keyword))
                 .toList();
-        return PageInfo.of(tasks);
+        return pageTasks(tasks, pageNum, pageSize);
     }
 
     @Override
@@ -371,6 +371,34 @@ public class AgentServiceImpl implements AgentService {
                     counts.put(status, counts.getOrDefault(status, 0L) + 1);
                 });
         return counts;
+    }
+
+    private boolean matchesTaskKeyword(AgentTaskDTO task, String keyword) {
+        if (StringUtil.isBlank(keyword)) {
+            return true;
+        }
+        String normalizedKeyword = keyword.trim().toLowerCase();
+        return containsIgnoreCase(task.getId(), normalizedKeyword)
+                || containsIgnoreCase(task.getTitle(), normalizedKeyword)
+                || containsIgnoreCase(task.getDescription(), normalizedKeyword)
+                || containsIgnoreCase(task.getAssignedAgentName(), normalizedKeyword)
+                || task.getRequiredAbilities().stream().anyMatch(ability -> containsIgnoreCase(ability, normalizedKeyword));
+    }
+
+    private boolean containsIgnoreCase(String value, String normalizedKeyword) {
+        return value != null && value.toLowerCase().contains(normalizedKeyword);
+    }
+
+    private PageInfo<AgentTaskDTO> pageTasks(List<AgentTaskDTO> tasks, int pageNum, int pageSize) {
+        int safePageNum = Math.max(pageNum, 1);
+        int safePageSize = Math.max(pageSize, 1);
+        int fromIndex = Math.min((safePageNum - 1) * safePageSize, tasks.size());
+        int toIndex = Math.min(fromIndex + safePageSize, tasks.size());
+        PageInfo<AgentTaskDTO> pageInfo = PageInfo.of(tasks.subList(fromIndex, toIndex));
+        pageInfo.setPageNum(safePageNum);
+        pageInfo.setPageSize(safePageSize);
+        pageInfo.setTotal(tasks.size());
+        return pageInfo;
     }
 
     @Override
