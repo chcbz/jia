@@ -3,10 +3,12 @@ dependencies {
     implementation project(':agent:jia-agent-mapper')
     compileOnly project(':task:jia-task-core')
     compileOnly project(':task:jia-task-api')
+    compileOnly project(':oauth:jia-oauth-api')
     implementation project(':common:jia-common-service')
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
+    testImplementation project(':oauth:jia-oauth-api')
 }
 
 version = '1.1.2-SNAPSHOT'

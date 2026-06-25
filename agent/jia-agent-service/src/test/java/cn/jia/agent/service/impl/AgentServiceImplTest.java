@@ -30,6 +30,7 @@ import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
@@ -69,6 +70,8 @@ class AgentServiceImplTest extends BaseMockTest {
     @Mock
     ObjectProvider<TaskService> taskServiceProvider;
     @Mock
+    ObjectProvider<ApiKeyService> apiKeyServiceProvider;
+    @Mock
     TaskService taskService;
     @Mock
     AgentEventPublisher eventPublisher;
@@ -78,7 +81,7 @@ class AgentServiceImplTest extends BaseMockTest {
     void setUpAgentService() {
         EsContextHolder.setContext(new EsContext());
         agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
-                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider);
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider, apiKeyServiceProvider);
     }
 
     @Test

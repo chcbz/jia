@@ -38,6 +38,8 @@ import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.oauth.entity.OauthApiKeyEntity;
+import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.common.TaskConstants;
 import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.task.service.TaskService;
@@ -86,6 +88,7 @@ public class AgentServiceImpl implements AgentService {
     private final DialogueTemplateDao dialogueTemplateDao;
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
     private final ObjectProvider<TaskService> taskServiceProvider;
+    private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -664,7 +667,8 @@ public class AgentServiceImpl implements AgentService {
                 Files.writeString(CODEX_WS_PROFILES_FILE, defaultProfileSection(), StandardCharsets.UTF_8);
             }
             String profiles = Files.readString(CODEX_WS_PROFILES_FILE, StandardCharsets.UTF_8);
-            String section = serverProfileSection(profileId, agent, persona, workdir, codexHome, true);
+            String profileApiKey = ensureAgentApiKey();
+            String section = serverProfileSection(profileId, agent, persona, workdir, codexHome, true, profileApiKey);
             writeResult = upsertServerProfileSection(profiles, profileId, section);
             if (writeResult.changed) {
                 Files.writeString(CODEX_WS_PROFILES_FILE, writeResult.profiles, StandardCharsets.UTF_8);
@@ -711,7 +715,7 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private String serverProfileSection(String profileId, AgentRuntimeDTO agent, AgentPersonaEntity persona,
-            Path workdir, Path codexHome, boolean enabled) {
+            Path workdir, Path codexHome, boolean enabled, String apiKey) {
         return """
 
 [agent.%s]
@@ -721,7 +725,44 @@ agentName=%s
 personaName=%s
 codexHome=%s
 enabled=%s
-""".formatted(profileId, agent.getAgentId(), workdir, persona.getName(), personaDisplayTitle(persona), codexHome, enabled);
+apiKey=%s
+""".formatted(profileId, agent.getAgentId(), workdir, persona.getName(), personaDisplayTitle(persona), codexHome, enabled, apiKey);
+    }
+
+    private String ensureAgentApiKey() {
+        ApiKeyService apiKeyService = apiKeyServiceProvider.getIfAvailable();
+        if (apiKeyService == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "ApiKeyService is unavailable");
+        }
+        String clientId = resolveCurrentClientId();
+        String jiacn = resolveCurrentJiacn();
+        long now = System.currentTimeMillis();
+
+        OauthApiKeyEntity query = new OauthApiKeyEntity();
+        query.setClientId(clientId);
+        query.setJiacn(jiacn);
+        return apiKeyService.findList(query).stream()
+                .filter(key -> key.getStatus() == null || key.getStatus() == 1)
+                .filter(key -> key.getExpireTime() == null || key.getExpireTime() > now)
+                .filter(key -> !StringUtil.isBlank(key.getApiKey()))
+                .findFirst()
+                .map(OauthApiKeyEntity::getApiKey)
+                .orElseGet(() -> createAgentApiKey(apiKeyService, clientId, jiacn));
+    }
+
+    private String createAgentApiKey(ApiKeyService apiKeyService, String clientId, String jiacn) {
+        OauthApiKeyEntity apiKey = new OauthApiKeyEntity();
+        apiKey.setClientId(clientId);
+        apiKey.setJiacn(jiacn);
+        apiKey.setApiKey("cdx_" + UUID.randomUUID().toString().replace("-", ""));
+        apiKey.setKeyName("codex-ws-agent");
+        apiKey.setStatus(1);
+        apiKey.setDescription("Auto-created for Codex WebSocket agent profile binding");
+        OauthApiKeyEntity saved = apiKeyService.create(apiKey);
+        if (saved == null || StringUtil.isBlank(saved.getApiKey())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "Failed to create Codex agent API key");
+        }
+        return saved.getApiKey();
     }
 
     private ServerProfileWriteResult upsertServerProfileSection(String profiles, String profileId, String section) {
