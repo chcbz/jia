@@ -1,5 +1,6 @@
 package cn.jia.chat.api;
 
+import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -102,9 +103,10 @@ public class ChatController {
                 conversationId,
                 () -> createBuiltinSongJiangStream(chatMessage, conversationId, needSummary, summary)
         );
+        boolean skipAdvisorUserPersistence = agentDelivery.attempted();
         Flux<String> aiStream = agentDelivery.delivered()
                 ? Flux.empty()
-                : createAIStream(chatMessage, conversationId, needSummary, summary);
+                : createAIStream(chatMessage, conversationId, needSummary, summary, skipAdvisorUserPersistence);
 
         return Flux.create(emitter -> {
             Flux<String> backendStream = agentDelivery.stream()
@@ -172,7 +174,8 @@ public class ChatController {
                 : CONVERSATION_TYPE_NORMAL;
     }
 
-    private Flux<String> createAIStream(ChatMessageDTO chatMessage, String conversationId, boolean needSummary, StringBuilder summary) {
+    private Flux<String> createAIStream(ChatMessageDTO chatMessage, String conversationId, boolean needSummary,
+                                        StringBuilder summary, boolean skipAdvisorUserPersistence) {
         String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
         String clientId = Optional.ofNullable(EsContextHolder.getContext().getClientId()).orElse("jia_client");
         String filterExpression = "metadata.jiacn == '" + jiacn + "' AND role == 'ASSISTANT'";
@@ -187,6 +190,7 @@ public class ChatController {
                         .param("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse(""))
                         .param("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse(""))
                         .param("selectedAgentId", Optional.ofNullable(juyitingAgentRelayService.selectedAgentId(chatMessage)).orElse(""))
+                        .param(DatabaseChatMemoryAdvisor.SKIP_USER_MESSAGE_PERSISTENCE, skipAdvisorUserPersistence)
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, filterExpression))
                 .messages()
                 .stream().content()
@@ -207,6 +211,8 @@ public class ChatController {
                         .param("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"))
                         .param("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"))
                         .param("selectedAgentId", builtinHallAgentSupport.defaultAgentId())
+                        .param(DatabaseChatMemoryAdvisor.SKIP_USER_MESSAGE_PERSISTENCE, true)
+                        .param(DatabaseChatMemoryAdvisor.SKIP_ASSISTANT_MESSAGE_PERSISTENCE, true)
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION,
                                 "metadata.jiacn == '" + Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous") + "' AND role == 'ASSISTANT'"))
                 .messages()

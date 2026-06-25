@@ -51,6 +51,8 @@ import reactor.core.scheduler.Scheduler;
 public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
 
     public static final String USER_MESSAGE = "user_message";
+    public static final String SKIP_USER_MESSAGE_PERSISTENCE = "skipUserMessagePersistence";
+    public static final String SKIP_ASSISTANT_MESSAGE_PERSISTENCE = "skipAssistantMessagePersistence";
 
     private static final String MEMORY_TEMPLATE = """
         {instructions}
@@ -134,7 +136,9 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
                 ));
 
         // 保存用户消息到数据库
-        saveMessage(request.prompt().getUserMessage(), request.context());
+        if (!Boolean.TRUE.equals(request.context().get(SKIP_USER_MESSAGE_PERSISTENCE))) {
+            saveMessage(request.prompt().getUserMessage(), request.context());
+        }
 
         // 更新上下文中的用户消息
         return request.mutate()
@@ -154,11 +158,13 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
                     .toList();
         }
         
-        // 保存 AI 响应消息到数据库
-        for (Message message : assistantMessages) {
-            if (message instanceof AssistantMessage assistantMessage
-                    && StringUtil.isNotBlank(assistantMessage.getText())) {
-                saveMessage(assistantMessage, chatClientResponse.context());
+        if (!Boolean.TRUE.equals(chatClientResponse.context().get(SKIP_ASSISTANT_MESSAGE_PERSISTENCE))) {
+            // 保存 AI 响应消息到数据库
+            for (Message message : assistantMessages) {
+                if (message instanceof AssistantMessage assistantMessage
+                        && StringUtil.isNotBlank(assistantMessage.getText())) {
+                    saveMessage(assistantMessage, chatClientResponse.context());
+                }
             }
         }
         
