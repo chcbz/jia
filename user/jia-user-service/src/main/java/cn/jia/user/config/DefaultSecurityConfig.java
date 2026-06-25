@@ -91,7 +91,7 @@ public class DefaultSecurityConfig {
                     if (CollectionUtil.isNotNullOrEmpty(ignoreUris)) {
                         authorize.requestMatchers(ignoreUris.toArray(new String[0])).permitAll();
                     }
-                    authorize.requestMatchers("/actuator/health", "/actuator/health/**",
+                    authorize.requestMatchers("/actuator", "/actuator/**",
                                     "/login/**", "/oauth/**", "/favicon.ico").permitAll()
                             .anyRequest().authenticated();
                 })
