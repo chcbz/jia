@@ -149,4 +149,10 @@ public class KefuServiceImpl implements KefuService {
 		}
 		return false;
 	}
+
+	@Override
+	public boolean isWxActive(String jiacn) {
+		MpUserEntity mpUser = mpUserService.findByJiacn(jiacn);
+		return mpUser != null && redisService.get(ACTIVE_MP_USER + mpUser.getOpenId()) != null;
+	}
 }

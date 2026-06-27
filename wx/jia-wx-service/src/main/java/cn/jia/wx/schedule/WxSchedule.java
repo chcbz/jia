@@ -2,6 +2,7 @@ package cn.jia.wx.schedule;
 
 import cn.jia.core.entity.DelayObj;
 import cn.jia.core.exception.EsErrorConstants;
+import cn.jia.core.common.EsConstants;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.JsonUtil;
@@ -53,11 +54,17 @@ public class WxSchedule {
 	public void sendVote() {
 		KefuMsgSubscribeEntity subscribe = new KefuMsgSubscribeEntity();
 		subscribe.setTypeCode(KefuMsgTypeCode.VOTE.getCode());
+		subscribe.setStatus(EsConstants.COMMON_ENABLE);
+		subscribe.setWxRxFlag(EsConstants.COMMON_YES);
 		List<KefuMsgSubscribeEntity> subscribeList = kefuMsgSubscribeService.findList(subscribe);
 		for (KefuMsgSubscribeEntity kefuMsgSubscribe : subscribeList) {
 			KefuMsgTypeEntity kefuMsgType =
 					kefuMsgTypeService.findOne(new KefuMsgTypeEntity().setTypeCode(kefuMsgSubscribe.getTypeCode()));
 			MatVoteQuestionVO question = voteService.findOneQuestion(kefuMsgSubscribe.getJiacn());
+			if (kefuMsgType == null || question == null) {
+				log.warn("Skip vote notice, msgType or question missing. jiacn={}", kefuMsgSubscribe.getJiacn());
+				continue;
+			}
 			String title = question.getTitle();
 			StringBuilder content = new StringBuilder();
 			for (MatVoteItemEntity item : question.getItems()) {
@@ -67,9 +74,10 @@ public class WxSchedule {
 				content.append(item.getOpt()).append(". ").append(item.getContent());
 			}
 			try {
+				boolean active = kefuService.isWxActive(kefuMsgSubscribe.getJiacn());
 				boolean sendSuccess = kefuService.sendWxTemplate(kefuMsgType, kefuMsgSubscribe.getJiacn(), title,
 						content.toString());
-				if (sendSuccess) {
+				if (sendSuccess && active) {
 					redisService.set("vote_" + kefuMsgSubscribe.getJiacn(), String.valueOf(question.getId()),
 							2L, TimeUnit.HOURS);
 				}

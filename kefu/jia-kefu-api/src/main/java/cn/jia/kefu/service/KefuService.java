@@ -12,4 +12,6 @@ public interface KefuService {
     void sendTemplate(KefuMsgTypeEntity kefuMsgType, KefuMsgSubscribeEntity item, String... attr) throws Exception;
 
     boolean sendWxTemplate(KefuMsgTypeEntity kefuMsgType, String jiacn, String... attr) throws Exception;
+
+    boolean isWxActive(String jiacn);
 }

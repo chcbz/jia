@@ -1,6 +1,7 @@
 package cn.jia.wx.api;
 
 import cn.jia.base.service.DictService;
+import cn.jia.core.common.EsConstants;
 import cn.jia.core.common.EsHandler;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -10,6 +11,9 @@ import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.util.*;
 import cn.jia.dwz.service.DwzService;
+import cn.jia.kefu.entity.KefuMsgSubscribeEntity;
+import cn.jia.kefu.entity.KefuMsgTypeCode;
+import cn.jia.kefu.service.KefuMsgSubscribeService;
 import cn.jia.mat.entity.MatVoteItemEntity;
 import cn.jia.mat.entity.MatVoteQuestionEntity;
 import cn.jia.mat.entity.MatVoteQuestionVO;
@@ -98,6 +102,8 @@ public class WxMpController {
     private MatVoteService voteService;
     @Autowired(required = false)
     private DwzService dwzService;
+    @Autowired(required = false)
+    private KefuMsgSubscribeService kefuMsgSubscribeService;
 
     /**
      * 微信公众号接口认证
@@ -159,6 +165,17 @@ public class WxMpController {
         }
         // 将当前用户设置为活跃用户
         redisService.set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
+        if (WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())
+                && "TD".equalsIgnoreCase(message.getContent())) {
+            WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
+            outMessage.setCreateTime(message.getCreateTime());
+            outMessage.setFromUserName(message.getToUser());
+            outMessage.setToUserName(message.getFromUser());
+            unsubscribeVote(mpUser);
+            redisService.delete("vote_" + mpUser.getJiacn());
+            outMessage.setContent("退订成功咯！哼！！");
+            return outMessage.toXml();
+        }
         //关注
         if (WxConsts.XmlMsgType.EVENT.equals(message.getMsgType()) && WxConsts.EventType.SUBSCRIBE.equals(message.getEvent())) {
             WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
@@ -337,44 +354,33 @@ public class WxMpController {
             outMessage.setFromUserName(message.getToUser());
             outMessage.setToUserName(message.getFromUser());
 
-            if ("TD".equalsIgnoreCase(message.getContent())) {
-                List<String> subscribe = new ArrayList<>(Arrays.asList(mpUser.getSubscribeItems().split(",")));
-                subscribe.remove(UserConstants.SUBSCRIBE_VOTE);
-                MpUserEntity upUser = new MpUserEntity();
-                upUser.setId(mpUser.getId());
-                upUser.setSubscribeItems(Joiner.on(",").join(subscribe));
-                mpUserService.update(upUser);
-                outMessage.setContent("退订成功咯！哼！！");
+            Long questionId = Long.parseLong(obj);
+            MatVoteQuestionEntity voteQuestion = voteService.findQuestion(questionId);
+            MatVoteTickEntity voteTick = new MatVoteTickEntity();
+            voteTick.setQuestionId(questionId);
+            voteTick.setOpt(message.getContent());
+            voteTick.setJiacn(mpUser.getJiacn());
+            boolean tick = voteService.tick(voteTick);
+            if (tick) {
+                outMessage.setContent("恭喜你，答案正确，增加" + voteQuestion.getPoint() + "积分！");
+                pointService.add(mpUser.getJiacn(), voteQuestion.getPoint(), PointConstants.POINT_TYPE_VOTE);
+                //随机发放红包
+                WxPaySendRedpackRequest sendRedpack = new WxPaySendRedpackRequest();
+                sendRedpack.setMchBillNo(String.valueOf(DateUtil.nowTime()));
+                sendRedpack.setClientIp(HttpUtil.getIpAddr(request));
+                sendRedpack.setActName("奖励红包");
+                sendRedpack.setReOpenid(message.getFromUser());
+                sendRedpack.setSceneId("PRODUCT_2");
+                sendRedpack.setWishing("幸运之神眷顾着你");
+                sendRedpack.setRemark("多多关注我们，每天都有不一样的收获!");
+                sendRedpack.setSendName(mpInfo.getName());
+                sendRedpack.setAmtType("ALL_RAND");
+                sendRedpack.setTotalAmount(200 + Integer.parseInt(DataUtil.getRandom(true, 3)));
+                sendRedpack.setTotalNum(10);
+                sendRedpack.setWxAppid(appid);
+                payInfoService.findWxPayService(request).getRedpackService().sendRedpack(sendRedpack);
             } else {
-                Long questionId = Long.parseLong(obj);
-                MatVoteQuestionEntity voteQuestion = voteService.findQuestion(questionId);
-                MatVoteTickEntity voteTick = new MatVoteTickEntity();
-                voteTick.setQuestionId(questionId);
-                voteTick.setOpt(message.getContent());
-                voteTick.setJiacn(mpUser.getJiacn());
-                boolean tick = voteService.tick(voteTick);
-                if (tick) {
-                    outMessage.setContent("恭喜你，答案正确，增加" + voteQuestion.getPoint() + "积分！");
-                    pointService.add(mpUser.getJiacn(), voteQuestion.getPoint(), PointConstants.POINT_TYPE_VOTE);
-                    //随机发放红包
-                    WxPaySendRedpackRequest sendRedpack = new WxPaySendRedpackRequest();
-                    sendRedpack.setMchBillNo(String.valueOf(DateUtil.nowTime()));
-                    sendRedpack.setClientIp(HttpUtil.getIpAddr(request));
-                    sendRedpack.setActName("奖励红包");
-                    sendRedpack.setReOpenid(message.getFromUser());
-                    sendRedpack.setSceneId("PRODUCT_2");
-                    sendRedpack.setWishing("幸运之神眷顾着你");
-                    sendRedpack.setRemark("多多关注我们，每天都有不一样的收获!");
-                    sendRedpack.setSendName(mpInfo.getName());
-                    sendRedpack.setAmtType("ALL_RAND");
-                    sendRedpack.setTotalAmount(200 + Integer.parseInt(DataUtil.getRandom(true, 3)));
-                    sendRedpack.setTotalNum(10);
-                    sendRedpack.setWxAppid(appid);
-                    payInfoService.findWxPayService(request).getRedpackService().sendRedpack(sendRedpack);
-                } else {
-                    outMessage.setContent("很遗憾，回答错误，正确答案是" + voteQuestion.getOpt() + ",下次继续努力！");
-                }
-
+                outMessage.setContent("很遗憾，回答错误，正确答案是" + voteQuestion.getOpt() + ",下次继续努力！");
             }
             redisService.delete("vote_" + mpUser.getJiacn());
             return outMessage.toXml();
@@ -876,5 +882,29 @@ public class WxMpController {
         result.setPageNum(list.getPageNum());
         result.setTotal(list.getTotal());
         return result;
+    }
+
+    private void unsubscribeVote(MpUserEntity mpUser) {
+        if (StringUtil.isNotEmpty(mpUser.getSubscribeItems())) {
+            List<String> subscribe = new ArrayList<>(Arrays.asList(mpUser.getSubscribeItems().split(",")));
+            subscribe.remove(UserConstants.SUBSCRIBE_VOTE);
+            MpUserEntity upUser = new MpUserEntity();
+            upUser.setId(mpUser.getId());
+            upUser.setSubscribeItems(Joiner.on(",").join(subscribe));
+            mpUserService.update(upUser);
+        }
+        if (kefuMsgSubscribeService == null) {
+            return;
+        }
+        KefuMsgSubscribeEntity subscribe = kefuMsgSubscribeService.findOne(new KefuMsgSubscribeEntity()
+                .setTypeCode(KefuMsgTypeCode.VOTE.getCode())
+                .setJiacn(mpUser.getJiacn()));
+        if (subscribe != null) {
+            KefuMsgSubscribeEntity upSubscribe = new KefuMsgSubscribeEntity();
+            upSubscribe.setId(subscribe.getId());
+            upSubscribe.setStatus(EsConstants.COMMON_DISABLE);
+            upSubscribe.setWxRxFlag(EsConstants.COMMON_NO);
+            kefuMsgSubscribeService.update(upSubscribe);
+        }
     }
 }
