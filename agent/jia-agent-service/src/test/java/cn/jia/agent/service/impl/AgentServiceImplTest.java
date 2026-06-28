@@ -26,10 +26,12 @@ import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskNoteEntity;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
+import cn.jia.agent.entity.AgentPersonaBindResultDTO;
 import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
 import com.github.pagehelper.PageInfo;
@@ -72,6 +74,8 @@ class AgentServiceImplTest extends BaseMockTest {
     ObjectProvider<TaskService> taskServiceProvider;
     @Mock
     ObjectProvider<ApiKeyService> apiKeyServiceProvider;
+    @Mock
+    ApiKeyService apiKeyService;
     @Mock
     TaskService taskService;
     @Mock
@@ -301,6 +305,23 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, result.get(1).getAgentId());
         assertTrue(result.get(1).getRoles().contains("leader"));
         assertEquals("宋江首领负责议事、拆解、派令、追踪和复盘。", result.get(1).getCollaborationHint());
+    }
+
+    @Test
+    void localPersonaBindingReturnsApiKeyForAgentSetup() {
+        AgentPersonaEntity persona = persona("husanniang", "扈三娘", "一丈青");
+        OauthApiKeyEntity apiKey = new OauthApiKeyEntity();
+        apiKey.setApiKey("cdx_test_key");
+        apiKey.setStatus(1);
+
+        when(agentPersonaDao.findByCode("husanniang")).thenReturn(persona);
+        when(apiKeyServiceProvider.getIfAvailable()).thenReturn(apiKeyService);
+        when(apiKeyService.findList(any(OauthApiKeyEntity.class))).thenReturn(List.of(apiKey));
+
+        AgentPersonaBindResultDTO result = agentService.bindPersona("husanniang", "local");
+
+        assertEquals("cdx_test_key", result.getApiKey());
+        assertTrue(result.getEnvExample().contains("OPENCLAW_API_KEY=cdx_test_key"));
     }
 
     @Test

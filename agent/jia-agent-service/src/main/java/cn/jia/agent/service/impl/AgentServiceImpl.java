@@ -685,6 +685,7 @@ public class AgentServiceImpl implements AgentService {
         Path workdir = AGENT_CLIENTS_DIR.resolve(safePathName(agent.getAgentId()));
         Path codexHome = CODEX_WS_AGENT_DIR.resolve(".codex-" + profileId);
         ServerProfileWriteResult writeResult;
+        String profileApiKey;
         try {
             Files.createDirectories(workdir);
             Files.createDirectories(codexHome);
@@ -695,7 +696,7 @@ public class AgentServiceImpl implements AgentService {
                 Files.writeString(CODEX_WS_PROFILES_FILE, defaultProfileSection(), StandardCharsets.UTF_8);
             }
             String profiles = Files.readString(CODEX_WS_PROFILES_FILE, StandardCharsets.UTF_8);
-            String profileApiKey = ensureAgentApiKey();
+            profileApiKey = ensureAgentApiKey();
             String section = serverProfileSection(profileId, agent, persona, workdir, codexHome, true, profileApiKey);
             writeResult = upsertServerProfileSection(profiles, profileId, section);
             if (writeResult.changed) {
@@ -706,6 +707,7 @@ public class AgentServiceImpl implements AgentService {
         }
 
         AgentPersonaBindResultDTO result = baseBindResult(agent, BIND_MODE_SERVER, profileId, workdir, codexHome);
+        result.setApiKey(profileApiKey);
         result.setProfilesFile(CODEX_WS_PROFILES_FILE.toString());
         result.setServerProfileAlreadyExists(writeResult.existed);
         result.setServerProfileCreated(!writeResult.existed);
@@ -858,18 +860,20 @@ apiKey=%s
         Path workdir = Path.of("$HOME/cyf-agent-clients").resolve(safePathName(agent.getAgentId()));
         Path codexHome = Path.of("$HOME/.codex-" + profileId);
         AgentPersonaBindResultDTO result = baseBindResult(agent, BIND_MODE_LOCAL, profileId, workdir, codexHome);
+        String apiKey = ensureAgentApiKey();
         String wsUrl = Optional.ofNullable(System.getenv("WS_URL"))
                 .filter(value -> !StringUtil.isBlank(value))
                 .orElse("ws://<当前服务地址>:10018/ws/agent/channel");
+        result.setApiKey(apiKey);
         result.setMessage("已入名册，请在本机安装 codex-ws-agent 并用下列配置连接");
         result.setEnvExample("""
 WS_URL=%s
-OPENCLAW_API_KEY=<向管理员获取 API Key>
+OPENCLAW_API_KEY=%s
 DEFAULT_CODEX_PROFILE=%s
 CODEX_PROFILES_FILE=$PWD/codex-profiles.conf
 HEARTBEAT_MS=30000
 RECONNECT_MAX_MS=1800000
-""".formatted(wsUrl, profileId).stripTrailing());
+""".formatted(wsUrl, apiKey, profileId).stripTrailing());
         result.setProfileExample((defaultProfileSection() + """
 
 [agent.%s]

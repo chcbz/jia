@@ -22,6 +22,7 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
+import cn.jia.core.security.AllowSensitiveOutput;
 import com.github.pagehelper.PageInfo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -76,6 +77,7 @@ public class AgentController {
     }
 
     @PostMapping("/personas/{personaCode}/bind")
+    @AllowSensitiveOutput(reason = "persona binding returns the codex-ws-agent API key needed for local setup")
     public Object bindPersona(@PathVariable String personaCode,
             @RequestBody(required = false) AgentPersonaBindRequestDTO request) {
         if (request == null || request.getMode() == null || request.getMode().isBlank()) {
