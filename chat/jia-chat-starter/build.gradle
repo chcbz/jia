@@ -7,7 +7,6 @@ dependencies {
 	implementation(libs.spring.boot.starter.elasticsearch)
 	implementation(libs.spring.boot.starter.data.redis)
 	implementation libs.spring.boot.starter.websocket
-	implementation (libs.spring.ai.starter.model.zhipuai)
 	implementation libs.spring.ai.starter.model.deepseek
 	implementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 }

@@ -13,6 +13,7 @@ import org.springframework.ai.chat.client.advisor.api.BaseChatMemoryAdvisor;
 import org.springframework.ai.chat.messages.AbstractMessage;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.util.Assert;
@@ -112,7 +113,8 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
 
     @Override
     public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
-        String conversationId = getConversationId(request.context(), this.defaultConversationId);
+        request.context().putIfAbsent(ChatMemory.CONVERSATION_ID, this.defaultConversationId);
+        String conversationId = getConversationId(request.context());
         
         // 获取用户消息
         String userMessageText = Optional.of(request.prompt().getUserMessage())
@@ -190,7 +192,8 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
      * 保存消息到数据库
      */
     private void saveMessage(Message message, Map<String, Object> context) {
-        String conversationId = getConversationId(context, defaultConversationId);
+        context.putIfAbsent(ChatMemory.CONVERSATION_ID, defaultConversationId);
+        String conversationId = getConversationId(context);
         try {
             ChatMessageEntity entity = new ChatMessageEntity();
             entity.init4Creation();

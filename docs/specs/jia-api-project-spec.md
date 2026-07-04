@@ -7,7 +7,7 @@ Jia 是一个基于 Spring Cloud 的微服务 DevOps 云服务管理框架，提
 - **当前版本**: 1.1.2-SNAPSHOT
 - **Git仓库**: https://gitee.com/chcbz/jia.git
 - **基础包名**: cn.jia
-- **最后更新**: 2026-04-24
+- **最后更新**: 2026-07-04
 
 ## 技术栈
 
@@ -45,6 +45,7 @@ Jia 是一个基于 Spring Cloud 的微服务 DevOps 云服务管理框架，提
 | dwz | 短网址 | api, core, mapper, service, starter | common |
 | wx | 微信 | api, core, mapper, service | common |
 | chat | 聊天 | api, core, mapper, service, starter | common, task, elasticsearch |
+| agent | 多Agent协作 | api, core, mapper, service | common |
 
 ### 工具模块
 
@@ -236,7 +237,7 @@ public class XxxErrorConstants extends EsErrorConstants {
 
 ```groovy
 dependencies {
-    implementation 'cn.jia:jia-{module}-starter:1.1.2-SNAPSHOT'
+    implementation 'cn.jia:jia-{module}-starter:1.1.3-SNAPSHOT'
 }
 ```
 

@@ -101,7 +101,8 @@ public class CustomerVectorStoreChatMemoryAdvisor implements BaseChatMemoryAdvis
 
     @Override
     public ChatClientRequest before(ChatClientRequest request, AdvisorChain advisorChain) {
-        String conversationId = getConversationId(request.context(), this.defaultConversationId);
+        request.context().putIfAbsent(ChatMemory.CONVERSATION_ID, this.defaultConversationId);
+        String conversationId = getConversationId(request.context());
         String query = Optional.of(request.prompt().getUserMessage()).map(AbstractMessage::getText).orElse("");
         int topK = getChatMemoryTopK(request.context());
         String filter = DOCUMENT_METADATA_CONVERSATION_ID + "=='" + conversationId + "'";
@@ -150,9 +151,9 @@ public class CustomerVectorStoreChatMemoryAdvisor implements BaseChatMemoryAdvis
                     .map(g -> (Message) g.getOutput())
                     .toList();
         }
-        this.vectorStore.write(toDocuments(assistantMessages,
-                this.getConversationId(chatClientResponse.context(), this.defaultConversationId),
-                chatClientResponse.context()));
+                chatClientResponse.context().putIfAbsent(ChatMemory.CONVERSATION_ID, this.defaultConversationId);
+        String conversationId = this.getConversationId(chatClientResponse.context());
+        this.vectorStore.write(toDocuments(assistantMessages, conversationId, chatClientResponse.context()));
         return chatClientResponse;
     }
 
@@ -206,7 +207,7 @@ public class CustomerVectorStoreChatMemoryAdvisor implements BaseChatMemoryAdvis
 
         private Integer defaultTopK = DEFAULT_TOP_K;
 
-        private String conversationId = ChatMemory.DEFAULT_CONVERSATION_ID;
+        private String conversationId = ChatMemory.CONVERSATION_ID;
 
         private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
 

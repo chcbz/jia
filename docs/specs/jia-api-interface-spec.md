@@ -17,6 +17,7 @@
 | User 用户模块 | 80 | [interfaces/jia-user-interface-spec.md](interfaces/jia-user-interface-spec.md) |
 | Workflow 工作流模块 | 25 | [interfaces/jia-workflow-interface-spec.md](interfaces/jia-workflow-interface-spec.md) |
 | WX 微信模块 | 57 | [interfaces/jia-wx-interface-spec.md](interfaces/jia-wx-interface-spec.md) |
+| Agent 多Agent协作模块 | 33 | [interfaces/jia-agent-interface-spec.md](interfaces/jia-agent-interface-spec.md) |
 
 ## 全局约定
 
