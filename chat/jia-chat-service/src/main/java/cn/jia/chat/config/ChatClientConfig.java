@@ -19,6 +19,8 @@ import org.springaicommunity.agent.tools.task.TaskTool;
 import org.springaicommunity.agent.tools.task.claude.ClaudeSubagentType;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
+import cn.jia.chat.tool.TaskTools;
+import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
@@ -41,7 +43,8 @@ public class ChatClientConfig {
     @Bean
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             ObjectProvider<McpSyncClient> mcpSyncClientsProvider, MemoryRepository memoryRepository,
-            ChatMessageDao chatMessageDao) {
+            ChatMessageDao chatMessageDao, TaskTools taskTools) {
+        ToolCallback[] taskToolCallbacks = ToolCallbacks.from(taskTools);
         List<McpSyncClient> mcpSyncClients = mcpSyncClientsProvider.orderedStream().toList();
         // 使用 LongTermMemoryAdvisor 实现长效记忆检索(带会话权重)
         LongTermMemoryAdvisor longTermMemoryAdvisor = LongTermMemoryAdvisor.builder(memoryRepository)
@@ -73,8 +76,8 @@ public class ChatClientConfig {
         } else {
             log.info("MCP tool callbacks are disabled for ChatClient");
         }
-        builder = builder
-                .defaultToolCallbacks(taskTool);
+        builder = builder.defaultTools(taskTool);
+        builder = builder.defaultTools((Object[]) taskToolCallbacks);
         if (!skillsDirectories.isEmpty()) {
             builder = builder.defaultToolCallbacks(SkillsTool.builder().addSkillsDirectories(skillsDirectories).build());
         } else {

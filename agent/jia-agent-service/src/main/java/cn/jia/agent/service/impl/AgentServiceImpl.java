@@ -1046,7 +1046,7 @@ codexTimeoutMs=900000
             dto.setName("宋江");
             dto.setPersonaName("宋江");
             dto.setTitle("及时雨");
-            dto.setAbilities(List.of("coordination", "dispatch", "planning", "briefing"));
+            dto.setAbilities(List.of("coordination", "dispatch", "planning", "briefing", "task_management"));
         }
         return dto;
     }

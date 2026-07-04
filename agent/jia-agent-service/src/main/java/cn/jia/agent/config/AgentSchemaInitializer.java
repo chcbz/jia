@@ -162,7 +162,7 @@ public class AgentSchemaInitializer implements InitializingBean {
 
     private String abilities(PersonaSeed seed) {
         if ("songjiang".equals(seed.code())) {
-            return "[\"coordination\",\"dispatch\",\"planning\",\"briefing\"]";
+            return "[\"coordination\",\"dispatch\",\"planning\",\"briefing\",\"task_management\"]";
         }
         if (seed.rankNo() <= 36) {
             return "[\"strategy\",\"execution\",\"battle\"]";
