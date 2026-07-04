@@ -62,7 +62,7 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
     @Override
     public int getOrder() {
         // 在 DatabaseChatMemoryAdvisor 之后执行
-        return Advisor.DEFAULT_CHAT_MEMORY_PRECEDENCE_ORDER + 100;
+        return Advisor.DEFAULT_CHAT_MEMORY_PRECEDENCE_ORDER + 50;
     }
 
     @Override

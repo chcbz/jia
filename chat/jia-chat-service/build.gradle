@@ -7,6 +7,9 @@ dependencies {
 	compileOnly project(':oauth:jia-oauth-api')
 	implementation project(':task:jia-task-core')
     implementation project(':task:jia-task-api')
+	compileOnly project(':point:jia-point-api')
+	compileOnly project(':kefu:jia-kefu-api')
+	compileOnly project(':material:jia-material-api')
 	implementation libs.spring.boot.starter.webflux
 	implementation libs.spring.ai.starter.mcp.client
 	compileOnly libs.spring.ai.starter.model.deepseek
@@ -16,6 +19,7 @@ dependencies {
 //	implementation libs.spring.ai.starter.vector.store.elasticsearch
 	// implementation 'org.springframework.ai:spring-ai-starter-vector-store-redis'
 	compileOnly libs.spring.ai.vector.store.advisor
+	implementation libs.spring.ai.starter.tool.search.advisor
 	implementation libs.spring.ai.agent.utils
 	compileOnly libs.spring.boot.starter.websocket
 	compileOnly libs.spring.security.oauth2.client

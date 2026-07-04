@@ -190,8 +190,8 @@ public class SharedDependencyManagementPlugin implements Plugin<Settings> {
                             catalog.library("spring-ai-starter-model-ollama", "org.springframework.ai", "spring-ai-starter-model-ollama").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-vector-store-elasticsearch", "org.springframework.ai", "spring-ai-starter-vector-store-elasticsearch").versionRef("spring-ai");
                             catalog.library("spring-ai-starter-vector-store-redis", "org.springframework.ai", "spring-ai-starter-vector-store-redis").versionRef("spring-ai");
-                            catalog.library("spring-ai-advisors-vector-store", "org.springframework.ai", "spring-ai-advisors-vector-store").versionRef("spring-ai");
                             catalog.library("spring-ai-vector-store-advisor", "org.springframework.ai", "spring-ai-vector-store-advisor").versionRef("spring-ai");
+                            catalog.library("spring-ai-starter-tool-search-advisor", "org.springframework.ai", "spring-ai-starter-tool-search-advisor").versionRef("spring-ai");
                             catalog.library("spring-ai-agent-utils", "org.springaicommunity", "spring-ai-agent-utils").versionRef("spring-ai-agent-utils");
                             catalog.library("jackson-databind", "tools.jackson.core", "jackson-databind").versionRef("jackson-databind");
                             catalog.library("jackson-annotations", "com.fasterxml.jackson.core", "jackson-annotations").versionRef("jackson-annotations");

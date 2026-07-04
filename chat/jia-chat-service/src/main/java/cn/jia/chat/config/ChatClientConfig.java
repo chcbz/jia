@@ -10,6 +10,12 @@ import cn.jia.chat.advisor.LongTermMemoryAdvisor;
 import cn.jia.chat.advisor.RequestResponseAdvisor;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.memory.MemoryRepository;
+import cn.jia.chat.tool.AgentTools;
+import cn.jia.chat.tool.ChatTools;
+import cn.jia.chat.tool.KefuTools;
+import cn.jia.chat.tool.MaterialTools;
+import cn.jia.chat.tool.PointTools;
+import cn.jia.chat.tool.TaskTools;
 import org.springaicommunity.agent.tools.GrepTool;
 import org.springaicommunity.agent.tools.ShellTools;
 import org.springaicommunity.agent.tools.SkillsTool;
@@ -19,7 +25,6 @@ import org.springaicommunity.agent.tools.task.TaskTool;
 import org.springaicommunity.agent.tools.task.claude.ClaudeSubagentType;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
-import cn.jia.chat.tool.TaskTools;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallback;
@@ -43,10 +48,15 @@ public class ChatClientConfig {
     @Bean
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             ObjectProvider<McpSyncClient> mcpSyncClientsProvider, MemoryRepository memoryRepository,
-            ChatMessageDao chatMessageDao, TaskTools taskTools) {
+            ChatMessageDao chatMessageDao, TaskTools taskTools,
+            ObjectProvider<AgentTools> agentToolsProvider,
+            ObjectProvider<PointTools> pointToolsProvider,
+            ObjectProvider<MaterialTools> materialToolsProvider,
+            ObjectProvider<KefuTools> kefuToolsProvider,
+            ObjectProvider<ChatTools> chatToolsProvider) {
         ToolCallback[] taskToolCallbacks = ToolCallbacks.from(taskTools);
         List<McpSyncClient> mcpSyncClients = mcpSyncClientsProvider.orderedStream().toList();
-        // 使用 LongTermMemoryAdvisor 实现长效记忆检索(带会话权重)
+        // 使用 LongTermMemoryAdvisor 实现长效记忆检索 带会话权重
         LongTermMemoryAdvisor longTermMemoryAdvisor = LongTermMemoryAdvisor.builder(memoryRepository)
                 .memoryTopK(2)
                 .similarityThreshold(0.75)
@@ -82,6 +92,27 @@ public class ChatClientConfig {
             builder = builder.defaultToolCallbacks(SkillsTool.builder().addSkillsDirectories(skillsDirectories).build());
         } else {
             log.warn("No valid skill directories configured; SkillsTool is disabled for ChatClient");
+        }
+        // Register business module tools (optional, available when their service modules are present)
+        AgentTools agentTools = agentToolsProvider.getIfAvailable();
+        if (agentTools != null) {
+            builder = builder.defaultTools(ToolCallbacks.from(agentTools));
+        }
+        PointTools pointTools = pointToolsProvider.getIfAvailable();
+        if (pointTools != null) {
+            builder = builder.defaultTools(ToolCallbacks.from(pointTools));
+        }
+        MaterialTools materialTools = materialToolsProvider.getIfAvailable();
+        if (materialTools != null) {
+            builder = builder.defaultTools(ToolCallbacks.from(materialTools));
+        }
+        KefuTools kefuTools = kefuToolsProvider.getIfAvailable();
+        if (kefuTools != null) {
+            builder = builder.defaultTools(ToolCallbacks.from(kefuTools));
+        }
+        ChatTools chatTools = chatToolsProvider.getIfAvailable();
+        if (chatTools != null) {
+            builder = builder.defaultTools(ToolCallbacks.from(chatTools));
         }
         return builder
                 // Core Tools
