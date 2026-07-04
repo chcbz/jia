@@ -32,6 +32,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 
 import lombok.extern.slf4j.Slf4j;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -49,27 +50,24 @@ public class ChatClientConfig {
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             ObjectProvider<McpSyncClient> mcpSyncClientsProvider, MemoryRepository memoryRepository,
             ChatMessageDao chatMessageDao, TaskTools taskTools,
-            ObjectProvider<AgentTools> agentToolsProvider,
-            ObjectProvider<PointTools> pointToolsProvider,
-            ObjectProvider<MaterialTools> materialToolsProvider,
-            ObjectProvider<KefuTools> kefuToolsProvider,
-            ObjectProvider<ChatTools> chatToolsProvider) {
+            @Lazy ObjectProvider<AgentTools> agentToolsProvider,
+            @Lazy ObjectProvider<PointTools> pointToolsProvider,
+            @Lazy ObjectProvider<MaterialTools> materialToolsProvider,
+            @Lazy ObjectProvider<KefuTools> kefuToolsProvider,
+            @Lazy ObjectProvider<ChatTools> chatToolsProvider) {
         ToolCallback[] taskToolCallbacks = ToolCallbacks.from(taskTools);
         List<McpSyncClient> mcpSyncClients = mcpSyncClientsProvider.orderedStream().toList();
-        // 使用 LongTermMemoryAdvisor 实现长效记忆检索 带会话权重
         LongTermMemoryAdvisor longTermMemoryAdvisor = LongTermMemoryAdvisor.builder(memoryRepository)
                 .memoryTopK(2)
                 .similarityThreshold(0.75)
                 .build();
-        
-        // 使用 DatabaseChatMemoryAdvisor 实现上下文记忆
+
         DatabaseChatMemoryAdvisor contextMemoryAdvisor = DatabaseChatMemoryAdvisor.builder(chatMessageDao)
                 .maxMessages(10)
                 .build();
-        
+
         RequestResponseAdvisor chatControllerAdvisor = new RequestResponseAdvisor();
         List<String> skillsDirectories = configuredSkillsDirectories();
-        // Configure Task tool with Claude sub-agents
         var taskTool = TaskTool.builder()
                 .subagentTypes(ClaudeSubagentType.builder()
                         .chatClientBuilder("default", chatClientBuilder.clone())
@@ -93,7 +91,6 @@ public class ChatClientConfig {
         } else {
             log.warn("No valid skill directories configured; SkillsTool is disabled for ChatClient");
         }
-        // Register business module tools (optional, available when their service modules are present)
         AgentTools agentTools = agentToolsProvider.getIfAvailable();
         if (agentTools != null) {
             builder = builder.defaultTools(ToolCallbacks.from(agentTools));
@@ -115,21 +112,12 @@ public class ChatClientConfig {
             builder = builder.defaultTools(ToolCallbacks.from(chatTools));
         }
         return builder
-                // Core Tools
                 .defaultTools(
-//                        GlobTool.builder().build(),
-//                        FileSystemTools.builder().build(),
                         GrepTool.builder().build(),
                         ShellTools.builder().build(),
                         SmartWebFetchTool.builder(chatClientBuilder.clone().build()).build()
                 )
-                // Task orchestration
                 .defaultTools(TodoWriteTool.builder().build())
-
-                // User feedback tool (use CommandLineQuestionHandler for CLI apps)
-//                .defaultTools(AskUserQuestionTool.builder()
-//                        .questionHandler(new CommandLineQuestionHandler())
-//                        .build())
                 .defaultAdvisors(longTermMemoryAdvisor)
                 .defaultAdvisors(contextMemoryAdvisor)
                 .defaultAdvisors(SimpleLoggerAdvisor.builder().build())
