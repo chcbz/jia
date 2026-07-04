@@ -32,7 +32,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Lazy;
 
 import lombok.extern.slf4j.Slf4j;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -50,11 +49,11 @@ public class ChatClientConfig {
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             ObjectProvider<McpSyncClient> mcpSyncClientsProvider, MemoryRepository memoryRepository,
             ChatMessageDao chatMessageDao, TaskTools taskTools,
-            @Lazy ObjectProvider<AgentTools> agentToolsProvider,
-            @Lazy ObjectProvider<PointTools> pointToolsProvider,
-            @Lazy ObjectProvider<MaterialTools> materialToolsProvider,
-            @Lazy ObjectProvider<KefuTools> kefuToolsProvider,
-            @Lazy ObjectProvider<ChatTools> chatToolsProvider) {
+            ObjectProvider<AgentTools> agentToolsProvider,
+            ObjectProvider<PointTools> pointToolsProvider,
+            ObjectProvider<MaterialTools> materialToolsProvider,
+            ObjectProvider<KefuTools> kefuToolsProvider,
+            ObjectProvider<ChatTools> chatToolsProvider) {
         ToolCallback[] taskToolCallbacks = ToolCallbacks.from(taskTools);
         List<McpSyncClient> mcpSyncClients = mcpSyncClientsProvider.orderedStream().toList();
         LongTermMemoryAdvisor longTermMemoryAdvisor = LongTermMemoryAdvisor.builder(memoryRepository)
