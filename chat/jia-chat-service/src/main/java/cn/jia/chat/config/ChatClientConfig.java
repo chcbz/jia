@@ -79,36 +79,36 @@ public class ChatClientConfig {
                     .mcpClients(mcpSyncClients)
                     .build()
                     .getToolCallbacks();
-            builder = builder.defaultToolCallbacks(mcpToolCallbacks);
+            builder = builder.defaultTools((Object[]) mcpToolCallbacks);
         } else {
             log.info("MCP tool callbacks are disabled for ChatClient");
         }
         builder = builder.defaultTools(taskTool);
         builder = builder.defaultTools((Object[]) taskToolCallbacks);
         if (!skillsDirectories.isEmpty()) {
-            builder = builder.defaultToolCallbacks(SkillsTool.builder().addSkillsDirectories(skillsDirectories).build());
+            builder = builder.defaultTools(SkillsTool.builder().addSkillsDirectories(skillsDirectories).build());
         } else {
             log.warn("No valid skill directories configured; SkillsTool is disabled for ChatClient");
         }
         AgentTools agentTools = agentToolsProvider.getIfAvailable();
         if (agentTools != null) {
-            builder = builder.defaultTools(ToolCallbacks.from(agentTools));
+            builder = builder.defaultTools((Object[]) ToolCallbacks.from(agentTools));
         }
         PointTools pointTools = pointToolsProvider.getIfAvailable();
         if (pointTools != null) {
-            builder = builder.defaultTools(ToolCallbacks.from(pointTools));
+            builder = builder.defaultTools((Object[]) ToolCallbacks.from(pointTools));
         }
         MaterialTools materialTools = materialToolsProvider.getIfAvailable();
         if (materialTools != null) {
-            builder = builder.defaultTools(ToolCallbacks.from(materialTools));
+            builder = builder.defaultTools((Object[]) ToolCallbacks.from(materialTools));
         }
         KefuTools kefuTools = kefuToolsProvider.getIfAvailable();
         if (kefuTools != null) {
-            builder = builder.defaultTools(ToolCallbacks.from(kefuTools));
+            builder = builder.defaultTools((Object[]) ToolCallbacks.from(kefuTools));
         }
         ChatTools chatTools = chatToolsProvider.getIfAvailable();
         if (chatTools != null) {
-            builder = builder.defaultTools(ToolCallbacks.from(chatTools));
+            builder = builder.defaultTools((Object[]) ToolCallbacks.from(chatTools));
         }
         return builder
                 .defaultTools(
