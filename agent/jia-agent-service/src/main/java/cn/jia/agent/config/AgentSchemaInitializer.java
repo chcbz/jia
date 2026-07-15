@@ -173,22 +173,22 @@ public class AgentSchemaInitializer implements InitializingBean {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
-        addIndexIfMissing("agent_scene_state", "uk_agent_scene_state_scope_agent",
+        addRequiredIndexIfMissing("agent_scene_state", "uk_agent_scene_state_scope_agent",
                 "CREATE UNIQUE INDEX uk_agent_scene_state_scope_agent "
                         + "ON agent_scene_state (tenant_id, client_id, scene_id, agent_id)");
-        addIndexIfMissing("agent_scene_state", "idx_agent_scene_state_scope_version",
+        addRequiredIndexIfMissing("agent_scene_state", "idx_agent_scene_state_scope_version",
                 "CREATE INDEX idx_agent_scene_state_scope_version "
                         + "ON agent_scene_state (tenant_id, client_id, scene_id, state_version)");
-        addIndexIfMissing("agent_scene_event", "uk_agent_scene_event_scope_version",
+        addRequiredIndexIfMissing("agent_scene_event", "uk_agent_scene_event_scope_version",
                 "CREATE UNIQUE INDEX uk_agent_scene_event_scope_version "
                         + "ON agent_scene_event (tenant_id, client_id, scene_id, scene_version)");
-        addIndexIfMissing("agent_scene_event", "idx_agent_scene_event_scope_occurred",
+        addRequiredIndexIfMissing("agent_scene_event", "idx_agent_scene_event_scope_occurred",
                 "CREATE INDEX idx_agent_scene_event_scope_occurred "
                         + "ON agent_scene_event (tenant_id, client_id, scene_id, occurred_at)");
-        addIndexIfMissing("agent_scene_phase_report", "uk_agent_scene_phase_report_scope_report",
+        addRequiredIndexIfMissing("agent_scene_phase_report", "uk_agent_scene_phase_report_scope_report",
                 "CREATE UNIQUE INDEX uk_agent_scene_phase_report_scope_report "
                         + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, report_id)");
-        addIndexIfMissing("agent_scene_phase_report", "idx_agent_scene_phase_report_scope_agent_version",
+        addRequiredIndexIfMissing("agent_scene_phase_report", "idx_agent_scene_phase_report_scope_agent_version",
                 "CREATE INDEX idx_agent_scene_phase_report_scope_agent_version "
                         + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, agent_id, state_version)");
     }
@@ -239,6 +239,17 @@ public class AgentSchemaInitializer implements InitializingBean {
             }
         } catch (Exception e) {
             log.warn("Unable to ensure index {}.{}: {}", table, indexName, e.getMessage());
+        }
+    }
+
+    private void addRequiredIndexIfMissing(String table, String indexName, String sql) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
+                """, Integer.class, table, indexName);
+        if (count == null || count == 0) {
+            jdbcTemplate.execute(sql);
         }
     }
 

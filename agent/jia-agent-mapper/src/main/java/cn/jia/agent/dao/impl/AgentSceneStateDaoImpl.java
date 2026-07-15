@@ -46,19 +46,12 @@ public class AgentSceneStateDaoImpl implements AgentSceneStateDao {
     public int upsert(
             String tenantId, String clientId, String sceneId, AgentSceneStateEntity entity) {
         requireScope(tenantId, clientId, sceneId);
-        if (entity == null || StringUtil.isBlank(entity.getAgentId())) {
-            throw new IllegalArgumentException("scene state and agentId are required");
+        if (entity == null || StringUtil.isBlank(entity.getAgentId()) || entity.getStateVersion() == null) {
+            throw new IllegalArgumentException("scene state, agentId and stateVersion are required");
         }
         applyScope(entity, tenantId, clientId, sceneId);
-        AgentSceneStateEntity existing = findByAgent(tenantId, clientId, sceneId, entity.getAgentId());
-        if (existing == null) {
-            entity.init4Creation();
-            return baseMapper.insert(entity);
-        }
-        entity.setId(existing.getId());
-        entity.init4Update();
-        return baseMapper.update(entity, scopeUpdate(tenantId, clientId, sceneId)
-                .eq(AgentSceneStateEntity::getAgentId, entity.getAgentId()));
+        entity.init4Creation();
+        return baseMapper.upsertMonotonic(tenantId, clientId, sceneId, entity);
     }
 
     @Override

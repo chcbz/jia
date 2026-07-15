@@ -10,13 +10,20 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 class AgentSchemaInitializerTest extends BaseMockTest {
@@ -68,11 +75,81 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         verify(jdbcTemplate, atLeastOnce()).update(any(String.class), any(Object[].class));
     }
 
+    @Test
+    void requiredSceneIndexFailurePropagatesInsteadOfBeingSwallowed() {
+        JdbcTemplate failingTemplate = new JdbcTemplate() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                if (args.length == 2
+                        && "agent_scene_state".equals(args[0])
+                        && "uk_agent_scene_state_scope_agent".equals(args[1])) {
+                    return (T) Integer.valueOf(0);
+                }
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            public void execute(String sql) {
+                if (sql.startsWith("CREATE UNIQUE INDEX uk_agent_scene_state_scope_agent")) {
+                    throw new IllegalStateException("required index denied");
+                }
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+        assertEquals("required index denied", error.getMessage());
+    }
+
+    @Test
+    void initializerAndSchemaResourceKeepSceneTableStructureInParity() throws IOException {
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(captor.capture());
+        List<String> initializerSql = captor.getAllValues().stream()
+                .map(sql -> sql.toLowerCase(Locale.ROOT))
+                .toList();
+        String schema = readSchema();
+
+        for (String table : Set.of("agent_scene_state", "agent_scene_event", "agent_scene_phase_report")) {
+            String resourceDefinition = tableDefinition(schema, table);
+            String initializerDefinition = initializerSql.stream()
+                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .findFirst().orElseThrow();
+            assertEquals(structuralNames(resourceDefinition), structuralNames(initializerDefinition), table);
+        }
+    }
+
     private String tableDefinition(String schema, String table) {
         int start = schema.indexOf("create table if not exists " + table);
         assertTrue(start >= 0, table);
         int end = schema.indexOf(";", start);
         assertTrue(end > start, table);
         return schema.substring(start, end);
+    }
+
+    private String readSchema() throws IOException {
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream("db/schema.sql")) {
+            assertNotNull(input);
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private Set<String> structuralNames(String definition) {
+        Set<String> names = new HashSet<>();
+        Matcher columns = Pattern.compile(
+                "(?m)^\\s*([a-z][a-z0-9_]*)\\s+(?:bigint|varchar|text)\\b")
+                .matcher(definition);
+        while (columns.find()) {
+            names.add("column:" + columns.group(1));
+        }
+        Matcher indexes = Pattern.compile("(?i)(?:unique\\s+key|key)\\s+([a-z][a-z0-9_]*)")
+                .matcher(definition);
+        while (indexes.find()) {
+            names.add("index:" + indexes.group(1).toLowerCase(Locale.ROOT));
+        }
+        return names;
     }
 }

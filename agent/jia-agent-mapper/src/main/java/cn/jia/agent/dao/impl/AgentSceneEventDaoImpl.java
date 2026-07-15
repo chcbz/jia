@@ -1,12 +1,17 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.dao.AgentSceneEventDao;
+import cn.jia.agent.entity.AgentSceneEventDTO;
 import cn.jia.agent.entity.AgentSceneEventEntity;
+import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.mapper.AgentSceneEventMapper;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -20,8 +25,10 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
     }
 
     @Override
+    @Transactional(propagation = Propagation.MANDATORY)
     public long nextSceneVersion(String tenantId, String clientId, String sceneId) {
-        Long latest = findLatestSceneVersion(tenantId, clientId, sceneId);
+        requireScope(tenantId, clientId, sceneId);
+        Long latest = baseMapper.selectLatestVersionForUpdate(tenantId, clientId, sceneId);
         return latest == null ? 1L : latest + 1L;
     }
 
@@ -50,16 +57,39 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
 
     @Override
     public int insert(
-            String tenantId, String clientId, String sceneId, AgentSceneEventEntity entity) {
+            String tenantId, String clientId, String sceneId, AgentSceneEventDTO event) {
         requireScope(tenantId, clientId, sceneId);
-        if (entity == null || entity.getSceneVersion() == null || StringUtil.isBlank(entity.getEventType())) {
+        if (event == null || event.getSceneVersion() == null || StringUtil.isBlank(event.getEventType())) {
             throw new IllegalArgumentException("scene event version and type are required");
         }
+        AgentSceneEventDTO safeEvent = safeCopy(event);
+        AgentSceneEventEntity entity = new AgentSceneEventEntity();
+        entity.setSceneVersion(safeEvent.getSceneVersion());
+        entity.setEventType(safeEvent.getEventType());
+        entity.setOccurredAt(safeEvent.getOccurredAt());
+        entity.setEventJson(serializeSafeEvent(safeEvent));
         entity.setTenantId(tenantId);
         entity.setClientId(clientId);
         entity.setSceneId(sceneId);
         entity.init4Creation();
         return baseMapper.insert(entity);
+    }
+
+    private AgentSceneEventDTO safeCopy(AgentSceneEventDTO source) {
+        AgentSceneEventDTO safe = new AgentSceneEventDTO();
+        safe.setSceneVersion(source.getSceneVersion());
+        safe.setEventType(source.getEventType());
+        safe.setOccurredAt(source.getOccurredAt());
+        safe.setState(AgentSceneStateDTO.copyOf(source.getState()));
+        return safe;
+    }
+
+    private String serializeSafeEvent(AgentSceneEventDTO safeEvent) {
+        String json = JsonUtil.toSafeJson(safeEvent);
+        if (StringUtil.isBlank(json)) {
+            throw new IllegalArgumentException("Unable to serialize safe scene event");
+        }
+        return json;
     }
 
     private AgentSceneEventEntity findBoundary(
