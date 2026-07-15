@@ -143,6 +143,16 @@ CREATE TABLE IF NOT EXISTS agent_scene_event (
     KEY idx_agent_scene_event_scope_occurred (tenant_id, client_id, scene_id, occurred_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped safe agent scene events';
 
+CREATE TABLE IF NOT EXISTS agent_scene_version (
+    tenant_id       VARCHAR(50) NOT NULL,
+    client_id       VARCHAR(50) NOT NULL,
+    scene_id        VARCHAR(100) NOT NULL,
+    current_version BIGINT NOT NULL,
+    create_time     BIGINT DEFAULT NULL,
+    update_time     BIGINT DEFAULT NULL,
+    PRIMARY KEY (tenant_id, client_id, scene_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped agent scene version counter';
+
 CREATE TABLE IF NOT EXISTS agent_scene_phase_report (
     id                  BIGINT NOT NULL AUTO_INCREMENT,
     scene_id            VARCHAR(100) NOT NULL,

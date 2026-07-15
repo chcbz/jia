@@ -7,8 +7,9 @@ import java.util.List;
 
 public interface AgentSceneEventDao {
     /**
-     * Allocates the next scoped version by locking the indexed latest-version range.
-     * The caller must keep this call and the corresponding event insert in one transaction.
+     * Atomically allocates the next durable scoped version on the current database connection.
+     * The caller must keep this call and the corresponding event insert in one transaction;
+     * a rolled-back publish may leave a gap, but concurrent allocations cannot duplicate a version.
      */
     long nextSceneVersion(String tenantId, String clientId, String sceneId);
 

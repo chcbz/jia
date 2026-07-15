@@ -6,6 +6,9 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+import java.util.Locale;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -150,6 +153,17 @@ public class AgentSchemaInitializer implements InitializingBean {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
         jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_scene_version (
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    scene_id VARCHAR(100) NOT NULL,
+                    current_version BIGINT NOT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    PRIMARY KEY (tenant_id, client_id, scene_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+        jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_scene_phase_report (
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     scene_id VARCHAR(100) NOT NULL,
@@ -173,24 +187,33 @@ public class AgentSchemaInitializer implements InitializingBean {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
-        addRequiredIndexIfMissing("agent_scene_state", "uk_agent_scene_state_scope_agent",
+        ensureRequiredIndex("agent_scene_state", "uk_agent_scene_state_scope_agent", true,
+                List.of("tenant_id", "client_id", "scene_id", "agent_id"),
                 "CREATE UNIQUE INDEX uk_agent_scene_state_scope_agent "
                         + "ON agent_scene_state (tenant_id, client_id, scene_id, agent_id)");
-        addRequiredIndexIfMissing("agent_scene_state", "idx_agent_scene_state_scope_version",
+        ensureRequiredIndex("agent_scene_state", "idx_agent_scene_state_scope_version", false,
+                List.of("tenant_id", "client_id", "scene_id", "state_version"),
                 "CREATE INDEX idx_agent_scene_state_scope_version "
                         + "ON agent_scene_state (tenant_id, client_id, scene_id, state_version)");
-        addRequiredIndexIfMissing("agent_scene_event", "uk_agent_scene_event_scope_version",
+        ensureRequiredIndex("agent_scene_event", "uk_agent_scene_event_scope_version", true,
+                List.of("tenant_id", "client_id", "scene_id", "scene_version"),
                 "CREATE UNIQUE INDEX uk_agent_scene_event_scope_version "
                         + "ON agent_scene_event (tenant_id, client_id, scene_id, scene_version)");
-        addRequiredIndexIfMissing("agent_scene_event", "idx_agent_scene_event_scope_occurred",
+        ensureRequiredIndex("agent_scene_event", "idx_agent_scene_event_scope_occurred", false,
+                List.of("tenant_id", "client_id", "scene_id", "occurred_at"),
                 "CREATE INDEX idx_agent_scene_event_scope_occurred "
                         + "ON agent_scene_event (tenant_id, client_id, scene_id, occurred_at)");
-        addRequiredIndexIfMissing("agent_scene_phase_report", "uk_agent_scene_phase_report_scope_report",
+        ensureRequiredIndex("agent_scene_phase_report", "uk_agent_scene_phase_report_scope_report", true,
+                List.of("tenant_id", "client_id", "scene_id", "report_id"),
                 "CREATE UNIQUE INDEX uk_agent_scene_phase_report_scope_report "
                         + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, report_id)");
-        addRequiredIndexIfMissing("agent_scene_phase_report", "idx_agent_scene_phase_report_scope_agent_version",
+        ensureRequiredIndex("agent_scene_phase_report", "idx_agent_scene_phase_report_scope_agent_version", false,
+                List.of("tenant_id", "client_id", "scene_id", "agent_id", "state_version"),
                 "CREATE INDEX idx_agent_scene_phase_report_scope_agent_version "
                         + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, agent_id, state_version)");
+        ensureRequiredIndex("agent_scene_version", "PRIMARY", true,
+                List.of("tenant_id", "client_id", "scene_id"),
+                "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, scene_id)");
     }
 
     private void seedWaterMarginPersonas() {
@@ -242,16 +265,35 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
     }
 
-    private void addRequiredIndexIfMissing(String table, String indexName, String sql) {
-        Integer count = jdbcTemplate.queryForObject("""
-                SELECT COUNT(*)
+    private void ensureRequiredIndex(
+            String table, String indexName, boolean unique, List<String> columns, String createSql) {
+        List<IndexColumn> actual = jdbcTemplate.query("""
+                SELECT NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX
                 FROM information_schema.statistics
                 WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
-                """, Integer.class, table, indexName);
-        if (count == null || count == 0) {
-            jdbcTemplate.execute(sql);
+                ORDER BY SEQ_IN_INDEX
+                """, (rs, rowNum) -> new IndexColumn(
+                rs.getInt("NON_UNIQUE"), rs.getString("COLUMN_NAME"), rs.getInt("SEQ_IN_INDEX")),
+                table, indexName);
+        if (actual == null || actual.isEmpty()) {
+            jdbcTemplate.execute(createSql);
+            return;
+        }
+        int expectedNonUnique = unique ? 0 : 1;
+        boolean matches = actual.size() == columns.size();
+        for (int i = 0; matches && i < actual.size(); i++) {
+            IndexColumn part = actual.get(i);
+            matches = part.nonUnique() == expectedNonUnique
+                    && part.sequence() == i + 1
+                    && columns.get(i).equals(part.columnName().toLowerCase(Locale.ROOT));
+        }
+        if (!matches) {
+            throw new IllegalStateException("Required index " + table + "." + indexName
+                    + " has an incompatible uniqueness or ordered column definition");
         }
     }
+
+    static record IndexColumn(int nonUnique, String columnName, int sequence) {}
 
     private String visualConfig(int rankNo) {
         int x = (rankNo - 1) % 6;

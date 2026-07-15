@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AgentSceneEventDTO;
 import cn.jia.agent.entity.AgentSceneEventEntity;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.mapper.AgentSceneEventMapper;
+import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -28,8 +29,16 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
     @Transactional(propagation = Propagation.MANDATORY)
     public long nextSceneVersion(String tenantId, String clientId, String sceneId) {
         requireScope(tenantId, clientId, sceneId);
-        Long latest = baseMapper.selectLatestVersionForUpdate(tenantId, clientId, sceneId);
-        return latest == null ? 1L : latest + 1L;
+        int affected = baseMapper.allocateNextVersion(
+                tenantId, clientId, sceneId, DateUtil.nowTime());
+        if (affected <= 0) {
+            throw new IllegalStateException("Unable to allocate scoped scene version");
+        }
+        Long allocated = baseMapper.selectLastAllocatedVersion();
+        if (allocated == null || allocated <= 0) {
+            throw new IllegalStateException("Unable to read allocated scoped scene version");
+        }
+        return allocated;
     }
 
     @Override

@@ -21,6 +21,7 @@ import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,10 +38,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 
 class AgentSceneScopedDaoTest {
     private static final Set<String> FORBIDDEN_FIELDS = Set.of(
@@ -74,16 +77,26 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
-    void versionAllocationUsesScopedLatestRowLockAndDocumentsTransactionBoundary() throws Exception {
-        Method method = AgentSceneEventMapper.class.getDeclaredMethod(
-                "selectLatestVersionForUpdate", String.class, String.class, String.class);
-        String sql = normalizeSql(method.getAnnotation(Select.class).value());
+    void versionAllocationUsesAtomicScopedCounterAndDocumentsTransactionBoundary() throws Exception {
+        Method allocate = AgentSceneEventMapper.class.getDeclaredMethod(
+                "allocateNextVersion", String.class, String.class, String.class, long.class);
+        String sql = normalizeSql(allocate.getAnnotation(Insert.class).value());
 
-        assertTrue(sql.contains("tenant_id = #{tenantid}"), sql);
-        assertTrue(sql.contains("client_id = #{clientid}"), sql);
-        assertTrue(sql.contains("scene_id = #{sceneid}"), sql);
-        assertTrue(sql.contains("order by scene_version desc"), sql);
-        assertTrue(sql.contains("limit 1 for update"), sql);
+        assertTrue(sql.contains("insert into agent_scene_version"), sql);
+        assertTrue(sql.contains("(tenant_id, client_id, scene_id, current_version"), sql);
+        assertTrue(sql.contains("(#{tenantid}, #{clientid}, #{sceneid}, last_insert_id(1)"), sql);
+        assertTrue(sql.contains("last_insert_id(1)"), sql);
+        assertTrue(sql.contains("on duplicate key update"), sql);
+        assertTrue(sql.contains("current_version = last_insert_id(current_version + 1)"), sql);
+        assertFalse(sql.contains("select max("), sql);
+        assertFalse(sql.contains("for update"), sql);
+
+        Method selectAllocated = AgentSceneEventMapper.class.getDeclaredMethod("selectLastAllocatedVersion");
+        String selectSql = normalizeSql(selectAllocated.getAnnotation(Select.class).value());
+        assertEquals("select last_insert_id()", selectSql);
+        assertThrows(NoSuchMethodException.class, () -> AgentSceneEventMapper.class.getDeclaredMethod(
+                "selectLatestVersionForUpdate", String.class, String.class, String.class));
+
         Transactional transaction = AgentSceneEventDaoImpl.class.getMethod(
                 "nextSceneVersion", String.class, String.class, String.class)
                 .getAnnotation(Transactional.class);
@@ -127,16 +140,36 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
-    void nextSceneVersionUsesScopedLockingMapperPath() {
+    void nextSceneVersionUsesSameConnectionCounterAllocationPath() {
         AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
-        when(mapper.selectLatestVersionForUpdate("tenant-a", "client-a", "juyiting-main")).thenReturn(41L);
+        when(mapper.allocateNextVersion(
+                org.mockito.ArgumentMatchers.eq("tenant-a"),
+                org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("juyiting-main"), anyLong())).thenReturn(1);
+        when(mapper.selectLastAllocatedVersion()).thenReturn(42L);
 
         long next = new AgentSceneEventDaoImpl(mapper)
                 .nextSceneVersion("tenant-a", "client-a", "juyiting-main");
 
         assertEquals(42L, next);
-        verify(mapper).selectLatestVersionForUpdate("tenant-a", "client-a", "juyiting-main");
+        InOrder allocationOrder = inOrder(mapper);
+        allocationOrder.verify(mapper).allocateNextVersion(
+                org.mockito.ArgumentMatchers.eq("tenant-a"),
+                org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("juyiting-main"), anyLong());
+        allocationOrder.verify(mapper).selectLastAllocatedVersion();
         verify(mapper, never()).selectOne(any());
+    }
+
+    @Test
+    void nextSceneVersionRejectsBlankScopeBeforeCounterAccess() {
+        AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
+
+        assertThrows(IllegalArgumentException.class, () -> new AgentSceneEventDaoImpl(mapper)
+                .nextSceneVersion("", "client-a", "juyiting-main"));
+
+        verify(mapper, never()).allocateNextVersion(any(), any(), any(), anyLong());
+        verify(mapper, never()).selectLastAllocatedVersion();
     }
 
     @Test
