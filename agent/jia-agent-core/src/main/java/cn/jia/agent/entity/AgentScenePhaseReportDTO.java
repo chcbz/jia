@@ -15,5 +15,5 @@ public class AgentScenePhaseReportDTO implements Serializable {
     private Long stateVersion;
     private String phase;
     private String regionId;
-    private String occurredAt;
+    private Long occurredAt;
 }

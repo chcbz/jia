@@ -19,7 +19,27 @@ public class AgentSceneStateDTO implements Serializable {
     private String relatedId;
     private String phase;
     private Long stateVersion;
-    private String startedAt;
-    private String expectedArrivalAt;
-    private String expiresAt;
+    private Long startedAt;
+    private Long expectedArrivalAt;
+    private Long expiresAt;
+
+    public static AgentSceneStateDTO copyOf(AgentSceneStateDTO source) {
+        if (source == null) {
+            return null;
+        }
+        AgentSceneStateDTO copy = new AgentSceneStateDTO();
+        copy.setAgentId(source.getAgentId());
+        copy.setPersonaCode(source.getPersonaCode());
+        copy.setBehavior(source.getBehavior());
+        copy.setOriginRegionId(source.getOriginRegionId());
+        copy.setTargetRegionId(source.getTargetRegionId());
+        copy.setRelatedType(source.getRelatedType());
+        copy.setRelatedId(source.getRelatedId());
+        copy.setPhase(source.getPhase());
+        copy.setStateVersion(source.getStateVersion());
+        copy.setStartedAt(source.getStartedAt());
+        copy.setExpectedArrivalAt(source.getExpectedArrivalAt());
+        copy.setExpiresAt(source.getExpiresAt());
+        return copy;
+    }
 }

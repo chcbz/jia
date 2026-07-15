@@ -1,6 +1,7 @@
 package cn.jia.agent.service;
 
 import cn.jia.agent.common.AgentSceneConstants;
+import cn.jia.agent.entity.AgentSceneAgentDTO;
 import cn.jia.agent.entity.AgentSceneEventDTO;
 import cn.jia.agent.entity.AgentScenePhaseReportDTO;
 import cn.jia.agent.entity.AgentScenePhaseResultDTO;
@@ -15,7 +16,9 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -39,9 +42,13 @@ class AgentSceneContractTest {
     }
 
     @Test
-    void snapshotAndSupportingContractsExposeOnlyApprovedFields() {
+    void snapshotAndSupportingContractsExposeOnlyApprovedFields() throws Exception {
         assertEquals(Set.of("sceneId", "sceneVersion", "generatedAt", "agents", "states"),
                 instanceFieldNames(AgentSceneSnapshotDTO.class));
+        assertEquals(Set.of("agentId", "personaCode", "status"), instanceFieldNames(AgentSceneAgentDTO.class));
+        ParameterizedType agentsType = (ParameterizedType) AgentSceneSnapshotDTO.class
+                .getDeclaredField("agents").getGenericType();
+        assertEquals(AgentSceneAgentDTO.class, agentsType.getActualTypeArguments()[0]);
         assertEquals(Set.of("sceneVersion", "eventType", "state", "occurredAt"),
                 instanceFieldNames(AgentSceneEventDTO.class));
         assertEquals(Set.of("reportId", "agentId", "stateVersion", "phase", "regionId", "occurredAt"),
@@ -49,10 +56,20 @@ class AgentSceneContractTest {
         assertEquals(Set.of("reportId", "stateVersion", "result"),
                 instanceFieldNames(AgentScenePhaseResultDTO.class));
         List.of(
-                AgentSceneStateDTO.class, AgentSceneSnapshotDTO.class, AgentSceneEventDTO.class,
+                AgentSceneAgentDTO.class, AgentSceneStateDTO.class, AgentSceneSnapshotDTO.class, AgentSceneEventDTO.class,
                 AgentScenePhaseReportDTO.class, AgentScenePhaseResultDTO.class)
                 .forEach(type -> assertFalse(
                         instanceFieldNames(type).stream().anyMatch(FORBIDDEN_FIELDS::contains), type.getSimpleName()));
+    }
+
+    @Test
+    void publicTimestampsUseNullableEpochMilliseconds() throws Exception {
+        for (String field : List.of("startedAt", "expectedArrivalAt", "expiresAt")) {
+            assertEquals(Long.class, AgentSceneStateDTO.class.getDeclaredField(field).getType());
+        }
+        assertEquals(Long.class, AgentSceneSnapshotDTO.class.getDeclaredField("generatedAt").getType());
+        assertEquals(Long.class, AgentSceneEventDTO.class.getDeclaredField("occurredAt").getType());
+        assertEquals(Long.class, AgentScenePhaseReportDTO.class.getDeclaredField("occurredAt").getType());
     }
 
     @Test
@@ -83,20 +100,70 @@ class AgentSceneContractTest {
 
     @Test
     void serializationContainsSemanticFieldsAndNoSensitiveOrGeometryFields() {
+        AgentSceneAgentDTO agent = new AgentSceneAgentDTO();
+        agent.setAgentId("agent-songjiang");
+        agent.setPersonaCode("songjiang");
+        agent.setStatus("online");
         AgentSceneStateDTO state = new AgentSceneStateDTO();
         state.setAgentId("agent-songjiang");
         state.setPersonaCode("songjiang");
         state.setTargetRegionId("council-table");
         state.setStateVersion(17L);
+        state.setStartedAt(1_752_199_990_000L);
         AgentSceneSnapshotDTO snapshot = new AgentSceneSnapshotDTO();
         snapshot.setSceneId("juyiting-main");
         snapshot.setSceneVersion(128L);
+        snapshot.setGeneratedAt(1_752_200_000_000L);
+        snapshot.setAgents(List.of(agent));
         snapshot.setStates(List.of(state));
 
         String json = JsonUtil.toJson(snapshot);
+        Map<String, Object> serialized = JsonUtil.jsonToMap(json);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> serializedAgent = ((List<Map<String, Object>>) serialized.get("agents")).getFirst();
 
         assertTrue(json.contains("\"targetRegionId\":\"council-table\""));
+        assertEquals(Set.of("agentId", "personaCode", "status"), serializedAgent.keySet());
+        assertEquals(1_752_200_000_000L, ((Number) serialized.get("generatedAt")).longValue());
         FORBIDDEN_FIELDS.forEach(field -> assertFalse(json.contains("\"" + field + "\""), field));
+    }
+
+    @Test
+    void snapshotAndEventsDefensivelyIsolateMutableInputsAndOutputs() {
+        AgentSceneAgentDTO agent = new AgentSceneAgentDTO();
+        agent.setAgentId("agent-songjiang");
+        agent.setPersonaCode("songjiang");
+        agent.setStatus("online");
+        AgentSceneStateDTO state = new AgentSceneStateDTO();
+        state.setAgentId("agent-songjiang");
+        state.setTargetRegionId("council-table");
+        List<AgentSceneAgentDTO> agents = new ArrayList<>(List.of(agent));
+        List<AgentSceneStateDTO> states = new ArrayList<>(List.of(state));
+
+        AgentSceneSnapshotDTO snapshot = new AgentSceneSnapshotDTO();
+        snapshot.setAgents(agents);
+        snapshot.setStates(states);
+        AgentSceneEventDTO event = new AgentSceneEventDTO();
+        event.setState(state);
+
+        agent.setStatus("offline");
+        state.setTargetRegionId("main-seat");
+        agents.clear();
+        states.clear();
+        assertEquals("online", snapshot.getAgents().getFirst().getStatus());
+        assertEquals("council-table", snapshot.getStates().getFirst().getTargetRegionId());
+        assertEquals("council-table", event.getState().getTargetRegionId());
+        assertThrows(UnsupportedOperationException.class,
+                () -> snapshot.getAgents().add(new AgentSceneAgentDTO()));
+        assertThrows(UnsupportedOperationException.class,
+                () -> snapshot.getStates().add(new AgentSceneStateDTO()));
+
+        snapshot.getAgents().getFirst().setStatus("mutated-return");
+        snapshot.getStates().getFirst().setTargetRegionId("mutated-return");
+        event.getState().setTargetRegionId("mutated-return");
+        assertEquals("online", snapshot.getAgents().getFirst().getStatus());
+        assertEquals("council-table", snapshot.getStates().getFirst().getTargetRegionId());
+        assertEquals("council-table", event.getState().getTargetRegionId());
     }
 
     private static Set<String> instanceFieldNames(Class<?> type) {
