@@ -9,6 +9,8 @@ dependencies {
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
     testImplementation project(':oauth:jia-oauth-api')
+    testImplementation platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}")
+    testImplementation 'io.projectreactor:reactor-test'
 }
 
 version = '1.1.2-SNAPSHOT'
