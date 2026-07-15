@@ -102,15 +102,15 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             @SuppressWarnings("unchecked")
             public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
                 String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
-                assertTrue(normalized.contains("select non_unique, column_name, seq_in_index"), normalized);
+                assertTrue(normalized.contains("select non_unique, column_name, seq_in_index, sub_part"), normalized);
                 assertTrue(normalized.contains("order by seq_in_index"), normalized);
                 if ("agent_scene_state".equals(args[0])
                         && "uk_agent_scene_state_scope_agent".equals(args[1])) {
                     return (List<T>) List.of(
-                            new AgentSchemaInitializer.IndexColumn(1, "tenant_id", 1),
-                            new AgentSchemaInitializer.IndexColumn(1, "client_id", 2),
-                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 3),
-                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 4));
+                            new AgentSchemaInitializer.IndexColumn(1, "tenant_id", 1, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "client_id", 2, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 4, null));
                 }
                 return List.of();
             }
@@ -141,10 +141,44 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 if ("agent_scene_state".equals(args[0])
                         && "uk_agent_scene_state_scope_agent".equals(args[1])) {
                     return (List<T>) List.of(
-                            new AgentSchemaInitializer.IndexColumn(0, "client_id", 1),
-                            new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 2),
-                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 3),
-                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 4));
+                            new AgentSchemaInitializer.IndexColumn(0, "client_id", 1, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 2, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 4, null));
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("uk_agent_scene_state_scope_agent"), error.getMessage());
+    }
+
+    @Test
+    void requiredSceneIndexWithPrefixComponentFailsStartup() {
+        JdbcTemplate failingTemplate = new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL is intentionally inert; this test exercises required-index introspection.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if ("agent_scene_state".equals(args[0])
+                        && "uk_agent_scene_state_scope_agent".equals(args[1])) {
+                    return (List<T>) List.of(
+                            new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 1, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "client_id", 2, 12),
+                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 4, null));
                 }
                 return List.of();
             }

@@ -268,12 +268,15 @@ public class AgentSchemaInitializer implements InitializingBean {
     private void ensureRequiredIndex(
             String table, String indexName, boolean unique, List<String> columns, String createSql) {
         List<IndexColumn> actual = jdbcTemplate.query("""
-                SELECT NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX
+                SELECT NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX, SUB_PART
                 FROM information_schema.statistics
                 WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
                 ORDER BY SEQ_IN_INDEX
                 """, (rs, rowNum) -> new IndexColumn(
-                rs.getInt("NON_UNIQUE"), rs.getString("COLUMN_NAME"), rs.getInt("SEQ_IN_INDEX")),
+                rs.getInt("NON_UNIQUE"),
+                rs.getString("COLUMN_NAME"),
+                rs.getInt("SEQ_IN_INDEX"),
+                rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART")),
                 table, indexName);
         if (actual == null || actual.isEmpty()) {
             jdbcTemplate.execute(createSql);
@@ -285,6 +288,7 @@ public class AgentSchemaInitializer implements InitializingBean {
             IndexColumn part = actual.get(i);
             matches = part.nonUnique() == expectedNonUnique
                     && part.sequence() == i + 1
+                    && part.subPart() == null
                     && columns.get(i).equals(part.columnName().toLowerCase(Locale.ROOT));
         }
         if (!matches) {
@@ -293,7 +297,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
     }
 
-    static record IndexColumn(int nonUnique, String columnName, int sequence) {}
+    static record IndexColumn(int nonUnique, String columnName, int sequence, Integer subPart) {}
 
     private String visualConfig(int rankNo) {
         int x = (rankNo - 1) % 6;
