@@ -291,6 +291,27 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void phaseResultUpdateIsScopedToTheUniqueReportIdentity() {
+        AgentScenePhaseReportMapper mapper = mock(AgentScenePhaseReportMapper.class);
+        AgentScenePhaseReportDao dao = new AgentScenePhaseReportDaoImpl(mapper);
+
+        dao.updateResult("tenant-a", "client-a", "juyiting-main",
+                "report-1", "ignored_stale", 2_600L);
+
+        ArgumentCaptor<AgentScenePhaseReportEntity> update =
+                ArgumentCaptor.forClass(AgentScenePhaseReportEntity.class);
+        ArgumentCaptor<Wrapper<AgentScenePhaseReportEntity>> scope = ArgumentCaptor.forClass(Wrapper.class);
+        verify(mapper).update(update.capture(), scope.capture());
+        assertEquals("ignored_stale", update.getValue().getResult());
+        assertEquals(2_600L, update.getValue().getProcessedAt());
+        assertEquals(2_600L, update.getValue().getUpdateTime());
+        assertScoped(scope.getValue(), "tenant-a", "client-a", "juyiting-main");
+        AbstractWrapper<?, ?, ?> wrapper = (AbstractWrapper<?, ?, ?>) scope.getValue();
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("report-1"));
+    }
+
+    @Test
     void blankScopeIsRejectedBeforeMapperAccess() {
         AgentSceneStateMapper mapper = mock(AgentSceneStateMapper.class);
         AgentSceneStateDao dao = new AgentSceneStateDaoImpl(mapper);

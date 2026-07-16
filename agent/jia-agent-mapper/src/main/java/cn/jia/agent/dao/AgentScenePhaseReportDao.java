@@ -7,4 +7,7 @@ public interface AgentScenePhaseReportDao {
             String tenantId, String clientId, String sceneId, String reportId);
 
     int insert(String tenantId, String clientId, String sceneId, AgentScenePhaseReportEntity entity);
+
+    int updateResult(String tenantId, String clientId, String sceneId,
+            String reportId, String result, long processedAt);
 }

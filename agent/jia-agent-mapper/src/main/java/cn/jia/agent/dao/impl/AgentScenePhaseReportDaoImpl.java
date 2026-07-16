@@ -43,6 +43,21 @@ public class AgentScenePhaseReportDaoImpl implements AgentScenePhaseReportDao {
         return baseMapper.insert(entity);
     }
 
+    @Override
+    public int updateResult(String tenantId, String clientId, String sceneId,
+            String reportId, String result, long processedAt) {
+        requireScope(tenantId, clientId, sceneId);
+        if (StringUtil.isBlank(reportId) || StringUtil.isBlank(result) || processedAt < 0) {
+            throw new IllegalArgumentException("reportId, result and nonnegative processedAt are required");
+        }
+        AgentScenePhaseReportEntity update = new AgentScenePhaseReportEntity();
+        update.setResult(result);
+        update.setProcessedAt(processedAt);
+        update.setUpdateTime(processedAt);
+        return baseMapper.update(update, scope(tenantId, clientId, sceneId)
+                .eq(AgentScenePhaseReportEntity::getReportId, reportId));
+    }
+
     private LambdaQueryWrapper<AgentScenePhaseReportEntity> scope(
             String tenantId, String clientId, String sceneId) {
         return new LambdaQueryWrapper<AgentScenePhaseReportEntity>()

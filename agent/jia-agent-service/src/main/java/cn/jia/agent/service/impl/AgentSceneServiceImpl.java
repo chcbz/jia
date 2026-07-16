@@ -1,14 +1,17 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentSceneConstants;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.dao.AgentSceneEventDao;
+import cn.jia.agent.dao.AgentScenePhaseReportDao;
 import cn.jia.agent.dao.AgentSceneStateDao;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentSceneAgentDTO;
 import cn.jia.agent.entity.AgentSceneEventDTO;
 import cn.jia.agent.entity.AgentSceneEventEntity;
 import cn.jia.agent.entity.AgentScenePhaseReportDTO;
+import cn.jia.agent.entity.AgentScenePhaseReportEntity;
 import cn.jia.agent.entity.AgentScenePhaseResultDTO;
 import cn.jia.agent.entity.AgentSceneSnapshotDTO;
 import cn.jia.agent.entity.AgentSceneStateDTO;
@@ -25,6 +28,7 @@ import jakarta.inject.Named;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DuplicateKeyException;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
@@ -52,6 +56,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
 
     private final AgentSceneStateDao stateDao;
     private final AgentSceneEventDao eventDao;
+    private final AgentScenePhaseReportDao phaseReportDao;
     private final AgentRuntimeDao runtimeDao;
     private final AgentSceneEventBroker eventBroker;
     private final AtomicInteger scheduledEventBridgeTasks = new AtomicInteger();
@@ -60,12 +65,22 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     public AgentSceneServiceImpl(
             AgentSceneStateDao stateDao,
             AgentSceneEventDao eventDao,
+            AgentScenePhaseReportDao phaseReportDao,
             AgentRuntimeDao runtimeDao,
             AgentSceneEventBroker eventBroker) {
         this.stateDao = stateDao;
         this.eventDao = eventDao;
+        this.phaseReportDao = phaseReportDao;
         this.runtimeDao = runtimeDao;
         this.eventBroker = eventBroker;
+    }
+
+    public AgentSceneServiceImpl(
+            AgentSceneStateDao stateDao,
+            AgentSceneEventDao eventDao,
+            AgentRuntimeDao runtimeDao,
+            AgentSceneEventBroker eventBroker) {
+        this(stateDao, eventDao, null, runtimeDao, eventBroker);
     }
 
     @Override
@@ -117,9 +132,78 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public AgentScenePhaseResultDTO reportPhase(String sceneId, AgentScenePhaseReportDTO request) {
-        requireScope(sceneId);
-        throw new UnsupportedOperationException("Agent scene phase reporting is implemented in Task 5");
+        SceneScope scope = requireScope(sceneId);
+        AgentScenePhaseReportDTO report = requirePhaseReport(request);
+        if (phaseReportDao == null) {
+            throw new IllegalStateException("AgentScenePhaseReportDao is required for phase reporting");
+        }
+        AgentScenePhaseReportEntity existing = phaseReportDao.findByReportId(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId());
+        if (existing != null) {
+            return phaseResult(existing.getReportId(), existing.getStateVersion(),
+                    AgentSceneConstants.RESULT_IGNORED_DUPLICATE);
+        }
+
+        AgentSceneStateEntity current = stateDao.findByAgent(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId());
+        boolean exactCurrent = phaseMatchesCurrent(report, current);
+        long processedAt = System.currentTimeMillis();
+        String initialResult = exactCurrent
+                ? AgentSceneConstants.RESULT_ACCEPTED
+                : AgentSceneConstants.RESULT_IGNORED_STALE;
+        AgentScenePhaseReportEntity persisted = toPhaseReportEntity(report, initialResult, processedAt);
+        try {
+            if (phaseReportDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), persisted) <= 0) {
+                throw new IllegalStateException("Unable to persist agent scene phase report");
+            }
+        } catch (DuplicateKeyException duplicate) {
+            AgentScenePhaseReportEntity original = phaseReportDao.findByReportId(
+                    scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId());
+            if (original == null) {
+                throw new IllegalStateException("Duplicate phase report is not readable in its scope", duplicate);
+            }
+            return phaseResult(original.getReportId(), original.getStateVersion(),
+                    AgentSceneConstants.RESULT_IGNORED_DUPLICATE);
+        }
+
+        if (!exactCurrent) {
+            return phaseResult(report.getReportId(), report.getStateVersion(),
+                    AgentSceneConstants.RESULT_IGNORED_STALE);
+        }
+
+        int updated = stateDao.updatePhase(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId(),
+                report.getStateVersion(), report.getPhase(), processedAt);
+        if (updated <= 0) {
+            if (phaseReportDao.updateResult(
+                    scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId(),
+                    AgentSceneConstants.RESULT_IGNORED_STALE, processedAt) <= 0) {
+                throw new IllegalStateException("Unable to persist stale phase report result");
+            }
+            return phaseResult(report.getReportId(), report.getStateVersion(),
+                    AgentSceneConstants.RESULT_IGNORED_STALE);
+        }
+
+        long sceneVersion = eventDao.nextSceneVersion(
+                scope.tenantId(), scope.clientId(), scope.sceneId());
+        if (sceneVersion <= 0) {
+            throw new IllegalStateException("Allocated sceneVersion must be positive");
+        }
+        AgentSceneStateDTO publishedState = toStateDTO(current);
+        publishedState.setPhase(report.getPhase());
+        AgentSceneEventDTO event = new AgentSceneEventDTO();
+        event.setSceneVersion(sceneVersion);
+        event.setEventType(EVENT_STATE_UPDATED);
+        event.setState(publishedState);
+        event.setOccurredAt(processedAt);
+        if (eventDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), event) <= 0) {
+            throw new IllegalStateException("Unable to persist accepted phase event");
+        }
+        publishAfterCommit(scope, event);
+        return phaseResult(report.getReportId(), report.getStateVersion(),
+                AgentSceneConstants.RESULT_ACCEPTED);
     }
 
     @Override
@@ -498,6 +582,64 @@ public class AgentSceneServiceImpl implements AgentSceneService {
             }
         }
         return agents;
+    }
+
+    private AgentScenePhaseReportDTO requirePhaseReport(AgentScenePhaseReportDTO source) {
+        if (source == null) {
+            throw new IllegalArgumentException("phase report is required");
+        }
+        AgentScenePhaseReportDTO report = new AgentScenePhaseReportDTO();
+        report.setReportId(trim(source.getReportId()));
+        report.setAgentId(trim(source.getAgentId()));
+        report.setStateVersion(source.getStateVersion());
+        report.setPhase(trim(source.getPhase()));
+        report.setRegionId(trim(source.getRegionId()));
+        report.setOccurredAt(source.getOccurredAt());
+        requireText(report.getReportId(), "reportId");
+        requireText(report.getAgentId(), "agentId");
+        requireText(report.getRegionId(), "regionId");
+        if (!AgentSceneConstants.PHASES.contains(report.getPhase())) {
+            throw new IllegalArgumentException("phase must be arrived or blocked");
+        }
+        if (report.getStateVersion() == null || report.getStateVersion() <= 0) {
+            throw new IllegalArgumentException("stateVersion must be positive");
+        }
+        if (report.getOccurredAt() == null || report.getOccurredAt() < 0) {
+            throw new IllegalArgumentException("occurredAt is required and must be nonnegative");
+        }
+        return report;
+    }
+
+    private static boolean phaseMatchesCurrent(
+            AgentScenePhaseReportDTO report, AgentSceneStateEntity current) {
+        return current != null
+                && report.getAgentId().equals(current.getAgentId())
+                && report.getStateVersion().equals(current.getStateVersion())
+                && report.getRegionId().equals(current.getTargetRegionId())
+                && (current.getStartedAt() == null || report.getOccurredAt() >= current.getStartedAt());
+    }
+
+    private static AgentScenePhaseReportEntity toPhaseReportEntity(
+            AgentScenePhaseReportDTO report, String result, long processedAt) {
+        AgentScenePhaseReportEntity entity = new AgentScenePhaseReportEntity();
+        entity.setReportId(report.getReportId());
+        entity.setAgentId(report.getAgentId());
+        entity.setStateVersion(report.getStateVersion());
+        entity.setPhase(report.getPhase());
+        entity.setRegionId(report.getRegionId());
+        entity.setResult(result);
+        entity.setOccurredAt(report.getOccurredAt());
+        entity.setProcessedAt(processedAt);
+        return entity;
+    }
+
+    private static AgentScenePhaseResultDTO phaseResult(
+            String reportId, Long stateVersion, String result) {
+        AgentScenePhaseResultDTO response = new AgentScenePhaseResultDTO();
+        response.setReportId(reportId);
+        response.setStateVersion(stateVersion);
+        response.setResult(result);
+        return response;
     }
 
     private AgentSceneStateDTO requireState(AgentSceneStateDTO source) {
