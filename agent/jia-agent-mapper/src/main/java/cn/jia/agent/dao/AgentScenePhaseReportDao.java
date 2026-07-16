@@ -10,4 +10,7 @@ public interface AgentScenePhaseReportDao {
             String tenantId, String clientId, String sceneId, String reportId);
 
     int insert(String tenantId, String clientId, String sceneId, AgentScenePhaseReportEntity entity);
+
+    int finalizePendingResult(String tenantId, String clientId, String sceneId,
+            String reportId, String pendingResult, String finalResult, long processedAt);
 }

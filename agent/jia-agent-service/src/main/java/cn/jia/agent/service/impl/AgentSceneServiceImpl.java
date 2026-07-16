@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class AgentSceneServiceImpl implements AgentSceneService {
     private static final String EVENT_STATE_UPDATED = "agent-scene-state-updated";
     private static final String EVENT_RESYNC_REQUIRED = "resync-required";
+    private static final String PHASE_RESULT_PENDING_INTERNAL = "__pending_phase_report__";
     private static final int BACKLOG_PAGE_SIZE = 1000;
     private static final Set<String> VISIBLE_STATUSES = Set.of(
             AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY);
@@ -139,25 +140,12 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         if (phaseReportDao == null) {
             throw new IllegalStateException("AgentScenePhaseReportDao is required for phase reporting");
         }
-        AgentScenePhaseReportEntity existing = phaseReportDao.findByReportIdForUpdate(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId());
-        if (existing != null) {
-            return phaseResult(existing.getReportId(), existing.getStateVersion(),
-                    AgentSceneConstants.RESULT_IGNORED_DUPLICATE);
-        }
-
-        eventDao.lockSceneVersionScope(scope.tenantId(), scope.clientId(), scope.sceneId());
-        AgentSceneStateEntity current = stateDao.findByAgent(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId());
-        boolean exactCurrent = phaseMatchesCurrent(report, current);
         long processedAt = System.currentTimeMillis();
-        String initialResult = exactCurrent
-                ? AgentSceneConstants.RESULT_ACCEPTED
-                : AgentSceneConstants.RESULT_IGNORED_STALE;
-        AgentScenePhaseReportEntity persisted = toPhaseReportEntity(report, initialResult, processedAt);
+        AgentScenePhaseReportEntity reservation = toPhaseReportEntity(
+                report, PHASE_RESULT_PENDING_INTERNAL, processedAt);
         try {
-            if (phaseReportDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), persisted) <= 0) {
-                throw new IllegalStateException("Unable to persist agent scene phase report");
+            if (phaseReportDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), reservation) <= 0) {
+                throw new IllegalStateException("Unable to reserve agent scene phase report ID");
             }
         } catch (DuplicateKeyException duplicate) {
             AgentScenePhaseReportEntity original = phaseReportDao.findByReportIdForUpdate(
@@ -165,10 +153,23 @@ public class AgentSceneServiceImpl implements AgentSceneService {
             if (original == null) {
                 throw new IllegalStateException("Duplicate phase report is not readable in its scope", duplicate);
             }
+            requireFinalizedPhaseReport(original);
             return phaseResult(original.getReportId(), original.getStateVersion(),
                     AgentSceneConstants.RESULT_IGNORED_DUPLICATE);
         }
 
+        eventDao.lockSceneVersionScope(scope.tenantId(), scope.clientId(), scope.sceneId());
+        AgentSceneStateEntity current = stateDao.findByAgent(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId());
+        boolean exactCurrent = phaseMatchesCurrent(report, current);
+        String finalResult = exactCurrent
+                ? AgentSceneConstants.RESULT_ACCEPTED
+                : AgentSceneConstants.RESULT_IGNORED_STALE;
+        if (phaseReportDao.finalizePendingResult(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId(),
+                PHASE_RESULT_PENDING_INTERNAL, finalResult, processedAt) != 1) {
+            throw new IllegalStateException("Phase report reservation was not finalized exactly once");
+        }
         if (!exactCurrent) {
             return phaseResult(report.getReportId(), report.getStateVersion(),
                     AgentSceneConstants.RESULT_IGNORED_STALE);
@@ -611,6 +612,17 @@ public class AgentSceneServiceImpl implements AgentSceneService {
                 && report.getStateVersion().equals(current.getStateVersion())
                 && report.getRegionId().equals(current.getTargetRegionId())
                 && (current.getStartedAt() == null || report.getOccurredAt() >= current.getStartedAt());
+    }
+
+    private static void requireFinalizedPhaseReport(AgentScenePhaseReportEntity report) {
+        if (PHASE_RESULT_PENDING_INTERNAL.equals(report.getResult())) {
+            throw new IllegalStateException("Internal pending phase report escaped its reservation transaction");
+        }
+        if (!Set.of(
+                AgentSceneConstants.RESULT_ACCEPTED,
+                AgentSceneConstants.RESULT_IGNORED_STALE).contains(report.getResult())) {
+            throw new IllegalStateException("Stored phase report has an unsupported finalized result");
+        }
     }
 
     private static AgentScenePhaseReportEntity toPhaseReportEntity(

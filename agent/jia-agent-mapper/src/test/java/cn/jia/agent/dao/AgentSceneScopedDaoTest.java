@@ -132,6 +132,15 @@ class AgentSceneScopedDaoTest {
                 "lockSceneVersionScope", String.class, String.class, String.class)
                 .getAnnotation(Transactional.class);
         assertEquals(Propagation.MANDATORY, sceneTransaction.propagation());
+        Transactional reserveTransaction = AgentScenePhaseReportDaoImpl.class.getMethod(
+                "insert", String.class, String.class, String.class, AgentScenePhaseReportEntity.class)
+                .getAnnotation(Transactional.class);
+        assertEquals(Propagation.MANDATORY, reserveTransaction.propagation());
+        Transactional finalizeTransaction = AgentScenePhaseReportDaoImpl.class.getMethod(
+                "finalizePendingResult", String.class, String.class, String.class,
+                String.class, String.class, String.class, long.class)
+                .getAnnotation(Transactional.class);
+        assertEquals(Propagation.MANDATORY, finalizeTransaction.propagation());
     }
 
     @Test
@@ -335,6 +344,27 @@ class AgentSceneScopedDaoTest {
 
         assertEquals(stored, result);
         verify(mapper).selectScopedForUpdate("tenant-a", "client-a", "juyiting-main", "report-1");
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void pendingPhaseResultCanOnlyBeFinalizedWithinItsScopedReservation() {
+        AgentScenePhaseReportMapper mapper = mock(AgentScenePhaseReportMapper.class);
+        AgentScenePhaseReportDao dao = new AgentScenePhaseReportDaoImpl(mapper);
+
+        dao.finalizePendingResult("tenant-a", "client-a", "juyiting-main", "report-1",
+                "__pending_phase_report__", "accepted", 2_600L);
+
+        ArgumentCaptor<AgentScenePhaseReportEntity> update =
+                ArgumentCaptor.forClass(AgentScenePhaseReportEntity.class);
+        ArgumentCaptor<Wrapper<AgentScenePhaseReportEntity>> scope = ArgumentCaptor.forClass(Wrapper.class);
+        verify(mapper).update(update.capture(), scope.capture());
+        assertEquals("accepted", update.getValue().getResult());
+        assertEquals(2_600L, update.getValue().getProcessedAt());
+        assertScoped(scope.getValue(), "tenant-a", "client-a", "juyiting-main");
+        AbstractWrapper<?, ?, ?> wrapper = (AbstractWrapper<?, ?, ?>) scope.getValue();
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("report-1"));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("__pending_phase_report__"));
     }
 
     @Test
