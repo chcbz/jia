@@ -44,6 +44,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -132,6 +133,12 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", SCENE_ID)).thenReturn(null);
 
         StepVerifier.create(service.events(SCENE_ID, 0L))
+                .then(() -> {
+                    verify(eventDao, timeout(2_000))
+                            .findCurrentSceneVersion("tenant-a", "client-a", SCENE_ID);
+                    verify(eventDao, timeout(2_000))
+                            .findEarliestSceneVersion("tenant-a", "client-a", SCENE_ID);
+                })
                 .thenCancel()
                 .verify(Duration.ofSeconds(5));
 

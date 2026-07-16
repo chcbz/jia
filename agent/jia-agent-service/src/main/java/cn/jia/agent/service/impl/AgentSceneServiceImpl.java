@@ -28,6 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -173,56 +175,105 @@ public class AgentSceneServiceImpl implements AgentSceneService {
 
     private void bridgeBacklogAndLive(
             SceneScope scope, long sinceVersion, FluxSink<AgentSceneEventDTO> sink) {
-        Object monitor = new Object();
         List<AgentSceneEventDTO> pendingLive = new ArrayList<>();
         AtomicLong deliveredVersion = new AtomicLong(sinceVersion);
         AtomicBoolean backlogComplete = new AtomicBoolean(false);
+        Scheduler.Worker worker = Schedulers.boundedElastic().createWorker();
         Disposable live = eventBroker.stream(scope, sinceVersion).subscribe(
-                event -> {
-                    synchronized (monitor) {
-                        if (!backlogComplete.get()) {
-                            pendingLive.add(AgentSceneEventBroker.copyEvent(event));
-                        } else {
-                            emitIfNew(sink, deliveredVersion, event);
-                        }
+                event -> schedule(worker, sink, () -> {
+                    if (!backlogComplete.get()) {
+                        pendingLive.add(AgentSceneEventBroker.copyEvent(event));
+                    } else {
+                        emitLiveWithCatchup(scope, sink, deliveredVersion, event);
                     }
-                }, sink::error);
-        sink.onDispose(live::dispose);
-
-        try {
-            long currentVersion = versionOrZero(eventDao.findCurrentSceneVersion(
-                    scope.tenantId(), scope.clientId(), scope.sceneId()));
-            Long earliestVersion = eventDao.findEarliestSceneVersion(
-                    scope.tenantId(), scope.clientId(), scope.sceneId());
-            boolean noRetainedBacklog = earliestVersion == null && currentVersion > sinceVersion;
-            boolean retainedGap = earliestVersion != null
-                    && earliestVersion > 0
-                    && sinceVersion < earliestVersion - 1;
-            if (noRetainedBacklog || retainedGap) {
-                synchronized (monitor) {
-                    backlogComplete.set(true);
-                    pendingLive.clear();
-                    sink.next(resyncRequired(currentVersion));
-                    sink.complete();
-                }
-                return;
-            }
-
-            List<AgentSceneEventDTO> backlog = readBacklog(scope, sinceVersion, currentVersion);
-            synchronized (monitor) {
-                for (AgentSceneEventDTO event : backlog) {
-                    emitIfNew(sink, deliveredVersion, event);
-                }
-                pendingLive.sort(Comparator.comparing(AgentSceneEventDTO::getSceneVersion));
-                for (AgentSceneEventDTO event : pendingLive) {
-                    emitIfNew(sink, deliveredVersion, event);
-                }
-                pendingLive.clear();
-                backlogComplete.set(true);
-            }
-        } catch (RuntimeException error) {
+                }),
+                error -> schedule(worker, sink, () -> sink.error(error)));
+        sink.onDispose(() -> {
             live.dispose();
-            sink.error(error);
+            worker.dispose();
+        });
+        schedule(worker, sink, () -> initializeBacklog(
+                scope, sinceVersion, sink, pendingLive, deliveredVersion, backlogComplete, live));
+    }
+
+    private void initializeBacklog(
+            SceneScope scope,
+            long sinceVersion,
+            FluxSink<AgentSceneEventDTO> sink,
+            List<AgentSceneEventDTO> pendingLive,
+            AtomicLong deliveredVersion,
+            AtomicBoolean backlogComplete,
+            Disposable live) {
+        long currentVersion = versionOrZero(eventDao.findCurrentSceneVersion(
+                scope.tenantId(), scope.clientId(), scope.sceneId()));
+        Long earliestVersion = eventDao.findEarliestSceneVersion(
+                scope.tenantId(), scope.clientId(), scope.sceneId());
+        boolean noRetainedBacklog = earliestVersion == null && currentVersion > sinceVersion;
+        boolean retainedGap = earliestVersion != null
+                && earliestVersion > 0
+                && sinceVersion < earliestVersion - 1;
+        if (noRetainedBacklog || retainedGap) {
+            backlogComplete.set(true);
+            pendingLive.clear();
+            live.dispose();
+            sink.next(resyncRequired(currentVersion));
+            sink.complete();
+            return;
+        }
+
+        List<AgentSceneEventDTO> backlog = readBacklog(scope, sinceVersion, currentVersion);
+        for (AgentSceneEventDTO event : backlog) {
+            emitIfNew(sink, deliveredVersion, event);
+        }
+        pendingLive.sort(Comparator.comparing(AgentSceneEventDTO::getSceneVersion));
+        backlogComplete.set(true);
+        for (AgentSceneEventDTO event : pendingLive) {
+            emitLiveWithCatchup(scope, sink, deliveredVersion, event);
+        }
+        pendingLive.clear();
+    }
+
+    private void emitLiveWithCatchup(
+            SceneScope scope,
+            FluxSink<AgentSceneEventDTO> sink,
+            AtomicLong deliveredVersion,
+            AgentSceneEventDTO incoming) {
+        if (incoming == null || incoming.getSceneVersion() == null
+                || incoming.getSceneVersion() <= deliveredVersion.get()
+                || sink.isCancelled()) {
+            return;
+        }
+        long incomingVersion = incoming.getSceneVersion();
+        if (incomingVersion - deliveredVersion.get() > 1) {
+            List<AgentSceneEventDTO> catchup = readBacklog(
+                    scope, deliveredVersion.get(), incomingVersion);
+            for (AgentSceneEventDTO event : catchup) {
+                emitIfNew(sink, deliveredVersion, event);
+            }
+        }
+        emitIfNew(sink, deliveredVersion, incoming);
+    }
+
+    private static void schedule(
+            Scheduler.Worker worker, FluxSink<AgentSceneEventDTO> sink, Runnable task) {
+        if (sink.isCancelled() || worker.isDisposed()) {
+            return;
+        }
+        try {
+            worker.schedule(() -> {
+                if (sink.isCancelled()) {
+                    return;
+                }
+                try {
+                    task.run();
+                } catch (RuntimeException error) {
+                    sink.error(error);
+                }
+            });
+        } catch (RuntimeException error) {
+            if (!sink.isCancelled()) {
+                sink.error(error);
+            }
         }
     }
 

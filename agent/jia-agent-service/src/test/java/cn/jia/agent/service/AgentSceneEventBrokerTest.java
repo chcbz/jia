@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -175,6 +176,40 @@ class AgentSceneEventBrokerTest {
     }
 
     @Test
+    void serviceCatchesUpPersistedEventsWhenLiveCallbacksArriveOutOfVersionOrder() {
+        setScope("tenant-a", "client-a");
+        AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
+        CountDownLatch streamReady = new CountDownLatch(1);
+        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenReturn(1L);
+        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenAnswer(invocation -> {
+                    streamReady.countDown();
+                    return 1L;
+                });
+        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 1L, 1000))
+                .thenAnswer(invocation -> {
+                    assertTrue(Thread.currentThread().getName().startsWith("boundedElastic-"));
+                    return List.of(entity(event(2L, "two")), entity(event(3L, "three")));
+                });
+
+        StepVerifier.create(service(eventDao).events("juyiting-main", 1L))
+                .then(() -> {
+                    await(streamReady);
+                    broker.publish(scope, event(3L, "three-live-first"));
+                    broker.publish(scope, event(2L, "two-live-delayed"));
+                })
+                .assertNext(event -> assertEquals(2L, event.getSceneVersion()))
+                .assertNext(event -> assertEquals(3L, event.getSceneVersion()))
+                .expectNoEvent(Duration.ofMillis(200))
+                .thenCancel()
+                .verify(Duration.ofSeconds(5));
+
+        verify(eventDao).findAfterVersion(
+                "tenant-a", "client-a", "juyiting-main", 1L, 1000);
+    }
+
+    @Test
     void serviceEmitsExactlyOneSafeResyncWhenRetentionHasARealGap() {
         setScope("tenant-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
@@ -239,9 +274,16 @@ class AgentSceneEventBrokerTest {
         when(eventDao.findEarliestSceneVersion("tenant-b", "client-b", "scene-b")).thenReturn(null);
 
         StepVerifier.create(service(eventDao).events("scene-b", 0L))
+                .then(() -> {
+                    verify(eventDao, timeout(2_000))
+                            .findCurrentSceneVersion("tenant-b", "client-b", "scene-b");
+                    verify(eventDao, timeout(2_000))
+                            .findEarliestSceneVersion("tenant-b", "client-b", "scene-b");
+                })
                 .thenCancel()
                 .verify(Duration.ofSeconds(5));
 
+        assertEquals(0, broker.activeScopeCount());
         verify(eventDao).findCurrentSceneVersion("tenant-b", "client-b", "scene-b");
         verify(eventDao).findEarliestSceneVersion("tenant-b", "client-b", "scene-b");
         verify(eventDao, never()).findCurrentSceneVersion(eq("tenant-a"), any(), any());
