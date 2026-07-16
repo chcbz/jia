@@ -190,13 +190,19 @@ public class AgentSceneController {
             if (sinceVersion < 0) {
                 throw new SceneRequestException("sinceVersion must be nonnegative");
             }
-            return sinceVersion;
         }
-        if (lastEventId == null || lastEventId.isBlank()) {
-            return 0L;
+        Long headerVersion = null;
+        if (lastEventId != null) {
+            headerVersion = parseLastEventId(lastEventId);
         }
+        long queryCursor = sinceVersion == null ? 0L : sinceVersion;
+        long headerCursor = headerVersion == null ? 0L : headerVersion;
+        return Math.max(queryCursor, headerCursor);
+    }
+
+    private static long parseLastEventId(String lastEventId) {
         String normalized = lastEventId.trim();
-        if (!normalized.matches("[0-9]+")) {
+        if (normalized.isEmpty() || !normalized.matches("[0-9]+")) {
             throw new SceneRequestException("Last-Event-ID must be a nonnegative version");
         }
         try {

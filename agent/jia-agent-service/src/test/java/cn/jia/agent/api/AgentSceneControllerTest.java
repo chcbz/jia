@@ -90,14 +90,20 @@ class AgentSceneControllerTest {
     }
 
     @Test
-    void mockMvcWritesResyncAndHonorsQueryThenLastEventIdSemantics() throws Exception {
+    void mockMvcUsesGreatestValidatedQueryOrLastEventIdCursor() throws Exception {
         AgentSceneService service = mock(AgentSceneService.class);
         MockMvc mvc = mvc(service);
         AgentSceneEventDTO resync = new AgentSceneEventDTO();
         resync.setSceneVersion(512L);
         resync.setEventType("resync-required");
+        when(service.events("juyiting-main", 4L)).thenReturn(Flux.just(resync));
         when(service.events("juyiting-main", 7L)).thenReturn(Flux.just(resync));
         when(service.events("juyiting-main", 9L)).thenReturn(Flux.just(resync));
+        when(service.events("juyiting-main", 12L)).thenReturn(Flux.just(resync));
+
+        completeAsync(mvc.perform(get("/agent/scenes/juyiting-main/events")
+                .param("sinceVersion", "4"))
+                .andExpect(request().asyncStarted()).andReturn(), mvc);
 
         MvcResult fromHeader = completeAsync(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .header("Last-Event-ID", "7"))
@@ -107,11 +113,17 @@ class AgentSceneControllerTest {
                 + "\\r?\\n\\r?\\n$"), headerBody);
 
         completeAsync(mvc.perform(get("/agent/scenes/juyiting-main/events")
+                .param("sinceVersion", "4")
+                .header("Last-Event-ID", "12"))
+                .andExpect(request().asyncStarted()).andReturn(), mvc);
+        completeAsync(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .param("sinceVersion", "9")
                 .header("Last-Event-ID", "7"))
                 .andExpect(request().asyncStarted()).andReturn(), mvc);
+        verify(service).events("juyiting-main", 4L);
         verify(service).events("juyiting-main", 7L);
         verify(service).events("juyiting-main", 9L);
+        verify(service).events("juyiting-main", 12L);
     }
 
     @Test
@@ -162,6 +174,18 @@ class AgentSceneControllerTest {
                 .param("sinceVersion", "token-secret-not-a-number")).andReturn(), 400);
         assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
                 .header("Last-Event-ID", "token-secret-invalid")).andReturn(), 400);
+        assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
+                .param("sinceVersion", "7")
+                .header("Last-Event-ID", "token-secret-invalid")).andReturn(), 400);
+        assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
+                .param("sinceVersion", "token-secret-not-a-number")
+                .header("Last-Event-ID", "7")).andReturn(), 400);
+        assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
+                .param("sinceVersion", "7")
+                .header("Last-Event-ID", "-2")).andReturn(), 400);
+        assertSafeError(mvc.perform(get("/agent/scenes/juyiting-main/events")
+                .param("sinceVersion", "-1")
+                .header("Last-Event-ID", "7")).andReturn(), 400);
         assertSafeError(mvc.perform(post("/agent/scenes/juyiting-main/phases")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"token\":\"token-secret\",broken}"))
