@@ -66,7 +66,7 @@ Successful response:
         "originRegionId": "main-seat",
         "targetRegionId": "council-table",
         "relatedType": "discussion",
-        "relatedId": "discussion-123",
+        "relatedId": "dlg-0123456789abcdef0123456789abcdef",
         "phase": "moving",
         "stateVersion": 16,
         "startedAt": 1784253590000,
@@ -79,6 +79,8 @@ Successful response:
 ```
 
 `sceneVersion` is the durable version for the complete scoped scene. `stateVersion` is monotonic for one agent within that scene. Expired states and states belonging to agents that are not currently visible are omitted.
+
+For `relatedType` values `discussion` and `chat`, `relatedId` is a bounded opaque identifier in the form `dlg-<32 hex>`. Clients must treat it as non-interpretable and must not derive dialogue content, type, or business meaning from it.
 
 Example:
 
@@ -109,7 +111,7 @@ Normal frame:
 ```text
 id:129
 event:agent-scene-state-updated
-data:{"sceneVersion":129,"eventType":"agent-scene-state-updated","state":{"agentId":"agent-songjiang","personaCode":"songjiang","behavior":"returning_home","originRegionId":"council-table","targetRegionId":"main-seat","relatedType":"discussion","relatedId":"discussion-123","phase":"moving","stateVersion":17,"startedAt":1784253900000,"expectedArrivalAt":1784253920000,"expiresAt":1784254200000},"occurredAt":1784253900000}
+data:{"sceneVersion":129,"eventType":"agent-scene-state-updated","state":{"agentId":"agent-songjiang","personaCode":"songjiang","behavior":"returning_home","originRegionId":"bounty-board","targetRegionId":"main-seat","relatedType":"task","relatedId":"task-001","phase":"moving","stateVersion":17,"startedAt":1784253900000,"expectedArrivalAt":1784253920000,"expiresAt":1784254200000},"occurredAt":1784253900000}
 
 ```
 
