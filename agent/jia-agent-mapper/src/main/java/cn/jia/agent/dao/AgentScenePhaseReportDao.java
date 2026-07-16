@@ -6,8 +6,8 @@ public interface AgentScenePhaseReportDao {
     AgentScenePhaseReportEntity findByReportId(
             String tenantId, String clientId, String sceneId, String reportId);
 
-    int insert(String tenantId, String clientId, String sceneId, AgentScenePhaseReportEntity entity);
+    AgentScenePhaseReportEntity findByReportIdForUpdate(
+            String tenantId, String clientId, String sceneId, String reportId);
 
-    int updateResult(String tenantId, String clientId, String sceneId,
-            String reportId, String result, long processedAt);
+    int insert(String tenantId, String clientId, String sceneId, AgentScenePhaseReportEntity entity);
 }

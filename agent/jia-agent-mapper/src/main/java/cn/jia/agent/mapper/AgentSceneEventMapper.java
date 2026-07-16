@@ -11,6 +11,21 @@ public interface AgentSceneEventMapper extends BaseMapper<AgentSceneEventEntity>
             INSERT INTO agent_scene_version
                 (tenant_id, client_id, scene_id, current_version, create_time, update_time)
             VALUES
+                (#{tenantId}, #{clientId}, #{sceneId}, 0, #{now}, #{now})
+            ON DUPLICATE KEY UPDATE
+                current_version = current_version,
+                update_time = update_time
+            """)
+    int ensureAndLockVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("sceneId") String sceneId,
+            @Param("now") long now);
+
+    @Insert("""
+            INSERT INTO agent_scene_version
+                (tenant_id, client_id, scene_id, current_version, create_time, update_time)
+            VALUES
                 (#{tenantId}, #{clientId}, #{sceneId}, LAST_INSERT_ID(1), #{now}, #{now})
             ON DUPLICATE KEY UPDATE
                 current_version = LAST_INSERT_ID(current_version + 1),

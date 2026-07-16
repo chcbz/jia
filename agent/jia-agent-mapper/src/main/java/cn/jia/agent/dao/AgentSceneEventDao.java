@@ -6,6 +6,9 @@ import cn.jia.agent.entity.AgentSceneEventEntity;
 import java.util.List;
 
 public interface AgentSceneEventDao {
+    /** Ensures and exclusively locks the scoped version row without changing its version. */
+    void lockSceneVersionScope(String tenantId, String clientId, String sceneId);
+
     /**
      * Atomically allocates the next durable scoped version on the current database connection.
      * The caller must keep this call and the corresponding event insert in one transaction;

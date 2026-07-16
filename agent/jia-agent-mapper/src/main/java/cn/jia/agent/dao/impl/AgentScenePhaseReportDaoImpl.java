@@ -7,6 +7,8 @@ import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 @Named
 public class AgentScenePhaseReportDaoImpl implements AgentScenePhaseReportDao {
@@ -30,6 +32,17 @@ public class AgentScenePhaseReportDaoImpl implements AgentScenePhaseReportDao {
     }
 
     @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AgentScenePhaseReportEntity findByReportIdForUpdate(
+            String tenantId, String clientId, String sceneId, String reportId) {
+        requireScope(tenantId, clientId, sceneId);
+        if (StringUtil.isBlank(reportId)) {
+            throw new IllegalArgumentException("reportId is required");
+        }
+        return baseMapper.selectScopedForUpdate(tenantId, clientId, sceneId, reportId);
+    }
+
+    @Override
     public int insert(String tenantId, String clientId, String sceneId,
             AgentScenePhaseReportEntity entity) {
         requireScope(tenantId, clientId, sceneId);
@@ -41,21 +54,6 @@ public class AgentScenePhaseReportDaoImpl implements AgentScenePhaseReportDao {
         entity.setSceneId(sceneId);
         entity.init4Creation();
         return baseMapper.insert(entity);
-    }
-
-    @Override
-    public int updateResult(String tenantId, String clientId, String sceneId,
-            String reportId, String result, long processedAt) {
-        requireScope(tenantId, clientId, sceneId);
-        if (StringUtil.isBlank(reportId) || StringUtil.isBlank(result) || processedAt < 0) {
-            throw new IllegalArgumentException("reportId, result and nonnegative processedAt are required");
-        }
-        AgentScenePhaseReportEntity update = new AgentScenePhaseReportEntity();
-        update.setResult(result);
-        update.setProcessedAt(processedAt);
-        update.setUpdateTime(processedAt);
-        return baseMapper.update(update, scope(tenantId, clientId, sceneId)
-                .eq(AgentScenePhaseReportEntity::getReportId, reportId));
     }
 
     private LambdaQueryWrapper<AgentScenePhaseReportEntity> scope(

@@ -104,6 +104,37 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
+    void phaseAndSceneScopeLocksUseCurrentForUpdateReadsWithoutIncrementing() throws Exception {
+        Method reportLock = AgentScenePhaseReportMapper.class.getDeclaredMethod(
+                "selectScopedForUpdate", String.class, String.class, String.class, String.class);
+        String reportSql = normalizeSql(reportLock.getAnnotation(Select.class).value());
+        assertTrue(reportSql.contains("from agent_scene_phase_report"), reportSql);
+        assertTrue(reportSql.contains("tenant_id = #{tenantid}"), reportSql);
+        assertTrue(reportSql.contains("client_id = #{clientid}"), reportSql);
+        assertTrue(reportSql.contains("scene_id = #{sceneid}"), reportSql);
+        assertTrue(reportSql.contains("report_id = #{reportid}"), reportSql);
+        assertTrue(reportSql.trim().endsWith("for update"), reportSql);
+
+        Method sceneLock = AgentSceneEventMapper.class.getDeclaredMethod(
+                "ensureAndLockVersion", String.class, String.class, String.class, long.class);
+        String sceneSql = normalizeSql(sceneLock.getAnnotation(Insert.class).value());
+        assertTrue(sceneSql.contains("insert into agent_scene_version"), sceneSql);
+        assertTrue(sceneSql.contains("on duplicate key update"), sceneSql);
+        assertTrue(sceneSql.contains("current_version = current_version"), sceneSql);
+        assertFalse(sceneSql.contains("current_version + 1"), sceneSql);
+        assertFalse(sceneSql.contains("last_insert_id"), sceneSql);
+
+        Transactional reportTransaction = AgentScenePhaseReportDaoImpl.class.getMethod(
+                "findByReportIdForUpdate", String.class, String.class, String.class, String.class)
+                .getAnnotation(Transactional.class);
+        assertEquals(Propagation.MANDATORY, reportTransaction.propagation());
+        Transactional sceneTransaction = AgentSceneEventDaoImpl.class.getMethod(
+                "lockSceneVersionScope", String.class, String.class, String.class)
+                .getAnnotation(Transactional.class);
+        assertEquals(Propagation.MANDATORY, sceneTransaction.propagation());
+    }
+
+    @Test
     void stateUpsertUsesAtomicMonotonicDuplicateKeyUpdate() throws Exception {
         Method method = AgentSceneStateMapper.class.getDeclaredMethod(
                 "upsertMonotonic", String.class, String.class, String.class, AgentSceneStateEntity.class);
@@ -292,23 +323,33 @@ class AgentSceneScopedDaoTest {
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
-    void phaseResultUpdateIsScopedToTheUniqueReportIdentity() {
+    void phaseLockReadDelegatesToTheScopedCurrentMapperQuery() {
         AgentScenePhaseReportMapper mapper = mock(AgentScenePhaseReportMapper.class);
         AgentScenePhaseReportDao dao = new AgentScenePhaseReportDaoImpl(mapper);
+        AgentScenePhaseReportEntity stored = new AgentScenePhaseReportEntity();
+        when(mapper.selectScopedForUpdate("tenant-a", "client-a", "juyiting-main", "report-1"))
+                .thenReturn(stored);
 
-        dao.updateResult("tenant-a", "client-a", "juyiting-main",
-                "report-1", "ignored_stale", 2_600L);
+        AgentScenePhaseReportEntity result = dao.findByReportIdForUpdate(
+                "tenant-a", "client-a", "juyiting-main", "report-1");
 
-        ArgumentCaptor<AgentScenePhaseReportEntity> update =
-                ArgumentCaptor.forClass(AgentScenePhaseReportEntity.class);
-        ArgumentCaptor<Wrapper<AgentScenePhaseReportEntity>> scope = ArgumentCaptor.forClass(Wrapper.class);
-        verify(mapper).update(update.capture(), scope.capture());
-        assertEquals("ignored_stale", update.getValue().getResult());
-        assertEquals(2_600L, update.getValue().getProcessedAt());
-        assertEquals(2_600L, update.getValue().getUpdateTime());
-        assertScoped(scope.getValue(), "tenant-a", "client-a", "juyiting-main");
-        AbstractWrapper<?, ?, ?> wrapper = (AbstractWrapper<?, ?, ?>) scope.getValue();
-        assertTrue(wrapper.getParamNameValuePairs().containsValue("report-1"));
+        assertEquals(stored, result);
+        verify(mapper).selectScopedForUpdate("tenant-a", "client-a", "juyiting-main", "report-1");
+    }
+
+    @Test
+    void sceneScopeLockEnsuresTheCounterRowWithoutAllocatingAVersion() {
+        AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
+        AgentSceneEventDao dao = new AgentSceneEventDaoImpl(mapper);
+
+        dao.lockSceneVersionScope("tenant-a", "client-a", "juyiting-main");
+
+        verify(mapper).ensureAndLockVersion(
+                org.mockito.ArgumentMatchers.eq("tenant-a"),
+                org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("juyiting-main"), anyLong());
+        verify(mapper, never()).allocateNextVersion(any(), any(), any(), anyLong());
+        verify(mapper, never()).selectLastAllocatedVersion();
     }
 
     @Test

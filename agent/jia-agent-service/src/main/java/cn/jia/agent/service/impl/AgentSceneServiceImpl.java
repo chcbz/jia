@@ -139,13 +139,14 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         if (phaseReportDao == null) {
             throw new IllegalStateException("AgentScenePhaseReportDao is required for phase reporting");
         }
-        AgentScenePhaseReportEntity existing = phaseReportDao.findByReportId(
+        AgentScenePhaseReportEntity existing = phaseReportDao.findByReportIdForUpdate(
                 scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId());
         if (existing != null) {
             return phaseResult(existing.getReportId(), existing.getStateVersion(),
                     AgentSceneConstants.RESULT_IGNORED_DUPLICATE);
         }
 
+        eventDao.lockSceneVersionScope(scope.tenantId(), scope.clientId(), scope.sceneId());
         AgentSceneStateEntity current = stateDao.findByAgent(
                 scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId());
         boolean exactCurrent = phaseMatchesCurrent(report, current);
@@ -159,7 +160,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
                 throw new IllegalStateException("Unable to persist agent scene phase report");
             }
         } catch (DuplicateKeyException duplicate) {
-            AgentScenePhaseReportEntity original = phaseReportDao.findByReportId(
+            AgentScenePhaseReportEntity original = phaseReportDao.findByReportIdForUpdate(
                     scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId());
             if (original == null) {
                 throw new IllegalStateException("Duplicate phase report is not readable in its scope", duplicate);
@@ -173,23 +174,16 @@ public class AgentSceneServiceImpl implements AgentSceneService {
                     AgentSceneConstants.RESULT_IGNORED_STALE);
         }
 
-        int updated = stateDao.updatePhase(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId(),
-                report.getStateVersion(), report.getPhase(), processedAt);
-        if (updated <= 0) {
-            if (phaseReportDao.updateResult(
-                    scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId(),
-                    AgentSceneConstants.RESULT_IGNORED_STALE, processedAt) <= 0) {
-                throw new IllegalStateException("Unable to persist stale phase report result");
-            }
-            return phaseResult(report.getReportId(), report.getStateVersion(),
-                    AgentSceneConstants.RESULT_IGNORED_STALE);
-        }
-
         long sceneVersion = eventDao.nextSceneVersion(
                 scope.tenantId(), scope.clientId(), scope.sceneId());
         if (sceneVersion <= 0) {
             throw new IllegalStateException("Allocated sceneVersion must be positive");
+        }
+        int updated = stateDao.updatePhase(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId(),
+                report.getStateVersion(), report.getPhase(), processedAt);
+        if (updated <= 0) {
+            throw new IllegalStateException("Scoped scene state changed while its version lock was held");
         }
         AgentSceneStateDTO publishedState = toStateDTO(current);
         publishedState.setPhase(report.getPhase());

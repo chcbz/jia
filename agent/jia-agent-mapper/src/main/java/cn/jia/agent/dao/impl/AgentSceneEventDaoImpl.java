@@ -27,6 +27,13 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
+    public void lockSceneVersionScope(String tenantId, String clientId, String sceneId) {
+        requireScope(tenantId, clientId, sceneId);
+        baseMapper.ensureAndLockVersion(tenantId, clientId, sceneId, DateUtil.nowTime());
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
     public long nextSceneVersion(String tenantId, String clientId, String sceneId) {
         requireScope(tenantId, clientId, sceneId);
         int affected = baseMapper.allocateNextVersion(
