@@ -6,6 +6,7 @@ import cn.jia.agent.dao.AgentSceneEventDao;
 import cn.jia.agent.dao.AgentSceneStateDao;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentSceneEventDTO;
+import cn.jia.agent.entity.AgentSceneEventEntity;
 import cn.jia.agent.entity.AgentSceneSnapshotDTO;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentSceneStateEntity;
@@ -13,6 +14,7 @@ import cn.jia.agent.service.AgentSceneEventBroker;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +34,11 @@ import reactor.test.StepVerifier;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.LongStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -144,6 +150,63 @@ class AgentSceneServiceImplTest extends BaseMockTest {
 
         verify(eventDao).findCurrentSceneVersion("tenant-a", "client-a", SCENE_ID);
         verify(eventDao).findEarliestSceneVersion("tenant-a", "client-a", SCENE_ID);
+    }
+
+    @Test
+    void coalescesLiveNotificationsWhilePersistedCatchupIsBlocked() {
+        AtomicLong durableVersion = new AtomicLong(1L);
+        CountDownLatch streamReady = new CountDownLatch(1);
+        CountDownLatch catchupEntered = new CountDownLatch(1);
+        CountDownLatch releaseCatchup = new CountDownLatch(1);
+        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", SCENE_ID))
+                .thenAnswer(invocation -> durableVersion.get());
+        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", SCENE_ID))
+                .thenAnswer(invocation -> {
+                    streamReady.countDown();
+                    return 1L;
+                });
+        when(eventDao.findAfterVersion("tenant-a", "client-a", SCENE_ID, 1L, 1000))
+                .thenAnswer(invocation -> {
+                    catchupEntered.countDown();
+                    assertTrue(releaseCatchup.await(2, TimeUnit.SECONDS));
+                    return List.of(eventEntity(2L), eventEntity(3L));
+                });
+        when(eventDao.findAfterVersion("tenant-a", "client-a", SCENE_ID, 3L, 1000))
+                .thenReturn(LongStream.rangeClosed(4L, 100L)
+                        .mapToObj(this::eventEntity)
+                        .toList());
+        AgentSceneEventBroker.SceneScope scope = new AgentSceneEventBroker.SceneScope(
+                "tenant-a", "client-a", SCENE_ID);
+
+        List<Long> received = new CopyOnWriteArrayList<>();
+        CountDownLatch delivered = new CountDownLatch(99);
+        var subscription = service.events(SCENE_ID, 1L).subscribe(event -> {
+            received.add(event.getSceneVersion());
+            delivered.countDown();
+        });
+        await(streamReady);
+        durableVersion.set(3L);
+        eventBroker.publish(scope, sceneEvent(3L));
+        await(catchupEntered);
+        try {
+            durableVersion.set(100L);
+            LongStream.rangeClosed(4L, 100L)
+                    .forEach(version -> eventBroker.publish(scope, sceneEvent(version)));
+            assertEquals(1, service.scheduledEventBridgeTaskCount());
+        } finally {
+            releaseCatchup.countDown();
+        }
+
+        try {
+            assertTrue(delivered.await(5, TimeUnit.SECONDS), received.toString());
+            assertEquals(LongStream.rangeClosed(2L, 100L).boxed().toList(), received);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(error);
+        } finally {
+            subscription.dispose();
+        }
+        assertEquals(0, service.scheduledEventBridgeTaskCount());
     }
 
     @Test
@@ -352,5 +415,32 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         entity.setExpectedArrivalAt(2_000L);
         entity.setExpiresAt(expiresAt);
         return entity;
+    }
+
+    private AgentSceneEventDTO sceneEvent(long version) {
+        AgentSceneEventDTO event = new AgentSceneEventDTO();
+        event.setSceneVersion(version);
+        event.setEventType("agent-scene-state-updated");
+        event.setOccurredAt(2_000L + version);
+        return event;
+    }
+
+    private AgentSceneEventEntity eventEntity(long version) {
+        AgentSceneEventDTO event = sceneEvent(version);
+        AgentSceneEventEntity entity = new AgentSceneEventEntity();
+        entity.setSceneVersion(version);
+        entity.setEventType(event.getEventType());
+        entity.setOccurredAt(event.getOccurredAt());
+        entity.setEventJson(JsonUtil.toJson(event));
+        return entity;
+    }
+
+    private void await(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(2, TimeUnit.SECONDS));
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(error);
+        }
     }
 }

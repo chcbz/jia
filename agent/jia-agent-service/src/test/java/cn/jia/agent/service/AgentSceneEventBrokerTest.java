@@ -17,6 +17,7 @@ import org.reactivestreams.Subscription;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import reactor.core.publisher.BaseSubscriber;
+import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
@@ -146,7 +147,7 @@ class AgentSceneEventBrokerTest {
         CountDownLatch backlogEntered = new CountDownLatch(1);
         CountDownLatch releaseBacklog = new CountDownLatch(1);
         when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
-                .thenReturn(2L);
+                .thenReturn(2L, 3L);
         when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
                 .thenReturn(1L);
         when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 0L, 1000))
@@ -155,6 +156,8 @@ class AgentSceneEventBrokerTest {
                     assertTrue(releaseBacklog.await(5, TimeUnit.SECONDS));
                     return List.of(entity(event(1L, "one")), entity(event(2L, "two")));
                 });
+        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 2L, 1000))
+                .thenReturn(List.of(entity(event(3L, "three"))));
         AgentSceneServiceImpl service = service(eventDao);
         List<Long> received = new CopyOnWriteArrayList<>();
         CountDownLatch receivedLatch = new CountDownLatch(3);
@@ -181,7 +184,7 @@ class AgentSceneEventBrokerTest {
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
         CountDownLatch streamReady = new CountDownLatch(1);
         when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
-                .thenReturn(1L);
+                .thenReturn(1L, 3L);
         when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
                 .thenAnswer(invocation -> {
                     streamReady.countDown();
@@ -207,6 +210,70 @@ class AgentSceneEventBrokerTest {
 
         verify(eventDao).findAfterVersion(
                 "tenant-a", "client-a", "juyiting-main", 1L, 1000);
+    }
+
+    @Test
+    void persistedBacklogGapRequiresOneSafeResyncWithoutPartialReplay() {
+        setScope("tenant-a", "client-a");
+        AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
+        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenReturn(3L);
+        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenReturn(1L);
+        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 0L, 1000))
+                .thenReturn(List.of(entity(event(1L, "one")), entity(event(3L, "three"))));
+
+        assertSingleSafeResync(service(eventDao).events("juyiting-main", 0L), 3L);
+    }
+
+    @Test
+    void liveJumpWithMissingPersistedIntermediateRequiresResync() {
+        setScope("tenant-a", "client-a");
+        AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
+        CountDownLatch streamReady = new CountDownLatch(1);
+        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenReturn(1L, 3L, 3L);
+        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenAnswer(invocation -> {
+                    streamReady.countDown();
+                    return 1L;
+                });
+        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 1L, 1000))
+                .thenReturn(List.of(entity(event(3L, "three"))));
+
+        StepVerifier.create(service(eventDao).events("juyiting-main", 1L))
+                .then(() -> {
+                    await(streamReady);
+                    broker.publish(scope, event(3L, "three-live"));
+                })
+                .assertNext(event -> assertSafeResync(event, 3L))
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void retentionChangeDuringBacklogHandoffRequiresResync() {
+        setScope("tenant-a", "client-a");
+        AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
+        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenReturn(3L);
+        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenReturn(1L);
+        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 0L, 1000))
+                .thenReturn(List.of(entity(event(2L, "two")), entity(event(3L, "three"))));
+
+        assertSingleSafeResync(service(eventDao).events("juyiting-main", 0L), 3L);
+    }
+
+    @Test
+    void cursorAheadOfDurableVersionRequiresResync() {
+        setScope("tenant-a", "client-a");
+        AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
+        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+                .thenReturn(3L);
+
+        assertSingleSafeResync(service(eventDao).events("juyiting-main", 5L), 3L);
+        verify(eventDao, never()).findEarliestSceneVersion(any(), any(), any());
     }
 
     @Test
@@ -356,6 +423,20 @@ class AgentSceneEventBrokerTest {
         entity.setOccurredAt(event.getOccurredAt());
         entity.setEventJson(JsonUtil.toJson(event));
         return entity;
+    }
+
+    private void assertSingleSafeResync(Flux<AgentSceneEventDTO> events, long currentVersion) {
+        StepVerifier.create(events)
+                .assertNext(event -> assertSafeResync(event, currentVersion))
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+    }
+
+    private void assertSafeResync(AgentSceneEventDTO event, long currentVersion) {
+        assertEquals(currentVersion, event.getSceneVersion());
+        assertEquals("resync-required", event.getEventType());
+        assertEquals(null, event.getState());
+        assertEquals(null, event.getOccurredAt());
     }
 
     private AgentSceneServiceImpl service(AgentSceneEventDao eventDao) {

@@ -38,7 +38,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Named
 public class AgentSceneServiceImpl implements AgentSceneService {
@@ -52,6 +54,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     private final AgentSceneEventDao eventDao;
     private final AgentRuntimeDao runtimeDao;
     private final AgentSceneEventBroker eventBroker;
+    private final AtomicInteger scheduledEventBridgeTasks = new AtomicInteger();
 
     @Inject
     public AgentSceneServiceImpl(
@@ -175,120 +178,26 @@ public class AgentSceneServiceImpl implements AgentSceneService {
 
     private void bridgeBacklogAndLive(
             SceneScope scope, long sinceVersion, FluxSink<AgentSceneEventDTO> sink) {
-        List<AgentSceneEventDTO> pendingLive = new ArrayList<>();
-        AtomicLong deliveredVersion = new AtomicLong(sinceVersion);
-        AtomicBoolean backlogComplete = new AtomicBoolean(false);
-        Scheduler.Worker worker = Schedulers.boundedElastic().createWorker();
-        Disposable live = eventBroker.stream(scope, sinceVersion).subscribe(
-                event -> schedule(worker, sink, () -> {
-                    if (!backlogComplete.get()) {
-                        pendingLive.add(AgentSceneEventBroker.copyEvent(event));
-                    } else {
-                        emitLiveWithCatchup(scope, sink, deliveredVersion, event);
-                    }
-                }),
-                error -> schedule(worker, sink, () -> sink.error(error)));
-        sink.onDispose(() -> {
-            live.dispose();
-            worker.dispose();
-        });
-        schedule(worker, sink, () -> initializeBacklog(
-                scope, sinceVersion, sink, pendingLive, deliveredVersion, backlogComplete, live));
+        new EventStreamBridge(scope, sinceVersion, sink).start();
     }
 
-    private void initializeBacklog(
-            SceneScope scope,
-            long sinceVersion,
-            FluxSink<AgentSceneEventDTO> sink,
-            List<AgentSceneEventDTO> pendingLive,
-            AtomicLong deliveredVersion,
-            AtomicBoolean backlogComplete,
-            Disposable live) {
-        long currentVersion = versionOrZero(eventDao.findCurrentSceneVersion(
-                scope.tenantId(), scope.clientId(), scope.sceneId()));
-        Long earliestVersion = eventDao.findEarliestSceneVersion(
-                scope.tenantId(), scope.clientId(), scope.sceneId());
-        boolean noRetainedBacklog = earliestVersion == null && currentVersion > sinceVersion;
-        boolean retainedGap = earliestVersion != null
-                && earliestVersion > 0
-                && sinceVersion < earliestVersion - 1;
-        if (noRetainedBacklog || retainedGap) {
-            backlogComplete.set(true);
-            pendingLive.clear();
-            live.dispose();
-            sink.next(resyncRequired(currentVersion));
-            sink.complete();
-            return;
-        }
-
-        List<AgentSceneEventDTO> backlog = readBacklog(scope, sinceVersion, currentVersion);
-        for (AgentSceneEventDTO event : backlog) {
-            emitIfNew(sink, deliveredVersion, event);
-        }
-        pendingLive.sort(Comparator.comparing(AgentSceneEventDTO::getSceneVersion));
-        backlogComplete.set(true);
-        for (AgentSceneEventDTO event : pendingLive) {
-            emitLiveWithCatchup(scope, sink, deliveredVersion, event);
-        }
-        pendingLive.clear();
+    int scheduledEventBridgeTaskCount() {
+        // Package-visible only so the bounded-work regression can assert coalescing.
+        return scheduledEventBridgeTasks.get();
     }
 
-    private void emitLiveWithCatchup(
-            SceneScope scope,
-            FluxSink<AgentSceneEventDTO> sink,
-            AtomicLong deliveredVersion,
-            AgentSceneEventDTO incoming) {
-        if (incoming == null || incoming.getSceneVersion() == null
-                || incoming.getSceneVersion() <= deliveredVersion.get()
-                || sink.isCancelled()) {
-            return;
-        }
-        long incomingVersion = incoming.getSceneVersion();
-        if (incomingVersion - deliveredVersion.get() > 1) {
-            List<AgentSceneEventDTO> catchup = readBacklog(
-                    scope, deliveredVersion.get(), incomingVersion);
-            for (AgentSceneEventDTO event : catchup) {
-                emitIfNew(sink, deliveredVersion, event);
-            }
-        }
-        emitIfNew(sink, deliveredVersion, incoming);
-    }
-
-    private static void schedule(
-            Scheduler.Worker worker, FluxSink<AgentSceneEventDTO> sink, Runnable task) {
-        if (sink.isCancelled() || worker.isDisposed()) {
-            return;
-        }
-        try {
-            worker.schedule(() -> {
-                if (sink.isCancelled()) {
-                    return;
-                }
-                try {
-                    task.run();
-                } catch (RuntimeException error) {
-                    sink.error(error);
-                }
-            });
-        } catch (RuntimeException error) {
-            if (!sink.isCancelled()) {
-                sink.error(error);
-            }
-        }
-    }
-
-    private List<AgentSceneEventDTO> readBacklog(
-            SceneScope scope, long sinceVersion, long handoffVersion) {
-        if (handoffVersion <= sinceVersion) {
+    private List<AgentSceneEventDTO> readContiguousEvents(
+            SceneScope scope, long afterVersion, long throughVersion) {
+        if (throughVersion <= afterVersion) {
             return List.of();
         }
         List<AgentSceneEventDTO> backlog = new ArrayList<>();
-        long cursor = sinceVersion;
-        while (cursor < handoffVersion) {
+        long cursor = afterVersion;
+        while (cursor < throughVersion) {
             List<AgentSceneEventEntity> page = safeList(eventDao.findAfterVersion(
                     scope.tenantId(), scope.clientId(), scope.sceneId(), cursor, BACKLOG_PAGE_SIZE));
             if (page.isEmpty()) {
-                break;
+                throw new ContinuityGapException();
             }
             long priorCursor = cursor;
             for (AgentSceneEventEntity entity : page) {
@@ -296,15 +205,21 @@ public class AgentSceneServiceImpl implements AgentSceneService {
                         || entity.getSceneVersion() <= cursor) {
                     continue;
                 }
-                if (entity.getSceneVersion() > handoffVersion) {
-                    break;
+                long expectedVersion = cursor + 1;
+                if (entity.getSceneVersion() != expectedVersion
+                        || entity.getSceneVersion() > throughVersion) {
+                    throw new ContinuityGapException();
                 }
                 AgentSceneEventDTO event = toEventDTO(entity);
                 backlog.add(event);
                 cursor = entity.getSceneVersion();
+                if (cursor == throughVersion) {
+                    break;
+                }
             }
-            if (page.size() < BACKLOG_PAGE_SIZE || cursor == priorCursor) {
-                break;
+            if (cursor == priorCursor
+                    || (cursor < throughVersion && page.size() < BACKLOG_PAGE_SIZE)) {
+                throw new ContinuityGapException();
             }
         }
         return backlog;
@@ -324,25 +239,209 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         return event;
     }
 
-    private static void emitIfNew(
-            FluxSink<AgentSceneEventDTO> sink,
-            AtomicLong deliveredVersion,
-            AgentSceneEventDTO source) {
-        AgentSceneEventDTO event = AgentSceneEventBroker.copyEvent(source);
-        if (event == null || event.getSceneVersion() == null
-                || event.getSceneVersion() <= deliveredVersion.get()
-                || sink.isCancelled()) {
-            return;
-        }
-        deliveredVersion.set(event.getSceneVersion());
-        sink.next(event);
-    }
-
     private static AgentSceneEventDTO resyncRequired(long currentVersion) {
         AgentSceneEventDTO event = new AgentSceneEventDTO();
         event.setSceneVersion(currentVersion);
         event.setEventType(EVENT_RESYNC_REQUIRED);
         return event;
+    }
+
+    private final class EventStreamBridge {
+        private final SceneScope scope;
+        private final long sinceVersion;
+        private final FluxSink<AgentSceneEventDTO> sink;
+        private final Scheduler.Worker worker = Schedulers.boundedElastic().createWorker();
+        private final AtomicLong deliveredVersion;
+        private final AtomicLong highestObservedVersion;
+        private final AtomicBoolean taskScheduled = new AtomicBoolean(true);
+        private final AtomicBoolean terminated = new AtomicBoolean(false);
+        private final AtomicReference<ScheduledWork> scheduledWork = new AtomicReference<>();
+        private volatile boolean initialized;
+        private volatile Disposable live;
+
+        private EventStreamBridge(
+                SceneScope scope, long sinceVersion, FluxSink<AgentSceneEventDTO> sink) {
+            this.scope = scope;
+            this.sinceVersion = sinceVersion;
+            this.sink = sink;
+            this.deliveredVersion = new AtomicLong(sinceVersion);
+            this.highestObservedVersion = new AtomicLong(sinceVersion);
+        }
+
+        private void start() {
+            live = eventBroker.stream(scope, sinceVersion).subscribe(this::observe, this::fail);
+            sink.onDispose(() -> {
+                terminated.set(true);
+                live.dispose();
+                ScheduledWork work = scheduledWork.getAndSet(null);
+                if (work != null) {
+                    work.finish();
+                }
+                worker.dispose();
+            });
+            scheduleReserved(this::initializeAndCatchUp);
+        }
+
+        private void observe(AgentSceneEventDTO event) {
+            if (terminated.get() || event == null || event.getSceneVersion() == null) {
+                return;
+            }
+            highestObservedVersion.accumulateAndGet(event.getSceneVersion(), Math::max);
+            if (initialized) {
+                scheduleCatchUp();
+            }
+        }
+
+        private void initializeAndCatchUp() {
+            long currentVersion = currentVersion();
+            if (sinceVersion > currentVersion) {
+                resync(currentVersion);
+                return;
+            }
+            Long earliestVersion = eventDao.findEarliestSceneVersion(
+                    scope.tenantId(), scope.clientId(), scope.sceneId());
+            boolean noRetainedBacklog = earliestVersion == null && currentVersion > sinceVersion;
+            boolean retainedGap = earliestVersion != null
+                    && earliestVersion > 0
+                    && sinceVersion < earliestVersion - 1;
+            if (noRetainedBacklog || retainedGap) {
+                resync(currentVersion());
+                return;
+            }
+            replayThrough(currentVersion);
+            initialized = true;
+            catchUpObserved();
+        }
+
+        private void catchUpObserved() {
+            long observedVersion = highestObservedVersion.get();
+            if (observedVersion <= deliveredVersion.get() || terminated.get()) {
+                return;
+            }
+            long currentVersion = currentVersion();
+            if (observedVersion > currentVersion || deliveredVersion.get() > currentVersion) {
+                resync(currentVersion);
+                return;
+            }
+            replayThrough(currentVersion);
+        }
+
+        private void replayThrough(long throughVersion) {
+            long afterVersion = deliveredVersion.get();
+            List<AgentSceneEventDTO> events = readContiguousEvents(
+                    scope, afterVersion, throughVersion);
+            for (AgentSceneEventDTO source : events) {
+                if (terminated.get() || sink.isCancelled()) {
+                    return;
+                }
+                AgentSceneEventDTO event = AgentSceneEventBroker.copyEvent(source);
+                long expectedVersion = deliveredVersion.get() + 1;
+                if (event == null || event.getSceneVersion() == null
+                        || event.getSceneVersion() != expectedVersion) {
+                    throw new ContinuityGapException();
+                }
+                sink.next(event);
+                deliveredVersion.set(expectedVersion);
+            }
+            if (!terminated.get() && deliveredVersion.get() != throughVersion) {
+                throw new ContinuityGapException();
+            }
+        }
+
+        private long currentVersion() {
+            return versionOrZero(eventDao.findCurrentSceneVersion(
+                    scope.tenantId(), scope.clientId(), scope.sceneId()));
+        }
+
+        private void scheduleCatchUp() {
+            if (terminated.get() || sink.isCancelled()
+                    || highestObservedVersion.get() <= deliveredVersion.get()
+                    || !taskScheduled.compareAndSet(false, true)) {
+                return;
+            }
+            scheduleReserved(this::catchUpObserved);
+        }
+
+        private void scheduleReserved(Runnable action) {
+            ScheduledWork work = new ScheduledWork();
+            scheduledWork.set(work);
+            try {
+                worker.schedule(() -> runScheduled(action, work));
+            } catch (RuntimeException error) {
+                scheduledWork.compareAndSet(work, null);
+                work.finish();
+                taskScheduled.set(false);
+                fail(error);
+            }
+        }
+
+        private void runScheduled(Runnable action, ScheduledWork work) {
+            try {
+                if (!terminated.get() && !sink.isCancelled()) {
+                    action.run();
+                }
+            } catch (ContinuityGapException gap) {
+                try {
+                    resync(currentVersion());
+                } catch (RuntimeException error) {
+                    fail(error);
+                }
+            } catch (RuntimeException error) {
+                fail(error);
+            } finally {
+                taskScheduled.set(false);
+                scheduledWork.compareAndSet(work, null);
+                work.finish();
+                if (initialized) {
+                    scheduleCatchUp();
+                }
+            }
+        }
+
+        private void resync(long currentVersion) {
+            if (!terminated.compareAndSet(false, true)) {
+                return;
+            }
+            if (live != null) {
+                live.dispose();
+            }
+            if (!sink.isCancelled()) {
+                sink.next(resyncRequired(currentVersion));
+                sink.complete();
+            }
+        }
+
+        private void fail(Throwable error) {
+            if (!terminated.compareAndSet(false, true)) {
+                return;
+            }
+            if (live != null) {
+                live.dispose();
+            }
+            if (!sink.isCancelled()) {
+                sink.error(error);
+            }
+        }
+
+        private final class ScheduledWork {
+            private final AtomicBoolean finished = new AtomicBoolean(false);
+
+            private ScheduledWork() {
+                scheduledEventBridgeTasks.incrementAndGet();
+            }
+
+            private void finish() {
+                if (finished.compareAndSet(false, true)) {
+                    scheduledEventBridgeTasks.decrementAndGet();
+                }
+            }
+        }
+    }
+
+    private static final class ContinuityGapException extends RuntimeException {
+        private ContinuityGapException() {
+            super(null, null, false, false);
+        }
     }
 
     private void publishAfterCommit(SceneScope scope, AgentSceneEventDTO source) {
