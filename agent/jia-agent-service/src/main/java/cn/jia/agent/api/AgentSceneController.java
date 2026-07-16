@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.common.AgentSceneConstants;
+import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.entity.AgentSceneEventDTO;
 import cn.jia.agent.entity.AgentScenePhaseReportDTO;
 import cn.jia.agent.entity.AgentScenePhaseResultDTO;
@@ -42,6 +43,7 @@ public class AgentSceneController {
             Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,63}");
 
     private final AgentSceneService sceneService;
+    private final AgentSceneFeatureFlags featureFlags;
 
     @GetMapping("/{sceneId}/snapshot")
     public JsonResult<AgentSceneSnapshotDTO> snapshot(@PathVariable String sceneId) {
@@ -60,6 +62,9 @@ public class AgentSceneController {
             @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
         String requiredSceneId = requireSceneId(sceneId);
         long resumeAfter = resolveResumeVersion(sinceVersion, lastEventId);
+        if (!featureFlags.sceneEventsEnabled()) {
+            throw new SceneEventsDisabledException();
+        }
         Flux<AgentSceneEventDTO> events;
         try {
             events = sceneService.events(requiredSceneId, resumeAfter);
@@ -110,6 +115,12 @@ public class AgentSceneController {
     public ResponseEntity<JsonResult<Void>> handleSceneStreamFailure() {
         return error(HttpStatus.INTERNAL_SERVER_ERROR,
                 "SCENE_STREAM_ERROR", "Scene event stream failed");
+    }
+
+    @ExceptionHandler(SceneEventsDisabledException.class)
+    public ResponseEntity<JsonResult<Void>> handleSceneEventsDisabled() {
+        return error(HttpStatus.SERVICE_UNAVAILABLE,
+                "SCENE_EVENTS_DISABLED", "Scene event stream is disabled");
     }
 
     @ExceptionHandler(Exception.class)
@@ -267,6 +278,9 @@ public class AgentSceneController {
     }
 
     static final class SceneStreamException extends RuntimeException {
+    }
+
+    static final class SceneEventsDisabledException extends RuntimeException {
     }
 
     private static final class ManagedSseEmitter extends SseEmitter {

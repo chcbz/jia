@@ -3,6 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentSceneConstants;
+import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
@@ -99,6 +100,7 @@ public class AgentServiceImpl implements AgentService {
     private final ObjectProvider<TaskService> taskServiceProvider;
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     private final ObjectProvider<AgentSceneService> sceneServiceProvider;
+    private final AgentSceneFeatureFlags sceneFeatureFlags;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -1422,6 +1424,9 @@ codexTimeoutMs=900000
 
     private void publishTaskAssignmentSceneStates(
             String taskId, List<AgentRuntimeEntity> assignedAgents) {
+        if (!sceneFeatureFlags.sceneStateEnabled()) {
+            return;
+        }
         AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
         if (sceneService == null) {
             return;
@@ -1435,6 +1440,9 @@ codexTimeoutMs=900000
     }
 
     private void publishDiscussionSceneState(String personaName, String dialogueType) {
+        if (!sceneFeatureFlags.sceneStateEnabled()) {
+            return;
+        }
         AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
         String normalizedType = Optional.ofNullable(dialogueType).orElse("")
                 .trim().toUpperCase(Locale.ROOT);
@@ -1460,6 +1468,9 @@ codexTimeoutMs=900000
     }
 
     private void publishReturnHomeSceneStates(String taskId, List<AgentRuntimeDTO> agents) {
+        if (!sceneFeatureFlags.sceneStateEnabled()) {
+            return;
+        }
         AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
         if (sceneService == null) {
             return;

@@ -5,10 +5,12 @@ import cn.jia.agent.entity.AgentScenePhaseReportDTO;
 import cn.jia.agent.entity.AgentScenePhaseResultDTO;
 import cn.jia.agent.entity.AgentSceneSnapshotDTO;
 import cn.jia.agent.entity.AgentSceneStateDTO;
+import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -31,9 +33,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
@@ -44,6 +48,45 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class AgentSceneControllerTest {
+
+    @Test
+    void featureFlagsDeclareSafeFalseDefaults() throws Exception {
+        var constructor = AgentSceneFeatureFlags.class.getConstructor(boolean.class, boolean.class);
+        assertEquals("${juyiting.scene-state.enabled:false}",
+                constructor.getParameters()[0].getAnnotation(Value.class).value());
+        assertEquals("${juyiting.scene-events.enabled:false}",
+                constructor.getParameters()[1].getAnnotation(Value.class).value());
+    }
+
+    @Test
+    void eventsDisabledReturnsControlledResponseWhileSnapshotAndPhaseRemainAvailable() throws Exception {
+        AgentSceneService service = mock(AgentSceneService.class);
+        AgentSceneSnapshotDTO snapshot = new AgentSceneSnapshotDTO();
+        snapshot.setSceneId("juyiting-main");
+        snapshot.setSceneVersion(7L);
+        when(service.snapshot("juyiting-main")).thenReturn(snapshot);
+        AgentScenePhaseResultDTO phaseResult = new AgentScenePhaseResultDTO();
+        phaseResult.setReportId("report-1");
+        phaseResult.setStateVersion(3L);
+        phaseResult.setResult("accepted");
+        when(service.reportPhase(eq("juyiting-main"), any())).thenReturn(phaseResult);
+        MockMvc mvc = mvc(service, new AgentSceneFeatureFlags(true, false));
+
+        mvc.perform(get("/agent/scenes/juyiting-main/events"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"code\":\"SCENE_EVENTS_DISABLED\"")));
+        mvc.perform(get("/agent/scenes/juyiting-main/snapshot"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"sceneVersion\":7")));
+        mvc.perform(post("/agent/scenes/juyiting-main/phases")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validPhaseJson()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"result\":\"accepted\"")));
+
+        verify(service, never()).events(any(), anyLong());
+    }
 
     @Test
     void exposesExactMvcRoutesAndEventStreamContentType() throws Exception {
@@ -209,7 +252,8 @@ class AgentSceneControllerTest {
     @Test
     void emitterAndMvcCompletionCancelFluxAndUseBoundedTimeout() throws Exception {
         AgentSceneService service = mock(AgentSceneService.class);
-        AgentSceneController controller = new AgentSceneController(service);
+        AgentSceneController controller = new AgentSceneController(
+                service, new AgentSceneFeatureFlags(true, true));
         AtomicBoolean cancelled = new AtomicBoolean();
         when(service.events("juyiting-main", 0L))
                 .thenReturn(Flux.<AgentSceneEventDTO>never().doOnCancel(() -> cancelled.set(true)));
@@ -266,7 +310,11 @@ class AgentSceneControllerTest {
     }
 
     private MockMvc mvc(AgentSceneService service) {
-        return MockMvcBuilders.standaloneSetup(new AgentSceneController(service)).build();
+        return mvc(service, new AgentSceneFeatureFlags(true, true));
+    }
+
+    private MockMvc mvc(AgentSceneService service, AgentSceneFeatureFlags flags) {
+        return MockMvcBuilders.standaloneSetup(new AgentSceneController(service, flags)).build();
     }
 
     private MvcResult completeAsync(MvcResult initial, MockMvc mvc) throws Exception {

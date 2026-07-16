@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
@@ -95,7 +96,7 @@ class AgentServiceImplTest extends BaseMockTest {
         EsContextHolder.setContext(new EsContext());
         agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
-                apiKeyServiceProvider, sceneServiceProvider);
+                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(true, true));
     }
 
     @Test
@@ -238,6 +239,30 @@ class AgentServiceImplTest extends BaseMockTest {
         assertNotNull(state.getStartedAt());
         assertTrue(state.getExpectedArrivalAt() > state.getStartedAt());
         assertTrue(state.getExpiresAt() > state.getExpectedArrivalAt());
+    }
+
+    @Test
+    void sceneStateDisabledPreservesTaskAssignmentWithoutSceneWrite() {
+        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
+                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(false, true));
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        agent.setPersonaCode("wuyong");
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(agent);
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentId("agent-wuyong");
+
+        AgentTaskDTO result = agentService.assignTask("task-001", request);
+
+        assertEquals(AgentConstants.TASK_STATUS_ASSIGNED, result.getStatus());
+        verify(sceneService, never()).upsertState(any(), any());
+        verify(sceneServiceProvider, never()).getIfAvailable();
     }
 
     @Test
