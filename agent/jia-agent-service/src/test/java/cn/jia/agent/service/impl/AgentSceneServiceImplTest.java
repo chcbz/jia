@@ -9,6 +9,7 @@ import cn.jia.agent.entity.AgentSceneEventDTO;
 import cn.jia.agent.entity.AgentSceneSnapshotDTO;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentSceneStateEntity;
+import cn.jia.agent.service.AgentSceneEventBroker;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -28,6 +29,7 @@ import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -57,11 +59,13 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     AgentRuntimeDao runtimeDao;
 
     AgentSceneServiceImpl service;
+    AgentSceneEventBroker eventBroker;
 
     @BeforeEach
     void setUp() {
         setScope("tenant-a", "client-a");
-        service = new AgentSceneServiceImpl(stateDao, eventDao, runtimeDao);
+        eventBroker = new AgentSceneEventBroker();
+        service = new AgentSceneServiceImpl(stateDao, eventDao, runtimeDao, eventBroker);
         lenient().when(runtimeDao.findRosterByOwner("client-a", "tenant-a", null, null))
                 .thenReturn(List.of(runtime("agent-songjiang", "songjiang", AgentConstants.STATUS_ONLINE)));
         lenient().when(stateDao.findActiveByScene(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong()))
@@ -123,11 +127,16 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void eventsFailsExplicitlyUntilTaskFour() {
+    void eventsOpensScopedLiveStreamWhenThereIsNoBacklog() {
+        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", SCENE_ID)).thenReturn(0L);
+        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", SCENE_ID)).thenReturn(null);
+
         StepVerifier.create(service.events(SCENE_ID, 0L))
-                .expectErrorMatches(error -> error instanceof UnsupportedOperationException
-                        && error.getMessage().contains("Task 4"))
-                .verify();
+                .thenCancel()
+                .verify(Duration.ofSeconds(5));
+
+        verify(eventDao).findCurrentSceneVersion("tenant-a", "client-a", SCENE_ID);
+        verify(eventDao).findEarliestSceneVersion("tenant-a", "client-a", SCENE_ID);
     }
 
     @Test

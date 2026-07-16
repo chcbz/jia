@@ -173,6 +173,54 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
+    void currentSceneVersionQueryUsesTheDurableScopedCounter() throws Exception {
+        Method method = AgentSceneEventMapper.class.getDeclaredMethod(
+                "selectCurrentVersion", String.class, String.class, String.class);
+        String sql = normalizeSql(method.getAnnotation(Select.class).value());
+        assertTrue(sql.contains("select current_version from agent_scene_version"), sql);
+        assertTrue(sql.contains("tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("scene_id = #{sceneid}"), sql);
+
+        AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
+        when(mapper.selectCurrentVersion("tenant-a", "client-a", "juyiting-main")).thenReturn(88L);
+
+        assertEquals(88L, new AgentSceneEventDaoImpl(mapper)
+                .findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"));
+        verify(mapper).selectCurrentVersion("tenant-a", "client-a", "juyiting-main");
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void retainedEventBoundariesAndBacklogAreScopedAndOrdered() {
+        AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
+        AgentSceneEventDao dao = new AgentSceneEventDaoImpl(mapper);
+
+        dao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main");
+        dao.findLatestSceneVersion("tenant-a", "client-a", "juyiting-main");
+        dao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 39L, 50);
+
+        ArgumentCaptor<Wrapper<AgentSceneEventEntity>> boundaryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(mapper, org.mockito.Mockito.times(2)).selectOne(boundaryCaptor.capture());
+        List<Wrapper<AgentSceneEventEntity>> boundaries = boundaryCaptor.getAllValues();
+        assertScoped(boundaries.get(0), "tenant-a", "client-a", "juyiting-main");
+        assertScoped(boundaries.get(1), "tenant-a", "client-a", "juyiting-main");
+        assertTrue(boundaries.get(0).getSqlSegment().toLowerCase(Locale.ROOT)
+                .contains("order by scene_version asc"));
+        assertTrue(boundaries.get(1).getSqlSegment().toLowerCase(Locale.ROOT)
+                .contains("order by scene_version desc"));
+
+        ArgumentCaptor<Wrapper<AgentSceneEventEntity>> backlogCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(mapper).selectList(backlogCaptor.capture());
+        String backlogSql = backlogCaptor.getValue().getSqlSegment().toLowerCase(Locale.ROOT);
+        assertScoped(backlogCaptor.getValue(), "tenant-a", "client-a", "juyiting-main");
+        assertTrue(backlogSql.contains("scene_version"), backlogSql);
+        assertTrue(backlogSql.contains(">"), backlogSql);
+        assertTrue(backlogSql.contains("order by scene_version asc"), backlogSql);
+        assertTrue(backlogSql.contains("limit 50"), backlogSql);
+    }
+
+    @Test
     void eventInsertCopiesOnlyAllowlistedTypedFieldsAndDropsForbiddenNestedKeys() {
         AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
         AgentSceneEventDao dao = new AgentSceneEventDaoImpl(mapper);

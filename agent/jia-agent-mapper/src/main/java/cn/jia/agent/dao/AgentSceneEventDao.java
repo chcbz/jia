@@ -13,6 +13,8 @@ public interface AgentSceneEventDao {
      */
     long nextSceneVersion(String tenantId, String clientId, String sceneId);
 
+    Long findCurrentSceneVersion(String tenantId, String clientId, String sceneId);
+
     Long findLatestSceneVersion(String tenantId, String clientId, String sceneId);
 
     Long findEarliestSceneVersion(String tenantId, String clientId, String sceneId);

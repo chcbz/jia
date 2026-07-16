@@ -42,6 +42,12 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
     }
 
     @Override
+    public Long findCurrentSceneVersion(String tenantId, String clientId, String sceneId) {
+        requireScope(tenantId, clientId, sceneId);
+        return baseMapper.selectCurrentVersion(tenantId, clientId, sceneId);
+    }
+
+    @Override
     public Long findLatestSceneVersion(String tenantId, String clientId, String sceneId) {
         AgentSceneEventEntity event = findBoundary(tenantId, clientId, sceneId, false);
         return event == null ? null : event.getSceneVersion();

@@ -24,4 +24,17 @@ public interface AgentSceneEventMapper extends BaseMapper<AgentSceneEventEntity>
 
     @Select("SELECT LAST_INSERT_ID()")
     Long selectLastAllocatedVersion();
+
+    @Select("""
+            SELECT current_version
+            FROM agent_scene_version
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND scene_id = #{sceneId}
+            LIMIT 1
+            """)
+    Long selectCurrentVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("sceneId") String sceneId);
 }
