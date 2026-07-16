@@ -1,0 +1,286 @@
+package cn.jia.agent.service.impl;
+
+import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentSceneEventDao;
+import cn.jia.agent.dao.AgentSceneStateDao;
+import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentSceneAgentDTO;
+import cn.jia.agent.entity.AgentSceneEventDTO;
+import cn.jia.agent.entity.AgentScenePhaseReportDTO;
+import cn.jia.agent.entity.AgentScenePhaseResultDTO;
+import cn.jia.agent.entity.AgentSceneSnapshotDTO;
+import cn.jia.agent.entity.AgentSceneStateDTO;
+import cn.jia.agent.entity.AgentSceneStateEntity;
+import cn.jia.agent.service.AgentSceneService;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.util.StringUtil;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import org.springframework.transaction.annotation.Transactional;
+import reactor.core.publisher.Flux;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+@Named
+public class AgentSceneServiceImpl implements AgentSceneService {
+    private static final String EVENT_STATE_UPDATED = "agent-scene-state-updated";
+    private static final Set<String> VISIBLE_STATUSES = Set.of(
+            AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY);
+
+    private final AgentSceneStateDao stateDao;
+    private final AgentSceneEventDao eventDao;
+    private final AgentRuntimeDao runtimeDao;
+
+    @Inject
+    public AgentSceneServiceImpl(
+            AgentSceneStateDao stateDao,
+            AgentSceneEventDao eventDao,
+            AgentRuntimeDao runtimeDao) {
+        this.stateDao = stateDao;
+        this.eventDao = eventDao;
+        this.runtimeDao = runtimeDao;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public AgentSceneSnapshotDTO snapshot(String sceneId) {
+        SceneScope scope = requireScope(sceneId);
+        long now = System.currentTimeMillis();
+        List<AgentRuntimeEntity> roster = scopedRoster(scope);
+        Map<String, AgentRuntimeEntity> visibleByAgent = new HashMap<>();
+        List<AgentSceneAgentDTO> agents = new ArrayList<>();
+        for (AgentRuntimeEntity runtime : roster) {
+            if (!VISIBLE_STATUSES.contains(runtime.getStatus())
+                    || StringUtil.isBlank(runtime.getAgentId())
+                    || StringUtil.isBlank(runtime.getPersonaCode())) {
+                continue;
+            }
+            visibleByAgent.put(runtime.getAgentId(), runtime);
+            agents.add(toAgentDTO(runtime));
+        }
+        agents.sort(Comparator.comparing(AgentSceneAgentDTO::getAgentId));
+
+        List<AgentSceneStateDTO> states = safeList(stateDao.findActiveByScene(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), now)).stream()
+                .filter(entity -> isActive(entity, now))
+                .filter(entity -> stateMatchesVisibleAgent(entity, visibleByAgent))
+                .map(AgentSceneServiceImpl::toStateDTO)
+                .sorted(Comparator.comparing(AgentSceneStateDTO::getAgentId))
+                .toList();
+
+        Long currentVersion = eventDao.findLatestSceneVersion(
+                scope.tenantId(), scope.clientId(), scope.sceneId());
+        AgentSceneSnapshotDTO snapshot = new AgentSceneSnapshotDTO();
+        snapshot.setSceneId(scope.sceneId());
+        snapshot.setSceneVersion(currentVersion == null ? 0L : currentVersion);
+        snapshot.setGeneratedAt(now);
+        snapshot.setAgents(agents);
+        snapshot.setStates(states);
+        return snapshot;
+    }
+
+    @Override
+    public Flux<AgentSceneEventDTO> events(String sceneId, long sinceVersion) {
+        requireScope(sceneId);
+        return Flux.empty();
+    }
+
+    @Override
+    public AgentScenePhaseResultDTO reportPhase(String sceneId, AgentScenePhaseReportDTO request) {
+        requireScope(sceneId);
+        throw new UnsupportedOperationException("Agent scene phase reporting is implemented in Task 5");
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentSceneStateDTO upsertState(String sceneId, AgentSceneStateDTO state) {
+        SceneScope scope = requireScope(sceneId);
+        AgentSceneStateDTO requested = requireState(state);
+        List<AgentRuntimeEntity> roster = scopedRoster(scope);
+        Map<String, AgentRuntimeEntity> realAgents = indexRealAgents(roster);
+        AgentRuntimeEntity requester = realAgents.get(requested.getAgentId());
+        if (requester == null) {
+            throw new IllegalArgumentException("agentId is not a real agent in the current scope");
+        }
+        if (!requested.getPersonaCode().equals(requester.getPersonaCode())) {
+            throw new IllegalArgumentException("personaCode does not match the scoped real agent");
+        }
+
+        long now = System.currentTimeMillis();
+        // The durable scoped counter row serializes writers in this scene until transaction completion.
+        long sceneVersion = eventDao.nextSceneVersion(
+                scope.tenantId(), scope.clientId(), scope.sceneId());
+        if (sceneVersion <= 0) {
+            throw new IllegalStateException("Allocated sceneVersion must be positive");
+        }
+        rejectPersonaConflict(scope, requested, realAgents, now);
+
+        AgentSceneStateEntity current = stateDao.findByAgent(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), requested.getAgentId());
+        long currentStateVersion = current == null || current.getStateVersion() == null
+                ? 0L : current.getStateVersion();
+        if (currentStateVersion == Long.MAX_VALUE) {
+            throw new IllegalStateException("stateVersion exhausted");
+        }
+        long nextStateVersion = currentStateVersion + 1;
+        AgentSceneStateEntity persisted = toStateEntity(requested, nextStateVersion);
+        if (stateDao.upsert(scope.tenantId(), scope.clientId(), scope.sceneId(), persisted) <= 0) {
+            throw new IllegalStateException("Unable to persist monotonic scene state");
+        }
+
+        AgentSceneStateDTO publishedState = toStateDTO(persisted);
+        AgentSceneEventDTO event = new AgentSceneEventDTO();
+        event.setSceneVersion(sceneVersion);
+        event.setEventType(EVENT_STATE_UPDATED);
+        event.setState(publishedState);
+        event.setOccurredAt(now);
+        if (eventDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), event) <= 0) {
+            throw new IllegalStateException("Unable to persist scene state event");
+        }
+        // Live publication is intentionally deferred until Task 4 and must occur after commit.
+        return AgentSceneStateDTO.copyOf(publishedState);
+    }
+
+    private void rejectPersonaConflict(
+            SceneScope scope,
+            AgentSceneStateDTO requested,
+            Map<String, AgentRuntimeEntity> realAgents,
+            long now) {
+        for (AgentSceneStateEntity existing : safeList(stateDao.findActiveByScene(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), now))) {
+            if (!isActive(existing, now)
+                    || requested.getAgentId().equals(existing.getAgentId())
+                    || !requested.getPersonaCode().equals(existing.getPersonaCode())) {
+                continue;
+            }
+            AgentRuntimeEntity realAgent = realAgents.get(existing.getAgentId());
+            if (realAgent != null && requested.getPersonaCode().equals(realAgent.getPersonaCode())) {
+                throw new IllegalArgumentException("personaCode is already active for another agent in this scene");
+            }
+        }
+    }
+
+    private List<AgentRuntimeEntity> scopedRoster(SceneScope scope) {
+        return safeList(runtimeDao.findRosterByOwner(scope.clientId(), scope.tenantId(), null, null)).stream()
+                .filter(runtime -> runtime != null
+                        && scope.clientId().equals(runtime.getClientId())
+                        && scope.tenantId().equals(runtime.getOwnerJiacn()))
+                .toList();
+    }
+
+    private Map<String, AgentRuntimeEntity> indexRealAgents(List<AgentRuntimeEntity> roster) {
+        Map<String, AgentRuntimeEntity> agents = new HashMap<>();
+        for (AgentRuntimeEntity runtime : roster) {
+            if (!StringUtil.isBlank(runtime.getAgentId()) && !StringUtil.isBlank(runtime.getPersonaCode())) {
+                agents.put(runtime.getAgentId(), runtime);
+            }
+        }
+        return agents;
+    }
+
+    private AgentSceneStateDTO requireState(AgentSceneStateDTO source) {
+        if (source == null) {
+            throw new IllegalArgumentException("scene state is required");
+        }
+        AgentSceneStateDTO state = AgentSceneStateDTO.copyOf(source);
+        requireText(state.getAgentId(), "agentId");
+        requireText(state.getPersonaCode(), "personaCode");
+        requireText(state.getBehavior(), "behavior");
+        requireText(state.getTargetRegionId(), "targetRegionId");
+        requireText(state.getPhase(), "phase");
+        if (state.getStartedAt() == null || state.getStartedAt() < 0) {
+            throw new IllegalArgumentException("startedAt is required and must be nonnegative");
+        }
+        return state;
+    }
+
+    private SceneScope requireScope(String sceneId) {
+        EsContext context = EsContextHolder.getContext();
+        String tenantId = trim(context.getJiacn());
+        String clientId = trim(context.getClientId());
+        String normalizedSceneId = trim(sceneId);
+        if (StringUtil.isBlank(tenantId)
+                || StringUtil.isBlank(clientId)
+                || StringUtil.isBlank(normalizedSceneId)) {
+            throw new IllegalArgumentException("tenant jiacn, clientId and sceneId are required");
+        }
+        return new SceneScope(tenantId, clientId, normalizedSceneId);
+    }
+
+    private void requireText(String value, String field) {
+        if (StringUtil.isBlank(value)) {
+            throw new IllegalArgumentException(field + " is required");
+        }
+    }
+
+    private static boolean stateMatchesVisibleAgent(
+            AgentSceneStateEntity state,
+            Map<String, AgentRuntimeEntity> visibleByAgent) {
+        AgentRuntimeEntity runtime = visibleByAgent.get(state.getAgentId());
+        return runtime != null && runtime.getPersonaCode().equals(state.getPersonaCode());
+    }
+
+    private static boolean isActive(AgentSceneStateEntity state, long now) {
+        return state != null && (state.getExpiresAt() == null || state.getExpiresAt() > now);
+    }
+
+    private static AgentSceneAgentDTO toAgentDTO(AgentRuntimeEntity runtime) {
+        AgentSceneAgentDTO agent = new AgentSceneAgentDTO();
+        agent.setAgentId(runtime.getAgentId());
+        agent.setPersonaCode(runtime.getPersonaCode());
+        agent.setStatus(runtime.getStatus());
+        return agent;
+    }
+
+    private static AgentSceneStateEntity toStateEntity(AgentSceneStateDTO state, long stateVersion) {
+        AgentSceneStateEntity entity = new AgentSceneStateEntity();
+        entity.setAgentId(state.getAgentId());
+        entity.setPersonaCode(state.getPersonaCode());
+        entity.setBehavior(state.getBehavior());
+        entity.setOriginRegionId(state.getOriginRegionId());
+        entity.setTargetRegionId(state.getTargetRegionId());
+        entity.setRelatedType(state.getRelatedType());
+        entity.setRelatedId(state.getRelatedId());
+        entity.setPhase(state.getPhase());
+        entity.setStateVersion(stateVersion);
+        entity.setStartedAt(state.getStartedAt());
+        entity.setExpectedArrivalAt(state.getExpectedArrivalAt());
+        entity.setExpiresAt(state.getExpiresAt());
+        return entity;
+    }
+
+    private static AgentSceneStateDTO toStateDTO(AgentSceneStateEntity entity) {
+        AgentSceneStateDTO state = new AgentSceneStateDTO();
+        state.setAgentId(entity.getAgentId());
+        state.setPersonaCode(entity.getPersonaCode());
+        state.setBehavior(entity.getBehavior());
+        state.setOriginRegionId(entity.getOriginRegionId());
+        state.setTargetRegionId(entity.getTargetRegionId());
+        state.setRelatedType(entity.getRelatedType());
+        state.setRelatedId(entity.getRelatedId());
+        state.setPhase(entity.getPhase());
+        state.setStateVersion(entity.getStateVersion());
+        state.setStartedAt(entity.getStartedAt());
+        state.setExpectedArrivalAt(entity.getExpectedArrivalAt());
+        state.setExpiresAt(entity.getExpiresAt());
+        return state;
+    }
+
+    private static String trim(String value) {
+        return value == null ? null : value.trim();
+    }
+
+    private static <T> List<T> safeList(List<T> source) {
+        return source == null ? List.of() : source;
+    }
+
+    private record SceneScope(String tenantId, String clientId, String sceneId) {
+    }
+}
