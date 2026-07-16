@@ -16,6 +16,7 @@ import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentStatsDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
@@ -27,8 +28,11 @@ import cn.jia.agent.entity.AgentTaskNoteEntity;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.AgentPersonaBindResultDTO;
+import cn.jia.agent.entity.DialogueRequestDTO;
+import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.service.AgentSceneService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
@@ -75,18 +79,23 @@ class AgentServiceImplTest extends BaseMockTest {
     @Mock
     ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     @Mock
+    ObjectProvider<AgentSceneService> sceneServiceProvider;
+    @Mock
     ApiKeyService apiKeyService;
     @Mock
     TaskService taskService;
     @Mock
     AgentEventPublisher eventPublisher;
+    @Mock
+    AgentSceneService sceneService;
     AgentServiceImpl agentService;
 
     @BeforeEach
     void setUpAgentService() {
         EsContextHolder.setContext(new EsContext());
         agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
-                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider, apiKeyServiceProvider);
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
+                apiKeyServiceProvider, sceneServiceProvider);
     }
 
     @Test
@@ -197,6 +206,97 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(agentTaskMetaDao).updateById(metaCaptor.capture());
         assertEquals("[\"agent-wuyong\",\"agent-linchong\"]", metaCaptor.getValue().getAssignedAgentId());
         verify(eventPublisher).publishTaskEvent(eq("task_assigned"), any(AgentTaskDTO.class));
+    }
+
+    @Test
+    void assignTaskPublishesSemanticBountyMovementWithExpiry() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        agent.setPersonaCode("wuyong");
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(agent);
+        when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentId("agent-wuyong");
+
+        agentService.assignTask("task-001", request);
+
+        ArgumentCaptor<AgentSceneStateDTO> stateCaptor = ArgumentCaptor.forClass(AgentSceneStateDTO.class);
+        verify(sceneService).upsertState(eq("juyiting-main"), stateCaptor.capture());
+        AgentSceneStateDTO state = stateCaptor.getValue();
+        assertEquals("agent-wuyong", state.getAgentId());
+        assertEquals("wuyong", state.getPersonaCode());
+        assertEquals("moving_to_bounty", state.getBehavior());
+        assertEquals("bounty-board", state.getTargetRegionId());
+        assertEquals("task", state.getRelatedType());
+        assertEquals("task-001", state.getRelatedId());
+        assertEquals("moving", state.getPhase());
+        assertNotNull(state.getStartedAt());
+        assertTrue(state.getExpectedArrivalAt() > state.getStartedAt());
+        assertTrue(state.getExpiresAt() > state.getExpectedArrivalAt());
+    }
+
+    @Test
+    void dialoguePublishesSemanticDiscussionMovementForMatchingRosterAgent() {
+        AgentRuntimeEntity agent = runtimeAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        agent.setPersonaCode("wuyong");
+        agent.setPersonaName("Wu Yong");
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+                .thenReturn(List.of(agent));
+        when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
+        DialogueTemplateEntity template = new DialogueTemplateEntity();
+        template.setContent("Discuss the plan");
+        when(dialogueTemplateDao.findByPersonaAndType("Wu Yong", "DISCUSSION-42"))
+                .thenReturn(List.of(template));
+        DialogueRequestDTO request = new DialogueRequestDTO();
+        request.setPersonaName("Wu Yong");
+        request.setDialogueType("DISCUSSION-42");
+
+        assertEquals("Discuss the plan", agentService.generateDialogue(request));
+
+        ArgumentCaptor<AgentSceneStateDTO> stateCaptor = ArgumentCaptor.forClass(AgentSceneStateDTO.class);
+        verify(sceneService).upsertState(eq("juyiting-main"), stateCaptor.capture());
+        AgentSceneStateDTO state = stateCaptor.getValue();
+        assertEquals("agent-wuyong", state.getAgentId());
+        assertEquals("moving_to_discussion", state.getBehavior());
+        assertEquals("council-table", state.getTargetRegionId());
+        assertEquals("discussion", state.getRelatedType());
+        assertEquals("discussion-42", state.getRelatedId());
+        assertTrue(state.getExpiresAt() > state.getExpectedArrivalAt());
+    }
+
+    @Test
+    void completedTaskPublishesReturnHomeForEachAssignedAgent() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_RUNNING);
+        meta.setAssignedAgentId("agent-wuyong");
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_BUSY, "[\"planning\"]");
+        agent.setPersonaCode("wuyong");
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(agent);
+        when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
+        AgentTaskReportDTO request = new AgentTaskReportDTO();
+        request.setStatus(AgentConstants.TASK_STATUS_COMPLETED);
+
+        agentService.reportTask("task-001", request);
+
+        ArgumentCaptor<AgentSceneStateDTO> stateCaptor = ArgumentCaptor.forClass(AgentSceneStateDTO.class);
+        verify(sceneService).upsertState(eq("juyiting-main"), stateCaptor.capture());
+        AgentSceneStateDTO state = stateCaptor.getValue();
+        assertEquals("agent-wuyong", state.getAgentId());
+        assertEquals("returning_home", state.getBehavior());
+        assertEquals("main-seat", state.getTargetRegionId());
+        assertEquals("task", state.getRelatedType());
+        assertEquals("task-001", state.getRelatedId());
+        assertEquals("moving", state.getPhase());
     }
 
     @Test
