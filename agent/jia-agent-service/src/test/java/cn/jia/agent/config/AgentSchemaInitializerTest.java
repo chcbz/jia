@@ -7,14 +7,18 @@ import org.mockito.Mock;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
+import javax.sql.DataSource;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,6 +31,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class AgentSchemaInitializerTest extends BaseMockTest {
     @Mock
@@ -82,6 +87,117 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_phase_report"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_version"));
         verify(jdbcTemplate, atLeastOnce()).update(any(String.class), any(Object[].class));
+    }
+
+    @Test
+    void h2DialectOmitsUnsupportedStoredKeywordFromGeneratedBindingColumns() throws Exception {
+        JdbcTemplate template = dialectTemplate("H2");
+
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+
+        List<String> statements = executedStatements(template);
+        String createBinding = statements.stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_persona_binding"))
+                .findFirst().orElseThrow();
+        assertTrue(createBinding.contains(
+                "active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END)"));
+        assertTrue(createBinding.contains(
+                "active_agent_id     VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END)"));
+        assertFalse(createBinding.contains(" STORED"));
+        assertTrue(statements.stream()
+                .filter(sql -> sql.startsWith("ALTER TABLE agent_persona_binding ADD COLUMN active_"))
+                .noneMatch(sql -> sql.contains(" STORED")));
+    }
+
+    @Test
+    void mysqlDialectRetainsStoredGeneratedBindingColumns() throws Exception {
+        JdbcTemplate template = dialectTemplate("MySQL");
+
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+
+        List<String> statements = executedStatements(template);
+        String createBinding = statements.stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_persona_binding"))
+                .findFirst().orElseThrow();
+        assertTrue(createBinding.contains(
+                "active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END) STORED"));
+        assertTrue(createBinding.contains(
+                "active_agent_id     VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END) STORED"));
+        assertTrue(statements.stream()
+                .filter(sql -> sql.startsWith("ALTER TABLE agent_persona_binding ADD COLUMN active_"))
+                .allMatch(sql -> sql.endsWith(" STORED")));
+    }
+
+    @Test
+    void h2DialectUsesNativeIndexCatalogAndStillRejectsIncompatibleRequiredIndex() throws Exception {
+        DataSource dataSource = dialectDataSource("H2");
+        JdbcTemplate failingTemplate = new JdbcTemplate(dataSource) {
+            @Override
+            public void execute(String sql) {
+                // DDL is intentionally inert; this test exercises H2 required-index introspection.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                assertTrue(normalized.contains("from information_schema.index_columns"), normalized);
+                if ("agent_scene_state".equals(args[0])
+                        && "uk_agent_scene_state_scope_agent".equals(args[1])) {
+                    return (List<T>) List.of(
+                            new AgentSchemaInitializer.IndexColumn(1, "tenant_id", 1, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "client_id", 2, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 4, null));
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("uk_agent_scene_state_scope_agent"), error.getMessage());
+    }
+
+    @Test
+    void h2WithoutOptionalBaseAgentTablesStillInitializesAndValidatesSceneSchema() throws Exception {
+        DataSource dataSource = dialectDataSource("H2");
+        AtomicBoolean sceneTableCreated = new AtomicBoolean();
+        JdbcTemplate template = new JdbcTemplate(dataSource) {
+            @Override
+            public void execute(String sql) {
+                if (sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_state")) {
+                    sceneTableCreated.set(true);
+                }
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                return (T) Integer.valueOf(normalized.contains("from information_schema.tables") ? 0 : 1);
+            }
+
+            @Override
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                return List.of();
+            }
+
+            @Override
+            public int update(String sql, Object... args) {
+                throw new AssertionError("persona seeds must not run without the optional agent_persona table");
+            }
+        };
+
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+
+        assertTrue(sceneTableCreated.get());
     }
 
     @Test
@@ -216,6 +332,29 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         int end = schema.indexOf(";", start);
         assertTrue(end > start, table);
         return schema.substring(start, end);
+    }
+
+    private JdbcTemplate dialectTemplate(String productName) throws Exception {
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        DataSource dataSource = dialectDataSource(productName);
+        when(template.getDataSource()).thenReturn(dataSource);
+        return template;
+    }
+
+    private DataSource dialectDataSource(String productName) throws Exception {
+        DataSource dataSource = mock(DataSource.class);
+        Connection connection = mock(Connection.class);
+        DatabaseMetaData metadata = mock(DatabaseMetaData.class);
+        when(dataSource.getConnection()).thenReturn(connection);
+        when(connection.getMetaData()).thenReturn(metadata);
+        when(metadata.getDatabaseProductName()).thenReturn(productName);
+        return dataSource;
+    }
+
+    private List<String> executedStatements(JdbcTemplate template) {
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(captor.capture());
+        return captor.getAllValues();
     }
 
     private String readSchema() throws IOException {

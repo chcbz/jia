@@ -4,8 +4,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Locale;
 
@@ -14,6 +18,7 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class AgentSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbcTemplate;
+    private Boolean h2Database;
 
     @Override
     public void afterPropertiesSet() {
@@ -56,6 +61,11 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
     private void ensureBindingTable() {
+        String generatedColumnStorage = isH2Database() ? "" : " STORED";
+        String activePersonaColumn = "active_persona_code VARCHAR(50) GENERATED ALWAYS AS "
+                + "(CASE WHEN status = 1 THEN persona_code ELSE NULL END)" + generatedColumnStorage;
+        String activeAgentColumn = "active_agent_id     VARCHAR(100) GENERATED ALWAYS AS "
+                + "(CASE WHEN status = 1 THEN agent_id ELSE NULL END)" + generatedColumnStorage;
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_persona_binding (
                     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
@@ -64,8 +74,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                     agent_id            VARCHAR(100) NOT NULL COMMENT 'Runtime agent ID',
                     bound_at            BIGINT NOT NULL COMMENT 'Bind time',
                     status              INT NOT NULL DEFAULT 1 COMMENT '1 active, 0 inactive',
-                    active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END) STORED,
-                    active_agent_id     VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END) STORED,
+                    %s,
+                    %s,
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     tenant_id           VARCHAR(50) DEFAULT NULL COMMENT 'Tenant ID reserved',
@@ -77,15 +87,33 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent persona binding'
-                """);
+                """.formatted(activePersonaColumn, activeAgentColumn));
         addColumnIfMissing("agent_persona_binding", "active_persona_code",
-                "active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END) STORED");
+                activePersonaColumn);
         addColumnIfMissing("agent_persona_binding", "active_agent_id",
-                "active_agent_id VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END) STORED");
+                activeAgentColumn);
         addIndexIfMissing("agent_persona_binding", "uk_agent_binding_active_persona",
                 "CREATE UNIQUE INDEX uk_agent_binding_active_persona ON agent_persona_binding (client_id, active_persona_code)");
         addIndexIfMissing("agent_persona_binding", "uk_agent_binding_active_agent",
                 "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (client_id, active_agent_id)");
+    }
+
+    private boolean isH2Database() {
+        if (h2Database != null) {
+            return h2Database;
+        }
+        DataSource dataSource = jdbcTemplate.getDataSource();
+        if (dataSource == null) {
+            h2Database = false;
+            return h2Database;
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            String productName = connection.getMetaData().getDatabaseProductName();
+            h2Database = productName != null && productName.toLowerCase(Locale.ROOT).contains("h2");
+            return h2Database;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Unable to determine database dialect for agent schema initialization", e);
+        }
     }
 
     private void ensureTaskNoteTable() {
@@ -217,6 +245,10 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
     private void seedWaterMarginPersonas() {
+        if (isH2Database() && !h2TableExists("agent_persona")) {
+            log.info("Skipping Water Margin persona seeds because H2 does not provide the optional agent_persona table");
+            return;
+        }
         for (PersonaSeed seed : PERSONAS) {
             jdbcTemplate.update("""
                     INSERT INTO agent_persona
@@ -267,17 +299,7 @@ public class AgentSchemaInitializer implements InitializingBean {
 
     private void ensureRequiredIndex(
             String table, String indexName, boolean unique, List<String> columns, String createSql) {
-        List<IndexColumn> actual = jdbcTemplate.query("""
-                SELECT NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX, SUB_PART
-                FROM information_schema.statistics
-                WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
-                ORDER BY SEQ_IN_INDEX
-                """, (rs, rowNum) -> new IndexColumn(
-                rs.getInt("NON_UNIQUE"),
-                rs.getString("COLUMN_NAME"),
-                rs.getInt("SEQ_IN_INDEX"),
-                rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART")),
-                table, indexName);
+        List<IndexColumn> actual = inspectRequiredIndex(table, indexName);
         if (actual == null || actual.isEmpty()) {
             jdbcTemplate.execute(createSql);
             return;
@@ -296,6 +318,59 @@ public class AgentSchemaInitializer implements InitializingBean {
                     + " has an incompatible uniqueness or ordered column definition");
         }
     }
+
+    private boolean h2TableExists(String table) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_schema = SCHEMA() AND LOWER(table_name) = LOWER(?)
+                """, Integer.class, table);
+        return count != null && count > 0;
+    }
+
+    private List<IndexColumn> inspectRequiredIndex(String table, String indexName) {
+        if (isH2Database()) {
+            if ("PRIMARY".equals(indexName)) {
+                return jdbcTemplate.query("""
+                        SELECT 0 AS NON_UNIQUE, kcu.COLUMN_NAME,
+                               kcu.ORDINAL_POSITION AS SEQ_IN_INDEX,
+                               CAST(NULL AS INTEGER) AS SUB_PART
+                        FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu
+                          ON tc.constraint_catalog = kcu.constraint_catalog
+                         AND tc.constraint_schema = kcu.constraint_schema
+                         AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.table_schema = SCHEMA()
+                          AND LOWER(tc.table_name) = LOWER(?)
+                          AND tc.constraint_type = 'PRIMARY KEY'
+                        ORDER BY kcu.ordinal_position
+                        """, INDEX_COLUMN_MAPPER, table);
+            }
+            return jdbcTemplate.query("""
+                    SELECT CASE WHEN IS_UNIQUE THEN 0 ELSE 1 END AS NON_UNIQUE,
+                           COLUMN_NAME, ORDINAL_POSITION AS SEQ_IN_INDEX,
+                           CAST(NULL AS INTEGER) AS SUB_PART
+                    FROM information_schema.index_columns
+                    WHERE table_schema = SCHEMA()
+                      AND LOWER(table_name) = LOWER(?)
+                      AND LOWER(index_name) = LOWER(?)
+                    ORDER BY ordinal_position
+                    """, INDEX_COLUMN_MAPPER, table, indexName);
+        }
+        return jdbcTemplate.query("""
+                SELECT NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX, SUB_PART
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
+                ORDER BY SEQ_IN_INDEX
+                """, INDEX_COLUMN_MAPPER, table, indexName);
+    }
+
+    private static final RowMapper<IndexColumn> INDEX_COLUMN_MAPPER = (rs, rowNum) ->
+            new IndexColumn(
+                    rs.getInt("NON_UNIQUE"),
+                    rs.getString("COLUMN_NAME"),
+                    rs.getInt("SEQ_IN_INDEX"),
+                    rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART"));
 
     static record IndexColumn(int nonUnique, String columnName, int sequence, Integer subPart) {}
 
