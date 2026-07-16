@@ -53,6 +53,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -591,6 +593,7 @@ public class AgentServiceImpl implements AgentService {
         saveMeta(meta);
         AgentTaskDTO task = toTaskDTO(meta);
         publishTaskEvent("task_archived", task);
+        publishReturnHomeSceneStatesForAgentIds(meta.getTaskId(), parseAssignedAgentIds(meta.getAssignedAgentId()));
         return task;
     }
 
@@ -1424,63 +1427,89 @@ codexTimeoutMs=900000
 
     private void publishTaskAssignmentSceneStates(
             String taskId, List<AgentRuntimeEntity> assignedAgents) {
-        if (!sceneFeatureFlags.sceneStateEnabled()) {
-            return;
-        }
-        AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
-        if (sceneService == null) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        for (AgentRuntimeEntity agent : assignedAgents) {
-            publishSceneState(sceneService, movementState(
-                    agent.getAgentId(), agent.getPersonaCode(), "moving_to_bounty",
-                    REGION_BOUNTY_BOARD, "task", taskId, now));
-        }
+        List<AgentRuntimeEntity> agents = List.copyOf(assignedAgents);
+        publishOptionalSceneAfterCommit("task-assignment", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (AgentRuntimeEntity agent : agents) {
+                publishSceneState(sceneService, movementState(
+                        agent.getAgentId(), agent.getPersonaCode(), "moving_to_bounty",
+                        REGION_BOUNTY_BOARD, "task", taskId, now));
+            }
+        });
     }
 
     private void publishDiscussionSceneState(String personaName, String dialogueType) {
-        if (!sceneFeatureFlags.sceneStateEnabled()) {
-            return;
-        }
-        AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
         String normalizedType = Optional.ofNullable(dialogueType).orElse("")
                 .trim().toUpperCase(Locale.ROOT);
-        if (sceneService == null
-                || (!normalizedType.contains("DISCUSSION") && !normalizedType.contains("CHAT"))) {
+        if (!"DISCUSSION".equals(normalizedType) && !"CHAT".equals(normalizedType)) {
             return;
         }
-        Optional<AgentRuntimeEntity> matchingAgent = Optional.ofNullable(agentRuntimeDao.findRosterByOwner(
-                        resolveCurrentClientId(), resolveCurrentJiacn(), null, null))
-                .orElseGet(Collections::emptyList)
-                .stream()
-                .filter(agent -> matchesPersona(agent, personaName))
-                .findFirst();
-        if (matchingAgent.isEmpty()) {
-            return;
-        }
-        AgentRuntimeEntity agent = matchingAgent.get();
-        String relatedType = normalizedType.contains("CHAT") ? "chat" : "discussion";
-        long now = System.currentTimeMillis();
-        publishSceneState(sceneService, movementState(
-                agent.getAgentId(), agent.getPersonaCode(), "moving_to_discussion",
-                REGION_COUNCIL_TABLE, relatedType, normalizedType.toLowerCase(Locale.ROOT), now));
+        publishOptionalSceneAfterCommit("dialogue", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            Optional<AgentPersonaEntity> persona = resolveUniquePersonaIdentity(personaName);
+            if (persona.isEmpty()) {
+                return;
+            }
+            List<AgentRuntimeEntity> matches = Optional.ofNullable(agentRuntimeDao.findRosterByOwner(
+                            resolveCurrentClientId(), resolveCurrentJiacn(), null, null))
+                    .orElseGet(Collections::emptyList)
+                    .stream()
+                    .filter(agent -> persona.get().getPersonaCode().equalsIgnoreCase(
+                            Optional.ofNullable(agent.getPersonaCode()).orElse("")))
+                    .toList();
+            if (matches.size() != 1) {
+                log.warn("Skipping optional dialogue scene publication because persona roster identity is not unique");
+                return;
+            }
+            AgentRuntimeEntity agent = matches.getFirst();
+            String relatedType = "CHAT".equals(normalizedType) ? "chat" : "discussion";
+            String relatedId = "dlg-" + UUID.randomUUID().toString().replace("-", "");
+            long now = System.currentTimeMillis();
+            publishSceneState(sceneService, movementState(
+                    agent.getAgentId(), agent.getPersonaCode(), "moving_to_discussion",
+                    REGION_COUNCIL_TABLE, relatedType, relatedId, now));
+        });
     }
 
     private void publishReturnHomeSceneStates(String taskId, List<AgentRuntimeDTO> agents) {
-        if (!sceneFeatureFlags.sceneStateEnabled()) {
-            return;
-        }
-        AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
-        if (sceneService == null) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        for (AgentRuntimeDTO agent : agents) {
-            publishSceneState(sceneService, movementState(
-                    agent.getAgentId(), agent.getPersonaCode(), "returning_home",
-                    REGION_MAIN_SEAT, "task", taskId, now));
-        }
+        List<AgentRuntimeDTO> copiedAgents = List.copyOf(agents);
+        publishOptionalSceneAfterCommit("task-return-home", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (AgentRuntimeDTO agent : copiedAgents) {
+                publishSceneState(sceneService, movementState(
+                        agent.getAgentId(), agent.getPersonaCode(), "returning_home",
+                        REGION_MAIN_SEAT, "task", taskId, now));
+            }
+        });
+    }
+
+    private void publishReturnHomeSceneStatesForAgentIds(String taskId, List<String> agentIds) {
+        List<String> copiedAgentIds = List.copyOf(agentIds);
+        publishOptionalSceneAfterCommit("task-archive-return-home", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (String agentId : copiedAgentIds) {
+                AgentRuntimeEntity agent = agentRuntimeDao.findByAgentId(agentId);
+                requireOwnedAgent(agent);
+                publishSceneState(sceneService, movementState(
+                        agent.getAgentId(), agent.getPersonaCode(), "returning_home",
+                        REGION_MAIN_SEAT, "task", taskId, now));
+            }
+        });
     }
 
     private AgentSceneStateDTO movementState(
@@ -1512,12 +1541,49 @@ codexTimeoutMs=900000
         sceneService.upsertState(AgentSceneConstants.SCENE_JUYITING_MAIN, state);
     }
 
-    private boolean matchesPersona(AgentRuntimeEntity agent, String personaName) {
-        String normalized = Optional.ofNullable(personaName).orElse("").trim();
-        return !normalized.isEmpty() && Stream.of(
-                        agent.getPersonaName(), agent.getName(), agent.getPersonaCode())
-                .filter(Objects::nonNull)
-                .anyMatch(value -> normalized.equalsIgnoreCase(value.trim()));
+    private Optional<AgentPersonaEntity> resolveUniquePersonaIdentity(String personaIdentity) {
+        String normalized = Optional.ofNullable(personaIdentity).orElse("").trim();
+        if (normalized.isEmpty()) {
+            return Optional.empty();
+        }
+        AgentPersonaEntity byCode = agentPersonaDao.findByCode(normalized);
+        AgentPersonaEntity byName = agentPersonaDao.findByName(normalized);
+        if (byCode != null && byName != null
+                && !Objects.equals(byCode.getPersonaCode(), byName.getPersonaCode())) {
+            log.warn("Skipping optional dialogue scene publication because persona identity is ambiguous");
+            return Optional.empty();
+        }
+        return Optional.ofNullable(byCode != null ? byCode : byName);
+    }
+
+    private void publishOptionalSceneAfterCommit(String operation, Runnable publication) {
+        if (!sceneFeatureFlags.sceneStateEnabled()) {
+            return;
+        }
+        Runnable isolatedPublication = () -> {
+            try {
+                publication.run();
+            } catch (RuntimeException failure) {
+                log.warn("Optional scene publication failed: operation={}, failureType={}",
+                        operation, failure.getClass().getSimpleName());
+            }
+        };
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            try {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        isolatedPublication.run();
+                    }
+                });
+            } catch (RuntimeException registrationFailure) {
+                log.warn("Optional scene publication could not be scheduled: operation={}, failureType={}",
+                        operation, registrationFailure.getClass().getSimpleName());
+            }
+            return;
+        }
+        isolatedPublication.run();
     }
 
     private boolean isTerminalTaskStatus(String status) {

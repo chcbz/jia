@@ -46,6 +46,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.Map;
@@ -55,6 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -271,16 +273,17 @@ class AgentServiceImplTest extends BaseMockTest {
                 "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
         agent.setPersonaCode("wuyong");
         agent.setPersonaName("Wu Yong");
+        when(agentPersonaDao.findByName("Wu Yong")).thenReturn(persona("wuyong", "Wu Yong", "Strategist"));
         when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
                 .thenReturn(List.of(agent));
         when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
         DialogueTemplateEntity template = new DialogueTemplateEntity();
         template.setContent("Discuss the plan");
-        when(dialogueTemplateDao.findByPersonaAndType("Wu Yong", "DISCUSSION-42"))
+        when(dialogueTemplateDao.findByPersonaAndType("Wu Yong", "DISCUSSION"))
                 .thenReturn(List.of(template));
         DialogueRequestDTO request = new DialogueRequestDTO();
         request.setPersonaName("Wu Yong");
-        request.setDialogueType("DISCUSSION-42");
+        request.setDialogueType("DISCUSSION");
 
         assertEquals("Discuss the plan", agentService.generateDialogue(request));
 
@@ -291,8 +294,105 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("moving_to_discussion", state.getBehavior());
         assertEquals("council-table", state.getTargetRegionId());
         assertEquals("discussion", state.getRelatedType());
-        assertEquals("discussion-42", state.getRelatedId());
+        assertTrue(state.getRelatedId().matches("dlg-[0-9a-f]{32}"));
+        assertTrue(state.getRelatedId().length() <= 40);
         assertTrue(state.getExpiresAt() > state.getExpectedArrivalAt());
+    }
+
+    @Test
+    void chatPublishesAllowlistedSemanticTypeWithOpaqueBoundedRelatedId() {
+        AgentRuntimeEntity agent = runtimeAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        agent.setPersonaCode("wuyong");
+        when(agentPersonaDao.findByName("Wu Yong")).thenReturn(persona("wuyong", "Wu Yong", "Strategist"));
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+                .thenReturn(List.of(agent));
+        when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
+        when(dialogueTemplateDao.findByPersonaAndType("Wu Yong", "CHAT")).thenReturn(List.of());
+        DialogueRequestDTO request = new DialogueRequestDTO();
+        request.setPersonaName("Wu Yong");
+        request.setDialogueType("CHAT");
+
+        assertEquals("今日聚义厅中，正好议事。", agentService.generateDialogue(request));
+
+        ArgumentCaptor<AgentSceneStateDTO> stateCaptor = ArgumentCaptor.forClass(AgentSceneStateDTO.class);
+        verify(sceneService).upsertState(eq("juyiting-main"), stateCaptor.capture());
+        AgentSceneStateDTO state = stateCaptor.getValue();
+        assertEquals("chat", state.getRelatedType());
+        assertTrue(state.getRelatedId().matches("dlg-[0-9a-f]{32}"));
+        assertTrue(state.getRelatedId().length() <= 40);
+    }
+
+    @Test
+    void rawOrExtendedDialogueTypeIsNeverPersistedAsSceneMetadata() {
+        String sensitiveType = "DISCUSSION-secret-token-" + "x".repeat(500);
+        DialogueTemplateEntity template = new DialogueTemplateEntity();
+        template.setContent("Core dialogue still succeeds");
+        when(dialogueTemplateDao.findByPersonaAndType("Wu Yong", sensitiveType)).thenReturn(List.of(template));
+        DialogueRequestDTO request = new DialogueRequestDTO();
+        request.setPersonaName("Wu Yong");
+        request.setDialogueType(sensitiveType);
+
+        assertEquals("Core dialogue still succeeds", agentService.generateDialogue(request));
+
+        verify(sceneService, never()).upsertState(any(), any());
+    }
+
+    @Test
+    void ambiguousDiscussionPersonaSkipsScenePublicationWithoutFailingDialogue() {
+        AgentPersonaEntity persona = persona("wuyong", "Wu Yong", "Strategist");
+        when(agentPersonaDao.findByName("Wu Yong")).thenReturn(persona);
+        AgentRuntimeEntity first = runtimeAgent("agent-wuyong-1", "Wu Yong 1", AgentConstants.STATUS_ONLINE, "[]");
+        first.setPersonaCode("wuyong");
+        AgentRuntimeEntity second = runtimeAgent("agent-wuyong-2", "Wu Yong 2", AgentConstants.STATUS_ONLINE, "[]");
+        second.setPersonaCode("wuyong");
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+                .thenReturn(List.of(first, second));
+        when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
+        DialogueTemplateEntity template = new DialogueTemplateEntity();
+        template.setContent("Ambiguous roster dialogue");
+        when(dialogueTemplateDao.findByPersonaAndType("Wu Yong", "DISCUSSION")).thenReturn(List.of(template));
+        DialogueRequestDTO request = new DialogueRequestDTO();
+        request.setPersonaName("Wu Yong");
+        request.setDialogueType("DISCUSSION");
+
+        assertEquals("Ambiguous roster dialogue", agentService.generateDialogue(request));
+
+        verify(sceneService, never()).upsertState(any(), any());
+    }
+
+    @Test
+    void scenePublicationFailureNeverFailsCoreTaskAssignment() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        agent.setPersonaCode("wuyong");
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(agent);
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+        when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
+        doThrow(new IllegalStateException("scene unavailable"))
+                .when(sceneService).upsertState(any(), any());
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentId("agent-wuyong");
+
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            AgentTaskDTO result = agentService.assignTask("task-001", request);
+
+            assertEquals(AgentConstants.TASK_STATUS_ASSIGNED, result.getStatus());
+            verify(agentTaskMetaDao).updateById(meta);
+            verify(sceneService, never()).upsertState(any(), any());
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(synchronization -> synchronization.afterCommit());
+            verify(sceneService).upsertState(any(), any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
     }
 
     @Test
@@ -505,6 +605,11 @@ class AgentServiceImplTest extends BaseMockTest {
         meta.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
         meta.setAssignedAgentId("agent-wuyong");
         when(agentTaskMetaDao.findByTaskId("task-001")).thenReturn(meta);
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        agent.setPersonaCode("wuyong");
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(agent);
+        when(sceneServiceProvider.getIfAvailable()).thenReturn(sceneService);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
         AgentTaskDTO result = agentService.archiveTask("task-001");
@@ -513,6 +618,13 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(agentTaskMetaDao).updateById(meta);
         verify(agentRuntimeDao, never()).updateById(any());
         verify(eventPublisher).publishTaskEvent(eq("task_archived"), any(AgentTaskDTO.class));
+        ArgumentCaptor<AgentSceneStateDTO> stateCaptor = ArgumentCaptor.forClass(AgentSceneStateDTO.class);
+        verify(sceneService).upsertState(eq("juyiting-main"), stateCaptor.capture());
+        AgentSceneStateDTO state = stateCaptor.getValue();
+        assertEquals("returning_home", state.getBehavior());
+        assertEquals("main-seat", state.getTargetRegionId());
+        assertEquals("task-001", state.getRelatedId());
+        assertTrue(state.getExpiresAt() > state.getExpectedArrivalAt());
     }
 
     @Test
