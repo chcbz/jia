@@ -89,7 +89,8 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     @Override
     public Flux<AgentSceneEventDTO> events(String sceneId, long sinceVersion) {
         requireScope(sceneId);
-        return Flux.empty();
+        return Flux.error(new UnsupportedOperationException(
+                "Agent scene event streaming is unavailable until Task 4"));
     }
 
     @Override
@@ -103,6 +104,19 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     public AgentSceneStateDTO upsertState(String sceneId, AgentSceneStateDTO state) {
         SceneScope scope = requireScope(sceneId);
         AgentSceneStateDTO requested = requireState(state);
+
+        /*
+         * This must remain the first normal/consistent database access in the transaction.
+         * Under InnoDB REPEATABLE READ, the counter INSERT/UPDATE takes the scoped row lock
+         * before the transaction establishes snapshots for roster/state decisions. Same-scene
+         * writers therefore serialize persona and stateVersion decisions until commit/rollback.
+         */
+        long sceneVersion = eventDao.nextSceneVersion(
+                scope.tenantId(), scope.clientId(), scope.sceneId());
+        if (sceneVersion <= 0) {
+            throw new IllegalStateException("Allocated sceneVersion must be positive");
+        }
+        long now = System.currentTimeMillis();
         List<AgentRuntimeEntity> roster = scopedRoster(scope);
         Map<String, AgentRuntimeEntity> realAgents = indexRealAgents(roster);
         AgentRuntimeEntity requester = realAgents.get(requested.getAgentId());
@@ -112,18 +126,9 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         if (!requested.getPersonaCode().equals(requester.getPersonaCode())) {
             throw new IllegalArgumentException("personaCode does not match the scoped real agent");
         }
-
-        long now = System.currentTimeMillis();
-        // The durable scoped counter row serializes writers in this scene until transaction completion.
-        long sceneVersion = eventDao.nextSceneVersion(
-                scope.tenantId(), scope.clientId(), scope.sceneId());
-        if (sceneVersion <= 0) {
-            throw new IllegalStateException("Allocated sceneVersion must be positive");
-        }
-        rejectPersonaConflict(scope, requested, realAgents, now);
-
         AgentSceneStateEntity current = stateDao.findByAgent(
                 scope.tenantId(), scope.clientId(), scope.sceneId(), requested.getAgentId());
+        rejectPersonaConflict(scope, requested, realAgents, now);
         long currentStateVersion = current == null || current.getStateVersion() == null
                 ? 0L : current.getStateVersion();
         if (currentStateVersion == Long.MAX_VALUE) {
@@ -197,6 +202,26 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         requireText(state.getPhase(), "phase");
         if (state.getStartedAt() == null || state.getStartedAt() < 0) {
             throw new IllegalArgumentException("startedAt is required and must be nonnegative");
+        }
+        if (state.getExpectedArrivalAt() != null) {
+            if (state.getExpectedArrivalAt() < 0) {
+                throw new IllegalArgumentException("expectedArrivalAt must be nonnegative");
+            }
+            if (state.getExpectedArrivalAt() < state.getStartedAt()) {
+                throw new IllegalArgumentException("expectedArrivalAt cannot be before startedAt");
+            }
+        }
+        if (state.getExpiresAt() != null) {
+            if (state.getExpiresAt() < 0) {
+                throw new IllegalArgumentException("expiresAt must be nonnegative");
+            }
+            if (state.getExpiresAt() < state.getStartedAt()) {
+                throw new IllegalArgumentException("expiresAt cannot be before startedAt");
+            }
+        }
+        if (state.getExpectedArrivalAt() != null && state.getExpiresAt() != null
+                && state.getExpiresAt() < state.getExpectedArrivalAt()) {
+            throw new IllegalArgumentException("expiresAt cannot be before expectedArrivalAt");
         }
         return state;
     }

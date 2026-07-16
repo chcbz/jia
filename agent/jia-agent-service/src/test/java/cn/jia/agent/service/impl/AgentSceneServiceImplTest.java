@@ -26,9 +26,11 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.springframework.transaction.support.SimpleTransactionStatus;
+import reactor.test.StepVerifier;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -91,12 +93,80 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         assertEquals(17L, eventCaptor.getValue().getState().getStateVersion());
         assertNotSame(result, eventCaptor.getValue().getState());
 
-        InOrder order = inOrder(eventDao, stateDao);
+        InOrder order = inOrder(eventDao, runtimeDao, stateDao);
         order.verify(eventDao).nextSceneVersion("tenant-a", "client-a", SCENE_ID);
-        order.verify(stateDao).findActiveByScene(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong());
+        order.verify(runtimeDao).findRosterByOwner("client-a", "tenant-a", null, null);
         order.verify(stateDao).findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang");
+        order.verify(stateDao).findActiveByScene(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong());
         order.verify(stateDao).upsert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
         order.verify(eventDao).insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
+    }
+
+    @Test
+    void allocatorLockPrecedesEveryRosterAndStateReadAndExpiryUsesPostLockTime() {
+        AtomicLong lockAcquiredAt = new AtomicLong();
+        when(eventDao.nextSceneVersion("tenant-a", "client-a", SCENE_ID)).thenAnswer(invocation -> {
+            lockAcquiredAt.set(System.currentTimeMillis());
+            return 8L;
+        });
+
+        service.upsertState(SCENE_ID, request("agent-songjiang", "songjiang"));
+
+        InOrder order = inOrder(eventDao, runtimeDao, stateDao);
+        order.verify(eventDao).nextSceneVersion("tenant-a", "client-a", SCENE_ID);
+        order.verify(runtimeDao).findRosterByOwner("client-a", "tenant-a", null, null);
+        order.verify(stateDao).findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang");
+        ArgumentCaptor<Long> activeAt = ArgumentCaptor.forClass(Long.class);
+        order.verify(stateDao).findActiveByScene(
+                eq("tenant-a"), eq("client-a"), eq(SCENE_ID), activeAt.capture());
+        assertTrue(activeAt.getValue() >= lockAcquiredAt.get());
+    }
+
+    @Test
+    void eventsFailsExplicitlyUntilTaskFour() {
+        StepVerifier.create(service.events(SCENE_ID, 0L))
+                .expectErrorMatches(error -> error instanceof UnsupportedOperationException
+                        && error.getMessage().contains("Task 4"))
+                .verify();
+    }
+
+    @Test
+    void reportPhaseRemainsExplicitlyUnavailableUntilTaskFive() {
+        UnsupportedOperationException error = assertThrows(UnsupportedOperationException.class,
+                () -> service.reportPhase(SCENE_ID, null));
+        assertTrue(error.getMessage().contains("Task 5"));
+    }
+
+    @Test
+    void rejectsInvalidTemporalOrderingBeforeAllocatingTheSceneLock() {
+        AgentSceneStateDTO missingStart = request("agent-songjiang", "songjiang");
+        missingStart.setStartedAt(null);
+        AgentSceneStateDTO negativeStart = request("agent-songjiang", "songjiang");
+        negativeStart.setStartedAt(-1L);
+        AgentSceneStateDTO negativeExpected = request("agent-songjiang", "songjiang");
+        negativeExpected.setExpectedArrivalAt(-1L);
+        AgentSceneStateDTO negativeExpiry = request("agent-songjiang", "songjiang");
+        negativeExpiry.setExpiresAt(-1L);
+        AgentSceneStateDTO expectedBeforeStart = request("agent-songjiang", "songjiang");
+        expectedBeforeStart.setStartedAt(2_000L);
+        expectedBeforeStart.setExpectedArrivalAt(1_999L);
+        AgentSceneStateDTO expiryBeforeStart = request("agent-songjiang", "songjiang");
+        expiryBeforeStart.setStartedAt(2_000L);
+        expiryBeforeStart.setExpectedArrivalAt(null);
+        expiryBeforeStart.setExpiresAt(1_999L);
+        AgentSceneStateDTO expiryBeforeArrival = request("agent-songjiang", "songjiang");
+        expiryBeforeArrival.setStartedAt(1_000L);
+        expiryBeforeArrival.setExpectedArrivalAt(3_000L);
+        expiryBeforeArrival.setExpiresAt(2_999L);
+
+        for (AgentSceneStateDTO invalid : List.of(
+                missingStart, negativeStart, negativeExpected, negativeExpiry,
+                expectedBeforeStart, expiryBeforeStart, expiryBeforeArrival)) {
+            assertThrows(IllegalArgumentException.class, () -> service.upsertState(SCENE_ID, invalid));
+        }
+        verify(eventDao, never()).nextSceneVersion(any(), any(), any());
+        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any());
+        verify(stateDao, never()).findByAgent(any(), any(), any(), any());
     }
 
     @Test
