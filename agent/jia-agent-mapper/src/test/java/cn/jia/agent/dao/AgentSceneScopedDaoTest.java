@@ -105,6 +105,13 @@ class AgentSceneScopedDaoTest {
 
     @Test
     void phaseAndSceneScopeLocksUseCurrentForUpdateReadsWithoutIncrementing() throws Exception {
+        Method reserve = AgentScenePhaseReportMapper.class.getDeclaredMethod(
+                "reserveIgnore", AgentScenePhaseReportEntity.class);
+        String reserveSql = normalizeSql(reserve.getAnnotation(Insert.class).value());
+        assertTrue(reserveSql.contains("insert ignore into agent_scene_phase_report"), reserveSql);
+        assertTrue(reserveSql.contains("tenant_id, client_id, scene_id, report_id"), reserveSql);
+        assertFalse(reserveSql.contains("on duplicate key update"), reserveSql);
+
         Method reportLock = AgentScenePhaseReportMapper.class.getDeclaredMethod(
                 "selectScopedForUpdate", String.class, String.class, String.class, String.class);
         String reportSql = normalizeSql(reportLock.getAnnotation(Select.class).value());
@@ -133,7 +140,7 @@ class AgentSceneScopedDaoTest {
                 .getAnnotation(Transactional.class);
         assertEquals(Propagation.MANDATORY, sceneTransaction.propagation());
         Transactional reserveTransaction = AgentScenePhaseReportDaoImpl.class.getMethod(
-                "insert", String.class, String.class, String.class, AgentScenePhaseReportEntity.class)
+                "tryReserve", String.class, String.class, String.class, AgentScenePhaseReportEntity.class)
                 .getAnnotation(Transactional.class);
         assertEquals(Propagation.MANDATORY, reserveTransaction.propagation());
         Transactional finalizeTransaction = AgentScenePhaseReportDaoImpl.class.getMethod(
@@ -368,6 +375,31 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
+    void phaseReservationReturnsOwnerStatusWithoutThrowingForDuplicateKeys() {
+        AgentScenePhaseReportMapper mapper = mock(AgentScenePhaseReportMapper.class);
+        AgentScenePhaseReportDao dao = new AgentScenePhaseReportDaoImpl(mapper);
+        AgentScenePhaseReportEntity first = validPhaseReservation("report-1");
+        AgentScenePhaseReportEntity duplicate = validPhaseReservation("report-1");
+        when(mapper.reserveIgnore(any())).thenReturn(1, 0);
+
+        assertTrue(dao.tryReserve("tenant-a", "client-a", "juyiting-main", first));
+        assertFalse(dao.tryReserve("tenant-a", "client-a", "juyiting-main", duplicate));
+        verify(mapper, org.mockito.Mockito.times(2)).reserveIgnore(any());
+    }
+
+    @Test
+    void phaseReservationRejectsOversizedDataBeforeInsertIgnoreCanMaskIt() {
+        AgentScenePhaseReportMapper mapper = mock(AgentScenePhaseReportMapper.class);
+        AgentScenePhaseReportDao dao = new AgentScenePhaseReportDaoImpl(mapper);
+        AgentScenePhaseReportEntity oversized = validPhaseReservation("r".repeat(101));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.tryReserve("tenant-a", "client-a", "juyiting-main", oversized));
+
+        verify(mapper, never()).reserveIgnore(any());
+    }
+
+    @Test
     void sceneScopeLockEnsuresTheCounterRowWithoutAllocatingAVersion() {
         AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
         AgentSceneEventDao dao = new AgentSceneEventDaoImpl(mapper);
@@ -402,6 +434,19 @@ class AgentSceneScopedDaoTest {
         assertTrue(abstractWrapper.getParamNameValuePairs().containsValue(tenantId));
         assertTrue(abstractWrapper.getParamNameValuePairs().containsValue(clientId));
         assertTrue(abstractWrapper.getParamNameValuePairs().containsValue(sceneId));
+    }
+
+    private AgentScenePhaseReportEntity validPhaseReservation(String reportId) {
+        AgentScenePhaseReportEntity entity = new AgentScenePhaseReportEntity();
+        entity.setReportId(reportId);
+        entity.setAgentId("agent-songjiang");
+        entity.setStateVersion(17L);
+        entity.setPhase("arrived");
+        entity.setRegionId("council-table");
+        entity.setResult("__pending_phase_report__");
+        entity.setOccurredAt(2_500L);
+        entity.setProcessedAt(2_600L);
+        return entity;
     }
 
     private String normalizeSql(String[] fragments) {

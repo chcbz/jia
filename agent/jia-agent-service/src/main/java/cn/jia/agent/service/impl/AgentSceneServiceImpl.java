@@ -28,7 +28,6 @@ import jakarta.inject.Named;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.dao.DuplicateKeyException;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
@@ -143,15 +142,14 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         long processedAt = System.currentTimeMillis();
         AgentScenePhaseReportEntity reservation = toPhaseReportEntity(
                 report, PHASE_RESULT_PENDING_INTERNAL, processedAt);
-        try {
-            if (phaseReportDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), reservation) <= 0) {
-                throw new IllegalStateException("Unable to reserve agent scene phase report ID");
-            }
-        } catch (DuplicateKeyException duplicate) {
+        boolean reservationOwner = phaseReportDao.tryReserve(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), reservation);
+        if (!reservationOwner) {
             AgentScenePhaseReportEntity original = phaseReportDao.findByReportIdForUpdate(
                     scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId());
             if (original == null) {
-                throw new IllegalStateException("Duplicate phase report is not readable in its scope", duplicate);
+                throw new IllegalStateException(
+                        "Non-owner phase reservation has no scoped finalized row");
             }
             requireFinalizedPhaseReport(original);
             return phaseResult(original.getReportId(), original.getStateVersion(),

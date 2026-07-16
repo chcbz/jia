@@ -26,7 +26,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.springframework.aop.framework.ProxyFactory;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -232,7 +231,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         AgentSceneStateEntity current = stateEntity("agent-songjiang", "songjiang", 17L, null);
         when(stateDao.findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang"))
                 .thenReturn(current);
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(true);
         when(stateDao.updatePhase(eq("tenant-a"), eq("client-a"), eq(SCENE_ID),
                 eq("agent-songjiang"), eq(17L), eq("arrived"), anyLong())).thenReturn(1);
         when(eventDao.nextSceneVersion("tenant-a", "client-a", SCENE_ID)).thenReturn(129L);
@@ -243,14 +242,14 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         assertEquals("accepted", result.getResult());
         assertEquals(17L, result.getStateVersion());
         ArgumentCaptor<AgentScenePhaseReportEntity> report = ArgumentCaptor.forClass(AgentScenePhaseReportEntity.class);
-        verify(phaseReportDao).insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), report.capture());
+        verify(phaseReportDao).tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), report.capture());
         assertEquals("__pending_phase_report__", report.getValue().getResult());
         ArgumentCaptor<AgentSceneEventDTO> event = ArgumentCaptor.forClass(AgentSceneEventDTO.class);
         verify(eventDao).insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), event.capture());
         assertEquals(129L, event.getValue().getSceneVersion());
         assertEquals("arrived", event.getValue().getState().getPhase());
         InOrder order = inOrder(phaseReportDao, eventDao, stateDao);
-        order.verify(phaseReportDao).insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
+        order.verify(phaseReportDao).tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
         order.verify(eventDao).lockSceneVersionScope("tenant-a", "client-a", SCENE_ID);
         order.verify(stateDao).findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang");
         order.verify(phaseReportDao).finalizePendingResult(
@@ -265,8 +264,8 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     @Test
     void duplicateReservationUsesCurrentLockingReadWithoutTakingTheCounterLock() {
         AgentScenePhaseReportEntity stored = phaseEntity("r1", 17L, "accepted");
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
-                .thenThrow(new DuplicateKeyException("existing reservation"));
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
+                .thenReturn(false);
         when(phaseReportDao.findByReportIdForUpdate("tenant-a", "client-a", SCENE_ID, "r1"))
                 .thenReturn(stored);
 
@@ -280,10 +279,55 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void nonOwnerReservationRequiresAnExistingScopedFinalizedRow() {
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
+                .thenReturn(false);
+        when(phaseReportDao.findByReportIdForUpdate("tenant-a", "client-a", SCENE_ID, "missing"))
+                .thenReturn(null);
+
+        assertThrows(IllegalStateException.class, () -> service.reportPhase(
+                SCENE_ID, phaseReport("missing", "agent-songjiang", 17L,
+                        "arrived", "council-table", 2_500L)));
+
+        verify(eventDao, never()).lockSceneVersionScope(any(), any(), any());
+        verify(stateDao, never()).findByAgent(any(), any(), any(), any());
+    }
+
+    @Test
+    void proxiedDuplicateResultCommitsNormallyWithoutRollbackOnlyRecovery() {
+        AgentScenePhaseReportEntity stored = phaseEntity("duplicate-commit", 17L, "accepted");
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
+                .thenReturn(false);
+        when(phaseReportDao.findByReportIdForUpdate(
+                "tenant-a", "client-a", SCENE_ID, "duplicate-commit"))
+                .thenReturn(stored);
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        TransactionStatus status = new SimpleTransactionStatus();
+        when(transactionManager.getTransaction(any())).thenReturn(status);
+        TransactionInterceptor interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactionManager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        ProxyFactory proxyFactory = new ProxyFactory(service);
+        proxyFactory.addAdvice(interceptor);
+        AgentSceneService transactionalService = (AgentSceneService) proxyFactory.getProxy();
+
+        AgentScenePhaseResultDTO result = transactionalService.reportPhase(
+                SCENE_ID, phaseReport("duplicate-commit", "agent-songjiang", 99L,
+                        "blocked", "council-table", 2_500L));
+
+        assertEquals("ignored_duplicate", result.getResult());
+        assertEquals(17L, result.getStateVersion());
+        verify(transactionManager).commit(status);
+        verify(transactionManager, never()).rollback(any());
+        verify(eventDao, never()).lockSceneVersionScope(any(), any(), any());
+        verify(stateDao, never()).findByAgent(any(), any(), any(), any());
+    }
+
+    @Test
     void duplicateRecoveryRejectsAnExternallyVisiblePendingInvariant() {
         AgentScenePhaseReportEntity pending = phaseEntity("pending", 17L, "__pending_phase_report__");
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
-                .thenThrow(new DuplicateKeyException("existing reservation"));
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
+                .thenReturn(false);
         when(phaseReportDao.findByReportIdForUpdate("tenant-a", "client-a", SCENE_ID, "pending"))
                 .thenReturn(pending);
 
@@ -299,7 +343,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     void treatsOlderFutureAndWrongRegionReportsAsStaleWithoutAllocatingEvents() {
         when(stateDao.findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang"))
                 .thenReturn(stateEntity("agent-songjiang", "songjiang", 17L, null));
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(true);
 
         for (AgentScenePhaseReportDTO report : List.of(
                 phaseReport("old", "agent-songjiang", 16L, "blocked", "council-table", 2_500L),
@@ -311,7 +355,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
 
         InOrder staleOrder = inOrder(phaseReportDao, eventDao, stateDao);
         staleOrder.verify(phaseReportDao)
-                .insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
+                .tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
         staleOrder.verify(eventDao).lockSceneVersionScope("tenant-a", "client-a", SCENE_ID);
         staleOrder.verify(stateDao)
                 .findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang");
@@ -348,12 +392,12 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         setScope("tenant-b", "client-b");
         when(stateDao.findByAgent("tenant-b", "client-b", SCENE_ID, "agent-songjiang"))
                 .thenReturn(stateEntity("agent-songjiang", "songjiang", 17L, null));
-        when(phaseReportDao.insert(eq("tenant-b"), eq("client-b"), eq(SCENE_ID), any())).thenReturn(1);
+        when(phaseReportDao.tryReserve(eq("tenant-b"), eq("client-b"), eq(SCENE_ID), any())).thenReturn(true);
 
         service.reportPhase(SCENE_ID,
                 phaseReport("r-b", "agent-songjiang", 16L, "blocked", "council-table", 2_500L));
 
-        verify(phaseReportDao).insert(eq("tenant-b"), eq("client-b"), eq(SCENE_ID), any());
+        verify(phaseReportDao).tryReserve(eq("tenant-b"), eq("client-b"), eq(SCENE_ID), any());
         verify(phaseReportDao).finalizePendingResult(
                 eq("tenant-b"), eq("client-b"), eq(SCENE_ID), eq("r-b"),
                 eq("__pending_phase_report__"), eq("ignored_stale"), anyLong());
@@ -367,15 +411,15 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         AtomicReference<AgentScenePhaseReportEntity> stored = new AtomicReference<>();
         when(stateDao.findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang"))
                 .thenReturn(stateEntity("agent-songjiang", "songjiang", 17L, null));
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
                 .thenAnswer(invocation -> {
                     AgentScenePhaseReportEntity candidate = invocation.getArgument(3);
                     if (reservationOwner.compareAndSet(false, true)) {
                         stored.set(candidate);
-                        return 1;
+                        return true;
                     }
                     assertTrue(reportFinalized.await(2, TimeUnit.SECONDS));
-                    throw new DuplicateKeyException("duplicate reservation");
+                    return false;
                 });
         when(phaseReportDao.finalizePendingResult(
                 eq("tenant-a"), eq("client-a"), eq(SCENE_ID), eq("race"),
@@ -410,7 +454,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     void conditionalStateFailureThrowsAfterAllocationSoTheTransactionRollsBack() {
         when(stateDao.findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang"))
                 .thenReturn(stateEntity("agent-songjiang", "songjiang", 17L, null));
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(true);
         when(stateDao.updatePhase(any(), any(), any(), any(), anyLong(), any(), anyLong())).thenReturn(0);
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         TransactionStatus status = new SimpleTransactionStatus();
@@ -436,7 +480,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     void pendingFinalizationFailureRollsBackReservationBeforeVersionAllocation() {
         when(stateDao.findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang"))
                 .thenReturn(stateEntity("agent-songjiang", "songjiang", 17L, null));
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(true);
         when(phaseReportDao.finalizePendingResult(
                 eq("tenant-a"), eq("client-a"), eq(SCENE_ID), eq("finalize-fail"),
                 eq("__pending_phase_report__"), eq("accepted"), anyLong())).thenReturn(0);
@@ -454,7 +498,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
                 phaseReport("finalize-fail", "agent-songjiang", 17L,
                         "arrived", "council-table", 2_500L)));
 
-        verify(phaseReportDao).insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
+        verify(phaseReportDao).tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
         verify(eventDao).lockSceneVersionScope("tenant-a", "client-a", SCENE_ID);
         verify(eventDao, never()).nextSceneVersion(any(), any(), any());
         verify(stateDao, never()).updatePhase(any(), any(), any(), any(), anyLong(), any(), anyLong());
@@ -469,7 +513,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
                 stateDao, eventDao, phaseReportDao, runtimeDao, broker);
         when(stateDao.findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang"))
                 .thenReturn(stateEntity("agent-songjiang", "songjiang", 17L, null));
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(true);
         when(stateDao.updatePhase(any(), any(), any(), any(), anyLong(), any(), anyLong())).thenReturn(1);
 
         TransactionSynchronizationManager.initSynchronization();
@@ -493,7 +537,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     void acceptedPhaseEventFailureRollsBackReportStateAndVersionWork() throws Exception {
         when(stateDao.findByAgent("tenant-a", "client-a", SCENE_ID, "agent-songjiang"))
                 .thenReturn(stateEntity("agent-songjiang", "songjiang", 17L, null));
-        when(phaseReportDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
+        when(phaseReportDao.tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(true);
         when(stateDao.updatePhase(any(), any(), any(), any(), anyLong(), any(), anyLong())).thenReturn(1);
         when(eventDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any()))
                 .thenThrow(new IllegalStateException("phase event insert failed"));
@@ -511,7 +555,7 @@ class AgentSceneServiceImplTest extends BaseMockTest {
                 phaseReport("rollback", "agent-songjiang", 17L,
                         "arrived", "council-table", 2_500L)));
 
-        verify(phaseReportDao).insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
+        verify(phaseReportDao).tryReserve(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any());
         verify(stateDao).updatePhase(eq("tenant-a"), eq("client-a"), eq(SCENE_ID),
                 eq("agent-songjiang"), eq(17L), eq("arrived"), anyLong());
         verify(eventDao).nextSceneVersion("tenant-a", "client-a", SCENE_ID);

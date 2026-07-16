@@ -9,7 +9,7 @@ public interface AgentScenePhaseReportDao {
     AgentScenePhaseReportEntity findByReportIdForUpdate(
             String tenantId, String clientId, String sceneId, String reportId);
 
-    int insert(String tenantId, String clientId, String sceneId, AgentScenePhaseReportEntity entity);
+    boolean tryReserve(String tenantId, String clientId, String sceneId, AgentScenePhaseReportEntity entity);
 
     int finalizePendingResult(String tenantId, String clientId, String sceneId,
             String reportId, String pendingResult, String finalResult, long processedAt);
