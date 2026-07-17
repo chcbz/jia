@@ -37,6 +37,7 @@ public class KefuServiceImpl implements KefuService {
 	 * 活跃用户
 	 */
 	private static final String ACTIVE_MP_USER = "active_mp_user_";
+	private static final String WX_USER_UNSUBSCRIBED_ERROR_CODE = "43004";
 	
 	@Autowired
 	private KefuMsgTypeDao kefuMsgTypeDao;
@@ -97,7 +98,7 @@ public class KefuServiceImpl implements KefuService {
 	@Override
 	public boolean sendWxTemplate(KefuMsgTypeEntity kefuMsgType, String jiacn, String... attr) throws Exception {
 		MpUserEntity mpUser = mpUserService.findByJiacn(jiacn);
-		if (mpUser == null) {
+		if (mpUser == null || EsConstants.COMMON_NO.equals(mpUser.getSubscribe())) {
 			return false;
 		}
 		String msgContent = "";
@@ -132,8 +133,13 @@ public class KefuServiceImpl implements KefuService {
 				message.setTemplateId(mpTemplate.getTemplateId());
 				message.setData(data);
 				message.setUrl(kefuMsgType.getUrl());
-				String messageId = mpInfoService.findWxMpService(mpTemplate.getAppid()).getTemplateMsgService().sendTemplateMsg(message);
-				sendSuccess = StringUtil.isNotEmpty(messageId);
+				try {
+					String messageId = mpInfoService.findWxMpService(mpTemplate.getAppid()).getTemplateMsgService().sendTemplateMsg(message);
+					sendSuccess = StringUtil.isNotEmpty(messageId);
+				} catch (WxErrorException e) {
+					markUserUnsubscribed(mpUser, e);
+					throw e;
+				}
 			}
 		}
 		if (sendSuccess) {
@@ -145,9 +151,31 @@ public class KefuServiceImpl implements KefuService {
 			msg.setTitle(kefuMsgType.getWxTemplateId());
 			msg.setContent(msgContent);
 			msg.setUrl(kefuMsgType.getUrl());
-			return kefuMsgLogDao.insert(msg) > 0;
+			try {
+				if (kefuMsgLogDao.insert(msg) <= 0) {
+					log.warn("Wx message sent but log persistence failed. jiacn={}", jiacn);
+				}
+			} catch (Exception e) {
+				log.error("Wx message sent but log persistence failed. jiacn={}", jiacn, e);
+			}
+			return true;
 		}
 		return false;
+	}
+
+	private void markUserUnsubscribed(MpUserEntity mpUser, WxErrorException exception) {
+		if (!exception.getMessage().contains(WX_USER_UNSUBSCRIBED_ERROR_CODE) || mpUser.getId() == null) {
+			return;
+		}
+		MpUserEntity update = new MpUserEntity();
+		update.setId(mpUser.getId());
+		update.setSubscribe(EsConstants.COMMON_NO);
+		try {
+			mpUserService.update(update);
+			log.info("Marked WeChat user as unsubscribed after error 43004. jiacn={}", mpUser.getJiacn());
+		} catch (Exception e) {
+			log.error("Failed to mark WeChat user as unsubscribed. jiacn={}", mpUser.getJiacn(), e);
+		}
 	}
 
 	@Override

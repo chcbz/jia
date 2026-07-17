@@ -165,6 +165,7 @@ public class PointServiceImpl implements PointService {
 		record.setType(PointConstants.POINT_TYPE_LUCK);
 		record.setChg(record.getChg());
 		record.setRemain(userPoint);
+		record.setId(null);
 		pointRecordDao.insert(record);
 		return record;
 	}

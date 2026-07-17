@@ -1,7 +1,6 @@
 package cn.jia.wx.dao.impl;
 
 import cn.jia.common.dao.BaseDaoImpl;
-import cn.jia.core.util.BeanUtil;
 import cn.jia.wx.dao.MpUserDao;
 import cn.jia.wx.entity.MpUserEntity;
 import cn.jia.wx.mapper.MpUserMapper;
@@ -21,7 +20,10 @@ public class MpUserDaoImpl extends BaseDaoImpl<MpUserMapper, MpUserEntity> imple
     @Override
     public int unsubscribe(MpUserEntity example) {
         UpdateWrapper<MpUserEntity> updateWrapper = new UpdateWrapper<>();
-        updateWrapper.allEq(BeanUtil.toMap(example), false).lambda().set(MpUserEntity::getSubscribe, 0);
+        updateWrapper.lambda()
+                .eq(example.getClientId() != null, MpUserEntity::getClientId, example.getClientId())
+                .eq(example.getAppid() != null, MpUserEntity::getAppid, example.getAppid())
+                .set(MpUserEntity::getSubscribe, 0);
         return baseMapper.update(null, updateWrapper);
     }
 }

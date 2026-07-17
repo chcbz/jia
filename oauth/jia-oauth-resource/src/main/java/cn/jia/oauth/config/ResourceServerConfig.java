@@ -38,6 +38,8 @@ import java.util.UUID;
 @ConditionalOnClass(OAuth2ResourceServerConfigurer.class)
 public class ResourceServerConfig {
 
+    private static final String WX_MP_CHECK_SIGNATURE_PATH = "/wx/mp/checksignature";
+
     @Bean
     @ConfigurationProperties(prefix = "oauth.resource")
     public OauthResourceProperties oauthResourceProperties() {
@@ -64,6 +66,7 @@ public class ResourceServerConfig {
         http
                 .securityMatcher(resourceUris.toArray(new String[0]))
                 .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers(WX_MP_CHECK_SIGNATURE_PATH).permitAll()
                         .requestMatchers("/dwz/view/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))

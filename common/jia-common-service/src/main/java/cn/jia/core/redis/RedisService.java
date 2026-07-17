@@ -72,6 +72,18 @@ public class RedisService {
     }
 
     /**
+     * 仅当键不存在时设置键值对并指定有效期。
+     *
+     * @param key 键
+     * @param value 值
+     * @param duration 有效期
+     * @return 是否设置成功
+     */
+    public boolean setIfAbsent(String key, String value, Duration duration) {
+        return Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(key, value, duration));
+    }
+
+    /**
      * 设置键值对到Redis中并指定有效期
      *
      * @param key 键

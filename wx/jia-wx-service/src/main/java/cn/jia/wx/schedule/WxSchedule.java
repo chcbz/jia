@@ -26,14 +26,20 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
-import java.util.Random;
 import java.util.concurrent.DelayQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Component
 @Slf4j
 public class WxSchedule {
+	private static final ZoneId SCHEDULE_ZONE = ZoneId.of("Asia/Shanghai");
+	private static final String SCHEDULE_LOCK_PREFIX = "wx_schedule:send_vote:";
+
 	@Autowired(required = false)
 	private MatVoteService voteService;
 	@Autowired
@@ -50,8 +56,14 @@ public class WxSchedule {
 	/**
 	 * 每天7:30发送提问信息，同时生成每日一句处理队列
 	 */
-	@Scheduled(cron = "0 30 7 * * ?")
+	@Scheduled(cron = "0 30 7 * * ?", zone = "Asia/Shanghai")
 	public void sendVote() {
+		String scheduleLockKey = SCHEDULE_LOCK_PREFIX + LocalDate.now(SCHEDULE_ZONE);
+		if (!redisService.setIfAbsent(scheduleLockKey, "1", Duration.ofMinutes(15))) {
+			log.info("Skip duplicate WeChat schedule. key={}", scheduleLockKey);
+			return;
+		}
+
 		KefuMsgSubscribeEntity subscribe = new KefuMsgSubscribeEntity();
 		subscribe.setTypeCode(KefuMsgTypeCode.VOTE.getCode());
 		subscribe.setStatus(EsConstants.COMMON_ENABLE);
@@ -91,11 +103,9 @@ public class WxSchedule {
 		subscribe.setTypeCode(KefuMsgTypeCode.PHRASE.getCode());
 		subscribeList = kefuMsgSubscribeService.findList(subscribe);
 		for (KefuMsgSubscribeEntity kefuMsgSubscribe : subscribeList) {
-			int max = (int)(DateUtil.todayEnd().getTime() / 1000);
-			int min = (int)(System.currentTimeMillis() / 1000);
-			Random random = new Random();
-			long i = random.nextInt(max) % (max - min + 1) * 1000L;
-			delayQueue.offer(new DelayObj(i, JsonUtil.toJson(kefuMsgSubscribe)));
+			long remainingMillis = Math.max(0, DateUtil.todayEnd().getTime() - System.currentTimeMillis());
+			long delayMillis = ThreadLocalRandom.current().nextLong(remainingMillis + 1);
+			delayQueue.offer(new DelayObj(delayMillis, JsonUtil.toJson(kefuMsgSubscribe)));
 		}
 		final int size = subscribeList.size();
 		new ThreadRequest(new AbstractThreadRequestContent() {
@@ -110,6 +120,10 @@ public class WxSchedule {
 						ValidUtil.assertNotNull(kefuMsgSubscribe, EsErrorConstants.PARAMETER_INCORRECT.getCode());
 						KefuMsgTypeEntity kefuMsgType =
 								kefuMsgTypeService.findOne(new KefuMsgTypeEntity().setTypeCode(kefuMsgSubscribe.getTypeCode()));
+						if (phrase == null || kefuMsgType == null) {
+							log.warn("Skip phrase notice, msgType or phrase missing. jiacn={}", kefuMsgSubscribe.getJiacn());
+							continue;
+						}
 						kefuService.sendWxTemplate(kefuMsgType, kefuMsgSubscribe.getJiacn(), phrase.getContent());
 					} catch (Exception e) {
 						log.error("WxSchedule.sendPhrase", e);

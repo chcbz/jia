@@ -103,5 +103,22 @@ class KefuServiceImplTest extends BaseMockTest {
         kefuMsgTypeEntity.setWxTemplate("[{\"name\":\"first\",\"value\":\"\",\"color\":\"#173177\"},{\"name\":\"keyword1\",\"value\":\"每天答题激活提醒\",\"color\":\"#173177\"},{\"name\":\"keyword2\",\"value\":\"请回复1重新激活，退订回复TD\",\"color\":\"#173177\"},{\"name\":\"remark\",\"value\":\"\",\"color\":\"#173177\"}]");
         result = kefuServiceImpl.sendWxTemplate(kefuMsgTypeEntity, kefuMsgSubscribeEntity.getJiacn(), "attr");
         Assertions.assertTrue(result);
+
+        when(redisService.get(any())).thenReturn("");
+        when(kefuMsgLogDao.insert(any())).thenReturn(0);
+        result = kefuServiceImpl.sendWxTemplate(kefuMsgTypeEntity, kefuMsgSubscribeEntity.getJiacn(), "attr");
+        Assertions.assertTrue(result);
+    }
+
+    @Test
+    void testSendWxTemplateSkipsUnsubscribedUser() throws Exception {
+        MpUserEntity mpUserEntity = new MpUserEntity();
+        mpUserEntity.setSubscribe(EsConstants.COMMON_NO);
+        when(mpUserService.findByJiacn("jiacn")).thenReturn(mpUserEntity);
+
+        boolean result = kefuServiceImpl.sendWxTemplate(new KefuMsgTypeEntity(), "jiacn", "attr");
+
+        Assertions.assertFalse(result);
+        verifyNoInteractions(mpInfoService, mpTemplateService, kefuMsgLogDao);
     }
 }
