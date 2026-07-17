@@ -102,3 +102,73 @@ CREATE TABLE IF NOT EXISTS agent_task_note (
     KEY idx_agent_task_note_task_id (task_id),
     KEY idx_agent_task_note_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent任务纪要表';
+
+CREATE TABLE IF NOT EXISTS agent_scene_state (
+    id                  BIGINT NOT NULL AUTO_INCREMENT,
+    scene_id            VARCHAR(100) NOT NULL,
+    agent_id            VARCHAR(100) NOT NULL,
+    persona_code        VARCHAR(50) NOT NULL,
+    behavior            VARCHAR(50) NOT NULL,
+    origin_region_id    VARCHAR(100) DEFAULT NULL,
+    target_region_id    VARCHAR(100) NOT NULL,
+    related_type        VARCHAR(50) DEFAULT NULL,
+    related_id          VARCHAR(100) DEFAULT NULL,
+    phase               VARCHAR(20) NOT NULL,
+    state_version       BIGINT NOT NULL,
+    started_at          BIGINT NOT NULL,
+    expected_arrival_at BIGINT DEFAULT NULL,
+    expires_at          BIGINT DEFAULT NULL,
+    tenant_id           VARCHAR(50) NOT NULL,
+    client_id           VARCHAR(50) NOT NULL,
+    create_time         BIGINT DEFAULT NULL,
+    update_time         BIGINT DEFAULT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_scene_state_scope_agent (tenant_id, client_id, scene_id, agent_id),
+    KEY idx_agent_scene_state_scope_version (tenant_id, client_id, scene_id, state_version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped semantic agent scene state';
+
+CREATE TABLE IF NOT EXISTS agent_scene_event (
+    id                  BIGINT NOT NULL AUTO_INCREMENT,
+    scene_id            VARCHAR(100) NOT NULL,
+    scene_version       BIGINT NOT NULL,
+    event_type          VARCHAR(50) NOT NULL,
+    event_json          TEXT NOT NULL,
+    occurred_at         BIGINT NOT NULL,
+    tenant_id           VARCHAR(50) NOT NULL,
+    client_id           VARCHAR(50) NOT NULL,
+    create_time         BIGINT DEFAULT NULL,
+    update_time         BIGINT DEFAULT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_scene_event_scope_version (tenant_id, client_id, scene_id, scene_version),
+    KEY idx_agent_scene_event_scope_occurred (tenant_id, client_id, scene_id, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped safe agent scene events';
+
+CREATE TABLE IF NOT EXISTS agent_scene_version (
+    tenant_id       VARCHAR(50) NOT NULL,
+    client_id       VARCHAR(50) NOT NULL,
+    scene_id        VARCHAR(100) NOT NULL,
+    current_version BIGINT NOT NULL,
+    create_time     BIGINT DEFAULT NULL,
+    update_time     BIGINT DEFAULT NULL,
+    PRIMARY KEY (tenant_id, client_id, scene_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped agent scene version counter';
+
+CREATE TABLE IF NOT EXISTS agent_scene_phase_report (
+    id                  BIGINT NOT NULL AUTO_INCREMENT,
+    scene_id            VARCHAR(100) NOT NULL,
+    report_id           VARCHAR(100) NOT NULL,
+    agent_id            VARCHAR(100) NOT NULL,
+    state_version       BIGINT NOT NULL,
+    phase               VARCHAR(20) NOT NULL,
+    region_id           VARCHAR(100) NOT NULL,
+    result              VARCHAR(30) NOT NULL,
+    occurred_at         BIGINT NOT NULL,
+    processed_at        BIGINT NOT NULL,
+    tenant_id           VARCHAR(50) NOT NULL,
+    client_id           VARCHAR(50) NOT NULL,
+    create_time         BIGINT DEFAULT NULL,
+    update_time         BIGINT DEFAULT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_scene_phase_report_scope_report (tenant_id, client_id, scene_id, report_id),
+    KEY idx_agent_scene_phase_report_scope_agent_version (tenant_id, client_id, scene_id, agent_id, state_version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped idempotent agent scene phase reports';

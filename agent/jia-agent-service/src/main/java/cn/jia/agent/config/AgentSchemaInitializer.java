@@ -4,13 +4,21 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Locale;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class AgentSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbcTemplate;
+    private Boolean h2Database;
 
     @Override
     public void afterPropertiesSet() {
@@ -18,6 +26,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureAgentRuntimeColumns();
         ensureBindingTable();
         ensureTaskNoteTable();
+        ensureSceneTables();
         seedWaterMarginPersonas();
     }
 
@@ -52,6 +61,11 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
     private void ensureBindingTable() {
+        String generatedColumnStorage = isH2Database() ? "" : " STORED";
+        String activePersonaColumn = "active_persona_code VARCHAR(50) GENERATED ALWAYS AS "
+                + "(CASE WHEN status = 1 THEN persona_code ELSE NULL END)" + generatedColumnStorage;
+        String activeAgentColumn = "active_agent_id     VARCHAR(100) GENERATED ALWAYS AS "
+                + "(CASE WHEN status = 1 THEN agent_id ELSE NULL END)" + generatedColumnStorage;
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_persona_binding (
                     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
@@ -60,8 +74,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                     agent_id            VARCHAR(100) NOT NULL COMMENT 'Runtime agent ID',
                     bound_at            BIGINT NOT NULL COMMENT 'Bind time',
                     status              INT NOT NULL DEFAULT 1 COMMENT '1 active, 0 inactive',
-                    active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END) STORED,
-                    active_agent_id     VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END) STORED,
+                    %s,
+                    %s,
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     tenant_id           VARCHAR(50) DEFAULT NULL COMMENT 'Tenant ID reserved',
@@ -73,15 +87,33 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent persona binding'
-                """);
+                """.formatted(activePersonaColumn, activeAgentColumn));
         addColumnIfMissing("agent_persona_binding", "active_persona_code",
-                "active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END) STORED");
+                activePersonaColumn);
         addColumnIfMissing("agent_persona_binding", "active_agent_id",
-                "active_agent_id VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END) STORED");
+                activeAgentColumn);
         addIndexIfMissing("agent_persona_binding", "uk_agent_binding_active_persona",
                 "CREATE UNIQUE INDEX uk_agent_binding_active_persona ON agent_persona_binding (client_id, active_persona_code)");
         addIndexIfMissing("agent_persona_binding", "uk_agent_binding_active_agent",
                 "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (client_id, active_agent_id)");
+    }
+
+    private boolean isH2Database() {
+        if (h2Database != null) {
+            return h2Database;
+        }
+        DataSource dataSource = jdbcTemplate.getDataSource();
+        if (dataSource == null) {
+            h2Database = false;
+            return h2Database;
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            String productName = connection.getMetaData().getDatabaseProductName();
+            h2Database = productName != null && productName.toLowerCase(Locale.ROOT).contains("h2");
+            return h2Database;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Unable to determine database dialect for agent schema initialization", e);
+        }
     }
 
     private void ensureTaskNoteTable() {
@@ -105,7 +137,118 @@ public class AgentSchemaInitializer implements InitializingBean {
                 """);
     }
 
+    private void ensureSceneTables() {
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_scene_state (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    scene_id VARCHAR(100) NOT NULL,
+                    agent_id VARCHAR(100) NOT NULL,
+                    persona_code VARCHAR(50) NOT NULL,
+                    behavior VARCHAR(50) NOT NULL,
+                    origin_region_id VARCHAR(100) DEFAULT NULL,
+                    target_region_id VARCHAR(100) NOT NULL,
+                    related_type VARCHAR(50) DEFAULT NULL,
+                    related_id VARCHAR(100) DEFAULT NULL,
+                    phase VARCHAR(20) NOT NULL,
+                    state_version BIGINT NOT NULL,
+                    started_at BIGINT NOT NULL,
+                    expected_arrival_at BIGINT DEFAULT NULL,
+                    expires_at BIGINT DEFAULT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_agent_scene_state_scope_agent (tenant_id, client_id, scene_id, agent_id),
+                    KEY idx_agent_scene_state_scope_version (tenant_id, client_id, scene_id, state_version)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_scene_event (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    scene_id VARCHAR(100) NOT NULL,
+                    scene_version BIGINT NOT NULL,
+                    event_type VARCHAR(50) NOT NULL,
+                    event_json TEXT NOT NULL,
+                    occurred_at BIGINT NOT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_agent_scene_event_scope_version (tenant_id, client_id, scene_id, scene_version),
+                    KEY idx_agent_scene_event_scope_occurred (tenant_id, client_id, scene_id, occurred_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_scene_version (
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    scene_id VARCHAR(100) NOT NULL,
+                    current_version BIGINT NOT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    PRIMARY KEY (tenant_id, client_id, scene_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_scene_phase_report (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    scene_id VARCHAR(100) NOT NULL,
+                    report_id VARCHAR(100) NOT NULL,
+                    agent_id VARCHAR(100) NOT NULL,
+                    state_version BIGINT NOT NULL,
+                    phase VARCHAR(20) NOT NULL,
+                    region_id VARCHAR(100) NOT NULL,
+                    result VARCHAR(30) NOT NULL,
+                    occurred_at BIGINT NOT NULL,
+                    processed_at BIGINT NOT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_agent_scene_phase_report_scope_report
+                        (tenant_id, client_id, scene_id, report_id),
+                    KEY idx_agent_scene_phase_report_scope_agent_version
+                        (tenant_id, client_id, scene_id, agent_id, state_version)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+
+        ensureRequiredIndex("agent_scene_state", "uk_agent_scene_state_scope_agent", true,
+                List.of("tenant_id", "client_id", "scene_id", "agent_id"),
+                "CREATE UNIQUE INDEX uk_agent_scene_state_scope_agent "
+                        + "ON agent_scene_state (tenant_id, client_id, scene_id, agent_id)");
+        ensureRequiredIndex("agent_scene_state", "idx_agent_scene_state_scope_version", false,
+                List.of("tenant_id", "client_id", "scene_id", "state_version"),
+                "CREATE INDEX idx_agent_scene_state_scope_version "
+                        + "ON agent_scene_state (tenant_id, client_id, scene_id, state_version)");
+        ensureRequiredIndex("agent_scene_event", "uk_agent_scene_event_scope_version", true,
+                List.of("tenant_id", "client_id", "scene_id", "scene_version"),
+                "CREATE UNIQUE INDEX uk_agent_scene_event_scope_version "
+                        + "ON agent_scene_event (tenant_id, client_id, scene_id, scene_version)");
+        ensureRequiredIndex("agent_scene_event", "idx_agent_scene_event_scope_occurred", false,
+                List.of("tenant_id", "client_id", "scene_id", "occurred_at"),
+                "CREATE INDEX idx_agent_scene_event_scope_occurred "
+                        + "ON agent_scene_event (tenant_id, client_id, scene_id, occurred_at)");
+        ensureRequiredIndex("agent_scene_phase_report", "uk_agent_scene_phase_report_scope_report", true,
+                List.of("tenant_id", "client_id", "scene_id", "report_id"),
+                "CREATE UNIQUE INDEX uk_agent_scene_phase_report_scope_report "
+                        + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, report_id)");
+        ensureRequiredIndex("agent_scene_phase_report", "idx_agent_scene_phase_report_scope_agent_version", false,
+                List.of("tenant_id", "client_id", "scene_id", "agent_id", "state_version"),
+                "CREATE INDEX idx_agent_scene_phase_report_scope_agent_version "
+                        + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, agent_id, state_version)");
+        ensureRequiredIndex("agent_scene_version", "PRIMARY", true,
+                List.of("tenant_id", "client_id", "scene_id"),
+                "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, scene_id)");
+    }
+
     private void seedWaterMarginPersonas() {
+        if (isH2Database() && !h2TableExists("agent_persona")) {
+            log.info("Skipping Water Margin persona seeds because H2 does not provide the optional agent_persona table");
+            return;
+        }
         for (PersonaSeed seed : PERSONAS) {
             jdbcTemplate.update("""
                     INSERT INTO agent_persona
@@ -153,6 +296,83 @@ public class AgentSchemaInitializer implements InitializingBean {
             log.warn("Unable to ensure index {}.{}: {}", table, indexName, e.getMessage());
         }
     }
+
+    private void ensureRequiredIndex(
+            String table, String indexName, boolean unique, List<String> columns, String createSql) {
+        List<IndexColumn> actual = inspectRequiredIndex(table, indexName);
+        if (actual == null || actual.isEmpty()) {
+            jdbcTemplate.execute(createSql);
+            return;
+        }
+        int expectedNonUnique = unique ? 0 : 1;
+        boolean matches = actual.size() == columns.size();
+        for (int i = 0; matches && i < actual.size(); i++) {
+            IndexColumn part = actual.get(i);
+            matches = part.nonUnique() == expectedNonUnique
+                    && part.sequence() == i + 1
+                    && part.subPart() == null
+                    && columns.get(i).equals(part.columnName().toLowerCase(Locale.ROOT));
+        }
+        if (!matches) {
+            throw new IllegalStateException("Required index " + table + "." + indexName
+                    + " has an incompatible uniqueness or ordered column definition");
+        }
+    }
+
+    private boolean h2TableExists(String table) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_schema = SCHEMA() AND LOWER(table_name) = LOWER(?)
+                """, Integer.class, table);
+        return count != null && count > 0;
+    }
+
+    private List<IndexColumn> inspectRequiredIndex(String table, String indexName) {
+        if (isH2Database()) {
+            if ("PRIMARY".equals(indexName)) {
+                return jdbcTemplate.query("""
+                        SELECT 0 AS NON_UNIQUE, kcu.COLUMN_NAME,
+                               kcu.ORDINAL_POSITION AS SEQ_IN_INDEX,
+                               CAST(NULL AS INTEGER) AS SUB_PART
+                        FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu
+                          ON tc.constraint_catalog = kcu.constraint_catalog
+                         AND tc.constraint_schema = kcu.constraint_schema
+                         AND tc.constraint_name = kcu.constraint_name
+                        WHERE tc.table_schema = SCHEMA()
+                          AND LOWER(tc.table_name) = LOWER(?)
+                          AND tc.constraint_type = 'PRIMARY KEY'
+                        ORDER BY kcu.ordinal_position
+                        """, INDEX_COLUMN_MAPPER, table);
+            }
+            return jdbcTemplate.query("""
+                    SELECT CASE WHEN IS_UNIQUE THEN 0 ELSE 1 END AS NON_UNIQUE,
+                           COLUMN_NAME, ORDINAL_POSITION AS SEQ_IN_INDEX,
+                           CAST(NULL AS INTEGER) AS SUB_PART
+                    FROM information_schema.index_columns
+                    WHERE table_schema = SCHEMA()
+                      AND LOWER(table_name) = LOWER(?)
+                      AND LOWER(index_name) = LOWER(?)
+                    ORDER BY ordinal_position
+                    """, INDEX_COLUMN_MAPPER, table, indexName);
+        }
+        return jdbcTemplate.query("""
+                SELECT NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX, SUB_PART
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
+                ORDER BY SEQ_IN_INDEX
+                """, INDEX_COLUMN_MAPPER, table, indexName);
+    }
+
+    private static final RowMapper<IndexColumn> INDEX_COLUMN_MAPPER = (rs, rowNum) ->
+            new IndexColumn(
+                    rs.getInt("NON_UNIQUE"),
+                    rs.getString("COLUMN_NAME"),
+                    rs.getInt("SEQ_IN_INDEX"),
+                    rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART"));
+
+    static record IndexColumn(int nonUnique, String columnName, int sequence, Integer subPart) {}
 
     private String visualConfig(int rankNo) {
         int x = (rankNo - 1) % 6;

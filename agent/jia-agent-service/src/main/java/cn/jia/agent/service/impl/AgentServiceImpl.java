@@ -2,6 +2,8 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.common.AgentSceneConstants;
+import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
@@ -18,6 +20,7 @@ import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentStatsDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
@@ -33,6 +36,7 @@ import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -49,6 +53,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -63,6 +69,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -79,6 +86,11 @@ public class AgentServiceImpl implements AgentService {
     private static final Path CODEX_WS_AGENT_DIR = Path.of("/home/isp/apps/codex-ws-agent");
     private static final Path CODEX_WS_PROFILES_FILE = CODEX_WS_AGENT_DIR.resolve("codex-profiles.conf");
     private static final Path AGENT_CLIENTS_DIR = Path.of("/home/isp/hosts/cyf/agent-clients");
+    private static final String REGION_BOUNTY_BOARD = "bounty-board";
+    private static final String REGION_COUNCIL_TABLE = "council-table";
+    private static final String REGION_MAIN_SEAT = "main-seat";
+    private static final long SCENE_EXPECTED_ARRIVAL_MILLIS = 20_000L;
+    private static final long SCENE_STATE_EXPIRY_MILLIS = 300_000L;
 
     private final AgentRuntimeDao agentRuntimeDao;
     private final AgentPersonaDao agentPersonaDao;
@@ -89,6 +101,8 @@ public class AgentServiceImpl implements AgentService {
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
     private final ObjectProvider<TaskService> taskServiceProvider;
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
+    private final ObjectProvider<AgentSceneService> sceneServiceProvider;
+    private final AgentSceneFeatureFlags sceneFeatureFlags;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -328,6 +342,7 @@ public class AgentServiceImpl implements AgentService {
         String personaName = Optional.ofNullable(request.getPersonaName()).orElse("宋江");
         String type = Optional.ofNullable(request.getDialogueType()).orElse("IDLE");
         List<DialogueTemplateEntity> templates = dialogueTemplateDao.findByPersonaAndType(personaName, type);
+        publishDiscussionSceneState(personaName, type);
         if (templates.isEmpty()) {
             return "今日聚义厅中，正好议事。";
         }
@@ -472,6 +487,7 @@ public class AgentServiceImpl implements AgentService {
         AgentTaskDTO task = toTaskDTO(meta);
         task.setActionDispatchResults(dispatchTaskAssignedActions(task, assignedAgents));
         publishTaskEvent("task_assigned", task);
+        publishTaskAssignmentSceneStates(taskId, assignedAgents);
         return task;
     }
 
@@ -528,17 +544,21 @@ public class AgentServiceImpl implements AgentService {
         }
         saveMeta(meta);
 
+        List<AgentRuntimeDTO> updatedAgents = new ArrayList<>();
         for (String assignedAgentId : parseAssignedAgentIds(meta.getAssignedAgentId())) {
             AgentStatusDTO status = new AgentStatusDTO();
             status.setStatus(resolveAgentStatus(meta.getRewardStatus()));
             status.setCurrentTaskId(AgentConstants.TASK_STATUS_COMPLETED.equals(meta.getRewardStatus()) ? null : meta.getTaskId());
             status.setCurrentTaskTitle(request.getCurrentTaskTitle());
             status.setErrorMessage(request.getFailureReason());
-            updateStatus(assignedAgentId, status);
+            updatedAgents.add(updateStatus(assignedAgentId, status));
         }
 
         AgentTaskDTO task = toTaskDTO(meta);
         publishTaskEvent("task_" + meta.getRewardStatus(), task);
+        if (isTerminalTaskStatus(meta.getRewardStatus())) {
+            publishReturnHomeSceneStates(meta.getTaskId(), updatedAgents);
+        }
         return task;
     }
 
@@ -573,6 +593,7 @@ public class AgentServiceImpl implements AgentService {
         saveMeta(meta);
         AgentTaskDTO task = toTaskDTO(meta);
         publishTaskEvent("task_archived", task);
+        publishReturnHomeSceneStatesForAgentIds(meta.getTaskId(), parseAssignedAgentIds(meta.getAssignedAgentId()));
         return task;
     }
 
@@ -1402,6 +1423,173 @@ codexTimeoutMs=900000
             case AgentConstants.TASK_STATUS_FAILED -> AgentConstants.STATUS_ERROR;
             default -> AgentConstants.STATUS_ONLINE;
         };
+    }
+
+    private void publishTaskAssignmentSceneStates(
+            String taskId, List<AgentRuntimeEntity> assignedAgents) {
+        List<AgentRuntimeEntity> agents = List.copyOf(assignedAgents);
+        publishOptionalSceneAfterCommit("task-assignment", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (AgentRuntimeEntity agent : agents) {
+                publishSceneState(sceneService, movementState(
+                        agent.getAgentId(), agent.getPersonaCode(), "moving_to_bounty",
+                        REGION_BOUNTY_BOARD, "task", taskId, now));
+            }
+        });
+    }
+
+    private void publishDiscussionSceneState(String personaName, String dialogueType) {
+        String normalizedType = Optional.ofNullable(dialogueType).orElse("")
+                .trim().toUpperCase(Locale.ROOT);
+        if (!"DISCUSSION".equals(normalizedType) && !"CHAT".equals(normalizedType)) {
+            return;
+        }
+        publishOptionalSceneAfterCommit("dialogue", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            Optional<AgentPersonaEntity> persona = resolveUniquePersonaIdentity(personaName);
+            if (persona.isEmpty()) {
+                return;
+            }
+            List<AgentRuntimeEntity> matches = Optional.ofNullable(agentRuntimeDao.findRosterByOwner(
+                            resolveCurrentClientId(), resolveCurrentJiacn(), null, null))
+                    .orElseGet(Collections::emptyList)
+                    .stream()
+                    .filter(agent -> persona.get().getPersonaCode().equalsIgnoreCase(
+                            Optional.ofNullable(agent.getPersonaCode()).orElse("")))
+                    .toList();
+            if (matches.size() != 1) {
+                log.warn("Skipping optional dialogue scene publication because persona roster identity is not unique");
+                return;
+            }
+            AgentRuntimeEntity agent = matches.getFirst();
+            String relatedType = "CHAT".equals(normalizedType) ? "chat" : "discussion";
+            String relatedId = "dlg-" + UUID.randomUUID().toString().replace("-", "");
+            long now = System.currentTimeMillis();
+            publishSceneState(sceneService, movementState(
+                    agent.getAgentId(), agent.getPersonaCode(), "moving_to_discussion",
+                    REGION_COUNCIL_TABLE, relatedType, relatedId, now));
+        });
+    }
+
+    private void publishReturnHomeSceneStates(String taskId, List<AgentRuntimeDTO> agents) {
+        List<AgentRuntimeDTO> copiedAgents = List.copyOf(agents);
+        publishOptionalSceneAfterCommit("task-return-home", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (AgentRuntimeDTO agent : copiedAgents) {
+                publishSceneState(sceneService, movementState(
+                        agent.getAgentId(), agent.getPersonaCode(), "returning_home",
+                        REGION_MAIN_SEAT, "task", taskId, now));
+            }
+        });
+    }
+
+    private void publishReturnHomeSceneStatesForAgentIds(String taskId, List<String> agentIds) {
+        List<String> copiedAgentIds = List.copyOf(agentIds);
+        publishOptionalSceneAfterCommit("task-archive-return-home", () -> {
+            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
+            if (sceneService == null) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            for (String agentId : copiedAgentIds) {
+                AgentRuntimeEntity agent = agentRuntimeDao.findByAgentId(agentId);
+                requireOwnedAgent(agent);
+                publishSceneState(sceneService, movementState(
+                        agent.getAgentId(), agent.getPersonaCode(), "returning_home",
+                        REGION_MAIN_SEAT, "task", taskId, now));
+            }
+        });
+    }
+
+    private AgentSceneStateDTO movementState(
+            String agentId,
+            String personaCode,
+            String behavior,
+            String targetRegionId,
+            String relatedType,
+            String relatedId,
+            long now) {
+        AgentSceneStateDTO state = new AgentSceneStateDTO();
+        state.setAgentId(agentId);
+        state.setPersonaCode(personaCode);
+        state.setBehavior(behavior);
+        state.setTargetRegionId(targetRegionId);
+        state.setRelatedType(relatedType);
+        state.setRelatedId(relatedId);
+        state.setPhase("moving");
+        state.setStartedAt(now);
+        state.setExpectedArrivalAt(now + SCENE_EXPECTED_ARRIVAL_MILLIS);
+        state.setExpiresAt(now + SCENE_STATE_EXPIRY_MILLIS);
+        return state;
+    }
+
+    private void publishSceneState(AgentSceneService sceneService, AgentSceneStateDTO state) {
+        if (StringUtil.isBlank(state.getAgentId()) || StringUtil.isBlank(state.getPersonaCode())) {
+            return;
+        }
+        sceneService.upsertState(AgentSceneConstants.SCENE_JUYITING_MAIN, state);
+    }
+
+    private Optional<AgentPersonaEntity> resolveUniquePersonaIdentity(String personaIdentity) {
+        String normalized = Optional.ofNullable(personaIdentity).orElse("").trim();
+        if (normalized.isEmpty()) {
+            return Optional.empty();
+        }
+        AgentPersonaEntity byCode = agentPersonaDao.findByCode(normalized);
+        AgentPersonaEntity byName = agentPersonaDao.findByName(normalized);
+        if (byCode != null && byName != null
+                && !Objects.equals(byCode.getPersonaCode(), byName.getPersonaCode())) {
+            log.warn("Skipping optional dialogue scene publication because persona identity is ambiguous");
+            return Optional.empty();
+        }
+        return Optional.ofNullable(byCode != null ? byCode : byName);
+    }
+
+    private void publishOptionalSceneAfterCommit(String operation, Runnable publication) {
+        if (!sceneFeatureFlags.sceneStateEnabled()) {
+            return;
+        }
+        Runnable isolatedPublication = () -> {
+            try {
+                publication.run();
+            } catch (RuntimeException failure) {
+                log.warn("Optional scene publication failed: operation={}, failureType={}",
+                        operation, failure.getClass().getSimpleName());
+            }
+        };
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            try {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        isolatedPublication.run();
+                    }
+                });
+            } catch (RuntimeException registrationFailure) {
+                log.warn("Optional scene publication could not be scheduled: operation={}, failureType={}",
+                        operation, registrationFailure.getClass().getSimpleName());
+            }
+            return;
+        }
+        isolatedPublication.run();
+    }
+
+    private boolean isTerminalTaskStatus(String status) {
+        return AgentConstants.TASK_STATUS_COMPLETED.equals(status)
+                || AgentConstants.TASK_STATUS_FAILED.equals(status)
+                || AgentConstants.TASK_STATUS_ARCHIVED.equals(status);
     }
 
     private void publishAgentStatus(AgentRuntimeDTO agent) {
