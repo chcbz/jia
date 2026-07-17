@@ -34,6 +34,8 @@ import cn.jia.wx.entity.MpUserEntity;
 import cn.jia.wx.service.MpInfoService;
 import cn.jia.wx.service.MpUserService;
 import cn.jia.wx.service.PayInfoService;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 import com.github.binarywang.wxpay.bean.request.WxPaySendRedpackRequest;
 import com.github.binarywang.wxpay.bean.result.WxPaySendRedpackResult;
 import com.github.pagehelper.PageInfo;
@@ -464,7 +466,9 @@ public class WxMpController {
      */
     @RequestMapping("/menu/create")
     public Object menuCreate(@RequestBody String menu, HttpServletRequest request) throws Exception {
-        mpInfoService.findWxMpService(request).getMenuService().menuCreate(menu);
+        JsonElement menuPayload = JsonParser.parseString(menu);
+        String menuJson = menuPayload.isJsonPrimitive() ? menuPayload.getAsString() : menu;
+        mpInfoService.findWxMpService(request).getMenuService().menuCreate(menuJson);
         return JsonResult.success();
     }
 
