@@ -63,7 +63,9 @@ public class ResourceServerConfig {
         List<String> resourceUris = SpringContextHolder.getBean(OauthResourceProperties.class).getUris();
         http
                 .securityMatcher(resourceUris.toArray(new String[0]))
-                .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
+                .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers("/dwz/view/**").permitAll()
+                        .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
                 .csrf(AbstractHttpConfigurer::disable)
         ;
