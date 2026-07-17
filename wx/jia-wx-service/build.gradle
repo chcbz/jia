@@ -11,6 +11,7 @@ dependencies {
     implementation project(':wx:jia-wx-mapper')
     implementation(libs.weixin.java.mp)
     implementation(libs.weixin.java.pay)
+    implementation(libs.zxing.javase)
     implementation(libs.spring.redis)
     testImplementation project(':common:jia-common-test')
     testAnnotationProcessor libs.lombok
