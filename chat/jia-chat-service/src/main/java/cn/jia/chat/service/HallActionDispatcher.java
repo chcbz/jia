@@ -50,14 +50,15 @@ public class HallActionDispatcher {
 
     private Map<String, Object> buildPayload(HallActionIntent intent) {
         String commandId = StringUtils.hasText(intent.getIntentId()) ? intent.getIntentId() : UUID.randomUUID().toString();
+        String messageId = UUID.randomUUID().toString();
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", AgentProtocolConstants.LEGACY_AGENT_ACTION);
         payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
-        payload.put("messageId", UUID.randomUUID().toString());
+        payload.put("messageId", messageId);
         payload.put("messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
         payload.put("commandId", commandId);
         payload.put("commandType", AgentProtocolConstants.commandTypeForLegacyAction(intent.getActionType()));
-        payload.put("requestId", intent.getIntentId());
+        payload.put("requestId", messageId);
         payload.put("correlationId", StringUtils.hasText(intent.getTaskId()) ? intent.getTaskId() : intent.getConversationId());
         putIfPresent(payload, "causationId", intent.getTriggerEventId());
         payload.put("conversationId", intent.getConversationId());

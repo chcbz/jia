@@ -608,7 +608,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         }
         event.put("type", type);
         event.put("channel", CHANNEL);
-        event.put("timestamp", System.currentTimeMillis());
+        if (event.containsKey("sentAt")) {
+            event.put("timestamp", event.get("sentAt"));
+        } else {
+            event.putIfAbsent("timestamp", System.currentTimeMillis());
+        }
         try {
             synchronized (session) {
                 session.sendMessage(new TextMessage(JsonUtil.toSafeJson(event)));
@@ -691,14 +695,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 .orElseGet(() -> Optional.ofNullable(intent.getIntentId()).orElseGet(() -> UUID.randomUUID().toString()));
         String commandType = Optional.ofNullable(intent.getCommandType())
                 .orElseGet(() -> AgentProtocolConstants.commandTypeForLegacyAction(intent.getActionType()));
+        String messageId = UUID.randomUUID().toString();
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", AgentProtocolConstants.LEGACY_AGENT_ACTION);
         payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
-        payload.put("messageId", UUID.randomUUID().toString());
+        payload.put("messageId", messageId);
         payload.put("messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
         payload.put("commandId", commandId);
         payload.put("commandType", commandType);
-        payload.put("requestId", intent.getIntentId());
+        payload.put("requestId", messageId);
         payload.put("correlationId", Optional.ofNullable(intent.getCorrelationId()).orElse(intent.getTaskId()));
         putIfPresent(payload, "causationId", intent.getCausationId());
         payload.put("conversationId", Optional.ofNullable(intent.getTaskId()).orElse(intent.getIntentId()));

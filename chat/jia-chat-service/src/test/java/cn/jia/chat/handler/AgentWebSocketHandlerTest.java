@@ -183,10 +183,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
 
+        long sentAt = 1_753_155_000_000L;
         boolean delivered = handler.sendDirectMessageToAgent("agent-001", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "messageId", "chat-message-1",
+                "messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
                 "conversationId", "1001",
                 "conversationType", "juyiting",
-                "content", "@Wu Yong please reply"));
+                "content", "@Wu Yong please reply",
+                "sentAt", sentAt,
+                "timestamp", sentAt));
 
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(3)).sendMessage(messageCaptor.capture());
@@ -198,6 +204,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("@Wu Yong please reply"));
         assertTrue(!messages.contains("\"commandType\""));
+        Map<String, Object> chatEnvelope = findOutboundEnvelope(
+                messageCaptor.getAllValues(), AgentProtocolConstants.TYPE_CHAT_MESSAGE);
+        assertEquals(chatEnvelope.get("sentAt"), chatEnvelope.get("timestamp"));
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized =
+                new AgentProtocolMessageNormalizer().normalizeInbound(chatEnvelope);
+        assertEquals(AgentProtocolConstants.TYPE_CHAT_MESSAGE, normalized.canonicalType());
         assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
 
@@ -243,6 +255,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"actionType\":\"task_briefing\""));
         assertTrue(messages.contains("\"taskId\":\"task-001\""));
         assertTrue(messages.contains("Read the bounty task and report the next plan."));
+        Map<String, Object> commandEnvelope = findOutboundEnvelope(
+                messageCaptor.getAllValues(), AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
+        assertEquals(commandEnvelope.get("messageId"), commandEnvelope.get("requestId"));
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized =
+                new AgentProtocolMessageNormalizer().normalizeInbound(commandEnvelope);
+        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, normalized.canonicalType());
         assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
 
@@ -566,6 +584,19 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         org.mockito.Mockito.lenient().when(session.getId()).thenReturn(sessionId);
         org.mockito.Mockito.lenient().when(session.isOpen()).thenReturn(true);
         org.mockito.Mockito.lenient().when(session.getAttributes()).thenReturn(attributes);
+    }
+
+    private Map<String, Object> findOutboundEnvelope(List<TextMessage> messages, String messageType)
+            throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        TypeReference<Map<String, Object>> mapType = new TypeReference<>() { };
+        for (TextMessage textMessage : messages) {
+            Map<String, Object> event = mapper.readValue(textMessage.getPayload(), mapType);
+            if (messageType.equals(event.get("messageType"))) {
+                return event;
+            }
+        }
+        throw new AssertionError("Missing outbound Envelope for messageType=" + messageType);
     }
 
     private void assertSafeServerDownlinks(List<TextMessage> messages) throws Exception {

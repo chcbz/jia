@@ -3,6 +3,7 @@ package cn.jia.chat.service;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.handler.AgentProtocolMessageNormalizer;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.context.EsContext;
@@ -62,13 +63,17 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertTrue(result.attempted());
         assertTrue(result.delivered());
         assertTrue(events.stream().anyMatch(item -> item.contains("\"agentDelivery\"")));
-        ArgumentCaptor<Map<String, ?>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(agentWebSocketHandler).sendDirectMessageToAgent(eq("agent-wuyong"), payloadCaptor.capture());
-        Map<String, ?> payload = payloadCaptor.getValue();
+        Map<String, Object> payload = payloadCaptor.getValue();
         assertEquals(AgentProtocolConstants.VERSION_1, payload.get("schemaVersion"));
         assertEquals(AgentProtocolConstants.TYPE_CHAT_MESSAGE, payload.get("messageType"));
         assertEquals("agent-wuyong", payload.get("targetAgentId"));
         assertEquals("1001", payload.get("conversationId"));
+        assertEquals(payload.get("sentAt"), payload.get("timestamp"));
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized =
+                new AgentProtocolMessageNormalizer().normalizeInbound(payload);
+        assertEquals(AgentProtocolConstants.TYPE_CHAT_MESSAGE, normalized.canonicalType());
         assertTrue(!payload.containsKey("commandType"));
         assertTrue(!payload.containsKey("taskId"));
         assertEquals("请回报当前进度", ((Map<?, ?>) payload.get("payload")).get("content"));

@@ -1,6 +1,7 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.common.AgentProtocolConstants;
+import cn.jia.chat.handler.AgentProtocolMessageNormalizer;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
@@ -41,9 +42,9 @@ class HallActionDispatcherTest extends BaseMockTest {
 
         HallActionDispatchResult result = dispatcher.dispatch(intent);
 
-        ArgumentCaptor<Map<String, ?>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(agentWebSocketHandler).sendDirectMessageToAgent(eq("agent-linchong"), payloadCaptor.capture());
-        Map<String, ?> payload = payloadCaptor.getValue();
+        Map<String, Object> payload = payloadCaptor.getValue();
         assertEquals("dispatched", result.getStatus());
         assertEquals(AgentProtocolConstants.LEGACY_AGENT_ACTION, payload.get("type"));
         assertEquals(AgentProtocolConstants.VERSION_1, payload.get("schemaVersion"));
@@ -51,7 +52,10 @@ class HallActionDispatcherTest extends BaseMockTest {
         assertEquals("intent-1", payload.get("commandId"));
         assertEquals(AgentProtocolConstants.COMMAND_REQUEST_RESPOND, payload.get("commandType"));
         assertEquals("agent-linchong", payload.get("targetAgentId"));
-        assertEquals("intent-1", payload.get("requestId"));
+        assertEquals(payload.get("messageId"), payload.get("requestId"));
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized =
+                new AgentProtocolMessageNormalizer().normalizeInbound(payload);
+        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, normalized.canonicalType());
         assertEquals("ask_help", payload.get("actionType"));
         assertEquals("请向吴用说明阻塞并请求替代方案", payload.get("content"));
         assertTrue(((Map<?, ?>) payload.get("metadata")).containsKey("reason"));
