@@ -32,7 +32,7 @@ public class AgentProtocolMessageNormalizer {
 
     private static final List<String> RESERVED_FIELDS = List.of(
             "schemaVersion", "tenantId", "clientId", "agentId", "sourceAgentId", "targetAgentId",
-            "receiverAgentId", "runtimeInstanceId", "messageId", "commandId", "commandType",
+            "receiverAgentId", "runtimeInstanceId", "messageId", "requestId", "commandId", "commandType",
             "correlationId", "causationId", "conversationId", "taskId", "workItemId",
             "issuedAt", "sentAt", "timestamp", "expiresAt", "attempt");
 
@@ -97,10 +97,13 @@ public class AgentProtocolMessageNormalizer {
         }
         validateCanonicalAgentAliases(raw);
         validateCanonicalAgentAliases(body);
+        validateAliasGroupWithinLayer(raw, "messageId", "messageId", "requestId");
+        validateAliasGroupWithinLayer(body, "messageId", "messageId", "requestId");
         validateAliasGroupWithinLayer(raw, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupWithinLayer(body, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupWithinLayer(raw, "sentAt", "sentAt", "timestamp");
         validateAliasGroupWithinLayer(body, "sentAt", "sentAt", "timestamp");
+        validateAliasGroupAcrossLayers(raw, body, "messageId", "messageId", "requestId");
         validateAliasGroupAcrossLayers(raw, body, "sourceAgentId", "agentId", "sourceAgentId");
         validateAliasGroupAcrossLayers(raw, body, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupAcrossLayers(raw, body, "sentAt", "sentAt", "timestamp");
@@ -160,7 +163,7 @@ public class AgentProtocolMessageNormalizer {
 
     private AgentProtocolException envelopeConflict(String field) {
         return new AgentProtocolException("ENVELOPE_FIELD_CONFLICT",
-                "Outer message and nested payload disagree on reserved Envelope field: " + field);
+                "Conflicting values for reserved Envelope field or alias: " + field);
     }
 
     private boolean sameEnvelopeValue(Object left, Object right) {
@@ -225,7 +228,7 @@ public class AgentProtocolMessageNormalizer {
     }
 
     private void addTypeDeclaration(List<TypeDeclaration> declarations, Map<String, Object> layer, String field) {
-        if (!layer.containsKey(field) || layer.get(field) == null) {
+        if (!layer.containsKey(field)) {
             return;
         }
         Object value = layer.get(field);

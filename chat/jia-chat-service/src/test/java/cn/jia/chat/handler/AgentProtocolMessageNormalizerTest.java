@@ -113,6 +113,62 @@ class AgentProtocolMessageNormalizerTest {
     }
 
     @Test
+    void rejectsConflictingMessageIdAliasesWithinAndAcrossLayers() {
+        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
+                "type", "agent.message",
+                "messageId", "message-outer",
+                "payload", Map.of("requestId", "message-inner")));
+
+        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
+                "type", "agent.message",
+                "messageId", "message-1",
+                "requestId", "request-2"));
+    }
+
+    @Test
+    void acceptsMatchingMessageIdAliasesWithinAndAcrossLayers() {
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized = normalizer.normalizeInbound(Map.of(
+                "type", "agent.message",
+                "messageId", "message-1",
+                "requestId", "message-1",
+                "payload", Map.of(
+                        "messageId", "message-1",
+                        "requestId", "message-1")));
+
+        assertEquals("message-1", normalized.envelope().getMessageId());
+    }
+
+    @Test
+    void rejectsExplicitInvalidTypeDeclarationsInOuterAndPayloadLayers() {
+        Map<String, Object> outerNull = new HashMap<>();
+        outerNull.put("messageType", null);
+        outerNull.put("payload", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "messageType", AgentProtocolConstants.TYPE_TASK_EVENT,
+                "messageId", "event-1"));
+        assertProtocolError("INVALID_MESSAGE_TYPE", outerNull);
+
+        Map<String, Object> nestedNull = new HashMap<>();
+        nestedNull.put("messageType", null);
+        assertProtocolError("INVALID_MESSAGE_TYPE", Map.of(
+                "type", "agent.message",
+                "payload", nestedNull));
+
+        assertProtocolError("INVALID_MESSAGE_TYPE", Map.of(
+                "type", 1,
+                "payload", Map.of("messageType", "agent.message")));
+        assertProtocolError("INVALID_MESSAGE_TYPE", Map.of(
+                "type", "agent.message",
+                "payload", Map.of("messageType", 1)));
+        assertProtocolError("INVALID_MESSAGE_TYPE", Map.of(
+                "messageType", "   ",
+                "payload", Map.of("type", "agent.message")));
+        assertProtocolError("INVALID_MESSAGE_TYPE", Map.of(
+                "type", "agent.message",
+                "payload", Map.of("type", "\t")));
+    }
+
+    @Test
     void rejectsDirectCompatibilityWrapperForEventSemantics() {
         assertProtocolError("MESSAGE_TYPE_CONFLICT", Map.of(
                 "schemaVersion", AgentProtocolConstants.VERSION_1,
