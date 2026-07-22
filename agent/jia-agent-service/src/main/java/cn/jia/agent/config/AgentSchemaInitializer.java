@@ -25,6 +25,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureAgentPersonaColumns();
         ensureAgentRuntimeColumns();
         ensureBindingTable();
+        ensureIdentitySchema();
         ensureTaskCollaborationSchema();
         ensureTaskNoteTable();
         ensureSceneTables();
@@ -63,6 +64,12 @@ public class AgentSchemaInitializer implements InitializingBean {
 
     private void ensureBindingTable() {
         String generatedColumnStorage = isH2Database() ? "" : " STORED";
+        String ownerJiacnColumn = "owner_jiacn VARCHAR(50) GENERATED ALWAYS AS (jiacn)"
+                + generatedColumnStorage;
+        String lifecycleColumn = "lifecycle_status VARCHAR(20) GENERATED ALWAYS AS "
+                + "(CASE status WHEN 2 THEN 'PROVISIONED' WHEN 1 THEN 'ACTIVE' "
+                + "WHEN 0 THEN 'SUSPENDED' WHEN 3 THEN 'RETIRED' ELSE NULL END)"
+                + generatedColumnStorage;
         String activePersonaColumn = "active_persona_code VARCHAR(50) GENERATED ALWAYS AS "
                 + "(CASE WHEN status = 1 THEN persona_code ELSE NULL END)" + generatedColumnStorage;
         String activeAgentColumn = "active_agent_id     VARCHAR(100) GENERATED ALWAYS AS "
@@ -70,33 +77,170 @@ public class AgentSchemaInitializer implements InitializingBean {
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_persona_binding (
                     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-                    jiacn               VARCHAR(50) NOT NULL COMMENT 'Bound Jia account',
+                    jiacn               VARCHAR(50) NOT NULL COMMENT 'Legacy writable owner Jia account field',
+                    %s,
                     persona_code        VARCHAR(50) NOT NULL COMMENT 'Water Margin persona code',
-                    agent_id            VARCHAR(100) NOT NULL COMMENT 'Runtime agent ID',
+                    agent_id            VARCHAR(100) NOT NULL COMMENT 'Canonical Agent ID',
                     bound_at            BIGINT NOT NULL COMMENT 'Bind time',
-                    status              INT NOT NULL DEFAULT 1 COMMENT '1 active, 0 inactive',
+                    status              INT NOT NULL DEFAULT 1 COMMENT '2 provisioned, 1 active, 0 suspended, 3 retired',
+                    %s,
                     %s,
                     %s,
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
-                    tenant_id           VARCHAR(50) DEFAULT NULL COMMENT 'Tenant ID reserved',
-                    client_id           VARCHAR(50) DEFAULT NULL COMMENT 'Client ID',
+                    tenant_id           VARCHAR(50) DEFAULT NULL COMMENT 'Legacy nullable tenant, when populated must equal owner_jiacn',
+                    client_id           VARCHAR(50) DEFAULT NULL COMMENT 'Owner-scope client ID',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_agent_binding_active_persona (client_id, active_persona_code),
-                    UNIQUE KEY uk_agent_binding_active_agent (client_id, active_agent_id),
+                    UNIQUE KEY uk_agent_binding_active_persona (client_id, owner_jiacn, active_persona_code),
+                    UNIQUE KEY uk_agent_binding_active_agent (active_agent_id),
                     KEY idx_agent_binding_user (client_id, jiacn, status),
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
-                    KEY idx_agent_binding_persona (client_id, persona_code, status)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent persona binding'
-                """.formatted(activePersonaColumn, activeAgentColumn));
-        addColumnIfMissing("agent_persona_binding", "active_persona_code",
-                activePersonaColumn);
-        addColumnIfMissing("agent_persona_binding", "active_agent_id",
-                activeAgentColumn);
-        addIndexIfMissing("agent_persona_binding", "uk_agent_binding_active_persona",
-                "CREATE UNIQUE INDEX uk_agent_binding_active_persona ON agent_persona_binding (client_id, active_persona_code)");
-        addIndexIfMissing("agent_persona_binding", "uk_agent_binding_active_agent",
-                "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (client_id, active_agent_id)");
+                    KEY idx_agent_binding_persona (client_id, persona_code, status),
+                    CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
+                    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id IS NULL OR tenant_id = owner_jiacn)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
+                """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
+        addRequiredColumnIfMissing("agent_persona_binding", "owner_jiacn", ownerJiacnColumn);
+        addRequiredColumnIfMissing("agent_persona_binding", "lifecycle_status", lifecycleColumn);
+        addRequiredColumnIfMissing("agent_persona_binding", "active_persona_code", activePersonaColumn);
+        addRequiredColumnIfMissing("agent_persona_binding", "active_agent_id", activeAgentColumn);
+        ensureRequiredIndex("agent_persona_binding", "uk_agent_binding_active_persona", true,
+                List.of("client_id", "owner_jiacn", "active_persona_code"),
+                "CREATE UNIQUE INDEX uk_agent_binding_active_persona "
+                        + "ON agent_persona_binding (client_id, owner_jiacn, active_persona_code)");
+        ensureRequiredIndex("agent_persona_binding", "uk_agent_binding_active_agent", true,
+                List.of("active_agent_id"),
+                "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (active_agent_id)");
+        ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_status",
+                "status IN (0, 1, 2, 3)");
+        ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_tenant_owner",
+                "tenant_id IS NULL OR tenant_id = owner_jiacn");
+    }
+
+    private void ensureIdentitySchema() {
+        String generatedColumnStorage = isH2Database() ? "" : " STORED";
+        String activeAliasColumn = "active_key TINYINT GENERATED ALWAYS AS "
+                + "(CASE WHEN alias_status = 'ACTIVE' AND valid_to IS NULL THEN 1 ELSE NULL END)"
+                + generatedColumnStorage;
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_identity_registry (
+                    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId, immutable and never reused',
+                    canonical_type          VARCHAR(32) NOT NULL COMMENT 'OPAQUE/LEGACY_CANONICAL/SYSTEM',
+                    lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED',
+                    client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client, NULL only for system identity',
+                    owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn, NULL only for system identity',
+                    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Must equal owner_jiacn, NULL only for system identity',
+                    binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID, not an ownership substitute',
+                    provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
+                    activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
+                    suspended_at            BIGINT DEFAULT NULL COMMENT 'Latest suspension time',
+                    retired_at              BIGINT DEFAULT NULL COMMENT 'Retirement time, RETIRED is terminal',
+                    audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable creation/migration reason',
+                    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+                    update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_identity_registry_agent (canonical_agent_id),
+                    UNIQUE KEY uk_identity_registry_binding (binding_id),
+                    UNIQUE KEY uk_identity_registry_alias_target
+                        (id, canonical_agent_id, client_id, owner_jiacn, tenant_id),
+                    KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status),
+                    CONSTRAINT chk_identity_registry_type CHECK (
+                        canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL', 'SYSTEM')
+                    ),
+                    CONSTRAINT chk_identity_registry_lifecycle CHECK (
+                        lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')
+                    ),
+                    CONSTRAINT chk_identity_registry_canonical CHECK (
+                        (canonical_type = 'OPAQUE'
+                            AND canonical_agent_id REGEXP '^agt_[0-9a-f]{32}$')
+                        OR (canonical_type = 'LEGACY_CANONICAL'
+                            AND canonical_agent_id <> 'builtin-songjiang'
+                            AND canonical_agent_id NOT REGEXP '^agt_[0-9a-f]{32}$')
+                        OR (canonical_type = 'SYSTEM'
+                            AND canonical_agent_id = 'builtin-songjiang')
+                    ),
+                    CONSTRAINT chk_identity_registry_scope CHECK (
+                        (canonical_type = 'SYSTEM'
+                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
+                        OR (canonical_type <> 'SYSTEM'
+                            AND client_id IS NOT NULL AND client_id <> ''
+                            AND owner_jiacn IS NOT NULL AND owner_jiacn <> ''
+                            AND tenant_id = owner_jiacn)
+                    ),
+                    CONSTRAINT chk_identity_registry_retired CHECK (
+                        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
+                        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
+                    )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable canonical Agent identity registry'
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_identity_alias (
+                    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    registry_id             BIGINT NOT NULL COMMENT 'Target identity registry ID',
+                    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'Resolved canonical agentId',
+                    alias_type              VARCHAR(32) NOT NULL DEFAULT 'LEGACY_AGENT_ID' COMMENT 'v1 online alias type',
+                    alias_value             VARCHAR(100) NOT NULL COMMENT 'Legacy agent ID resolved only with full owner scope',
+                    alias_status            VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/REVOKED',
+                    valid_from              BIGINT NOT NULL COMMENT 'Alias activation time',
+                    valid_to                BIGINT DEFAULT NULL COMMENT 'Alias revocation time, not used directly for uniqueness',
+                    %s,
+                    client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client',
+                    owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn',
+                    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Must equal owner_jiacn',
+                    audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable alias evidence/reason',
+                    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+                    update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_identity_alias_active
+                        (client_id, owner_jiacn, alias_type, alias_value, active_key),
+                    KEY idx_identity_alias_registry (registry_id, alias_status),
+                    KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
+                    CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
+                    CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
+                    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = owner_jiacn),
+                    CONSTRAINT chk_identity_alias_window CHECK (
+                        (alias_status = 'ACTIVE' AND valid_to IS NULL)
+                        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
+                    ),
+                    CONSTRAINT chk_identity_alias_not_system CHECK (
+                        alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'
+                    ),
+                    CONSTRAINT fk_identity_alias_registry_scope FOREIGN KEY
+                        (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
+                        REFERENCES agent_identity_registry
+                        (id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped legacy Agent ID compatibility aliases'
+                """.formatted(activeAliasColumn));
+
+        addRequiredColumnIfMissing("agent_identity_alias", "active_key", activeAliasColumn);
+        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_agent", true,
+                List.of("canonical_agent_id"),
+                "CREATE UNIQUE INDEX uk_identity_registry_agent "
+                        + "ON agent_identity_registry (canonical_agent_id)");
+        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_binding", true,
+                List.of("binding_id"),
+                "CREATE UNIQUE INDEX uk_identity_registry_binding ON agent_identity_registry (binding_id)");
+        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_alias_target", true,
+                List.of("id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id"),
+                "CREATE UNIQUE INDEX uk_identity_registry_alias_target "
+                        + "ON agent_identity_registry "
+                        + "(id, canonical_agent_id, client_id, owner_jiacn, tenant_id)");
+        ensureRequiredIndex("agent_identity_registry", "idx_identity_registry_scope_status", false,
+                List.of("tenant_id", "client_id", "owner_jiacn", "lifecycle_status"),
+                "CREATE INDEX idx_identity_registry_scope_status "
+                        + "ON agent_identity_registry (tenant_id, client_id, owner_jiacn, lifecycle_status)");
+        ensureRequiredIndex("agent_identity_alias", "uk_identity_alias_active", true,
+                List.of("client_id", "owner_jiacn", "alias_type", "alias_value", "active_key"),
+                "CREATE UNIQUE INDEX uk_identity_alias_active "
+                        + "ON agent_identity_alias (client_id, owner_jiacn, alias_type, alias_value, active_key)");
+        ensureRequiredIndex("agent_identity_alias", "idx_identity_alias_registry", false,
+                List.of("registry_id", "alias_status"),
+                "CREATE INDEX idx_identity_alias_registry ON agent_identity_alias (registry_id, alias_status)");
+        ensureRequiredIndex("agent_identity_alias", "idx_identity_alias_canonical", false,
+                List.of("canonical_agent_id", "alias_status"),
+                "CREATE INDEX idx_identity_alias_canonical "
+                        + "ON agent_identity_alias (canonical_agent_id, alias_status)");
     }
 
     private void ensureTaskCollaborationSchema() {
@@ -538,6 +682,29 @@ public class AgentSchemaInitializer implements InitializingBean {
             }
         } catch (Exception e) {
             log.warn("Unable to ensure index {}.{}: {}", table, indexName, e.getMessage());
+        }
+    }
+
+    private void ensureRequiredCheckConstraint(String table, String constraintName, String expression) {
+        String catalogQuery = isH2Database()
+                ? """
+                  SELECT COUNT(*)
+                  FROM information_schema.table_constraints
+                  WHERE table_schema = SCHEMA()
+                    AND LOWER(table_name) = LOWER(?)
+                    AND LOWER(constraint_name) = LOWER(?)
+                    AND constraint_type = 'CHECK'
+                  """
+                : """
+                  SELECT COUNT(*)
+                  FROM information_schema.table_constraints
+                  WHERE constraint_schema = DATABASE() AND table_name = ?
+                    AND constraint_name = ? AND constraint_type = 'CHECK'
+                  """;
+        Integer count = jdbcTemplate.queryForObject(catalogQuery, Integer.class, table, constraintName);
+        if (count == null || count == 0) {
+            jdbcTemplate.execute("ALTER TABLE " + table + " ADD CONSTRAINT " + constraintName
+                    + " CHECK (" + expression + ")");
         }
     }
 

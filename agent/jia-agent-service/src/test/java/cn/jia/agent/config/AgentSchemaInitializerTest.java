@@ -82,6 +82,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("idx_agent_task_note_task_id"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_persona_binding"));
         assertTrue(sql.contains("uk_agent_binding_active_persona"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_identity_registry"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_identity_alias"));
+        assertTrue(sql.contains("uk_identity_alias_active"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_state"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_event"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_phase_report"));
@@ -135,6 +138,26 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
+    void initializerAndSchemaResourceKeepIdentityTablesInParity() throws IOException {
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(captor.capture());
+        List<String> initializerSql = captor.getAllValues().stream()
+                .map(sql -> sql.toLowerCase(Locale.ROOT))
+                .toList();
+        String schema = readResource("db/schema.sql");
+
+        for (String table : Set.of("agent_identity_registry", "agent_identity_alias")) {
+            String initializerDefinition = initializerSql.stream()
+                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .findFirst().orElseThrow();
+            assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
+                    normalizeSqlStructure(initializerDefinition), table);
+        }
+    }
+
+    @Test
     void incompatibleArtifactVersionUniqueIndexFailsStartup() {
         JdbcTemplate failingTemplate = new JdbcTemplate() {
             @Override
@@ -167,6 +190,73 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
+    void incompatibleLegacyActivePersonaIndexFailsStartupUntilMigrationRuns() {
+        JdbcTemplate failingTemplate = new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL is intentionally inert; this test exercises A02 index introspection.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if ("agent_persona_binding".equals(args[0])
+                        && "uk_agent_binding_active_persona".equals(args[1])) {
+                    return (List<T>) List.of(
+                            new AgentSchemaInitializer.IndexColumn(0, "client_id", 1, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "active_persona_code", 2, null));
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("uk_agent_binding_active_persona"), error.getMessage());
+    }
+
+    @Test
+    void incompatibleActiveAliasIndexFailsStartup() {
+        JdbcTemplate failingTemplate = new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL is intentionally inert; this test exercises A02 index introspection.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if ("agent_identity_alias".equals(args[0])
+                        && "uk_identity_alias_active".equals(args[1])) {
+                    return (List<T>) List.of(
+                            new AgentSchemaInitializer.IndexColumn(0, "client_id", 1, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "owner_jiacn", 2, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "alias_type", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "alias_value", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "valid_to", 5, null));
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("uk_identity_alias_active"), error.getMessage());
+    }
+
+    @Test
     void h2DialectOmitsUnsupportedStoredKeywordFromGeneratedBindingColumns() throws Exception {
         JdbcTemplate template = dialectTemplate("H2");
 
@@ -180,7 +270,14 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 "active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END)"));
         assertTrue(createBinding.contains(
                 "active_agent_id     VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END)"));
+        assertTrue(createBinding.contains("owner_jiacn VARCHAR(50) GENERATED ALWAYS AS (jiacn)"));
+        assertTrue(createBinding.contains("lifecycle_status VARCHAR(20) GENERATED ALWAYS AS"));
+        String createAlias = statements.stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_identity_alias"))
+                .findFirst().orElseThrow();
+        assertTrue(createAlias.contains("active_key TINYINT GENERATED ALWAYS AS"));
         assertFalse(createBinding.contains(" STORED"));
+        assertFalse(createAlias.contains(" STORED"));
         assertTrue(statements.stream()
                 .filter(sql -> sql.startsWith("ALTER TABLE agent_persona_binding ADD COLUMN active_"))
                 .noneMatch(sql -> sql.contains(" STORED")));
@@ -200,6 +297,13 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 "active_persona_code VARCHAR(50) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN persona_code ELSE NULL END) STORED"));
         assertTrue(createBinding.contains(
                 "active_agent_id     VARCHAR(100) GENERATED ALWAYS AS (CASE WHEN status = 1 THEN agent_id ELSE NULL END) STORED"));
+        assertTrue(createBinding.contains("owner_jiacn VARCHAR(50) GENERATED ALWAYS AS (jiacn) STORED"));
+        assertTrue(createBinding.contains("lifecycle_status VARCHAR(20) GENERATED ALWAYS AS"));
+        String createAlias = statements.stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_identity_alias"))
+                .findFirst().orElseThrow();
+        assertTrue(createAlias.contains("active_key TINYINT GENERATED ALWAYS AS"));
+        assertTrue(createAlias.contains(" STORED"));
         assertTrue(statements.stream()
                 .filter(sql -> sql.startsWith("ALTER TABLE agent_persona_binding ADD COLUMN active_"))
                 .allMatch(sql -> sql.endsWith(" STORED")));
@@ -468,6 +572,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             indexes.put(namedIndexes.group(2), uniqueness + "|" + normalizeColumns(namedIndexes.group(3)));
         }
         return new TableStructure(columns, indexes);
+    }
+
+    private String normalizeSqlStructure(String definition) {
+        return normalizeDefinition(definition)
+                .replace("( ", "(")
+                .replace(" )", ")");
     }
 
     private String normalizeDefinition(String definition) {
