@@ -1,5 +1,6 @@
 package cn.jia.chat.handler;
 
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
@@ -42,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -49,11 +51,11 @@ import java.util.function.Supplier;
 /**
  * WebSocket channel for external agent clients.
  *
- * <p>Inbound messages are JSON objects with a {@code type} field:
- * {@code chat}, {@code stop}, {@code ping}, {@code agent.register},
- * {@code agent.status}, {@code task.assign}, {@code task.report}. Chat
- * responses are streamed as {@code delta} events and finished with
- * {@code done}.</p>
+ * <p>Protocol v1 messages use canonical dot-separated {@code messageType}
+ * values. The legacy {@code type} field remains accepted by the normalizer;
+ * only {@code command.dispatch} represents executable work, while
+ * {@code chat.message}, {@code work.progress}, {@code work.result}, and
+ * {@code task.event} have distinct non-command semantics.</p>
  */
 @Slf4j
 @Component
@@ -67,37 +69,59 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     private final ChatMessageDao chatMessageDao;
     private final ChatConversationEventBroker chatConversationEventBroker;
     private final HallAnnouncementService hallAnnouncementService;
+    private final AgentProtocolMessageNormalizer protocolMessageNormalizer;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
+    private final Map<String, String> sessionRuntimeInstanceIds = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
                                  ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker) {
-        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker, null);
+        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker, null,
+                new AgentProtocolMessageNormalizer());
+    }
+
+    public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+                                 ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
+                                 HallAnnouncementService hallAnnouncementService) {
+        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker, hallAnnouncementService,
+                new AgentProtocolMessageNormalizer());
     }
 
     @Autowired
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
                                  ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
-                                 HallAnnouncementService hallAnnouncementService) {
+                                 HallAnnouncementService hallAnnouncementService,
+                                 AgentProtocolMessageNormalizer protocolMessageNormalizer) {
         this.chatClient = chatClient;
         this.agentServiceProvider = agentServiceProvider;
         this.chatMessageDao = chatMessageDao;
         this.chatConversationEventBroker = chatConversationEventBroker;
         this.hallAnnouncementService = hallAnnouncementService;
+        this.protocolMessageNormalizer = protocolMessageNormalizer;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sessions.put(session.getId(), session);
-        sendEvent(session, "connected", Map.of(
-                "sessionId", session.getId(),
-                "channel", CHANNEL,
-                "agentId", Optional.ofNullable(sessionAgentId(session)).orElse(""),
-                "capabilities", new String[] {"chat.stream", "chat.stop", "ping", "agent.register",
-                        "agent.status", "agent.message", "task.assign", "task.report", "task.event",
-                        "capability.index", "capability.lookup"}));
+        Map<String, Object> connected = new HashMap<>();
+        connected.put("sessionId", session.getId());
+        connected.put("channel", CHANNEL);
+        connected.put("agentId", Optional.ofNullable(sessionAgentId(session)).orElse(""));
+        putIfPresent(connected, "runtimeInstanceId", sessionRuntimeInstanceId(session));
+        connected.put("supportedProtocolVersions", new int[] {AgentProtocolConstants.VERSION_1});
+        connected.put("legacyProtocolEnabled", true);
+        connected.put("capabilities", new String[] {AgentProtocolConstants.TYPE_PROTOCOL_HELLO,
+                AgentProtocolConstants.TYPE_CHAT_STREAM, AgentProtocolConstants.TYPE_CHAT_STOP,
+                AgentProtocolConstants.TYPE_PING, AgentProtocolConstants.TYPE_AGENT_REGISTER,
+                AgentProtocolConstants.TYPE_AGENT_PRESENCE, AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                AgentProtocolConstants.TYPE_COMMAND_ACK, AgentProtocolConstants.TYPE_WORK_PROGRESS,
+                AgentProtocolConstants.TYPE_WORK_HEARTBEAT, AgentProtocolConstants.TYPE_WORK_RESULT,
+                AgentProtocolConstants.TYPE_TASK_EVENT, AgentProtocolConstants.TYPE_CAPABILITY_LOOKUP,
+                "agent.status", "agent.message", "task.assign", "task.report"});
+        sendEvent(session, "connected", connected);
     }
 
     @Override
@@ -110,19 +134,48 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             return;
         }
 
-        String type = asString(payload.getOrDefault("type", "chat"));
-        switch (type) {
-            case "ping" -> sendEvent(session, "pong", copyTrace(payload));
-            case "stop", "chat.stop" -> stopStream(session, payload);
-            case "chat", "chat.stream" -> startChatStream(session, payload);
-            case "agent.register", "agent_register" -> registerAgent(session, payload);
-            case "agent.status", "agent_status_update" -> updateAgentStatus(session, payload);
-            case "agent.message", "agent.reply", "agent_message" -> saveAgentMessage(session, payload);
-            case "agent.message.delta", "agent_message_delta" -> publishAgentMessageDelta(session, payload);
-            case "task.assign", "task_assign" -> assignTask(session, payload);
-            case "task.report", "task_report" -> reportTask(session, payload);
-            case "capability.lookup", "capability_lookup" -> sendCapabilityIndex(session, payload);
-            default -> sendError(session, payload, "Unsupported agent channel message type: " + type);
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized;
+        try {
+            normalized = protocolMessageNormalizer.normalizeInbound(payload);
+            payload = normalized.payload();
+        } catch (AgentProtocolMessageNormalizer.AgentProtocolException e) {
+            sendProtocolError(session, payload, e.getCode(), e.getMessage());
+            return;
+        }
+
+        switch (normalized.canonicalType()) {
+            case AgentProtocolConstants.TYPE_PROTOCOL_HELLO -> sendProtocolHello(session, payload);
+            case AgentProtocolConstants.TYPE_PING -> sendEvent(session, "pong", copyTrace(payload));
+            case AgentProtocolConstants.TYPE_PONG -> { /* client-side response to a server heartbeat */ }
+            case AgentProtocolConstants.TYPE_CHAT_STOP -> stopStream(session, payload);
+            case AgentProtocolConstants.TYPE_CHAT_STREAM -> startChatStream(session, payload);
+            case AgentProtocolConstants.TYPE_AGENT_REGISTER -> registerAgent(session, payload);
+            case AgentProtocolConstants.TYPE_AGENT_PRESENCE -> updateAgentStatus(session, payload);
+            case AgentProtocolConstants.TYPE_CHAT_MESSAGE -> saveAgentMessage(session, payload);
+            case AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA -> publishAgentMessageDelta(session, payload);
+            case AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY -> assignTask(session, payload);
+            case AgentProtocolConstants.TYPE_WORK_RESULT -> {
+                if (normalized.legacyTaskReport()) {
+                    reportTask(session, payload);
+                } else {
+                    sendDeferredProtocolHandler(session, payload, normalized);
+                }
+            }
+            case AgentProtocolConstants.TYPE_WORK_PROGRESS,
+                 AgentProtocolConstants.TYPE_WORK_HEARTBEAT,
+                 AgentProtocolConstants.TYPE_HELP_REQUEST,
+                 AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
+                 AgentProtocolConstants.TYPE_COMMAND_ACK -> sendDeferredProtocolHandler(session, payload, normalized);
+            case AgentProtocolConstants.TYPE_COMMAND_DISPATCH -> sendProtocolError(session, payload,
+                    "MESSAGE_DIRECTION_INVALID", "command.dispatch is server-to-Agent only");
+            case AgentProtocolConstants.TYPE_TASK_EVENT -> sendProtocolError(session, payload,
+                    "MESSAGE_DIRECTION_INVALID", "task.event describes an event and cannot trigger execution");
+            case AgentProtocolConstants.TYPE_CAPABILITY_LOOKUP -> sendCapabilityIndex(session, payload);
+            case AgentProtocolConstants.TYPE_PROTOCOL_ERROR -> log.warn(
+                    "Agent reported protocol error, agentId={}, messageId={}, message={}",
+                    sessionAgentId(session), payload.get("messageId"), payload.get("message"));
+            default -> sendProtocolError(session, payload, "UNSUPPORTED_MESSAGE_TYPE",
+                    "Unsupported Agent Protocol message type: " + normalized.canonicalType());
         }
     }
 
@@ -130,6 +183,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sessions.remove(session.getId());
         sessionAgentIds.remove(session.getId());
+        sessionRuntimeInstanceIds.remove(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -138,6 +192,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             }
             return false;
         });
+    }
+
+    private void sendProtocolHello(WebSocketSession session, Map<String, Object> payload) {
+        Map<String, Object> event = copyTrace(payload);
+        event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        event.put("messageType", AgentProtocolConstants.TYPE_PROTOCOL_HELLO);
+        event.put("supportedProtocolVersions", new int[] {AgentProtocolConstants.VERSION_1});
+        event.put("legacyProtocolEnabled", true);
+        event.put("executionTriggerType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
+        event.put("taskEventExecutionTrigger", false);
+        sendEvent(session, "protocol_hello", event);
+    }
+
+    private void sendDeferredProtocolHandler(WebSocketSession session, Map<String, Object> payload,
+            AgentProtocolMessageNormalizer.NormalizedMessage normalized) {
+        if (requireAllowedSessionAgentId(session, payload) == null) {
+            return;
+        }
+        sendProtocolError(session, payload, "PROTOCOL_HANDLER_NOT_AVAILABLE",
+                normalized.canonicalType() + " is recognized, but its durable handler belongs to a later task");
     }
 
     private void startChatStream(WebSocketSession session, Map<String, Object> payload) {
@@ -256,6 +330,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             rememberSessionAgent(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
+            putIfPresent(event, "runtimeInstanceId", sessionRuntimeInstanceId(session));
             event.put("status", result.getStatus());
             event.put("token", result.getToken());
             sendEvent(session, "agent_registered", event);
@@ -478,9 +553,19 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
 
     private Map<String, Object> copyTrace(Map<String, Object> payload) {
         Map<String, Object> trace = new HashMap<>();
+        putIfPresent(trace, "schemaVersion", payload.get("schemaVersion"));
+        putIfPresent(trace, "messageId", payload.get("messageId"));
+        putIfPresent(trace, "commandId", payload.get("commandId"));
+        putIfPresent(trace, "correlationId", payload.get("correlationId"));
+        putIfPresent(trace, "causationId", payload.get("causationId"));
         putIfPresent(trace, "requestId", payload.get("requestId"));
         putIfPresent(trace, "conversationId", payload.get("conversationId"));
         putIfPresent(trace, "conversationType", payload.get("conversationType"));
+        putIfPresent(trace, "taskId", payload.get("taskId"));
+        putIfPresent(trace, "workItemId", payload.get("workItemId"));
+        putIfPresent(trace, "sourceAgentId", payload.get("sourceAgentId"));
+        putIfPresent(trace, "targetAgentId", payload.get("targetAgentId"));
+        putIfPresent(trace, "runtimeInstanceId", payload.get("runtimeInstanceId"));
         putIfPresent(trace, "agent", payload.get("agent"));
         return trace;
     }
@@ -494,6 +579,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         putIfPresent(event, "code", code);
         event.put("message", message);
         sendEvent(session, "error", event);
+    }
+
+    private void sendProtocolError(WebSocketSession session, Map<String, Object> payload, String code,
+            String message) {
+        Map<String, Object> event = copyTrace(payload);
+        event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        event.put("messageType", AgentProtocolConstants.TYPE_PROTOCOL_ERROR);
+        event.put("code", code);
+        event.put("message", message);
+        sendEvent(session, "protocol_error", event);
     }
 
     private void sendEvent(WebSocketSession session, String type, Map<String, ?> payload) {
@@ -537,6 +632,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     @Override
     public void publishTaskEvent(String eventType, AgentTaskDTO task) {
         Map<String, Object> payload = new HashMap<>();
+        payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        payload.put("messageId", UUID.randomUUID().toString());
+        payload.put("messageType", AgentProtocolConstants.TYPE_TASK_EVENT);
+        payload.put("correlationId", task.getId());
         payload.put("eventType", eventType);
         payload.put("taskId", task.getId());
         payload.put("title", task.getTitle());
@@ -547,7 +646,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         if (hallAnnouncementService != null) {
             hallAnnouncementService.recordTaskEvent(eventType, payload);
         }
-        broadcastEvent("task_event", payload);
+        broadcastEvent(AgentProtocolConstants.TYPE_TASK_EVENT, payload);
     }
 
     @Override
@@ -581,15 +680,29 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     }
 
     private Map<String, Object> buildAgentActionPayload(AgentActionIntentDTO intent) {
+        String commandId = Optional.ofNullable(intent.getCommandId())
+                .orElseGet(() -> Optional.ofNullable(intent.getIntentId()).orElseGet(() -> UUID.randomUUID().toString()));
+        String commandType = Optional.ofNullable(intent.getCommandType())
+                .orElseGet(() -> AgentProtocolConstants.commandTypeForLegacyAction(intent.getActionType()));
         Map<String, Object> payload = new HashMap<>();
-        payload.put("type", "agent.action");
-        payload.put("messageType", "agent.action");
+        payload.put("type", AgentProtocolConstants.LEGACY_AGENT_ACTION);
+        payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        payload.put("messageId", UUID.randomUUID().toString());
+        payload.put("messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
+        payload.put("commandId", commandId);
+        payload.put("commandType", commandType);
         payload.put("requestId", intent.getIntentId());
+        payload.put("correlationId", Optional.ofNullable(intent.getCorrelationId()).orElse(intent.getTaskId()));
+        putIfPresent(payload, "causationId", intent.getCausationId());
         payload.put("conversationId", Optional.ofNullable(intent.getTaskId()).orElse(intent.getIntentId()));
         payload.put("conversationType", Optional.ofNullable(intent.getConversationType()).orElse("juyiting"));
+        payload.put("taskId", intent.getTaskId());
+        payload.put("targetAgentId", intent.getActorAgentId());
         payload.put("agentId", intent.getActorAgentId());
         payload.put("actionType", intent.getActionType());
         payload.put("content", intent.getInstruction());
+        payload.put("issuedAt", Optional.ofNullable(intent.getCreatedAt()).orElse(System.currentTimeMillis()));
+        putIfPresent(payload, "expiresAt", intent.getExpiresAt());
 
         Map<String, Object> metadata = new HashMap<>();
         putIfPresent(metadata, "taskId", intent.getTaskId());
@@ -600,6 +713,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         putIfPresent(metadata, "context", intent.getContext());
         metadata.put("autonomy", true);
         payload.put("metadata", metadata);
+        payload.put("payload", Map.of(
+                "actionType", Optional.ofNullable(intent.getActionType()).orElse(""),
+                "instruction", Optional.ofNullable(intent.getInstruction()).orElse(""),
+                "metadata", metadata));
         return payload;
     }
 
@@ -617,11 +734,38 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             }
             WebSocketSession session = sessions.get(entry.getKey());
             if (session != null && session.isOpen()) {
-                sendEvent(session, "agent_direct_message", payload);
+                sendEvent(session, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE,
+                        prepareDirectOutboundPayload(agentId, payload));
                 return true;
             }
         }
         return false;
+    }
+
+    private Map<String, Object> prepareDirectOutboundPayload(String agentId, Map<String, ?> source) {
+        Map<String, Object> payload = new HashMap<>();
+        if (source != null) {
+            payload.putAll(source);
+        }
+        String legacyType = asString(payload.get("type"));
+        String messageType = asString(payload.get("messageType"));
+        if (!AgentProtocolConstants.isCanonicalType(messageType)) {
+            messageType = AgentProtocolConstants.LEGACY_AGENT_ACTION.equals(legacyType)
+                    ? AgentProtocolConstants.TYPE_COMMAND_DISPATCH
+                    : AgentProtocolConstants.TYPE_CHAT_MESSAGE;
+        }
+        payload.putIfAbsent("schemaVersion", AgentProtocolConstants.VERSION_1);
+        payload.putIfAbsent("messageId", UUID.randomUUID().toString());
+        payload.put("messageType", messageType);
+        payload.put("targetAgentId", agentId);
+        payload.putIfAbsent("agentId", agentId);
+        if (AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType)) {
+            payload.putIfAbsent("commandId", Optional.ofNullable(asString(payload.get("requestId")))
+                    .orElseGet(() -> UUID.randomUUID().toString()));
+            payload.putIfAbsent("commandType", AgentProtocolConstants.commandTypeForLegacyAction(
+                    asString(payload.get("actionType"))));
+        }
+        return payload;
     }
 
     public boolean isAgentConnected(String agentId) {
@@ -693,15 +837,49 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     private String requireAllowedSessionAgentId(WebSocketSession session, Map<String, Object> payload) {
         String allowedAgentId = sessionAgentId(session);
         String requestedAgentId = asString(payload.get("agentId"));
+        String sourceAgentId = asString(payload.get("sourceAgentId"));
         if (allowedAgentId == null || allowedAgentId.isBlank()) {
             sendError(session, payload, "AGENT_ID_REQUIRED", "agentId is required in WebSocket handshake");
             return null;
         }
-        if (requestedAgentId != null && !requestedAgentId.isBlank() && !allowedAgentId.equals(requestedAgentId)) {
-            sendError(session, payload, "AGENT_ID_MISMATCH", "agentId does not match the WebSocket handshake");
+        if (requestedAgentId != null && !requestedAgentId.isBlank()
+                && sourceAgentId != null && !sourceAgentId.isBlank()
+                && !requestedAgentId.equals(sourceAgentId)) {
+            sendError(session, payload, "AGENT_ID_CONFLICT",
+                    "agentId and sourceAgentId must identify the same canonical Agent");
             return null;
         }
+        String payloadAgentId = sourceAgentId == null || sourceAgentId.isBlank() ? requestedAgentId : sourceAgentId;
+        if (payloadAgentId != null && !payloadAgentId.isBlank() && !allowedAgentId.equals(payloadAgentId)) {
+            sendError(session, payload, "AGENT_ID_MISMATCH",
+                    "payload Agent identity does not match the WebSocket handshake");
+            return null;
+        }
+
+        String runtimeInstanceId = asString(payload.get("runtimeInstanceId"));
+        if (runtimeInstanceId != null && !runtimeInstanceId.isBlank()) {
+            if (runtimeInstanceId.equals(allowedAgentId)) {
+                sendError(session, payload, "RUNTIME_INSTANCE_ID_INVALID",
+                        "runtimeInstanceId is a process identity and must not equal canonical agentId");
+                return null;
+            }
+            String currentRuntimeInstanceId = sessionRuntimeInstanceId(session);
+            if (currentRuntimeInstanceId != null && !currentRuntimeInstanceId.isBlank()
+                    && !currentRuntimeInstanceId.equals(runtimeInstanceId)) {
+                sendError(session, payload, "RUNTIME_INSTANCE_ID_MISMATCH",
+                        "runtimeInstanceId cannot change within one WebSocket session");
+                return null;
+            }
+            rememberSessionRuntimeInstance(session, runtimeInstanceId);
+        }
         return allowedAgentId;
+    }
+
+    private void rememberSessionRuntimeInstance(WebSocketSession session, String runtimeInstanceId) {
+        if (session == null || runtimeInstanceId == null || runtimeInstanceId.isBlank()) {
+            return;
+        }
+        sessionRuntimeInstanceIds.putIfAbsent(session.getId(), runtimeInstanceId);
     }
 
     private <T> T withSessionContext(WebSocketSession session, Supplier<T> action) {
@@ -718,6 +896,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
 
     private String sessionAgentId(WebSocketSession session) {
         return sessionAttribute(session, "agentId");
+    }
+
+    private String sessionRuntimeInstanceId(WebSocketSession session) {
+        String remembered = sessionRuntimeInstanceIds.get(session.getId());
+        if (remembered != null && !remembered.isBlank()) {
+            return remembered;
+        }
+        String handshakeRuntimeInstanceId = sessionAttribute(session, "runtimeInstanceId");
+        rememberSessionRuntimeInstance(session, handshakeRuntimeInstanceId);
+        return handshakeRuntimeInstanceId;
     }
 
     private String sessionClientId(WebSocketSession session) {

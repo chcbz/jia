@@ -1,5 +1,6 @@
 package cn.jia.chat.service;
 
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
@@ -18,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 @Service
@@ -111,7 +113,14 @@ public class JuyitingAgentRelayService {
     }
 
     private Map<String, Object> buildDirectAgentPayload(ChatMessageDTO chatMessage, String conversationId, String agentId, JuyitingConversationScope scope) {
+        long sentAt = System.currentTimeMillis();
+        String messageId = UUID.randomUUID().toString();
         Map<String, Object> payload = new HashMap<>();
+        payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        payload.put("messageId", messageId);
+        payload.put("messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE);
+        payload.put("correlationId", conversationId);
+        payload.put("targetAgentId", agentId);
         payload.put("conversationId", conversationId);
         payload.put("conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING);
         payload.put("conversationScopeType", scope.scopeType());
@@ -121,7 +130,18 @@ public class JuyitingAgentRelayService {
         payload.put("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
         payload.put("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
         payload.put("metadata", Optional.ofNullable(chatMessage.getMetadata()).orElse(Map.of()));
-        payload.put("timestamp", System.currentTimeMillis());
+        payload.put("sentAt", sentAt);
+        payload.put("timestamp", sentAt);
+
+        Map<String, Object> protocolPayload = new HashMap<>();
+        protocolPayload.put("content", chatMessage.getContent());
+        protocolPayload.put("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
+        protocolPayload.put("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
+        protocolPayload.put("conversationScopeType", scope.scopeType());
+        protocolPayload.put("conversationScopeKey", scope.scopeKey());
+        putIfPresent(protocolPayload, "taskContextId", scope.taskId());
+        protocolPayload.put("metadata", Optional.ofNullable(chatMessage.getMetadata()).orElse(Map.of()));
+        payload.put("payload", protocolPayload);
         return payload;
     }
 
@@ -172,6 +192,12 @@ public class JuyitingAgentRelayService {
                 + "\",\"delivered\":" + delivered + "},\"conversationId\":\""
                 + escapeJson(conversationId) + "\",\"conversationType\":\""
                 + JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING + "\"}";
+    }
+
+    private void putIfPresent(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private String escapeJson(String value) {

@@ -13,6 +13,10 @@ public class AgentActionIntentDTO implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private String intentId;
+    private String commandId;
+    private String commandType;
+    private String correlationId;
+    private String causationId;
     private String actionType;
     private String actorAgentId;
     private List<String> targetAgentIds;
@@ -24,4 +28,5 @@ public class AgentActionIntentDTO implements Serializable {
     private Boolean requiresApproval;
     private String conversationType;
     private Long createdAt;
+    private Long expiresAt;
 }

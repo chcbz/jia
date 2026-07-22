@@ -1,5 +1,6 @@
 package cn.jia.chat.service;
 
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -10,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -47,14 +49,25 @@ public class HallActionDispatcher {
     }
 
     private Map<String, Object> buildPayload(HallActionIntent intent) {
+        String commandId = StringUtils.hasText(intent.getIntentId()) ? intent.getIntentId() : UUID.randomUUID().toString();
         Map<String, Object> payload = new HashMap<>();
-        payload.put("type", "agent.action");
+        payload.put("type", AgentProtocolConstants.LEGACY_AGENT_ACTION);
+        payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        payload.put("messageId", UUID.randomUUID().toString());
+        payload.put("messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
+        payload.put("commandId", commandId);
+        payload.put("commandType", AgentProtocolConstants.commandTypeForLegacyAction(intent.getActionType()));
         payload.put("requestId", intent.getIntentId());
+        payload.put("correlationId", StringUtils.hasText(intent.getTaskId()) ? intent.getTaskId() : intent.getConversationId());
+        putIfPresent(payload, "causationId", intent.getTriggerEventId());
         payload.put("conversationId", intent.getConversationId());
         payload.put("conversationType", "juyiting");
+        payload.put("taskId", intent.getTaskId());
+        payload.put("targetAgentId", intent.getActorAgentId());
         payload.put("agentId", intent.getActorAgentId());
         payload.put("actionType", intent.getActionType());
         payload.put("content", intent.getInstruction());
+        payload.put("issuedAt", System.currentTimeMillis());
 
         Map<String, Object> metadata = new HashMap<>();
         putIfPresent(metadata, "triggerEventId", intent.getTriggerEventId());

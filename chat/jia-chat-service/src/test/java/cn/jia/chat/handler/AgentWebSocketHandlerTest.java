@@ -2,6 +2,7 @@ package cn.jia.chat.handler;
 
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
@@ -31,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.argThat;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -88,12 +90,15 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
 
         assertTrue(messages.contains("\"type\":\"connected\""));
+        assertTrue(messages.contains("\"supportedProtocolVersions\":[1]"));
+        assertTrue(messages.contains("\"command.dispatch\""));
         assertTrue(messages.contains("\"agent.register\""));
         assertTrue(messages.contains("\"type\":\"pong\""));
         assertTrue(messages.contains("\"type\":\"agent_registered\""));
         assertTrue(messages.contains("\"type\":\"task_assigned\""));
         assertTrue(messages.contains("\"type\":\"task_reported\""));
         assertTrue(messages.contains("\"status\":\"running\""));
+        verify(agentService).reportTask(any(String.class), any(AgentTaskReportDTO.class));
     }
 
     @Test
@@ -183,8 +188,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         assertTrue(delivered);
         assertTrue(messages.contains("\"type\":\"agent_direct_message\""));
+        assertTrue(messages.contains("\"messageType\":\"chat.message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("@Wu Yong please reply"));
+        assertTrue(!messages.contains("\"commandType\""));
     }
 
     @Test
@@ -222,7 +229,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertEquals("dispatched", result.getStatus());
         assertEquals("agent-001", result.getTargetAgentId());
         assertTrue(messages.contains("\"type\":\"agent_direct_message\""));
-        assertTrue(messages.contains("\"messageType\":\"agent.action\""));
+        assertTrue(messages.contains("\"messageType\":\"command.dispatch\""));
+        assertTrue(messages.contains("\"commandId\":\"intent-task-1\""));
+        assertTrue(messages.contains("\"commandType\":\"TASK_INVITE\""));
         assertTrue(messages.contains("\"conversationType\":\"juyiting\""));
         assertTrue(messages.contains("\"actionType\":\"task_briefing\""));
         assertTrue(messages.contains("\"taskId\":\"task-001\""));
@@ -298,6 +307,73 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"type\":\"agent_message\""));
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("Inspect the current state first."));
+        verify(agentService, never()).reportTask(any(String.class), any(AgentTaskReportDTO.class));
+    }
+
+    @Test
+    void canonicalWorkResultDoesNotInvokeLegacyTaskReportHandler() throws Exception {
+        stubAgentSession("session-result", "agent-001");
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"work.result","messageId":"result-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1","taskId":"task-001","status":"completed"}
+                """));
+
+        verify(agentService, never()).reportTask(any(String.class), any(AgentTaskReportDTO.class));
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"type\":\"protocol_error\""));
+        assertTrue(messages.contains("\"code\":\"PROTOCOL_HANDLER_NOT_AVAILABLE\""));
+    }
+
+    @Test
+    void publishesTaskEventAsNonExecutableProtocolEvent() throws Exception {
+        when(session.getId()).thenReturn("session-event");
+        when(session.isOpen()).thenReturn(true);
+        when(session.getAttributes()).thenReturn(new java.util.HashMap<>());
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+
+        AgentTaskDTO task = new AgentTaskDTO();
+        task.setId("task-001");
+        task.setTitle("Protocol review");
+        task.setStatus(AgentConstants.TASK_STATUS_RUNNING);
+        handler.publishTaskEvent("task_updated", task);
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"type\":\"task.event\""));
+        assertTrue(messages.contains("\"messageType\":\"task.event\""));
+        assertTrue(!messages.contains("\"commandType\""));
+    }
+
+    @Test
+    void rejectsRuntimeInstanceChangeWithinOneSession() throws Exception {
+        stubAgentSession("session-runtime", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"agent.register","messageId":"register-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1","name":"Wu Yong"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"chat.message","messageId":"message-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-2","conversationId":"1001","content":"must be rejected"}
+                """));
+
+        verify(chatMessageDao, never()).insert(any());
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
     }
 
     @Test

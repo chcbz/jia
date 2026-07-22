@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentSceneConstants;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
@@ -1637,6 +1638,9 @@ codexTimeoutMs=900000
             List<AgentRuntimeEntity> assignedAgents) {
         AgentActionIntentDTO intent = new AgentActionIntentDTO();
         intent.setIntentId(UUID.randomUUID().toString());
+        intent.setCommandId(intent.getIntentId());
+        intent.setCommandType(AgentProtocolConstants.COMMAND_TASK_INVITE);
+        intent.setCorrelationId(task.getId());
         intent.setActionType("task_briefing");
         intent.setActorAgentId(agent.getAgentId());
         intent.setTargetAgentIds(assignedAgents.stream().map(AgentRuntimeEntity::getAgentId).toList());
@@ -1665,7 +1669,7 @@ codexTimeoutMs=900000
         context.put("collaborators", assignedAgents.stream()
                 .map(agent -> toCapabilityDTO(toRuntimeDTO(agent)))
                 .toList());
-        context.put("acceptance", "回报执行计划、风险、需要协助的对象，完成后提交 task.report。");
+        context.put("acceptance", "回报执行计划、风险和协助诉求；Protocol v1 使用 work.progress，完成后使用 work.result，旧客户端由兼容层处理。");
         return context;
     }
 

@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
@@ -467,6 +468,9 @@ class AgentServiceImplTest extends BaseMockTest {
         List<AgentActionIntentDTO> intents = intentCaptor.getAllValues();
         assertEquals(List.of("agent-wuyong", "agent-linchong"), intents.stream().map(AgentActionIntentDTO::getActorAgentId).toList());
         assertTrue(intents.stream().allMatch(intent -> "task_briefing".equals(intent.getActionType())));
+        assertTrue(intents.stream().allMatch(intent -> intent.getIntentId().equals(intent.getCommandId())));
+        assertTrue(intents.stream().allMatch(intent -> AgentProtocolConstants.COMMAND_TASK_INVITE.equals(intent.getCommandType())));
+        assertTrue(intents.stream().allMatch(intent -> "task-001".equals(intent.getCorrelationId())));
         assertTrue(intents.stream().allMatch(intent -> "juyiting".equals(intent.getConversationType())));
         assertTrue(intents.stream().allMatch(intent -> !intent.getRequiresApproval()));
         assertEquals(2, result.getActionDispatchResults().size());

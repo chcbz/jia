@@ -1,5 +1,6 @@
 package cn.jia.chat.service;
 
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
@@ -44,7 +45,12 @@ class HallActionDispatcherTest extends BaseMockTest {
         verify(agentWebSocketHandler).sendDirectMessageToAgent(eq("agent-linchong"), payloadCaptor.capture());
         Map<String, ?> payload = payloadCaptor.getValue();
         assertEquals("dispatched", result.getStatus());
-        assertEquals("agent.action", payload.get("type"));
+        assertEquals(AgentProtocolConstants.LEGACY_AGENT_ACTION, payload.get("type"));
+        assertEquals(AgentProtocolConstants.VERSION_1, payload.get("schemaVersion"));
+        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, payload.get("messageType"));
+        assertEquals("intent-1", payload.get("commandId"));
+        assertEquals(AgentProtocolConstants.COMMAND_REQUEST_RESPOND, payload.get("commandType"));
+        assertEquals("agent-linchong", payload.get("targetAgentId"));
         assertEquals("intent-1", payload.get("requestId"));
         assertEquals("ask_help", payload.get("actionType"));
         assertEquals("请向吴用说明阻塞并请求替代方案", payload.get("content"));
