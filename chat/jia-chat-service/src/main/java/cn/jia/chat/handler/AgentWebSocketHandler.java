@@ -403,11 +403,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             request.setAllowQueue(asBoolean(payload.get("allowQueue")));
             AgentTaskDTO task = withSessionContext(session, () -> agentService.assignTask(taskId, request));
             Map<String, Object> event = copyTrace(payload);
+            String requestMessageId = asString(payload.get("messageId"));
+            event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+            event.put("messageId", UUID.randomUUID().toString());
+            event.put("messageType", AgentProtocolConstants.TYPE_TASK_EVENT);
+            event.put("eventType", "task.assignment.accepted");
+            event.put("correlationId", task.getId());
+            putIfPresent(event, "causationId", requestMessageId);
             event.put("taskId", task.getId());
             event.put("status", task.getStatus());
             event.put("assignedAgentId", task.getAssignedAgentId());
             event.put("assignedAgentName", task.getAssignedAgentName());
-            sendEvent(session, "task_assigned", event);
+            sendEvent(session, AgentProtocolConstants.TYPE_TASK_EVENT, event);
         } catch (Exception e) {
             sendError(session, payload, errorCode(e), e.getMessage());
         }
@@ -734,12 +741,33 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             }
             WebSocketSession session = sessions.get(entry.getKey());
             if (session != null && session.isOpen()) {
-                sendEvent(session, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE,
-                        prepareDirectOutboundPayload(agentId, payload));
+                Map<String, Object> outbound = prepareDirectOutboundPayload(agentId, payload);
+                String messageType = asString(outbound.get("messageType"));
+                String outerType = directCompatibilityType(messageType)
+                        ? AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE
+                        : safeCanonicalOutboundType(messageType);
+                if (outerType == null) {
+                    log.warn("Refusing unsafe Agent direct delivery, agentId={}, messageType={}", agentId, messageType);
+                    return false;
+                }
+                sendEvent(session, outerType, outbound);
                 return true;
             }
         }
         return false;
+    }
+
+    private boolean directCompatibilityType(String messageType) {
+        return AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(messageType)
+                || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
+    }
+
+    private String safeCanonicalOutboundType(String messageType) {
+        if (!AgentProtocolConstants.isCanonicalType(messageType)
+                || AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY.equals(messageType)) {
+            return null;
+        }
+        return messageType;
     }
 
     private Map<String, Object> prepareDirectOutboundPayload(String agentId, Map<String, ?> source) {
@@ -750,9 +778,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         String legacyType = asString(payload.get("type"));
         String messageType = asString(payload.get("messageType"));
         if (!AgentProtocolConstants.isCanonicalType(messageType)) {
-            messageType = AgentProtocolConstants.LEGACY_AGENT_ACTION.equals(legacyType)
-                    ? AgentProtocolConstants.TYPE_COMMAND_DISPATCH
-                    : AgentProtocolConstants.TYPE_CHAT_MESSAGE;
+            if (AgentProtocolConstants.LEGACY_AGENT_ACTION.equals(legacyType)) {
+                messageType = AgentProtocolConstants.TYPE_COMMAND_DISPATCH;
+            } else if (AgentProtocolConstants.LEGACY_TASK_EVENT.equals(legacyType)
+                    || "task_assigned".equals(legacyType)) {
+                messageType = AgentProtocolConstants.TYPE_TASK_EVENT;
+            } else if (AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY.equals(legacyType)) {
+                messageType = AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY;
+            } else {
+                messageType = AgentProtocolConstants.TYPE_CHAT_MESSAGE;
+            }
         }
         payload.putIfAbsent("schemaVersion", AgentProtocolConstants.VERSION_1);
         payload.putIfAbsent("messageId", UUID.randomUUID().toString());
@@ -839,40 +874,66 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         String requestedAgentId = asString(payload.get("agentId"));
         String sourceAgentId = asString(payload.get("sourceAgentId"));
         if (allowedAgentId == null || allowedAgentId.isBlank()) {
-            sendError(session, payload, "AGENT_ID_REQUIRED", "agentId is required in WebSocket handshake");
+            sendSessionIdentityError(session, payload, "AGENT_ID_REQUIRED",
+                    "agentId is required in WebSocket handshake");
             return null;
         }
         if (requestedAgentId != null && !requestedAgentId.isBlank()
                 && sourceAgentId != null && !sourceAgentId.isBlank()
                 && !requestedAgentId.equals(sourceAgentId)) {
-            sendError(session, payload, "AGENT_ID_CONFLICT",
+            sendSessionIdentityError(session, payload, "AGENT_ID_CONFLICT",
                     "agentId and sourceAgentId must identify the same canonical Agent");
             return null;
         }
         String payloadAgentId = sourceAgentId == null || sourceAgentId.isBlank() ? requestedAgentId : sourceAgentId;
         if (payloadAgentId != null && !payloadAgentId.isBlank() && !allowedAgentId.equals(payloadAgentId)) {
-            sendError(session, payload, "AGENT_ID_MISMATCH",
+            sendSessionIdentityError(session, payload, "AGENT_ID_MISMATCH",
                     "payload Agent identity does not match the WebSocket handshake");
             return null;
         }
 
+        boolean protocolV1 = isProtocolV1(payload);
+        boolean registration = AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(asString(payload.get("messageType")));
         String runtimeInstanceId = asString(payload.get("runtimeInstanceId"));
+        String currentRuntimeInstanceId = sessionRuntimeInstanceId(session);
+        if (protocolV1 && (runtimeInstanceId == null || runtimeInstanceId.isBlank())) {
+            sendSessionIdentityError(session, payload, "RUNTIME_INSTANCE_ID_REQUIRED",
+                    "runtimeInstanceId is required for Protocol v1 Agent messages");
+            return null;
+        }
         if (runtimeInstanceId != null && !runtimeInstanceId.isBlank()) {
             if (runtimeInstanceId.equals(allowedAgentId)) {
-                sendError(session, payload, "RUNTIME_INSTANCE_ID_INVALID",
+                sendSessionIdentityError(session, payload, "RUNTIME_INSTANCE_ID_INVALID",
                         "runtimeInstanceId is a process identity and must not equal canonical agentId");
                 return null;
             }
-            String currentRuntimeInstanceId = sessionRuntimeInstanceId(session);
-            if (currentRuntimeInstanceId != null && !currentRuntimeInstanceId.isBlank()
-                    && !currentRuntimeInstanceId.equals(runtimeInstanceId)) {
-                sendError(session, payload, "RUNTIME_INSTANCE_ID_MISMATCH",
+            if (currentRuntimeInstanceId == null || currentRuntimeInstanceId.isBlank()) {
+                if (!registration || !registeredAgentIds(session.getId()).isEmpty()) {
+                    sendSessionIdentityError(session, payload, "RUNTIME_INSTANCE_ID_NOT_FIXED",
+                            "runtimeInstanceId must be fixed at WebSocket authentication or initial registration");
+                    return null;
+                }
+                rememberSessionRuntimeInstance(session, runtimeInstanceId);
+            } else if (!currentRuntimeInstanceId.equals(runtimeInstanceId)) {
+                sendSessionIdentityError(session, payload, "RUNTIME_INSTANCE_ID_MISMATCH",
                         "runtimeInstanceId cannot change within one WebSocket session");
                 return null;
             }
-            rememberSessionRuntimeInstance(session, runtimeInstanceId);
         }
         return allowedAgentId;
+    }
+
+    private boolean isProtocolV1(Map<String, Object> payload) {
+        return Integer.valueOf(AgentProtocolConstants.VERSION_1).equals(payload.get("schemaVersion"));
+    }
+
+    private void sendSessionIdentityError(WebSocketSession session, Map<String, Object> payload,
+            String code, String message) {
+        if (isProtocolV1(payload)) {
+            sendProtocolError(session, payload, code, message);
+        } else {
+            sendError(session, payload, code, message);
+        }
     }
 
     private void rememberSessionRuntimeInstance(WebSocketSession session, String runtimeInstanceId) {

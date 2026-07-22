@@ -48,6 +48,81 @@ class AgentProtocolMessageNormalizerTest {
     }
 
     @Test
+    void rejectsNonExactSchemaVersionsAndCanonicalV1WithoutVersion() {
+        Map<String, Object> command = new HashMap<>();
+        command.put("type", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
+        command.put("messageId", "message-1");
+        command.put("commandId", "command-1");
+        command.put("commandType", AgentProtocolConstants.COMMAND_TASK_INVITE);
+        command.put("targetAgentId", "agent-001");
+        assertProtocolError("SCHEMA_VERSION_REQUIRED", command);
+
+        Map<String, Object> overflow = new HashMap<>(command);
+        overflow.put("schemaVersion", 4_294_967_297L);
+        assertProtocolError("UNSUPPORTED_SCHEMA_VERSION", overflow);
+
+        Map<String, Object> decimal = new HashMap<>(command);
+        decimal.put("schemaVersion", 1.0d);
+        assertProtocolError("INVALID_SCHEMA_VERSION", decimal);
+
+        Map<String, Object> disguisedString = new HashMap<>(command);
+        disguisedString.put("schemaVersion", "1");
+        assertProtocolError("INVALID_SCHEMA_VERSION", disguisedString);
+    }
+
+    @Test
+    void rejectsOuterAndNestedEnvelopeConflicts() {
+        assertProtocolError("MESSAGE_TYPE_CONFLICT", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "type", AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                "messageId", "message-1",
+                "commandId", "command-1",
+                "commandType", AgentProtocolConstants.COMMAND_TASK_INVITE,
+                "targetAgentId", "agent-001",
+                "payload", Map.of("messageType", AgentProtocolConstants.TYPE_TASK_EVENT)));
+
+        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "type", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                "messageId", "message-1",
+                "sourceAgentId", "agent-001",
+                "runtimeInstanceId", "runtime-outer",
+                "payload", Map.of("runtimeInstanceId", "runtime-inner")));
+
+        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
+                "type", "agent.message",
+                "agentId", "agent-outer",
+                "payload", Map.of("sourceAgentId", "agent-inner")));
+
+        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "type", AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                "messageId", "message-1",
+                "commandId", "command-outer",
+                "commandType", AgentProtocolConstants.COMMAND_TASK_INVITE,
+                "targetAgentId", "agent-001",
+                "payload", Map.of("commandId", "command-inner")));
+
+        assertProtocolError("ENVELOPE_FIELD_CONFLICT", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "type", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                "messageId", "message-1",
+                "sourceAgentId", "agent-001",
+                "runtimeInstanceId", "runtime-1",
+                "payload", Map.of("schemaVersion", AgentProtocolConstants.LEGACY_VERSION)));
+    }
+
+    @Test
+    void rejectsDirectCompatibilityWrapperForEventSemantics() {
+        assertProtocolError("MESSAGE_TYPE_CONFLICT", Map.of(
+                "schemaVersion", AgentProtocolConstants.VERSION_1,
+                "type", AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE,
+                "payload", Map.of(
+                        "messageType", AgentProtocolConstants.TYPE_TASK_EVENT,
+                        "messageId", "event-1")));
+    }
+
+    @Test
     void rejectsConflictingLegacyAndCanonicalMessageTypes() {
         AgentProtocolMessageNormalizer.AgentProtocolException error = assertThrows(
                 AgentProtocolMessageNormalizer.AgentProtocolException.class,
@@ -122,6 +197,18 @@ class AgentProtocolMessageNormalizerTest {
                         "sourceAgentId", "agent-002")));
 
         assertEquals("AGENT_ID_CONFLICT", error.getCode());
+    }
+
+    @Test
+    void requiresRuntimeInstanceIdForProtocolV1Registration() {
+        AgentProtocolMessageNormalizer.AgentProtocolException error = assertThrows(
+                AgentProtocolMessageNormalizer.AgentProtocolException.class,
+                () -> normalizer.normalizeInbound(Map.of(
+                        "schemaVersion", AgentProtocolConstants.VERSION_1,
+                        "type", AgentProtocolConstants.TYPE_AGENT_REGISTER,
+                        "sourceAgentId", "agent-001")));
+
+        assertEquals("RUNTIME_INSTANCE_ID_REQUIRED", error.getCode());
     }
 
     @Test

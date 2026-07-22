@@ -23,12 +23,15 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.argThat;
@@ -95,10 +98,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"agent.register\""));
         assertTrue(messages.contains("\"type\":\"pong\""));
         assertTrue(messages.contains("\"type\":\"agent_registered\""));
-        assertTrue(messages.contains("\"type\":\"task_assigned\""));
+        assertTrue(messages.contains("\"type\":\"task.event\""));
+        assertTrue(messages.contains("\"eventType\":\"task.assignment.accepted\""));
+        assertFalse(messages.contains("\"type\":\"task_assigned\""));
         assertTrue(messages.contains("\"type\":\"task_reported\""));
         assertTrue(messages.contains("\"status\":\"running\""));
         verify(agentService).reportTask(any(String.class), any(AgentTaskReportDTO.class));
+        assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
 
     @Test
@@ -192,6 +198,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("@Wu Yong please reply"));
         assertTrue(!messages.contains("\"commandType\""));
+        assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
 
     @Test
@@ -236,6 +243,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"actionType\":\"task_briefing\""));
         assertTrue(messages.contains("\"taskId\":\"task-001\""));
         assertTrue(messages.contains("Read the bounty task and report the next plan."));
+        assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
 
     @Test
@@ -312,7 +320,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void canonicalWorkResultDoesNotInvokeLegacyTaskReportHandler() throws Exception {
-        stubAgentSession("session-result", "agent-001");
+        stubAgentSession("session-result", "agent-001", "runtime-1");
 
         AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
@@ -350,6 +358,122 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"type\":\"task.event\""));
         assertTrue(messages.contains("\"messageType\":\"task.event\""));
         assertTrue(!messages.contains("\"commandType\""));
+        assertSafeServerDownlinks(messageCaptor.getAllValues());
+    }
+
+    @Test
+    void directTaskEventsUseCanonicalNonExecutableOuterType() throws Exception {
+        stubAgentSession("session-direct-event", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
+                """));
+
+        boolean eventDelivered = handler.sendDirectMessageToAgent("agent-001", Map.of(
+                "schemaVersion", 1,
+                "messageId", "event-1",
+                "messageType", AgentProtocolConstants.TYPE_TASK_EVENT,
+                "taskId", "task-001"));
+        boolean unsafeAssignmentDelivered = handler.sendDirectMessageToAgent("agent-001", Map.of(
+                "messageType", AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY,
+                "taskId", "task-001"));
+
+        assertTrue(eventDelivered);
+        assertFalse(unsafeAssignmentDelivered);
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"type\":\"task.event\""));
+        assertFalse(messages.contains("\"type\":\"task_event\""));
+        assertFalse(messages.contains("\"type\":\"task.assign\""));
+        assertSafeServerDownlinks(messageCaptor.getAllValues());
+    }
+
+    @Test
+    void requiresRuntimeInstanceIdOnProtocolV1Registration() throws Exception {
+        stubAgentSession("session-runtime-required", "agent-001");
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"agent.register","sourceAgentId":"agent-001","name":"Wu Yong"}
+                """));
+
+        verify(agentService, never()).register(any(AgentRegisterDTO.class));
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"type\":\"protocol_error\""));
+        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_REQUIRED\""));
+    }
+
+    @Test
+    void rejectsMissingRuntimeAfterProtocolV1Registration() throws Exception {
+        stubAgentSession("session-runtime-missing", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"agent.register","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1","name":"Wu Yong"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"chat.message","messageId":"message-1","sourceAgentId":"agent-001","conversationId":"1001","content":"missing runtime"}
+                """));
+
+        verify(chatMessageDao, never()).insert(any());
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_REQUIRED\""));
+    }
+
+    @Test
+    void rejectsLateRuntimeBindingAfterLegacyRegistration() throws Exception {
+        stubAgentSession("session-runtime-late", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","agentId":"agent-001","name":"Wu Yong"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"chat.message","messageId":"message-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-late","conversationId":"1001","content":"late binding"}
+                """));
+
+        verify(chatMessageDao, never()).insert(any());
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_NOT_FIXED\""));
+    }
+
+    @Test
+    void rejectsRegistrationRuntimeConflictWithAuthenticatedSession() throws Exception {
+        stubAgentSession("session-runtime-auth", "agent-001", "runtime-auth");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"type":"agent.register","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-payload","name":"Wu Yong"}
+                """));
+
+        verify(agentService, never()).register(any(AgentRegisterDTO.class));
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
     }
 
     @Test
@@ -428,12 +552,38 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     private void stubAgentSession(String sessionId, String agentId) {
+        stubAgentSession(sessionId, agentId, null);
+    }
+
+    private void stubAgentSession(String sessionId, String agentId, String runtimeInstanceId) {
+        Map<String, Object> attributes = new java.util.HashMap<>();
+        attributes.put("agentId", agentId);
+        attributes.put("clientId", "jia_client");
+        attributes.put("jiacn", "juyiting");
+        if (runtimeInstanceId != null) {
+            attributes.put("runtimeInstanceId", runtimeInstanceId);
+        }
         org.mockito.Mockito.lenient().when(session.getId()).thenReturn(sessionId);
         org.mockito.Mockito.lenient().when(session.isOpen()).thenReturn(true);
-        org.mockito.Mockito.lenient().when(session.getAttributes()).thenReturn(new java.util.HashMap<>(Map.of(
-                "agentId", agentId,
-                "clientId", "jia_client",
-                "jiacn", "juyiting")));
+        org.mockito.Mockito.lenient().when(session.getAttributes()).thenReturn(attributes);
+    }
+
+    private void assertSafeServerDownlinks(List<TextMessage> messages) throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        TypeReference<Map<String, Object>> mapType = new TypeReference<>() { };
+        Set<String> legacyExecutionOuterTypes = Set.of("codex.exec", "task.assign", "task_assigned", "task_event");
+        for (TextMessage textMessage : messages) {
+            Map<String, Object> event = mapper.readValue(textMessage.getPayload(), mapType);
+            String outerType = String.valueOf(event.get("type"));
+            assertFalse(legacyExecutionOuterTypes.contains(outerType),
+                    () -> "unsafe legacy execution outer type: " + outerType);
+            if (AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE.equals(outerType)) {
+                String messageType = String.valueOf(event.get("messageType"));
+                assertTrue(AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(messageType)
+                                || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType),
+                        () -> "agent_direct_message must be explicitly chat or command: " + messageType);
+            }
+        }
     }
 
     static class TestAgentException extends RuntimeException {

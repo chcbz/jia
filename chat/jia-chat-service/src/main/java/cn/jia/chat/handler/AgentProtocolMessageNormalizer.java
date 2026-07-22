@@ -4,33 +4,51 @@ import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentProtocolEnvelopeDTO;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.Objects;
+import java.util.Set;
 
 /** Normalizes legacy flat WebSocket messages into the Agent Protocol v1 vocabulary. */
 @Component
 public class AgentProtocolMessageNormalizer {
+    private static final Set<String> V1_EXCLUSIVE_TYPES = Set.of(
+            AgentProtocolConstants.TYPE_PROTOCOL_HELLO,
+            AgentProtocolConstants.TYPE_PROTOCOL_ERROR,
+            AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+            AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA,
+            AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+            AgentProtocolConstants.TYPE_COMMAND_ACK,
+            AgentProtocolConstants.TYPE_WORK_PROGRESS,
+            AgentProtocolConstants.TYPE_WORK_HEARTBEAT,
+            AgentProtocolConstants.TYPE_WORK_RESULT,
+            AgentProtocolConstants.TYPE_HELP_REQUEST,
+            AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
+            AgentProtocolConstants.TYPE_TASK_EVENT);
+
+    private static final List<String> RESERVED_FIELDS = List.of(
+            "schemaVersion", "tenantId", "clientId", "agentId", "sourceAgentId", "targetAgentId",
+            "receiverAgentId", "runtimeInstanceId", "messageId", "commandId", "commandType",
+            "correlationId", "causationId", "conversationId", "taskId", "workItemId",
+            "issuedAt", "sentAt", "timestamp", "expiresAt", "attempt");
 
     public NormalizedMessage normalizeInbound(Map<String, Object> rawMessage) {
         Map<String, Object> raw = rawMessage == null ? Map.of() : rawMessage;
         Map<String, Object> body = asObjectMap(raw.get("payload"));
-        String declaredMessageType = asString(raw.get("messageType"));
-        String originalType = Optional.ofNullable(asString(raw.get("type")))
-                .orElseGet(() -> Optional.ofNullable(declaredMessageType).orElse("chat"));
-        int schemaVersion = asInteger(raw.get("schemaVersion"), AgentProtocolConstants.LEGACY_VERSION);
-        if (schemaVersion < AgentProtocolConstants.LEGACY_VERSION
-                || schemaVersion > AgentProtocolConstants.VERSION_1) {
-            throw new AgentProtocolException("UNSUPPORTED_SCHEMA_VERSION",
-                    "Unsupported Agent Protocol schemaVersion: " + schemaVersion);
-        }
+        validateEnvelopeConflicts(raw, body);
 
-        String canonicalType = canonicalType(originalType, declaredMessageType);
-        if (canonicalType == null) {
-            throw new AgentProtocolException("UNSUPPORTED_MESSAGE_TYPE",
-                    "Unsupported Agent Protocol message type: " + originalType);
-        }
+        Object schemaVersionValue = valueObject(raw, body, "schemaVersion");
+        boolean schemaVersionDeclared = schemaVersionValue != null
+                || raw.containsKey("schemaVersion") || body.containsKey("schemaVersion");
+        int schemaVersion = exactSchemaVersion(schemaVersionValue);
+        TypeResolution typeResolution = resolveType(raw, body);
+        validateExplicitV1Schema(typeResolution, schemaVersionDeclared, schemaVersion);
 
+        String canonicalType = typeResolution.canonicalType();
         Map<String, Object> normalizedPayload = new HashMap<>(raw);
         body.forEach(normalizedPayload::putIfAbsent);
         normalizedPayload.put("schemaVersion", schemaVersion);
@@ -63,22 +81,197 @@ public class AgentProtocolMessageNormalizer {
         validateV1Envelope(envelope);
 
         boolean legacy = schemaVersion == AgentProtocolConstants.LEGACY_VERSION
-                || !canonicalType.equals(originalType);
-        return new NormalizedMessage(envelope, normalizedPayload, originalType,
+                || typeResolution.hasLegacyAlias();
+        return new NormalizedMessage(envelope, normalizedPayload, typeResolution.originalType(),
                 AgentProtocolConstants.categoryOf(canonicalType), legacy);
     }
 
-    private String canonicalType(String originalType, String declaredMessageType) {
-        String declaredCanonical = canonicalAlias(declaredMessageType);
-        if (AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE.equals(originalType)) {
-            return declaredCanonical == null ? AgentProtocolConstants.TYPE_CHAT_MESSAGE : declaredCanonical;
+    private void validateEnvelopeConflicts(Map<String, Object> raw, Map<String, Object> body) {
+        validateDeclaredSchemaVersion(raw);
+        validateDeclaredSchemaVersion(body);
+        for (String field : RESERVED_FIELDS) {
+            if (raw.containsKey(field) && body.containsKey(field)
+                    && !sameEnvelopeValue(raw.get(field), body.get(field))) {
+                throw envelopeConflict(field);
+            }
         }
-        String originalCanonical = canonicalAlias(originalType);
-        if (originalCanonical != null && declaredCanonical != null && !originalCanonical.equals(declaredCanonical)) {
+        validateCanonicalAgentAliases(raw);
+        validateCanonicalAgentAliases(body);
+        validateAliasGroupWithinLayer(raw, "targetAgentId", "targetAgentId", "receiverAgentId");
+        validateAliasGroupWithinLayer(body, "targetAgentId", "targetAgentId", "receiverAgentId");
+        validateAliasGroupWithinLayer(raw, "sentAt", "sentAt", "timestamp");
+        validateAliasGroupWithinLayer(body, "sentAt", "sentAt", "timestamp");
+        validateAliasGroupAcrossLayers(raw, body, "sourceAgentId", "agentId", "sourceAgentId");
+        validateAliasGroupAcrossLayers(raw, body, "targetAgentId", "targetAgentId", "receiverAgentId");
+        validateAliasGroupAcrossLayers(raw, body, "sentAt", "sentAt", "timestamp");
+    }
+
+    private void validateDeclaredSchemaVersion(Map<String, Object> layer) {
+        if (!layer.containsKey("schemaVersion") || layer.get("schemaVersion") == null) {
+            if (layer.containsKey("schemaVersion")) {
+                throw new AgentProtocolException("INVALID_SCHEMA_VERSION",
+                        "schemaVersion must be the JSON integer 0 or 1");
+            }
+            return;
+        }
+        exactSchemaVersion(layer.get("schemaVersion"));
+    }
+
+    private void validateCanonicalAgentAliases(Map<String, Object> layer) {
+        PresentValue agentId = firstPresentValue(layer, "agentId");
+        PresentValue sourceAgentId = firstPresentValue(layer, "sourceAgentId");
+        if (agentId != null && sourceAgentId != null
+                && !sameEnvelopeValue(agentId.value(), sourceAgentId.value())) {
+            throw new AgentProtocolException("AGENT_ID_CONFLICT",
+                    "agentId and sourceAgentId must identify the same canonical Agent");
+        }
+    }
+
+    private void validateAliasGroupWithinLayer(Map<String, Object> layer,
+            String logicalField, String... aliases) {
+        PresentValue first = firstPresentValue(layer, aliases);
+        if (first == null) {
+            return;
+        }
+        for (String alias : aliases) {
+            if (layer.containsKey(alias) && !sameEnvelopeValue(first.value(), layer.get(alias))) {
+                throw envelopeConflict(logicalField);
+            }
+        }
+    }
+
+    private void validateAliasGroupAcrossLayers(Map<String, Object> raw, Map<String, Object> body,
+            String logicalField, String... aliases) {
+        PresentValue outer = firstPresentValue(raw, aliases);
+        PresentValue nested = firstPresentValue(body, aliases);
+        if (outer != null && nested != null && !sameEnvelopeValue(outer.value(), nested.value())) {
+            throw envelopeConflict(logicalField);
+        }
+    }
+
+    private PresentValue firstPresentValue(Map<String, Object> layer, String... aliases) {
+        for (String alias : aliases) {
+            if (layer.containsKey(alias)) {
+                return new PresentValue(alias, layer.get(alias));
+            }
+        }
+        return null;
+    }
+
+    private AgentProtocolException envelopeConflict(String field) {
+        return new AgentProtocolException("ENVELOPE_FIELD_CONFLICT",
+                "Outer message and nested payload disagree on reserved Envelope field: " + field);
+    }
+
+    private boolean sameEnvelopeValue(Object left, Object right) {
+        if (left instanceof Number leftNumber && right instanceof Number rightNumber) {
+            try {
+                return new BigDecimal(leftNumber.toString()).compareTo(new BigDecimal(rightNumber.toString())) == 0;
+            } catch (NumberFormatException ignored) {
+                return false;
+            }
+        }
+        return Objects.deepEquals(left, right);
+    }
+
+    private TypeResolution resolveType(Map<String, Object> raw, Map<String, Object> body) {
+        List<TypeDeclaration> declarations = new ArrayList<>();
+        addTypeDeclaration(declarations, raw, "type");
+        addTypeDeclaration(declarations, raw, "messageType");
+        addTypeDeclaration(declarations, body, "type");
+        addTypeDeclaration(declarations, body, "messageType");
+
+        String originalType = declarations.stream()
+                .filter(declaration -> "type".equals(declaration.field()))
+                .map(TypeDeclaration::value)
+                .findFirst()
+                .orElseGet(() -> declarations.stream().map(TypeDeclaration::value).findFirst().orElse("chat"));
+
+        String canonicalType = null;
+        boolean directWrapper = false;
+        boolean canonicalV1Declared = false;
+        boolean legacyAlias = false;
+        for (TypeDeclaration declaration : declarations) {
+            if ("type".equals(declaration.field())
+                    && AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE.equals(declaration.value())) {
+                directWrapper = true;
+                legacyAlias = true;
+                continue;
+            }
+            String resolved = canonicalAlias(declaration.value());
+            if (resolved == null) {
+                throw new AgentProtocolException("UNSUPPORTED_MESSAGE_TYPE",
+                        "Unsupported Agent Protocol message type: " + declaration.value());
+            }
+            if (canonicalType != null && !canonicalType.equals(resolved)) {
+                throw new AgentProtocolException("MESSAGE_TYPE_CONFLICT",
+                        "type and messageType resolve to different Agent Protocol semantics");
+            }
+            canonicalType = resolved;
+            boolean canonicalDeclaration = AgentProtocolConstants.isCanonicalType(declaration.value());
+            canonicalV1Declared |= canonicalDeclaration && V1_EXCLUSIVE_TYPES.contains(declaration.value());
+            legacyAlias |= !canonicalDeclaration;
+        }
+        if (canonicalType == null) {
+            canonicalType = directWrapper ? AgentProtocolConstants.TYPE_CHAT_MESSAGE
+                    : AgentProtocolConstants.TYPE_CHAT_STREAM;
+        }
+        if (directWrapper && !AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(canonicalType)
+                && !AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(canonicalType)) {
             throw new AgentProtocolException("MESSAGE_TYPE_CONFLICT",
-                    "type and messageType resolve to different Agent Protocol semantics");
+                    "agent_direct_message compatibility wrapper is limited to chat.message or command.dispatch");
         }
-        return originalCanonical == null ? declaredCanonical : originalCanonical;
+        return new TypeResolution(originalType, canonicalType, canonicalV1Declared, legacyAlias);
+    }
+
+    private void addTypeDeclaration(List<TypeDeclaration> declarations, Map<String, Object> layer, String field) {
+        if (!layer.containsKey(field) || layer.get(field) == null) {
+            return;
+        }
+        Object value = layer.get(field);
+        if (!(value instanceof String text) || text.isBlank()) {
+            throw new AgentProtocolException("INVALID_MESSAGE_TYPE",
+                    field + " must be a non-blank string");
+        }
+        declarations.add(new TypeDeclaration(field, text));
+    }
+
+    private void validateExplicitV1Schema(TypeResolution typeResolution, boolean schemaVersionDeclared,
+            int schemaVersion) {
+        if (!typeResolution.canonicalV1Declared()) {
+            return;
+        }
+        if (!schemaVersionDeclared) {
+            throw new AgentProtocolException("SCHEMA_VERSION_REQUIRED",
+                    "schemaVersion=1 is required when declaring a Protocol v1 canonical messageType");
+        }
+        if (schemaVersion != AgentProtocolConstants.VERSION_1) {
+            throw new AgentProtocolException("SCHEMA_VERSION_MISMATCH",
+                    "Protocol v1 canonical messageType requires schemaVersion=1");
+        }
+    }
+
+    private int exactSchemaVersion(Object value) {
+        if (value == null) {
+            return AgentProtocolConstants.LEGACY_VERSION;
+        }
+        BigInteger integer;
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            integer = BigInteger.valueOf(((Number) value).longValue());
+        } else if (value instanceof BigInteger bigInteger) {
+            integer = bigInteger;
+        } else {
+            throw new AgentProtocolException("INVALID_SCHEMA_VERSION",
+                    "schemaVersion must be the JSON integer 0 or 1");
+        }
+        if (BigInteger.ZERO.equals(integer)) {
+            return AgentProtocolConstants.LEGACY_VERSION;
+        }
+        if (BigInteger.ONE.equals(integer)) {
+            return AgentProtocolConstants.VERSION_1;
+        }
+        throw new AgentProtocolException("UNSUPPORTED_SCHEMA_VERSION",
+                "Unsupported Agent Protocol schemaVersion: " + integer);
     }
 
     private String canonicalAlias(String type) {
@@ -138,6 +331,10 @@ public class AgentProtocolMessageNormalizer {
         if (requiresMessageId(envelope.getMessageType()) && isBlank(envelope.getMessageId())) {
             throw new AgentProtocolException("MESSAGE_ID_REQUIRED", "messageId is required for Protocol v1 messages");
         }
+        if (AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(envelope.getMessageType())) {
+            require(envelope.getRuntimeInstanceId(), "RUNTIME_INSTANCE_ID_REQUIRED",
+                    "runtimeInstanceId is required for Protocol v1 registration");
+        }
         if (AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(envelope.getMessageType())) {
             require(envelope.getCommandId(), "COMMAND_ID_REQUIRED", "commandId is required for command.dispatch");
             require(envelope.getCommandType(), "COMMAND_TYPE_REQUIRED", "commandType is required for command.dispatch");
@@ -192,11 +389,6 @@ public class AgentProtocolMessageNormalizer {
         return value == null ? null : String.valueOf(value);
     }
 
-    private int asInteger(Object value, int fallback) {
-        Integer result = asNullableInteger(value);
-        return result == null ? fallback : result;
-    }
-
     private Integer asNullableInteger(Object value) {
         if (value == null) {
             return null;
@@ -225,7 +417,6 @@ public class AgentProtocolMessageNormalizer {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private Map<String, Object> asObjectMap(Object value) {
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> result = new HashMap<>();
@@ -233,6 +424,19 @@ public class AgentProtocolMessageNormalizer {
             return result;
         }
         return Map.of();
+    }
+
+    private record TypeDeclaration(String field, String value) {
+    }
+
+    private record TypeResolution(
+            String originalType,
+            String canonicalType,
+            boolean canonicalV1Declared,
+            boolean hasLegacyAlias) {
+    }
+
+    private record PresentValue(String field, Object value) {
     }
 
     public record NormalizedMessage(
