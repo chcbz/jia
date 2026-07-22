@@ -25,6 +25,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureAgentPersonaColumns();
         ensureAgentRuntimeColumns();
         ensureBindingTable();
+        ensureTaskCollaborationSchema();
         ensureTaskNoteTable();
         ensureSceneTables();
         seedWaterMarginPersonas();
@@ -96,6 +97,229 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "CREATE UNIQUE INDEX uk_agent_binding_active_persona ON agent_persona_binding (client_id, active_persona_code)");
         addIndexIfMissing("agent_persona_binding", "uk_agent_binding_active_agent",
                 "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (client_id, active_agent_id)");
+    }
+
+    private void ensureTaskCollaborationSchema() {
+        addRequiredColumnIfMissing("agent_task_meta", "collaboration_mode",
+                "collaboration_mode VARCHAR(20) NOT NULL DEFAULT 'single' COMMENT 'single/team'");
+        addRequiredColumnIfMissing("agent_task_meta", "risk_level",
+                "risk_level VARCHAR(20) NOT NULL DEFAULT 'low' COMMENT 'low/medium/high'");
+        addRequiredColumnIfMissing("agent_task_meta", "max_agents",
+                "max_agents INT NOT NULL DEFAULT 1 COMMENT 'Maximum collaboration agent count'");
+        addRequiredColumnIfMissing("agent_task_meta", "coordinator_agent_id",
+                "coordinator_agent_id VARCHAR(100) DEFAULT NULL COMMENT 'ADR-001 canonical coordinator agentId'");
+        addRequiredColumnIfMissing("agent_task_meta", "review_required",
+                "review_required TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Whether independent review is required'");
+        addRequiredColumnIfMissing("agent_task_meta", "task_version",
+                "task_version BIGINT NOT NULL DEFAULT 0 COMMENT 'Task aggregate optimistic lock version'");
+        addRequiredColumnIfMissing("agent_task_meta", "current_event_version",
+                "current_event_version BIGINT NOT NULL DEFAULT 0 COMMENT 'Latest persisted task event version'");
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_member (
+                    id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    agent_id            VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId',
+                    member_role         VARCHAR(20) NOT NULL COMMENT 'coordinator/worker/reviewer/observer',
+                    member_status       VARCHAR(20) NOT NULL DEFAULT 'invited' COMMENT 'invited/accepted/working/done/rejected/blocked/failed/left',
+                    assignment_source   VARCHAR(20) NOT NULL DEFAULT 'manual' COMMENT 'manual/auto/migration',
+                    joined_at           BIGINT DEFAULT NULL COMMENT 'Join or invitation time',
+                    accepted_at         BIGINT DEFAULT NULL COMMENT 'Acceptance time',
+                    started_at          BIGINT DEFAULT NULL COMMENT 'Work start time',
+                    completed_at        BIGINT DEFAULT NULL COMMENT 'Completion time',
+                    last_heartbeat_at   BIGINT DEFAULT NULL COMMENT 'Last member heartbeat time',
+                    failure_reason      VARCHAR(1000) DEFAULT NULL COMMENT 'Failure or blocking reason',
+                    version             BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+                    tenant_id           VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+                    client_id           VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+                    create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
+                    update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, task_id, agent_id),
+                    KEY idx_task_member_agent_status (tenant_id, client_id, agent_id, member_status),
+                    KEY idx_task_member_task_status (tenant_id, client_id, task_id, member_status),
+                    KEY idx_task_member_task_role (tenant_id, client_id, task_id, member_role, member_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task members'
+                """);
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_work_item (
+                    id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    work_item_id        VARCHAR(100) NOT NULL COMMENT 'Stable work item ID',
+                    task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    title               VARCHAR(255) NOT NULL COMMENT 'Work item title',
+                    description         TEXT COMMENT 'Work item description',
+                    work_type           VARCHAR(30) NOT NULL COMMENT 'Work item type',
+                    required_abilities  TEXT COMMENT 'Required abilities JSON array',
+                    assignee_agent_id   VARCHAR(100) DEFAULT NULL COMMENT 'ADR-001 canonical assignee agentId',
+                    status              VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/ready/claimed/running/blocked/submitted/completed/failed/cancelled',
+                    priority            INT NOT NULL DEFAULT 0 COMMENT 'Higher value means higher priority',
+                    required_item       TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Whether task completion requires this item',
+                    dependency_json     TEXT COMMENT 'Dependency work item IDs JSON array',
+                    lease_token         VARCHAR(100) DEFAULT NULL COMMENT 'Current claim lease token',
+                    lease_until         BIGINT DEFAULT NULL COMMENT 'Lease expiry time',
+                    attempt_count       INT NOT NULL DEFAULT 0 COMMENT 'Execution attempts',
+                    max_attempts        INT NOT NULL DEFAULT 3 COMMENT 'Maximum execution attempts',
+                    result_artifact_id  VARCHAR(100) DEFAULT NULL COMMENT 'Accepted result artifact ID',
+                    submitted_at        BIGINT DEFAULT NULL COMMENT 'Submission time',
+                    completed_at        BIGINT DEFAULT NULL COMMENT 'Review completion time',
+                    version             BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+                    tenant_id           VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+                    client_id           VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+                    create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
+                    update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, work_item_id),
+                    KEY idx_work_item_task_status (tenant_id, client_id, task_id, status, priority),
+                    KEY idx_work_item_assignee_status (tenant_id, client_id, assignee_agent_id, status, lease_until),
+                    KEY idx_work_item_lease (status, lease_until, id),
+                    KEY idx_work_item_task_required (tenant_id, client_id, task_id, required_item, status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task work items'
+                """);
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_request (
+                    id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    request_id          VARCHAR(100) NOT NULL COMMENT 'Stable request ID',
+                    task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    work_item_id        VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
+                    requester_agent_id  VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical requester agentId',
+                    target_type         VARCHAR(20) NOT NULL COMMENT 'agent/role/user/system',
+                    target_id           VARCHAR(100) NOT NULL COMMENT 'Canonical agentId, role, user or system target',
+                    request_type        VARCHAR(30) NOT NULL COMMENT 'help/clarification/dependency/review/resource/reassignment/approval',
+                    status              VARCHAR(20) NOT NULL DEFAULT 'open' COMMENT 'open/acknowledged/resolved/rejected/cancelled',
+                    priority            INT NOT NULL DEFAULT 0 COMMENT 'Higher value means higher priority',
+                    title               VARCHAR(255) NOT NULL COMMENT 'Request title',
+                    description         TEXT NOT NULL COMMENT 'Request details',
+                    response_json       MEDIUMTEXT COMMENT 'Structured response JSON',
+                    due_at              BIGINT DEFAULT NULL COMMENT 'Requested response deadline',
+                    acknowledged_at     BIGINT DEFAULT NULL COMMENT 'Acknowledgement time',
+                    resolved_at         BIGINT DEFAULT NULL COMMENT 'Resolution time',
+                    version             BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+                    tenant_id           VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+                    client_id           VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+                    create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
+                    update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, request_id),
+                    KEY idx_task_request_task_status (tenant_id, client_id, task_id, status, priority, create_time),
+                    KEY idx_task_request_target_status (tenant_id, client_id, target_type, target_id, status, due_at),
+                    KEY idx_task_request_work_item (tenant_id, client_id, work_item_id, status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent collaboration requests'
+                """);
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_artifact (
+                    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    artifact_id             VARCHAR(100) NOT NULL COMMENT 'Stable logical artifact ID',
+                    task_id                 VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    work_item_id            VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
+                    producer_agent_id       VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical producer agentId',
+                    artifact_type           VARCHAR(30) NOT NULL COMMENT 'summary/document/patch/commit/test_report/analysis/dataset/link',
+                    title                   VARCHAR(255) NOT NULL COMMENT 'Artifact title',
+                    content                 MEDIUMTEXT COMMENT 'Inline artifact content',
+                    storage_uri             VARCHAR(1000) DEFAULT NULL COMMENT 'External large object location',
+                    content_hash            VARCHAR(128) DEFAULT NULL COMMENT 'Content integrity hash',
+                    artifact_version        INT NOT NULL DEFAULT 1 COMMENT 'Logical artifact version',
+                    visibility              VARCHAR(20) NOT NULL DEFAULT 'task_members' COMMENT 'task_members/reviewer/private',
+                    metadata_json           TEXT COMMENT 'Artifact metadata JSON',
+                    created_at              BIGINT NOT NULL COMMENT 'Artifact publication time',
+                    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+                    client_id               VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+                    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+                    update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_artifact_version (tenant_id, client_id, artifact_id, artifact_version),
+                    KEY idx_artifact_task_created (tenant_id, client_id, task_id, created_at),
+                    KEY idx_artifact_work_item (tenant_id, client_id, work_item_id, artifact_type, created_at),
+                    KEY idx_artifact_producer (tenant_id, client_id, producer_agent_id, created_at),
+                    KEY idx_artifact_hash (tenant_id, client_id, content_hash)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped versioned Agent task artifacts'
+                """);
+
+        ensureRequiredIndex("agent_task_meta", "idx_agent_task_meta_scope_status", false,
+                List.of("tenant_id", "client_id", "reward_status", "update_time", "id"),
+                "CREATE INDEX idx_agent_task_meta_scope_status "
+                        + "ON agent_task_meta (tenant_id, client_id, reward_status, update_time, id)");
+        ensureRequiredIndex("agent_task_meta", "idx_agent_task_meta_scope_coordinator", false,
+                List.of("tenant_id", "client_id", "coordinator_agent_id", "reward_status"),
+                "CREATE INDEX idx_agent_task_meta_scope_coordinator "
+                        + "ON agent_task_meta (tenant_id, client_id, coordinator_agent_id, reward_status)");
+
+        ensureRequiredIndex("agent_task_member", "uk_task_member_scope", true,
+                List.of("tenant_id", "client_id", "task_id", "agent_id"),
+                "CREATE UNIQUE INDEX uk_task_member_scope "
+                        + "ON agent_task_member (tenant_id, client_id, task_id, agent_id)");
+        ensureRequiredIndex("agent_task_member", "idx_task_member_agent_status", false,
+                List.of("tenant_id", "client_id", "agent_id", "member_status"),
+                "CREATE INDEX idx_task_member_agent_status "
+                        + "ON agent_task_member (tenant_id, client_id, agent_id, member_status)");
+        ensureRequiredIndex("agent_task_member", "idx_task_member_task_status", false,
+                List.of("tenant_id", "client_id", "task_id", "member_status"),
+                "CREATE INDEX idx_task_member_task_status "
+                        + "ON agent_task_member (tenant_id, client_id, task_id, member_status)");
+        ensureRequiredIndex("agent_task_member", "idx_task_member_task_role", false,
+                List.of("tenant_id", "client_id", "task_id", "member_role", "member_status"),
+                "CREATE INDEX idx_task_member_task_role "
+                        + "ON agent_task_member (tenant_id, client_id, task_id, member_role, member_status)");
+
+        ensureRequiredIndex("agent_task_work_item", "uk_work_item_scope", true,
+                List.of("tenant_id", "client_id", "work_item_id"),
+                "CREATE UNIQUE INDEX uk_work_item_scope "
+                        + "ON agent_task_work_item (tenant_id, client_id, work_item_id)");
+        ensureRequiredIndex("agent_task_work_item", "idx_work_item_task_status", false,
+                List.of("tenant_id", "client_id", "task_id", "status", "priority"),
+                "CREATE INDEX idx_work_item_task_status "
+                        + "ON agent_task_work_item (tenant_id, client_id, task_id, status, priority)");
+        ensureRequiredIndex("agent_task_work_item", "idx_work_item_assignee_status", false,
+                List.of("tenant_id", "client_id", "assignee_agent_id", "status", "lease_until"),
+                "CREATE INDEX idx_work_item_assignee_status "
+                        + "ON agent_task_work_item (tenant_id, client_id, assignee_agent_id, status, lease_until)");
+        ensureRequiredIndex("agent_task_work_item", "idx_work_item_lease", false,
+                List.of("status", "lease_until", "id"),
+                "CREATE INDEX idx_work_item_lease ON agent_task_work_item (status, lease_until, id)");
+        ensureRequiredIndex("agent_task_work_item", "idx_work_item_task_required", false,
+                List.of("tenant_id", "client_id", "task_id", "required_item", "status"),
+                "CREATE INDEX idx_work_item_task_required "
+                        + "ON agent_task_work_item (tenant_id, client_id, task_id, required_item, status)");
+
+        ensureRequiredIndex("agent_task_request", "uk_task_request_scope", true,
+                List.of("tenant_id", "client_id", "request_id"),
+                "CREATE UNIQUE INDEX uk_task_request_scope "
+                        + "ON agent_task_request (tenant_id, client_id, request_id)");
+        ensureRequiredIndex("agent_task_request", "idx_task_request_task_status", false,
+                List.of("tenant_id", "client_id", "task_id", "status", "priority", "create_time"),
+                "CREATE INDEX idx_task_request_task_status "
+                        + "ON agent_task_request (tenant_id, client_id, task_id, status, priority, create_time)");
+        ensureRequiredIndex("agent_task_request", "idx_task_request_target_status", false,
+                List.of("tenant_id", "client_id", "target_type", "target_id", "status", "due_at"),
+                "CREATE INDEX idx_task_request_target_status "
+                        + "ON agent_task_request (tenant_id, client_id, target_type, target_id, status, due_at)");
+        ensureRequiredIndex("agent_task_request", "idx_task_request_work_item", false,
+                List.of("tenant_id", "client_id", "work_item_id", "status"),
+                "CREATE INDEX idx_task_request_work_item "
+                        + "ON agent_task_request (tenant_id, client_id, work_item_id, status)");
+
+        ensureRequiredIndex("agent_task_artifact", "uk_artifact_version", true,
+                List.of("tenant_id", "client_id", "artifact_id", "artifact_version"),
+                "CREATE UNIQUE INDEX uk_artifact_version "
+                        + "ON agent_task_artifact (tenant_id, client_id, artifact_id, artifact_version)");
+        ensureRequiredIndex("agent_task_artifact", "idx_artifact_task_created", false,
+                List.of("tenant_id", "client_id", "task_id", "created_at"),
+                "CREATE INDEX idx_artifact_task_created "
+                        + "ON agent_task_artifact (tenant_id, client_id, task_id, created_at)");
+        ensureRequiredIndex("agent_task_artifact", "idx_artifact_work_item", false,
+                List.of("tenant_id", "client_id", "work_item_id", "artifact_type", "created_at"),
+                "CREATE INDEX idx_artifact_work_item "
+                        + "ON agent_task_artifact (tenant_id, client_id, work_item_id, artifact_type, created_at)");
+        ensureRequiredIndex("agent_task_artifact", "idx_artifact_producer", false,
+                List.of("tenant_id", "client_id", "producer_agent_id", "created_at"),
+                "CREATE INDEX idx_artifact_producer "
+                        + "ON agent_task_artifact (tenant_id, client_id, producer_agent_id, created_at)");
+        ensureRequiredIndex("agent_task_artifact", "idx_artifact_hash", false,
+                List.of("tenant_id", "client_id", "content_hash"),
+                "CREATE INDEX idx_artifact_hash "
+                        + "ON agent_task_artifact (tenant_id, client_id, content_hash)");
     }
 
     private boolean isH2Database() {
@@ -264,6 +488,26 @@ public class AgentSchemaInitializer implements InitializingBean {
                     visualConfig(seed.rankNo()), abilities(seed), personality(seed), speakingStyle(seed), background(seed),
                     score(seed.rankNo(), 72), score(109 - seed.rankNo(), 70), score(seed.rankNo(), 66),
                     "songjiang".equals(seed.code()), System.currentTimeMillis(), System.currentTimeMillis(), seed.code());
+        }
+    }
+
+    private void addRequiredColumnIfMissing(String table, String column, String definition) {
+        String catalogQuery = isH2Database()
+                ? """
+                  SELECT COUNT(*)
+                  FROM information_schema.columns
+                  WHERE table_schema = SCHEMA()
+                    AND LOWER(table_name) = LOWER(?)
+                    AND LOWER(column_name) = LOWER(?)
+                  """
+                : """
+                  SELECT COUNT(*)
+                  FROM information_schema.columns
+                  WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+                  """;
+        Integer count = jdbcTemplate.queryForObject(catalogQuery, Integer.class, table, column);
+        if (count == null || count == 0) {
+            jdbcTemplate.execute("ALTER TABLE " + table + " ADD COLUMN " + definition);
         }
     }
 

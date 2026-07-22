@@ -86,7 +86,84 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_event"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_phase_report"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_scene_version"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_member"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_work_item"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_request"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_artifact"));
         verify(jdbcTemplate, atLeastOnce()).update(any(String.class), any(Object[].class));
+    }
+
+    @Test
+    void initializerAddsAllRequiredTaskMetaCollaborationColumns() {
+        AgentSchemaInitializer initializer = new AgentSchemaInitializer(jdbcTemplate);
+
+        initializer.afterPropertiesSet();
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, atLeastOnce()).execute(sqlCaptor.capture());
+        Set<String> taskMetaAlterColumns = sqlCaptor.getAllValues().stream()
+                .filter(sql -> sql.startsWith("ALTER TABLE agent_task_meta ADD COLUMN "))
+                .map(sql -> sql.substring("ALTER TABLE agent_task_meta ADD COLUMN ".length()))
+                .map(sql -> sql.substring(0, sql.indexOf(' ')))
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of(
+                "collaboration_mode", "risk_level", "max_agents", "coordinator_agent_id",
+                "review_required", "task_version", "current_event_version"), taskMetaAlterColumns);
+    }
+
+    @Test
+    void initializerAndSqlResourcesKeepCollaborationTableStructureInParity() throws IOException {
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(captor.capture());
+        List<String> initializerSql = captor.getAllValues().stream()
+                .map(sql -> sql.toLowerCase(Locale.ROOT))
+                .toList();
+        String schema = readResource("db/schema.sql");
+        String migration = readResource("db/task-collaboration-schema.sql");
+
+        for (String table : Set.of(
+                "agent_task_member", "agent_task_work_item", "agent_task_request", "agent_task_artifact")) {
+            String initializerDefinition = initializerSql.stream()
+                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .findFirst().orElseThrow();
+            TableStructure expected = tableStructure(tableDefinition(schema, table));
+            assertEquals(expected, tableStructure(tableDefinition(migration, table)), table + " migration");
+            assertEquals(expected, tableStructure(initializerDefinition), table + " initializer");
+        }
+    }
+
+    @Test
+    void incompatibleArtifactVersionUniqueIndexFailsStartup() {
+        JdbcTemplate failingTemplate = new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL is intentionally inert; this test exercises collaboration-index introspection.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if ("agent_task_artifact".equals(args[0]) && "uk_artifact_version".equals(args[1])) {
+                    return (List<T>) List.of(
+                            new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 1, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "client_id", 2, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "artifact_id", 3, null));
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("uk_artifact_version"), error.getMessage());
     }
 
     @Test
@@ -358,8 +435,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     private String readSchema() throws IOException {
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream("db/schema.sql")) {
-            assertNotNull(input);
+        return readResource("db/schema.sql");
+    }
+
+    private String readResource(String resource) throws IOException {
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource)) {
+            assertNotNull(input, resource);
             return new String(input.readAllBytes(), StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
         }
     }
@@ -367,7 +448,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     private TableStructure tableStructure(String definition) {
         Map<String, String> columns = new LinkedHashMap<>();
         Matcher columnMatcher = Pattern.compile(
-                "(?m)^\\s*([a-z][a-z0-9_]*)\\s+((?:bigint\\b|varchar\\(\\d+\\)|text\\b)[^,\\n]*)")
+                "(?m)^\\s*([a-z][a-z0-9_]*)\\s+"
+                        + "((?:(?:bigint|int|mediumtext|text)\\b|tinyint\\(1\\)|varchar\\(\\d+\\))[^,\\n]*)")
                 .matcher(definition);
         while (columnMatcher.find()) {
             columns.put(columnMatcher.group(1), normalizeDefinition(columnMatcher.group(2)));
