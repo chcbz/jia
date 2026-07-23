@@ -607,9 +607,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         sendEvent(session, "protocol_error", event);
     }
 
-    private void sendEvent(WebSocketSession session, String type, Map<String, ?> payload) {
+    private boolean sendEvent(WebSocketSession session, String type, Map<String, ?> payload) {
         if (!session.isOpen()) {
-            return;
+            return false;
         }
         Map<String, Object> event = new HashMap<>();
         if (payload != null) {
@@ -626,8 +626,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             synchronized (session) {
                 session.sendMessage(new TextMessage(JsonUtil.toSafeJson(event)));
             }
+            return true;
         } catch (Exception e) {
             log.error("Error sending OpenClaw channel event", e);
+            return false;
         }
     }
 
@@ -811,6 +813,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             }
         }
 
+        String outerType = directCompatibilityType(messageType)
+                ? AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE
+                : safeCanonicalOutboundType(messageType);
+        if (outerType == null) {
+            log.warn("Refusing unsafe Agent direct delivery, agentId={}, messageType={}", agentId, messageType);
+            return false;
+        }
+
+        boolean delivered = false;
         for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
             if (!entry.getValue().contains(agentId)) {
                 continue;
@@ -823,17 +834,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                     || !taskScope.clientId().equals(sessionClientId(session)))) {
                 continue;
             }
-            String outerType = directCompatibilityType(messageType)
-                    ? AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE
-                    : safeCanonicalOutboundType(messageType);
-            if (outerType == null) {
-                log.warn("Refusing unsafe Agent direct delivery, agentId={}, messageType={}", agentId, messageType);
-                return false;
-            }
-            sendEvent(session, outerType, outbound);
-            return true;
+            delivered = sendEvent(session, outerType, outbound) || delivered;
         }
-        return false;
+        return delivered;
     }
 
     private boolean directCompatibilityType(String messageType) {
@@ -880,9 +883,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         payload.putIfAbsent("schemaVersion", AgentProtocolConstants.VERSION_1);
         payload.putIfAbsent("messageId", UUID.randomUUID().toString());
         payload.put("messageType", messageType);
-        if (!requiresTaskScope(messageType)) {
-            payload.put("targetAgentId", agentId);
-            payload.putIfAbsent("agentId", agentId);
+        payload.put("targetAgentId", agentId);
+        payload.put("agentId", agentId);
+        if (requiresTaskScope(messageType)) {
+            TaskDeliveryScope trustedScope = taskDeliveryScope(payload);
+            payload.put("tenantId", trustedScope.tenantId());
+            payload.put("clientId", trustedScope.clientId());
+            payload.put("taskId", trustedScope.taskId());
         }
         if (AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType)) {
             payload.putIfAbsent("commandId", Optional.ofNullable(asString(payload.get("requestId")))

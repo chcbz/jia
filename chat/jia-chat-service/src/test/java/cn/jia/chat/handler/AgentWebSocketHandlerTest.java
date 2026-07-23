@@ -230,6 +230,116 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
+    void sendsDirectTaskMessageToEveryOpenMatchingSessionOnlyOnce() throws Exception {
+        WebSocketSession firstSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession secondSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession closedSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossTenantSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossClientSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(firstSession, "session-multi-1", "agent-multi", "tenant-a", "client-a", null);
+        stubAgentSession(secondSession, "session-multi-2", "agent-multi", "tenant-a", "client-a", null);
+        stubAgentSession(closedSession, "session-multi-closed", "agent-multi", "tenant-a", "client-a", null);
+        stubAgentSession(crossTenantSession, "session-multi-cross-tenant", "agent-multi", "tenant-b", "client-a", null);
+        stubAgentSession(crossClientSession, "session-multi-cross-client", "agent-multi", "tenant-a", "client-b", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-multi", "token", AgentConstants.STATUS_ONLINE));
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-multi"))
+                .thenReturn(List.of("agent-multi"));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        for (WebSocketSession candidate : List.of(firstSession, secondSession, closedSession,
+                crossTenantSession, crossClientSession)) {
+            handler.afterConnectionEstablished(candidate);
+            handler.handleTextMessage(candidate, new TextMessage(
+                    "{\"type\":\"agent.register\",\"agentId\":\"agent-multi\",\"name\":\"Agent\"}"));
+        }
+        org.mockito.Mockito.clearInvocations(firstSession, secondSession, closedSession,
+                crossTenantSession, crossClientSession);
+        when(closedSession.isOpen()).thenReturn(false);
+
+        boolean delivered = handler.sendDirectMessageToAgent("agent-multi", Map.of(
+                "schemaVersion", 1,
+                "messageId", "task-message-multi",
+                "messageType", AgentProtocolConstants.TYPE_TASK_EVENT,
+                "tenantId", "tenant-a",
+                "clientId", "client-a",
+                "taskId", "task-multi",
+                "targetAgentId", "agent-multi"));
+
+        assertTrue(delivered);
+        verify(firstSession, org.mockito.Mockito.times(1)).sendMessage(any(TextMessage.class));
+        verify(secondSession, org.mockito.Mockito.times(1)).sendMessage(any(TextMessage.class));
+        verify(closedSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossTenantSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossClientSession, never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    void directDeliveryContinuesAfterOneSessionSendFails() throws Exception {
+        WebSocketSession failingSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession healthySession = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(failingSession, "session-failing", "agent-multi", "tenant-a", "client-a", null);
+        stubAgentSession(healthySession, "session-healthy", "agent-multi", "tenant-a", "client-a", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-multi", "token", AgentConstants.STATUS_ONLINE));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        for (WebSocketSession candidate : List.of(failingSession, healthySession)) {
+            handler.afterConnectionEstablished(candidate);
+            handler.handleTextMessage(candidate, new TextMessage(
+                    "{\"type\":\"agent.register\",\"agentId\":\"agent-multi\",\"name\":\"Agent\"}"));
+        }
+        org.mockito.Mockito.clearInvocations(failingSession, healthySession);
+        org.mockito.Mockito.doThrow(new RuntimeException("simulated send failure"))
+                .when(failingSession).sendMessage(any(TextMessage.class));
+
+        boolean delivered = handler.sendDirectMessageToAgent("agent-multi", Map.of(
+                "schemaVersion", 1,
+                "messageId", "chat-message-multi",
+                "messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                "content", "continue after failure"));
+
+        assertTrue(delivered);
+        verify(failingSession, org.mockito.Mockito.times(1)).sendMessage(any(TextMessage.class));
+        verify(healthySession, org.mockito.Mockito.times(1)).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    void nonTaskDirectOutboundOverwritesUntrustedAgentIdentity() throws Exception {
+        stubAgentSession("session-identity-overwrite", "agent-trusted");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-trusted", "token", AgentConstants.STATUS_ONLINE));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-trusted\",\"name\":\"Agent\"}"));
+        org.mockito.Mockito.clearInvocations(session);
+
+        boolean delivered = handler.sendDirectMessageToAgent("agent-trusted", Map.of(
+                "schemaVersion", 1,
+                "messageId", "identity-overwrite",
+                "messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE,
+                "agentId", "agent-malicious",
+                "targetAgentId", "agent-malicious",
+                "content", "trusted target wins"));
+
+        assertTrue(delivered);
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(messageCaptor.capture());
+        Map<String, Object> envelope = findOutboundEnvelope(
+                messageCaptor.getAllValues(), AgentProtocolConstants.TYPE_CHAT_MESSAGE);
+        assertEquals("agent-trusted", envelope.get("agentId"));
+        assertEquals("agent-trusted", envelope.get("targetAgentId"));
+        assertFalse(messageCaptor.getValue().getPayload().contains("agent-malicious"));
+    }
+
+    @Test
     void publishesAgentActionIntentToRegisteredAgentSession() throws Exception {
         stubAgentSession("session-action", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
