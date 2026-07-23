@@ -43,9 +43,11 @@ class AgentTaskWorkItemParentGateDaoTest {
         assertTrue(sql.contains("cast(substring(parent.task_id, 1, 50) as binary(200))"), sql);
         assertTrue(sql.contains("cast(substring(parent.task_id, 51, 50) as binary(200))"), sql);
         assertTrue(sql.contains("octet_length(parent.task_id) = octet_length(#{item.taskid})"), sql);
-        assertTrue(sql.contains("cast(parent.reward_status as binary(80)) in"), sql);
         for (String nonTerminal : new String[]{"open", "planning", "assigned", "running", "reviewing", "blocked"}) {
-            assertTrue(sql.contains("cast('" + nonTerminal + "' as binary(80))"), sql);
+            assertTrue(sql.contains("cast(parent.reward_status as binary(80)) "
+                    + "= cast('" + nonTerminal + "' as binary(80))"), sql);
+            assertTrue(sql.contains("octet_length(parent.reward_status) "
+                    + "= octet_length('" + nonTerminal + "')"), sql);
         }
         assertTrue(sql.endsWith("for update"), sql);
         for (String terminal : new String[]{"completed", "failed", "cancelled", "archived"}) {

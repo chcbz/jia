@@ -32,10 +32,20 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
               AND CAST(SUBSTRING(parent.task_id, 51, 50) AS BINARY(200))
                   = CAST(SUBSTRING(#{item.taskId}, 51, 50) AS BINARY(200))
               AND OCTET_LENGTH(parent.task_id) = OCTET_LENGTH(#{item.taskId})
-              AND CAST(parent.reward_status AS BINARY(80)) IN
-                  (CAST('open' AS BINARY(80)), CAST('planning' AS BINARY(80)),
-                   CAST('assigned' AS BINARY(80)), CAST('running' AS BINARY(80)),
-                   CAST('reviewing' AS BINARY(80)), CAST('blocked' AS BINARY(80)))
+              AND (
+                  (CAST(parent.reward_status AS BINARY(80)) = CAST('open' AS BINARY(80))
+                   AND OCTET_LENGTH(parent.reward_status) = OCTET_LENGTH('open'))
+                  OR (CAST(parent.reward_status AS BINARY(80)) = CAST('planning' AS BINARY(80))
+                      AND OCTET_LENGTH(parent.reward_status) = OCTET_LENGTH('planning'))
+                  OR (CAST(parent.reward_status AS BINARY(80)) = CAST('assigned' AS BINARY(80))
+                      AND OCTET_LENGTH(parent.reward_status) = OCTET_LENGTH('assigned'))
+                  OR (CAST(parent.reward_status AS BINARY(80)) = CAST('running' AS BINARY(80))
+                      AND OCTET_LENGTH(parent.reward_status) = OCTET_LENGTH('running'))
+                  OR (CAST(parent.reward_status AS BINARY(80)) = CAST('reviewing' AS BINARY(80))
+                      AND OCTET_LENGTH(parent.reward_status) = OCTET_LENGTH('reviewing'))
+                  OR (CAST(parent.reward_status AS BINARY(80)) = CAST('blocked' AS BINARY(80))
+                      AND OCTET_LENGTH(parent.reward_status) = OCTET_LENGTH('blocked'))
+              )
             FOR UPDATE
             """)
     int insertIfParentNonTerminal(
