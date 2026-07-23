@@ -1,6 +1,7 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.dao.AgentTaskMetaDao;
+import cn.jia.agent.entity.AgentTaskAggregationSnapshotRow;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.common.dao.BaseDaoImpl;
@@ -29,6 +30,26 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
                 .eq(AgentTaskMetaEntity::getClientId, clientId)
                 .eq(AgentTaskMetaEntity::getTaskId, taskId)
                 .last("limit 1"));
+    }
+
+    @Override
+    public AgentTaskMetaEntity findByTaskIdForUpdate(
+            String tenantId, String clientId, String taskId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        return baseMapper.selectOne(new LambdaQueryWrapper<AgentTaskMetaEntity>()
+                .eq(AgentTaskMetaEntity::getTenantId, tenantId)
+                .eq(AgentTaskMetaEntity::getClientId, clientId)
+                .eq(AgentTaskMetaEntity::getTaskId, taskId)
+                .last("FOR UPDATE"));
+    }
+
+    @Override
+    public List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
+            String tenantId, String clientId, String taskId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        return baseMapper.selectAggregationSnapshot(tenantId, clientId, taskId);
     }
 
     @Override
