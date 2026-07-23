@@ -129,7 +129,10 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         WorkItemChange workItemChange = prepareWorkItem(
                 tenantId, clientId, taskId, workItemId, workItemTransition, changedAt);
         String assigneeAgentId = workItemChange.current().getAssigneeAgentId();
-        if (!StringUtil.isBlank(assigneeAgentId) && !agentId.equals(assigneeAgentId)) {
+        if (StringUtil.isBlank(assigneeAgentId)) {
+            throw invalidRequest("Work item must have a non-blank assignee for combined transition");
+        }
+        if (!agentId.equals(assigneeAgentId)) {
             throw invalidRequest("Work item assignee does not match the transitioning member");
         }
 
@@ -260,7 +263,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     private AgentTaskStatus persistedTaskStatus(String status) {
         try {
-            return AgentTaskStatus.fromValue(status);
+            return AgentTaskStatus.fromPersistedValue(status);
         } catch (IllegalArgumentException e) {
             throw invalidPersistedStatus("task");
         }
@@ -276,7 +279,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     private AgentTaskMemberStatus persistedMemberStatus(String status) {
         try {
-            return AgentTaskMemberStatus.fromValue(status);
+            return AgentTaskMemberStatus.fromPersistedValue(status);
         } catch (IllegalArgumentException e) {
             throw invalidPersistedStatus("member");
         }
@@ -292,7 +295,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     private AgentTaskWorkItemStatus persistedWorkItemStatus(String status) {
         try {
-            return AgentTaskWorkItemStatus.fromValue(status);
+            return AgentTaskWorkItemStatus.fromPersistedValue(status);
         } catch (IllegalArgumentException e) {
             throw invalidPersistedStatus("work item");
         }

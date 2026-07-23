@@ -54,6 +54,19 @@ public enum AgentTaskMemberStatus {
         return status;
     }
 
+    /**
+     * Parses a persisted status value with exact match only (no normalization).
+     * Non-canonical persisted values (different case, whitespace) are rejected.
+     */
+    public static AgentTaskMemberStatus fromPersistedValue(String value) {
+        AgentTaskMemberStatus status = BY_VALUE.get(value);
+        if (status == null) {
+            throw new IllegalArgumentException("Unknown task member status");
+        }
+        return status;
+    }
+
+
     private static Map<String, AgentTaskMemberStatus> valuesByValue() {
         return java.util.Arrays.stream(values())
                 .collect(Collectors.toUnmodifiableMap(AgentTaskMemberStatus::value, Function.identity()));

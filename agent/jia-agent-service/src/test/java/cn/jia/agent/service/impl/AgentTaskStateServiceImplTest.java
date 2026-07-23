@@ -306,6 +306,164 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         assertTrue(Arrays.asList(annotation.rollbackFor()).contains(Exception.class));
     }
 
+
+    // ── P1-2: Combined transition fails closed on blank/mismatched assignee ──
+
+    @Test
+    void combinedTransitionRejectsBlankAssigneeBeforeAnyWrite() {
+        AgentTaskWorkItemEntity wi = workItem("running", 6L);
+        wi.setAssigneeAgentId(null);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(wi);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionMemberAndWorkItem(
+                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        transition("done", 3L, null), transition("submitted", 6L, null)));
+
+        assertEquals(Reason.INVALID_REQUEST, exception.getReason());
+        assertTrue(exception.getMessage().contains("non-blank assignee"));
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void combinedTransitionRejectsEmptyStringAssigneeBeforeAnyWrite() {
+        AgentTaskWorkItemEntity wi = workItem("running", 6L);
+        wi.setAssigneeAgentId("   ");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(wi);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionMemberAndWorkItem(
+                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        transition("done", 3L, null), transition("submitted", 6L, null)));
+
+        assertEquals(Reason.INVALID_REQUEST, exception.getReason());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void combinedTransitionRejectsMismatchedAssigneeBeforeAnyWrite() {
+        AgentTaskWorkItemEntity wi = workItem("running", 6L);
+        wi.setAssigneeAgentId("agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(wi);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionMemberAndWorkItem(
+                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        transition("done", 3L, null), transition("submitted", 6L, null)));
+
+        assertEquals(Reason.INVALID_REQUEST, exception.getReason());
+        assertTrue(exception.getMessage().contains("assignee does not match"));
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+    }
+
+    // ── P2-3: Persisted noncanonical status values are rejected ──
+
+    @Test
+    void persistedNoncanonicalTaskStatusIsRejectedWithoutNormalization() {
+        AgentTaskMetaEntity current = task("RUNNING", 5L); // uppercase, not canonical "running"
+        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(current);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionTask(
+                        TENANT, CLIENT, TASK_ID, transition("completed", 5L, null)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
+        verify(taskMetaDao, never()).updateStatusByVersion(
+                any(), any(), any(), anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void persistedNoncanonicalTaskStatusWhitespaceIsRejected() {
+        AgentTaskMetaEntity current = task(" running ", 5L); // whitespace not canonical
+        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(current);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionTask(
+                        TENANT, CLIENT, TASK_ID, transition("completed", 5L, null)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
+    }
+
+    @Test
+    void persistedNoncanonicalTaskStatusEmptyIsRejected() {
+        AgentTaskMetaEntity current = task("", 5L);
+        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(current);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionTask(
+                        TENANT, CLIENT, TASK_ID, transition("completed", 5L, null)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
+    }
+
+    @Test
+    void persistedNoncanonicalMemberStatusIsRejected() {
+        AgentTaskMemberEntity current = member("WORKING", 3L);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID)).thenReturn(current);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionMember(
+                        TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void persistedNoncanonicalWorkItemStatusIsRejected() {
+        AgentTaskWorkItemEntity current = workItem("RUNNING", 6L);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionWorkItem(
+                        TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void persistedNoncanonicalWorkerItemStatusWhitespaceIsRejected() {
+        AgentTaskWorkItemEntity current = workItem(" running ", 6L);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+
+        AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
+                () -> service.transitionWorkItem(
+                        TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
+    }
+
+    @Test
+    void requestedTargetStatusStillAcceptsNormalizedValues() {
+        // Verify that request target normalization is preserved (P2-3 scope)
+        // This test confirms that the target " DONE " (with whitespace) is normalized
+        // while persisted non-canonical values are rejected.
+        AgentTaskMemberEntity current = member("working", 3L);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID)).thenReturn(current);
+        when(memberDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+
+        // Target " DONE " is normalized to "done" by requestedMemberStatus
+        AgentTaskStateDTO result = service.transitionMember(
+                TENANT, CLIENT, TASK_ID, AGENT_ID, transition(" DONE ", 3L, null));
+
+        assertEquals("done", result.getStatus());
+    }
+
+
     private AgentTaskMetaEntity task(String status, long version) {
         AgentTaskMetaEntity entity = new AgentTaskMetaEntity();
         entity.setTaskId(TASK_ID);
