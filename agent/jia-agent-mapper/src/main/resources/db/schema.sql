@@ -40,11 +40,16 @@ CREATE TABLE IF NOT EXISTS agent_runtime (
     update_time         BIGINT DEFAULT NULL COMMENT '更新时间',
     tenant_id           VARCHAR(50) DEFAULT NULL COMMENT '租户ID',
     client_id           VARCHAR(50) DEFAULT NULL COMMENT '客户端ID',
+    owner_jiacn         VARCHAR(50) DEFAULT NULL COMMENT 'Bound user Jia account',
+    persona_code        VARCHAR(50) DEFAULT NULL COMMENT 'Bound persona code',
+    binding_id          BIGINT DEFAULT NULL COMMENT 'Persona binding ID',
     PRIMARY KEY (id),
     UNIQUE KEY uk_agent_runtime_agent_id (agent_id),
     KEY idx_agent_runtime_status (status),
     KEY idx_agent_runtime_persona_name (persona_name),
-    KEY idx_agent_runtime_last_seen_at (last_seen_at)
+    KEY idx_agent_runtime_last_seen_at (last_seen_at),
+    KEY idx_agent_runtime_owner (client_id, owner_jiacn),
+    KEY idx_agent_runtime_persona_code (persona_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent运行时注册表';
 
 CREATE TABLE IF NOT EXISTS agent_persona_binding (

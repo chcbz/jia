@@ -118,102 +118,409 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
     private void validateExistingIdentityTables() {
-        for (String table : List.of("agent_identity_registry", "agent_identity_alias")) {
-            if (!tableExists(table)) {
-                continue;
-            }
-            List<String> requiredRegistryColumns = List.of(
-                    "canonical_agent_id", "canonical_type", "lifecycle_status",
-                    "client_id", "owner_jiacn", "tenant_id", "binding_id",
-                    "provisioned_at", "activated_at", "suspended_at", "retired_at",
-                    "audit_reason", "create_time", "update_time");
-            List<String> requiredAliasColumns = List.of(
-                    "registry_id", "canonical_agent_id", "alias_type", "alias_value",
-                    "alias_status", "valid_from", "valid_to", "active_key",
-                    "client_id", "owner_jiacn", "tenant_id", "audit_reason",
-                    "create_time", "update_time");
-            List<String> requiredColumns = "agent_identity_registry".equals(table)
-                    ? requiredRegistryColumns : requiredAliasColumns;
-            List<String> requiredRegistryIndexes = List.of(
-                    "uk_identity_registry_agent", "uk_identity_registry_binding",
-                    "uk_identity_registry_alias_target", "idx_identity_registry_scope_status");
-            List<String> requiredAliasIndexes = List.of(
-                    "uk_identity_alias_active", "idx_identity_alias_registry",
-                    "idx_identity_alias_canonical");
-            List<String> requiredIndexes = "agent_identity_registry".equals(table)
-                    ? requiredRegistryIndexes : requiredAliasIndexes;
-
-            for (String column : requiredColumns) {
-                if (!columnExists(table, column)) {
-                    throw new IllegalStateException(
-                            "Existing identity table " + table + " is missing required column "
-                                    + column + "; manual migration or table rebuild required");
-                }
-            }
-            for (String index : requiredIndexes) {
-                if (!indexExists(table, index)) {
-                    throw new IllegalStateException(
-                            "Existing identity table " + table + " is missing required index/key "
-                                    + index + "; manual migration or table rebuild required");
-                }
-            }
-            log.info("Existing identity table {} passed structural validation", table);
+        boolean registryExists = tableExists("agent_identity_registry");
+        boolean aliasExists = tableExists("agent_identity_alias");
+        if (registryExists != aliasExists) {
+            throw new IllegalStateException(
+                    "A02 identity schema is partial: registry and alias tables must exist together");
         }
+        if (!registryExists) {
+            return;
+        }
+
+        validateIdentityColumn("agent_identity_registry", "canonical_agent_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_registry", "canonical_type",
+                "varchar", "varchar(32)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_registry", "lifecycle_status",
+                "varchar", "varchar(20)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_registry", "client_id",
+                "varchar", "varchar(50)", true, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_registry", "owner_jiacn",
+                "varchar", "varchar(50)", true, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_registry", "tenant_id",
+                "varchar", "varchar(50)", true, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_registry", "binding_id",
+                "bigint", "bigint", true, null, null);
+        validateIdentityColumn("agent_identity_registry", "audit_reason",
+                "varchar", "varchar(1000)", false, "utf8mb4_0900_bin", null);
+
+        validateIdentityColumn("agent_identity_alias", "registry_id",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_identity_alias", "canonical_agent_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_alias", "alias_type",
+                "varchar", "varchar(32)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_alias", "alias_value",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_alias", "alias_status",
+                "varchar", "varchar(20)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_alias", "client_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_alias", "owner_jiacn",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_alias", "tenant_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_identity_alias", "active_key",
+                "tinyint", "tinyint", true, null,
+                "case when alias_status = 'ACTIVE' and valid_to is null then 1 else null end");
+
+        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_agent", true,
+                List.of("canonical_agent_id"), "");
+        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_binding", true,
+                List.of("binding_id"), "");
+        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_alias_target", true,
+                List.of("id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id"), "");
+        ensureRequiredIndex("agent_identity_registry", "idx_identity_registry_scope_status", false,
+                List.of("tenant_id", "client_id", "owner_jiacn", "lifecycle_status"), "");
+        ensureRequiredIndex("agent_identity_alias", "uk_identity_alias_active", true,
+                List.of("client_id", "owner_jiacn", "alias_type", "alias_value", "active_key"), "");
+        ensureRequiredIndex("agent_identity_alias", "idx_identity_alias_registry", false,
+                List.of("registry_id", "alias_status"), "");
+        ensureRequiredIndex("agent_identity_alias", "idx_identity_alias_canonical", false,
+                List.of("canonical_agent_id", "alias_status"), "");
+
+        if (!isH2Database()) {
+            validateTableCollation("agent_identity_registry", "utf8mb4_0900_bin");
+            validateTableCollation("agent_identity_alias", "utf8mb4_0900_bin");
+            validateIdentityChecks();
+            validateIdentityAliasForeignKey();
+            validateIdentityTriggers();
+        }
+    }
+
+    private void validateRuntimeIdentityProjection() {
+        if (!tableExists("agent_runtime")) {
+            return;
+        }
+        validateIdentityColumn("agent_runtime", "owner_jiacn",
+                "varchar", "varchar(50)", true, null, null);
+        validateIdentityColumn("agent_runtime", "persona_code",
+                "varchar", "varchar(50)", true, null, null);
+        validateIdentityColumn("agent_runtime", "binding_id",
+                "bigint", "bigint", true, null, null);
+        ensureRequiredIndex("agent_runtime", "idx_agent_runtime_owner", false,
+                List.of("client_id", "owner_jiacn"), "");
+        ensureRequiredIndex("agent_runtime", "idx_agent_runtime_persona_code", false,
+                List.of("persona_code"), "");
+    }
+
+    private void validateIdentityColumn(
+            String table, String column, String dataType, String columnType,
+            boolean nullable, String collation, String generationExpression) {
+        List<ColumnDefinition> definitions = inspectColumnDefinition(table, column);
+        if (definitions.size() != 1) {
+            throw new IllegalStateException("A02 required column " + table + "." + column
+                    + " is missing or duplicated");
+        }
+        ColumnDefinition actual = definitions.get(0);
+        boolean matches = dataType.equalsIgnoreCase(actual.dataType())
+                && normalizeSql(columnType).equals(normalizeSql(actual.columnType()))
+                && nullable == actual.nullable();
+        if (collation != null && !isH2Database()) {
+            matches &= collation.equalsIgnoreCase(actual.collation());
+        }
+        if (generationExpression != null) {
+            matches &= normalizeSql(generationExpression)
+                    .equals(normalizeSql(actual.generationExpression()));
+        } else {
+            matches &= actual.generationExpression() == null
+                    || actual.generationExpression().isBlank();
+        }
+        if (!matches) {
+            throw new IllegalStateException("A02 required column " + table + "." + column
+                    + " has incompatible type/nullability/collation/generated expression: " + actual);
+        }
+    }
+
+    private List<ColumnDefinition> inspectColumnDefinition(String table, String column) {
+        if (isH2Database()) {
+            return jdbcTemplate.query("""
+                    SELECT DATA_TYPE, DECLARED_DATA_TYPE AS COLUMN_TYPE, IS_NULLABLE,
+                           COLLATION_NAME, GENERATION_EXPRESSION
+                    FROM information_schema.columns
+                    WHERE table_schema = SCHEMA()
+                      AND LOWER(table_name) = LOWER(?)
+                      AND LOWER(column_name) = LOWER(?)
+                    """, (rs, rowNum) -> new ColumnDefinition(
+                    rs.getString("DATA_TYPE"), rs.getString("COLUMN_TYPE"),
+                    "YES".equalsIgnoreCase(rs.getString("IS_NULLABLE")),
+                    rs.getString("COLLATION_NAME"), rs.getString("GENERATION_EXPRESSION")),
+                    table, column);
+        }
+        return jdbcTemplate.query("""
+                SELECT DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLLATION_NAME, GENERATION_EXPRESSION
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+                """, (rs, rowNum) -> new ColumnDefinition(
+                rs.getString("DATA_TYPE"), rs.getString("COLUMN_TYPE"),
+                "YES".equalsIgnoreCase(rs.getString("IS_NULLABLE")),
+                rs.getString("COLLATION_NAME"), rs.getString("GENERATION_EXPRESSION")),
+                table, column);
+    }
+
+    private void validateTableCollation(String table, String expected) {
+        String actual = jdbcTemplate.queryForObject("""
+                SELECT TABLE_COLLATION FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = ?
+                """, String.class, table);
+        if (!expected.equalsIgnoreCase(actual)) {
+            throw new IllegalStateException("A02 identity table " + table
+                    + " must use binary collation " + expected + " but was " + actual);
+        }
+    }
+
+    private void validateIdentityChecks() {
+        java.util.Map<String, String> expected = java.util.Map.ofEntries(
+                java.util.Map.entry("agent_identity_registry.chk_identity_registry_type",
+                        "canonical_type IN ('OPAQUE', 'LEGACY_CANONICAL', 'SYSTEM')"),
+                java.util.Map.entry("agent_identity_registry.chk_identity_registry_lifecycle",
+                        "lifecycle_status IN ('PROVISIONED', 'ACTIVE', 'SUSPENDED', 'RETIRED')"),
+                java.util.Map.entry("agent_identity_registry.chk_identity_registry_canonical", """
+                        (canonical_type = 'OPAQUE'
+                            AND REGEXP_LIKE(canonical_agent_id, '^agt_[0-9a-f]{32}$'))
+                        OR (canonical_type = 'LEGACY_CANONICAL'
+                            AND canonical_agent_id <> 'builtin-songjiang'
+                            AND NOT(REGEXP_LIKE(canonical_agent_id, '^agt_[0-9a-f]{32}$')))
+                        OR (canonical_type = 'SYSTEM'
+                            AND canonical_agent_id = 'builtin-songjiang')
+                        """),
+                java.util.Map.entry("agent_identity_registry.chk_identity_registry_scope", """
+                        (canonical_type = 'SYSTEM'
+                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
+                        OR (canonical_type <> 'SYSTEM'
+                            AND client_id IS NOT NULL AND TRIM(client_id) <> ''
+                            AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
+                            AND tenant_id = TRIM(owner_jiacn))
+                        """),
+                java.util.Map.entry("agent_identity_registry.chk_identity_registry_retired", """
+                        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
+                        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
+                        """),
+                java.util.Map.entry("agent_identity_alias.chk_identity_alias_type",
+                        "alias_type = 'LEGACY_AGENT_ID'"),
+                java.util.Map.entry("agent_identity_alias.chk_identity_alias_status",
+                        "alias_status IN ('ACTIVE', 'REVOKED')"),
+                java.util.Map.entry("agent_identity_alias.chk_identity_alias_scope",
+                        "tenant_id = TRIM(owner_jiacn)"),
+                java.util.Map.entry("agent_identity_alias.chk_identity_alias_no_blank_scope",
+                        "TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''"),
+                java.util.Map.entry("agent_identity_alias.chk_identity_alias_window", """
+                        (alias_status = 'ACTIVE' AND valid_to IS NULL)
+                        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
+                        """),
+                java.util.Map.entry("agent_identity_alias.chk_identity_alias_not_system",
+                        "alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'"));
+        List<CheckDefinition> actual = jdbcTemplate.query("""
+                SELECT tc.TABLE_NAME, tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+                 AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
+                  AND tc.CONSTRAINT_TYPE = 'CHECK'
+                  AND tc.TABLE_NAME IN ('agent_identity_registry', 'agent_identity_alias')
+                """, (rs, rowNum) -> new CheckDefinition(
+                rs.getString("TABLE_NAME"), rs.getString("CONSTRAINT_NAME"),
+                rs.getString("CHECK_CLAUSE")));
+        java.util.Map<String, String> actualByName = new java.util.HashMap<>();
+        for (CheckDefinition definition : actual) {
+            actualByName.put(definition.table() + "." + definition.name(),
+                    normalizeSql(definition.clause()));
+        }
+        if (!actualByName.keySet().equals(expected.keySet())) {
+            throw new IllegalStateException("A02 identity CHECK constraint set is incompatible: "
+                    + actualByName.keySet());
+        }
+        for (var entry : expected.entrySet()) {
+            if (!normalizeSql(entry.getValue()).equals(actualByName.get(entry.getKey()))) {
+                throw new IllegalStateException("A02 CHECK " + entry.getKey()
+                        + " has an incompatible definition");
+            }
+        }
+    }
+
+    private void validateIdentityAliasForeignKey() {
+        List<ForeignKeyColumn> columns = jdbcTemplate.query("""
+                SELECT kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME,
+                       kcu.REFERENCED_COLUMN_NAME, kcu.ORDINAL_POSITION,
+                       rc.UPDATE_RULE, rc.DELETE_RULE
+                FROM information_schema.key_column_usage kcu
+                JOIN information_schema.referential_constraints rc
+                  ON rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+                 AND rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                WHERE kcu.CONSTRAINT_SCHEMA = DATABASE()
+                  AND kcu.TABLE_NAME = 'agent_identity_alias'
+                  AND kcu.CONSTRAINT_NAME = 'fk_identity_alias_registry_scope'
+                ORDER BY kcu.ORDINAL_POSITION
+                """, (rs, rowNum) -> new ForeignKeyColumn(
+                rs.getString("COLUMN_NAME"), rs.getString("REFERENCED_TABLE_NAME"),
+                rs.getString("REFERENCED_COLUMN_NAME"), rs.getInt("ORDINAL_POSITION"),
+                rs.getString("UPDATE_RULE"), rs.getString("DELETE_RULE")));
+        List<String> expectedColumns = List.of(
+                "registry_id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");
+        boolean matches = columns.size() == expectedColumns.size();
+        for (int i = 0; matches && i < columns.size(); i++) {
+            ForeignKeyColumn column = columns.get(i);
+            matches = expectedColumns.get(i).equalsIgnoreCase(column.column())
+                    && expectedColumns.get(i).equalsIgnoreCase(column.referencedColumn())
+                    && "agent_identity_registry".equalsIgnoreCase(column.referencedTable())
+                    && column.position() == i + 1
+                    && "RESTRICT".equalsIgnoreCase(column.updateRule())
+                    && "RESTRICT".equalsIgnoreCase(column.deleteRule());
+        }
+        if (!matches) {
+            throw new IllegalStateException(
+                    "A02 alias composite FK definition is missing or incompatible");
+        }
+    }
+
+    private void validateIdentityTriggers() {
+        java.util.Map<String, TriggerDefinition> expected = expectedIdentityTriggers();
+        List<TriggerDefinition> actual = jdbcTemplate.query("""
+                SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ACTION_STATEMENT
+                FROM information_schema.triggers
+                WHERE trigger_schema = DATABASE()
+                  AND trigger_name IN (
+                    'trg_identity_registry_immutable_update', 'trg_identity_registry_no_delete',
+                    'trg_identity_alias_immutable_update', 'trg_identity_alias_no_delete')
+                """, (rs, rowNum) -> new TriggerDefinition(
+                rs.getString("TRIGGER_NAME"), rs.getString("ACTION_TIMING"),
+                rs.getString("EVENT_MANIPULATION"), rs.getString("ACTION_STATEMENT")));
+        if (actual.size() != expected.size()) {
+            throw new IllegalStateException("A02 requires four exact identity protection triggers");
+        }
+        for (TriggerDefinition trigger : actual) {
+            TriggerDefinition required = expected.get(trigger.name());
+            boolean matches = required != null
+                    && required.timing().equalsIgnoreCase(trigger.timing())
+                    && required.event().equalsIgnoreCase(trigger.event())
+                    && normalizeSql(required.statement()).equals(normalizeSql(trigger.statement()));
+            if (!matches) {
+                throw new IllegalStateException("A02 trigger " + trigger.name()
+                        + " has an incompatible definition");
+            }
+        }
+    }
+
+    private java.util.Map<String, TriggerDefinition> expectedIdentityTriggers() {
+        return java.util.Map.of(
+                "trg_identity_registry_immutable_update", new TriggerDefinition(
+                        "trg_identity_registry_immutable_update", "BEFORE", "UPDATE", """
+                        BEGIN
+                            IF NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: canonical_agent_id is immutable after insert';
+                            END IF;
+                            IF NOT (NEW.canonical_type <=> OLD.canonical_type) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: canonical_type is immutable after insert';
+                            END IF;
+                            IF NOT (NEW.client_id <=> OLD.client_id) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: client_id is immutable after insert';
+                            END IF;
+                            IF NOT (NEW.owner_jiacn <=> OLD.owner_jiacn) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: owner_jiacn is immutable after insert';
+                            END IF;
+                            IF NOT (NEW.tenant_id <=> OLD.tenant_id) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: tenant_id is immutable after insert';
+                            END IF;
+                            IF NOT (NEW.binding_id <=> OLD.binding_id) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: binding_id is immutable after insert';
+                            END IF;
+                            IF OLD.lifecycle_status = 'RETIRED' AND NEW.lifecycle_status <> 'RETIRED' THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: RETIRED identity cannot be resurrected';
+                            END IF;
+                        END
+                        """),
+                "trg_identity_registry_no_delete", new TriggerDefinition(
+                        "trg_identity_registry_no_delete", "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity registry is forbidden';
+                        END
+                        """),
+                "trg_identity_alias_immutable_update", new TriggerDefinition(
+                        "trg_identity_alias_immutable_update", "BEFORE", "UPDATE", """
+                        BEGIN
+                            IF NOT (NEW.registry_id <=> OLD.registry_id)
+                               OR NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id)
+                               OR NOT (NEW.alias_type <=> OLD.alias_type)
+                               OR NOT (NEW.alias_value <=> OLD.alias_value)
+                               OR NOT (NEW.client_id <=> OLD.client_id)
+                               OR NOT (NEW.owner_jiacn <=> OLD.owner_jiacn)
+                               OR NOT (NEW.tenant_id <=> OLD.tenant_id) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: alias identity and owner scope are immutable';
+                            END IF;
+                            IF OLD.alias_status = 'REVOKED' AND NEW.alias_status = 'ACTIVE' THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: REVOKED alias cannot be reactivated';
+                            END IF;
+                        END
+                        """),
+                "trg_identity_alias_no_delete", new TriggerDefinition(
+                        "trg_identity_alias_no_delete", "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity alias is forbidden';
+                        END
+                        """));
+    }
+
+    private void createIdentityTriggers() {
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_identity_registry_immutable_update");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_identity_registry_no_delete");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_identity_alias_immutable_update");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_identity_alias_no_delete");
+        for (TriggerDefinition trigger : expectedIdentityTriggers().values()) {
+            jdbcTemplate.execute("CREATE TRIGGER " + trigger.name() + " " + trigger.timing()
+                    + " " + trigger.event() + " ON " + triggerTable(trigger.name())
+                    + " FOR EACH ROW " + trigger.statement());
+        }
+    }
+
+    private String triggerTable(String triggerName) {
+        return triggerName.startsWith("trg_identity_registry_")
+                ? "agent_identity_registry" : "agent_identity_alias";
+    }
+
+    private String normalizeSql(String sql) {
+        if (sql == null) {
+            return "";
+        }
+        return sql.toLowerCase(Locale.ROOT)
+                .replace("`", "")
+                .replace("_utf8mb4", "")
+                .replace("\\", "")
+                .replaceAll("[()]", " ")
+                .replaceAll("\\s*,\\s*", ",")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private boolean tableExists(String table) {
         String catalogQuery = isH2Database()
                 ? """
-                  SELECT COUNT(*)
-                  FROM information_schema.tables
+                  SELECT COUNT(*) FROM information_schema.tables
                   WHERE table_schema = SCHEMA() AND LOWER(table_name) = LOWER(?)
                   """
                 : """
-                  SELECT COUNT(*)
-                  FROM information_schema.tables
+                  SELECT COUNT(*) FROM information_schema.tables
                   WHERE table_schema = DATABASE() AND table_name = ?
                   """;
-        Integer count = jdbcTemplate.queryForObject(catalogQuery, Integer.class, table);
-        return count != null && count > 0;
+        List<Integer> counts = jdbcTemplate.query(catalogQuery,
+                (rs, rowNum) -> rs.getInt(1), table);
+        return !counts.isEmpty() && counts.get(0) > 0;
     }
 
-    private boolean columnExists(String table, String column) {
-        String catalogQuery = isH2Database()
-                ? """
-                  SELECT COUNT(*)
-                  FROM information_schema.columns
-                  WHERE table_schema = SCHEMA()
-                    AND LOWER(table_name) = LOWER(?)
-                    AND LOWER(column_name) = LOWER(?)
-                  """
-                : """
-                  SELECT COUNT(*)
-                  FROM information_schema.columns
-                  WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
-                  """;
-        Integer count = jdbcTemplate.queryForObject(catalogQuery, Integer.class, table, column);
-        return count != null && count > 0;
-    }
-
-    private boolean indexExists(String table, String indexName) {
-        String catalogQuery = isH2Database()
-                ? """
-                  SELECT COUNT(*)
-                  FROM information_schema.indexes
-                  WHERE table_schema = SCHEMA()
-                    AND LOWER(table_name) = LOWER(?)
-                    AND LOWER(index_name) = LOWER(?)
-                  """
-                : """
-                  SELECT COUNT(*)
-                  FROM information_schema.statistics
-                  WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
-                  """;
-        Integer count = jdbcTemplate.queryForObject(catalogQuery, Integer.class, table, indexName);
-        return count != null && count > 0;
-    }
+    static record ColumnDefinition(
+            String dataType, String columnType, boolean nullable,
+            String collation, String generationExpression) {}
+    static record CheckDefinition(String table, String name, String clause) {}
+    static record ForeignKeyColumn(
+            String column, String referencedTable, String referencedColumn,
+            int position, String updateRule, String deleteRule) {}
+    static record TriggerDefinition(String name, String timing, String event, String statement) {}
 
     private void ensureIdentitySchema() {
+        validateRuntimeIdentityProjection();
+        boolean identityTablesAlreadyExist = tableExists("agent_identity_registry")
+                || tableExists("agent_identity_alias");
         validateExistingIdentityTables();
         String generatedColumnStorage = isH2Database() ? "" : " STORED";
         String activeAliasColumn = "active_key TINYINT GENERATED ALWAYS AS "
@@ -341,6 +648,10 @@ public class AgentSchemaInitializer implements InitializingBean {
                 List.of("canonical_agent_id", "alias_status"),
                 "CREATE INDEX idx_identity_alias_canonical "
                         + "ON agent_identity_alias (canonical_agent_id, alias_status)");
+        if (!identityTablesAlreadyExist && !isH2Database()) {
+            createIdentityTriggers();
+        }
+        validateExistingIdentityTables();
     }
 
     private void ensureTaskCollaborationSchema() {
@@ -812,6 +1123,10 @@ public class AgentSchemaInitializer implements InitializingBean {
             String table, String indexName, boolean unique, List<String> columns, String createSql) {
         List<IndexColumn> actual = inspectRequiredIndex(table, indexName);
         if (actual == null || actual.isEmpty()) {
+            if (createSql == null || createSql.isBlank()) {
+                throw new IllegalStateException("Required index " + table + "." + indexName
+                        + " is missing");
+            }
             jdbcTemplate.execute(createSql);
             return;
         }

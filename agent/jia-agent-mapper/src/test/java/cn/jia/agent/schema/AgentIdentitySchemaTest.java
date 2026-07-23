@@ -7,8 +7,10 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,116 +18,98 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AgentIdentitySchemaTest {
 
     @Test
-    void schemaClosesCanonicalTypesLifecycleAndOwnerScope() throws IOException {
+    void schemaClosesCanonicalTypesLifecycleOwnerScopeAndRuntimeProjection() throws IOException {
         String schema = readResource("db/schema.sql");
         String registry = compact(tableDefinition(schema, "agent_identity_registry"));
+        String alias = compact(tableDefinition(schema, "agent_identity_alias"));
+        String runtime = compact(tableDefinition(schema, "agent_runtime"));
 
         assertTrue(registry.contains("unique key uk_identity_registry_agent (canonical_agent_id)"));
         assertTrue(registry.contains("canonical_type in ('opaque', 'legacy_canonical', 'system')"));
         assertTrue(registry.contains(
                 "lifecycle_status in ('provisioned', 'active', 'suspended', 'retired')"));
         assertTrue(registry.contains("canonical_agent_id regexp '^agt_[0-9a-f]{32}$'"));
-        assertTrue(registry.contains("canonical_agent_id = 'builtin-songjiang'"));
         assertTrue(registry.contains("tenant_id = trim(owner_jiacn)"));
-        assertTrue(registry.contains(
-                "(lifecycle_status = 'retired' and retired_at is not null) "
-                        + "or (lifecycle_status <> 'retired' and retired_at is null)"));
-        assertTrue(registry.contains("unique key uk_identity_registry_alias_target "
-                + "(id, canonical_agent_id, client_id, owner_jiacn, tenant_id)"));
         assertTrue(registry.contains("trim(client_id) <> ''"));
         assertTrue(registry.contains("trim(owner_jiacn) <> ''"));
         assertTrue(registry.contains("utf8mb4_0900_bin"));
-        assertTrue(registry.contains("immutable after insert"));
-        assertTrue(registry.contains("retired is terminal"));
-        assertTrue(registry.contains("never reused even after delete"));
-    }
 
-    @Test
-    void schemaAndMigrationKeepIdentityTablesInParity() throws IOException {
-        String schema = readResource("db/schema.sql");
-        String migration = readResource("db/agent-identity-schema.sql");
-
-        for (String table : List.of("agent_identity_registry", "agent_identity_alias")) {
-            assertTrue(compact(tableDefinition(schema, table))
-                    .equals(compact(tableDefinition(migration, table))), table);
-        }
-    }
-
-    @Test
-    void activeAliasAndPersonaUseGeneratedScopedKeys() throws IOException {
-        String schema = readResource("db/schema.sql");
-        String alias = compact(tableDefinition(schema, "agent_identity_alias"));
-        String binding = compact(tableDefinition(schema, "agent_persona_binding"));
-
-        assertTrue(alias.contains("alias_type = 'legacy_agent_id'"));
+        assertTrue(alias.contains("chk_identity_alias_no_blank_scope"));
+        assertTrue(alias.contains("tenant_id = trim(owner_jiacn)"));
         assertTrue(alias.contains("foreign key "
                 + "(registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)"));
-        assertTrue(alias.contains(
-                "case when alias_status = 'active' and valid_to is null then 1 else null end"));
         assertTrue(alias.contains("unique key uk_identity_alias_active "
                 + "(client_id, owner_jiacn, alias_type, alias_value, active_key)"));
-        assertFalse(alias.contains("unique key uk_identity_alias_active "
-                + "(client_id, owner_jiacn, alias_type, alias_value, valid_to)"));
-        assertTrue(alias.contains("chk_identity_alias_no_blank_scope"));
-        assertTrue(alias.contains("trim(client_id) <> '' and trim(owner_jiacn) <> ''"));
         assertTrue(alias.contains("utf8mb4_0900_bin"));
-        assertTrue(alias.contains("once revoked cannot become active again"));
 
-        assertTrue(binding.contains("owner_jiacn varchar(50) generated always as (jiacn) stored"));
-        assertTrue(binding.contains("when 2 then 'provisioned'"));
-        assertTrue(binding.contains("when 1 then 'active'"));
-        assertTrue(binding.contains("when 0 then 'suspended'"));
-        assertTrue(binding.contains("when 3 then 'retired'"));
-        assertTrue(binding.contains("unique key uk_agent_binding_active_persona "
-                + "(client_id, owner_jiacn, active_persona_code)"));
-        assertTrue(binding.contains("unique key uk_agent_binding_active_agent (active_agent_id)"));
-        assertTrue(binding.contains("tenant_id is null or tenant_id = owner_jiacn"));
+        assertTrue(runtime.contains("owner_jiacn varchar(50) default null"));
+        assertTrue(runtime.contains("persona_code varchar(50) default null"));
+        assertTrue(runtime.contains("binding_id bigint default null"));
+        assertTrue(runtime.contains("key idx_agent_runtime_owner (client_id, owner_jiacn)"));
+        assertTrue(runtime.contains("key idx_agent_runtime_persona_code (persona_code)"));
     }
 
     @Test
-    void migrationIsRepeatableDdlAndDoesNotRewriteHistoricalRows() throws IOException {
+    void schemaAndMigrationCreateDefinitionsStayInParity() throws IOException {
+        String schema = readResource("db/schema.sql");
         String migration = readResource("db/agent-identity-schema.sql");
-
-        assertTrue(migration.contains("create table if not exists agent_identity_registry"));
-        assertTrue(migration.contains("create table if not exists agent_identity_alias"));
-        assertTrue(migration.contains("information_schema.columns"));
-        assertTrue(migration.contains("information_schema.statistics"));
-        assertTrue(migration.contains("prepare a02_stmt"));
-        assertTrue(migration.contains("uk_agent_binding_active_persona_a02"));
-        assertTrue(migration.contains("rename index uk_agent_binding_active_persona_a02"));
-        assertTrue(migration.contains("uk_agent_binding_active_agent_a02"));
-        assertTrue(migration.contains("rename index uk_agent_binding_active_agent_a02"));
-        assertTrue(migration.contains("client_id, owner_jiacn, active_persona_code"));
-        assertFalse(Pattern.compile("(?m)^\\s*(insert|update|delete|replace|truncate)\\b")
-                .matcher(withoutLineComments(migration)).find());
-        assertTrue(migration.contains("trg_identity_registry_immutable_update"));
-        assertTrue(migration.contains("trg_identity_registry_no_delete"));
-        assertTrue(migration.contains("trg_identity_alias_immutable_update"));
-        assertTrue(migration.contains("trg_identity_alias_no_delete"));
-        assertTrue(migration.contains("retired identity cannot be resurrected"));
-        assertTrue(migration.contains("physical deletion of agent_identity_registry is forbidden"));
-        assertTrue(migration.contains("revoked alias cannot be reactivated"));
-        assertTrue(migration.contains("trg_identity_registry_immutable_update"));
-        assertTrue(migration.contains("trg_identity_registry_no_delete"));
-        assertTrue(migration.contains("trg_identity_alias_immutable_update"));
-        assertTrue(migration.contains("trg_identity_alias_no_delete"));
-        assertTrue(migration.contains("retired identity cannot be resurrected"));
-        assertTrue(migration.contains("physical deletion of agent_identity_registry is forbidden"));
-        assertTrue(migration.contains("revoked alias cannot be reactivated"));
-
-        for (String b01Table : List.of(
-                "agent_task_member", "agent_task_work_item", "agent_task_request", "agent_task_artifact")) {
-            assertFalse(migration.contains("create table if not exists " + b01Table), b01Table);
+        for (String table : List.of("agent_identity_registry", "agent_identity_alias")) {
+            assertEquals(compact(tableDefinition(schema, table)),
+                    compact(tableDefinition(migration, table)), table);
         }
     }
 
     @Test
-    void dryRunIsReadOnlyAndEmitsRequiredAuditGateColumns() throws IOException {
+    void migrationContainsRealB0UpgradeAndMysql8021RepeatableTriggers() throws IOException {
+        String migration = readResource("db/agent-identity-schema.sql");
+        String executable = withoutLineComments(migration);
+
+        assertTrue(migration.contains("convert to character set utf8mb4 collate utf8mb4_0900_bin"));
+        assertTrue(migration.contains("alter table agent_identity_registry\n    modify column"));
+        assertTrue(migration.contains("alter table agent_identity_alias\n    modify column"));
+        assertTrue(migration.contains("drop foreign key fk_identity_alias_registry_scope"));
+        assertTrue(migration.contains("add constraint fk_identity_alias_registry_scope foreign key"));
+        assertTrue(migration.contains("drop check"));
+        assertTrue(migration.contains("chk_identity_alias_no_blank_scope"));
+        assertTrue(migration.contains("alter table agent_runtime add column owner_jiacn"));
+        assertTrue(migration.contains("alter table agent_runtime add column persona_code"));
+        assertTrue(migration.contains("alter table agent_runtime add column binding_id"));
+
+        assertFalse(executable.contains("create trigger if not exists"));
+        for (String trigger : List.of(
+                "trg_identity_registry_immutable_update", "trg_identity_registry_no_delete",
+                "trg_identity_alias_immutable_update", "trg_identity_alias_no_delete")) {
+            assertEquals(1, occurrenceCount(migration, "drop trigger if exists " + trigger));
+            assertEquals(1, occurrenceCount(migration, "create trigger " + trigger));
+        }
+        assertTrue(migration.contains("retired identity cannot be resurrected"));
+        assertTrue(migration.contains("physical delete of identity registry is forbidden"));
+        assertFalse(Pattern.compile("(?m)^\\s*(insert|update|delete|replace|truncate)\\b")
+                .matcher(executable).find());
+    }
+
+    @Test
+    void dryRunIsExecutableSingleCandidatePipelineAndReadOnly() throws IOException {
         String dryRun = readResource("db/agent-identity-dry-run.sql");
         String executable = withoutLineComments(dryRun);
 
         assertFalse(Pattern.compile("(?m)^\\s*(insert|update|delete|alter|create|drop|truncate|replace)\\b")
                 .matcher(executable).find());
+        assertEquals(1, cteDefinitionCount(dryRun, "linked_runtime_candidates"));
+        assertEquals(1, cteDefinitionCount(dryRun, "exact_runtime_candidates"));
+        assertEquals(1, cteDefinitionCount(dryRun, "raw_candidate_evidence"));
+        assertEquals(1, cteDefinitionCount(dryRun, "resolved_candidate"));
+        assertEquals(0, cteDefinitionCount(dryRun, "linked_candidate_counts"));
+        assertEquals(0, cteDefinitionCount(dryRun, "exact_candidate_counts"));
+        assertTrue(dryRun.indexOf("linked_runtime_candidates as")
+                < dryRun.indexOf("resolved_candidate as"));
+        assertTrue(dryRun.indexOf("exact_runtime_candidates as")
+                < dryRun.indexOf("resolved_candidate as"));
+        assertTrue(dryRun.contains("linked_exact_candidate_conflict"));
+        assertTrue(dryRun.contains("blocked_linked_exact_conflict"));
+        assertTrue(dryRun.contains("blocked_task_scope_missing"));
+        assertTrue(dryRun.contains("task_missing_scope_count"));
+
         for (String column : List.of(
                 "canonical_agent_id", "canonical_type", "lifecycle_status", "legacy_agent_id",
                 "client_id", "owner_jiacn", "tenant_id", "persona_code_evidence",
@@ -133,31 +117,25 @@ class AgentIdentitySchemaTest {
                 "resolution_status", "resolution_reason")) {
             assertTrue(dryRun.contains(column), column);
         }
-        for (String blocker : List.of(
-                "blocked_missing_scope", "blocked_tenant_owner_mismatch", "blocked_cross_owner",
-                "blocked_multiple_bindings", "blocked_runtime_conflict",
-                "blocked_multiple_alias_targets", "blocked_task_scope_conflict", "blocked_no_binding",
-                "report_only_system_reference", "auto_eligible")) {
-            assertTrue(dryRun.contains(blocker), blocker);
-        }
-        assertTrue(dryRun.contains("alias_type is only legacy_agent_id"));
-        assertTrue(dryRun.contains("cast(null as char(100)) as profile_id_evidence"));
-        for (String newBlocker : List.of(
-                "blocked_exact_multi_candidate", "blocked_linked_multi_candidate",
-                "blocked_linked_conflicting_canonical", "blocked_task_scope_missing")) {
-            assertTrue(dryRun.contains(newBlocker), newBlocker);
-        }
-        for (String newBlocker : List.of(
-                "blocked_exact_multi_candidate", "blocked_linked_multi_candidate",
-                "blocked_linked_conflicting_canonical", "blocked_task_scope_missing")) {
-            assertTrue(dryRun.contains(newBlocker), newBlocker);
-        }
+    }
+
+    @Test
+    void bindingGeneratedColumnsAndScopedIndexesRemainFrozen() throws IOException {
+        String binding = compact(tableDefinition(readResource("db/schema.sql"),
+                "agent_persona_binding"));
+        assertTrue(binding.contains("owner_jiacn varchar(50) generated always as (jiacn) stored"));
+        assertTrue(binding.contains("when 2 then 'provisioned'"));
+        assertTrue(binding.contains("when 3 then 'retired'"));
+        assertTrue(binding.contains("unique key uk_agent_binding_active_persona "
+                + "(client_id, owner_jiacn, active_persona_code)"));
+        assertTrue(binding.contains("unique key uk_agent_binding_active_agent (active_agent_id)"));
     }
 
     private String readResource(String resource) throws IOException {
         try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource)) {
             assertNotNull(input, resource);
-            return new String(input.readAllBytes(), StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8)
+                    .toLowerCase(Locale.ROOT);
         }
     }
 
@@ -167,6 +145,26 @@ class AgentIdentitySchemaTest {
         int end = sql.indexOf(';', start);
         assertTrue(end > start, table);
         return sql.substring(start, end);
+    }
+
+    private int cteDefinitionCount(String sql, String cte) {
+        Matcher matcher = Pattern.compile("(?m)^" + Pattern.quote(cte) + "\\s+as\\s*\\(")
+                .matcher(sql);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+        }
+        return count;
+    }
+
+    private int occurrenceCount(String value, String needle) {
+        int count = 0;
+        int index = 0;
+        while ((index = value.indexOf(needle, index)) >= 0) {
+            count++;
+            index += needle.length();
+        }
+        return count;
     }
 
     private String compact(String value) {

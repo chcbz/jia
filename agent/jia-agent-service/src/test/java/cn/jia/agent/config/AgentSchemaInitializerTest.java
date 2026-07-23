@@ -238,7 +238,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             @Override
             @SuppressWarnings("unchecked")
             public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
-                if ("agent_identity_alias".equals(args[0])
+                if (args.length > 1 && "agent_identity_alias".equals(args[0])
                         && "uk_identity_alias_active".equals(args[1])) {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(0, "client_id", 1, null),
@@ -310,6 +310,25 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
+    void initializerAndMigrationKeepIdentityTriggerDefinitionsInParity() throws Exception {
+        JdbcTemplate template = dialectTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        List<String> statements = executedStatements(template);
+        String migration = readResource("db/agent-identity-schema.sql");
+
+        for (String trigger : List.of(
+                "trg_identity_registry_immutable_update", "trg_identity_registry_no_delete",
+                "trg_identity_alias_immutable_update", "trg_identity_alias_no_delete")) {
+            String initializerTrigger = statements.stream()
+                    .filter(sql -> sql.toLowerCase(Locale.ROOT).startsWith("create trigger " + trigger))
+                    .findFirst().orElseThrow();
+            assertEquals(migrationTriggerDefinition(migration, trigger),
+                    normalizeDefinition(initializerTrigger), trigger);
+            assertTrue(statements.contains("DROP TRIGGER IF EXISTS " + trigger));
+        }
+    }
+
+    @Test
     void h2DialectUsesNativeIndexCatalogAndStillRejectsIncompatibleRequiredIndex() throws Exception {
         DataSource dataSource = dialectDataSource("H2");
         JdbcTemplate failingTemplate = new JdbcTemplate(dataSource) {
@@ -328,6 +347,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             @SuppressWarnings("unchecked")
             public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
                 String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                if (normalized.contains("from information_schema.tables")) {
+                    return List.of();
+                }
                 assertTrue(normalized.contains("from information_schema.index_columns"), normalized);
                 if ("agent_scene_state".equals(args[0])
                         && "uk_agent_scene_state_scope_agent".equals(args[1])) {
@@ -399,6 +421,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             @SuppressWarnings("unchecked")
             public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
                 String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                if (normalized.contains("from information_schema.tables")) {
+                    return List.of();
+                }
                 assertTrue(normalized.contains("select non_unique, column_name, seq_in_index, sub_part"), normalized);
                 assertTrue(normalized.contains("order by seq_in_index"), normalized);
                 if ("agent_scene_state".equals(args[0])
@@ -505,6 +530,346 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     .findFirst().orElseThrow();
             assertEquals(tableStructure(resourceDefinition), tableStructure(initializerDefinition), table);
         }
+    }
+
+
+    @Test
+    void b0IdentityTablesWithAiCiCollationFailClosedBeforeStartup() {
+        JdbcTemplate b0Template = new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL is inert; this fixture models an existing b0 catalog.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                if (requiredType == String.class && sql.contains("TABLE_COLLATION")) {
+                    return (T) "utf8mb4_0900_ai_ci";
+                }
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                if (normalized.contains("from information_schema.tables")) {
+                    String table = String.valueOf(args[0]);
+                    return (List<T>) List.of(table.startsWith("agent_identity_") ? 1 : 0);
+                }
+                if (normalized.contains("from information_schema.columns")) {
+                    return (List<T>) List.of(identityColumn(String.valueOf(args[0]), String.valueOf(args[1])));
+                }
+                if (normalized.contains("from information_schema.statistics")) {
+                    return (List<T>) identityIndex(String.valueOf(args[0]), String.valueOf(args[1]));
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(b0Template).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("binary collation"), error.getMessage());
+        assertTrue(error.getMessage().contains("utf8mb4_0900_ai_ci"), error.getMessage());
+    }
+
+    @Test
+    void partialIdentityTableFailsClosedBeforeCreateCanMaskIt() {
+        JdbcTemplate partialTemplate = new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL is inert so the pre-create catalog state remains observable.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                if (normalized.contains("from information_schema.tables")) {
+                    return (List<T>) List.of("agent_identity_registry".equals(args[0]) ? 1 : 0);
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(partialTemplate).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("identity schema is partial"), error.getMessage());
+    }
+
+    @Test
+    void incompatibleGeneratedColumnFailsClosed() {
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(identityCatalogTemplate("generated")).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("agent_identity_alias.active_key"), error.getMessage());
+        assertTrue(error.getMessage().contains("generated expression"), error.getMessage());
+    }
+
+    @Test
+    void weakenedIdentityCheckDefinitionFailsClosed() {
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(identityCatalogTemplate("check")).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("chk_identity_registry_scope"), error.getMessage());
+        assertTrue(error.getMessage().contains("incompatible definition"), error.getMessage());
+    }
+
+    @Test
+    void incompatibleAliasForeignKeyRuleFailsClosed() {
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(identityCatalogTemplate("fk")).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("composite FK"), error.getMessage());
+    }
+
+    @Test
+    void weakenedIdentityTriggerDefinitionFailsClosed() {
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(identityCatalogTemplate("trigger")).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("trg_identity_registry_immutable_update"), error.getMessage());
+        assertTrue(error.getMessage().contains("incompatible definition"), error.getMessage());
+    }
+
+    private JdbcTemplate identityCatalogTemplate(String fault) {
+        return new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL is inert; this fixture exposes a complete existing MySQL identity catalog.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                if (requiredType == String.class && sql.contains("TABLE_COLLATION")) {
+                    return (T) "utf8mb4_0900_bin";
+                }
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper) {
+                return query(sql, rowMapper, new Object[0]);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+                if (normalized.contains("from information_schema.tables")) {
+                    String table = String.valueOf(args[0]);
+                    return (List<T>) List.of(table.startsWith("agent_identity_") ? 1 : 0);
+                }
+                if (normalized.contains("from information_schema.columns")) {
+                    AgentSchemaInitializer.ColumnDefinition definition =
+                            identityColumn(String.valueOf(args[0]), String.valueOf(args[1]));
+                    if ("generated".equals(fault) && "active_key".equals(args[1])) {
+                        definition = new AgentSchemaInitializer.ColumnDefinition(
+                                "tinyint", "tinyint", true, null,
+                                "case when alias_status = 'ACTIVE' then 1 else null end");
+                    }
+                    return (List<T>) List.of(definition);
+                }
+                if (normalized.contains("from information_schema.statistics")) {
+                    return (List<T>) identityIndex(String.valueOf(args[0]), String.valueOf(args[1]));
+                }
+                if (normalized.contains("join information_schema.check_constraints")) {
+                    return (List<T>) identityChecks("check".equals(fault));
+                }
+                if (normalized.contains("join information_schema.referential_constraints")) {
+                    return (List<T>) identityForeignKey("fk".equals(fault));
+                }
+                if (normalized.contains("from information_schema.triggers")) {
+                    return (List<T>) identityTriggers("trigger".equals(fault));
+                }
+                return List.of();
+            }
+        };
+    }
+
+    private List<AgentSchemaInitializer.CheckDefinition> identityChecks(boolean weakenedScope) {
+        return List.of(
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
+                        "chk_identity_registry_type",
+                        "canonical_type IN ('OPAQUE','LEGACY_CANONICAL','SYSTEM')"),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
+                        "chk_identity_registry_lifecycle",
+                        "lifecycle_status IN ('PROVISIONED','ACTIVE','SUSPENDED','RETIRED')"),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
+                        "chk_identity_registry_canonical", """
+                        (canonical_type = 'OPAQUE' AND REGEXP_LIKE(canonical_agent_id,'^agt_[0-9a-f]{32}$'))
+                        OR (canonical_type = 'LEGACY_CANONICAL'
+                            AND canonical_agent_id <> 'builtin-songjiang'
+                            AND NOT(REGEXP_LIKE(canonical_agent_id,'^agt_[0-9a-f]{32}$')))
+                        OR (canonical_type = 'SYSTEM' AND canonical_agent_id = 'builtin-songjiang')
+                        """),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
+                        "chk_identity_registry_scope", weakenedScope
+                        ? "canonical_type = 'SYSTEM' OR tenant_id = TRIM(owner_jiacn)"
+                        : """
+                          (canonical_type = 'SYSTEM' AND client_id IS NULL
+                              AND owner_jiacn IS NULL AND tenant_id IS NULL)
+                          OR (canonical_type <> 'SYSTEM' AND client_id IS NOT NULL
+                              AND TRIM(client_id) <> '' AND owner_jiacn IS NOT NULL
+                              AND TRIM(owner_jiacn) <> '' AND tenant_id = TRIM(owner_jiacn))
+                          """),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
+                        "chk_identity_registry_retired", """
+                        (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
+                        OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
+                        """),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
+                        "chk_identity_alias_type", "alias_type = 'LEGACY_AGENT_ID'"),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
+                        "chk_identity_alias_status", "alias_status IN ('ACTIVE','REVOKED')"),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
+                        "chk_identity_alias_scope", "tenant_id = TRIM(owner_jiacn)"),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
+                        "chk_identity_alias_no_blank_scope",
+                        "TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''"),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
+                        "chk_identity_alias_window", """
+                        (alias_status = 'ACTIVE' AND valid_to IS NULL)
+                        OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
+                        """),
+                new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
+                        "chk_identity_alias_not_system",
+                        "alias_value <> 'builtin-songjiang' AND canonical_agent_id <> 'builtin-songjiang'")
+        );
+    }
+
+    private List<AgentSchemaInitializer.ForeignKeyColumn> identityForeignKey(boolean cascadeDelete) {
+        List<String> columns = List.of(
+                "registry_id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");
+        java.util.ArrayList<AgentSchemaInitializer.ForeignKeyColumn> result = new java.util.ArrayList<>();
+        for (int i = 0; i < columns.size(); i++) {
+            result.add(new AgentSchemaInitializer.ForeignKeyColumn(
+                    columns.get(i), "agent_identity_registry", columns.get(i), i + 1,
+                    "RESTRICT", cascadeDelete ? "CASCADE" : "RESTRICT"));
+        }
+        return result;
+    }
+
+    private List<AgentSchemaInitializer.TriggerDefinition> identityTriggers(boolean weakenedRegistry) {
+        String registryUpdate = weakenedRegistry ? """
+                BEGIN
+                    IF NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id) THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'immutable';
+                    END IF;
+                END
+                """ : """
+                BEGIN
+                    IF NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id) THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: canonical_agent_id is immutable after insert';
+                    END IF;
+                    IF NOT (NEW.canonical_type <=> OLD.canonical_type) THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: canonical_type is immutable after insert';
+                    END IF;
+                    IF NOT (NEW.client_id <=> OLD.client_id) THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: client_id is immutable after insert';
+                    END IF;
+                    IF NOT (NEW.owner_jiacn <=> OLD.owner_jiacn) THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: owner_jiacn is immutable after insert';
+                    END IF;
+                    IF NOT (NEW.tenant_id <=> OLD.tenant_id) THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: tenant_id is immutable after insert';
+                    END IF;
+                    IF NOT (NEW.binding_id <=> OLD.binding_id) THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: binding_id is immutable after insert';
+                    END IF;
+                    IF OLD.lifecycle_status = 'RETIRED' AND NEW.lifecycle_status <> 'RETIRED' THEN
+                        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: RETIRED identity cannot be resurrected';
+                    END IF;
+                END
+                """;
+        return List.of(
+                new AgentSchemaInitializer.TriggerDefinition(
+                        "trg_identity_registry_immutable_update", "BEFORE", "UPDATE", registryUpdate),
+                new AgentSchemaInitializer.TriggerDefinition(
+                        "trg_identity_registry_no_delete", "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity registry is forbidden';
+                        END
+                        """),
+                new AgentSchemaInitializer.TriggerDefinition(
+                        "trg_identity_alias_immutable_update", "BEFORE", "UPDATE", """
+                        BEGIN
+                            IF NOT (NEW.registry_id <=> OLD.registry_id)
+                               OR NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id)
+                               OR NOT (NEW.alias_type <=> OLD.alias_type)
+                               OR NOT (NEW.alias_value <=> OLD.alias_value)
+                               OR NOT (NEW.client_id <=> OLD.client_id)
+                               OR NOT (NEW.owner_jiacn <=> OLD.owner_jiacn)
+                               OR NOT (NEW.tenant_id <=> OLD.tenant_id) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: alias identity and owner scope are immutable';
+                            END IF;
+                            IF OLD.alias_status = 'REVOKED' AND NEW.alias_status = 'ACTIVE' THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: REVOKED alias cannot be reactivated';
+                            END IF;
+                        END
+                        """),
+                new AgentSchemaInitializer.TriggerDefinition(
+                        "trg_identity_alias_no_delete", "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity alias is forbidden';
+                        END
+                        """));
+    }
+
+    private AgentSchemaInitializer.ColumnDefinition identityColumn(String table, String column) {
+        boolean alias = "agent_identity_alias".equals(table);
+        return switch (column) {
+            case "registry_id" -> new AgentSchemaInitializer.ColumnDefinition("bigint", "bigint", false, null, "");
+            case "binding_id" -> new AgentSchemaInitializer.ColumnDefinition("bigint", "bigint", true, null, "");
+            case "active_key" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "tinyint", "tinyint", true, null,
+                    "case when alias_status = 'ACTIVE' and valid_to is null then 1 else null end");
+            case "canonical_agent_id", "alias_value" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(100)", false, "utf8mb4_0900_bin", "");
+            case "canonical_type", "alias_type" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(32)", false, "utf8mb4_0900_bin", "");
+            case "lifecycle_status", "alias_status" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(20)", false, "utf8mb4_0900_bin", "");
+            case "client_id", "owner_jiacn", "tenant_id" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(50)", alias ? false : true, "utf8mb4_0900_bin", "");
+            case "audit_reason" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(1000)", false, "utf8mb4_0900_bin", "");
+            default -> throw new AssertionError(table + "." + column);
+        };
+    }
+
+    private List<AgentSchemaInitializer.IndexColumn> identityIndex(String table, String index) {
+        List<String> columns = switch (index) {
+            case "uk_identity_registry_agent" -> List.of("canonical_agent_id");
+            case "uk_identity_registry_binding" -> List.of("binding_id");
+            case "uk_identity_registry_alias_target" ->
+                    List.of("id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");
+            case "idx_identity_registry_scope_status" ->
+                    List.of("tenant_id", "client_id", "owner_jiacn", "lifecycle_status");
+            case "uk_identity_alias_active" ->
+                    List.of("client_id", "owner_jiacn", "alias_type", "alias_value", "active_key");
+            case "idx_identity_alias_registry" -> List.of("registry_id", "alias_status");
+            case "idx_identity_alias_canonical" -> List.of("canonical_agent_id", "alias_status");
+            default -> List.of();
+        };
+        boolean unique = index.startsWith("uk_");
+        java.util.ArrayList<AgentSchemaInitializer.IndexColumn> result = new java.util.ArrayList<>();
+        for (int i = 0; i < columns.size(); i++) {
+            result.add(new AgentSchemaInitializer.IndexColumn(unique ? 0 : 1, columns.get(i), i + 1, null));
+        }
+        return result;
+    }
+
+    private String migrationTriggerDefinition(String migration, String trigger) {
+        int start = migration.indexOf("create trigger " + trigger);
+        assertTrue(start >= 0, trigger);
+        int end = migration.indexOf("end$$", start);
+        assertTrue(end > start, trigger);
+        return normalizeDefinition(migration.substring(start, end + "end".length()));
     }
 
     private String tableDefinition(String schema, String table) {
