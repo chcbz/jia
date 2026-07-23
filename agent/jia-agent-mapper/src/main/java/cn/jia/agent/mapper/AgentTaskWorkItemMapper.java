@@ -3,10 +3,38 @@ package cn.jia.agent.mapper;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
 public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEntity> {
+    @Insert("""
+            INSERT INTO agent_task_work_item
+                (work_item_id, task_id, title, description, work_type, required_abilities,
+                 assignee_agent_id, status, priority, required_item, dependency_json,
+                 lease_token, lease_until, attempt_count, max_attempts,
+                 result_artifact_id, submitted_at, completed_at, version,
+                 tenant_id, client_id, create_time, update_time)
+            SELECT #{item.workItemId}, #{item.taskId}, #{item.title}, #{item.description},
+                   #{item.workType}, #{item.requiredAbilities}, #{item.assigneeAgentId},
+                   #{item.status}, #{item.priority}, #{item.requiredItem},
+                   #{item.dependencyJson}, #{item.leaseToken}, #{item.leaseUntil},
+                   #{item.attemptCount}, #{item.maxAttempts}, #{item.resultArtifactId},
+                   #{item.submittedAt}, #{item.completedAt}, #{item.version},
+                   #{tenantId}, #{clientId}, #{item.createTime}, #{item.updateTime}
+            FROM agent_task_meta parent
+            WHERE parent.tenant_id = #{tenantId}
+              AND parent.client_id = #{clientId}
+              AND parent.task_id = #{item.taskId}
+              AND parent.reward_status IN
+                  ('open', 'planning', 'assigned', 'running', 'reviewing', 'blocked')
+            FOR UPDATE
+            """)
+    int insertIfParentNonTerminal(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("item") AgentTaskWorkItemEntity item);
+
     @Update("""
             UPDATE agent_task_work_item
             SET title = #{item.title},

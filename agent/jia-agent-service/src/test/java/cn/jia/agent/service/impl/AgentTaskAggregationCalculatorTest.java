@@ -93,6 +93,17 @@ class AgentTaskAggregationCalculatorTest {
     }
 
     @Test
+    void optionalOnlyActiveWorkAdvancesOpenTaskToRunning() {
+        var decision = calculator.calculate(AgentTaskStatus.OPEN, List.of(),
+                List.of(item("optional-running", false, "running", 0, 3, null, null)));
+
+        assertEquals(AgentTaskStatus.RUNNING, decision.status());
+        assertEquals("optional_active_work", decision.reason());
+        assertEquals(0, decision.counts().requiredWorkItemCount());
+        assertEquals(1, decision.counts().optionalWorkItemCount());
+    }
+
+    @Test
     void emptyTaskDoesNotVacuouslyCompleteOrReview() {
         var decision = calculator.calculate(AgentTaskStatus.PLANNING,
                 List.of(member("agent-a", "done")), List.of());

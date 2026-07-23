@@ -69,6 +69,16 @@ final class AgentTaskAggregationCalculator {
             return new Decision(currentStatus, "terminal_preserved", counts, null);
         }
         if (required.isEmpty()) {
+            boolean optionalActive = workItems.stream()
+                    .map(AgentTaskWorkItemEntity::getStatus)
+                    .map(AgentTaskWorkItemStatus::fromPersistedValue)
+                    .anyMatch(status -> status == AgentTaskWorkItemStatus.CLAIMED
+                            || status == AgentTaskWorkItemStatus.RUNNING
+                            || status == AgentTaskWorkItemStatus.SUBMITTED);
+            if (optionalActive) {
+                return new Decision(AgentTaskStatus.RUNNING,
+                        "optional_active_work", counts, null);
+            }
             return new Decision(currentStatus, "no_required_work_items", counts, null);
         }
         if (requiredFailed > 0) {

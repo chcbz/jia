@@ -22,9 +22,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.LongSupplier;
+import java.util.regex.Pattern;
 
 @Named
 public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationService {
+    private static final Pattern CANONICAL_AGENT_ID = Pattern.compile("^agt_[0-9a-f]{32}$");
+    private static final int MAX_LEASE_TOKEN_LENGTH = 100;
     private final AgentTaskMetaDao taskMetaDao;
     private final AgentTaskAggregationCalculator calculator;
     private final LongSupplier clock;
@@ -225,10 +228,23 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 && item.getAttemptCount() >= item.getMaxAttempts()) {
             throw invalidPersisted("READY work item has exhausted maxAttempts");
         }
-        if (item.getLeaseUntil() != null && item.getLeaseUntil() <= 0
-                || item.getLeaseToken() != null && StringUtil.isBlank(item.getLeaseToken())
-                || item.getAssigneeAgentId() != null && StringUtil.isBlank(item.getAssigneeAgentId())) {
-            throw invalidPersisted("Persisted work item lease/assignee fields are invalid");
+        boolean activeLeaseStatus = status == AgentTaskWorkItemStatus.CLAIMED
+                || status == AgentTaskWorkItemStatus.RUNNING;
+        if (activeLeaseStatus) {
+            if (StringUtil.isBlank(item.getAssigneeAgentId())
+                    || !CANONICAL_AGENT_ID.matcher(item.getAssigneeAgentId()).matches()
+                    || StringUtil.isBlank(item.getLeaseToken())
+                    || item.getLeaseToken().length() > MAX_LEASE_TOKEN_LENGTH
+                    || item.getLeaseUntil() == null || item.getLeaseUntil() <= 0) {
+                throw invalidPersisted("Persisted active lease is incomplete or non-canonical");
+            }
+        } else if (item.getLeaseToken() != null || item.getLeaseUntil() != null) {
+            throw invalidPersisted("Non-active work item status retains active lease state");
+        }
+        if (item.getAssigneeAgentId() != null
+                && (StringUtil.isBlank(item.getAssigneeAgentId())
+                || !CANONICAL_AGENT_ID.matcher(item.getAssigneeAgentId()).matches())) {
+            throw invalidPersisted("Persisted work item assignee is blank or non-canonical");
         }
     }
 

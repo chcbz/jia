@@ -35,7 +35,7 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         entity.setMaxAttempts(item.getMaxAttempts() == null ? 3 : item.getMaxAttempts());
         entity.setVersion(0L);
         entity.init4Creation();
-        return baseMapper.insert(entity);
+        return baseMapper.insertIfParentNonTerminal(tenantId, clientId, entity);
     }
 
     @Override
