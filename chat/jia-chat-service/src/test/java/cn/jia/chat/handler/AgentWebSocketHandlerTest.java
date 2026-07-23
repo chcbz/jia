@@ -15,6 +15,17 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.handler.dto.ChatMessageDTO;
+import cn.jia.chat.service.BuiltinHallAgentSupport;
+import cn.jia.chat.service.HallActionDispatchResult;
+import cn.jia.chat.service.HallActionDispatcher;
+import cn.jia.chat.service.HallActionIntent;
+import cn.jia.chat.service.JuyitingAgentRelayResult;
+import cn.jia.chat.service.JuyitingAgentRelayService;
+import cn.jia.chat.service.JuyitingConversationScopeService;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
+import reactor.core.publisher.Flux;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -29,6 +40,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,6 +65,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     ChatConversationEventBroker chatConversationEventBroker;
     @Mock
     WebSocketSession session;
+    @Mock
+    BuiltinHallAgentSupport builtinHallAgentSupport;
+
 
     @Test
     void handlesAgentRegisterAssignAndReport() throws Exception {
@@ -560,6 +576,142 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
         assertTrue(messages.contains("\"code\":\"AGENT_ID_MISMATCH\""));
     }
+
+    @Test
+    void dispatcherDispatchProducesCanonicalCommandEnvelopeThroughWebSocket() throws Exception {
+        stubAgentSession("session-cmd-dispatch", "agent-wuyong");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token-001", AgentConstants.STATUS_ONLINE));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-1","agentId":"agent-wuyong","name":"Wu Yong"}
+                """));
+
+        org.mockito.Mockito.clearInvocations(session);
+        when(session.isOpen()).thenReturn(true);
+
+        HallActionDispatcher dispatcher = new HallActionDispatcher(handler);
+
+        HallActionIntent intent = new HallActionIntent();
+        intent.setIntentId("intent-dispatch-1");
+        intent.setActionType("ask_help");
+        intent.setActorAgentId("agent-wuyong");
+        intent.setTargetAgentIds(List.of("agent-linchong"));
+        intent.setConversationId("1001");
+        intent.setTaskId("task-001");
+        intent.setInstruction("请向林冲说明阻塞并请求替代方案");
+        intent.setReason("接口依赖阻塞");
+
+        HallActionDispatchResult result = dispatcher.dispatch(intent);
+
+        assertEquals("dispatched", result.getStatus());
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messageCaptor.capture());
+
+        ObjectMapper mapper = new ObjectMapper();
+        TypeReference<Map<String, Object>> mapType = new TypeReference<>() { };
+        Map<String, Object> commandEnvelope = null;
+        for (TextMessage textMessage : messageCaptor.getAllValues()) {
+            Map<String, Object> event = mapper.readValue(textMessage.getPayload(), mapType);
+            if (AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(event.get("messageType"))) {
+                commandEnvelope = event;
+                break;
+            }
+        }
+        org.junit.jupiter.api.Assertions.assertNotNull(commandEnvelope,
+                "Should find a command.dispatch messageType in WebSocket output");
+
+        assertEquals(commandEnvelope.get("messageId"), commandEnvelope.get("requestId"),
+                "messageId and requestId must be equal in canonical command.dispatch");
+        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, commandEnvelope.get("messageType"));
+
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized =
+                new AgentProtocolMessageNormalizer().normalizeInbound(commandEnvelope);
+        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, normalized.canonicalType());
+        assertTrue(normalized.executionTrigger());
+
+        assertSafeServerDownlinks(messageCaptor.getAllValues());
+    }
+
+    @Test
+    void relayServiceProducesCanonicalChatEnvelopeThroughWebSocket() throws Exception {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+
+        stubAgentSession("session-chat-relay", "agent-wuyong");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token-001", AgentConstants.STATUS_ONLINE));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-1","agentId":"agent-wuyong","name":"Wu Yong"}
+                """));
+
+        org.mockito.Mockito.clearInvocations(session);
+        when(session.isOpen()).thenReturn(true);
+
+        JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport);
+        JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
+                handler, chatConversationEventBroker, builtinHallAgentSupport, chatMessageDao, scopeService);
+
+        ChatMessageDTO chatMessage = new ChatMessageDTO();
+        chatMessage.setContent("请回报当前进度");
+        chatMessage.setConversationType("juyiting");
+        chatMessage.setConversationScopeType("public");
+        chatMessage.setConversationScopeKey("public");
+        chatMessage.setSenderType("user");
+        chatMessage.setSenderName("测试用户");
+        chatMessage.setTargetAgentIds(List.of("agent-wuyong"));
+
+        when(chatConversationEventBroker.stream("1001"))
+                .thenReturn(Flux.just("{\"type\":\"agent_message\",\"content\":\"ok\"}"));
+
+        JuyitingAgentRelayResult relayResult = relayService.relay(chatMessage, "1001", () -> Flux.just("builtin"));
+        List<String> events = relayResult.stream().collectList().block(Duration.ofSeconds(5));
+
+        assertTrue(relayResult.attempted());
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messageCaptor.capture());
+
+        ObjectMapper mapper = new ObjectMapper();
+        TypeReference<Map<String, Object>> mapType = new TypeReference<>() { };
+        Map<String, Object> chatEnvelope = null;
+        for (TextMessage textMessage : messageCaptor.getAllValues()) {
+            Map<String, Object> event = mapper.readValue(textMessage.getPayload(), mapType);
+            if (AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(event.get("messageType"))) {
+                chatEnvelope = event;
+                break;
+            }
+        }
+        org.junit.jupiter.api.Assertions.assertNotNull(chatEnvelope,
+                "Should find a chat.message messageType in WebSocket output");
+
+        assertEquals(chatEnvelope.get("sentAt"), chatEnvelope.get("timestamp"),
+                "sentAt and timestamp must be equal in canonical chat.message");
+        assertEquals(AgentProtocolConstants.TYPE_CHAT_MESSAGE, chatEnvelope.get("messageType"));
+        assertFalse(chatEnvelope.containsKey("commandType"));
+
+        AgentProtocolMessageNormalizer.NormalizedMessage normalized =
+                new AgentProtocolMessageNormalizer().normalizeInbound(chatEnvelope);
+        assertEquals(AgentProtocolConstants.TYPE_CHAT_MESSAGE, normalized.canonicalType());
+        assertFalse(normalized.executionTrigger());
+
+        assertSafeServerDownlinks(messageCaptor.getAllValues());
+
+        EsContextHolder.setContext(new EsContext());
+    }
+
 
     private cn.jia.agent.entity.AgentRuntimeDTO runtime(String agentId, String name) {
         cn.jia.agent.entity.AgentRuntimeDTO dto = new cn.jia.agent.entity.AgentRuntimeDTO();
