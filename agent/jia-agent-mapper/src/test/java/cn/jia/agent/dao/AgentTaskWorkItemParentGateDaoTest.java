@@ -34,6 +34,9 @@ class AgentTaskWorkItemParentGateDaoTest {
         assertTrue(sql.startsWith("insert into agent_task_work_item"), sql);
         assertTrue(sql.contains(" select "), sql);
         assertTrue(sql.contains("from agent_task_meta parent"), sql);
+        assertTrue(sql.contains("parent.tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("parent.client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("parent.task_id = #{item.taskid}"), sql);
         assertTrue(sql.contains("cast(parent.tenant_id as binary(200)) "
                 + "= cast(#{tenantid} as binary(200))"), sql);
         assertTrue(sql.contains("octet_length(parent.tenant_id) = octet_length(#{tenantid})"), sql);

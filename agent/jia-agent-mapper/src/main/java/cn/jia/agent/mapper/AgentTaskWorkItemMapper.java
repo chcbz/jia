@@ -23,7 +23,10 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                    #{item.submittedAt}, #{item.completedAt}, #{item.version},
                    #{tenantId}, #{clientId}, #{item.createTime}, #{item.updateTime}
             FROM agent_task_meta parent
-            WHERE CAST(parent.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+            WHERE parent.tenant_id = #{tenantId}
+              AND parent.client_id = #{clientId}
+              AND parent.task_id = #{item.taskId}
+              AND CAST(parent.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(parent.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(parent.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(parent.client_id) = OCTET_LENGTH(#{clientId})

@@ -98,6 +98,26 @@ class AgentTaskWorkItemParentGateMySqlTest {
     }
 
     @Test
+    void parentGateKeepsScopedUniqueIndexSargable() {
+        String explain = jdbc.queryForObject(
+                "EXPLAIN SELECT id FROM agent_task_meta parent "
+                        + "WHERE parent.tenant_id=? AND parent.client_id=? AND parent.task_id=? "
+                        + "AND CAST(parent.tenant_id AS BINARY(200))=CAST(? AS BINARY(200)) "
+                        + "AND OCTET_LENGTH(parent.tenant_id)=OCTET_LENGTH(?) "
+                        + "AND CAST(parent.client_id AS BINARY(200))=CAST(? AS BINARY(200)) "
+                        + "AND OCTET_LENGTH(parent.client_id)=OCTET_LENGTH(?) "
+                        + "AND CAST(SUBSTRING(parent.task_id,1,50) AS BINARY(200))="
+                        + "CAST(SUBSTRING(?,1,50) AS BINARY(200)) "
+                        + "AND CAST(SUBSTRING(parent.task_id,51,50) AS BINARY(200))="
+                        + "CAST(SUBSTRING(?,51,50) AS BINARY(200)) "
+                        + "AND OCTET_LENGTH(parent.task_id)=OCTET_LENGTH(?) FOR UPDATE",
+                (rs, rowNum) -> rs.getString("key"),
+                TENANT, CLIENT, TASK, TENANT, TENANT, CLIENT, CLIENT, TASK, TASK, TASK);
+
+        assertEquals("uk_task_scope", explain);
+    }
+
+    @Test
     void parentGateRequiresByteExactScopeUnderCaseInsensitiveCollation() {
         AgentTaskWorkItemDTO wrongCase = readyWorkItem("case-scope-child");
         wrongCase.setTaskId("Task-1");
