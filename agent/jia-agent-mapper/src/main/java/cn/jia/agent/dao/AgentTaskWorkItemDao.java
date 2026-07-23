@@ -10,6 +10,9 @@ public interface AgentTaskWorkItemDao {
 
     AgentTaskWorkItemEntity findByWorkItemId(String tenantId, String clientId, String workItemId);
 
+    AgentTaskWorkItemEntity findByTaskAndWorkItemId(
+            String tenantId, String clientId, String taskId, String workItemId);
+
     List<AgentTaskWorkItemEntity> listByTask(
             String tenantId, String clientId, String taskId, String status, int limit);
 

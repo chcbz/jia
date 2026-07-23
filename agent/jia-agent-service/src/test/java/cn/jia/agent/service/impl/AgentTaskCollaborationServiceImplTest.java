@@ -1,0 +1,519 @@
+package cn.jia.agent.service.impl;
+
+import cn.jia.agent.dao.AgentTaskArtifactDao;
+import cn.jia.agent.dao.AgentTaskMemberDao;
+import cn.jia.agent.dao.AgentTaskMetaDao;
+import cn.jia.agent.dao.AgentTaskRequestDao;
+import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.entity.AgentTaskArtifactEntity;
+import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
+import cn.jia.agent.entity.AgentTaskArtifactQueryDTO;
+import cn.jia.agent.entity.AgentTaskMemberEntity;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.AgentTaskRequestCreateDTO;
+import cn.jia.agent.entity.AgentTaskRequestDTO;
+import cn.jia.agent.entity.AgentTaskRequestEntity;
+import cn.jia.agent.entity.AgentTaskRequestQueryDTO;
+import cn.jia.agent.entity.AgentTaskRequestTransitionDTO;
+import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
+import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class AgentTaskCollaborationServiceImplTest {
+    private static final String TENANT = "tenant-a";
+    private static final String CLIENT = "client-a";
+    private static final String TASK = "task-1";
+    private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private static final String TARGET = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private static final long NOW = 1_721_700_000_000L;
+
+    private AgentTaskMetaDao taskDao;
+    private AgentTaskMemberDao memberDao;
+    private AgentTaskWorkItemDao workItemDao;
+    private AgentTaskRequestDao requestDao;
+    private AgentTaskArtifactDao artifactDao;
+    private AgentTaskCollaborationServiceImpl service;
+
+    @BeforeEach
+    void setUp() {
+        taskDao = mock(AgentTaskMetaDao.class);
+        memberDao = mock(AgentTaskMemberDao.class);
+        workItemDao = mock(AgentTaskWorkItemDao.class);
+        requestDao = mock(AgentTaskRequestDao.class);
+        artifactDao = mock(AgentTaskArtifactDao.class);
+        service = new AgentTaskCollaborationServiceImpl(
+                taskDao, memberDao, workItemDao, requestDao, artifactDao, () -> NOW);
+    }
+
+    @Test
+    void createsScopedRequestForMemberAndValidTargetAgent() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 0L, ACTOR, "agent", TARGET));
+
+        var result = service.create(TENANT, CLIENT, TASK, ACTOR, createRequest());
+
+        assertEquals("open", result.getStatus());
+        ArgumentCaptor<AgentTaskRequestDTO> insert = ArgumentCaptor.forClass(AgentTaskRequestDTO.class);
+        verify(requestDao).insert(eq(TENANT), eq(CLIENT), insert.capture());
+        assertEquals(TASK, insert.getValue().getTaskId());
+        assertEquals(ACTOR, insert.getValue().getRequesterAgentId());
+        assertEquals("open", insert.getValue().getStatus());
+        assertEquals("work-1", insert.getValue().getWorkItemId());
+    }
+
+
+    @Test
+    void workerCanTargetConfiguredCoordinatorRoleWithoutCoordinatorMemberRow() {
+        allow(ACTOR, "worker");
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(task(TARGET));
+        when(memberDao.listByTask(TENANT, CLIENT, TASK)).thenReturn(List.of());
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 0L, ACTOR, "role", "coordinator"));
+        AgentTaskRequestCreateDTO command = createRequest();
+        command.setTargetType("role");
+        command.setTargetId("coordinator");
+
+        var result = service.create(TENANT, CLIENT, TASK, ACTOR, command);
+
+        assertEquals("coordinator", result.getTargetId());
+    }
+
+    @Test
+    void crossScopeTaskMissReturnsGenericNotFoundWithoutMemberLookup() {
+        when(taskDao.findByTaskId("tenant-b", CLIENT, TASK)).thenReturn(null);
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.list("tenant-b", CLIENT, TASK, ACTOR, (AgentTaskRequestQueryDTO) null));
+
+        assertEquals(Reason.NOT_FOUND, error.getReason());
+        assertEquals("Resource was not found in the requested scope", error.getMessage());
+        verify(memberDao, never()).findByTaskAndAgent(any(), any(), any(), any());
+    }
+
+    @Test
+    void nonMemberCannotReadOrDiscoverTaskData() {
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(task(null));
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, ACTOR)).thenReturn(null);
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.get(TENANT, CLIENT, TASK, ACTOR, "req-1"));
+
+        assertEquals(Reason.FORBIDDEN, error.getReason());
+        verify(requestDao, never()).findByRequestId(any(), any(), any(), any());
+    }
+
+    @Test
+    void observerCannotCreateRequest() {
+        allow(ACTOR, "observer");
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()));
+
+        assertEquals(Reason.FORBIDDEN, error.getReason());
+        verify(requestDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void requesterCannotImpersonateAnotherAgent() {
+        allow(ACTOR, "worker");
+        AgentTaskRequestCreateDTO command = createRequest();
+        command.setRequesterAgentId(TARGET);
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, command));
+
+        assertEquals(Reason.FORBIDDEN, error.getReason());
+        verify(requestDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void invalidCrossTaskWorkItemFailsClosedBeforeInsert() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(null);
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()));
+
+        assertEquals(Reason.NOT_FOUND, error.getReason());
+        verify(requestDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void targetAcknowledgesWithCasAndStructuredResponse() {
+        allow(TARGET, "reviewer");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 3L, ACTOR, "agent", TARGET));
+        when(requestDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq("req-1"),
+                eq(3L), any())).thenReturn(1);
+        AgentTaskRequestTransitionDTO command = transition(3L, Map.of("accepted", true));
+
+        var result = service.acknowledge(TENANT, CLIENT, TASK, TARGET, "req-1", command);
+
+        assertEquals("acknowledged", result.getStatus());
+        assertEquals(4L, result.getVersion());
+        assertEquals(NOW, result.getAcknowledgedAt());
+        assertEquals(Boolean.TRUE, result.getResponse().get("accepted"));
+    }
+
+    @Test
+    void openRequestCannotSkipAcknowledgedState() {
+        allow(TARGET, "reviewer");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 0L, ACTOR, "agent", TARGET));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.resolve(TENANT, CLIENT, TASK, TARGET, "req-1",
+                        transition(0L, Map.of("answer", "done"))));
+
+        assertEquals(Reason.INVALID_TRANSITION, error.getReason());
+        verify(requestDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void terminalRequestCannotBeReopenedOrChanged() {
+        allow(TARGET, "reviewer");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "resolved", 2L, ACTOR, "agent", TARGET));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.reject(TENANT, CLIENT, TASK, TARGET, "req-1",
+                        transition(2L, Map.of("reason", "late"))));
+
+        assertEquals(Reason.INVALID_TRANSITION, error.getReason());
+    }
+
+    @Test
+    void staleRequestVersionFailsBeforeCasWrite() {
+        allow(TARGET, "reviewer");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 4L, ACTOR, "agent", TARGET));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.acknowledge(TENANT, CLIENT, TASK, TARGET, "req-1",
+                        transition(3L, null)));
+
+        assertEquals(Reason.VERSION_CONFLICT, error.getReason());
+        verify(requestDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void onlyRequesterOrCoordinatorCanCancel() {
+        allow(TARGET, "worker");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 0L, ACTOR, "role", "reviewer"));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.cancel(TENANT, CLIENT, TASK, TARGET, "req-1",
+                        transition(0L, null)));
+
+        assertEquals(Reason.FORBIDDEN, error.getReason());
+    }
+
+    @Test
+    void resolveRequiresStructuredResponse() {
+        allow(TARGET, "reviewer");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "acknowledged", 1L, ACTOR, "agent", TARGET));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.resolve(TENANT, CLIENT, TASK, TARGET, "req-1",
+                        transition(1L, null)));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+    }
+
+    @Test
+    void requestListKeepsDaoOrderAndAppliesWorkItemFilterAfterScope() {
+        allow(ACTOR, "worker");
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.listByTask(TENANT, CLIENT, TASK, "open", 500)).thenReturn(List.of(
+                requestWithWork("req-2", "work-2"), requestWithWork("req-1", "work-1")));
+        AgentTaskRequestQueryDTO query = new AgentTaskRequestQueryDTO();
+        query.setStatus("open");
+        query.setWorkItemId("work-1");
+        query.setLimit(10);
+
+        var result = service.list(TENANT, CLIENT, TASK, ACTOR, query);
+
+        assertEquals(List.of("req-1"), result.stream().map(r -> r.getRequestId()).toList());
+    }
+
+    @Test
+    void publishesNextArtifactVersionWithVerifiedInlineHash() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(2, 1);
+        AgentTaskArtifactEntity latest = artifact("artifact-1", 1, ACTOR, "task_members");
+        AgentTaskArtifactEntity stored = artifact("artifact-1", 2, ACTOR, "task_members");
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-1"))
+                .thenReturn(latest);
+        when(artifactDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(artifactDao.findVersion(TENANT, CLIENT, TASK, "artifact-1", 2)).thenReturn(stored);
+
+        var result = service.publish(TENANT, CLIENT, TASK, ACTOR, command);
+
+        assertEquals(2, result.getArtifactVersion());
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskArtifactDTO> insert =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskArtifactDTO.class);
+        verify(artifactDao).insert(eq(TENANT), eq(CLIENT), insert.capture());
+        assertEquals(TASK, insert.getValue().getTaskId());
+        assertEquals(ACTOR, insert.getValue().getProducerAgentId());
+        assertEquals("task_members", insert.getValue().getVisibility());
+    }
+
+    @Test
+    void artifactVersionChainFailsClosedOnStaleExpectedPreviousVersion() {
+        allow(ACTOR, "worker");
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-1"))
+                .thenReturn(artifact("artifact-1", 2, ACTOR, "task_members"));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, artifactCommand(2, 1)));
+
+        assertEquals(Reason.VERSION_CONFLICT, error.getReason());
+        verify(artifactDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void producerImpersonationAndBadHashAreRejected() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO impersonated = artifactCommand(1, 0);
+        impersonated.setProducerAgentId(TARGET);
+        assertEquals(Reason.FORBIDDEN, assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, impersonated)).getReason());
+
+        AgentTaskArtifactPublishDTO badHash = artifactCommand(1, 0);
+        badHash.setContentHash("0".repeat(64));
+        assertEquals(Reason.INVALID_REQUEST, assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, badHash)).getReason());
+        verify(artifactDao, never()).insert(any(), any(), any());
+    }
+
+
+    @Test
+    void inlineArtifactLimitIsEnforcedOnUtf8BytesNotJavaCharacters() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+        String oversizedUtf8 = "界".repeat(100_000);
+        command.setContent(oversizedUtf8);
+        command.setContentHash(sha256(oversizedUtf8));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        verify(artifactDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void externalArtifactUriUsesSchemeWhitelistAndRequiresHash() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+        command.setContent(null);
+        command.setStorageUri("file:///etc/passwd");
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+    }
+
+    @Test
+    void privateArtifactIsHiddenFromOtherMemberButVisibleToProducer() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactEntity privateArtifact = artifact("artifact-1", 1, TARGET, "private");
+        when(artifactDao.findLatestVersion(TENANT, CLIENT, TASK, "artifact-1"))
+                .thenReturn(privateArtifact);
+
+        AgentTaskCollaborationException hidden = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.getLatest(TENANT, CLIENT, TASK, ACTOR, "artifact-1"));
+        assertEquals(Reason.NOT_FOUND, hidden.getReason());
+
+        allow(TARGET, "worker");
+        assertEquals("artifact-1",
+                service.getLatest(TENANT, CLIENT, TASK, TARGET, "artifact-1").getArtifactId());
+    }
+
+    @Test
+    void reviewerVisibilityListFiltersWithoutReorderingVisibleRows() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactEntity reviewerOnly = artifact("artifact-r", 1, TARGET, "reviewer");
+        AgentTaskArtifactEntity shared = artifact("artifact-s", 1, TARGET, "task_members");
+        AgentTaskArtifactEntity ownPrivate = artifact("artifact-p", 1, ACTOR, "private");
+        when(artifactDao.listByTask(TENANT, CLIENT, TASK, 500))
+                .thenReturn(List.of(reviewerOnly, shared, ownPrivate));
+
+        var result = service.list(TENANT, CLIENT, TASK, ACTOR, new AgentTaskArtifactQueryDTO());
+
+        assertEquals(List.of("artifact-s", "artifact-p"),
+                result.stream().map(a -> a.getArtifactId()).toList());
+    }
+
+    @Test
+    void malformedPersistedVisibilityFailsClosed() {
+        allow(ACTOR, "worker");
+        when(artifactDao.findLatestVersion(TENANT, CLIENT, TASK, "artifact-1"))
+                .thenReturn(artifact("artifact-1", 1, TARGET, "TASK_MEMBERS"));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.getLatest(TENANT, CLIENT, TASK, ACTOR, "artifact-1"));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, error.getReason());
+    }
+
+    @Test
+    void ordinaryArtifactContractDoesNotExposeWorkItemResultMutation() {
+        assertTrue(java.util.Arrays.stream(cn.jia.agent.service.AgentTaskArtifactService.class.getMethods())
+                .noneMatch(method -> method.getName().toLowerCase().contains("result")));
+        assertEquals(1, cn.jia.agent.service.AgentWorkItemResultCommitService.class.getDeclaredMethods().length);
+    }
+
+    private void allow(String agentId, String role) {
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(task(null));
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, agentId))
+                .thenReturn(member(agentId, role, "working"));
+    }
+
+    private AgentTaskMetaEntity task(String coordinator) {
+        AgentTaskMetaEntity entity = new AgentTaskMetaEntity();
+        entity.setTaskId(TASK);
+        entity.setCoordinatorAgentId(coordinator);
+        return entity;
+    }
+
+    private AgentTaskMemberEntity member(String agentId, String role, String status) {
+        AgentTaskMemberEntity entity = new AgentTaskMemberEntity();
+        entity.setTaskId(TASK);
+        entity.setAgentId(agentId);
+        entity.setMemberRole(role);
+        entity.setMemberStatus(status);
+        return entity;
+    }
+
+    private AgentTaskWorkItemEntity workItem(String id) {
+        AgentTaskWorkItemEntity entity = new AgentTaskWorkItemEntity();
+        entity.setTaskId(TASK);
+        entity.setWorkItemId(id);
+        return entity;
+    }
+
+    private AgentTaskRequestCreateDTO createRequest() {
+        AgentTaskRequestCreateDTO command = new AgentTaskRequestCreateDTO();
+        command.setRequestId("req-1");
+        command.setWorkItemId("work-1");
+        command.setRequesterAgentId(ACTOR);
+        command.setTargetType("agent");
+        command.setTargetId(TARGET);
+        command.setRequestType("review");
+        command.setPriority(5);
+        command.setTitle("Please review");
+        command.setDescription("Review the scoped work item");
+        return command;
+    }
+
+    private AgentTaskRequestTransitionDTO transition(Long version, Map<String, Object> response) {
+        AgentTaskRequestTransitionDTO command = new AgentTaskRequestTransitionDTO();
+        command.setExpectedVersion(version);
+        command.setResponse(response);
+        return command;
+    }
+
+    private AgentTaskRequestEntity request(String id, String status, Long version,
+            String requester, String targetType, String targetId) {
+        AgentTaskRequestEntity entity = new AgentTaskRequestEntity();
+        entity.setRequestId(id);
+        entity.setTaskId(TASK);
+        entity.setRequesterAgentId(requester);
+        entity.setTargetType(targetType);
+        entity.setTargetId(targetId);
+        entity.setRequestType("review");
+        entity.setStatus(status);
+        entity.setPriority(1);
+        entity.setTitle("Request");
+        entity.setDescription("Description");
+        entity.setVersion(version);
+        entity.setCreateTime(NOW - 100);
+        entity.setUpdateTime(NOW - 50);
+        return entity;
+    }
+
+    private AgentTaskRequestEntity requestWithWork(String id, String workItemId) {
+        AgentTaskRequestEntity entity = request(id, "open", 0L, ACTOR, "agent", TARGET);
+        entity.setWorkItemId(workItemId);
+        return entity;
+    }
+
+    private AgentTaskArtifactPublishDTO artifactCommand(int version, int expectedPrevious) {
+        AgentTaskArtifactPublishDTO command = new AgentTaskArtifactPublishDTO();
+        command.setArtifactId("artifact-1");
+        command.setProducerAgentId(ACTOR);
+        command.setArtifactType("analysis");
+        command.setTitle("Analysis");
+        command.setContent("bounded-content");
+        command.setContentHash(sha256("bounded-content"));
+        command.setArtifactVersion(version);
+        command.setExpectedPreviousVersion(expectedPrevious);
+        command.setVisibility("task_members");
+        command.setMetadata(Map.of("format", "text/plain"));
+        return command;
+    }
+
+    private AgentTaskArtifactEntity artifact(String id, int version, String producer, String visibility) {
+        AgentTaskArtifactEntity entity = new AgentTaskArtifactEntity();
+        entity.setArtifactId(id);
+        entity.setTaskId(TASK);
+        entity.setProducerAgentId(producer);
+        entity.setArtifactType("analysis");
+        entity.setTitle("Artifact");
+        entity.setContent("bounded-content");
+        entity.setContentHash(sha256("bounded-content"));
+        entity.setArtifactVersion(version);
+        entity.setVisibility(visibility);
+        entity.setMetadataJson("{\"format\":\"text/plain\"}");
+        entity.setCreatedAt(NOW);
+        return entity;
+    }
+
+    private String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
+}

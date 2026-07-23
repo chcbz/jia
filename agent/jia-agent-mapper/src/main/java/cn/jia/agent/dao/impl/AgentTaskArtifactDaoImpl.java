@@ -36,11 +36,13 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public AgentTaskArtifactEntity findVersion(
-            String tenantId, String clientId, String artifactId, int artifactVersion) {
+            String tenantId, String clientId, String taskId, String artifactId, int artifactVersion) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
         requireVersion(artifactVersion);
         return baseMapper.selectOne(scope(tenantId, clientId)
+                .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getArtifactId, artifactId)
                 .eq(AgentTaskArtifactEntity::getArtifactVersion, artifactVersion)
                 .last("limit 1"));
@@ -48,10 +50,12 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public AgentTaskArtifactEntity findLatestVersion(
-            String tenantId, String clientId, String artifactId) {
+            String tenantId, String clientId, String taskId, String artifactId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
         return baseMapper.selectOne(scope(tenantId, clientId)
+                .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getArtifactId, artifactId)
                 .orderByDesc(AgentTaskArtifactEntity::getArtifactVersion)
                 .orderByDesc(AgentTaskArtifactEntity::getId)
@@ -59,11 +63,22 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
     }
 
     @Override
-    public List<AgentTaskArtifactEntity> listVersions(
-            String tenantId, String clientId, String artifactId) {
+    public AgentTaskArtifactEntity findLatestVersionForUpdate(
+            String tenantId, String clientId, String taskId, String artifactId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
+        return baseMapper.selectLatestVersionForUpdate(tenantId, clientId, taskId, artifactId);
+    }
+
+    @Override
+    public List<AgentTaskArtifactEntity> listVersions(
+            String tenantId, String clientId, String taskId, String artifactId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
         return baseMapper.selectList(scope(tenantId, clientId)
+                .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getArtifactId, artifactId)
                 .orderByDesc(AgentTaskArtifactEntity::getArtifactVersion)
                 .orderByDesc(AgentTaskArtifactEntity::getId));
@@ -80,10 +95,12 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public List<AgentTaskArtifactEntity> listByWorkItem(
-            String tenantId, String clientId, String workItemId, int limit) {
+            String tenantId, String clientId, String taskId, String workItemId, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
         return ordered(scope(tenantId, clientId)
+                .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getWorkItemId, workItemId), limit);
     }
 

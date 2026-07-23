@@ -49,6 +49,18 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public AgentTaskWorkItemEntity findByTaskAndWorkItemId(
+            String tenantId, String clientId, String taskId, String workItemId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
+        return baseMapper.selectOne(scope(tenantId, clientId)
+                .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
+                .eq(AgentTaskWorkItemEntity::getWorkItemId, workItemId)
+                .last("limit 1"));
+    }
+
+    @Override
     public List<AgentTaskWorkItemEntity> listByTask(
             String tenantId, String clientId, String taskId, String status, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

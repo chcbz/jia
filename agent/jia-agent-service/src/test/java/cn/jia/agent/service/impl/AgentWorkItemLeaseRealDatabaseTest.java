@@ -501,6 +501,12 @@ class AgentWorkItemLeaseRealDatabaseTest {
         }
 
         @Override
+        public AgentTaskWorkItemEntity findByTaskAndWorkItemId(
+                String tenantId, String clientId, String taskId, String workItemId) {
+            return delegate.findByTaskAndWorkItemId(tenantId, clientId, taskId, workItemId);
+        }
+
+        @Override
         public List<AgentTaskWorkItemEntity> listByTask(
                 String tenantId, String clientId, String taskId, String status, int limit) {
             return delegate.listByTask(tenantId, clientId, taskId, status, limit);

@@ -113,7 +113,7 @@ class AgentTaskCollaborationDaoTest {
 
         AgentTaskRequestMapper requestMapper = mock(AgentTaskRequestMapper.class);
         new AgentTaskRequestDaoImpl(requestMapper).listByTarget(
-                "tenant-b", "client-b", "agent", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "open", 20);
+                "tenant-b", "client-b", "task-1", "agent", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "open", 20);
         ArgumentCaptor<Wrapper<AgentTaskRequestEntity>> request = ArgumentCaptor.forClass(Wrapper.class);
         verify(requestMapper).selectList(request.capture());
         assertScoped(request.getValue(), "tenant-b", "client-b");
@@ -134,9 +134,9 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskArtifactDTO versionTwo = artifact(2);
         dao.insert("tenant-a", "client-a", versionOne);
         dao.insert("tenant-a", "client-a", versionTwo);
-        dao.findVersion("tenant-a", "client-a", "artifact-1", 1);
-        dao.findLatestVersion("tenant-a", "client-a", "artifact-1");
-        dao.listVersions("tenant-a", "client-a", "artifact-1");
+        dao.findVersion("tenant-a", "client-a", "task-1", "artifact-1", 1);
+        dao.findLatestVersion("tenant-a", "client-a", "task-1", "artifact-1");
+        dao.listVersions("tenant-a", "client-a", "task-1", "artifact-1");
 
         ArgumentCaptor<AgentTaskArtifactEntity> inserts = ArgumentCaptor.forClass(AgentTaskArtifactEntity.class);
         verify(mapper, org.mockito.Mockito.times(2)).insert(inserts.capture());
@@ -165,7 +165,7 @@ class AgentTaskCollaborationDaoTest {
     void versionedMapperUpdatesUseFullScopeAndAtomicCasIncrement() throws Exception {
         assertCasSql(AgentTaskMemberMapper.class, "task_id = #{taskid}", "agent_id = #{agentid}");
         assertCasSql(AgentTaskWorkItemMapper.class, "work_item_id = #{workitemid}");
-        assertCasSql(AgentTaskRequestMapper.class, "request_id = #{requestid}");
+        assertCasSql(AgentTaskRequestMapper.class, "task_id = #{taskid}", "request_id = #{requestid}");
     }
 
     @Test
@@ -198,10 +198,11 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskRequestMapper requestMapper = mock(AgentTaskRequestMapper.class);
         AgentTaskRequestDTO request = request();
         new AgentTaskRequestDaoImpl(requestMapper).updateByVersion(
-                "tenant-c", "client-c", "request-1", 9L, request);
+                "tenant-c", "client-c", "task-1", "request-1", 9L, request);
         verify(requestMapper).updateByVersion(
                 org.mockito.ArgumentMatchers.eq("tenant-c"),
                 org.mockito.ArgumentMatchers.eq("client-c"),
+                org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq("request-1"),
                 org.mockito.ArgumentMatchers.eq(9L),
                 org.mockito.ArgumentMatchers.same(request), anyLong());
@@ -222,8 +223,8 @@ class AgentTaskCollaborationDaoTest {
 
         AgentTaskRequestMapper requestMapper = mock(AgentTaskRequestMapper.class);
         assertThrows(IllegalArgumentException.class, () -> new AgentTaskRequestDaoImpl(requestMapper).updateByVersion(
-                "tenant-a", "client-a", "request-1", -1L, request()));
-        verify(requestMapper, never()).updateByVersion(any(), any(), any(), anyLong(), any(), anyLong());
+                "tenant-a", "client-a", "task-1", "request-1", -1L, request()));
+        verify(requestMapper, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any(), anyLong());
     }
 
     @Test

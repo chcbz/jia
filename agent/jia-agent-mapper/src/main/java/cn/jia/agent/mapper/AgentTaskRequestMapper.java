@@ -26,12 +26,14 @@ public interface AgentTaskRequestMapper extends BaseMapper<AgentTaskRequestEntit
                 version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND task_id = #{taskId}
               AND request_id = #{requestId}
               AND version = #{expectedVersion}
             """)
     int updateByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
             @Param("requestId") String requestId,
             @Param("expectedVersion") long expectedVersion,
             @Param("request") AgentTaskRequestDTO request,

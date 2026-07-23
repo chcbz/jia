@@ -34,10 +34,13 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
     }
 
     @Override
-    public AgentTaskRequestEntity findByRequestId(String tenantId, String clientId, String requestId) {
+    public AgentTaskRequestEntity findByRequestId(
+            String tenantId, String clientId, String taskId, String requestId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(requestId, "requestId");
         return baseMapper.selectOne(scope(tenantId, clientId)
+                .eq(AgentTaskRequestEntity::getTaskId, taskId)
                 .eq(AgentTaskRequestEntity::getRequestId, requestId)
                 .last("limit 1"));
     }
@@ -54,12 +57,14 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
     }
 
     @Override
-    public List<AgentTaskRequestEntity> listByTarget(String tenantId, String clientId,
+    public List<AgentTaskRequestEntity> listByTarget(String tenantId, String clientId, String taskId,
             String targetType, String targetId, String status, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(targetType, "targetType");
         TaskCollaborationDaoSupport.requireId(targetId, "targetId");
         LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId)
+                .eq(AgentTaskRequestEntity::getTaskId, taskId)
                 .eq(AgentTaskRequestEntity::getTargetType, targetType)
                 .eq(AgentTaskRequestEntity::getTargetId, targetId);
         appendStatus(wrapper, status);
@@ -73,14 +78,15 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
     }
 
     @Override
-    public int updateByVersion(String tenantId, String clientId, String requestId,
+    public int updateByVersion(String tenantId, String clientId, String taskId, String requestId,
             long expectedVersion, AgentTaskRequestDTO request) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(requestId, "requestId");
         requireRequest(request, false);
         TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
         return baseMapper.updateByVersion(
-                tenantId, clientId, requestId, expectedVersion, request, DateUtil.nowTime());
+                tenantId, clientId, taskId, requestId, expectedVersion, request, DateUtil.nowTime());
     }
 
     private LambdaQueryWrapper<AgentTaskRequestEntity> orderByTask(

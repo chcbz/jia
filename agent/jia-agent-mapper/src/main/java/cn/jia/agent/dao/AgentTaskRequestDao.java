@@ -8,14 +8,15 @@ import java.util.List;
 public interface AgentTaskRequestDao {
     int insert(String tenantId, String clientId, AgentTaskRequestDTO request);
 
-    AgentTaskRequestEntity findByRequestId(String tenantId, String clientId, String requestId);
+    AgentTaskRequestEntity findByRequestId(
+            String tenantId, String clientId, String taskId, String requestId);
 
     List<AgentTaskRequestEntity> listByTask(
             String tenantId, String clientId, String taskId, String status, int limit);
 
-    List<AgentTaskRequestEntity> listByTarget(String tenantId, String clientId,
+    List<AgentTaskRequestEntity> listByTarget(String tenantId, String clientId, String taskId,
             String targetType, String targetId, String status, int limit);
 
-    int updateByVersion(String tenantId, String clientId, String requestId,
+    int updateByVersion(String tenantId, String clientId, String taskId, String requestId,
             long expectedVersion, AgentTaskRequestDTO request);
 }
