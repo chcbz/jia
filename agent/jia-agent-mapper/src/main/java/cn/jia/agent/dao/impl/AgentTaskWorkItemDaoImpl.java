@@ -14,6 +14,8 @@ import java.util.List;
 
 @Named
 public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
+    private static final List<String> LEASED_STATUSES = List.of("claimed", "running");
+
     private final AgentTaskWorkItemMapper baseMapper;
 
     @Inject
@@ -69,6 +71,21 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public List<AgentTaskWorkItemEntity> listExpiredLeases(
+            String tenantId, String clientId, long expiredAtOrBefore, int limit) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireNonnegativeTime(expiredAtOrBefore, "expiredAtOrBefore");
+        return baseMapper.selectList(scope(tenantId, clientId)
+                .in(AgentTaskWorkItemEntity::getStatus, LEASED_STATUSES)
+                .isNotNull(AgentTaskWorkItemEntity::getLeaseUntil)
+                .le(AgentTaskWorkItemEntity::getLeaseUntil, expiredAtOrBefore)
+                .orderByAsc(AgentTaskWorkItemEntity::getLeaseUntil)
+                .orderByAsc(AgentTaskWorkItemEntity::getWorkItemId)
+                .orderByAsc(AgentTaskWorkItemEntity::getId)
+                .last("limit " + TaskCollaborationDaoSupport.boundedLimit(limit)));
+    }
+
+    @Override
     public int updateByVersion(String tenantId, String clientId, String workItemId,
             long expectedVersion, AgentTaskWorkItemDTO item) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
@@ -77,6 +94,78 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
         return baseMapper.updateByVersion(
                 tenantId, clientId, workItemId, expectedVersion, item, DateUtil.nowTime());
+    }
+
+    @Override
+    public int claimReadyByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item) {
+        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        long updateTime = DateUtil.nowTime();
+        if (StringUtil.isBlank(expectedAssigneeAgentId)) {
+            return baseMapper.claimReadyUnassignedByVersion(
+                    tenantId, clientId, taskId, workItemId, expectedVersion, item, updateTime);
+        }
+        return baseMapper.claimReadyAssignedByVersion(
+                tenantId, clientId, taskId, workItemId, expectedAssigneeAgentId,
+                expectedVersion, item, updateTime);
+    }
+
+    @Override
+    public int updateActiveLeaseByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String assigneeAgentId, String leaseToken, String expectedStatus,
+            long expectedLeaseUntil, long expectedVersion, long operationTime,
+            AgentTaskWorkItemDTO item) {
+        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseIdentity(assigneeAgentId, leaseToken, expectedStatus, expectedLeaseUntil);
+        requireNonnegativeTime(operationTime, "operationTime");
+        return baseMapper.updateActiveLeaseByVersion(
+                tenantId, clientId, taskId, workItemId, assigneeAgentId, leaseToken,
+                expectedStatus, expectedLeaseUntil, expectedVersion, operationTime,
+                item, DateUtil.nowTime());
+    }
+
+    @Override
+    public int expireLeaseByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String assigneeAgentId, String leaseToken, String expectedStatus,
+            long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
+            AgentTaskWorkItemDTO item) {
+        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseIdentity(assigneeAgentId, leaseToken, expectedStatus, expectedLeaseUntil);
+        requireNonnegativeTime(expiredAtOrBefore, "expiredAtOrBefore");
+        return baseMapper.expireLeaseByVersion(
+                tenantId, clientId, taskId, workItemId, assigneeAgentId, leaseToken,
+                expectedStatus, expectedLeaseUntil, expectedVersion, expiredAtOrBefore,
+                item, DateUtil.nowTime());
+    }
+
+    private void requireLeaseCasCommon(
+            String tenantId, String clientId, String taskId, String workItemId,
+            long expectedVersion, AgentTaskWorkItemDTO item) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
+        TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
+        requireItem(item, false);
+    }
+
+    private void requireLeaseIdentity(
+            String assigneeAgentId, String leaseToken, String expectedStatus,
+            long expectedLeaseUntil) {
+        TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
+        TaskCollaborationDaoSupport.requireId(leaseToken, "leaseToken");
+        TaskCollaborationDaoSupport.requireId(expectedStatus, "expectedStatus");
+        if (expectedLeaseUntil <= 0) {
+            throw new IllegalArgumentException("expectedLeaseUntil must be positive");
+        }
+    }
+
+    private void requireNonnegativeTime(long value, String name) {
+        if (value < 0) {
+            throw new IllegalArgumentException(name + " must be nonnegative");
+        }
     }
 
     private List<AgentTaskWorkItemEntity> ordered(

@@ -18,6 +18,7 @@ public class AgentTaskStateException extends RuntimeException {
         INVALID_TRANSITION,
         VERSION_CONFLICT,
         RESERVED_FOR_CLAIM_PROTOCOL,
+        LEASE_INVALID,
         INVALID_PERSISTED_STATE
     }
 }

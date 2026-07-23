@@ -16,6 +16,25 @@ public interface AgentTaskWorkItemDao {
     List<AgentTaskWorkItemEntity> listByAssignee(
             String tenantId, String clientId, String assigneeAgentId, String status, int limit);
 
+    List<AgentTaskWorkItemEntity> listExpiredLeases(
+            String tenantId, String clientId, long expiredAtOrBefore, int limit);
+
     int updateByVersion(String tenantId, String clientId, String workItemId,
             long expectedVersion, AgentTaskWorkItemDTO item);
+
+    int claimReadyByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item);
+
+    int updateActiveLeaseByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String assigneeAgentId, String leaseToken, String expectedStatus,
+            long expectedLeaseUntil, long expectedVersion, long operationTime,
+            AgentTaskWorkItemDTO item);
+
+    int expireLeaseByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String assigneeAgentId, String leaseToken, String expectedStatus,
+            long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
+            AgentTaskWorkItemDTO item);
 }
