@@ -93,6 +93,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_work_item"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_request"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_artifact"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_issue"));
+        assertTrue(sql.contains("uk_task_backfill_issue_key"));
         verify(jdbcTemplate, atLeastOnce()).update(any(String.class), any(Object[].class));
     }
 
@@ -135,6 +137,26 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             assertEquals(expected, tableStructure(tableDefinition(migration, table)), table + " migration");
             assertEquals(expected, tableStructure(initializerDefinition), table + " initializer");
         }
+    }
+
+    @Test
+    void initializerSchemaAndBackfillMigrationKeepAuditTableInParity() throws IOException {
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(captor.capture());
+        String initializerDefinition = captor.getAllValues().stream()
+                .map(sql -> sql.toLowerCase(Locale.ROOT))
+                .filter(sql -> sql.contains("create table if not exists agent_task_backfill_issue"))
+                .findFirst().orElseThrow();
+        String schema = readResource("db/schema.sql");
+        String backfill = readResource("db/task-collaboration-backfill.sql");
+
+        TableStructure expected = tableStructure(tableDefinition(schema, "agent_task_backfill_issue"));
+        assertEquals(expected,
+                tableStructure(tableDefinition(backfill, "agent_task_backfill_issue")), "backfill migration");
+        assertEquals(expected,
+                tableStructure(initializerDefinition), "initializer");
     }
 
     @Test

@@ -292,6 +292,35 @@ CREATE TABLE IF NOT EXISTS agent_task_work_item (
     KEY idx_work_item_task_required (tenant_id, client_id, task_id, required_item, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task work items';
 
+CREATE TABLE IF NOT EXISTS agent_task_backfill_issue (
+    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    issue_key               CHAR(64) NOT NULL COMMENT 'Deterministic SHA-256 issue identity',
+    meta_id                 BIGINT NOT NULL COMMENT 'Source agent_task_meta primary key',
+    task_id                 VARCHAR(100) NOT NULL COMMENT 'Source task ID',
+    source_hash             CHAR(64) NOT NULL COMMENT 'SHA-256 of the original assignee field',
+    source_format           VARCHAR(32) NOT NULL COMMENT 'Detected legacy assignee shape',
+    source_shape            VARCHAR(32) NOT NULL COMMENT 'Parsed scalar/array/object location',
+    source_ordinal          INT NOT NULL COMMENT 'Stable source element ordinal',
+    raw_assignee            VARCHAR(100) DEFAULT NULL COMMENT 'Original agent_task_meta.assigned_agent_id',
+    source_agent_id         VARCHAR(100) DEFAULT NULL COMMENT 'Parsed historical Agent ID before resolution',
+    issue_code              VARCHAR(64) NOT NULL COMMENT 'Fail-closed B09 exception/review code',
+    issue_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable resolution reason',
+    first_report_sha256     CHAR(64) NOT NULL COMMENT 'First reviewed dry-run report SHA-256',
+    last_report_sha256      CHAR(64) NOT NULL COMMENT 'Latest reviewed dry-run report SHA-256',
+    first_seen_at           BIGINT NOT NULL COMMENT 'First apply observation time',
+    last_seen_at            BIGINT NOT NULL COMMENT 'Latest apply observation time',
+    occurrence_count        BIGINT NOT NULL DEFAULT 1 COMMENT 'Number of reviewed apply observations',
+    last_operator           VARCHAR(100) NOT NULL COMMENT 'Latest approved migration operator',
+    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source owner jiacn scope, nullable only for audited bad history',
+    client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source OAuth/API client scope, nullable only for audited bad history',
+    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+    update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_task_backfill_issue_key (issue_key),
+    KEY idx_task_backfill_issue_scope_task (tenant_id, client_id, task_id, issue_code),
+    KEY idx_task_backfill_issue_code_seen (issue_code, last_seen_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Auditable B09 historical task backfill exceptions';
+
 CREATE TABLE IF NOT EXISTS agent_task_request (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     request_id          VARCHAR(100) NOT NULL COMMENT 'Stable request ID',
