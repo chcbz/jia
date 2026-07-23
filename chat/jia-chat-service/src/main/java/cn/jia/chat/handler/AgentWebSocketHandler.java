@@ -63,6 +63,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
+    private static final Set<String> TASK_SCOPED_OUTBOUND_TYPES = Set.of(
+            AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+            AgentProtocolConstants.TYPE_COMMAND_ACK,
+            AgentProtocolConstants.TYPE_WORK_PROGRESS,
+            AgentProtocolConstants.TYPE_WORK_HEARTBEAT,
+            AgentProtocolConstants.TYPE_WORK_RESULT,
+            AgentProtocolConstants.TYPE_HELP_REQUEST,
+            AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
+            AgentProtocolConstants.TYPE_TASK_EVENT);
 
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
@@ -642,11 +651,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
 
     @Override
     public void publishTaskEvent(String eventType, AgentTaskDTO task) {
+        if (task == null || isBlank(task.getTenantId()) || isBlank(task.getClientId()) || isBlank(task.getId())) {
+            log.warn("Refusing task event without explicit scope, eventType={}, taskId={}",
+                    eventType, task == null ? null : task.getId());
+            return;
+        }
         Map<String, Object> payload = new HashMap<>();
         payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
         payload.put("messageId", UUID.randomUUID().toString());
         payload.put("messageType", AgentProtocolConstants.TYPE_TASK_EVENT);
         payload.put("correlationId", task.getId());
+        payload.put("tenantId", task.getTenantId());
+        payload.put("clientId", task.getClientId());
         payload.put("eventType", eventType);
         payload.put("taskId", task.getId());
         payload.put("title", task.getTitle());
@@ -657,7 +673,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         if (hallAnnouncementService != null) {
             hallAnnouncementService.recordTaskEvent(eventType, payload);
         }
-        broadcastEvent(AgentProtocolConstants.TYPE_TASK_EVENT, payload);
+
+        Set<String> memberAgentIds = resolveTaskMemberAgentIds(
+                task.getTenantId(), task.getClientId(), task.getId());
+        for (String memberAgentId : memberAgentIds) {
+            Map<String, Object> targetedPayload = new HashMap<>(payload);
+            targetedPayload.put("targetAgentId", memberAgentId);
+            targetedPayload.put("agentId", memberAgentId);
+            sendDirectMessageToAgent(memberAgentId, targetedPayload, memberAgentIds);
+        }
     }
 
     @Override
@@ -670,10 +694,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
 
     @Override
     public AgentActionDispatchResultDTO publishAgentAction(AgentActionIntentDTO intent) {
-        if (intent == null || intent.getActorAgentId() == null || intent.getActorAgentId().isBlank()) {
+        String validationError = validateAgentActionIntent(intent);
+        if (validationError != null) {
             AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
+            result.setIntentId(intent == null ? null : intent.getIntentId());
+            result.setTaskId(intent == null ? null : intent.getTaskId());
+            result.setTargetAgentId(intent == null ? null : intent.getActorAgentId());
             result.setStatus("failed");
-            result.setMessage("actorAgentId is required");
+            result.setMessage(validationError);
             return result;
         }
         Map<String, Object> payload = buildAgentActionPayload(intent);
@@ -683,11 +711,30 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         result.setTaskId(intent.getTaskId());
         result.setTargetAgentId(intent.getActorAgentId());
         result.setStatus(delivered ? "dispatched" : "queued");
-        result.setMessage(delivered ? "dispatched" : "Agent offline or not connected");
+        result.setMessage(delivered ? "dispatched" : "Agent offline, outside scope, or not a task member");
         if (delivered) {
             result.setDispatchedAt(System.currentTimeMillis());
         }
         return result;
+    }
+
+    private String validateAgentActionIntent(AgentActionIntentDTO intent) {
+        if (intent == null) {
+            return "intent is required";
+        }
+        if (isBlank(intent.getActorAgentId())) {
+            return "actorAgentId is required";
+        }
+        if (isBlank(intent.getTenantId())) {
+            return "tenantId is required";
+        }
+        if (isBlank(intent.getClientId())) {
+            return "clientId is required";
+        }
+        if (isBlank(intent.getTaskId())) {
+            return "taskId is required";
+        }
+        return null;
     }
 
     private Map<String, Object> buildAgentActionPayload(AgentActionIntentDTO intent) {
@@ -706,6 +753,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         payload.put("requestId", messageId);
         payload.put("correlationId", Optional.ofNullable(intent.getCorrelationId()).orElse(intent.getTaskId()));
         putIfPresent(payload, "causationId", intent.getCausationId());
+        payload.put("tenantId", intent.getTenantId());
+        payload.put("clientId", intent.getClientId());
         payload.put("conversationId", Optional.ofNullable(intent.getTaskId()).orElse(intent.getIntentId()));
         payload.put("conversationType", Optional.ofNullable(intent.getConversationType()).orElse("juyiting"));
         payload.put("taskId", intent.getTaskId());
@@ -737,27 +786,52 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     }
 
     public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
-        if (agentId == null || agentId.isBlank()) {
+        return sendDirectMessageToAgent(agentId, payload, null);
+    }
+
+    private boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload,
+            Set<String> trustedTaskMemberAgentIds) {
+        if (isBlank(agentId)) {
             return false;
         }
+        Map<String, Object> outbound = prepareDirectOutboundPayload(agentId, payload);
+        if (outbound == null) {
+            return false;
+        }
+        String messageType = asString(outbound.get("messageType"));
+        TaskDeliveryScope taskScope = taskDeliveryScope(outbound);
+        if (requiresTaskScope(messageType)) {
+            Set<String> memberAgentIds = trustedTaskMemberAgentIds == null
+                    ? resolveTaskMemberAgentIds(taskScope.tenantId(), taskScope.clientId(), taskScope.taskId())
+                    : trustedTaskMemberAgentIds;
+            if (!memberAgentIds.contains(agentId)) {
+                log.warn("Refusing task delivery to non-member, tenantId={}, clientId={}, taskId={}, agentId={}",
+                        taskScope.tenantId(), taskScope.clientId(), taskScope.taskId(), agentId);
+                return false;
+            }
+        }
+
         for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
             if (!entry.getValue().contains(agentId)) {
                 continue;
             }
             WebSocketSession session = sessions.get(entry.getKey());
-            if (session != null && session.isOpen()) {
-                Map<String, Object> outbound = prepareDirectOutboundPayload(agentId, payload);
-                String messageType = asString(outbound.get("messageType"));
-                String outerType = directCompatibilityType(messageType)
-                        ? AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE
-                        : safeCanonicalOutboundType(messageType);
-                if (outerType == null) {
-                    log.warn("Refusing unsafe Agent direct delivery, agentId={}, messageType={}", agentId, messageType);
-                    return false;
-                }
-                sendEvent(session, outerType, outbound);
-                return true;
+            if (session == null || !session.isOpen() || !agentId.equals(sessionAgentId(session))) {
+                continue;
             }
+            if (taskScope != null && (!taskScope.tenantId().equals(sessionJiacn(session))
+                    || !taskScope.clientId().equals(sessionClientId(session)))) {
+                continue;
+            }
+            String outerType = directCompatibilityType(messageType)
+                    ? AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE
+                    : safeCanonicalOutboundType(messageType);
+            if (outerType == null) {
+                log.warn("Refusing unsafe Agent direct delivery, agentId={}, messageType={}", agentId, messageType);
+                return false;
+            }
+            sendEvent(session, outerType, outbound);
+            return true;
         }
         return false;
     }
@@ -782,6 +856,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         }
         String legacyType = asString(payload.get("type"));
         String messageType = asString(payload.get("messageType"));
+        if (payload.containsKey("messageType") && !AgentProtocolConstants.isCanonicalType(messageType)) {
+            log.warn("Refusing Agent direct delivery with invalid explicit messageType, agentId={}", agentId);
+            return null;
+        }
         if (!AgentProtocolConstants.isCanonicalType(messageType)) {
             if (AgentProtocolConstants.LEGACY_AGENT_ACTION.equals(legacyType)) {
                 messageType = AgentProtocolConstants.TYPE_COMMAND_DISPATCH;
@@ -794,11 +872,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 messageType = AgentProtocolConstants.TYPE_CHAT_MESSAGE;
             }
         }
+        if (requiresTaskScope(messageType) && !hasConsistentTaskScope(payload, agentId)) {
+            log.warn("Refusing task-scoped Agent delivery with missing or conflicting scope, agentId={}, messageType={}",
+                    agentId, messageType);
+            return null;
+        }
         payload.putIfAbsent("schemaVersion", AgentProtocolConstants.VERSION_1);
         payload.putIfAbsent("messageId", UUID.randomUUID().toString());
         payload.put("messageType", messageType);
-        payload.put("targetAgentId", agentId);
-        payload.putIfAbsent("agentId", agentId);
+        if (!requiresTaskScope(messageType)) {
+            payload.put("targetAgentId", agentId);
+            payload.putIfAbsent("agentId", agentId);
+        }
         if (AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType)) {
             payload.putIfAbsent("commandId", Optional.ofNullable(asString(payload.get("requestId")))
                     .orElseGet(() -> UUID.randomUUID().toString()));
@@ -806,6 +891,90 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                     asString(payload.get("actionType"))));
         }
         return payload;
+    }
+
+    private boolean hasConsistentTaskScope(Map<String, Object> payload, String trustedTargetAgentId) {
+        String tenantId = strictString(payload.get("tenantId"));
+        String clientId = strictString(payload.get("clientId"));
+        String taskId = strictString(payload.get("taskId"));
+        String targetAgentId = strictString(payload.get("targetAgentId"));
+        if (isBlank(tenantId) || isBlank(clientId) || isBlank(taskId) || isBlank(targetAgentId)
+                || !trustedTargetAgentId.equals(targetAgentId)) {
+            return false;
+        }
+        String agentId = strictString(payload.get("agentId"));
+        if (!isBlank(agentId) && !trustedTargetAgentId.equals(agentId)) {
+            return false;
+        }
+        return nestedFieldMatches(payload, "tenantId", tenantId)
+                && nestedFieldMatches(payload, "clientId", clientId)
+                && nestedFieldMatches(payload, "taskId", taskId)
+                && nestedFieldMatches(payload, "targetAgentId", trustedTargetAgentId);
+    }
+
+    private boolean nestedFieldMatches(Map<String, Object> payload, String field, String expectedValue) {
+        Object nestedPayload = payload.get("payload");
+        if (!(nestedPayload instanceof Map<?, ?> nested) || !nested.containsKey(field)) {
+            return true;
+        }
+        return expectedValue.equals(strictString(nested.get(field)));
+    }
+
+    private TaskDeliveryScope taskDeliveryScope(Map<String, Object> payload) {
+        String messageType = asString(payload.get("messageType"));
+        if (!requiresTaskScope(messageType)) {
+            return null;
+        }
+        return new TaskDeliveryScope(
+                asString(payload.get("tenantId")),
+                asString(payload.get("clientId")),
+                asString(payload.get("taskId")));
+    }
+
+    private boolean requiresTaskScope(String messageType) {
+        return TASK_SCOPED_OUTBOUND_TYPES.contains(messageType);
+    }
+
+    private Set<String> resolveTaskMemberAgentIds(String tenantId, String clientId, String taskId) {
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            log.warn("Refusing task delivery because AgentService is unavailable, tenantId={}, clientId={}, taskId={}",
+                    tenantId, clientId, taskId);
+            return Set.of();
+        }
+        try {
+            return new LinkedHashSet<>(Optional.ofNullable(
+                    agentService.listTaskMemberAgentIds(tenantId, clientId, taskId)).orElseGet(List::of));
+        } catch (RuntimeException e) {
+            log.warn("Refusing task delivery because task members could not be resolved, tenantId={}, clientId={}, taskId={}",
+                    tenantId, clientId, taskId, e);
+            return Set.of();
+        }
+    }
+
+    private String strictString(Object value) {
+        return value instanceof String text ? text : null;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    public boolean isAgentConnected(String tenantId, String clientId, String agentId) {
+        if (isBlank(tenantId) || isBlank(clientId) || isBlank(agentId)) {
+            return false;
+        }
+        for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
+            if (!entry.getValue().contains(agentId)) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session != null && session.isOpen() && agentId.equals(sessionAgentId(session))
+                    && tenantId.equals(sessionJiacn(session)) && clientId.equals(sessionClientId(session))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean isAgentConnected(String agentId) {
@@ -1022,6 +1191,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 .map(String::trim)
                 .filter(item -> !item.isEmpty())
                 .toList();
+    }
+
+    private record TaskDeliveryScope(String tenantId, String clientId, String taskId) {
     }
 
     private record StreamState(String sessionId, String requestId, String conversationId, Disposable disposable) {

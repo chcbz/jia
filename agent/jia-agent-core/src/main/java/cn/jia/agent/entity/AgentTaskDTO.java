@@ -12,6 +12,8 @@ public class AgentTaskDTO implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private String id;
+    private String tenantId;
+    private String clientId;
     private String title;
     private String description;
     private String status;

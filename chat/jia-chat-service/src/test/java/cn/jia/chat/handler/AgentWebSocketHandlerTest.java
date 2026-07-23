@@ -246,6 +246,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         AgentActionIntentDTO intent = new AgentActionIntentDTO();
         intent.setIntentId("intent-task-1");
         intent.setActorAgentId("agent-001");
+        intent.setTenantId("juyiting");
+        intent.setClientId("jia_client");
         intent.setActionType("task_briefing");
         intent.setTaskId("task-001");
         intent.setTargetAgentIds(java.util.List.of("agent-001"));
@@ -254,6 +256,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         intent.setReason("Task assigned");
         intent.setAutonomyLevel("assist");
         intent.setRequiresApproval(false);
+        when(agentService.listTaskMemberAgentIds("juyiting", "jia_client", "task-001"))
+                .thenReturn(List.of("agent-001"));
 
         AgentActionDispatchResultDTO result = handler.publishAgentAction(intent);
 
@@ -278,6 +282,129 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 new AgentProtocolMessageNormalizer().normalizeInbound(commandEnvelope);
         assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, normalized.canonicalType());
         assertSafeServerDownlinks(messageCaptor.getAllValues());
+    }
+
+    @Test
+    void commandDeliveryUsesHandshakeIdentityScopeAndTaskMembership() throws Exception {
+        WebSocketSession targetSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession otherAgentSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossTenantSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossClientSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(targetSession, "session-target", "agent-target", "tenant-a", "client-a", null);
+        stubAgentSession(otherAgentSession, "session-other", "agent-other", "tenant-a", "client-a", null);
+        stubAgentSession(crossTenantSession, "session-cross-tenant", "agent-target", "tenant-b", "client-a", null);
+        stubAgentSession(crossClientSession, "session-cross-client", "agent-target", "tenant-a", "client-b", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class))).thenAnswer(invocation -> {
+            AgentRegisterDTO request = invocation.getArgument(0);
+            return new AgentRegisterResultDTO(request.getAgentId(), "token", AgentConstants.STATUS_ONLINE);
+        });
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-001"))
+                .thenReturn(List.of("agent-target"));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        for (WebSocketSession candidate : List.of(
+                targetSession, otherAgentSession, crossTenantSession, crossClientSession)) {
+            handler.afterConnectionEstablished(candidate);
+            handler.handleTextMessage(candidate, new TextMessage(
+                    "{\"type\":\"agent.register\",\"agentId\":\""
+                            + candidate.getAttributes().get("agentId") + "\",\"name\":\"Agent\"}"));
+        }
+        org.mockito.Mockito.clearInvocations(
+                targetSession, otherAgentSession, crossTenantSession, crossClientSession);
+
+        AgentActionIntentDTO intent = new AgentActionIntentDTO();
+        intent.setIntentId("intent-001");
+        intent.setTenantId("tenant-a");
+        intent.setClientId("client-a");
+        intent.setActorAgentId("agent-target");
+        intent.setTaskId("task-001");
+        intent.setActionType("task_briefing");
+        intent.setInstruction("execute");
+
+        AgentActionDispatchResultDTO result = handler.publishAgentAction(intent);
+
+        assertEquals("dispatched", result.getStatus());
+        ArgumentCaptor<TextMessage> targetMessage = ArgumentCaptor.forClass(TextMessage.class);
+        verify(targetSession).sendMessage(targetMessage.capture());
+        verify(otherAgentSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossTenantSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossClientSession, never()).sendMessage(any(TextMessage.class));
+        Map<String, Object> envelope = findOutboundEnvelope(
+                targetMessage.getAllValues(), AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
+        assertEquals("tenant-a", envelope.get("tenantId"));
+        assertEquals("client-a", envelope.get("clientId"));
+        assertEquals("task-001", envelope.get("taskId"));
+        assertEquals("agent-target", envelope.get("targetAgentId"));
+        assertEquals(envelope.get("messageId"), envelope.get("requestId"));
+        assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                new AgentProtocolMessageNormalizer().normalizeInbound(envelope).canonicalType());
+    }
+
+    @Test
+    void taskScopedDirectDeliveryFailsClosedForMissingConflictingOrMaliciousScope() throws Exception {
+        stubAgentSession("session-fail-closed", "agent-target");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-target", "token", AgentConstants.STATUS_ONLINE));
+        when(agentService.listTaskMemberAgentIds("juyiting", "other-client", "task-001"))
+                .thenReturn(List.of("agent-target"));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-target\",\"name\":\"Agent\"}"));
+        org.mockito.Mockito.clearInvocations(session);
+
+        boolean missingScope = handler.sendDirectMessageToAgent("agent-target", Map.of(
+                "schemaVersion", 1,
+                "messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                "taskId", "task-001",
+                "targetAgentId", "agent-target"));
+        boolean missingTarget = handler.sendDirectMessageToAgent("agent-target", Map.of(
+                "schemaVersion", 1,
+                "messageType", AgentProtocolConstants.TYPE_TASK_EVENT,
+                "tenantId", "juyiting",
+                "clientId", "jia_client",
+                "taskId", "task-001"));
+        boolean nonStringScope = handler.sendDirectMessageToAgent("agent-target", Map.of(
+                "schemaVersion", 1,
+                "messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                "tenantId", 7,
+                "clientId", "jia_client",
+                "taskId", "task-001",
+                "targetAgentId", "agent-target"));
+        boolean crossClient = handler.sendDirectMessageToAgent("agent-target", Map.of(
+                "schemaVersion", 1,
+                "messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                "tenantId", "juyiting",
+                "clientId", "other-client",
+                "taskId", "task-001",
+                "targetAgentId", "agent-target"));
+        boolean maliciousTarget = handler.sendDirectMessageToAgent("agent-target", Map.of(
+                "schemaVersion", 1,
+                "messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                "tenantId", "juyiting",
+                "clientId", "jia_client",
+                "taskId", "task-001",
+                "targetAgentId", "agent-other"));
+        boolean nestedConflict = handler.sendDirectMessageToAgent("agent-target", Map.of(
+                "schemaVersion", 1,
+                "messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                "tenantId", "juyiting",
+                "clientId", "jia_client",
+                "taskId", "task-001",
+                "targetAgentId", "agent-target",
+                "payload", Map.of("targetAgentId", "agent-other")));
+
+        assertFalse(missingScope);
+        assertFalse(missingTarget);
+        assertFalse(nonStringScope);
+        assertFalse(crossClient);
+        assertFalse(maliciousTarget);
+        assertFalse(nestedConflict);
+        verify(session, never()).sendMessage(any(TextMessage.class));
     }
 
     @Test
@@ -372,26 +499,49 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
-    void publishesTaskEventAsNonExecutableProtocolEvent() throws Exception {
-        when(session.getId()).thenReturn("session-event");
-        when(session.isOpen()).thenReturn(true);
-        when(session.getAttributes()).thenReturn(new java.util.HashMap<>());
+    void publishesTaskEventOnlyToScopedTaskMembers() throws Exception {
+        WebSocketSession memberSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession nonMemberSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(memberSession, "session-member", "agent-member", "juyiting", "jia_client", null);
+        stubAgentSession(nonMemberSession, "session-non-member", "agent-other", "juyiting", "jia_client", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class))).thenAnswer(invocation -> {
+            AgentRegisterDTO request = invocation.getArgument(0);
+            return new AgentRegisterResultDTO(request.getAgentId(), "token", AgentConstants.STATUS_ONLINE);
+        });
+        when(agentService.listTaskMemberAgentIds("juyiting", "jia_client", "task-001"))
+                .thenReturn(List.of("agent-member"));
+
         AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
-        handler.afterConnectionEstablished(session);
+        handler.afterConnectionEstablished(memberSession);
+        handler.afterConnectionEstablished(nonMemberSession);
+        handler.handleTextMessage(memberSession, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-member\",\"name\":\"Member\"}"));
+        handler.handleTextMessage(nonMemberSession, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-other\",\"name\":\"Other\"}"));
+        org.mockito.Mockito.clearInvocations(memberSession, nonMemberSession);
 
         AgentTaskDTO task = new AgentTaskDTO();
         task.setId("task-001");
+        task.setTenantId("juyiting");
+        task.setClientId("jia_client");
         task.setTitle("Protocol review");
         task.setStatus(AgentConstants.TASK_STATUS_RUNNING);
         handler.publishTaskEvent("task_updated", task);
 
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
-        String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"type\":\"task.event\""));
-        assertTrue(messages.contains("\"messageType\":\"task.event\""));
-        assertTrue(!messages.contains("\"commandType\""));
+        verify(memberSession).sendMessage(messageCaptor.capture());
+        verify(nonMemberSession, never()).sendMessage(any(TextMessage.class));
+        Map<String, Object> event = findOutboundEnvelope(
+                messageCaptor.getAllValues(), AgentProtocolConstants.TYPE_TASK_EVENT);
+        assertEquals("juyiting", event.get("tenantId"));
+        assertEquals("jia_client", event.get("clientId"));
+        assertEquals("task-001", event.get("taskId"));
+        assertEquals("agent-member", event.get("targetAgentId"));
+        assertFalse(event.containsKey("commandType"));
+        assertEquals(AgentProtocolConstants.TYPE_TASK_EVENT,
+                new AgentProtocolMessageNormalizer().normalizeInbound(event).canonicalType());
         assertSafeServerDownlinks(messageCaptor.getAllValues());
     }
 
@@ -407,12 +557,17 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         handler.handleTextMessage(session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
+        when(agentService.listTaskMemberAgentIds("juyiting", "jia_client", "task-001"))
+                .thenReturn(List.of("agent-001"));
 
         boolean eventDelivered = handler.sendDirectMessageToAgent("agent-001", Map.of(
                 "schemaVersion", 1,
                 "messageId", "event-1",
                 "messageType", AgentProtocolConstants.TYPE_TASK_EVENT,
-                "taskId", "task-001"));
+                "tenantId", "juyiting",
+                "clientId", "jia_client",
+                "taskId", "task-001",
+                "targetAgentId", "agent-001"));
         boolean unsafeAssignmentDelivered = handler.sendDirectMessageToAgent("agent-001", Map.of(
                 "messageType", AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY,
                 "taskId", "task-001"));
@@ -579,10 +734,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void dispatcherDispatchProducesCanonicalCommandEnvelopeThroughWebSocket() throws Exception {
+        EsContext commandContext = new EsContext();
+        commandContext.setJiacn("juyiting");
+        commandContext.setClientId("jia_client");
+        EsContextHolder.setContext(commandContext);
         stubAgentSession("session-cmd-dispatch", "agent-wuyong");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token-001", AgentConstants.STATUS_ONLINE));
+        when(agentService.listTaskMemberAgentIds("juyiting", "jia_client", "task-001"))
+                .thenReturn(List.of("agent-wuyong"));
 
         AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker);
@@ -593,6 +754,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         org.mockito.Mockito.clearInvocations(session);
         when(session.isOpen()).thenReturn(true);
+        EsContextHolder.setContext(commandContext);
 
         HallActionDispatcher dispatcher = new HallActionDispatcher(handler);
 
@@ -726,16 +888,21 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     private void stubAgentSession(String sessionId, String agentId, String runtimeInstanceId) {
+        stubAgentSession(session, sessionId, agentId, "juyiting", "jia_client", runtimeInstanceId);
+    }
+
+    private void stubAgentSession(WebSocketSession targetSession, String sessionId, String agentId,
+            String tenantId, String clientId, String runtimeInstanceId) {
         Map<String, Object> attributes = new java.util.HashMap<>();
         attributes.put("agentId", agentId);
-        attributes.put("clientId", "jia_client");
-        attributes.put("jiacn", "juyiting");
+        attributes.put("clientId", clientId);
+        attributes.put("jiacn", tenantId);
         if (runtimeInstanceId != null) {
             attributes.put("runtimeInstanceId", runtimeInstanceId);
         }
-        org.mockito.Mockito.lenient().when(session.getId()).thenReturn(sessionId);
-        org.mockito.Mockito.lenient().when(session.isOpen()).thenReturn(true);
-        org.mockito.Mockito.lenient().when(session.getAttributes()).thenReturn(attributes);
+        org.mockito.Mockito.lenient().when(targetSession.getId()).thenReturn(sessionId);
+        org.mockito.Mockito.lenient().when(targetSession.isOpen()).thenReturn(true);
+        org.mockito.Mockito.lenient().when(targetSession.getAttributes()).thenReturn(attributes);
     }
 
     private Map<String, Object> findOutboundEnvelope(List<TextMessage> messages, String messageType)

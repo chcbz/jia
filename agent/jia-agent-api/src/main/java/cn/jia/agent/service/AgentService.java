@@ -63,6 +63,8 @@ public interface AgentService {
 
     AgentTaskDTO getTask(String taskId);
 
+    List<String> listTaskMemberAgentIds(String tenantId, String clientId, String taskId);
+
     AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
 
     List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId);

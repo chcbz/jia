@@ -3,7 +3,10 @@ package cn.jia.chat.service;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.handler.AgentProtocolMessageNormalizer;
 import cn.jia.chat.handler.AgentWebSocketHandler;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.test.BaseMockTest;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -23,9 +26,15 @@ class HallActionDispatcherTest extends BaseMockTest {
     @Mock
     AgentWebSocketHandler agentWebSocketHandler;
 
+    @AfterEach
+    void tearDown() {
+        EsContextHolder.setContext(new EsContext());
+    }
+
     @Test
     void dispatchesOnlineIntentToAgentDirectMessage() {
-        when(agentWebSocketHandler.isAgentConnected("agent-linchong")).thenReturn(true);
+        setScope("tenant-a", "client-a");
+        when(agentWebSocketHandler.isAgentConnected("tenant-a", "client-a", "agent-linchong")).thenReturn(true);
         when(agentWebSocketHandler.sendDirectMessageToAgent(eq("agent-linchong"), any(Map.class))).thenReturn(true);
         HallActionDispatcher dispatcher = new HallActionDispatcher(agentWebSocketHandler);
 
@@ -52,6 +61,9 @@ class HallActionDispatcherTest extends BaseMockTest {
         assertEquals("intent-1", payload.get("commandId"));
         assertEquals(AgentProtocolConstants.COMMAND_REQUEST_RESPOND, payload.get("commandType"));
         assertEquals("agent-linchong", payload.get("targetAgentId"));
+        assertEquals("tenant-a", payload.get("tenantId"));
+        assertEquals("client-a", payload.get("clientId"));
+        assertEquals("task-1", payload.get("taskId"));
         assertEquals(payload.get("messageId"), payload.get("requestId"));
         AgentProtocolMessageNormalizer.NormalizedMessage normalized =
                 new AgentProtocolMessageNormalizer().normalizeInbound(payload);
@@ -63,7 +75,8 @@ class HallActionDispatcherTest extends BaseMockTest {
 
     @Test
     void queuesOfflineIntentInMailbox() {
-        when(agentWebSocketHandler.isAgentConnected("agent-linchong")).thenReturn(false);
+        setScope("tenant-a", "client-a");
+        when(agentWebSocketHandler.isAgentConnected("tenant-a", "client-a", "agent-linchong")).thenReturn(false);
         HallActionDispatcher dispatcher = new HallActionDispatcher(agentWebSocketHandler);
 
         HallActionIntent intent = new HallActionIntent();
@@ -71,6 +84,7 @@ class HallActionDispatcherTest extends BaseMockTest {
         intent.setActionType("request_report");
         intent.setActorAgentId("agent-linchong");
         intent.setConversationId("1001");
+        intent.setTaskId("task-2");
         intent.setInstruction("请回报当前进展");
 
         HallActionDispatchResult result = dispatcher.dispatch(intent);
@@ -80,4 +94,26 @@ class HallActionDispatcherTest extends BaseMockTest {
         assertEquals(1, dispatcher.mailbox("agent-linchong").size());
         assertEquals("intent-2", dispatcher.mailbox("agent-linchong").getFirst().getIntentId());
     }
+    @Test
+    void rejectsCommandWhenTrustedScopeIsMissing() {
+        HallActionDispatcher dispatcher = new HallActionDispatcher(agentWebSocketHandler);
+        HallActionIntent intent = new HallActionIntent();
+        intent.setIntentId("intent-missing-scope");
+        intent.setActorAgentId("agent-linchong");
+        intent.setTaskId("task-1");
+
+        HallActionDispatchResult result = dispatcher.dispatch(intent);
+
+        assertEquals("failed", result.getStatus());
+        verify(agentWebSocketHandler, never()).isAgentConnected(any(), any(), any());
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
+    }
+
+    private void setScope(String tenantId, String clientId) {
+        EsContext context = new EsContext();
+        context.setJiacn(tenantId);
+        context.setClientId(clientId);
+        EsContextHolder.setContext(context);
+    }
+
 }

@@ -17,6 +17,8 @@ public class AgentActionIntentDTO implements Serializable {
     private String commandType;
     private String correlationId;
     private String causationId;
+    private String tenantId;
+    private String clientId;
     private String actionType;
     private String actorAgentId;
     private List<String> targetAgentIds;

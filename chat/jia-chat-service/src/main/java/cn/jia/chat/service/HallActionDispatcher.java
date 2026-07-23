@@ -2,6 +2,8 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.handler.AgentWebSocketHandler;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -27,9 +29,14 @@ public class HallActionDispatcher {
         if (intent == null || !StringUtils.hasText(intent.getActorAgentId())) {
             return new HallActionDispatchResult(null, null, STATUS_FAILED, "actorAgentId is required");
         }
+        TaskCommandScope scope = currentTaskCommandScope(intent);
+        if (scope == null) {
+            return new HallActionDispatchResult(intent.getIntentId(), intent.getActorAgentId(), STATUS_FAILED,
+                    "tenantId, clientId and taskId are required");
+        }
         String agentId = intent.getActorAgentId();
-        Map<String, Object> payload = buildPayload(intent);
-        if (!agentWebSocketHandler.isAgentConnected(agentId)) {
+        Map<String, Object> payload = buildPayload(intent, scope);
+        if (!agentWebSocketHandler.isAgentConnected(scope.tenantId(), scope.clientId(), agentId)) {
             queue(agentId, intent, payload);
             intent.setStatus(STATUS_QUEUED);
             return new HallActionDispatchResult(intent.getIntentId(), agentId, STATUS_QUEUED, "agent is offline");
@@ -48,7 +55,7 @@ public class HallActionDispatcher {
         return mailbox.getOrDefault(agentId, List.of());
     }
 
-    private Map<String, Object> buildPayload(HallActionIntent intent) {
+    private Map<String, Object> buildPayload(HallActionIntent intent, TaskCommandScope scope) {
         String commandId = StringUtils.hasText(intent.getIntentId()) ? intent.getIntentId() : UUID.randomUUID().toString();
         String messageId = UUID.randomUUID().toString();
         Map<String, Object> payload = new HashMap<>();
@@ -59,8 +66,10 @@ public class HallActionDispatcher {
         payload.put("commandId", commandId);
         payload.put("commandType", AgentProtocolConstants.commandTypeForLegacyAction(intent.getActionType()));
         payload.put("requestId", messageId);
-        payload.put("correlationId", StringUtils.hasText(intent.getTaskId()) ? intent.getTaskId() : intent.getConversationId());
+        payload.put("correlationId", intent.getTaskId());
         putIfPresent(payload, "causationId", intent.getTriggerEventId());
+        payload.put("tenantId", scope.tenantId());
+        payload.put("clientId", scope.clientId());
         payload.put("conversationId", intent.getConversationId());
         payload.put("conversationType", "juyiting");
         payload.put("taskId", intent.getTaskId());
@@ -94,6 +103,20 @@ public class HallActionDispatcher {
         item.setCreateTime(System.currentTimeMillis());
         item.setUpdateTime(item.getCreateTime());
         mailbox.computeIfAbsent(agentId, key -> new ArrayList<>()).add(item);
+    }
+
+    private TaskCommandScope currentTaskCommandScope(HallActionIntent intent) {
+        EsContext context = EsContextHolder.getContext();
+        String tenantId = context == null ? null : context.getJiacn();
+        String clientId = context == null ? null : context.getClientId();
+        if (!StringUtils.hasText(tenantId) || !StringUtils.hasText(clientId)
+                || !StringUtils.hasText(intent.getTaskId())) {
+            return null;
+        }
+        return new TaskCommandScope(tenantId, clientId);
+    }
+
+    private record TaskCommandScope(String tenantId, String clientId) {
     }
 
     private void putIfPresent(Map<String, Object> map, String key, Object value) {

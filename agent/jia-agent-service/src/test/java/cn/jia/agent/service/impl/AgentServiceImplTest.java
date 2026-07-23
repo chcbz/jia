@@ -7,6 +7,7 @@ import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
@@ -24,6 +25,7 @@ import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskNoteEntity;
@@ -73,6 +75,8 @@ class AgentServiceImplTest extends BaseMockTest {
     @Mock
     AgentTaskMetaDao agentTaskMetaDao;
     @Mock
+    AgentTaskMemberDao agentTaskMemberDao;
+    @Mock
     AgentTaskNoteDao agentTaskNoteDao;
     @Mock
     DialogueTemplateDao dialogueTemplateDao;
@@ -98,7 +102,7 @@ class AgentServiceImplTest extends BaseMockTest {
     void setUpAgentService() {
         EsContextHolder.setContext(new EsContext());
         agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
-                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
+                agentTaskMemberDao, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
                 apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(true, true));
     }
 
@@ -167,7 +171,36 @@ class AgentServiceImplTest extends BaseMockTest {
         ArgumentCaptor<AgentTaskMetaEntity> metaCaptor = ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
         verify(agentTaskMetaDao).insert(metaCaptor.capture());
         assertEquals(AgentConstants.TASK_STATUS_OPEN, metaCaptor.getValue().getRewardStatus());
-        verify(eventPublisher).publishTaskEvent(eq("task_created"), any(AgentTaskDTO.class));
+        assertEquals("juyiting", metaCaptor.getValue().getTenantId());
+        assertEquals("jia_client", metaCaptor.getValue().getClientId());
+        ArgumentCaptor<AgentTaskDTO> eventTaskCaptor = ArgumentCaptor.forClass(AgentTaskDTO.class);
+        verify(eventPublisher).publishTaskEvent(eq("task_created"), eventTaskCaptor.capture());
+        assertEquals("juyiting", eventTaskCaptor.getValue().getTenantId());
+        assertEquals("jia_client", eventTaskCaptor.getValue().getClientId());
+    }
+
+    @Test
+    void resolvesScopedTaskMembersAndUsesLegacyAssigneesOnlyWhenMemberRowsAreAbsent() {
+        AgentTaskMemberEntity active = new AgentTaskMemberEntity();
+        active.setAgentId("agent-active");
+        active.setMemberStatus("working");
+        AgentTaskMemberEntity left = new AgentTaskMemberEntity();
+        left.setAgentId("agent-left");
+        left.setMemberStatus("left");
+        when(agentTaskMemberDao.listByTask("tenant-a", "client-a", "task-1"))
+                .thenReturn(List.of(active, left));
+
+        assertEquals(List.of("agent-active"),
+                agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-1"));
+        verify(agentTaskMetaDao, never()).findByTaskId("tenant-a", "client-a", "task-1");
+
+        AgentTaskMetaEntity legacy = new AgentTaskMetaEntity();
+        legacy.setAssignedAgentId("[\"agent-one\",\"agent-two\"]");
+        when(agentTaskMemberDao.listByTask("tenant-a", "client-a", "task-legacy")).thenReturn(List.of());
+        when(agentTaskMetaDao.findByTaskId("tenant-a", "client-a", "task-legacy")).thenReturn(legacy);
+
+        assertEquals(List.of("agent-one", "agent-two"),
+                agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-legacy"));
     }
 
     @Test
@@ -247,7 +280,7 @@ class AgentServiceImplTest extends BaseMockTest {
     @Test
     void sceneStateDisabledPreservesTaskAssignmentWithoutSceneWrite() {
         agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
-                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
+                agentTaskMemberDao, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
                 apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(false, true));
         AgentRuntimeEntity agent = ownedAgent(
                 "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
@@ -471,6 +504,8 @@ class AgentServiceImplTest extends BaseMockTest {
         assertTrue(intents.stream().allMatch(intent -> intent.getIntentId().equals(intent.getCommandId())));
         assertTrue(intents.stream().allMatch(intent -> AgentProtocolConstants.COMMAND_TASK_INVITE.equals(intent.getCommandType())));
         assertTrue(intents.stream().allMatch(intent -> "task-001".equals(intent.getCorrelationId())));
+        assertTrue(intents.stream().allMatch(intent -> "juyiting".equals(intent.getTenantId())));
+        assertTrue(intents.stream().allMatch(intent -> "jia_client".equals(intent.getClientId())));
         assertTrue(intents.stream().allMatch(intent -> "juyiting".equals(intent.getConversationType())));
         assertTrue(intents.stream().allMatch(intent -> !intent.getRequiresApproval()));
         assertEquals(2, result.getActionDispatchResults().size());

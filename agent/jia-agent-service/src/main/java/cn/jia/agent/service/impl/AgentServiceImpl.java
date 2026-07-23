@@ -8,6 +8,7 @@ import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
@@ -28,6 +29,7 @@ import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskAssigneeDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskNoteEntity;
@@ -97,6 +99,7 @@ public class AgentServiceImpl implements AgentService {
     private final AgentPersonaDao agentPersonaDao;
     private final AgentPersonaBindingDao agentPersonaBindingDao;
     private final AgentTaskMetaDao agentTaskMetaDao;
+    private final AgentTaskMemberDao agentTaskMemberDao;
     private final AgentTaskNoteDao agentTaskNoteDao;
     private final DialogueTemplateDao dialogueTemplateDao;
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
@@ -462,6 +465,30 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    public List<String> listTaskMemberAgentIds(String tenantId, String clientId, String taskId) {
+        require(!StringUtil.isBlank(tenantId), "tenantId is required");
+        require(!StringUtil.isBlank(clientId), "clientId is required");
+        require(!StringUtil.isBlank(taskId), "taskId is required");
+
+        List<AgentTaskMemberEntity> members = Optional.ofNullable(
+                agentTaskMemberDao.listByTask(tenantId, clientId, taskId)).orElseGet(Collections::emptyList);
+        if (!members.isEmpty()) {
+            return members.stream()
+                    .filter(member -> !"rejected".equals(member.getMemberStatus())
+                            && !"left".equals(member.getMemberStatus()))
+                    .map(AgentTaskMemberEntity::getAgentId)
+                    .filter(agentId -> !StringUtil.isBlank(agentId))
+                    .distinct()
+                    .toList();
+        }
+
+        AgentTaskMetaEntity legacyMeta = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        return legacyMeta == null
+                ? List.of()
+                : parseAssignedAgentIds(legacyMeta.getAssignedAgentId());
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request) {
         List<String> agentIds = normalizeAssignAgentIds(request);
@@ -599,10 +626,26 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void saveMeta(AgentTaskMetaEntity meta) {
+        applyCurrentTaskScope(meta);
         if (meta.getId() == null) {
             agentTaskMetaDao.insert(meta);
         } else {
             agentTaskMetaDao.updateById(meta);
+        }
+    }
+
+    private void applyCurrentTaskScope(AgentTaskMetaEntity meta) {
+        String tenantId = resolveCurrentJiacn();
+        String clientId = resolveCurrentClientId();
+        if (StringUtil.isBlank(meta.getTenantId())) {
+            meta.setTenantId(tenantId);
+        } else {
+            require(tenantId.equals(meta.getTenantId()), "task tenantId does not match current scope");
+        }
+        if (StringUtil.isBlank(meta.getClientId())) {
+            meta.setClientId(clientId);
+        } else {
+            require(clientId.equals(meta.getClientId()), "task clientId does not match current scope");
         }
     }
 
@@ -1319,6 +1362,8 @@ codexTimeoutMs=900000
     private AgentTaskDTO toTaskDTO(AgentTaskMetaEntity meta) {
         AgentTaskDTO dto = new AgentTaskDTO();
         dto.setId(meta.getTaskId());
+        dto.setTenantId(meta.getTenantId());
+        dto.setClientId(meta.getClientId());
         dto.setTitle(meta.getTaskId());
         dto.setStatus(meta.getRewardStatus());
         dto.setRequiredAbilities(parseList(meta.getRequiredAbilities()));
@@ -1641,6 +1686,8 @@ codexTimeoutMs=900000
         intent.setCommandId(intent.getIntentId());
         intent.setCommandType(AgentProtocolConstants.COMMAND_TASK_INVITE);
         intent.setCorrelationId(task.getId());
+        intent.setTenantId(task.getTenantId());
+        intent.setClientId(task.getClientId());
         intent.setActionType("task_briefing");
         intent.setActorAgentId(agent.getAgentId());
         intent.setTargetAgentIds(assignedAgents.stream().map(AgentRuntimeEntity::getAgentId).toList());
