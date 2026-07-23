@@ -23,11 +23,19 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                    #{item.submittedAt}, #{item.completedAt}, #{item.version},
                    #{tenantId}, #{clientId}, #{item.createTime}, #{item.updateTime}
             FROM agent_task_meta parent
-            WHERE parent.tenant_id = #{tenantId}
-              AND parent.client_id = #{clientId}
-              AND parent.task_id = #{item.taskId}
-              AND parent.reward_status IN
-                  ('open', 'planning', 'assigned', 'running', 'reviewing', 'blocked')
+            WHERE CAST(parent.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(parent.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(parent.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(parent.client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(SUBSTRING(parent.task_id, 1, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{item.taskId}, 1, 50) AS BINARY(200))
+              AND CAST(SUBSTRING(parent.task_id, 51, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{item.taskId}, 51, 50) AS BINARY(200))
+              AND OCTET_LENGTH(parent.task_id) = OCTET_LENGTH(#{item.taskId})
+              AND CAST(parent.reward_status AS BINARY(80)) IN
+                  (CAST('open' AS BINARY(80)), CAST('planning' AS BINARY(80)),
+                   CAST('assigned' AS BINARY(80)), CAST('running' AS BINARY(80)),
+                   CAST('reviewing' AS BINARY(80)), CAST('blocked' AS BINARY(80)))
             FOR UPDATE
             """)
     int insertIfParentNonTerminal(

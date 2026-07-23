@@ -34,11 +34,19 @@ class AgentTaskWorkItemParentGateDaoTest {
         assertTrue(sql.startsWith("insert into agent_task_work_item"), sql);
         assertTrue(sql.contains(" select "), sql);
         assertTrue(sql.contains("from agent_task_meta parent"), sql);
-        assertTrue(sql.contains("parent.tenant_id = #{tenantid}"), sql);
-        assertTrue(sql.contains("parent.client_id = #{clientid}"), sql);
-        assertTrue(sql.contains("parent.task_id = #{item.taskid}"), sql);
-        assertTrue(sql.contains("parent.reward_status in "
-                + "('open', 'planning', 'assigned', 'running', 'reviewing', 'blocked')"), sql);
+        assertTrue(sql.contains("cast(parent.tenant_id as binary(200)) "
+                + "= cast(#{tenantid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(parent.tenant_id) = octet_length(#{tenantid})"), sql);
+        assertTrue(sql.contains("cast(parent.client_id as binary(200)) "
+                + "= cast(#{clientid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(parent.client_id) = octet_length(#{clientid})"), sql);
+        assertTrue(sql.contains("cast(substring(parent.task_id, 1, 50) as binary(200))"), sql);
+        assertTrue(sql.contains("cast(substring(parent.task_id, 51, 50) as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(parent.task_id) = octet_length(#{item.taskid})"), sql);
+        assertTrue(sql.contains("cast(parent.reward_status as binary(80)) in"), sql);
+        for (String nonTerminal : new String[]{"open", "planning", "assigned", "running", "reviewing", "blocked"}) {
+            assertTrue(sql.contains("cast('" + nonTerminal + "' as binary(80))"), sql);
+        }
         assertTrue(sql.endsWith("for update"), sql);
         for (String terminal : new String[]{"completed", "failed", "cancelled", "archived"}) {
             assertTrue(!sql.contains("'" + terminal + "'"), sql);

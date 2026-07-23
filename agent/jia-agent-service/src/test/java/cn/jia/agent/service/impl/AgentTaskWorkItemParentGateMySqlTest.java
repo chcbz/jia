@@ -98,6 +98,28 @@ class AgentTaskWorkItemParentGateMySqlTest {
     }
 
     @Test
+    void parentGateRequiresByteExactScopeUnderCaseInsensitiveCollation() {
+        AgentTaskWorkItemDTO wrongCase = readyWorkItem("case-scope-child");
+        wrongCase.setTaskId("Task-1");
+
+        assertEquals(0, workItemDao.insert("Tenant-A", "Client-A", wrongCase));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_work_item WHERE work_item_id='case-scope-child'",
+                Integer.class));
+    }
+
+    @Test
+    void parentGateRejectsNonCanonicalStatusCaseUnderCaseInsensitiveCollation() {
+        jdbc.update("UPDATE agent_task_meta SET reward_status='Running' WHERE task_id=?", TASK);
+
+        assertEquals(0, workItemDao.insert(
+                TENANT, CLIENT, readyWorkItem("case-status-child")));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_work_item WHERE work_item_id='case-status-child'",
+                Integer.class));
+    }
+
+    @Test
     void lateRequiredInsertWaitsForTerminalRootLockThenReturnsZero() throws Exception {
         CountDownLatch snapshotRead = new CountDownLatch(1);
         CountDownLatch allowTerminalWrite = new CountDownLatch(1);
