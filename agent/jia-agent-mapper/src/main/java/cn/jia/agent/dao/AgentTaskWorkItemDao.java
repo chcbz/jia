@@ -19,6 +19,13 @@ public interface AgentTaskWorkItemDao {
     List<AgentTaskWorkItemEntity> listByAssignee(
             String tenantId, String clientId, String assigneeAgentId, String status, int limit);
 
+    List<AgentTaskWorkItemEntity> listByTaskAndAssignee(
+            String tenantId, String clientId, String taskId, String assigneeAgentId, int limit);
+
+    List<AgentTaskWorkItemEntity> listByTaskAssigneeAndType(
+            String tenantId, String clientId, String taskId, String assigneeAgentId,
+            String workType, int limit);
+
     List<AgentTaskWorkItemEntity> listExpiredLeases(
             String tenantId, String clientId, long expiredAtOrBefore, int limit);
 

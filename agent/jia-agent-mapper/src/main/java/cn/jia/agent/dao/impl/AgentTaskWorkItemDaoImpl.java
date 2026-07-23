@@ -83,6 +83,31 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public List<AgentTaskWorkItemEntity> listByTaskAndAssignee(
+            String tenantId, String clientId, String taskId, String assigneeAgentId, int limit) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
+        return ordered(scope(tenantId, clientId)
+                .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
+                .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId), limit);
+    }
+
+    @Override
+    public List<AgentTaskWorkItemEntity> listByTaskAssigneeAndType(
+            String tenantId, String clientId, String taskId, String assigneeAgentId,
+            String workType, int limit) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
+        TaskCollaborationDaoSupport.requireId(workType, "workType");
+        return ordered(scope(tenantId, clientId)
+                .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
+                .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId)
+                .eq(AgentTaskWorkItemEntity::getWorkType, workType), limit);
+    }
+
+    @Override
     public List<AgentTaskWorkItemEntity> listExpiredLeases(
             String tenantId, String clientId, long expiredAtOrBefore, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

@@ -519,6 +519,21 @@ class AgentWorkItemLeaseRealDatabaseTest {
         }
 
         @Override
+        public List<AgentTaskWorkItemEntity> listByTaskAndAssignee(
+                String tenantId, String clientId, String taskId, String assigneeAgentId, int limit) {
+            return delegate.listByTaskAndAssignee(
+                    tenantId, clientId, taskId, assigneeAgentId, limit);
+        }
+
+        @Override
+        public List<AgentTaskWorkItemEntity> listByTaskAssigneeAndType(
+                String tenantId, String clientId, String taskId, String assigneeAgentId,
+                String workType, int limit) {
+            return delegate.listByTaskAssigneeAndType(
+                    tenantId, clientId, taskId, assigneeAgentId, workType, limit);
+        }
+
+        @Override
         public List<AgentTaskWorkItemEntity> listExpiredLeases(
                 String tenantId, String clientId, long expiredAtOrBefore, int limit) {
             return delegate.listExpiredLeases(tenantId, clientId, expiredAtOrBefore, limit);
