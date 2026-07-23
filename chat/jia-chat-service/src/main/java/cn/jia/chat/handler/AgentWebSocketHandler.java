@@ -411,22 +411,52 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             request.setAgentId(agentId);
             request.setAllowQueue(asBoolean(payload.get("allowQueue")));
             AgentTaskDTO task = withSessionContext(session, () -> agentService.assignTask(taskId, request));
-            Map<String, Object> event = copyTrace(payload);
-            String requestMessageId = asString(payload.get("messageId"));
+            String tenantId = sessionJiacn(session);
+            String clientId = sessionClientId(session);
+            if (!isTrustedTaskAssignmentConfirmation(task, taskId, tenantId, clientId, agentId)) {
+                log.warn("Refusing legacy task assignment confirmation with incomplete or mismatched trusted scope, "
+                                + "tenantId={}, clientId={}, taskId={}, agentId={}",
+                        tenantId, clientId, taskId, agentId);
+                return;
+            }
+            Map<String, Object> event = new HashMap<>();
+            String requestMessageId = Optional.ofNullable(asString(payload.get("messageId")))
+                    .orElse(asString(payload.get("requestId")));
             event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
             event.put("messageId", UUID.randomUUID().toString());
             event.put("messageType", AgentProtocolConstants.TYPE_TASK_EVENT);
             event.put("eventType", "task.assignment.accepted");
             event.put("correlationId", task.getId());
             putIfPresent(event, "causationId", requestMessageId);
+            event.put("tenantId", tenantId);
+            event.put("clientId", clientId);
             event.put("taskId", task.getId());
+            event.put("agentId", agentId);
+            event.put("targetAgentId", agentId);
             event.put("status", task.getStatus());
-            event.put("assignedAgentId", task.getAssignedAgentId());
+            event.put("assignedAgentId", agentId);
             event.put("assignedAgentName", task.getAssignedAgentName());
-            sendEvent(session, AgentProtocolConstants.TYPE_TASK_EVENT, event);
+            if (!sendDirectMessageToAgent(agentId, event)) {
+                log.warn("Legacy task assignment confirmation was not delivered, tenantId={}, clientId={}, "
+                                + "taskId={}, agentId={}",
+                        tenantId, clientId, task.getId(), agentId);
+            }
         } catch (Exception e) {
             sendError(session, payload, errorCode(e), e.getMessage());
         }
+    }
+
+    private boolean isTrustedTaskAssignmentConfirmation(AgentTaskDTO task, String requestedTaskId,
+            String tenantId, String clientId, String agentId) {
+        return task != null
+                && !isBlank(requestedTaskId)
+                && requestedTaskId.equals(task.getId())
+                && !isBlank(tenantId)
+                && tenantId.equals(task.getTenantId())
+                && !isBlank(clientId)
+                && clientId.equals(task.getClientId())
+                && !isBlank(agentId)
+                && agentId.equals(task.getAssignedAgentId());
     }
 
     private void reportTask(WebSocketSession session, Map<String, Object> payload) {

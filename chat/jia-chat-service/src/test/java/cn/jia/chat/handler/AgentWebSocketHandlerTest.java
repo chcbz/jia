@@ -78,10 +78,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         AgentTaskDTO assigned = new AgentTaskDTO();
         assigned.setId("task-001");
+        assigned.setTenantId("juyiting");
+        assigned.setClientId("jia_client");
         assigned.setStatus(AgentConstants.TASK_STATUS_ASSIGNED);
         assigned.setAssignedAgentId("agent-001");
         assigned.setAssignedAgentName("Wu Yong");
         when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class))).thenReturn(assigned);
+        when(agentService.listTaskMemberAgentIds("juyiting", "jia_client", "task-001"))
+                .thenReturn(List.of("agent-001"));
 
         AgentTaskDTO running = new AgentTaskDTO();
         running.setId("task-001");
@@ -121,6 +125,173 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"status\":\"running\""));
         verify(agentService).reportTask(any(String.class), any(AgentTaskReportDTO.class));
         assertSafeServerDownlinks(messageCaptor.getAllValues());
+    }
+
+    @Test
+    void legacyTaskAssignmentConfirmationUsesTrustedScopeForEveryMatchingSession() throws Exception {
+        WebSocketSession firstSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession secondSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossTenantSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossClientSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(firstSession, "session-legacy-first", "agent-legacy", "tenant-a", "client-a", null);
+        stubAgentSession(secondSession, "session-legacy-second", "agent-legacy", "tenant-a", "client-a", null);
+        stubAgentSession(crossTenantSession, "session-legacy-cross-tenant", "agent-legacy",
+                "tenant-b", "client-a", null);
+        stubAgentSession(crossClientSession, "session-legacy-cross-client", "agent-legacy",
+                "tenant-a", "client-b", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-legacy", "token", AgentConstants.STATUS_ONLINE));
+
+        AgentTaskDTO assigned = assignedTask("task-legacy", "tenant-a", "client-a", "agent-legacy");
+        when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class))).thenReturn(assigned);
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-legacy"))
+                .thenReturn(List.of("agent-legacy"));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        for (WebSocketSession candidate : List.of(firstSession, secondSession,
+                crossTenantSession, crossClientSession)) {
+            handler.afterConnectionEstablished(candidate);
+            handler.handleTextMessage(candidate, new TextMessage(
+                    "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
+        }
+        org.mockito.Mockito.clearInvocations(firstSession, secondSession, crossTenantSession, crossClientSession);
+
+        handler.handleTextMessage(firstSession, new TextMessage("""
+                {"type":"task.assign","requestId":"legacy-assign","taskId":"task-legacy",
+                 "agentId":"agent-legacy","targetAgentId":"agent-malicious",
+                 "tenantId":"tenant-malicious","clientId":"client-malicious"}
+                """));
+
+        ArgumentCaptor<TextMessage> firstCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        ArgumentCaptor<TextMessage> secondCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(firstSession, org.mockito.Mockito.times(1)).sendMessage(firstCaptor.capture());
+        verify(secondSession, org.mockito.Mockito.times(1)).sendMessage(secondCaptor.capture());
+        verify(crossTenantSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossClientSession, never()).sendMessage(any(TextMessage.class));
+
+        Map<String, Object> firstEnvelope = findOutboundEnvelope(
+                firstCaptor.getAllValues(), AgentProtocolConstants.TYPE_TASK_EVENT);
+        Map<String, Object> secondEnvelope = findOutboundEnvelope(
+                secondCaptor.getAllValues(), AgentProtocolConstants.TYPE_TASK_EVENT);
+        for (Map<String, Object> envelope : List.of(firstEnvelope, secondEnvelope)) {
+            assertEquals("tenant-a", envelope.get("tenantId"));
+            assertEquals("client-a", envelope.get("clientId"));
+            assertEquals("task-legacy", envelope.get("taskId"));
+            assertEquals("agent-legacy", envelope.get("agentId"));
+            assertEquals("agent-legacy", envelope.get("targetAgentId"));
+            assertEquals("legacy-assign", envelope.get("causationId"));
+            assertEquals("task.assignment.accepted", envelope.get("eventType"));
+            AgentProtocolMessageNormalizer.NormalizedMessage normalized =
+                    new AgentProtocolMessageNormalizer().normalizeInbound(envelope);
+            assertEquals(AgentProtocolConstants.TYPE_TASK_EVENT, normalized.canonicalType());
+        }
+        assertFalse(firstCaptor.getValue().getPayload().contains("malicious"));
+        assertFalse(secondCaptor.getValue().getPayload().contains("malicious"));
+    }
+
+    @Test
+    void legacyTaskAssignmentConfirmationFailsClosedForMissingOrMismatchedScope() throws Exception {
+        stubAgentSession("session-legacy-invalid-scope", "agent-legacy");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-legacy", "token", AgentConstants.STATUS_ONLINE));
+        AgentTaskDTO missingScope = assignedTask("task-missing-scope", null, "jia_client", "agent-legacy");
+        AgentTaskDTO mismatchedScope = assignedTask("task-cross-scope", "other-tenant", "jia_client", "agent-legacy");
+        when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
+                .thenReturn(missingScope, mismatchedScope);
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
+        org.mockito.Mockito.clearInvocations(session);
+
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"task.assign\",\"taskId\":\"task-missing-scope\",\"agentId\":\"agent-legacy\"}"));
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"task.assign\",\"taskId\":\"task-cross-scope\",\"agentId\":\"agent-legacy\"}"));
+
+        verify(session, never()).sendMessage(any(TextMessage.class));
+        verify(agentService, never()).listTaskMemberAgentIds(any(String.class), any(String.class), any(String.class));
+    }
+
+    @Test
+    void legacyTaskAssignmentConfirmationFailsClosedForNonMember() throws Exception {
+        stubAgentSession("session-legacy-non-member", "agent-legacy");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-legacy", "token", AgentConstants.STATUS_ONLINE));
+        when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
+                .thenReturn(assignedTask("task-non-member", "juyiting", "jia_client", "agent-legacy"));
+        when(agentService.listTaskMemberAgentIds("juyiting", "jia_client", "task-non-member"))
+                .thenReturn(List.of("agent-other"));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
+        org.mockito.Mockito.clearInvocations(session);
+
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"task.assign\",\"taskId\":\"task-non-member\",\"agentId\":\"agent-legacy\"}"));
+
+        verify(session, never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    void legacyTaskAssignmentConfirmationContinuesAfterOneSessionFails() throws Exception {
+        WebSocketSession firstSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession secondSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(firstSession, "session-legacy-first-candidate", "agent-legacy",
+                "tenant-a", "client-a", null);
+        stubAgentSession(secondSession, "session-legacy-second-candidate", "agent-legacy",
+                "tenant-a", "client-a", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-legacy", "token", AgentConstants.STATUS_ONLINE));
+        when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
+                .thenReturn(assignedTask("task-failure", "tenant-a", "client-a", "agent-legacy"));
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-failure"))
+                .thenReturn(List.of("agent-legacy"));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        for (WebSocketSession candidate : List.of(firstSession, secondSession)) {
+            handler.afterConnectionEstablished(candidate);
+            handler.handleTextMessage(candidate, new TextMessage(
+                    "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
+        }
+        org.mockito.Mockito.clearInvocations(firstSession, secondSession);
+        java.util.concurrent.atomic.AtomicInteger sendAttempts = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<TextMessage> deliveredMessage =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        org.mockito.stubbing.Answer<Void> failFirstSendOnly = invocation -> {
+            TextMessage outbound = invocation.getArgument(0);
+            if (sendAttempts.getAndIncrement() == 0) {
+                throw new RuntimeException("simulated assignment confirmation failure");
+            }
+            deliveredMessage.set(outbound);
+            return null;
+        };
+        org.mockito.Mockito.doAnswer(failFirstSendOnly)
+                .when(firstSession).sendMessage(any(TextMessage.class));
+        org.mockito.Mockito.doAnswer(failFirstSendOnly)
+                .when(secondSession).sendMessage(any(TextMessage.class));
+
+        handler.handleTextMessage(firstSession, new TextMessage(
+                "{\"type\":\"task.assign\",\"taskId\":\"task-failure\",\"agentId\":\"agent-legacy\"}"));
+
+        verify(firstSession, org.mockito.Mockito.times(1)).sendMessage(any(TextMessage.class));
+        verify(secondSession, org.mockito.Mockito.times(1)).sendMessage(any(TextMessage.class));
+        assertEquals(2, sendAttempts.get());
+        Map<String, Object> envelope = findOutboundEnvelope(
+                List.of(deliveredMessage.get()), AgentProtocolConstants.TYPE_TASK_EVENT);
+        assertEquals("task.assignment.accepted", envelope.get("eventType"));
+        assertEquals("agent-legacy", envelope.get("targetAgentId"));
     }
 
     @Test
@@ -991,6 +1162,17 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         dto.setName(name);
         dto.setStatus(AgentConstants.STATUS_ONLINE);
         return dto;
+    }
+
+    private AgentTaskDTO assignedTask(String taskId, String tenantId, String clientId, String agentId) {
+        AgentTaskDTO task = new AgentTaskDTO();
+        task.setId(taskId);
+        task.setTenantId(tenantId);
+        task.setClientId(clientId);
+        task.setStatus(AgentConstants.TASK_STATUS_ASSIGNED);
+        task.setAssignedAgentId(agentId);
+        task.setAssignedAgentName("Agent");
+        return task;
     }
 
     private void stubAgentSession(String sessionId, String agentId) {
