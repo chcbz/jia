@@ -747,23 +747,13 @@ public class AgentTaskCollaborationServiceImpl
             }
             if (current instanceof SQLException sql) {
                 String state = sql.getSQLState();
-                if ("23505".equals(state) || sql.getErrorCode() == 1062
-                        || isKnownDuplicateConstraint(sql.getMessage())) {
+                if ("23505".equals(state) || sql.getErrorCode() == 1062) {
                     return true;
                 }
             }
             current = current.getCause();
         }
         return false;
-    }
-
-    private boolean isKnownDuplicateConstraint(String message) {
-        if (message == null) {
-            return false;
-        }
-        String normalized = message.toLowerCase(Locale.ROOT);
-        return normalized.contains("uk_task_request_scope")
-                || normalized.contains("uk_artifact_version");
     }
 
     private boolean isPersistenceValidationFailure(Throwable throwable) {

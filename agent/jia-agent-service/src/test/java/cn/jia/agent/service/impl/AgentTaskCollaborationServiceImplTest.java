@@ -26,6 +26,7 @@ import org.springframework.dao.DuplicateKeyException;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.sql.SQLException;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -221,6 +222,27 @@ class AgentTaskCollaborationServiceImplTest {
                 .thenReturn(workItem("work-1"));
         when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenThrow(
                 new DataIntegrityViolationException("INSERT INTO secret_table failed: value too long"));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, error.getReason());
+        assertEquals("Request could not be persisted", error.getMessage());
+        assertNull(error.getCause());
+        verify(requestDao, never()).findByRequestId(any(), any(), any(), any());
+    }
+
+    @Test
+    void constraintNameDoesNotMakeSqlState22FailureADuplicateConflict() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        SQLException sql = new SQLException(
+                "Data too long while handling uk_task_request_scope", "22001", 0);
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenThrow(
+                new DataIntegrityViolationException("request insert failed", sql));
 
         AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
                 () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()));
