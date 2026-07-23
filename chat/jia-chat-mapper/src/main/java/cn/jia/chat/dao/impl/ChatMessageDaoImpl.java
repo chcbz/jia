@@ -4,6 +4,7 @@ import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.mapper.ChatMessageMapper;
 import cn.jia.common.dao.BaseDaoImpl;
+import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
@@ -22,6 +23,36 @@ import java.util.Set;
  */
 @Named
 public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessageEntity> implements ChatMessageDao {
+
+    @Override
+    public int insertScoped(String tenantId, String clientId, ChatMessageEntity message) {
+        requireScope(tenantId, clientId);
+        if (message == null) {
+            throw new IllegalArgumentException("message is required");
+        }
+        requireId(message.getConversationId(), "conversationId");
+        message.setTenantId(tenantId);
+        message.setClientId(clientId);
+        return insert(message);
+    }
+
+    @Override
+    public List<ChatMessageEntity> findByConversationIdScoped(
+            String tenantId, String clientId, String conversationId, int limit) {
+        requireScope(tenantId, clientId);
+        requireId(conversationId, "conversationId");
+        int bounded = Math.max(1, Math.min(limit, 500));
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(ChatMessageEntity::getTenantId, tenantId)
+                .eq(ChatMessageEntity::getClientId, clientId)
+                .eq(ChatMessageEntity::getConversationId, conversationId)
+                .orderByDesc(ChatMessageEntity::getCreateTime)
+                .orderByDesc(ChatMessageEntity::getId)
+                .last("LIMIT " + bounded);
+        List<ChatMessageEntity> result = baseMapper.selectList(wrapper);
+        Collections.reverse(result);
+        return result;
+    }
 
     @Override
     public List<ChatMessageEntity> findByConversationId(String conversationId) {
@@ -112,4 +143,15 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
         }
         return Collections.emptyList();
     }
+    private void requireScope(String tenantId, String clientId) {
+        requireId(tenantId, "tenantId");
+        requireId(clientId, "clientId");
+    }
+
+    private void requireId(String value, String field) {
+        if (StringUtil.isBlank(value)) {
+            throw new IllegalArgumentException(field + " is required");
+        }
+    }
+
 }

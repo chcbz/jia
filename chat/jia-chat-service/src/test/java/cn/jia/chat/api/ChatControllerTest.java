@@ -1,8 +1,10 @@
 package cn.jia.chat.api;
 
 import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.entity.JsonResult;
@@ -32,12 +34,14 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -108,6 +112,46 @@ class ChatControllerTest extends BaseMockTest {
         assertTrue(saved.getMetadata().contains("\"selectedAgentId\":\"agent-wuyong\""));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"agentDelivery\"")));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"conversationId\": \"1001\"")));
+    }
+
+    @Test
+    void genericChatCannotCreateReservedTaskThreadScope() {
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setContent("spoof task thread");
+        request.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
+        request.setConversationScopeType(AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE);
+        request.setConversationScopeKey("task-thread:task-1");
+        request.setTaskId("task-1");
+
+        AgentTaskThreadException denied = assertThrows(AgentTaskThreadException.class,
+                () -> newController().handleChat(request));
+        assertEquals(AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN, denied.getReason());
+
+        ChatMessageDTO metadataSpoof = new ChatMessageDTO();
+        metadataSpoof.setContent("spoof task thread through metadata");
+        metadataSpoof.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
+        metadataSpoof.setMetadata(Map.of("mode",
+                AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE));
+        assertThrows(AgentTaskThreadException.class,
+                () -> newController().handleChat(metadataSpoof));
+
+        verify(chatConversationService, never()).create(any());
+    }
+
+    @Test
+    void genericStopAndEventRoutesCannotUseTaskThreadConversation() {
+        when(chatConversationService.get("77")).thenThrow(new AgentTaskThreadException(
+                AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                "protected task thread"));
+        ChatController controller = newController();
+        ChatMessageDTO stop = new ChatMessageDTO();
+        stop.setConversationId("77");
+
+        assertThrows(AgentTaskThreadException.class, () -> controller.stopStream(stop));
+        assertThrows(AgentTaskThreadException.class, () -> controller.conversationEvents("77"));
+
+        verify(redisService, never()).publishSignal("77");
+        verify(chatConversationEventBroker, never()).stream("77");
     }
 
     @Test

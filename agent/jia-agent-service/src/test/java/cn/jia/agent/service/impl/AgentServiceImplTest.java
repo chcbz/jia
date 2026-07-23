@@ -140,6 +140,74 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void apiKeyOwnedAgentRequiresMatchingScopeAndActiveBinding() {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setAgentId("agent-owned");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("tenant-a");
+        when(agentRuntimeDao.findByAgentId("agent-owned")).thenReturn(runtime);
+        AgentPersonaBindingEntity active = binding("agent-owned", "wuyong");
+        active.setClientId("client-a");
+        active.setJiacn("tenant-a");
+        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(
+                "client-a", "tenant-a", "agent-owned")).thenReturn(active);
+
+        assertEquals("agent-owned", agentService.requireApiKeyOwnedAgent(
+                "client-a", "tenant-a", "agent-owned").getAgentId());
+    }
+
+    @Test
+    void apiKeyOwnedAgentRejectsOtherClientOrTenantWithoutBindingLookup() {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setAgentId("agent-other-scope");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("tenant-a");
+        when(agentRuntimeDao.findByAgentId("agent-other-scope")).thenReturn(runtime);
+
+        for (String[] scope : List.of(
+                new String[]{"client-b", "tenant-a"},
+                new String[]{"client-a", "tenant-b"})) {
+            AgentServiceImpl.AgentBizException denied = assertThrows(
+                    AgentServiceImpl.AgentBizException.class,
+                    () -> agentService.requireApiKeyOwnedAgent(
+                            scope[0], scope[1], "agent-other-scope"));
+            assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, denied.getCode());
+        }
+        verify(agentPersonaBindingDao, never())
+                .findActiveByClientJiacnAndAgentId(any(), any(), any());
+    }
+
+    @Test
+    void apiKeyOwnedAgentRejectsSystemAgentBeforeRuntimeLookup() {
+        AgentServiceImpl.AgentBizException denied = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> agentService.requireApiKeyOwnedAgent(
+                        "client-a", "tenant-a", AgentConstants.BUILTIN_SONGJIANG_AGENT_ID));
+
+        assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, denied.getCode());
+        verify(agentRuntimeDao, never()).findByAgentId(any());
+        verify(agentPersonaBindingDao, never())
+                .findActiveByClientJiacnAndAgentId(any(), any(), any());
+    }
+
+    @Test
+    void apiKeyOwnedAgentRejectsMissingOrInactiveBinding() {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setAgentId("agent-unbound");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("tenant-a");
+        when(agentRuntimeDao.findByAgentId("agent-unbound")).thenReturn(runtime);
+        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(
+                "client-a", "tenant-a", "agent-unbound")).thenReturn(null);
+
+        AgentServiceImpl.AgentBizException denied = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> agentService.requireApiKeyOwnedAgent(
+                        "client-a", "tenant-a", "agent-unbound"));
+        assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, denied.getCode());
+    }
+
+    @Test
     void registerCreatesOnlineAgentAndPublishesStatus() {
         AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
         AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_PROVISIONED);

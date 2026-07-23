@@ -2,8 +2,11 @@ package cn.jia.chat.service.impl;
 
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.exception.AgentTaskThreadException;
+import cn.jia.chat.exception.AgentTaskThreadException.Reason;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.core.context.EsContextHolder;
 import com.github.pagehelper.PageHelper;
@@ -40,12 +43,13 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         if (example.getJiacn() == null || example.getJiacn().isEmpty()) {
             example.setJiacn(EsContextHolder.getContext().getJiacn());
         }
-        return PageInfo.of(chatConversationDao.selectByEntity(example));
+        return PageInfo.of(chatConversationDao.selectNonTaskThreadByEntity(example));
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void deleteConversation(String conversationId) {
+        requireGenericConversation(conversationId);
         // 删除会话记录
         chatConversationDao.deleteById(Long.valueOf(conversationId));
         // 删除该会话的所有消息
@@ -54,6 +58,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
 
     @Override
     public List<ChatMessageEntity> findByConversationId(String conversationId) {
+        requireGenericConversation(conversationId);
         return chatMessageDao.findByConversationId(conversationId);
     }
 
@@ -66,16 +71,29 @@ public class ChatConversationServiceImpl implements ChatConversationService {
 
     @Override
     public ChatConversationEntity get(String conversationId) {
-        ChatConversationEntity query = new ChatConversationEntity();
-        query.setId(Long.valueOf(conversationId));
-        List<ChatConversationEntity> list = chatConversationDao.selectByEntity(query);
-        return list != null && !list.isEmpty() ? list.getFirst() : null;
+        return requireGenericConversation(conversationId);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ChatConversationEntity update(ChatConversationEntity entity) {
+        if (entity != null && entity.getId() != null) {
+            requireGenericConversation(String.valueOf(entity.getId()));
+        }
         chatConversationDao.updateById(entity);
         return entity;
+    }
+
+    private ChatConversationEntity requireGenericConversation(String conversationId) {
+        ChatConversationEntity query = new ChatConversationEntity();
+        query.setId(Long.valueOf(conversationId));
+        List<ChatConversationEntity> list = chatConversationDao.selectByEntity(query);
+        ChatConversationEntity conversation = list != null && !list.isEmpty() ? list.getFirst() : null;
+        if (AgentTaskThreadConstants.isTaskThreadConversation(conversation)) {
+            throw new AgentTaskThreadException(
+                    Reason.NOT_FOUND_OR_FORBIDDEN,
+                    "Conversation is not available through the generic chat API");
+        }
+        return conversation;
     }
 }

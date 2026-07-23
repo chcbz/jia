@@ -3,6 +3,8 @@ package cn.jia.chat.dao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.core.dao.IBaseDao;
 
+import java.util.List;
+
 /**
  * <p>
  * 聊天会话 DAO 接口
@@ -13,4 +15,7 @@ import cn.jia.core.dao.IBaseDao;
  */
 public interface ChatConversationDao extends IBaseDao<ChatConversationEntity> {
 
+    ChatConversationEntity findScopedById(String tenantId, String clientId, String conversationId);
+
+    List<ChatConversationEntity> selectNonTaskThreadByEntity(ChatConversationEntity example);
 }

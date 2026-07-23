@@ -15,6 +15,13 @@ import java.util.List;
  */
 public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
 
+    /** Scoped task-thread write boundary. */
+    int insertScoped(String tenantId, String clientId, ChatMessageEntity message);
+
+    /** Scoped stable latest-message query for task threads. */
+    List<ChatMessageEntity> findByConversationIdScoped(
+            String tenantId, String clientId, String conversationId, int limit);
+
     /**
      * 根据会话ID查询消息列表
      *

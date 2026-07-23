@@ -2,8 +2,10 @@ package cn.jia.chat.api;
 
 import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
 import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
@@ -28,7 +30,10 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
@@ -146,7 +151,13 @@ public class ChatController {
                             : CONVERSATION_TYPE_NORMAL
             );
             if (CONVERSATION_TYPE_JUYITING.equals(message.getConversationType())) {
+                if (requestsReservedTaskThreadScope(chatMessage)) {
+                    throw reservedTaskThreadAccess();
+                }
                 JuyitingConversationScope scope = juyitingConversationScopeService.resolve(chatMessage);
+                if (AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(scope.scopeType())) {
+                    throw reservedTaskThreadAccess();
+                }
                 message.setConversationScopeType(scope.scopeType());
                 message.setConversationScopeKey(scope.scopeKey());
                 message.setTaskId(scope.taskId());
@@ -157,6 +168,33 @@ public class ChatController {
             message = chatConversationService.get(chatMessage.getConversationId());
         }
         return message;
+    }
+
+    private boolean requestsReservedTaskThreadScope(ChatMessageDTO chatMessage) {
+        if (chatMessage == null) {
+            return false;
+        }
+        if (AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(
+                chatMessage.getConversationScopeType())) {
+            return true;
+        }
+        Object metadataMode = chatMessage.getMetadata() == null
+                ? null : chatMessage.getMetadata().get("mode");
+        return metadataMode != null
+                && AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(
+                String.valueOf(metadataMode));
+    }
+
+    private AgentTaskThreadException reservedTaskThreadAccess() {
+        return new AgentTaskThreadException(
+                AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                "Reserved conversation scope type");
+    }
+
+    private void requireGenericConversationAccess(String conversationId) {
+        if (StringUtil.isNotBlank(conversationId)) {
+            chatConversationService.get(conversationId);
+        }
     }
 
     private String resolveConversationTypeStr(ChatMessageDTO chatMessage) {
@@ -329,6 +367,7 @@ public class ChatController {
 
     @RequestMapping(value = "/stop_stream", method = RequestMethod.POST)
     public Object stopStream(@RequestBody ChatMessageDTO chatMessage) {
+        requireGenericConversationAccess(chatMessage.getConversationId());
         redisService.publishSignal(chatMessage.getConversationId()).subscribe();
         return JsonResult.success();
     }
@@ -346,6 +385,7 @@ public class ChatController {
 
     @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> conversationEvents(@RequestParam(name = "id") String id) {
+        requireGenericConversationAccess(id);
         return chatConversationEventBroker.stream(id)
                 .map(event -> "data: " + event + "\n\n");
     }
@@ -468,6 +508,14 @@ public class ChatController {
         result.setTimestamp(document.getTimestamp());
         result.setScore(document.getScore());
         return result;
+    }
+
+    @ExceptionHandler(AgentTaskThreadException.class)
+    public ResponseEntity<JsonResult<Void>> handleReservedTaskThreadAccess() {
+        JsonResult<Void> result = JsonResult.failure(
+                "CONVERSATION_NOT_FOUND", "Conversation is not available");
+        result.setStatus(HttpStatus.NOT_FOUND.value());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(result);
     }
 
     @lombok.Data
