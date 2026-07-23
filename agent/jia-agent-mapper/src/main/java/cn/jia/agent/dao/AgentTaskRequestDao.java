@@ -12,7 +12,8 @@ public interface AgentTaskRequestDao {
             String tenantId, String clientId, String taskId, String requestId);
 
     List<AgentTaskRequestEntity> listByTask(
-            String tenantId, String clientId, String taskId, String status, int limit);
+            String tenantId, String clientId, String taskId, String status,
+            String workItemId, int limit);
 
     List<AgentTaskRequestEntity> listByTarget(String tenantId, String clientId, String taskId,
             String targetType, String targetId, String status, int limit);

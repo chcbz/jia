@@ -24,6 +24,11 @@ public interface AgentTaskArtifactDao {
     List<AgentTaskArtifactEntity> listByTask(
             String tenantId, String clientId, String taskId, int limit);
 
+    /** Applies task/work-item and visibility ACL predicates before deterministic ORDER/LIMIT. */
+    List<AgentTaskArtifactEntity> listVisibleByTask(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String actorAgentId, boolean reviewerAccess, boolean coordinatorAccess, int limit);
+
     List<AgentTaskArtifactEntity> listByWorkItem(
             String tenantId, String clientId, String taskId, String workItemId, int limit);
 }

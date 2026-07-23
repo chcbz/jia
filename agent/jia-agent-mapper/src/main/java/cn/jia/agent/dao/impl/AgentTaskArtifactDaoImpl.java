@@ -94,6 +94,33 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
     }
 
     @Override
+    public List<AgentTaskArtifactEntity> listVisibleByTask(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String actorAgentId, boolean reviewerAccess, boolean coordinatorAccess, int limit) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(actorAgentId, "actorAgentId");
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+                .eq(AgentTaskArtifactEntity::getTaskId, taskId)
+                .in(AgentTaskArtifactEntity::getVisibility,
+                        "task_members", "reviewer", "private");
+        if (!StringUtil.isBlank(workItemId)) {
+            TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
+            wrapper.eq(AgentTaskArtifactEntity::getWorkItemId, workItemId);
+        }
+        if (!coordinatorAccess) {
+            wrapper.and(readable -> {
+                readable.eq(AgentTaskArtifactEntity::getVisibility, "task_members")
+                        .or().eq(AgentTaskArtifactEntity::getProducerAgentId, actorAgentId);
+                if (reviewerAccess) {
+                    readable.or().eq(AgentTaskArtifactEntity::getVisibility, "reviewer");
+                }
+            });
+        }
+        return ordered(wrapper, limit);
+    }
+
+    @Override
     public List<AgentTaskArtifactEntity> listByWorkItem(
             String tenantId, String clientId, String taskId, String workItemId, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

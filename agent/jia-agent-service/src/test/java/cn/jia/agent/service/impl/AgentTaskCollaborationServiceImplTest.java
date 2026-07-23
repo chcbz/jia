@@ -21,6 +21,8 @@ import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -173,6 +175,81 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void requestDescriptionAcceptsExactlyTextUtf8ByteLimit() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 0L, ACTOR, "agent", TARGET));
+        AgentTaskRequestCreateDTO command = createRequest();
+        command.setDescription("界".repeat(21_845));
+
+        service.create(TENANT, CLIENT, TASK, ACTOR, command);
+
+        ArgumentCaptor<AgentTaskRequestDTO> insert = ArgumentCaptor.forClass(AgentTaskRequestDTO.class);
+        verify(requestDao).insert(eq(TENANT), eq(CLIENT), insert.capture());
+        assertEquals(65_535, insert.getValue().getDescription()
+                .getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    @Test
+    void requestDescriptionRejectsUtf8ByteOverflowBeforeRequestDao() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        AgentTaskRequestCreateDTO command = createRequest();
+        command.setDescription("界".repeat(21_845) + "x");
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, command));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        assertEquals("description is required and must be within its UTF-8 byte limit",
+                error.getMessage());
+        verify(requestDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void nonDuplicateIntegrityFailureMapsToStablePersistedValidationWithoutSqlLeak() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenThrow(
+                new DataIntegrityViolationException("INSERT INTO secret_table failed: value too long"));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, error.getReason());
+        assertEquals("Request could not be persisted", error.getMessage());
+        assertNull(error.getCause());
+        verify(requestDao, never()).findByRequestId(any(), any(), any(), any());
+    }
+
+    @Test
+    void duplicateKeyStillMapsToStableConflictWithoutSqlLeak() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenThrow(
+                new DuplicateKeyException("duplicate SQL for uk_task_request_scope"));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()));
+
+        assertEquals(Reason.VERSION_CONFLICT, error.getReason());
+        assertEquals("Request changed or already exists", error.getMessage());
+        assertNull(error.getCause());
+    }
+
+    @Test
     void targetAcknowledgesWithCasAndStructuredResponse() {
         allow(TARGET, "reviewer");
         when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
@@ -257,12 +334,12 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
-    void requestListKeepsDaoOrderAndAppliesWorkItemFilterAfterScope() {
+    void requestListPushesStatusWorkItemOrderAndLimitIntoDao() {
         allow(ACTOR, "worker");
         when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
                 .thenReturn(workItem("work-1"));
-        when(requestDao.listByTask(TENANT, CLIENT, TASK, "open", 500)).thenReturn(List.of(
-                requestWithWork("req-2", "work-2"), requestWithWork("req-1", "work-1")));
+        when(requestDao.listByTask(TENANT, CLIENT, TASK, "open", "work-1", 10))
+                .thenReturn(List.of(requestWithWork("req-1", "work-1")));
         AgentTaskRequestQueryDTO query = new AgentTaskRequestQueryDTO();
         query.setStatus("open");
         query.setWorkItemId("work-1");
@@ -271,6 +348,7 @@ class AgentTaskCollaborationServiceImplTest {
         var result = service.list(TENANT, CLIENT, TASK, ACTOR, query);
 
         assertEquals(List.of("req-1"), result.stream().map(r -> r.getRequestId()).toList());
+        verify(requestDao).listByTask(TENANT, CLIENT, TASK, "open", "work-1", 10);
     }
 
     @Test
@@ -353,6 +431,65 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void artifactNonDuplicateIntegrityFailureMapsWithoutSqlLeak() {
+        allow(ACTOR, "worker");
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-1"))
+                .thenReturn(null);
+        when(artifactDao.insert(eq(TENANT), eq(CLIENT), any())).thenThrow(
+                new DataIntegrityViolationException("constraint SQL exposed by driver"));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, artifactCommand(1, 0)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, error.getReason());
+        assertEquals("Artifact could not be persisted", error.getMessage());
+        assertNull(error.getCause());
+        verify(artifactDao, never()).findVersion(any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void storageUriRejects1021CharactersBeforeArtifactDao() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+        command.setContent(null);
+        String prefix = "https://example.com/";
+        command.setStorageUri(prefix + "a".repeat(1_021 - prefix.length()));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        assertEquals("storageUri exceeds the schema character limit", error.getMessage());
+        verify(artifactDao, never()).findLatestVersionForUpdate(any(), any(), any(), any());
+        verify(artifactDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void metadataRejectsUtf8TextOverflowBeforeArtifactDao() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+        command.setMetadata(Map.of("payload", "界".repeat(21_845)));
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        assertEquals("metadata is not valid bounded JSON", error.getMessage());
+        verify(artifactDao, never()).findLatestVersionForUpdate(any(), any(), any(), any());
+        verify(artifactDao, never()).insert(any(), any(), any());
+    }
+
+    @Test
+    void overlongTenantScopeIsRejectedBeforeTaskDao() {
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.list("t".repeat(51), CLIENT, TASK, ACTOR,
+                        (AgentTaskRequestQueryDTO) null));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        verify(taskDao, never()).findByTaskId(any(), any(), any());
+    }
+
+    @Test
     void privateArtifactIsHiddenFromOtherMemberButVisibleToProducer() {
         allow(ACTOR, "worker");
         AgentTaskArtifactEntity privateArtifact = artifact("artifact-1", 1, TARGET, "private");
@@ -374,13 +511,16 @@ class AgentTaskCollaborationServiceImplTest {
         AgentTaskArtifactEntity reviewerOnly = artifact("artifact-r", 1, TARGET, "reviewer");
         AgentTaskArtifactEntity shared = artifact("artifact-s", 1, TARGET, "task_members");
         AgentTaskArtifactEntity ownPrivate = artifact("artifact-p", 1, ACTOR, "private");
-        when(artifactDao.listByTask(TENANT, CLIENT, TASK, 500))
+        when(artifactDao.listVisibleByTask(
+                TENANT, CLIENT, TASK, null, ACTOR, false, false, 100))
                 .thenReturn(List.of(reviewerOnly, shared, ownPrivate));
 
         var result = service.list(TENANT, CLIENT, TASK, ACTOR, new AgentTaskArtifactQueryDTO());
 
         assertEquals(List.of("artifact-s", "artifact-p"),
                 result.stream().map(a -> a.getArtifactId()).toList());
+        verify(artifactDao).listVisibleByTask(
+                TENANT, CLIENT, TASK, null, ACTOR, false, false, 100);
     }
 
     @Test

@@ -47,12 +47,17 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
 
     @Override
     public List<AgentTaskRequestEntity> listByTask(
-            String tenantId, String clientId, String taskId, String status, int limit) {
+            String tenantId, String clientId, String taskId, String status,
+            String workItemId, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskRequestEntity::getTaskId, taskId);
         appendStatus(wrapper, status);
+        if (!StringUtil.isBlank(workItemId)) {
+            TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
+            wrapper.eq(AgentTaskRequestEntity::getWorkItemId, workItemId);
+        }
         return baseMapper.selectList(orderByTask(wrapper, limit));
     }
 

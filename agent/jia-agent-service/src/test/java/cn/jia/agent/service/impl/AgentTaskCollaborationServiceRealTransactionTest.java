@@ -11,7 +11,9 @@ import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskRequestDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
+import cn.jia.agent.entity.AgentTaskArtifactQueryDTO;
 import cn.jia.agent.entity.AgentTaskRequestCreateDTO;
+import cn.jia.agent.entity.AgentTaskRequestQueryDTO;
 import cn.jia.agent.entity.AgentTaskRequestTransitionDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO;
@@ -228,6 +230,78 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         List<String> producerView = artifactService.list(
                 TENANT, CLIENT, TASK, REQUESTER, null).stream().map(a -> a.getArtifactId()).toList();
         assertEquals(List.of("review", "private", "shared"), producerView);
+    }
+
+    @Test
+    void requestFiltersBeforeLimitReturnRowsBeyondFormerFiveHundredWindow() {
+        insertWorkItem(TENANT, CLIENT, TASK, "work-other");
+        insertWorkItem(TENANT, CLIENT, TASK, "work-target");
+        List<Object[]> rows = new ArrayList<>();
+        for (int index = 0; index < 500; index++) {
+            rows.add(new Object[]{
+                    "req-other-" + index, TASK, "work-other", REQUESTER, "agent", TARGET,
+                    "review", "open", 10, "Other", "Other request", 0L,
+                    TENANT, CLIENT, 1L, 1L});
+        }
+        rows.add(new Object[]{
+                "req-target-b", TASK, "work-target", REQUESTER, "agent", TARGET,
+                "review", "open", 1, "Target B", "Target request", 0L,
+                TENANT, CLIENT, 1L, 1L});
+        rows.add(new Object[]{
+                "req-target-a", TASK, "work-target", REQUESTER, "agent", TARGET,
+                "review", "open", 1, "Target A", "Target request", 0L,
+                TENANT, CLIENT, 1L, 1L});
+        jdbc.batchUpdate("""
+                INSERT INTO agent_task_request
+                (request_id, task_id, work_item_id, requester_agent_id, target_type, target_id,
+                 request_type, status, priority, title, description, version,
+                 tenant_id, client_id, create_time, update_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows);
+
+        AgentTaskRequestQueryDTO query = new AgentTaskRequestQueryDTO();
+        query.setStatus("open");
+        query.setWorkItemId("work-target");
+        query.setLimit(2);
+        List<String> ids = requestService.list(
+                TENANT, CLIENT, TASK, REQUESTER, query).stream()
+                .map(item -> item.getRequestId()).toList();
+
+        assertEquals(List.of("req-target-a", "req-target-b"), ids);
+    }
+
+    @Test
+    void artifactAclFiltersBeforeLimitWithoutPermissionExpansion() {
+        List<Object[]> rows = new ArrayList<>();
+        for (int index = 0; index < 500; index++) {
+            rows.add(new Object[]{
+                    "hidden-" + index, TASK, REQUESTER, "analysis", "Hidden", "x",
+                    sha256("x"), 1, "private", "{}", 10_000L, TENANT, CLIENT, 1L, 1L});
+        }
+        rows.add(new Object[]{
+                "visible-b", TASK, REQUESTER, "analysis", "Visible B", "x",
+                sha256("x"), 1, "task_members", "{}", 1L, TENANT, CLIENT, 1L, 1L});
+        rows.add(new Object[]{
+                "visible-a", TASK, REQUESTER, "analysis", "Visible A", "x",
+                sha256("x"), 1, "reviewer", "{}", 1L, TENANT, CLIENT, 1L, 1L});
+        jdbc.batchUpdate("""
+                INSERT INTO agent_task_artifact
+                (artifact_id, task_id, producer_agent_id, artifact_type, title, content,
+                 content_hash, artifact_version, visibility, metadata_json, created_at,
+                 tenant_id, client_id, create_time, update_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows);
+
+        AgentTaskArtifactQueryDTO query = new AgentTaskArtifactQueryDTO();
+        query.setLimit(2);
+        List<String> ids = artifactService.list(
+                TENANT, CLIENT, TASK, TARGET, query).stream()
+                .map(item -> item.getArtifactId()).toList();
+
+        assertEquals(List.of("visible-a", "visible-b"), ids);
+        AgentTaskCollaborationException hidden = assertThrows(AgentTaskCollaborationException.class,
+                () -> artifactService.getLatest(TENANT, CLIENT, TASK, TARGET, "hidden-0"));
+        assertEquals(Reason.NOT_FOUND, hidden.getReason());
     }
 
     @Test

@@ -126,6 +126,50 @@ class AgentTaskCollaborationDaoTest {
 
     @Test
     @SuppressWarnings({"rawtypes", "unchecked"})
+    void requestWorkItemAndStatusPredicatesPrecedeDeterministicLimit() {
+        AgentTaskRequestMapper mapper = mock(AgentTaskRequestMapper.class);
+        new AgentTaskRequestDaoImpl(mapper).listByTask(
+                "tenant-a", "client-a", "task-1", "open", "work-501", 2);
+
+        ArgumentCaptor<Wrapper<AgentTaskRequestEntity>> capture = ArgumentCaptor.forClass(Wrapper.class);
+        verify(mapper).selectList(capture.capture());
+        Wrapper<AgentTaskRequestEntity> wrapper = capture.getValue();
+        assertScoped(wrapper, "tenant-a", "client-a");
+        assertValues(wrapper, "task-1", "open", "work-501");
+        String sql = normalize(wrapper.getSqlSegment());
+        assertTrue(sql.contains("status"), sql);
+        assertTrue(sql.contains("work_item_id"), sql);
+        assertTrue(sql.contains("order by priority desc,create_time asc,request_id asc,id asc"), sql);
+        assertTrue(sql.endsWith("limit 2"), sql);
+        assertTrue(sql.indexOf("work_item_id") < sql.indexOf("order by"), sql);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void artifactVisibilityAclPredicatesPrecedeDeterministicLimit() {
+        AgentTaskArtifactMapper mapper = mock(AgentTaskArtifactMapper.class);
+        new AgentTaskArtifactDaoImpl(mapper).listVisibleByTask(
+                "tenant-a", "client-a", "task-1", "work-1",
+                "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true, false, 3);
+
+        ArgumentCaptor<Wrapper<AgentTaskArtifactEntity>> capture = ArgumentCaptor.forClass(Wrapper.class);
+        verify(mapper).selectList(capture.capture());
+        Wrapper<AgentTaskArtifactEntity> wrapper = capture.getValue();
+        assertScoped(wrapper, "tenant-a", "client-a");
+        assertValues(wrapper, "task-1", "work-1", "task_members", "reviewer", "private",
+                "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        String sql = normalize(wrapper.getSqlSegment());
+        assertTrue(sql.contains("visibility in"), sql);
+        assertTrue(sql.contains("producer_agent_id"), sql);
+        assertTrue(sql.contains("work_item_id"), sql);
+        assertTrue(sql.contains(
+                "order by created_at desc,artifact_id asc,artifact_version desc,id desc"), sql);
+        assertTrue(sql.endsWith("limit 3"), sql);
+        assertTrue(sql.indexOf("visibility") < sql.indexOf("order by"), sql);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
     void artifactAccessPreservesLogicalVersionsWithinScope() {
         AgentTaskArtifactMapper mapper = mock(AgentTaskArtifactMapper.class);
         AgentTaskArtifactDao dao = new AgentTaskArtifactDaoImpl(mapper);

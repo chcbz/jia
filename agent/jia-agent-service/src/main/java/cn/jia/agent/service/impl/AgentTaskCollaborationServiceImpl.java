@@ -29,8 +29,8 @@ import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
-import org.apache.ibatis.exceptions.PersistenceException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.net.URI;
@@ -69,7 +69,9 @@ public class AgentTaskCollaborationServiceImpl
             AgentTaskMemberStatus.BLOCKED, AgentTaskMemberStatus.DONE);
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final int MAX_INLINE_CONTENT_BYTES = 262_144;
-    private static final int MAX_JSON_CHARS = 65_535;
+    private static final int MAX_TEXT_BYTES = 65_535;
+    private static final int MAX_MEDIUMTEXT_BYTES = 16_777_215;
+    private static final int MAX_STORAGE_URI_CHARS = 1_000;
     private static final int MAX_LIST_LIMIT = 500;
 
     private final AgentTaskMetaDao taskMetaDao;
@@ -128,7 +130,7 @@ public class AgentTaskCollaborationServiceImpl
             throw invalid("requestType is not supported");
         }
         requireText(command.getTitle(), "title", 255);
-        requireText(command.getDescription(), "description", 1_048_576);
+        requireUtf8Text(command.getDescription(), "description", MAX_TEXT_BYTES);
         if (command.getDueAt() != null && command.getDueAt() < 0) {
             throw invalid("dueAt must not be negative");
         }
@@ -150,8 +152,11 @@ public class AgentTaskCollaborationServiceImpl
         try {
             requireSingleInsert(requestDao.insert(tenantId, clientId, insert));
         } catch (RuntimeException e) {
-            if (isConstraintConflict(e)) {
-                throw conflict("Request changed or already exists", e);
+            if (isDuplicateConflict(e)) {
+                throw conflict("Request changed or already exists", null);
+            }
+            if (isPersistenceValidationFailure(e)) {
+                throw invalidPersisted("Request could not be persisted");
             }
             throw e;
         }
@@ -185,10 +190,8 @@ public class AgentTaskCollaborationServiceImpl
         String workItemId = query == null ? null : trimToNull(query.getWorkItemId());
         requireWorkItem(tenantId, clientId, taskId, workItemId);
         int limit = boundedLimit(query == null ? null : query.getLimit());
-        int fetchLimit = workItemId == null ? limit : MAX_LIST_LIMIT;
-        return requestDao.listByTask(tenantId, clientId, taskId, status, fetchLimit).stream()
-                .filter(entity -> workItemId == null || workItemId.equals(entity.getWorkItemId()))
-                .limit(limit)
+        return requestDao.listByTask(
+                        tenantId, clientId, taskId, status, workItemId, limit).stream()
                 .map(this::requestView)
                 .toList();
     }
@@ -269,13 +272,16 @@ public class AgentTaskCollaborationServiceImpl
         insert.setContentHash(command.getContentHash());
         insert.setArtifactVersion(command.getArtifactVersion());
         insert.setVisibility(visibility);
-        insert.setMetadataJson(serializeObject(command.getMetadata(), "metadata"));
+        insert.setMetadataJson(serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES));
         insert.setCreatedAt(now());
         try {
             requireSingleInsert(artifactDao.insert(tenantId, clientId, insert));
         } catch (RuntimeException e) {
-            if (isConstraintConflict(e)) {
-                throw conflict("Artifact version changed concurrently", e);
+            if (isDuplicateConflict(e)) {
+                throw conflict("Artifact version changed concurrently", null);
+            }
+            if (isPersistenceValidationFailure(e)) {
+                throw invalidPersisted("Artifact could not be persisted");
             }
             throw e;
         }
@@ -323,9 +329,9 @@ public class AgentTaskCollaborationServiceImpl
         String workItemId = query == null ? null : trimToNull(query.getWorkItemId());
         requireWorkItem(tenantId, clientId, taskId, workItemId);
         int limit = boundedLimit(query == null ? null : query.getLimit());
-        List<AgentTaskArtifactEntity> entities = workItemId == null
-                ? artifactDao.listByTask(tenantId, clientId, taskId, MAX_LIST_LIMIT)
-                : artifactDao.listByWorkItem(tenantId, clientId, taskId, workItemId, MAX_LIST_LIMIT);
+        List<AgentTaskArtifactEntity> entities = artifactDao.listVisibleByTask(
+                tenantId, clientId, taskId, workItemId, actorAgentId,
+                "reviewer".equals(access.role()), access.coordinator(), limit);
         return entities.stream()
                 .filter(entity -> canReadArtifact(access, entity))
                 .limit(limit)
@@ -379,7 +385,7 @@ public class AgentTaskCollaborationServiceImpl
         AgentTaskRequestDTO update = copyRequest(current);
         update.setStatus(target.value());
         if (response != null) {
-            update.setResponseJson(serializeObject(response, "response"));
+            update.setResponseJson(serializeObject(response, "response", MAX_MEDIUMTEXT_BYTES));
         }
         if (target == AgentTaskRequestStatus.ACKNOWLEDGED && update.getAcknowledgedAt() == null) {
             update.setAcknowledgedAt(changedAt);
@@ -388,8 +394,19 @@ public class AgentTaskCollaborationServiceImpl
                 && update.getResolvedAt() == null) {
             update.setResolvedAt(changedAt);
         }
-        int updated = requestDao.updateByVersion(
-                tenantId, clientId, taskId, requestId, expectedVersion, update);
+        int updated;
+        try {
+            updated = requestDao.updateByVersion(
+                    tenantId, clientId, taskId, requestId, expectedVersion, update);
+        } catch (RuntimeException e) {
+            if (isDuplicateConflict(e)) {
+                throw conflict("Request changed concurrently", null);
+            }
+            if (isPersistenceValidationFailure(e)) {
+                throw invalidPersisted("Request could not be persisted");
+            }
+            throw e;
+        }
         requireSingleCas(updated);
         current.setStatus(update.getStatus());
         current.setResponseJson(update.getResponseJson());
@@ -530,7 +547,7 @@ public class AgentTaskCollaborationServiceImpl
             throw invalid("contentHash must be lowercase SHA-256 hex");
         }
         if (hasContent) {
-            byte[] contentBytes = command.getContent().getBytes(StandardCharsets.UTF_8);
+            byte[] contentBytes = utf8Bytes(command.getContent(), "content");
             if (contentBytes.length > MAX_INLINE_CONTENT_BYTES) {
                 throw invalid("Inline artifact content exceeds the B06 limit; use external storage");
             }
@@ -541,11 +558,14 @@ public class AgentTaskCollaborationServiceImpl
             validateStorageUri(command.getStorageUri().trim());
         }
         if (command.getMetadata() != null) {
-            serializeObject(command.getMetadata(), "metadata");
+            serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES);
         }
     }
 
     private void validateStorageUri(String value) {
+        if (characterLength(value, "storageUri") > MAX_STORAGE_URI_CHARS) {
+            throw invalid("storageUri exceeds the schema character limit");
+        }
         try {
             URI uri = URI.create(value);
             String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
@@ -677,12 +697,12 @@ public class AgentTaskCollaborationServiceImpl
         return command.getExpectedVersion();
     }
 
-    private String serializeObject(Map<String, Object> value, String name) {
+    private String serializeObject(Map<String, Object> value, String name, int maxBytes) {
         if (value == null) {
             return null;
         }
         String json = JsonUtil.toJson(value);
-        if (json == null || json.length() > MAX_JSON_CHARS) {
+        if (json == null || utf8Bytes(json, name).length > maxBytes) {
             throw invalid(name + " is not valid bounded JSON");
         }
         return json;
@@ -719,20 +739,47 @@ public class AgentTaskCollaborationServiceImpl
         }
     }
 
-    private boolean isConstraintConflict(Throwable throwable) {
-        if (throwable instanceof DataIntegrityViolationException) {
-            return true;
-        }
+    private boolean isDuplicateConflict(Throwable throwable) {
         Throwable current = throwable;
         while (current != null) {
-            if (current instanceof SQLException sql
-                    && sql.getSQLState() != null && sql.getSQLState().startsWith("23")) {
+            if (current instanceof DuplicateKeyException) {
+                return true;
+            }
+            if (current instanceof SQLException sql) {
+                String state = sql.getSQLState();
+                if ("23505".equals(state) || sql.getErrorCode() == 1062
+                        || isKnownDuplicateConstraint(sql.getMessage())) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private boolean isKnownDuplicateConstraint(String message) {
+        if (message == null) {
+            return false;
+        }
+        String normalized = message.toLowerCase(Locale.ROOT);
+        return normalized.contains("uk_task_request_scope")
+                || normalized.contains("uk_artifact_version");
+    }
+
+    private boolean isPersistenceValidationFailure(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof DataIntegrityViolationException) {
+                return true;
+            }
+            if (current instanceof SQLException sql && sql.getSQLState() != null
+                    && (sql.getSQLState().startsWith("22")
+                    || sql.getSQLState().startsWith("23"))) {
                 return true;
             }
             current = current.getCause();
         }
-        return throwable instanceof PersistenceException && throwable.getCause() != null
-                && isConstraintConflict(throwable.getCause());
+        return false;
     }
 
     private int boundedLimit(Integer requested) {
@@ -740,9 +787,8 @@ public class AgentTaskCollaborationServiceImpl
     }
 
     private void requireScope(String tenantId, String clientId, String taskId, String actorAgentId) {
-        if (StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId)) {
-            throw invalid("tenantId and clientId are required");
-        }
+        requireId(tenantId, "tenantId", 50);
+        requireId(clientId, "clientId", 50);
         requireId(taskId, "taskId", 100);
         requireId(actorAgentId, "actorAgentId", 100);
     }
@@ -759,16 +805,43 @@ public class AgentTaskCollaborationServiceImpl
             throw invalid(name + " is required");
         }
         String normalized = value.trim();
-        if (normalized.length() > maxLength) {
+        if (characterLength(normalized, name) > maxLength) {
             throw invalid(name + " is too long");
         }
         return normalized;
     }
 
     private void requireText(String value, String name, int maxLength) {
-        if (StringUtil.isBlank(value) || value.length() > maxLength) {
+        if (StringUtil.isBlank(value) || characterLength(value, name) > maxLength) {
             throw invalid(name + " is required and must be within its size limit");
         }
+    }
+
+    private void requireUtf8Text(String value, String name, int maxBytes) {
+        if (StringUtil.isBlank(value) || utf8Bytes(value, name).length > maxBytes) {
+            throw invalid(name + " is required and must be within its UTF-8 byte limit");
+        }
+    }
+
+    private int characterLength(String value, String name) {
+        utf8Bytes(value, name);
+        return value.codePointCount(0, value.length());
+    }
+
+    private byte[] utf8Bytes(String value, String name) {
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (index + 1 >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(index + 1))) {
+                    throw invalid(name + " contains invalid Unicode");
+                }
+                index++;
+            } else if (Character.isLowSurrogate(current)) {
+                throw invalid(name + " contains invalid Unicode");
+            }
+        }
+        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private String canonical(String value, String name) {
