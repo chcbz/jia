@@ -10,7 +10,11 @@
 -- 5. BLOCKED_MULTIPLE_BINDINGS: one agent ID has multiple binding records.
 -- 6. BLOCKED_RUNTIME_CONFLICT: linked/exact runtime evidence is multiple or cross-scope.
 -- 7. BLOCKED_TASK_SCOPE_CONFLICT: scoped task evidence contradicts the identity owner scope.
--- 8. AUTO_ELIGIBLE: owner scope is complete/consistent and identity evidence is unique.
+-- 7a. BLOCKED_TASK_SCOPE_MISSING: task references exist but scope columns are NULL.
+-- 8. BLOCKED_EXACT_MULTI_CANDIDATE: multiple binding rows claim same canonical via EXACT runtime.
+-- 9. BLOCKED_LINKED_MULTI_CANDIDATE: multiple binding rows claim same canonical via LINKED runtime.
+-- 10. BLOCKED_LINKED_CONFLICTING_CANONICAL: one binding has LINKED runtime pointing at conflicting candidates.
+-- 11. AUTO_ELIGIBLE: owner scope is complete/consistent and identity evidence is unique.
 --
 -- AUTO_ELIGIBLE means a reviewed repair list may be generated later. This script
 -- deliberately emits no INSERT/UPDATE/DELETE. persona/profile/displayName evidence
@@ -111,6 +115,44 @@ candidate_scope_counts AS (
                               COALESCE(owner_jiacn, '<NULL>'))) AS canonical_scope_count
     FROM resolved_candidate
     GROUP BY canonical_agent_id
+),
+linked_candidate_counts AS (
+    SELECT
+        binding_id,
+        canonical_agent_id,
+        COUNT(*) AS linked_candidate_count,
+        COUNT(DISTINCT canonical_agent_id) AS linked_distinct_canonical_count
+    FROM resolved_candidate
+    WHERE linked_runtime_count = 1 AND linked_runtime_agent_count = 1
+    GROUP BY binding_id, canonical_agent_id
+),
+exact_candidate_counts AS (
+    SELECT
+        binding_id,
+        canonical_agent_id,
+        COUNT(*) AS exact_candidate_count
+    FROM resolved_candidate
+    WHERE exact_runtime_count = 1 AND exact_runtime_scope_match_count = 1
+    GROUP BY binding_id, canonical_agent_id
+),
+linked_candidate_counts AS (
+    SELECT
+        binding_id,
+        canonical_agent_id,
+        COUNT(*) AS linked_candidate_count,
+        COUNT(DISTINCT canonical_agent_id) AS linked_distinct_canonical_count
+    FROM resolved_candidate
+    WHERE linked_runtime_count = 1 AND linked_runtime_agent_count = 1
+    GROUP BY binding_id, canonical_agent_id
+),
+exact_candidate_counts AS (
+    SELECT
+        binding_id,
+        canonical_agent_id,
+        COUNT(*) AS exact_candidate_count
+    FROM resolved_candidate
+    WHERE exact_runtime_count = 1 AND exact_runtime_scope_match_count = 1
+    GROUP BY binding_id, canonical_agent_id
 ),
 alias_candidate_counts AS (
     SELECT
@@ -252,10 +294,26 @@ report AS (
               OR rc.linked_runtime_scope_conflict_count > 0
               OR rc.exact_runtime_scope_conflict_count > 0
                 THEN 'BLOCKED_RUNTIME_CONFLICT'
+            WHEN ecc.exact_candidate_count > 1 THEN 'BLOCKED_EXACT_MULTI_CANDIDATE'
+            WHEN lcc.linked_candidate_count > 1 THEN 'BLOCKED_LINKED_MULTI_CANDIDATE'
+            WHEN lcc.linked_distinct_canonical_count > 1 THEN 'BLOCKED_LINKED_CONFLICTING_CANONICAL'
+            WHEN ecc.exact_candidate_count > 1 THEN 'BLOCKED_EXACT_MULTI_CANDIDATE'
+            WHEN lcc.linked_candidate_count > 1 THEN 'BLOCKED_LINKED_MULTI_CANDIDATE'
+            WHEN lcc.linked_distinct_canonical_count > 1 THEN 'BLOCKED_LINKED_CONFLICTING_CANONICAL'
             WHEN acc.alias_target_count > 1 THEN 'BLOCKED_MULTIPLE_ALIAS_TARGETS'
             WHEN COALESCE(tr_binding.task_scope_count, 0) > 1
               OR COALESCE(tr_canonical.task_scope_count, 0) > 1
                 THEN 'BLOCKED_CROSS_OWNER'
+            WHEN (COALESCE(tr_binding.task_reference_count, 0) > 0
+                    AND (tr_binding.task_client_id IS NULL OR tr_binding.task_tenant_id IS NULL))
+              OR (COALESCE(tr_canonical.task_reference_count, 0) > 0
+                    AND (tr_canonical.task_client_id IS NULL OR tr_canonical.task_tenant_id IS NULL))
+                THEN 'BLOCKED_TASK_SCOPE_MISSING'
+            WHEN (COALESCE(tr_binding.task_reference_count, 0) > 0
+                    AND (tr_binding.task_client_id IS NULL OR tr_binding.task_tenant_id IS NULL))
+              OR (COALESCE(tr_canonical.task_reference_count, 0) > 0
+                    AND (tr_canonical.task_client_id IS NULL OR tr_canonical.task_tenant_id IS NULL))
+                THEN 'BLOCKED_TASK_SCOPE_MISSING'
             WHEN (tr_binding.task_client_id IS NOT NULL
                     AND tr_binding.task_client_id <> rc.client_id)
               OR (tr_binding.task_tenant_id IS NOT NULL
@@ -284,8 +342,30 @@ report AS (
               OR rc.linked_runtime_scope_conflict_count > 0
               OR rc.exact_runtime_scope_conflict_count > 0
                 THEN 'Runtime evidence is ambiguous or conflicts with binding scope'
+            WHEN ecc.exact_candidate_count > 1
+                THEN 'Multiple binding rows claim the same canonical_agent_id via EXACT runtime match'
+            WHEN lcc.linked_candidate_count > 1
+                THEN 'Multiple binding rows claim the same canonical_agent_id via LINKED runtime match'
+            WHEN lcc.linked_distinct_canonical_count > 1
+                THEN 'One binding has LINKED runtime pointing at conflicting canonical candidates'
+            WHEN ecc.exact_candidate_count > 1
+                THEN 'Multiple binding rows claim the same canonical_agent_id via EXACT runtime match'
+            WHEN lcc.linked_candidate_count > 1
+                THEN 'Multiple binding rows claim the same canonical_agent_id via LINKED runtime match'
+            WHEN lcc.linked_distinct_canonical_count > 1
+                THEN 'One binding has LINKED runtime pointing at conflicting canonical candidates'
             WHEN acc.alias_target_count > 1
                 THEN 'One scoped legacy_agent_id points at multiple canonical candidates'
+            WHEN (COALESCE(tr_binding.task_reference_count, 0) > 0
+                    AND (tr_binding.task_client_id IS NULL OR tr_binding.task_tenant_id IS NULL))
+              OR (COALESCE(tr_canonical.task_reference_count, 0) > 0
+                    AND (tr_canonical.task_client_id IS NULL OR tr_canonical.task_tenant_id IS NULL))
+                THEN 'Task references exist but scope columns (client_id/tenant_id) are NULL; backfill B09 first'
+            WHEN (COALESCE(tr_binding.task_reference_count, 0) > 0
+                    AND (tr_binding.task_client_id IS NULL OR tr_binding.task_tenant_id IS NULL))
+              OR (COALESCE(tr_canonical.task_reference_count, 0) > 0
+                    AND (tr_canonical.task_client_id IS NULL OR tr_canonical.task_tenant_id IS NULL))
+                THEN 'Task references exist but scope columns (client_id/tenant_id) are NULL | backfill B09 first'
             WHEN COALESCE(tr_binding.task_scope_count, 0) > 1
               OR COALESCE(tr_canonical.task_scope_count, 0) > 1
                 THEN 'Task references for the identity cross owner scopes'
@@ -308,6 +388,10 @@ report AS (
         END AS resolution_reason
     FROM resolved_candidate rc
     JOIN candidate_scope_counts csc ON csc.canonical_agent_id = rc.canonical_agent_id
+    LEFT JOIN linked_candidate_counts lcc
+        ON lcc.binding_id = rc.binding_id AND lcc.canonical_agent_id = rc.canonical_agent_id
+    LEFT JOIN exact_candidate_counts ecc
+        ON ecc.binding_id = rc.binding_id AND ecc.canonical_agent_id = rc.canonical_agent_id
     LEFT JOIN alias_candidate_counts acc
       ON acc.client_id <=> rc.client_id
      AND acc.owner_jiacn <=> rc.owner_jiacn

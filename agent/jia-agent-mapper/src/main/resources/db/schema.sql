@@ -86,18 +86,18 @@ CREATE TABLE IF NOT EXISTS agent_persona_binding (
 
 CREATE TABLE IF NOT EXISTS agent_identity_registry (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId, immutable and never reused',
-    canonical_type          VARCHAR(32) NOT NULL COMMENT 'OPAQUE/LEGACY_CANONICAL/SYSTEM',
-    lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED',
-    client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client, NULL only for system identity',
-    owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn, NULL only for system identity',
-    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Must equal owner_jiacn, NULL only for system identity',
-    binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID, not an ownership substitute',
+    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId | immutable after insert | never reused even after delete',
+    canonical_type          VARCHAR(32) NOT NULL COMMENT 'OPAQUE/LEGACY_CANONICAL/SYSTEM | immutable after insert',
+    lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
+    client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
+    owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
+    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+    binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
     suspended_at            BIGINT DEFAULT NULL COMMENT 'Latest suspension time',
-    retired_at              BIGINT DEFAULT NULL COMMENT 'Retirement time, RETIRED is terminal',
-    audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable creation/migration reason',
+    retired_at              BIGINT DEFAULT NULL COMMENT 'Retirement time | RETIRED is terminal and cannot be reverted',
+    audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable creation/migration reason | immutable after insert',
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
@@ -125,23 +125,23 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
         (canonical_type = 'SYSTEM'
             AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
         OR (canonical_type <> 'SYSTEM'
-            AND client_id IS NOT NULL AND client_id <> ''
-            AND owner_jiacn IS NOT NULL AND owner_jiacn <> ''
-            AND tenant_id = owner_jiacn)
+            AND client_id IS NOT NULL AND TRIM(client_id) <> ''
+            AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
+            AND tenant_id = TRIM(owner_jiacn))
     ),
     CONSTRAINT chk_identity_registry_retired CHECK (
         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
         OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL)
     )
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable canonical Agent identity registry';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable canonical Agent identity registry | collation binary enforces exact case matching';
 
 CREATE TABLE IF NOT EXISTS agent_identity_alias (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-    registry_id             BIGINT NOT NULL COMMENT 'Target identity registry ID',
-    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'Resolved canonical agentId',
-    alias_type              VARCHAR(32) NOT NULL DEFAULT 'LEGACY_AGENT_ID' COMMENT 'v1 online alias type',
-    alias_value             VARCHAR(100) NOT NULL COMMENT 'Legacy agent ID resolved only with full owner scope',
-    alias_status            VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/REVOKED',
+    registry_id             BIGINT NOT NULL COMMENT 'Target identity registry ID | immutable after insert',
+    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'Resolved canonical agentId | immutable after insert',
+    alias_type              VARCHAR(32) NOT NULL DEFAULT 'LEGACY_AGENT_ID' COMMENT 'v1 online alias type | immutable after insert',
+    alias_value             VARCHAR(100) NOT NULL COMMENT 'Legacy agent ID resolved only with full owner scope | immutable after insert',
+    alias_status            VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE/REVOKED | once REVOKED cannot become ACTIVE again',
     valid_from              BIGINT NOT NULL COMMENT 'Alias activation time',
     valid_to                BIGINT DEFAULT NULL COMMENT 'Alias revocation time, not used directly for uniqueness',
     active_key              TINYINT GENERATED ALWAYS AS (
@@ -150,9 +150,9 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
                                     ELSE NULL
                                 END
                             ) STORED,
-    client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client',
-    owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn',
-    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Must equal owner_jiacn',
+    client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client after insert',
+    owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn after insert',
+    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Must equal TRIM(owner_jiacn) | immutable after insert',
     audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable alias evidence/reason',
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -163,7 +163,10 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = owner_jiacn),
+    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = TRIM(owner_jiacn)),
+    CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
+        TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
+    ),
     CONSTRAINT chk_identity_alias_window CHECK (
         (alias_status = 'ACTIVE' AND valid_to IS NULL)
         OR (alias_status = 'REVOKED' AND valid_to IS NOT NULL)
@@ -175,7 +178,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
         REFERENCES agent_identity_registry
         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped legacy Agent ID compatibility aliases';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped legacy Agent ID compatibility aliases | collation binary enforces exact case matching';
 
 CREATE TABLE IF NOT EXISTS dialogue_template (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',

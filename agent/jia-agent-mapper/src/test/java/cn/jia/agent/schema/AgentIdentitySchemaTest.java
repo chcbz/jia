@@ -26,12 +26,18 @@ class AgentIdentitySchemaTest {
                 "lifecycle_status in ('provisioned', 'active', 'suspended', 'retired')"));
         assertTrue(registry.contains("canonical_agent_id regexp '^agt_[0-9a-f]{32}$'"));
         assertTrue(registry.contains("canonical_agent_id = 'builtin-songjiang'"));
-        assertTrue(registry.contains("tenant_id = owner_jiacn"));
+        assertTrue(registry.contains("tenant_id = trim(owner_jiacn)"));
         assertTrue(registry.contains(
                 "(lifecycle_status = 'retired' and retired_at is not null) "
                         + "or (lifecycle_status <> 'retired' and retired_at is null)"));
         assertTrue(registry.contains("unique key uk_identity_registry_alias_target "
                 + "(id, canonical_agent_id, client_id, owner_jiacn, tenant_id)"));
+        assertTrue(registry.contains("trim(client_id) <> ''"));
+        assertTrue(registry.contains("trim(owner_jiacn) <> ''"));
+        assertTrue(registry.contains("utf8mb4_0900_bin"));
+        assertTrue(registry.contains("immutable after insert"));
+        assertTrue(registry.contains("retired is terminal"));
+        assertTrue(registry.contains("never reused even after delete"));
     }
 
     @Test
@@ -60,6 +66,10 @@ class AgentIdentitySchemaTest {
                 + "(client_id, owner_jiacn, alias_type, alias_value, active_key)"));
         assertFalse(alias.contains("unique key uk_identity_alias_active "
                 + "(client_id, owner_jiacn, alias_type, alias_value, valid_to)"));
+        assertTrue(alias.contains("chk_identity_alias_no_blank_scope"));
+        assertTrue(alias.contains("trim(client_id) <> '' and trim(owner_jiacn) <> ''"));
+        assertTrue(alias.contains("utf8mb4_0900_bin"));
+        assertTrue(alias.contains("once revoked cannot become active again"));
 
         assertTrue(binding.contains("owner_jiacn varchar(50) generated always as (jiacn) stored"));
         assertTrue(binding.contains("when 2 then 'provisioned'"));
@@ -88,6 +98,20 @@ class AgentIdentitySchemaTest {
         assertTrue(migration.contains("client_id, owner_jiacn, active_persona_code"));
         assertFalse(Pattern.compile("(?m)^\\s*(insert|update|delete|replace|truncate)\\b")
                 .matcher(withoutLineComments(migration)).find());
+        assertTrue(migration.contains("trg_identity_registry_immutable_update"));
+        assertTrue(migration.contains("trg_identity_registry_no_delete"));
+        assertTrue(migration.contains("trg_identity_alias_immutable_update"));
+        assertTrue(migration.contains("trg_identity_alias_no_delete"));
+        assertTrue(migration.contains("retired identity cannot be resurrected"));
+        assertTrue(migration.contains("physical deletion of agent_identity_registry is forbidden"));
+        assertTrue(migration.contains("revoked alias cannot be reactivated"));
+        assertTrue(migration.contains("trg_identity_registry_immutable_update"));
+        assertTrue(migration.contains("trg_identity_registry_no_delete"));
+        assertTrue(migration.contains("trg_identity_alias_immutable_update"));
+        assertTrue(migration.contains("trg_identity_alias_no_delete"));
+        assertTrue(migration.contains("retired identity cannot be resurrected"));
+        assertTrue(migration.contains("physical deletion of agent_identity_registry is forbidden"));
+        assertTrue(migration.contains("revoked alias cannot be reactivated"));
 
         for (String b01Table : List.of(
                 "agent_task_member", "agent_task_work_item", "agent_task_request", "agent_task_artifact")) {
@@ -118,6 +142,16 @@ class AgentIdentitySchemaTest {
         }
         assertTrue(dryRun.contains("alias_type is only legacy_agent_id"));
         assertTrue(dryRun.contains("cast(null as char(100)) as profile_id_evidence"));
+        for (String newBlocker : List.of(
+                "blocked_exact_multi_candidate", "blocked_linked_multi_candidate",
+                "blocked_linked_conflicting_canonical", "blocked_task_scope_missing")) {
+            assertTrue(dryRun.contains(newBlocker), newBlocker);
+        }
+        for (String newBlocker : List.of(
+                "blocked_exact_multi_candidate", "blocked_linked_multi_candidate",
+                "blocked_linked_conflicting_canonical", "blocked_task_scope_missing")) {
+            assertTrue(dryRun.contains(newBlocker), newBlocker);
+        }
     }
 
     private String readResource(String resource) throws IOException {
