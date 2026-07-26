@@ -62,6 +62,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -106,6 +107,8 @@ public class WxMpController {
     private DwzService dwzService;
     @Autowired(required = false)
     private KefuMsgSubscribeService kefuMsgSubscribeService;
+    @Autowired
+    private ThreadPoolTaskExecutor taskExecutor;
 
     /**
      * 微信公众号接口认证
@@ -380,7 +383,21 @@ public class WxMpController {
                 sendRedpack.setTotalAmount(200 + Integer.parseInt(DataUtil.getRandom(true, 3)));
                 sendRedpack.setTotalNum(10);
                 sendRedpack.setWxAppid(appid);
-                payInfoService.findWxPayService(request).getRedpackService().sendRedpack(sendRedpack);
+                String redpackAppId = appid;
+                String voteJiacn = mpUser.getJiacn();
+                try {
+                    taskExecutor.execute(() -> {
+                        try {
+                            payInfoService.findWxPayService(redpackAppId).getRedpackService().sendRedpack(sendRedpack);
+                        } catch (Exception e) {
+                            log.error("Daily vote redpack failed: appid={}, questionId={}, jiacn={}",
+                                    redpackAppId, questionId, voteJiacn, e);
+                        }
+                    });
+                } catch (Exception e) {
+                    log.error("Daily vote redpack dispatch failed: appid={}, questionId={}, jiacn={}",
+                            redpackAppId, questionId, voteJiacn, e);
+                }
             } else {
                 outMessage.setContent("很遗憾，回答错误，正确答案是" + voteQuestion.getOpt() + ",下次继续努力！");
             }
