@@ -684,6 +684,8 @@ public class AgentServiceImpl implements AgentService {
         List<String> abilities = parseList(agent.getAbilities());
         boolean matched = required.stream().anyMatch(abilities::contains);
         if (!matched) {
+            log.warn("Agent ability mismatch: taskId={}, requiredAbilities={}, agentId={}, agentAbilities={}",
+                    meta.getTaskId(), required, agent.getAgentId(), abilities);
             throw new AgentBizException(AgentErrorConstants.AGENT_ABILITY_MISMATCH, "Agent ability mismatch");
         }
     }
