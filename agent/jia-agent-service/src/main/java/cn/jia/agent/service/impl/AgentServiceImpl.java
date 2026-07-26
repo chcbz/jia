@@ -1440,7 +1440,7 @@ codexTimeoutMs=900000
     }
 
     private List<String> parseList(String json) {
-        if (StringUtil.isBlank(json)) {
+        if (StringUtil.isBlank(json) || "[]".equals(json.trim())) {
             return Collections.emptyList();
         }
         List<String> parsed = JsonUtil.jsonToList(json, String.class);
