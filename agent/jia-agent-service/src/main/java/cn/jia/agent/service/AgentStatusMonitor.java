@@ -30,10 +30,16 @@ public class AgentStatusMonitor {
     @Scheduled(fixedDelayString = "${jia.agent.status.offline-scan-interval-seconds:10}000")
     @Transactional(rollbackFor = Exception.class)
     public void markHeartbeatTimedOutAgentsOffline() {
-        syncWebSocketAgentStatuses();
+        Set<String> connectedAgentIds = connectedAgentIds();
+        syncWebSocketAgentStatuses(connectedAgentIds);
 
         long cutoffTime = System.currentTimeMillis() - heartbeatTimeoutSeconds * 1000;
         for (AgentRuntimeEntity agent : agentRuntimeDao.findHeartbeatTimedOut(cutoffTime)) {
+            // A live local WebSocket is stronger evidence than an asynchronously persisted
+            // heartbeat. Never turn a socket-owning agent offline from a stale DB snapshot.
+            if (connectedAgentIds.contains(agent.getAgentId())) {
+                continue;
+            }
             if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId())) {
                 continue;
             }
@@ -47,13 +53,7 @@ public class AgentStatusMonitor {
         }
     }
 
-    private void syncWebSocketAgentStatuses() {
-        AgentEventPublisher publisher = eventPublisherProvider.getIfAvailable();
-        if (publisher == null) {
-            return;
-        }
-
-        Set<String> connectedAgentIds = Optional.ofNullable(publisher.connectedAgentIds()).orElseGet(Set::of);
+    private void syncWebSocketAgentStatuses(Set<String> connectedAgentIds) {
         long now = System.currentTimeMillis();
         List<AgentRuntimeEntity> agents = agentRuntimeDao.findByStatusAndAbility(null, null);
         for (AgentRuntimeEntity agent : agents) {
@@ -84,6 +84,14 @@ public class AgentStatusMonitor {
                 publishAgentStatus(agent);
             }
         }
+    }
+
+    private Set<String> connectedAgentIds() {
+        AgentEventPublisher publisher = eventPublisherProvider.getIfAvailable();
+        if (publisher == null) {
+            return Set.of();
+        }
+        return Optional.ofNullable(publisher.connectedAgentIds()).orElseGet(Set::of);
     }
 
     private String resolveConnectedStatus(AgentRuntimeEntity agent) {

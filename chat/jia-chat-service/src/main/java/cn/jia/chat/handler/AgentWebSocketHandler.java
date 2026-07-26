@@ -1053,11 +1053,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     public Set<String> connectedAgentIds() {
         Set<String> connectedAgentIds = new LinkedHashSet<>();
         sessions.forEach((sessionId, session) -> {
-            Set<String> agentIds = sessionAgentIds.get(sessionId);
-            if (session.isOpen() && agentIds != null) {
-                agentIds.stream()
-                        .filter(agentId -> agentId != null && !agentId.isBlank())
-                        .forEach(connectedAgentIds::add);
+            if (session.isOpen()) {
+                String agentId = sessionAgentId(session);
+                if (agentId != null && !agentId.isBlank()) {
+                    connectedAgentIds.add(agentId);
+                }
             }
         });
         return connectedAgentIds;

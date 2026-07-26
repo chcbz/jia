@@ -61,6 +61,25 @@ class AgentStatusMonitorTest extends BaseMockTest {
     }
 
     @Test
+    void doesNotOfflineAHeartbeatCandidateWhenItStillOwnsALocalWebSocket() {
+        AgentRuntimeEntity connected = new AgentRuntimeEntity();
+        connected.setAgentId("agent-connected");
+        connected.setStatus(AgentConstants.STATUS_ONLINE);
+        connected.setLastSeenAt(1L);
+
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-connected"));
+        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(connected));
+        // Simulates a stale timeout query result racing a fresh socket heartbeat.
+        when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of(connected));
+
+        monitor.markHeartbeatTimedOutAgentsOffline();
+
+        assertEquals(AgentConstants.STATUS_ONLINE, connected.getStatus());
+        verify(agentRuntimeDao, times(1)).updateById(connected);
+    }
+
+    @Test
     void refreshesLocallyConnectedAgentsWithoutOffliningAgentsOwnedByAnotherInstance() {
         AgentRuntimeEntity idleConnected = new AgentRuntimeEntity();
         idleConnected.setAgentId("agent-idle");
