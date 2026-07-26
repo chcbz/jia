@@ -23,6 +23,7 @@ import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.security.AllowSensitiveOutput;
+import jakarta.servlet.http.HttpServletRequest;
 import com.github.pagehelper.PageInfo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -222,14 +223,17 @@ public class AgentController {
     }
 
     @ExceptionHandler(AgentBizException.class)
-    public JsonResult<Void> handleAgentBizException(AgentBizException e) {
+    public JsonResult<Void> handleAgentBizException(AgentBizException e, HttpServletRequest request) {
+        log.warn("Agent API request rejected: uri={}, code={}, message={}",
+                request.getRequestURI(), e.getCode(), e.getMessage());
         JsonResult<Void> result = JsonResult.failure(e.getCode(), e.getMessage());
         result.setStatus(409);
         return result;
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
-    public JsonResult<Void> handleIllegalArgumentException(IllegalArgumentException e) {
+    public JsonResult<Void> handleIllegalArgumentException(IllegalArgumentException e, HttpServletRequest request) {
+        log.warn("Agent API request invalid: uri={}, message={}", request.getRequestURI(), e.getMessage());
         JsonResult<Void> result = JsonResult.failure("BAD_REQUEST", e.getMessage());
         result.setStatus(400);
         return result;
