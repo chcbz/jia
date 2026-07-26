@@ -61,38 +61,32 @@ public class AgentStatusMonitor {
                 continue;
             }
 
-            boolean connected = connectedAgentIds.contains(agent.getAgentId());
-            String previousStatus = agent.getStatus();
-            String nextStatus = resolveStatus(agent, connected);
-            boolean statusChanged = !nextStatus.equals(previousStatus);
-
-            if (connected) {
-                agent.setLastSeenAt(now);
-            } else if (!AgentConstants.STATUS_OFFLINE.equals(previousStatus)) {
-                agent.setCurrentTaskId(null);
-                agent.setCurrentTaskTitle(null);
-                agent.setErrorMessage(null);
+            // The WebSocket registry is local to this JVM.  Absence from this instance
+            // must not be interpreted as a disconnect in a multi-instance deployment:
+            // another instance may own the socket and refresh lastSeenAt instead.
+            if (!connectedAgentIds.contains(agent.getAgentId())) {
+                continue;
             }
 
+            String previousStatus = agent.getStatus();
+            String nextStatus = resolveConnectedStatus(agent);
+            boolean statusChanged = !nextStatus.equals(previousStatus);
+
+            agent.setLastSeenAt(now);
             if (statusChanged) {
-                log.debug("Syncing agent status from WebSocket connection: agentId={}, connected={}, {} -> {}",
-                        agent.getAgentId(), connected, previousStatus, nextStatus);
+                log.debug("Refreshing locally connected agent status: agentId={}, {} -> {}",
+                        agent.getAgentId(), previousStatus, nextStatus);
                 agent.setStatus(nextStatus);
             }
 
-            if (connected || statusChanged) {
-                agentRuntimeDao.updateById(agent);
-            }
+            agentRuntimeDao.updateById(agent);
             if (statusChanged) {
                 publishAgentStatus(agent);
             }
         }
     }
 
-    private String resolveStatus(AgentRuntimeEntity agent, boolean connected) {
-        if (!connected) {
-            return AgentConstants.STATUS_OFFLINE;
-        }
+    private String resolveConnectedStatus(AgentRuntimeEntity agent) {
         if (hasText(agent.getCurrentTaskId())) {
             return AgentConstants.STATUS_BUSY;
         }

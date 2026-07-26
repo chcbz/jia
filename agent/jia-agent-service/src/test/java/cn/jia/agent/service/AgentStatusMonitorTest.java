@@ -61,7 +61,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
     }
 
     @Test
-    void syncsAgentStatusesFromWebSocketConnections() {
+    void refreshesLocallyConnectedAgentsWithoutOffliningAgentsOwnedByAnotherInstance() {
         AgentRuntimeEntity idleConnected = new AgentRuntimeEntity();
         idleConnected.setAgentId("agent-idle");
         idleConnected.setStatus(AgentConstants.STATUS_OFFLINE);
@@ -88,9 +88,9 @@ class AgentStatusMonitorTest extends BaseMockTest {
 
         assertEquals(AgentConstants.STATUS_ONLINE, idleConnected.getStatus());
         assertEquals(AgentConstants.STATUS_BUSY, busyConnected.getStatus());
-        assertEquals(AgentConstants.STATUS_OFFLINE, disconnected.getStatus());
-        assertEquals(null, disconnected.getCurrentTaskId());
-        assertEquals(null, disconnected.getCurrentTaskTitle());
-        verify(agentRuntimeDao, times(3)).updateById(org.mockito.Mockito.any(AgentRuntimeEntity.class));
+        assertEquals(AgentConstants.STATUS_BUSY, disconnected.getStatus());
+        assertEquals("task-002", disconnected.getCurrentTaskId());
+        assertEquals("旧任务", disconnected.getCurrentTaskTitle());
+        verify(agentRuntimeDao, times(2)).updateById(org.mockito.Mockito.any(AgentRuntimeEntity.class));
     }
 }
