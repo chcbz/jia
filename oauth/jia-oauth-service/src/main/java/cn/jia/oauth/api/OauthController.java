@@ -421,7 +421,16 @@ public class OauthController {
                 log.debug("获取到用户权限数量: {}", authorities.size());
             }
         }
-        CustomUserDetails userDetails = new CustomUserDetails(user.getJiacn(), user.getUsername(), null, authorities);
+        String authUsername = StringUtil.firstNotEmpty(
+                user.getUsername(), user.getJiacn(), user.getOpenid(), user.getWeixinid(), user.getGithubid());
+        if (StringUtil.isEmpty(authUsername)) {
+            log.error("第三方登录自动登录失败：用户缺少可用认证标识，userId: {}", user.getId());
+            return "redirect:/login/index.html";
+        }
+        if (StringUtil.isEmpty(user.getUsername())) {
+            log.warn("第三方登录用户未配置 username，使用备用认证标识完成登录，userId: {}", user.getId());
+        }
+        CustomUserDetails userDetails = new CustomUserDetails(user.getJiacn(), authUsername, null, authorities);
         UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                 userDetails, null, authorities
         );
@@ -430,7 +439,7 @@ public class OauthController {
         request.getSession().setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
                 SecurityContextHolder.getContext());
         EsContext context = EsContextHolder.getContext();
-        context.setUsername(user.getUsername());
+        context.setUsername(authUsername);
         context.setJiacn(user.getJiacn());
         log.info("第三方登录自动登录流程完成，重定向到: {}", redirectUrl);
         return "redirect:" + redirectUrl;
