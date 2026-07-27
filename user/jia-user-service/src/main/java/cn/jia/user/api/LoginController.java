@@ -6,10 +6,10 @@ import cn.jia.core.errcode.ErrCodeHolder;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.Base64Util;
 import cn.jia.core.util.BeanUtil;
-import cn.jia.core.util.DataUtil;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.PasswordUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.core.redis.ThirdPartyLoginTransactionService;
 import cn.jia.isp.entity.LdapUser;
 import cn.jia.isp.entity.LdapUserGroup;
 import cn.jia.isp.service.LdapUserGroupService;
@@ -68,6 +68,8 @@ public class LoginController {
     private SmsService smsService;
     @Autowired(required = false)
     private SmsServiceProvider smsServiceProvider;
+    @Autowired
+    private ThirdPartyLoginTransactionService thirdPartyLoginTransactionService;
 
     @Value("${oauth.default.clientId:jia_client}")
     private String defaultClientId;
@@ -96,11 +98,14 @@ public class LoginController {
         String loginType = this.getRequestValue(request, "loginType").orElse("");
         switch (loginType) {
             case "wxmp" -> {
+                String state = createThirdPartyLoginState(request, "wxmp");
+                if (state == null) {
+                    return thirdPartyLoginError(request);
+                }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String scope = "snsapi_userinfo";
                 String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/wxmp", StandardCharsets.UTF_8);
-                String state = DataUtil.getRandom(true, 4);
                 String url = "https://open.weixin.qq.com/connect/oauth2/authorize?appid=" + wxMpAppId +
                         "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + scope +
                         "&state=" + state + "#wechat_redirect";
@@ -108,11 +113,14 @@ public class LoginController {
                 return view;
             }
             case "weixin" -> {
+                String state = createThirdPartyLoginState(request, "weixin");
+                if (state == null) {
+                    return thirdPartyLoginError(request);
+                }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String scope = "snsapi_login";
                 String redirect_uri = URLEncoder.encode(baseUrl + "/oauth/third-party/weixin", StandardCharsets.UTF_8);
-                String state = DataUtil.getRandom(true, 4);
                 String url = "https://open.weixin.qq.com/connect/qrconnect?appid=" + weiXinAppId +
                         "&redirect_uri=" + redirect_uri + "&response_type=code&scope=" + scope +
                         "&state=" + state + "#wechat_redirect";
@@ -120,25 +128,36 @@ public class LoginController {
                 return view;
             }
             case "weibo" -> {
+                String state = createThirdPartyLoginState(request, "weibo");
+                if (state == null) {
+                    return thirdPartyLoginError(request);
+                }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/weibo", StandardCharsets.UTF_8);
                 String url = "https://api.weibo.com/oauth2/authorize?client_id=" + weiBoAppId +
-                        "&response_type=code&redirect_uri=" + redirectUri;
+                        "&response_type=code&redirect_uri=" + redirectUri + "&state=" + state;
                 view.setViewName("redirect:" + url);
                 return view;
             }
             case "github" -> {
+                String state = createThirdPartyLoginState(request, "github");
+                if (state == null) {
+                    return thirdPartyLoginError(request);
+                }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
                 String scope = "user,user:email,repo";
                 String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/github", StandardCharsets.UTF_8);
                 String url = "https://github.com/login/oauth/authorize?client_id=" + githubAppId +
-                        "&redirect_uri=" + redirectUri + "&scope=" + scope;
+                        "&redirect_uri=" + redirectUri + "&scope=" + scope + "&state=" + state;
                 view.setViewName("redirect:" + url);
                 return view;
             }
             default -> {
+                if ("1".equals(request.getParameter("thirdPartyLoginError"))) {
+                    return thirdPartyLoginError(request);
+                }
                 view = this.initModelAndView(request);
                 view.setViewName("login/login");
                 return view;
@@ -256,6 +275,25 @@ public class LoginController {
             view.addObject("error", ((AuthenticationException) exception).getMessage());
             request.getSession().removeAttribute(WebAttributes.AUTHENTICATION_EXCEPTION);
         }
+        return view;
+    }
+
+    private String createThirdPartyLoginState(HttpServletRequest request, String provider) {
+        Object savedRequest = request.getSession(false) == null ? null
+                : request.getSession(false).getAttribute(SAVED_REQUEST);
+        if (!(savedRequest instanceof DefaultSavedRequest requestToResume)
+                || StringUtil.isEmpty(requestToResume.getRedirectUrl())) {
+            log.warn("第三方登录未找到可恢复的授权请求，provider: {}", provider);
+            return null;
+        }
+        return thirdPartyLoginTransactionService.create(provider, requestToResume.getRedirectUrl());
+    }
+
+    private ModelAndView thirdPartyLoginError(HttpServletRequest request) {
+        ModelAndView view = this.initModelAndView(request);
+        view.setViewName("login/login");
+        view.addObject("thirdPartyLoginError", true);
+        view.addObject("error", "第三方登录请求已过期，请返回系统后重试。");
         return view;
     }
 

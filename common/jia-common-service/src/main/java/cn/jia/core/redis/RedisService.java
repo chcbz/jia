@@ -7,12 +7,14 @@ import org.springframework.data.redis.connection.ReactiveSubscription;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Set;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -36,6 +38,20 @@ public class RedisService {
      */
     public String get(String key) {
         return redisTemplate.opsForValue().get(key);
+    }
+
+    /**
+     * 原子读取并删除键值，适用于一次性令牌等不可重放场景。
+     *
+     * @param key 键
+     * @return 删除前的值；键不存在时返回null
+     */
+    public String getAndDelete(String key) {
+        DefaultRedisScript<String> script = new DefaultRedisScript<>(
+                "local value = redis.call('GET', KEYS[1]); "
+                        + "if value then redis.call('DEL', KEYS[1]); end; return value",
+                String.class);
+        return redisTemplate.execute(script, List.of(key));
     }
 
     /**

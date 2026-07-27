@@ -9,6 +9,7 @@ import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.core.redis.ThirdPartyLoginTransactionService;
 import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.oauth.dto.GithubOauthTokenDTO;
@@ -68,6 +69,7 @@ public class OauthController {
     private final UserService userService;
     private final PermsService permsService;
     private final RestTemplate restTemplate;
+    private final ThirdPartyLoginTransactionService thirdPartyLoginTransactionService;
 
     @Value("${oauth.third-party.wxmp.appid:}")
     private String wxMpAppId;
@@ -96,13 +98,17 @@ public class OauthController {
      */
     @GetMapping("/third-party/wxmp")
     public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
-        log.info("处理微信公众号第三方登录回调，code: {}, state: {}", code, state);
+        ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("wxmp", state);
+        if (transaction == null) {
+            return thirdPartyLoginFailed("wxmp");
+        }
+        log.info("处理微信公众号第三方登录回调");
         String base_url = "https://api.weixin.qq.com";
         //获取token
         String grant_type = "authorization_code";
         String url = base_url + "/sns/oauth2/access_token?appid=" + wxMpAppId + "&secret=" + wxMpSecret +
                 "&grant_type=" + grant_type + "&code=" + code;
-        log.debug("请求微信API获取token，URL: {}", url);
+        log.debug("请求微信 API 获取 token");
         
         // 设置请求头，确保接收JSON格式响应
         HttpHeaders headers = new HttpHeaders();
@@ -133,14 +139,14 @@ public class OauthController {
         String accessToken = tokenDTO.getAccessToken();
         String openid = tokenDTO.getOpenId();
         String scope = tokenDTO.getScope();
-        log.debug("微信公众号token获取成功，openid: {}, scope: {}", openid, scope);
+        log.debug("微信公众号 token 获取成功，scope: {}", scope);
         //保存用户信息
         UserEntity user = new UserEntity();
         user.setOpenid(openid);
         //获取用户信息
         if (scope.contains("snsapi_userinfo")) {
             url = base_url + "/sns/userinfo?access_token=" + accessToken + "&openid=" + openid;
-            log.debug("请求微信API获取用户信息，URL: {}", url);
+            log.debug("请求微信公众号 API 获取用户信息");
             
             WeiXinOauthUserDTO userDTO;
             try {
@@ -176,9 +182,8 @@ public class OauthController {
             log.debug("微信公众号用户信息获取成功，昵称: {}", user.getNickname());
         }
 
-        request.getSession().setAttribute("user", user);
-        log.info("微信公众号第三方登录回调处理完成，用户openid: {}", openid);
-        return "redirect:/oauth/third-party/autologin";
+        log.info("微信公众号第三方登录回调处理完成");
+        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
     }
 
     /**
@@ -191,12 +196,16 @@ public class OauthController {
      */
     @GetMapping("/third-party/weixin")
     public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
-        log.info("处理微信第三方登录回调，code: {}, state: {}", code, state);
+        ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("weixin", state);
+        if (transaction == null) {
+            return thirdPartyLoginFailed("weixin");
+        }
+        log.info("处理微信第三方登录回调");
         String baseUrl = "https://api.weixin.qq.com";
         // 获取token
         String url = baseUrl + "/sns/oauth2/access_token?appid=" + weiXinAppId + "&secret=" + weiXinSecret +
                 "&grant_type=authorization_code&code=" + code;
-        log.debug("请求微信API获取token，URL: {}", url);
+        log.debug("请求微信 API 获取 token");
         
         // 设置请求头，确保接收JSON格式响应
         HttpHeaders headers = new HttpHeaders();
@@ -226,28 +235,32 @@ public class OauthController {
         }
         String openid = tokenDTO.getOpenId();
         String unionid = StringUtil.isEmpty(tokenDTO.getUnionId()) ? openid : tokenDTO.getUnionId();
-        log.debug("微信token获取成功，openid: {}, unionid: {}", openid, unionid);
+        log.debug("微信 token 获取成功");
 
         // 保存用户信息
         UserEntity user = new UserEntity();
         user.setWeixinid(unionid);
         user.setOpenid(openid);
         
-        request.getSession().setAttribute("user", user);
-        log.info("微信第三方登录回调处理完成，用户openid: {}", openid);
-        return "redirect:/oauth/third-party/autologin";
+        log.info("微信第三方登录回调处理完成");
+        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
     }
 
     /**
      * 处理微博第三方登录回调
      *
      * @param code     授权码
+     * @param state    状态参数
      * @param request  HTTP请求对象
-     * @return 重定向到自动登录处理
+     * @return 重定向到原始授权请求
      */
     @GetMapping("/third-party/weibo")
-    public String thirdPartyWeiBo(@RequestParam String code, HttpServletRequest request) {
-        log.info("处理微博第三方登录回调，code: {}", code);
+    public String thirdPartyWeiBo(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
+        ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("weibo", state);
+        if (transaction == null) {
+            return thirdPartyLoginFailed("weibo");
+        }
+        log.info("处理微博第三方登录回调");
         String weiBoBaseUrl = "https://api.weibo.com";
         String baseUrl = "https://" + request.getServerName();
         String redirectUri = URLEncoder.encode(baseUrl + "/oauth/third-party/weibo", StandardCharsets.UTF_8);
@@ -263,7 +276,7 @@ public class OauthController {
         
         WeiBoOauthTokenDTO tokenDTO;
         try {
-            log.debug("请求微博API获取token，URL: {}", url);
+            log.debug("请求微博 API 获取 token");
             ResponseEntity<String> responseEntity = restTemplate.postForEntity(url, entity, String.class);
             String tokenStr = responseEntity.getBody();
             tokenDTO = JsonUtil.fromJson(tokenStr, WeiBoOauthTokenDTO.class);
@@ -281,7 +294,7 @@ public class OauthController {
 
         String accessToken = Objects.requireNonNull(tokenDTO).getAccessToken();
         String uid = tokenDTO.getUid();
-        log.debug("微博token获取成功，uid: {}", uid);
+        log.debug("微博 token 获取成功");
         // 获取用户信息
         url = weiBoBaseUrl + "/2/users/show.json?access_token=" + accessToken + "&uid=" + uid;
         
@@ -290,7 +303,7 @@ public class OauthController {
             headers.clear();
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
             HttpEntity<?> userEntity = new HttpEntity<>(headers);
-            log.debug("请求微博API获取用户信息，URL: {}", url);
+            log.debug("请求微博 API 获取用户信息");
             ResponseEntity<String> userResponseEntity = restTemplate.exchange(url, HttpMethod.GET, userEntity, String.class);
             String userStr = userResponseEntity.getBody();
             userDTO = JsonUtil.fromJson(userStr, WeiBoOauthUserDTO.class);
@@ -323,21 +336,25 @@ public class OauthController {
         Optional.ofNullable(userDTO.getProfileImageUrl()).ifPresent(user::setAvatar);
         log.debug("微博用户信息获取成功，昵称: {}", user.getNickname());
         
-        request.getSession().setAttribute("user", user);
-        log.info("微博第三方登录回调处理完成，用户uid: {}", uid);
-        return "redirect:/oauth/third-party/autologin";
+        log.info("微博第三方登录回调处理完成");
+        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
     }
 
     /**
      * 处理GitHub第三方登录回调
      *
      * @param code     授权码
+     * @param state    状态参数
      * @param request  HTTP请求对象
-     * @return 重定向到自动登录处理
+     * @return 重定向到原始授权请求
      */
     @GetMapping("/third-party/github")
-    public String thirdPartyGithub(@RequestParam String code, HttpServletRequest request) {
-        log.info("处理GitHub第三方登录回调，code: {}", code);
+    public String thirdPartyGithub(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
+        ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("github", state);
+        if (transaction == null) {
+            return thirdPartyLoginFailed("github");
+        }
+        log.info("处理GitHub第三方登录回调");
         String githubBaseUrl = "https://github.com";
         String apiBaseUrl = "https://api.github.com";
         // 获取token
@@ -348,19 +365,19 @@ public class OauthController {
         HttpHeaders headers = new HttpHeaders();
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         HttpEntity<?> entity = new HttpEntity<>(headers);
-        log.debug("请求GitHub API获取token，URL: {}", url);
+        log.debug("请求 GitHub API 获取 token");
         ResponseEntity<String> responseEntity = restTemplate.postForEntity(url, entity, String.class);
         String tokenStr = responseEntity.getBody();
         GithubOauthTokenDTO tokenDTO = JsonUtil.fromJson(tokenStr, GithubOauthTokenDTO.class);
         String accessToken = Objects.requireNonNull(tokenDTO).getAccessToken();
-        log.debug("GitHub token获取成功，accessToken: {}", accessToken);
+        log.debug("GitHub token获取成功");
         // 获取用户信息
         url = apiBaseUrl + "/user";
         headers.clear();
         headers.setBearerAuth(accessToken);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         HttpEntity<?> userEntity = new HttpEntity<>(headers);
-        log.debug("请求GitHub API获取用户信息，URL: {}", url);
+        log.debug("请求 GitHub API 获取用户信息");
         ResponseEntity<String> userResponseEntity = restTemplate.exchange(url, HttpMethod.GET, userEntity, String.class);
         String userStr = userResponseEntity.getBody();
         GithubOauthUserDTO userDTO = JsonUtil.fromJson(userStr, GithubOauthUserDTO.class);
@@ -379,9 +396,8 @@ public class OauthController {
         user.setRemark(userDTO.getBio());
         log.debug("GitHub用户信息获取成功，用户名: {}", user.getUsername());
 
-        request.getSession().setAttribute("user", user);
-        log.info("GitHub第三方登录回调处理完成，用户ID: {}", userDTO.getId());
-        return "redirect:/oauth/third-party/autologin";
+        log.info("GitHub第三方登录回调处理完成");
+        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
     }
 
     /**
@@ -393,47 +409,62 @@ public class OauthController {
      */
     @GetMapping("/third-party/autologin")
     public String thirdPartyAutoLogin(HttpServletRequest request, HttpServletResponse response) {
-        log.info("开始处理第三方登录自动登录流程");
+        log.info("开始处理兼容第三方登录自动登录流程");
         UserEntity user = (UserEntity) request.getSession().getAttribute("user");
         RequestCache requestCache = new HttpSessionRequestCache();
         SavedRequest savedRequest = requestCache.getRequest(request, response);
-        if (savedRequest == null) {
-            log.warn("没有找到保存的请求，重定向到登录页");
-            return "redirect:/login/index.html";
+        if (user == null || savedRequest == null || StringUtil.isEmpty(savedRequest.getRedirectUrl())) {
+            log.warn("兼容第三方登录流程缺少用户或原始授权请求");
+            return thirdPartyLoginFailed("legacy");
         }
-        String redirectUrl = savedRequest.getRedirectUrl();
+        return completeThirdPartyLogin(user, savedRequest.getRedirectUrl(), request);
+    }
+
+    private ThirdPartyLoginTransactionService.Transaction consumeTransaction(String provider, String state) {
+        ThirdPartyLoginTransactionService.Transaction transaction = thirdPartyLoginTransactionService.consume(provider, state);
+        if (transaction == null) {
+            log.warn("第三方登录回调 state 无效、过期或已消费，provider: {}", provider);
+        }
+        return transaction;
+    }
+
+    private String thirdPartyLoginFailed(String provider) {
+        log.warn("第三方登录回调未完成，返回不可自动重试的登录页，provider: {}", provider);
+        return "redirect:/login/index.html?thirdPartyLoginError=1";
+    }
+
+    /**
+     * 完成第三方认证，不依赖回调浏览器保留原 HttpSession。
+     */
+    private String completeThirdPartyLogin(UserEntity user, String redirectUrl, HttpServletRequest request) {
+        if (user == null || StringUtil.isEmpty(redirectUrl)) {
+            log.warn("第三方登录缺少用户或授权跳转地址");
+            return thirdPartyLoginFailed("unknown");
+        }
         String clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
-        log.debug("从重定向URL中获取到client_id: {}", clientId);
         EsContextHolder.getContext().setClientId(clientId);
-        //保存用户信息
         user = userService.upsert(user);
-        log.debug("用户信息保存完成，用户ID: {}", user.getId());
-        //自动登录
-        // 用户已经在第三方登录中验证，直接创建已认证的Authentication对象
-        // 获取用户的所有权限
+
         Collection<? extends GrantedAuthority> authorities = new ArrayList<>();
         if (user.getId() != null) {
             List<PermsEntity> authList = permsService.findByUserId(user.getId());
             if (CollectionUtil.isNotNullOrEmpty(authList)) {
                 authorities = authList.stream()
-                    .map(p -> new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc()))
-                    .collect(Collectors.toList());
-                log.debug("获取到用户权限数量: {}", authorities.size());
+                        .map(p -> new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc()))
+                        .collect(Collectors.toList());
             }
         }
         String authUsername = StringUtil.firstNotEmpty(
                 user.getUsername(), user.getJiacn(), user.getOpenid(), user.getWeixinid(), user.getGithubid());
         if (StringUtil.isEmpty(authUsername)) {
             log.error("第三方登录自动登录失败：用户缺少可用认证标识，userId: {}", user.getId());
-            return "redirect:/login/index.html";
+            return thirdPartyLoginFailed("unknown");
         }
         if (StringUtil.isEmpty(user.getUsername())) {
             log.warn("第三方登录用户未配置 username，使用备用认证标识完成登录，userId: {}", user.getId());
         }
         CustomUserDetails userDetails = new CustomUserDetails(user.getJiacn(), authUsername, null, authorities);
-        UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                userDetails, null, authorities
-        );
+        UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(userDetails, null, authorities);
         authToken.setDetails(new WebAuthenticationDetails(request));
         SecurityContextHolder.getContext().setAuthentication(authToken);
         request.getSession().setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
@@ -441,7 +472,7 @@ public class OauthController {
         EsContext context = EsContextHolder.getContext();
         context.setUsername(authUsername);
         context.setJiacn(user.getJiacn());
-        log.info("第三方登录自动登录流程完成，重定向到: {}", redirectUrl);
+        log.info("第三方登录自动登录完成，clientId: {}", clientId);
         return "redirect:" + redirectUrl;
     }
 

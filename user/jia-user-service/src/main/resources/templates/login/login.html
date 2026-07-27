@@ -139,8 +139,9 @@
 $(function() {
     $("input[name='username']").prev().focus();
     
-    // 检测是否为微信浏览器，如果是则自动跳转微信公众号登录
-    if(isWeixinBrowser()) {
+    // 第三方授权上下文失效时停留在登录页展示错误，避免微信浏览器自动重试造成循环。
+    var thirdPartyLoginError = [[${thirdPartyLoginError ?: false}]];
+    if(!thirdPartyLoginError && isWeixinBrowser()) {
         otherLogin('wxmp');
     }
 })
