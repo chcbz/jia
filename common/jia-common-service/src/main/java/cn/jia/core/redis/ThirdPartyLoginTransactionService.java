@@ -19,7 +19,9 @@ import java.util.Base64;
 @Service
 public class ThirdPartyLoginTransactionService {
     private static final String KEY_PREFIX = "oauth:third-party-login:";
+    private static final String COMPLETED_KEY_PREFIX = KEY_PREFIX + "completed:";
     private static final Duration TTL = Duration.ofMinutes(5);
+    private static final Duration COMPLETED_TTL = Duration.ofMinutes(1);
     private static final int STATE_BYTES = 32;
 
     private final RedisService redisService;
@@ -55,11 +57,38 @@ public class ThirdPartyLoginTransactionService {
             return null;
         }
         Transaction transaction = JsonUtil.fromJson(value, Transaction.class);
-        if (transaction == null || !provider.equals(transaction.getProvider())
-                || StringUtil.isEmpty(transaction.getRedirectUrl())) {
+        if (!isValidTransaction(transaction) || !provider.equals(transaction.getProvider())) {
             return null;
         }
         return transaction;
+    }
+
+    /**
+     * Remembers a successful callback briefly so WebView/provider duplicate callbacks can
+     * resume the already-completed authorization without reusing their authorization code.
+     */
+    public void markCompleted(String state, Transaction transaction) {
+        if (!isValidState(state) || !isValidTransaction(transaction)) {
+            throw new IllegalArgumentException("valid state and transaction are required");
+        }
+        redisService.set(COMPLETED_KEY_PREFIX + state, JsonUtil.toJson(transaction), COMPLETED_TTL);
+    }
+
+    /**
+     * Returns a short-lived completed transaction for an idempotent duplicate callback.
+     * This does not make the third-party code reusable.
+     */
+    public Transaction findCompleted(String provider, String state) {
+        if (StringUtil.isEmpty(provider) || !isValidState(state)) {
+            return null;
+        }
+        Transaction transaction = redisService.get(COMPLETED_KEY_PREFIX + state, Transaction.class);
+        return isValidTransaction(transaction) && provider.equals(transaction.getProvider()) ? transaction : null;
+    }
+
+    private boolean isValidTransaction(Transaction transaction) {
+        return transaction != null && StringUtil.isNotEmpty(transaction.getProvider())
+                && StringUtil.isNotEmpty(transaction.getRedirectUrl());
     }
 
     private String nextState() {

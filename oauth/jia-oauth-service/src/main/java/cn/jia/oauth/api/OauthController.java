@@ -100,7 +100,7 @@ public class OauthController {
     public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("wxmp", state);
         if (transaction == null) {
-            return thirdPartyLoginFailed("wxmp");
+            return resumeCompletedThirdPartyLogin("wxmp", state);
         }
         log.info("处理微信公众号第三方登录回调");
         String base_url = "https://api.weixin.qq.com";
@@ -183,7 +183,7 @@ public class OauthController {
         }
 
         log.info("微信公众号第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
+        return completeThirdPartyLogin(user, transaction, state, request);
     }
 
     /**
@@ -198,7 +198,7 @@ public class OauthController {
     public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("weixin", state);
         if (transaction == null) {
-            return thirdPartyLoginFailed("weixin");
+            return resumeCompletedThirdPartyLogin("weixin", state);
         }
         log.info("处理微信第三方登录回调");
         String baseUrl = "https://api.weixin.qq.com";
@@ -243,7 +243,7 @@ public class OauthController {
         user.setOpenid(openid);
         
         log.info("微信第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
+        return completeThirdPartyLogin(user, transaction, state, request);
     }
 
     /**
@@ -258,7 +258,7 @@ public class OauthController {
     public String thirdPartyWeiBo(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("weibo", state);
         if (transaction == null) {
-            return thirdPartyLoginFailed("weibo");
+            return resumeCompletedThirdPartyLogin("weibo", state);
         }
         log.info("处理微博第三方登录回调");
         String weiBoBaseUrl = "https://api.weibo.com";
@@ -337,7 +337,7 @@ public class OauthController {
         log.debug("微博用户信息获取成功，昵称: {}", user.getNickname());
         
         log.info("微博第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
+        return completeThirdPartyLogin(user, transaction, state, request);
     }
 
     /**
@@ -352,7 +352,7 @@ public class OauthController {
     public String thirdPartyGithub(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("github", state);
         if (transaction == null) {
-            return thirdPartyLoginFailed("github");
+            return resumeCompletedThirdPartyLogin("github", state);
         }
         log.info("处理GitHub第三方登录回调");
         String githubBaseUrl = "https://github.com";
@@ -397,7 +397,7 @@ public class OauthController {
         log.debug("GitHub用户信息获取成功，用户名: {}", user.getUsername());
 
         log.info("GitHub第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction.getRedirectUrl(), request);
+        return completeThirdPartyLogin(user, transaction, state, request);
     }
 
     /**
@@ -417,15 +417,21 @@ public class OauthController {
             log.warn("兼容第三方登录流程缺少用户或原始授权请求");
             return thirdPartyLoginFailed("legacy");
         }
-        return completeThirdPartyLogin(user, savedRequest.getRedirectUrl(), request);
+        return completeThirdPartyLogin(user, new ThirdPartyLoginTransactionService.Transaction("legacy", savedRequest.getRedirectUrl()), null, request);
     }
 
     private ThirdPartyLoginTransactionService.Transaction consumeTransaction(String provider, String state) {
-        ThirdPartyLoginTransactionService.Transaction transaction = thirdPartyLoginTransactionService.consume(provider, state);
-        if (transaction == null) {
-            log.warn("第三方登录回调 state 无效、过期或已消费，provider: {}", provider);
+        return thirdPartyLoginTransactionService.consume(provider, state);
+    }
+
+    private String resumeCompletedThirdPartyLogin(String provider, String state) {
+        ThirdPartyLoginTransactionService.Transaction completed = thirdPartyLoginTransactionService.findCompleted(provider, state);
+        if (completed != null) {
+            log.info("第三方登录收到已完成交易的重复回调，直接恢复原授权请求，provider: {}", provider);
+            return "redirect:" + completed.getRedirectUrl();
         }
-        return transaction;
+        log.warn("第三方登录回调 state 无效、过期或已消费，provider: {}", provider);
+        return thirdPartyLoginFailed(provider);
     }
 
     private String thirdPartyLoginFailed(String provider) {
@@ -436,7 +442,11 @@ public class OauthController {
     /**
      * 完成第三方认证，不依赖回调浏览器保留原 HttpSession。
      */
-    private String completeThirdPartyLogin(UserEntity user, String redirectUrl, HttpServletRequest request) {
+    private String completeThirdPartyLogin(UserEntity user,
+                                           ThirdPartyLoginTransactionService.Transaction transaction,
+                                           String state,
+                                           HttpServletRequest request) {
+        String redirectUrl = transaction == null ? null : transaction.getRedirectUrl();
         if (user == null || StringUtil.isEmpty(redirectUrl)) {
             log.warn("第三方登录缺少用户或授权跳转地址");
             return thirdPartyLoginFailed("unknown");
@@ -472,6 +482,9 @@ public class OauthController {
         EsContext context = EsContextHolder.getContext();
         context.setUsername(authUsername);
         context.setJiacn(user.getJiacn());
+        if (StringUtil.isNotEmpty(state)) {
+            thirdPartyLoginTransactionService.markCompleted(state, transaction);
+        }
         log.info("第三方登录自动登录完成，clientId: {}", clientId);
         return "redirect:" + redirectUrl;
     }
