@@ -11,6 +11,16 @@ public final class AgentConstants {
     public static final int BINDING_STATUS_ACTIVE = 1;
     public static final int BINDING_STATUS_INACTIVE = 0;
 
+    public static final String IDENTITY_TYPE_OPAQUE = "OPAQUE";
+    public static final String IDENTITY_TYPE_LEGACY_CANONICAL = "LEGACY_CANONICAL";
+    public static final String IDENTITY_TYPE_SYSTEM = "SYSTEM";
+    public static final String IDENTITY_STATUS_PROVISIONED = "PROVISIONED";
+    public static final String IDENTITY_STATUS_ACTIVE = "ACTIVE";
+    public static final String IDENTITY_STATUS_SUSPENDED = "SUSPENDED";
+    public static final String IDENTITY_STATUS_RETIRED = "RETIRED";
+    public static final String IDENTITY_ALIAS_TYPE_LEGACY_AGENT_ID = "LEGACY_AGENT_ID";
+    public static final String IDENTITY_ALIAS_STATUS_ACTIVE = "ACTIVE";
+
     public static final String TASK_TYPE_AGENT = "agent";
     public static final String TASK_STATUS_OPEN = "open";
     public static final String TASK_STATUS_ASSIGNED = "assigned";

@@ -14,6 +14,11 @@ import java.util.List;
 public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingMapper, AgentPersonaBindingEntity>
         implements AgentPersonaBindingDao {
     @Override
+    public AgentPersonaBindingEntity findByIdForUpdate(long id) {
+        return baseMapper.selectByIdForUpdate(id);
+    }
+
+    @Override
     public AgentPersonaBindingEntity findActiveByClientAndPersona(String clientId, String personaCode) {
         return baseMapper.selectOne(activeWrapper(clientId)
                 .eq(AgentPersonaBindingEntity::getPersonaCode, personaCode)

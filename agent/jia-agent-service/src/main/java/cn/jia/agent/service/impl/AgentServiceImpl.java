@@ -13,6 +13,7 @@ import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
 import cn.jia.agent.entity.AgentCapabilityDTO;
+import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
@@ -39,6 +40,7 @@ import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.service.AgentService;
@@ -97,6 +99,7 @@ public class AgentServiceImpl implements AgentService {
     private static final long SCENE_STATE_EXPIRY_MILLIS = 300_000L;
 
     private final AgentRuntimeDao agentRuntimeDao;
+    private final AgentIdentityService agentIdentityService;
     private final AgentPersonaDao agentPersonaDao;
     private final AgentPersonaBindingDao agentPersonaBindingDao;
     private final AgentTaskMetaDao agentTaskMetaDao;
@@ -120,16 +123,20 @@ public class AgentServiceImpl implements AgentService {
 
         String clientId = resolveCurrentClientId();
         String jiacn = resolveCurrentJiacn();
-        AgentPersonaBindingEntity binding = agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(clientId, jiacn, request.getAgentId());
-        if (binding == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Agent is not bound to current user");
-        }
+        AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
+                jiacn, clientId, jiacn, request.getAgentId());
+        AgentPersonaBindingEntity binding = agentIdentityService.requireActiveBinding(
+                identity, Objects.equals(request.getAgentId(), identity.getCanonicalAgentId())
+                        ? null : request.getAgentId());
         AgentPersonaEntity persona = requirePersona(binding.getPersonaCode());
+        identity = agentIdentityService.activateForFirstRegistration(identity);
+        String canonicalAgentId = identity.getCanonicalAgentId();
 
         String token = UUID.randomUUID().toString().replace("-", "");
-        AgentRuntimeEntity entity = Optional.ofNullable(agentRuntimeDao.findByAgentId(request.getAgentId()))
+        AgentRuntimeEntity entity = Optional.ofNullable(agentRuntimeDao.findByAgentId(canonicalAgentId))
+                .map(existing -> requireExactRuntime(existing, canonicalAgentId, clientId, jiacn, binding.getId()))
                 .orElseGet(AgentRuntimeEntity::new);
-        entity.setAgentId(request.getAgentId());
+        entity.setAgentId(canonicalAgentId);
         entity.setName(persona.getName());
         entity.setAvatar(StringUtil.isBlank(request.getAvatar()) ? persona.getAvatar() : request.getAvatar());
         entity.setPersonaCode(persona.getPersonaCode());
@@ -222,21 +229,31 @@ public class AgentServiceImpl implements AgentService {
         AgentPersonaBindingEntity bound = agentPersonaBindingDao.findActiveByClientAndPersona(clientId, persona.getPersonaCode());
         if (bound != null) {
             if (jiacn.equals(bound.getJiacn())) {
-                AgentRuntimeEntity existing = agentRuntimeDao.findByAgentId(bound.getAgentId());
-                return existing == null ? createRuntimeFromBinding(bound, persona, AgentConstants.STATUS_OFFLINE) : toRuntimeDTO(existing);
+                AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
+                        jiacn, clientId, jiacn, bound.getAgentId());
+                agentIdentityService.requireActiveBinding(identity, null);
+                AgentRuntimeEntity existing = agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId());
+                return existing == null
+                        ? createRuntimeFromBinding(bound, identity.getCanonicalAgentId(), persona, AgentConstants.STATUS_OFFLINE)
+                        : toRuntimeDTO(requireExactRuntime(existing, identity.getCanonicalAgentId(),
+                                clientId, jiacn, bound.getId()));
             }
             throw new AgentBizException(AgentErrorConstants.PERSONA_BOUND, "Persona has been bound in this client");
         }
 
         AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
         binding.setClientId(clientId);
+        binding.setTenantId(jiacn);
         binding.setJiacn(jiacn);
         binding.setPersonaCode(persona.getPersonaCode());
-        binding.setAgentId(generateAgentId(clientId, persona.getPersonaCode()));
+        binding.setAgentId(generateAgentId());
         binding.setBoundAt(System.currentTimeMillis());
         binding.setStatus(AgentConstants.BINDING_STATUS_ACTIVE);
         agentPersonaBindingDao.insert(binding);
-        return createRuntimeFromBinding(binding, persona, AgentConstants.STATUS_OFFLINE);
+        AgentIdentityRegistryEntity identity = agentIdentityService.provisionOpaqueIdentity(
+                binding, "A08 persona bind: " + persona.getPersonaCode());
+        return createRuntimeFromBinding(binding, identity.getCanonicalAgentId(),
+                persona, AgentConstants.STATUS_OFFLINE);
     }
 
     @Override
@@ -267,10 +284,13 @@ public class AgentServiceImpl implements AgentService {
         if (binding == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Persona is not bound to current user");
         }
+        AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
+                jiacn, clientId, jiacn, binding.getAgentId());
         binding.setStatus(AgentConstants.BINDING_STATUS_INACTIVE);
         agentPersonaBindingDao.updateById(binding);
+        agentIdentityService.suspendForBinding(jiacn, clientId, jiacn, binding.getId());
         disableServerHostedProfile(persona);
-        AgentRuntimeEntity runtime = agentRuntimeDao.findByAgentId(binding.getAgentId());
+        AgentRuntimeEntity runtime = agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId());
         if (runtime != null) {
             runtime.setStatus(AgentConstants.STATUS_OFFLINE);
             runtime.setLastSeenAt(System.currentTimeMillis());
@@ -281,17 +301,13 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId) {
-        if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agentId)) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "System agent cannot be registered by external clients");
-        }
-        AgentRuntimeEntity agent = requireAgent(agentId);
-        if (!clientId.equals(agent.getClientId()) || !jiacn.equals(agent.getOwnerJiacn())) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Agent is not owned by the API key user");
-        }
-        AgentPersonaBindingEntity binding = agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(clientId, jiacn, agentId);
-        if (binding == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Agent binding is inactive or missing");
-        }
+        String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
+                jiacn, clientId, jiacn, agentId);
+        AgentRuntimeEntity agent = requireAgent(canonicalAgentId);
+        AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
+                jiacn, clientId, jiacn, requireBindingId(agent), canonicalAgentId);
+        agentIdentityService.requireActiveBinding(identity, null);
+        requireExactRuntime(agent, canonicalAgentId, clientId, jiacn, identity.getBindingId());
         return toRuntimeDTO(agent);
     }
 
@@ -724,24 +740,23 @@ public class AgentServiceImpl implements AgentService {
         if (agent == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent not found");
         }
-        if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId())) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "System agent cannot be operated directly");
-        }
         String clientId = resolveCurrentClientId();
         String jiacn = resolveCurrentJiacn();
-        if (!Objects.equals(clientId, agent.getClientId()) || !Objects.equals(jiacn, agent.getOwnerJiacn())) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Agent is not bound to current user");
-        }
-        AgentPersonaBindingEntity binding = agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(clientId, jiacn, agent.getAgentId());
-        if (binding == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Agent binding is inactive or missing");
-        }
+        String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
+                jiacn, clientId, jiacn, agent.getAgentId());
+        AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
+                jiacn, clientId, jiacn, requireBindingId(agent), canonicalAgentId);
+        agentIdentityService.requireActiveBinding(identity, null);
+        requireExactRuntime(agent, canonicalAgentId, clientId, jiacn, identity.getBindingId());
     }
 
-    private AgentRuntimeDTO createRuntimeFromBinding(AgentPersonaBindingEntity binding, AgentPersonaEntity persona, String status) {
-        AgentRuntimeEntity runtime = Optional.ofNullable(agentRuntimeDao.findByAgentId(binding.getAgentId()))
+    private AgentRuntimeDTO createRuntimeFromBinding(AgentPersonaBindingEntity binding,
+            String canonicalAgentId, AgentPersonaEntity persona, String status) {
+        AgentRuntimeEntity runtime = Optional.ofNullable(agentRuntimeDao.findByAgentId(canonicalAgentId))
+                .map(existing -> requireExactRuntime(existing, canonicalAgentId,
+                        binding.getClientId(), binding.getJiacn(), binding.getId()))
                 .orElseGet(AgentRuntimeEntity::new);
-        runtime.setAgentId(binding.getAgentId());
+        runtime.setAgentId(canonicalAgentId);
         runtime.setName(persona.getName());
         runtime.setAvatar(persona.getAvatar());
         runtime.setPersonaCode(persona.getPersonaCode());
@@ -1067,8 +1082,13 @@ codexTimeoutMs=900000
         AgentPersonaBindingEntity binding = Boolean.TRUE.equals(persona.getSystemAgent())
                 ? null
                 : agentPersonaBindingDao.findActiveByClientAndPersona(clientId, persona.getPersonaCode());
+        String catalogAgentId = null;
+        if (binding != null) {
+            catalogAgentId = agentIdentityService.requireRegistrationIdentityInScope(
+                    jiacn, clientId, jiacn, binding.getAgentId()).getCanonicalAgentId();
+        }
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
-        dto.setAgentId(binding == null ? generateAgentId(clientId, persona.getPersonaCode()) : binding.getAgentId());
+        dto.setAgentId(catalogAgentId);
         dto.setName(persona.getName());
         dto.setAvatar(persona.getAvatar());
         dto.setPersonaCode(persona.getPersonaCode());
@@ -1080,7 +1100,7 @@ codexTimeoutMs=900000
         dto.setSystemAgent(Boolean.TRUE.equals(persona.getSystemAgent()));
         dto.setAbilities(parseList(persona.getAbilities()));
         dto.setStatus(binding == null ? AgentConstants.STATUS_OFFLINE
-                : Optional.ofNullable(agentRuntimeDao.findByAgentId(binding.getAgentId()))
+                : Optional.ofNullable(agentRuntimeDao.findByAgentId(catalogAgentId))
                         .map(AgentRuntimeEntity::getStatus)
                         .orElse(AgentConstants.STATUS_OFFLINE));
         dto.setOwnerJiacn(binding == null ? null : binding.getJiacn());
@@ -1822,10 +1842,28 @@ codexTimeoutMs=900000
         return "jia_client";
     }
 
-    private String generateAgentId(String clientId, String personaCode) {
-        String safeClientId = Optional.ofNullable(clientId).orElse("jia_client")
-                .replaceAll("[^A-Za-z0-9_-]", "-");
-        return "jyt-" + safeClientId + "-" + personaCode;
+    private String generateAgentId() {
+        return "agt_" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    private Long requireBindingId(AgentRuntimeEntity runtime) {
+        if (runtime.getBindingId() == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Agent runtime is not linked to a durable binding");
+        }
+        return runtime.getBindingId();
+    }
+
+    private AgentRuntimeEntity requireExactRuntime(AgentRuntimeEntity runtime, String canonicalAgentId,
+            String clientId, String ownerJiacn, Long bindingId) {
+        if (!Objects.equals(canonicalAgentId, runtime.getAgentId())
+                || !Objects.equals(clientId, runtime.getClientId())
+                || !Objects.equals(ownerJiacn, runtime.getOwnerJiacn())
+                || !Objects.equals(bindingId, runtime.getBindingId())) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Agent runtime identity is not byte-exact or is outside owner scope");
+        }
+        return runtime;
     }
 
     private String limitLength(String value, int maxLength) {

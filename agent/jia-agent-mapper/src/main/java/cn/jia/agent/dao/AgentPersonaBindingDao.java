@@ -6,6 +6,8 @@ import cn.jia.core.dao.IBaseDao;
 import java.util.List;
 
 public interface AgentPersonaBindingDao extends IBaseDao<AgentPersonaBindingEntity> {
+    AgentPersonaBindingEntity findByIdForUpdate(long id);
+
     AgentPersonaBindingEntity findActiveByClientAndPersona(String clientId, String personaCode);
 
     AgentPersonaBindingEntity findActiveByClientAndAgentId(String clientId, String agentId);

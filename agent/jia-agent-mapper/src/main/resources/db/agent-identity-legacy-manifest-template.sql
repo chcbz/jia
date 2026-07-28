@@ -1,0 +1,24 @@
+-- A08 manifest authoring template. This file intentionally does not SELECT from
+-- AUTO_ELIGIBLE and does not infer an identity from runtime/persona/displayName.
+-- Populate exactly one row per manually approved binding after exporting and reviewing
+-- agent-identity-dry-run.sql. Compute source_row_sha256 and the full source snapshot with
+-- the same HEX-preserving formulas used by agent-identity-legacy-apply.sql.
+--
+-- Example only (replace every value; do not run as-is):
+-- INSERT INTO agent_identity_legacy_manifest (
+--   batch_id, manifest_row_no, binding_id,
+--   source_client_id, source_owner_jiacn, source_tenant_id, target_tenant_id,
+--   source_persona_code, source_agent_id, source_binding_status, source_bound_at,
+--   source_row_sha256, source_snapshot_row_count, source_snapshot_sha256,
+--   canonical_agent_id, canonical_type, lifecycle_status, legacy_agent_id,
+--   audit_reason, approved_report_sha256, approval_status,
+--   approved_by, approved_at, create_time
+-- ) VALUES (
+--   'review-20260728-01', 1, 5,
+--   '<exact-client>', '<exact-owner>', NULL, '<exact-owner>',
+--   '<exact-persona>', '<exact-old-agent-id>', 1, <exact-bound-at>,
+--   '<source-row-sha256>', <all-binding-row-count>, '<all-binding-snapshot-sha256>',
+--   'agt_<reviewed-32-lower-hex>', 'OPAQUE', 'ACTIVE', '<exact-old-agent-id>',
+--   'Manual selection of active binding 5 after cross-owner conflict review',
+--   '<approved-report-sha256>', 'APPROVED', '<reviewer>', <approved-at-ms>, <created-at-ms>
+-- );

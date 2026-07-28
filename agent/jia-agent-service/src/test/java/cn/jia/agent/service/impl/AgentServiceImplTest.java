@@ -12,6 +12,7 @@ import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.DialogueTemplateDao;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
+import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentPersonaEntity;
@@ -36,6 +37,7 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -68,6 +70,8 @@ import static org.mockito.Mockito.when;
 class AgentServiceImplTest extends BaseMockTest {
     @Mock
     AgentRuntimeDao agentRuntimeDao;
+    @Mock
+    AgentIdentityService agentIdentityService;
     @Mock
     AgentPersonaDao agentPersonaDao;
     @Mock
@@ -103,7 +107,19 @@ class AgentServiceImplTest extends BaseMockTest {
     @BeforeEach
     void setUpAgentService() {
         EsContextHolder.setContext(new EsContext());
-        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
+        org.mockito.Mockito.lenient().when(agentPersonaBindingDao.insert(any(AgentPersonaBindingEntity.class)))
+                .thenAnswer(invocation -> {
+                    AgentPersonaBindingEntity binding = invocation.getArgument(0);
+                    if (binding.getId() == null) {
+                        binding.setId(1L);
+                    }
+                    return 1;
+                });
+        org.mockito.Mockito.lenient().when(agentIdentityService.provisionOpaqueIdentity(
+                        any(AgentPersonaBindingEntity.class), any(String.class)))
+                .thenAnswer(invocation -> identity(invocation.<AgentPersonaBindingEntity>getArgument(0),
+                        AgentConstants.IDENTITY_STATUS_PROVISIONED));
+        agentService = new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
                 apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(true, true));
     }
@@ -111,8 +127,15 @@ class AgentServiceImplTest extends BaseMockTest {
     @Test
     void registerCreatesOnlineAgentAndPublishesStatus() {
         AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_PROVISIONED);
         AgentPersonaEntity persona = persona("wuyong", "吴用", "智多星");
-        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId("jia_client", "juyiting", "agent-001")).thenReturn(binding);
+        when(agentIdentityService.requireRegistrationIdentityInScope(
+                "juyiting", "jia_client", "juyiting", "agent-001")).thenReturn(identity);
+        when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
+        when(agentIdentityService.activateForFirstRegistration(identity)).thenAnswer(invocation -> {
+            identity.setLifecycleStatus(AgentConstants.IDENTITY_STATUS_ACTIVE);
+            return identity;
+        });
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(null);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
@@ -286,7 +309,7 @@ class AgentServiceImplTest extends BaseMockTest {
 
     @Test
     void sceneStateDisabledPreservesTaskAssignmentWithoutSceneWrite() {
-        agentService = new AgentServiceImpl(agentRuntimeDao, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
+        agentService = new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
                 apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(false, true));
         AgentRuntimeEntity agent = ownedAgent(
@@ -586,6 +609,55 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, result.get(1).getAgentId());
         assertTrue(result.get(1).getRoles().contains("leader"));
         assertEquals("宋江首领负责议事、拆解、派令、追踪和复盘。", result.get(1).getCollaborationHint());
+    }
+
+    @Test
+    void newPersonaBindingIssuesOpaqueIdentityInsteadOfLegacyJytId() {
+        AgentPersonaEntity persona = persona("wuyong", "吴用", "智多星");
+        when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
+
+        AgentRuntimeDTO result = agentService.bindPersona("wuyong");
+
+        assertTrue(result.getAgentId().matches("agt_[0-9a-f]{32}"));
+        assertTrue(!result.getAgentId().startsWith("jyt-"));
+        ArgumentCaptor<AgentPersonaBindingEntity> bindingCaptor =
+                ArgumentCaptor.forClass(AgentPersonaBindingEntity.class);
+        verify(agentPersonaBindingDao).insert(bindingCaptor.capture());
+        AgentPersonaBindingEntity binding = bindingCaptor.getValue();
+        assertEquals("juyiting", binding.getTenantId());
+        assertEquals("juyiting", binding.getJiacn());
+        assertEquals("jia_client", binding.getClientId());
+        assertEquals(result.getAgentId(), binding.getAgentId());
+        verify(agentIdentityService).provisionOpaqueIdentity(
+                eq(binding), eq("A08 persona bind: wuyong"));
+    }
+
+    @Test
+    void legacyAliasRegistrationReturnsCanonicalIdAndPersistsCanonicalRuntime() {
+        String legacy = "jyt-client-a-wuyong";
+        String canonical = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        AgentPersonaBindingEntity binding = binding(legacy, "wuyong");
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_PROVISIONED);
+        identity.setCanonicalAgentId(canonical);
+        identity.setCanonicalType(AgentConstants.IDENTITY_TYPE_OPAQUE);
+        when(agentIdentityService.requireRegistrationIdentityInScope(
+                "juyiting", "jia_client", "juyiting", legacy)).thenReturn(identity);
+        when(agentIdentityService.requireActiveBinding(identity, legacy)).thenReturn(binding);
+        when(agentIdentityService.activateForFirstRegistration(identity)).thenAnswer(invocation -> {
+            identity.setLifecycleStatus(AgentConstants.IDENTITY_STATUS_ACTIVE);
+            return identity;
+        });
+        when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona("wuyong", "吴用", "智多星"));
+
+        AgentRegisterDTO request = new AgentRegisterDTO();
+        request.setAgentId(legacy);
+        AgentRegisterResultDTO result = agentService.register(request);
+
+        assertEquals(canonical, result.getAgentId());
+        ArgumentCaptor<AgentRuntimeEntity> runtimeCaptor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
+        verify(agentRuntimeDao).insert(runtimeCaptor.capture());
+        assertEquals(canonical, runtimeCaptor.getValue().getAgentId());
+        assertEquals(binding.getId(), runtimeCaptor.getValue().getBindingId());
     }
 
     @Test
@@ -987,8 +1059,15 @@ class AgentServiceImplTest extends BaseMockTest {
     private void markOwned(AgentRuntimeEntity agent) {
         agent.setClientId("jia_client");
         agent.setOwnerJiacn("juyiting");
-        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId("jia_client", "juyiting", agent.getAgentId()))
-                .thenReturn(binding(agent.getAgentId(), agent.getPersonaCode() == null ? agent.getAgentId() : agent.getPersonaCode()));
+        agent.setBindingId(1L);
+        AgentPersonaBindingEntity binding = binding(
+                agent.getAgentId(), agent.getPersonaCode() == null ? agent.getAgentId() : agent.getPersonaCode());
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        org.mockito.Mockito.lenient().when(agentIdentityService.requireCanonicalAgentIdInScope(
+                "juyiting", "jia_client", "juyiting", agent.getAgentId())).thenReturn(agent.getAgentId());
+        org.mockito.Mockito.lenient().when(agentIdentityService.requireActiveIdentityForBinding(
+                "juyiting", "jia_client", "juyiting", 1L, agent.getAgentId())).thenReturn(identity);
+        org.mockito.Mockito.lenient().when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
     }
 
     private AgentRuntimeEntity ownedAgent(String agentId, String name, String status, String abilities) {
@@ -1011,11 +1090,28 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
         binding.setId(1L);
         binding.setClientId("jia_client");
+        binding.setTenantId("juyiting");
         binding.setJiacn("juyiting");
         binding.setAgentId(agentId);
         binding.setPersonaCode(personaCode);
         binding.setStatus(AgentConstants.BINDING_STATUS_ACTIVE);
         return binding;
+    }
+
+    private AgentIdentityRegistryEntity identity(AgentPersonaBindingEntity binding, String lifecycle) {
+        AgentIdentityRegistryEntity identity = new AgentIdentityRegistryEntity();
+        identity.setId(10L);
+        identity.setCanonicalAgentId(binding.getAgentId());
+        identity.setCanonicalType(binding.getAgentId().matches("agt_[0-9a-f]{32}")
+                ? AgentConstants.IDENTITY_TYPE_OPAQUE
+                : AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL);
+        identity.setLifecycleStatus(lifecycle);
+        identity.setTenantId(binding.getJiacn());
+        identity.setClientId(binding.getClientId());
+        identity.setOwnerJiacn(binding.getJiacn());
+        identity.setBindingId(binding.getId());
+        identity.setAuditReason("test");
+        return identity;
     }
 
     private AgentPersonaEntity persona(String code, String name, String title) {
