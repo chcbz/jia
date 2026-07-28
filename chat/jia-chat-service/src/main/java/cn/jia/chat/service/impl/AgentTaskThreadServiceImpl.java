@@ -120,12 +120,11 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
         }
         Scope scope = requireScope(tenantId, clientId, taskId, request.getActorAgentId());
         String content = requiredTextUtf8(request.getContent(), "content", MAX_TEXT_UTF8_BYTES);
-        String senderName = optionalText(request.getSenderName(), "senderName", MAX_SENDER_NAME_LENGTH);
-        if (senderName == null) {
-            senderName = scope.actorAgentId();
-        }
+        String senderName = optionalExactText(
+                request.getSenderName(), "senderName", MAX_SENDER_NAME_LENGTH);
         requireWriteAccess(scope);
-        AgentTaskThreadDTO thread = getOrCreateTeamThread(scope, null);
+        // Ensure a stable binding exists; the actual append repeats ownership/member checks under row locks.
+        getOrCreateTeamThread(scope, null);
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         if (request.getMetadata() != null) {
@@ -143,24 +142,20 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
         requireUtf8Bytes(metadataJson, "metadata", MAX_TEXT_UTF8_BYTES);
 
         ChatMessageEntity message = new ChatMessageEntity();
-        message.setConversationId(thread.getConversationId());
         message.setMessageType("ASSISTANT");
         message.setContent(content);
         message.setMetadata(metadataJson);
         message.setJiacn(scope.tenantId());
-        message.setSyncStatus("PENDING");
+        message.setSyncStatus(AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED);
         message.setConversationType(AgentTaskThreadConstants.CONVERSATION_TYPE);
         message.setSenderType("agent");
-        message.setSenderName(senderName);
         try {
-            int inserted = messageDao.insertScoped(scope.tenantId(), scope.clientId(), message);
-            if (inserted != 1 || message.getId() == null) {
-                throw new IllegalStateException("Task thread message insert did not affect one row");
-            }
+            return toMessageDto(creationTransaction.appendTeamMessage(
+                    scope.tenantId(), scope.clientId(), scope.taskId(), scope.actorAgentId(),
+                    senderName, message));
         } catch (RuntimeException exception) {
             throw persistenceFailure(exception);
         }
-        return toMessageDto(message);
     }
 
     @Override
@@ -211,13 +206,29 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
     private AgentTaskThreadEntity requireUsableThread(
             Scope scope, AgentTaskThreadEntity thread) {
         if (thread == null
+                || !scope.tenantId().equals(thread.getTenantId())
+                || !scope.clientId().equals(thread.getClientId())
                 || !scope.taskId().equals(thread.getTaskId())
-                || !AgentTaskThreadConstants.THREAD_STATUS_ACTIVE.equals(thread.getStatus())) {
+                || !AgentTaskThreadConstants.THREAD_TYPE_TEAM.equals(thread.getThreadType())
+                || !AgentTaskThreadConstants.THREAD_KEY_TEAM.equals(thread.getThreadKey())
+                || !AgentTaskThreadConstants.THREAD_STATUS_ACTIVE.equals(thread.getStatus())
+                || !canonicalId(thread.getConversationId())
+                || !canonicalId(thread.getCreatedByAgentId())) {
             throw unavailable();
         }
         ChatConversationEntity conversation = conversationDao.findScopedById(
                 scope.tenantId(), scope.clientId(), thread.getConversationId());
-        if (!AgentTaskThreadConstants.isTaskThreadConversation(conversation)) {
+        if (conversation == null
+                || conversation.getId() == null
+                || !thread.getConversationId().equals(String.valueOf(conversation.getId()))
+                || !scope.tenantId().equals(conversation.getTenantId())
+                || !scope.clientId().equals(conversation.getClientId())
+                || !scope.tenantId().equals(conversation.getJiacn())
+                || !AgentTaskThreadConstants.CONVERSATION_TYPE.equals(conversation.getConversationType())
+                || !AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(conversation.getConversationScopeType())
+                || !("task-thread:" + scope.taskId()).equals(conversation.getConversationScopeKey())
+                || !scope.taskId().equals(conversation.getTaskId())
+                || !Integer.valueOf(0).equals(conversation.getStatus())) {
             throw unavailable();
         }
         return thread;
@@ -262,12 +273,29 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
     }
 
     private String requiredId(String value, String field, int maxLength) {
-        String normalized = value == null ? null : value.trim();
-        if (StringUtil.isBlank(normalized) || normalized.length() > maxLength
-                || normalized.chars().anyMatch(Character::isISOControl)) {
+        if (StringUtil.isBlank(value) || !value.equals(value.strip())
+                || value.length() > maxLength
+                || value.chars().anyMatch(Character::isISOControl)) {
             throw invalid(field + " is invalid");
         }
-        return normalized;
+        return value;
+    }
+
+    private String optionalExactText(String value, String field, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        if (StringUtil.isBlank(value) || !value.equals(value.strip())
+                || value.length() > maxLength
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw invalid(field + " is invalid");
+        }
+        return value;
+    }
+
+    private boolean canonicalId(String value) {
+        return value != null && !value.isBlank() && value.equals(value.strip())
+                && value.chars().noneMatch(Character::isISOControl);
     }
 
     private String optionalText(String value, String field, int maxLength) {

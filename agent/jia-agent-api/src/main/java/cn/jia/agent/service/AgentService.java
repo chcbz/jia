@@ -41,6 +41,8 @@ public interface AgentService {
 
     AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId);
 
+    AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(String clientId, String jiacn, String agentId);
+
     AgentRuntimeDTO get(String agentId);
 
     AgentRuntimeDTO updateStatus(String agentId, AgentStatusDTO request);

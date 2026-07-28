@@ -4,7 +4,6 @@ import cn.jia.chat.dao.AgentTaskThreadDao;
 import cn.jia.chat.entity.AgentTaskThreadEntity;
 import cn.jia.chat.mapper.AgentTaskThreadMapper;
 import cn.jia.core.util.StringUtil;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
@@ -44,11 +43,19 @@ public class AgentTaskThreadDaoImpl implements AgentTaskThreadDao {
         requireId(taskId, "taskId");
         requireId(threadType, "threadType");
         requireId(threadKey, "threadKey");
-        return mapper.selectOne(scope(tenantId, clientId)
-                .eq(AgentTaskThreadEntity::getTaskId, taskId)
-                .eq(AgentTaskThreadEntity::getThreadType, threadType)
-                .eq(AgentTaskThreadEntity::getThreadKey, threadKey)
-                .last("limit 1"));
+        return mapper.findExactByTaskThread(
+                tenantId, clientId, taskId, threadType, threadKey);
+    }
+
+    @Override
+    public AgentTaskThreadEntity findByTaskThreadForUpdate(
+            String tenantId, String clientId, String taskId, String threadType, String threadKey) {
+        requireScope(tenantId, clientId);
+        requireId(taskId, "taskId");
+        requireId(threadType, "threadType");
+        requireId(threadKey, "threadKey");
+        return mapper.findExactByTaskThreadForUpdate(
+                tenantId, clientId, taskId, threadType, threadKey);
     }
 
     @Override
@@ -56,15 +63,13 @@ public class AgentTaskThreadDaoImpl implements AgentTaskThreadDao {
             String tenantId, String clientId, String conversationId) {
         requireScope(tenantId, clientId);
         requireId(conversationId, "conversationId");
-        return mapper.selectOne(scope(tenantId, clientId)
-                .eq(AgentTaskThreadEntity::getConversationId, conversationId)
-                .last("limit 1"));
+        return mapper.findExactByConversationId(tenantId, clientId, conversationId);
     }
 
-    private LambdaQueryWrapper<AgentTaskThreadEntity> scope(String tenantId, String clientId) {
-        return new LambdaQueryWrapper<AgentTaskThreadEntity>()
-                .eq(AgentTaskThreadEntity::getTenantId, tenantId)
-                .eq(AgentTaskThreadEntity::getClientId, clientId);
+    @Override
+    public AgentTaskThreadEntity findAnyByConversationId(String conversationId) {
+        requireId(conversationId, "conversationId");
+        return mapper.findAnyExactByConversationId(conversationId);
     }
 
     private void requireScope(String tenantId, String clientId) {
@@ -73,8 +78,9 @@ public class AgentTaskThreadDaoImpl implements AgentTaskThreadDao {
     }
 
     private void requireId(String value, String name) {
-        if (StringUtil.isBlank(value)) {
-            throw new IllegalArgumentException(name + " is required");
+        if (StringUtil.isBlank(value) || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(name + " is invalid");
         }
     }
 }

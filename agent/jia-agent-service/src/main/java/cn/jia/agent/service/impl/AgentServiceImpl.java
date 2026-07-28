@@ -303,14 +303,52 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId) {
-        String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
-                jiacn, clientId, jiacn, agentId);
-        AgentRuntimeEntity agent = requireAgent(canonicalAgentId);
+        return requireApiKeyOwnedAgent(clientId, jiacn, agentId, false);
+    }
+
+    @Override
+    public AgentRuntimeDTO requireApiKeyOwnedAgentForUpdate(
+            String clientId, String jiacn, String agentId) {
+        return requireApiKeyOwnedAgent(clientId, jiacn, agentId, true);
+    }
+
+    private AgentRuntimeDTO requireApiKeyOwnedAgent(
+            String clientId, String jiacn, String agentId, boolean forUpdate) {
+        requireCanonicalIdentityInput(clientId, "clientId");
+        requireCanonicalIdentityInput(jiacn, "jiacn");
+        requireCanonicalIdentityInput(agentId, "agentId");
+        if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agentId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "System agent cannot be registered by external clients");
+        }
+
+        if (forUpdate) {
+            agentIdentityService.lockActiveCanonicalAgentIdsInScope(
+                    jiacn, clientId, jiacn, List.of(agentId));
+        } else {
+            agentIdentityService.requireCanonicalAgentIdInScope(
+                    jiacn, clientId, jiacn, agentId);
+        }
+
+        AgentRuntimeEntity agent = forUpdate
+                ? agentRuntimeDao.findByAgentIdForUpdate(agentId)
+                : agentRuntimeDao.findByAgentId(agentId);
+        if (agent == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Agent runtime is missing or outside the authenticated scope");
+        }
         AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
-                jiacn, clientId, jiacn, requireBindingId(agent), canonicalAgentId);
-        agentIdentityService.requireActiveBinding(identity, null);
-        requireExactRuntime(agent, canonicalAgentId, clientId, jiacn, identity.getBindingId());
+                jiacn, clientId, jiacn, requireBindingId(agent), agentId);
+        requireExactRuntime(agent, agentId, clientId, jiacn, identity.getBindingId());
         return toRuntimeDTO(agent);
+    }
+
+    private void requireCanonicalIdentityInput(String value, String field) {
+        if (StringUtil.isBlank(value) || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    field + " is invalid");
+        }
     }
 
     @Override

@@ -64,4 +64,4 @@ CREATE TABLE agent_task_thread (
   UNIQUE KEY uk_task_thread_scope (tenant_id, client_id, task_id, thread_type, thread_key),
   UNIQUE KEY uk_task_thread_conversation (tenant_id, client_id, conversation_id),
   KEY idx_task_thread_task (tenant_id, client_id, task_id, status, create_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped task to shared conversation binding';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task to shared conversation binding';

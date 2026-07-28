@@ -30,7 +30,7 @@ class AgentTaskCollaborationAccessServiceImplTest extends BaseMockTest {
     void statusPolicyExplicitlySeparatesActiveHistoricalAndFormerMembers() {
         AgentTaskCollaborationAccessServiceImpl service = service();
         when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK))
-                .thenReturn(new AgentTaskMetaEntity().setTaskId(TASK));
+                .thenReturn(task());
 
         Map<String, AgentTaskAccessLevel> expected = Map.of(
                 "accepted", AgentTaskAccessLevel.READ_WRITE,
@@ -45,9 +45,7 @@ class AgentTaskCollaborationAccessServiceImplTest extends BaseMockTest {
 
         expected.forEach((status, access) -> {
             when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, AGENT))
-                    .thenReturn(new AgentTaskMemberEntity()
-                            .setTaskId(TASK).setAgentId(AGENT)
-                            .setMemberRole("observer").setMemberStatus(status));
+                    .thenReturn(member(status));
             assertEquals(access,
                     service.resolveMemberAccess(TENANT, CLIENT, TASK, AGENT), status);
         });
@@ -60,7 +58,7 @@ class AgentTaskCollaborationAccessServiceImplTest extends BaseMockTest {
                 service.resolveMemberAccess(TENANT, CLIENT, TASK, AGENT));
 
         when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK))
-                .thenReturn(new AgentTaskMetaEntity().setTaskId(TASK));
+                .thenReturn(task());
         assertEquals(AgentTaskAccessLevel.NONE,
                 service.resolveMemberAccess(TENANT, CLIENT, TASK, AGENT));
 
@@ -76,6 +74,23 @@ class AgentTaskCollaborationAccessServiceImplTest extends BaseMockTest {
     void blankScopeIsRejectedBeforeDaoLookup() {
         assertThrows(IllegalArgumentException.class,
                 () -> service().resolveMemberAccess(" ", CLIENT, TASK, AGENT));
+    }
+
+    private AgentTaskMetaEntity task() {
+        AgentTaskMetaEntity task = new AgentTaskMetaEntity().setTaskId(TASK).setRewardStatus("running");
+        task.setTenantId(TENANT);
+        task.setClientId(CLIENT);
+        return task;
+    }
+
+    private AgentTaskMemberEntity member(String status) {
+        AgentTaskMemberEntity member = new AgentTaskMemberEntity()
+                .setTaskId(TASK).setAgentId(AGENT)
+                .setMemberRole("observer").setMemberStatus(status)
+                .setAssignmentSource("manual");
+        member.setTenantId(TENANT);
+        member.setClientId(CLIENT);
+        return member;
     }
 
     private AgentTaskCollaborationAccessServiceImpl service() {

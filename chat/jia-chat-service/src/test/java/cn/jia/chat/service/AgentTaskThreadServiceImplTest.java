@@ -177,18 +177,22 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
                 .thenReturn(thread);
         when(conversationDao.findScopedById(TENANT, CLIENT, "303"))
                 .thenReturn(conversation(303L));
-        when(messageDao.insertScoped(eq(TENANT), eq(CLIENT), any(ChatMessageEntity.class)))
+        when(creationTransaction.appendTeamMessage(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(AGENT), eq("Agent A"),
+                any(ChatMessageEntity.class)))
                 .thenAnswer(invocation -> {
-                    ChatMessageEntity entity = invocation.getArgument(2);
+                    ChatMessageEntity entity = invocation.getArgument(5);
+                    entity.setConversationId("303");
+                    entity.setSenderName("Agent A");
                     entity.setId(9L);
                     entity.init4Creation();
-                    return 1;
+                    return entity;
                 });
 
         AgentTaskThreadMessageCreateDTO request = new AgentTaskThreadMessageCreateDTO();
         request.setActorAgentId(AGENT);
         request.setContent("进度 50%");
-        request.setSenderName("林冲");
+        request.setSenderName("Agent A");
         request.setMetadata(Map.of(
                 "taskId", "spoofed", "actorAgentId", "spoofed", "progress", 50));
 
@@ -196,12 +200,13 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
         assertEquals(9L, result.getMessageId());
 
         ArgumentCaptor<ChatMessageEntity> captor = ArgumentCaptor.forClass(ChatMessageEntity.class);
-        verify(messageDao).insertScoped(eq(TENANT), eq(CLIENT), captor.capture());
+        verify(creationTransaction).appendTeamMessage(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(AGENT), eq("Agent A"), captor.capture());
         ChatMessageEntity saved = captor.getValue();
         assertEquals("303", saved.getConversationId());
         assertEquals("ASSISTANT", saved.getMessageType());
         assertEquals("agent", saved.getSenderType());
-        assertEquals("林冲", saved.getSenderName());
+        assertEquals(AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED, saved.getSyncStatus());
         assertTrue(saved.getMetadata().contains("\"taskId\":\"task-1\""));
         assertTrue(saved.getMetadata().contains("\"actorAgentId\":\"" + AGENT + "\""));
     }
@@ -231,6 +236,8 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
                 .setConversationId(conversationId)
                 .setCreatedByAgentId(creator)
                 .setStatus(AgentTaskThreadConstants.THREAD_STATUS_ACTIVE);
+        entity.setTenantId(TENANT);
+        entity.setClientId(CLIENT);
         entity.setCreateTime(10L);
         return entity;
     }
@@ -238,7 +245,12 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
     private ChatConversationEntity conversation(long id) {
         ChatConversationEntity entity = new ChatConversationEntity()
                 .setId(id)
-                .setConversationScopeType(AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE);
+                .setJiacn(TENANT)
+                .setConversationType(AgentTaskThreadConstants.CONVERSATION_TYPE)
+                .setConversationScopeType(AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE)
+                .setConversationScopeKey("task-thread:" + TASK)
+                .setTaskId(TASK)
+                .setStatus(0);
         entity.setTenantId(TENANT);
         entity.setClientId(CLIENT);
         return entity;

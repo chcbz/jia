@@ -11,6 +11,9 @@ public interface AgentTaskMemberDao {
     AgentTaskMemberEntity findByTaskAndAgent(
             String tenantId, String clientId, String taskId, String agentId);
 
+    AgentTaskMemberEntity findByTaskAndAgentForUpdate(
+            String tenantId, String clientId, String taskId, String agentId);
+
     List<AgentTaskMemberEntity> listByTask(String tenantId, String clientId, String taskId);
 
     List<AgentTaskMemberEntity> listByAgent(

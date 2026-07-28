@@ -11,6 +11,25 @@ import org.apache.ibatis.annotations.Update;
 import java.util.List;
 
 public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
+    @Select("""
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+            LIMIT 1
+            """)
+    AgentTaskMetaEntity findExactByTaskScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId);
+
     @Insert("""
             INSERT IGNORE INTO agent_task_meta
                 (task_id, reward_status, collaboration_mode, risk_level, max_agents,

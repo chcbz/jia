@@ -15,9 +15,14 @@ import java.util.List;
 public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRuntimeEntity> implements AgentRuntimeDao {
     @Override
     public AgentRuntimeEntity findByAgentId(String agentId) {
-        return baseMapper.selectOne(new LambdaQueryWrapper<AgentRuntimeEntity>()
-                .eq(AgentRuntimeEntity::getAgentId, agentId)
-                .last("limit 1"));
+        requireExactId(agentId, "agentId");
+        return baseMapper.findExactByAgentId(agentId);
+    }
+
+    @Override
+    public AgentRuntimeEntity findByAgentIdForUpdate(String agentId) {
+        requireExactId(agentId, "agentId");
+        return baseMapper.findExactByAgentIdForUpdate(agentId);
     }
 
     @Override
@@ -67,4 +72,11 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
                         .lt(AgentRuntimeEntity::getLastSeenAt, cutoffTime))
                 .orderByAsc(AgentRuntimeEntity::getLastSeenAt));
     }
+    private void requireExactId(String value, String field) {
+        if (StringUtil.isBlank(value) || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+    }
+
 }

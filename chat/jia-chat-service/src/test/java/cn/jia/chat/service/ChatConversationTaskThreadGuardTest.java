@@ -2,7 +2,9 @@ package cn.jia.chat.service;
 
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.dao.AgentTaskThreadDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
+import cn.jia.chat.entity.AgentTaskThreadEntity;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.chat.service.impl.ChatConversationServiceImpl;
@@ -23,6 +25,8 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
     ChatConversationDao conversationDao;
     @Mock
     ChatMessageDao messageDao;
+    @Mock
+    AgentTaskThreadDao taskThreadDao;
 
     @Test
     void genericReadUpdateAndDeleteCannotBypassTaskThreadAcl() {
@@ -33,7 +37,7 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
         when(conversationDao.selectByEntity(any(ChatConversationEntity.class)))
                 .thenReturn(List.of(protectedConversation));
         ChatConversationServiceImpl service =
-                new ChatConversationServiceImpl(conversationDao, messageDao);
+                new ChatConversationServiceImpl(conversationDao, messageDao, taskThreadDao);
 
         assertThrows(AgentTaskThreadException.class, () -> service.get("77"));
         assertThrows(AgentTaskThreadException.class,
@@ -48,4 +52,38 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
         verify(conversationDao, never()).deleteById(77L);
         verify(conversationDao, never()).updateById(any());
     }
+    @Test
+    void bindingBlocksGenericApiEvenWhenConversationMarkerIsMissing() {
+        ChatConversationEntity partiallyMigrated = new ChatConversationEntity();
+        partiallyMigrated.setId(78L);
+        when(conversationDao.selectByEntity(any(ChatConversationEntity.class)))
+                .thenReturn(List.of(partiallyMigrated));
+        when(taskThreadDao.findAnyByConversationId("78"))
+                .thenReturn(new AgentTaskThreadEntity().setConversationId("78"));
+        ChatConversationServiceImpl service =
+                new ChatConversationServiceImpl(conversationDao, messageDao, taskThreadDao);
+
+        assertThrows(AgentTaskThreadException.class, () -> service.get("78"));
+        assertThrows(AgentTaskThreadException.class,
+                () -> service.findByConversationId("78"));
+        assertThrows(AgentTaskThreadException.class,
+                () -> service.update(new ChatConversationEntity().setId(78L)));
+        assertThrows(AgentTaskThreadException.class,
+                () -> service.deleteConversation("78"));
+    }
+
+    @Test
+    void corruptedCaseAndNulTaskMarkersFailClosedWithoutBinding() {
+        ChatConversationServiceImpl service =
+                new ChatConversationServiceImpl(conversationDao, messageDao, taskThreadDao);
+        for (String marker : List.of("TASK_THREAD", "task_thread\0", " task_thread ")) {
+            ChatConversationEntity corrupted = new ChatConversationEntity();
+            corrupted.setId(79L);
+            corrupted.setConversationScopeType(marker);
+            when(conversationDao.selectByEntity(any(ChatConversationEntity.class)))
+                    .thenReturn(List.of(corrupted));
+            assertThrows(AgentTaskThreadException.class, () -> service.get("79"), marker);
+        }
+    }
+
 }

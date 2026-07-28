@@ -8,4 +8,7 @@ import cn.jia.agent.access.AgentTaskAccessLevel;
 public interface AgentTaskCollaborationAccessService {
     AgentTaskAccessLevel resolveMemberAccess(
             String tenantId, String clientId, String taskId, String agentId);
+
+    AgentTaskAccessLevel resolveMemberAccessForUpdate(
+            String tenantId, String clientId, String taskId, String agentId);
 }

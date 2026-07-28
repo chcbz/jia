@@ -145,6 +145,7 @@ class AgentServiceImplTest extends BaseMockTest {
         runtime.setAgentId("agent-owned");
         runtime.setClientId("client-a");
         runtime.setOwnerJiacn("tenant-a");
+        runtime.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentRuntimeDao.findByAgentId("agent-owned")).thenReturn(runtime);
         AgentPersonaBindingEntity active = binding("agent-owned", "wuyong");
         active.setClientId("client-a");
@@ -162,6 +163,7 @@ class AgentServiceImplTest extends BaseMockTest {
         runtime.setAgentId("agent-other-scope");
         runtime.setClientId("client-a");
         runtime.setOwnerJiacn("tenant-a");
+        runtime.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentRuntimeDao.findByAgentId("agent-other-scope")).thenReturn(runtime);
 
         for (String[] scope : List.of(
@@ -196,6 +198,7 @@ class AgentServiceImplTest extends BaseMockTest {
         runtime.setAgentId("agent-unbound");
         runtime.setClientId("client-a");
         runtime.setOwnerJiacn("tenant-a");
+        runtime.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentRuntimeDao.findByAgentId("agent-unbound")).thenReturn(runtime);
         when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(
                 "client-a", "tenant-a", "agent-unbound")).thenReturn(null);

@@ -7,6 +7,7 @@ import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.impl.AgentTaskCollaborationAccessServiceImpl;
 import cn.jia.chat.dao.AgentTaskThreadDao;
@@ -44,7 +45,9 @@ import org.springframework.transaction.interceptor.TransactionInterceptor;
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -54,7 +57,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * B07 real H2/MyBatis transaction test. It forces two callers past the initial
@@ -112,8 +117,13 @@ class AgentTaskThreadRealDatabaseTest {
 
         accessService = new AgentTaskCollaborationAccessServiceImpl(taskMetaDao, memberDao);
         agentService = mock(AgentService.class);
+        when(agentService.requireApiKeyOwnedAgent(anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> runtime(invocation.getArgument(2)));
+        when(agentService.requireApiKeyOwnedAgentForUpdate(anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> runtime(invocation.getArgument(2)));
         AgentTaskThreadCreationTransaction creation = transactionalCreation(
-                new AgentTaskThreadCreationTransaction(realThreadDao, conversationDao));
+                new AgentTaskThreadCreationTransaction(
+                        realThreadDao, conversationDao, messageDao, agentService, accessService));
         service = new AgentTaskThreadServiceImpl(
                 realThreadDao, conversationDao, messageDao, agentService, accessService, creation);
 
@@ -131,7 +141,8 @@ class AgentTaskThreadRealDatabaseTest {
     void concurrentCreateIsIdempotentRollsBackOrphanAndSharesMessages() throws Exception {
         AgentTaskThreadDao barrierThreadDao = new FirstReadBarrierThreadDao(realThreadDao);
         AgentTaskThreadCreationTransaction creation = transactionalCreation(
-                new AgentTaskThreadCreationTransaction(barrierThreadDao, conversationDao));
+                new AgentTaskThreadCreationTransaction(
+                        barrierThreadDao, conversationDao, messageDao, agentService, accessService));
         AgentTaskThreadService concurrentService = new AgentTaskThreadServiceImpl(
                 barrierThreadDao, conversationDao, messageDao,
                 agentService, accessService, creation);
@@ -198,6 +209,43 @@ class AgentTaskThreadRealDatabaseTest {
     }
 
     @Test
+    void revocationBetweenOuterCheckAndTransactionalRevalidationBlocksLateWrite() throws Exception {
+        service.getOrCreateTeamThread(TENANT, CLIENT, TASK, AGENT_A, null);
+        CountDownLatch ownershipLocked = new CountDownLatch(1);
+        CountDownLatch continueWrite = new CountDownLatch(1);
+        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, AGENT_A))
+                .thenAnswer(invocation -> {
+                    ownershipLocked.countDown();
+                    if (!continueWrite.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("timed out waiting for revocation");
+                    }
+                    return runtime(AGENT_A);
+                });
+
+        AgentTaskThreadMessageCreateDTO late = new AgentTaskThreadMessageCreateDTO();
+        late.setActorAgentId(AGENT_A);
+        late.setContent("must not survive revocation race");
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> append = executor.submit(() ->
+                    service.appendTeamMessage(TENANT, CLIENT, TASK, late));
+            assertTrue(ownershipLocked.await(10, TimeUnit.SECONDS));
+            jdbc.update("""
+                    UPDATE agent_task_member SET member_status = 'left'
+                    WHERE tenant_id = ? AND client_id = ? AND task_id = ? AND agent_id = ?
+                    """, TENANT, CLIENT, TASK, AGENT_A);
+            continueWrite.countDown();
+            ExecutionException denied = assertThrows(ExecutionException.class,
+                    () -> append.get(20, TimeUnit.SECONDS));
+            assertTrue(denied.getCause() instanceof AgentTaskThreadException);
+            assertEquals(0, count("chat_message"));
+        } finally {
+            continueWrite.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void scopedLatestMessageReadHasStableOrderingForEqualTimestamps() {
         AgentTaskThreadDTO thread = service.getOrCreateTeamThread(
                 TENANT, CLIENT, TASK, AGENT_A, null);
@@ -214,6 +262,13 @@ class AgentTaskThreadRealDatabaseTest {
         assertEquals(List.of("two", "three"),
                 latest.stream().map(item -> item.getContent()).toList());
         assertTrue(latest.get(0).getMessageId() < latest.get(1).getMessageId());
+    }
+
+    private AgentRuntimeDTO runtime(String agentId) {
+        AgentRuntimeDTO runtime = new AgentRuntimeDTO();
+        runtime.setAgentId(agentId);
+        runtime.setName("Agent " + agentId.substring(Math.max(0, agentId.length() - 4)));
+        return runtime;
     }
 
     private void assertUnavailable(Runnable operation) {
@@ -418,9 +473,22 @@ class AgentTaskThreadRealDatabaseTest {
         }
 
         @Override
+        public AgentTaskThreadEntity findByTaskThreadForUpdate(
+                String tenantId, String clientId, String taskId,
+                String threadType, String threadKey) {
+            return delegate.findByTaskThreadForUpdate(
+                    tenantId, clientId, taskId, threadType, threadKey);
+        }
+
+        @Override
         public AgentTaskThreadEntity findByConversationId(
                 String tenantId, String clientId, String conversationId) {
             return delegate.findByConversationId(tenantId, clientId, conversationId);
+        }
+
+        @Override
+        public AgentTaskThreadEntity findAnyByConversationId(String conversationId) {
+            return delegate.findAnyByConversationId(conversationId);
         }
     }
 }

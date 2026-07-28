@@ -42,10 +42,21 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
 
     @Override
     public AgentPersonaBindingEntity findActiveByClientJiacnAndAgentId(String clientId, String jiacn, String agentId) {
-        return baseMapper.selectOne(activeWrapper(clientId)
-                .eq(AgentPersonaBindingEntity::getJiacn, jiacn)
-                .eq(AgentPersonaBindingEntity::getAgentId, agentId)
-                .last("limit 1"));
+        requireExact(clientId, "clientId");
+        requireExact(jiacn, "jiacn");
+        requireExact(agentId, "agentId");
+        return baseMapper.findExactActiveByOwner(
+                clientId, jiacn, agentId, AgentConstants.BINDING_STATUS_ACTIVE);
+    }
+
+    @Override
+    public AgentPersonaBindingEntity findActiveByClientJiacnAndAgentIdForUpdate(
+            String clientId, String jiacn, String agentId) {
+        requireExact(clientId, "clientId");
+        requireExact(jiacn, "jiacn");
+        requireExact(agentId, "agentId");
+        return baseMapper.findExactActiveByOwnerForUpdate(
+                clientId, jiacn, agentId, AgentConstants.BINDING_STATUS_ACTIVE);
     }
 
     @Override
@@ -53,6 +64,13 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         return baseMapper.selectList(activeWrapper(clientId)
                 .eq(AgentPersonaBindingEntity::getJiacn, jiacn)
                 .orderByAsc(AgentPersonaBindingEntity::getPersonaCode));
+    }
+
+    private void requireExact(String value, String field) {
+        if (value == null || value.isBlank() || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
     }
 
     private LambdaQueryWrapper<AgentPersonaBindingEntity> activeWrapper(String clientId) {

@@ -8,6 +8,8 @@ import java.util.List;
 public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
     AgentRuntimeEntity findByAgentId(String agentId);
 
+    AgentRuntimeEntity findByAgentIdForUpdate(String agentId);
+
     List<AgentRuntimeEntity> findByStatusAndAbility(String status, String ability);
 
     List<AgentRuntimeEntity> findRosterByOwner(String clientId, String jiacn, String status, String ability);

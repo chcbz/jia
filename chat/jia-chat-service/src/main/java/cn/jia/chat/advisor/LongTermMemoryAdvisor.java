@@ -2,6 +2,7 @@ package cn.jia.chat.advisor;
 
 import cn.jia.chat.memory.MemoryDocument;
 import cn.jia.chat.memory.MemoryRepository;
+import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
@@ -41,6 +42,7 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
     private final int memoryTopK;
     private final double similarityThreshold;
     private final String defaultSystemPrompt;
+    private final AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
 
     private LongTermMemoryAdvisor(Builder builder) {
         this.memoryRepository = builder.memoryRepository;
@@ -48,6 +50,7 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
         this.memoryTopK = builder.memoryTopK;
         this.similarityThreshold = builder.similarityThreshold;
         this.defaultSystemPrompt = builder.defaultSystemPrompt;
+        this.taskThreadMemoryGuard = builder.taskThreadMemoryGuard;
     }
 
     public static Builder builder(MemoryRepository memoryRepository) {
@@ -80,8 +83,9 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
                     .map(Message::getText).orElse("");
 
             // 检索记忆（带会话权重）
-            List<MemoryDocument> memories = memoryRepository.searchWithConversationBoost(
-                    jiacn, userMessage, conversationId, memoryTopK, similarityThreshold);
+            List<MemoryDocument> memories = taskThreadMemoryGuard.excludeProtected(
+                    memoryRepository.searchWithConversationBoost(
+                            jiacn, userMessage, conversationId, memoryTopK, similarityThreshold));
 
             if (memories == null || memories.isEmpty()) {
                 return request;
@@ -178,10 +182,16 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
         private int memoryTopK = 5;
         private double similarityThreshold = 0.75;
         private String defaultSystemPrompt = "你是一个有帮助的AI助手。";
+        private AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
 
         public Builder(MemoryRepository memoryRepository) {
             Assert.notNull(memoryRepository, "memoryRepository cannot be null");
             this.memoryRepository = memoryRepository;
+        }
+
+        public Builder taskThreadMemoryGuard(AgentTaskThreadMemoryGuard taskThreadMemoryGuard) {
+            this.taskThreadMemoryGuard = taskThreadMemoryGuard;
+            return this;
         }
 
         public Builder memoryEnabled(boolean memoryEnabled) {
@@ -205,6 +215,7 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
         }
 
         public LongTermMemoryAdvisor build() {
+            Assert.notNull(taskThreadMemoryGuard, "taskThreadMemoryGuard cannot be null");
             return new LongTermMemoryAdvisor(this);
         }
     }

@@ -38,10 +38,17 @@ public class AgentTaskMemberDaoImpl implements AgentTaskMemberDao {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(agentId, "agentId");
-        return baseMapper.selectOne(scope(tenantId, clientId)
-                .eq(AgentTaskMemberEntity::getTaskId, taskId)
-                .eq(AgentTaskMemberEntity::getAgentId, agentId)
-                .last("limit 1"));
+        return baseMapper.findExactByTaskAndAgent(tenantId, clientId, taskId, agentId);
+    }
+
+    @Override
+    public AgentTaskMemberEntity findByTaskAndAgentForUpdate(
+            String tenantId, String clientId, String taskId, String agentId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(agentId, "agentId");
+        return baseMapper.findExactByTaskAndAgentForUpdate(
+                tenantId, clientId, taskId, agentId);
     }
 
     @Override

@@ -6,7 +6,6 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.mapper.ChatConversationMapper;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.util.StringUtil;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.inject.Named;
 
@@ -35,11 +34,7 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException("conversationId is invalid");
         }
-        return baseMapper.selectOne(new LambdaQueryWrapper<ChatConversationEntity>()
-                .eq(ChatConversationEntity::getTenantId, tenantId)
-                .eq(ChatConversationEntity::getClientId, clientId)
-                .eq(ChatConversationEntity::getId, id)
-                .last("limit 1"));
+        return baseMapper.findExactScopedById(tenantId, clientId, id);
     }
 
     @Override
@@ -53,8 +48,9 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
     }
 
     private void requireId(String value, String field) {
-        if (StringUtil.isBlank(value)) {
-            throw new IllegalArgumentException(field + " is required");
+        if (StringUtil.isBlank(value) || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(field + " is invalid");
         }
     }
 }

@@ -2,6 +2,7 @@ package cn.jia.chat.service.impl;
 
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.memory.MemoryDocument;
 import cn.jia.chat.service.LongTermMemoryService;
 import cn.jia.chat.service.SummaryGenerator;
@@ -38,6 +39,9 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
     private SummaryGenerator summaryGenerator;
 
     @Autowired
+    private AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
+
+    @Autowired
     private cn.jia.chat.memory.MemoryRepository memoryRepository;
 
     @Value("${chat.memory.batch-size:100}")
@@ -70,6 +74,12 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
 
         try {
             log.info("Starting sync for conversation: {}", conversationId);
+            if (taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
+                chatMessageDao.updateSyncStatusByConversationId(
+                        conversationId, AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED);
+                log.info("Excluded task-thread conversation from legacy memory sync: {}", conversationId);
+                return;
+            }
 
             // 1. 获取会话消息
             List<ChatMessageEntity> messages = chatMessageDao.findByConversationId(conversationId);

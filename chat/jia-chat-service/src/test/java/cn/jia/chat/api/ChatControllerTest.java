@@ -15,6 +15,7 @@ import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.JuyitingAgentRelayService;
 import cn.jia.chat.service.JuyitingConversationScopeService;
+import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.redis.RedisService;
@@ -64,6 +65,8 @@ class ChatControllerTest extends BaseMockTest {
     ChatMessageDao chatMessageDao;
     @Mock
     MemoryRepository memoryRepository;
+    @Mock
+    AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
 
     @AfterEach
     void tearDown() {
@@ -317,6 +320,8 @@ class ChatControllerTest extends BaseMockTest {
     }
 
     private ChatController newController() {
+        org.mockito.Mockito.lenient().when(taskThreadMemoryGuard.excludeProtected(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 agentWebSocketHandler,
@@ -335,7 +340,8 @@ class ChatControllerTest extends BaseMockTest {
                 scopeService,
                 relayService,
                 chatMessageDao,
-                memoryRepository
+                memoryRepository,
+                taskThreadMemoryGuard
         );
     }
 

@@ -8,7 +8,9 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -70,6 +72,35 @@ class ChatSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
+    void mysqlRejectsWrongSameNameNonUniqueTaskThreadIndex() throws Exception {
+        JdbcTemplate template = new JdbcTemplate(dialectDataSource("MySQL")) {
+            @Override
+            public void execute(String sql) {
+                throw new AssertionError("existing schema must not be mutated: " + sql);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            public List<Map<String, Object>> queryForList(String sql) {
+                String normalized = normalize(sql);
+                if (normalized.contains("from information_schema.columns")) {
+                    return validTaskThreadColumns();
+                }
+                return wrongTaskThreadIndexes();
+            }
+        };
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new ChatSchemaInitializer(template).run(null));
+        assertTrue(failure.getMessage().contains("uk_task_thread_scope"), failure.getMessage());
+    }
+
+    @Test
     void mysqlStillFailsWhenRequiredProductionBaseTableIsAbsent() throws Exception {
         JdbcTemplate template = new JdbcTemplate(dialectDataSource("MySQL")) {
             @Override
@@ -85,6 +116,61 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         };
 
         assertThrows(IllegalStateException.class, () -> new ChatSchemaInitializer(template).run(null));
+    }
+
+    private List<Map<String, Object>> validTaskThreadColumns() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        rows.add(column("id", "bigint", null, "NO", null, null, "auto_increment"));
+        rows.add(column("task_id", "varchar", 100L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("thread_type", "varchar", 20L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("thread_key", "varchar", 100L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("conversation_id", "varchar", 100L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("created_by_agent_id", "varchar", 100L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("status", "varchar", 20L, "NO", "active", "utf8mb4_0900_bin", ""));
+        rows.add(column("tenant_id", "varchar", 50L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("client_id", "varchar", 50L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("create_time", "bigint", null, "YES", null, null, ""));
+        rows.add(column("update_time", "bigint", null, "YES", null, null, ""));
+        return rows;
+    }
+
+    private Map<String, Object> column(
+            String name, String type, Long length, String nullable,
+            String defaultValue, String collation, String extra) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("column_name", name);
+        row.put("data_type", type);
+        row.put("character_maximum_length", length);
+        row.put("is_nullable", nullable);
+        row.put("column_default", defaultValue);
+        row.put("collation_name", collation);
+        row.put("extra", extra);
+        return row;
+    }
+
+    private List<Map<String, Object>> wrongTaskThreadIndexes() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        addIndex(rows, "PRIMARY", 0, "id");
+        addIndex(rows, "uk_task_thread_scope", 1,
+                "tenant_id", "client_id", "task_id", "thread_type", "thread_key");
+        addIndex(rows, "uk_task_thread_conversation", 0,
+                "tenant_id", "client_id", "conversation_id");
+        addIndex(rows, "idx_task_thread_task", 1,
+                "tenant_id", "client_id", "task_id", "status", "create_time");
+        return rows;
+    }
+
+    private void addIndex(
+            List<Map<String, Object>> rows, String name, int nonUnique, String... columns) {
+        for (int i = 0; i < columns.length; i++) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("index_name", name);
+            row.put("non_unique", nonUnique);
+            row.put("seq_in_index", i + 1);
+            row.put("column_name", columns[i]);
+            row.put("sub_part", null);
+            rows.add(row);
+        }
     }
 
     private DataSource dialectDataSource(String productName) throws Exception {

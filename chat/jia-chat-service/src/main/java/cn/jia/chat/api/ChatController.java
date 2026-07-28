@@ -22,6 +22,7 @@ import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingAgentRelayService;
 import cn.jia.chat.service.JuyitingConversationScope;
 import cn.jia.chat.service.JuyitingConversationScopeService;
+import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
@@ -76,6 +77,7 @@ public class ChatController {
     private final JuyitingAgentRelayService juyitingAgentRelayService;
     private final ChatMessageDao chatMessageDao;
     private final MemoryRepository memoryRepository;
+    private final AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
             帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
             
@@ -174,15 +176,16 @@ public class ChatController {
         if (chatMessage == null) {
             return false;
         }
-        if (AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(
-                chatMessage.getConversationScopeType())) {
+        ChatConversationEntity requestedScope = new ChatConversationEntity()
+                .setConversationScopeType(chatMessage.getConversationScopeType());
+        if (AgentTaskThreadConstants.hasTaskThreadMarkerEvidence(requestedScope)) {
             return true;
         }
         Object metadataMode = chatMessage.getMetadata() == null
                 ? null : chatMessage.getMetadata().get("mode");
         return metadataMode != null
-                && AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(
-                String.valueOf(metadataMode));
+                && AgentTaskThreadConstants.hasTaskThreadMarkerEvidence(
+                new ChatConversationEntity().setConversationScopeType(String.valueOf(metadataMode)));
     }
 
     private AgentTaskThreadException reservedTaskThreadAccess() {
@@ -422,13 +425,13 @@ public class ChatController {
         double threshold = Optional.ofNullable(request.getSimilarityThreshold()).orElse(0.2D);
         List<MemoryDocument> documents;
         try {
-            documents = Optional.ofNullable(memoryRepository.searchWithConversationBoost(
-                    jiacn,
-                    request.getKeyword(),
-                    request.getConversationId(),
-                    topK,
-                    threshold
-            )).orElse(List.of());
+            documents = taskThreadMemoryGuard.excludeProtected(
+                    memoryRepository.searchWithConversationBoost(
+                            jiacn,
+                            request.getKeyword(),
+                            request.getConversationId(),
+                            topK,
+                            threshold));
         } catch (Exception e) {
             log.warn("Library search failed, return empty results. jiacn={}, keyword={}", jiacn, request.getKeyword(), e);
             return JsonResult.success(List.of());

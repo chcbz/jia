@@ -25,11 +25,7 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     public AgentTaskMetaEntity findByTaskId(String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        return baseMapper.selectOne(new LambdaQueryWrapper<AgentTaskMetaEntity>()
-                .eq(AgentTaskMetaEntity::getTenantId, tenantId)
-                .eq(AgentTaskMetaEntity::getClientId, clientId)
-                .eq(AgentTaskMetaEntity::getTaskId, taskId)
-                .last("limit 1"));
+        return baseMapper.findExactByTaskScope(tenantId, clientId, taskId);
     }
 
     @Override

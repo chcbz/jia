@@ -42,24 +42,19 @@ class AgentTaskThreadDaoTest {
     }
 
     @Test
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    void bindingReadsAlwaysStartWithFullScopeAndStableBusinessKey() {
+    void bindingReadsUseByteExactScopedMapperQueries() {
         AgentTaskThreadMapper mapper = mock(AgentTaskThreadMapper.class);
         AgentTaskThreadDao dao = new AgentTaskThreadDaoImpl(mapper);
 
         dao.findByTaskThread("tenant-a", "client-a", "task-1", "team", "team");
+        dao.findByTaskThreadForUpdate("tenant-a", "client-a", "task-1", "team", "team");
         dao.findByConversationId("tenant-a", "client-a", "42");
+        dao.findAnyByConversationId("42");
 
-        ArgumentCaptor<Wrapper<AgentTaskThreadEntity>> captor = ArgumentCaptor.forClass(Wrapper.class);
-        verify(mapper, org.mockito.Mockito.times(2)).selectOne(captor.capture());
-        String byTask = normalize(captor.getAllValues().get(0).getSqlSegment());
-        assertTrue(byTask.contains("tenant_id = #{"), byTask);
-        assertTrue(byTask.contains("client_id = #{"), byTask);
-        assertTrue(byTask.contains("task_id = #{"), byTask);
-        assertTrue(byTask.contains("thread_type = #{"), byTask);
-        assertTrue(byTask.contains("thread_key = #{"), byTask);
-        String byConversation = normalize(captor.getAllValues().get(1).getSqlSegment());
-        assertTrue(byConversation.contains("conversation_id = #{"), byConversation);
+        verify(mapper).findExactByTaskThread("tenant-a", "client-a", "task-1", "team", "team");
+        verify(mapper).findExactByTaskThreadForUpdate("tenant-a", "client-a", "task-1", "team", "team");
+        verify(mapper).findExactByConversationId("tenant-a", "client-a", "42");
+        verify(mapper).findAnyExactByConversationId("42");
     }
 
     @Test
@@ -94,7 +89,7 @@ class AgentTaskThreadDaoTest {
         AgentTaskThreadDao dao = new AgentTaskThreadDaoImpl(mapper);
         assertThrows(IllegalArgumentException.class,
                 () -> dao.findByTaskThread("", "client-a", "task-1", "team", "team"));
-        verify(mapper, never()).selectOne(any());
+        verify(mapper, never()).findExactByTaskThread(any(), any(), any(), any(), any());
     }
 
     @Test

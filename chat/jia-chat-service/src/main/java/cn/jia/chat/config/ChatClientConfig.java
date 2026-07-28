@@ -7,6 +7,7 @@ import java.util.List;
 
 import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
 import cn.jia.chat.advisor.LongTermMemoryAdvisor;
+import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.chat.advisor.RequestResponseAdvisor;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.memory.MemoryRepository;
@@ -48,6 +49,7 @@ public class ChatClientConfig {
     @Bean
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             ObjectProvider<McpSyncClient> mcpSyncClientsProvider, MemoryRepository memoryRepository,
+            AgentTaskThreadMemoryGuard taskThreadMemoryGuard,
             ChatMessageDao chatMessageDao, TaskTools taskTools,
             ObjectProvider<AgentTools> agentToolsProvider,
             ObjectProvider<PointTools> pointToolsProvider,
@@ -57,6 +59,7 @@ public class ChatClientConfig {
         ToolCallback[] taskToolCallbacks = ToolCallbacks.from(taskTools);
         List<McpSyncClient> mcpSyncClients = mcpSyncClientsProvider.orderedStream().toList();
         LongTermMemoryAdvisor longTermMemoryAdvisor = LongTermMemoryAdvisor.builder(memoryRepository)
+                .taskThreadMemoryGuard(taskThreadMemoryGuard)
                 .memoryTopK(2)
                 .similarityThreshold(0.75)
                 .build();

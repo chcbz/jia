@@ -1,6 +1,7 @@
 package cn.jia.chat.service.impl;
 
 import cn.jia.chat.dao.ChatConversationDao;
+import cn.jia.chat.dao.AgentTaskThreadDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
@@ -11,7 +12,6 @@ import cn.jia.chat.service.ChatConversationService;
 import cn.jia.core.context.EsContextHolder;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,12 +26,21 @@ import java.util.List;
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class ChatConversationServiceImpl implements ChatConversationService {
 
     private final ChatConversationDao chatConversationDao;
 
     private final ChatMessageDao chatMessageDao;
+    private final AgentTaskThreadDao taskThreadDao;
+
+    public ChatConversationServiceImpl(
+            ChatConversationDao chatConversationDao,
+            ChatMessageDao chatMessageDao,
+            AgentTaskThreadDao taskThreadDao) {
+        this.chatConversationDao = chatConversationDao;
+        this.chatMessageDao = chatMessageDao;
+        this.taskThreadDao = taskThreadDao;
+    }
 
     @Override
     public PageInfo<ChatConversationEntity> findPage(ChatConversationEntity example, int pageNum, int pageSize, String orderBy) {
@@ -43,7 +52,13 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         if (example.getJiacn() == null || example.getJiacn().isEmpty()) {
             example.setJiacn(EsContextHolder.getContext().getJiacn());
         }
-        return PageInfo.of(chatConversationDao.selectNonTaskThreadByEntity(example));
+        List<ChatConversationEntity> conversations = chatConversationDao.selectNonTaskThreadByEntity(example);
+        if (conversations != null) {
+            conversations = conversations.stream()
+                    .filter(conversation -> !isTaskThreadEvidence(conversation))
+                    .toList();
+        }
+        return PageInfo.of(conversations);
     }
 
     @Override
@@ -89,11 +104,27 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         query.setId(Long.valueOf(conversationId));
         List<ChatConversationEntity> list = chatConversationDao.selectByEntity(query);
         ChatConversationEntity conversation = list != null && !list.isEmpty() ? list.getFirst() : null;
-        if (AgentTaskThreadConstants.isTaskThreadConversation(conversation)) {
+        if (isTaskThreadEvidence(conversation)) {
             throw new AgentTaskThreadException(
                     Reason.NOT_FOUND_OR_FORBIDDEN,
                     "Conversation is not available through the generic chat API");
         }
         return conversation;
+    }
+
+    private boolean isTaskThreadEvidence(ChatConversationEntity conversation) {
+        if (AgentTaskThreadConstants.hasTaskThreadMarkerEvidence(conversation)) {
+            return true;
+        }
+        if (conversation == null || conversation.getId() == null) {
+            return false;
+        }
+        try {
+            return taskThreadDao.findAnyByConversationId(String.valueOf(conversation.getId())) != null;
+        } catch (RuntimeException exception) {
+            log.warn("Unable to prove conversation is outside task-thread scope; denying generic access. conversationId={}",
+                    conversation.getId(), exception);
+            return true;
+        }
     }
 }
