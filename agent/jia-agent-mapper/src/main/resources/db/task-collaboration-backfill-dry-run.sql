@@ -33,7 +33,7 @@ meta_source AS (
         COALESCE(m.assigned_at, m.started_at, m.completed_at, m.create_time, m.update_time) AS source_time,
         SHA2(COALESCE(m.assigned_agent_id, '<NULL>'), 256) AS source_hash,
         CASE
-            WHEN m.assigned_agent_id IS NULL OR TRIM(m.assigned_agent_id) = '' THEN 'EMPTY'
+            WHEN m.assigned_agent_id IS NULL OR BINARY m.assigned_agent_id = BINARY '' THEN 'EMPTY'
             WHEN JSON_VALID(m.assigned_agent_id) = 1
                 THEN CONCAT('JSON_', JSON_TYPE(JSON_EXTRACT(m.assigned_agent_id, '$')))
             WHEN LEFT(TRIM(m.assigned_agent_id), 1) IN ('[', '{', '"') THEN 'INVALID_JSON'
@@ -58,17 +58,24 @@ object_info AS (
             CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.id')) = 'STRING'
                 THEN JSON_UNQUOTE(JSON_EXTRACT(s.payload_json, '$.id')) END
         ) AS direct_candidate,
+        (JSON_CONTAINS_PATH(s.payload_json, 'one', '$.agentId')
+         + JSON_CONTAINS_PATH(s.payload_json, 'one', '$.agent_id')
+         + JSON_CONTAINS_PATH(s.payload_json, 'one', '$.assigneeAgentId')
+         + JSON_CONTAINS_PATH(s.payload_json, 'one', '$.assignee_agent_id')
+         + JSON_CONTAINS_PATH(s.payload_json, 'one', '$.id')) AS direct_present_count,
         (CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.agentId')) = 'STRING' THEN 1 ELSE 0 END
          + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.agent_id')) = 'STRING' THEN 1 ELSE 0 END
          + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.assigneeAgentId')) = 'STRING' THEN 1 ELSE 0 END
          + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.assignee_agent_id')) = 'STRING' THEN 1 ELSE 0 END
-         + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.id')) = 'STRING' THEN 1 ELSE 0 END
-        ) AS direct_count,
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.id')) = 'STRING' THEN 1 ELSE 0 END) AS direct_string_count,
+        (JSON_CONTAINS_PATH(s.payload_json, 'one', '$.agentIds')
+         + JSON_CONTAINS_PATH(s.payload_json, 'one', '$.agent_ids')
+         + JSON_CONTAINS_PATH(s.payload_json, 'one', '$.assignees')
+         + JSON_CONTAINS_PATH(s.payload_json, 'one', '$.agents')) AS wrapper_present_count,
         (CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.agentIds')) = 'ARRAY' THEN 1 ELSE 0 END
          + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.agent_ids')) = 'ARRAY' THEN 1 ELSE 0 END
          + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.assignees')) = 'ARRAY' THEN 1 ELSE 0 END
-         + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.agents')) = 'ARRAY' THEN 1 ELSE 0 END
-        ) AS wrapper_count,
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.agents')) = 'ARRAY' THEN 1 ELSE 0 END) AS wrapper_array_count,
         COALESCE(
             CASE WHEN JSON_TYPE(JSON_EXTRACT(s.payload_json, '$.agentIds')) = 'ARRAY'
                 THEN JSON_EXTRACT(s.payload_json, '$.agentIds') END,
@@ -82,43 +89,13 @@ object_info AS (
     FROM meta_source s
     WHERE s.source_format = 'JSON_OBJECT'
 ),
-array_candidates AS (
-    SELECT
-        s.*,
-        jt.source_ordinal,
-        CASE
-            WHEN JSON_TYPE(jt.item_json) = 'STRING' THEN JSON_UNQUOTE(jt.item_json)
-            WHEN JSON_TYPE(jt.item_json) = 'OBJECT' THEN COALESCE(
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agentId')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.agentId')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agent_id')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.agent_id')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.id')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.id')) END
-            )
-            ELSE NULL
-        END AS candidate_agent_id,
-        CASE
-            WHEN JSON_TYPE(jt.item_json) = 'STRING' THEN NULL
-            WHEN JSON_TYPE(jt.item_json) = 'OBJECT'
-             AND (CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.id')) = 'STRING' THEN 1 ELSE 0 END) = 1 THEN NULL
-            WHEN JSON_TYPE(jt.item_json) = 'OBJECT'
-             AND (CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.id')) = 'STRING' THEN 1 ELSE 0 END) > 1
-                THEN 'BLOCKED_AMBIGUOUS_JSON_OBJECT'
-            ELSE 'BLOCKED_UNSUPPORTED_JSON_SHAPE'
-        END AS parse_issue
+collection_items AS (
+    SELECT s.meta_id, s.task_id, s.tenant_id, s.client_id, s.reward_status,
+           s.raw_assignee, s.required_abilities, s.assigned_at, s.started_at,
+           s.completed_at, s.failure_reason, s.create_time, s.update_time,
+           s.source_time, s.source_hash, s.source_format, s.payload_json,
+           jt.source_ordinal, 'array_item' AS source_shape, jt.item_json,
+           0 AS parent_direct_present_count, 0 AS parent_wrapper_present_count
     FROM meta_source s
     JOIN JSON_TABLE(
         CASE WHEN s.source_format = 'JSON_ARRAY' THEN s.payload_json ELSE JSON_ARRAY() END,
@@ -127,54 +104,89 @@ array_candidates AS (
             item_json JSON PATH '$'
         )
     ) jt
-),
-object_wrapper_candidates AS (
-    SELECT
-        o.*,
-        jt.source_ordinal,
-        CASE
-            WHEN JSON_TYPE(jt.item_json) = 'STRING' THEN JSON_UNQUOTE(jt.item_json)
-            WHEN JSON_TYPE(jt.item_json) = 'OBJECT' THEN COALESCE(
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agentId')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.agentId')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agent_id')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.agent_id')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) END,
-                CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.id')) = 'STRING'
-                    THEN JSON_UNQUOTE(JSON_EXTRACT(jt.item_json, '$.id')) END
-            )
-            ELSE NULL
-        END AS candidate_agent_id,
-        CASE
-            WHEN o.wrapper_count > 1 OR o.direct_count > 0
-                THEN 'BLOCKED_AMBIGUOUS_JSON_OBJECT'
-            WHEN JSON_TYPE(jt.item_json) = 'STRING' THEN NULL
-            WHEN JSON_TYPE(jt.item_json) = 'OBJECT'
-             AND (CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.id')) = 'STRING' THEN 1 ELSE 0 END) = 1 THEN NULL
-            WHEN JSON_TYPE(jt.item_json) = 'OBJECT'
-             AND (CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assigneeAgentId')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.assignee_agent_id')) = 'STRING' THEN 1 ELSE 0 END
-                + CASE WHEN JSON_TYPE(JSON_EXTRACT(jt.item_json, '$.id')) = 'STRING' THEN 1 ELSE 0 END) > 1
-                THEN 'BLOCKED_AMBIGUOUS_JSON_OBJECT'
-            ELSE 'BLOCKED_UNSUPPORTED_JSON_SHAPE'
-        END AS parse_issue
+
+    UNION ALL
+
+    SELECT o.meta_id, o.task_id, o.tenant_id, o.client_id, o.reward_status,
+           o.raw_assignee, o.required_abilities, o.assigned_at, o.started_at,
+           o.completed_at, o.failure_reason, o.create_time, o.update_time,
+           o.source_time, o.source_hash, o.source_format, o.payload_json,
+           1000 + jt.source_ordinal, 'object_array_item', jt.item_json,
+           o.direct_present_count, o.wrapper_present_count
     FROM object_info o
     JOIN JSON_TABLE(
-        COALESCE(o.wrapper_json, JSON_ARRAY()),
+        CASE WHEN o.wrapper_present_count = 1 AND o.wrapper_array_count = 1
+             THEN o.wrapper_json ELSE JSON_ARRAY() END,
         '$[*]' COLUMNS (
             source_ordinal FOR ORDINALITY,
             item_json JSON PATH '$'
         )
     ) jt
+),
+collection_item_info AS (
+    SELECT
+        i.*,
+        COALESCE(
+            CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.agentId')) = 'STRING'
+                THEN JSON_UNQUOTE(JSON_EXTRACT(i.item_json, '$.agentId')) END,
+            CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.agent_id')) = 'STRING'
+                THEN JSON_UNQUOTE(JSON_EXTRACT(i.item_json, '$.agent_id')) END,
+            CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.assigneeAgentId')) = 'STRING'
+                THEN JSON_UNQUOTE(JSON_EXTRACT(i.item_json, '$.assigneeAgentId')) END,
+            CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.assignee_agent_id')) = 'STRING'
+                THEN JSON_UNQUOTE(JSON_EXTRACT(i.item_json, '$.assignee_agent_id')) END,
+            CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.id')) = 'STRING'
+                THEN JSON_UNQUOTE(JSON_EXTRACT(i.item_json, '$.id')) END
+        ) AS direct_candidate,
+        (JSON_CONTAINS_PATH(i.item_json, 'one', '$.agentId')
+         + JSON_CONTAINS_PATH(i.item_json, 'one', '$.agent_id')
+         + JSON_CONTAINS_PATH(i.item_json, 'one', '$.assigneeAgentId')
+         + JSON_CONTAINS_PATH(i.item_json, 'one', '$.assignee_agent_id')
+         + JSON_CONTAINS_PATH(i.item_json, 'one', '$.id')) AS direct_present_count,
+        (CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.agentId')) = 'STRING' THEN 1 ELSE 0 END
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.agent_id')) = 'STRING' THEN 1 ELSE 0 END
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.assigneeAgentId')) = 'STRING' THEN 1 ELSE 0 END
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.assignee_agent_id')) = 'STRING' THEN 1 ELSE 0 END
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.id')) = 'STRING' THEN 1 ELSE 0 END) AS direct_string_count,
+        (JSON_CONTAINS_PATH(i.item_json, 'one', '$.agentIds')
+         + JSON_CONTAINS_PATH(i.item_json, 'one', '$.agent_ids')
+         + JSON_CONTAINS_PATH(i.item_json, 'one', '$.assignees')
+         + JSON_CONTAINS_PATH(i.item_json, 'one', '$.agents')) AS wrapper_present_count,
+        (CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.agentIds')) = 'ARRAY' THEN 1 ELSE 0 END
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.agent_ids')) = 'ARRAY' THEN 1 ELSE 0 END
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.assignees')) = 'ARRAY' THEN 1 ELSE 0 END
+         + CASE WHEN JSON_TYPE(JSON_EXTRACT(i.item_json, '$.agents')) = 'ARRAY' THEN 1 ELSE 0 END) AS wrapper_array_count
+    FROM collection_items i
+),
+collection_candidates AS (
+    SELECT
+        i.meta_id, i.task_id, i.tenant_id, i.client_id, i.reward_status,
+        i.raw_assignee, i.required_abilities, i.assigned_at, i.started_at,
+        i.completed_at, i.failure_reason, i.create_time, i.update_time,
+        i.source_time, i.source_hash, i.source_format, i.payload_json,
+        i.source_ordinal, i.source_shape,
+        CASE
+            WHEN JSON_TYPE(i.item_json) = 'STRING' THEN JSON_UNQUOTE(i.item_json)
+            WHEN JSON_TYPE(i.item_json) = 'OBJECT'
+             AND i.direct_present_count = 1 AND i.direct_string_count = 1
+             AND i.wrapper_present_count = 0 THEN i.direct_candidate
+            ELSE NULL
+        END AS candidate_agent_id,
+        CASE
+            WHEN i.parent_direct_present_count + i.parent_wrapper_present_count > 1
+                THEN 'BLOCKED_AMBIGUOUS_JSON_OBJECT'
+            WHEN JSON_TYPE(i.item_json) = 'STRING' THEN NULL
+            WHEN JSON_TYPE(i.item_json) <> 'OBJECT' THEN 'BLOCKED_UNSUPPORTED_JSON_SHAPE'
+            WHEN i.direct_present_count + i.wrapper_present_count > 1
+                THEN 'BLOCKED_AMBIGUOUS_JSON_OBJECT'
+            WHEN i.direct_present_count = 1 AND i.direct_string_count = 0
+                THEN 'BLOCKED_INVALID_JSON_TARGET_TYPE'
+            WHEN i.wrapper_present_count = 1 AND i.wrapper_array_count = 0
+                THEN 'BLOCKED_INVALID_JSON_TARGET_TYPE'
+            WHEN i.direct_present_count = 1 AND i.direct_string_count = 1 THEN NULL
+            ELSE 'BLOCKED_UNSUPPORTED_JSON_SHAPE'
+        END AS parse_issue
+    FROM collection_item_info i
 ),
 candidate_rows AS (
     SELECT s.*, 1 AS source_ordinal, 'scalar' AS source_shape,
@@ -185,33 +197,51 @@ candidate_rows AS (
     WHERE s.source_format IN ('PLAIN', 'JSON_STRING')
 
     UNION ALL
-    SELECT a.meta_id, a.task_id, a.tenant_id, a.client_id, a.reward_status,
-           a.raw_assignee, a.required_abilities, a.assigned_at, a.started_at,
-           a.completed_at, a.failure_reason, a.create_time, a.update_time,
-           a.source_time, a.source_hash, a.source_format, a.payload_json,
-           a.source_ordinal, 'array_item', a.candidate_agent_id, a.parse_issue
-    FROM array_candidates a
+
+    SELECT c.meta_id, c.task_id, c.tenant_id, c.client_id, c.reward_status,
+           c.raw_assignee, c.required_abilities, c.assigned_at, c.started_at,
+           c.completed_at, c.failure_reason, c.create_time, c.update_time,
+           c.source_time, c.source_hash, c.source_format, c.payload_json,
+           c.source_ordinal, c.source_shape, c.candidate_agent_id, c.parse_issue
+    FROM collection_candidates c
 
     UNION ALL
+
     SELECT o.meta_id, o.task_id, o.tenant_id, o.client_id, o.reward_status,
            o.raw_assignee, o.required_abilities, o.assigned_at, o.started_at,
            o.completed_at, o.failure_reason, o.create_time, o.update_time,
            o.source_time, o.source_hash, o.source_format, o.payload_json,
-           1, 'object_direct', o.direct_candidate,
-           CASE WHEN o.wrapper_count > 0 OR o.direct_count > 1
-                THEN 'BLOCKED_AMBIGUOUS_JSON_OBJECT' ELSE NULL END
+           1, 'object_direct', o.direct_candidate, NULL
     FROM object_info o
-    WHERE o.direct_candidate IS NOT NULL
+    WHERE o.direct_present_count = 1 AND o.direct_string_count = 1
+      AND o.wrapper_present_count = 0
 
     UNION ALL
+
     SELECT o.meta_id, o.task_id, o.tenant_id, o.client_id, o.reward_status,
            o.raw_assignee, o.required_abilities, o.assigned_at, o.started_at,
            o.completed_at, o.failure_reason, o.create_time, o.update_time,
            o.source_time, o.source_hash, o.source_format, o.payload_json,
-           1000 + o.source_ordinal, 'object_array_item', o.candidate_agent_id, o.parse_issue
-    FROM object_wrapper_candidates o
+           1, 'object', NULL,
+           CASE
+               WHEN o.direct_present_count + o.wrapper_present_count > 1
+                   THEN 'BLOCKED_AMBIGUOUS_JSON_OBJECT'
+               WHEN o.direct_present_count = 1 AND o.direct_string_count = 0
+                   THEN 'BLOCKED_INVALID_JSON_TARGET_TYPE'
+               WHEN o.wrapper_present_count = 1 AND o.wrapper_array_count = 0
+                   THEN 'BLOCKED_INVALID_JSON_TARGET_TYPE'
+               WHEN o.wrapper_present_count = 1 AND o.wrapper_array_count = 1
+                AND JSON_LENGTH(o.wrapper_json) = 0 THEN 'SKIPPED_EMPTY_ASSIGNEE'
+               ELSE 'BLOCKED_UNSUPPORTED_JSON_SHAPE'
+           END
+    FROM object_info o
+    WHERE NOT (o.direct_present_count = 1 AND o.direct_string_count = 1
+               AND o.wrapper_present_count = 0)
+      AND NOT (o.direct_present_count = 0 AND o.wrapper_present_count = 1
+               AND o.wrapper_array_count = 1 AND JSON_LENGTH(o.wrapper_json) > 0)
 
     UNION ALL
+
     SELECT s.*, 1, 'source', NULL,
            CASE
                WHEN s.source_format IN ('EMPTY', 'JSON_NULL') THEN 'SKIPPED_EMPTY_ASSIGNEE'
@@ -223,27 +253,18 @@ candidate_rows AS (
                               'JSON_INTEGER', 'JSON_DOUBLE', 'JSON_BOOLEAN')
 
     UNION ALL
+
     SELECT s.*, 1, 'empty_array', NULL, 'SKIPPED_EMPTY_ASSIGNEE'
     FROM meta_source s
     WHERE s.source_format = 'JSON_ARRAY' AND JSON_LENGTH(s.payload_json) = 0
-
-    UNION ALL
-    SELECT o.meta_id, o.task_id, o.tenant_id, o.client_id, o.reward_status,
-           o.raw_assignee, o.required_abilities, o.assigned_at, o.started_at,
-           o.completed_at, o.failure_reason, o.create_time, o.update_time,
-           o.source_time, o.source_hash, o.source_format, o.payload_json,
-           1, 'object', NULL,
-           CASE WHEN o.wrapper_count = 1 AND JSON_LENGTH(o.wrapper_json) = 0
-                THEN 'SKIPPED_EMPTY_ASSIGNEE'
-                ELSE 'BLOCKED_UNSUPPORTED_JSON_SHAPE' END
-    FROM object_info o
-    WHERE o.direct_candidate IS NULL
-      AND (o.wrapper_count = 0 OR JSON_LENGTH(o.wrapper_json) = 0)
 ),
 normalized_candidates AS (
     SELECT
         c.*,
-        NULLIF(TRIM(c.candidate_agent_id), '') AS normalized_agent_id,
+        NULLIF(c.candidate_agent_id, '') AS normalized_agent_id,
+        CASE WHEN c.candidate_agent_id IS NOT NULL
+              AND BINARY c.candidate_agent_id <> BINARY TRIM(c.candidate_agent_id)
+             THEN 1 ELSE 0 END AS agent_id_has_boundary_whitespace,
         CONCAT(c.meta_id, ':', c.source_shape, ':', c.source_ordinal) AS candidate_key
     FROM candidate_rows c
 ),
@@ -489,6 +510,7 @@ resolved_rows AS (
         ic.identity_match,
         CASE
             WHEN n.parse_issue IS NOT NULL THEN n.parse_issue
+            WHEN n.agent_id_has_boundary_whitespace = 1 THEN 'BLOCKED_AGENT_ID_BOUNDARY_WHITESPACE'
             WHEN n.normalized_agent_id IS NULL THEN 'BLOCKED_BLANK_AGENT_ID'
             WHEN CHAR_LENGTH(n.normalized_agent_id) > 100 THEN 'BLOCKED_AGENT_ID_TOO_LONG'
             WHEN n.tenant_id IS NULL OR TRIM(n.tenant_id) = ''
@@ -516,6 +538,7 @@ resolved_rows AS (
             WHEN n.parse_issue = 'BLOCKED_INVALID_JSON' THEN 'JSON-looking assignee value is malformed'
             WHEN n.parse_issue = 'BLOCKED_AMBIGUOUS_JSON_OBJECT' THEN 'Object mixes direct and collection fields or has multiple collection fields'
             WHEN n.parse_issue = 'BLOCKED_UNSUPPORTED_JSON_SHAPE' THEN 'JSON value does not contain a supported string Agent ID shape'
+            WHEN n.agent_id_has_boundary_whitespace = 1 THEN 'Parsed Agent ID has leading or trailing whitespace and will not be normalized'
             WHEN n.normalized_agent_id IS NULL THEN 'Parsed Agent ID is blank'
             WHEN CHAR_LENGTH(n.normalized_agent_id) > 100 THEN 'Parsed Agent ID exceeds collaboration schema length'
             WHEN n.tenant_id IS NULL OR TRIM(n.tenant_id) = ''
@@ -556,9 +579,63 @@ task_rollup AS (
             AS canonical_agent_count
     FROM resolved_rows
     GROUP BY meta_id
+),
+task_outcomes AS (
+    SELECT
+        r.*,
+        t.eligible_row_count,
+        t.blocked_row_count,
+        t.empty_row_count,
+        t.canonical_agent_count,
+        CASE
+            WHEN t.blocked_row_count > 0 THEN 'BLOCKED'
+            WHEN t.eligible_row_count = 0 THEN 'SKIPPED_EMPTY'
+            ELSE 'ELIGIBLE'
+        END AS task_resolution_status
+    FROM resolved_rows r
+    JOIN task_rollup t ON t.meta_id = r.meta_id
+),
+manifest_rows AS (
+    SELECT
+        o.*,
+        SHA2(CONCAT_WS(CHAR(31), 'B09-MANIFEST-ROW-V1',
+            CAST(o.meta_id AS CHAR), o.source_shape, CAST(o.source_ordinal AS CHAR)), 256)
+            AS manifest_row_key,
+        SHA2(CONCAT_WS(CHAR(31),
+            'B09-MANIFEST-CONTENT-V1',
+            CAST(o.meta_id AS CHAR),
+            COALESCE(CONCAT('V', HEX(o.task_id)), 'N'),
+            COALESCE(CONCAT('V', HEX(o.tenant_id)), 'N'),
+            COALESCE(CONCAT('V', HEX(o.client_id)), 'N'),
+            COALESCE(CONCAT('V', HEX(o.reward_status)), 'N'),
+            o.source_hash,
+            COALESCE(CONCAT('V', SHA2(o.required_abilities, 256)), 'N'),
+            COALESCE(CONCAT('V', CAST(o.assigned_at AS CHAR)), 'N'),
+            COALESCE(CONCAT('V', CAST(o.started_at AS CHAR)), 'N'),
+            COALESCE(CONCAT('V', CAST(o.completed_at AS CHAR)), 'N'),
+            COALESCE(CONCAT('V', SHA2(o.failure_reason, 256)), 'N'),
+            COALESCE(CONCAT('V', CAST(o.create_time AS CHAR)), 'N'),
+            COALESCE(CONCAT('V', CAST(o.update_time AS CHAR)), 'N'),
+            COALESCE(CONCAT('V', CAST(o.source_time AS CHAR)), 'N'),
+            o.source_format, o.source_shape, CAST(o.source_ordinal AS CHAR),
+            COALESCE(CONCAT('V', HEX(o.normalized_agent_id)), 'N'),
+            COALESCE(CONCAT('V', HEX(o.canonical_agent_id)), 'N'),
+            COALESCE(CONCAT('V', HEX(o.identity_match)), 'N'),
+            o.resolution_status,
+            SHA2(o.resolution_reason, 256),
+            o.task_resolution_status,
+            CAST(o.eligible_row_count AS CHAR), CAST(o.blocked_row_count AS CHAR),
+            CAST(o.empty_row_count AS CHAR), CAST(o.canonical_agent_count AS CHAR),
+            COALESCE(CONCAT('V', HEX(o.planned_member_status)), 'N'),
+            COALESCE(CONCAT('V', HEX(o.planned_work_item_status)), 'N'),
+            COALESCE(CONCAT('V', HEX(o.planned_work_item_id)), 'N')), 256)
+            AS manifest_row_sha256
+    FROM task_outcomes o
 )
 -- B09_RESOLUTION_CTE_END
 SELECT
+    r.manifest_row_key,
+    r.manifest_row_sha256,
     r.meta_id,
     r.task_id,
     r.tenant_id,
@@ -573,19 +650,15 @@ SELECT
     r.identity_match,
     r.resolution_status,
     r.resolution_reason,
+    r.task_resolution_status,
     CASE
-        WHEN t.blocked_row_count > 0 THEN 'BLOCKED'
-        WHEN t.eligible_row_count = 0 THEN 'SKIPPED_EMPTY'
-        ELSE 'ELIGIBLE'
-    END AS task_resolution_status,
-    CASE
-        WHEN t.blocked_row_count > 0 OR t.eligible_row_count = 0 THEN 'NONE'
-        WHEN t.canonical_agent_count = 1 THEN 'DEFAULT_SINGLE_WORK_ITEM'
+        WHEN r.blocked_row_count > 0 OR r.eligible_row_count = 0 THEN 'NONE'
+        WHEN r.canonical_agent_count = 1 THEN 'DEFAULT_SINGLE_WORK_ITEM'
         ELSE 'MEMBERS_ONLY_MANUAL_DECOMPOSITION'
     END AS work_item_plan,
     r.planned_member_status,
     CASE
-        WHEN t.blocked_row_count > 0 OR t.eligible_row_count = 0 OR t.canonical_agent_count <> 1 THEN NULL
+        WHEN r.blocked_row_count > 0 OR r.eligible_row_count = 0 OR r.canonical_agent_count <> 1 THEN NULL
         ELSE r.planned_work_item_status
     END AS planned_work_item_status,
     EXISTS (
@@ -602,6 +675,5 @@ SELECT
           AND BINARY w.task_id = BINARY r.task_id
     ) AS task_work_item_already_exists,
     r.source_hash
-FROM resolved_rows r
-JOIN task_rollup t ON t.meta_id = r.meta_id
+FROM manifest_rows r
 ORDER BY r.meta_id, r.source_ordinal, r.source_shape;

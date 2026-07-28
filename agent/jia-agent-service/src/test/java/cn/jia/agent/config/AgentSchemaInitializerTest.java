@@ -94,7 +94,11 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_request"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_artifact"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_issue"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_run"));
         assertTrue(sql.contains("uk_task_backfill_issue_key"));
+        assertTrue(sql.contains("uk_task_backfill_manifest_row"));
+        assertTrue(sql.contains("uk_task_backfill_run_id"));
         verify(jdbcTemplate, atLeastOnce()).update(any(String.class), any(Object[].class));
     }
 
@@ -140,23 +144,26 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
-    void initializerSchemaAndBackfillMigrationKeepAuditTableInParity() throws IOException {
+    void initializerSchemaAndBackfillMigrationKeepAuditTablesInParity() throws IOException {
         JdbcTemplate template = mock(JdbcTemplate.class);
         new AgentSchemaInitializer(template).afterPropertiesSet();
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
         verify(template, atLeastOnce()).execute(captor.capture());
-        String initializerDefinition = captor.getAllValues().stream()
+        List<String> initializerSql = captor.getAllValues().stream()
                 .map(sql -> sql.toLowerCase(Locale.ROOT))
-                .filter(sql -> sql.contains("create table if not exists agent_task_backfill_issue"))
-                .findFirst().orElseThrow();
+                .toList();
         String schema = readResource("db/schema.sql");
-        String backfill = readResource("db/task-collaboration-backfill.sql");
+        String auditMigration = readResource("db/task-collaboration-backfill-audit-schema.sql");
 
-        TableStructure expected = tableStructure(tableDefinition(schema, "agent_task_backfill_issue"));
-        assertEquals(expected,
-                tableStructure(tableDefinition(backfill, "agent_task_backfill_issue")), "backfill migration");
-        assertEquals(expected,
-                tableStructure(initializerDefinition), "initializer");
+        for (String table : Set.of(
+                "agent_task_backfill_issue", "agent_task_backfill_manifest", "agent_task_backfill_run")) {
+            String initializerDefinition = initializerSql.stream()
+                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .findFirst().orElseThrow();
+            TableStructure expected = tableStructure(tableDefinition(schema, table));
+            assertEquals(expected, tableStructure(tableDefinition(auditMigration, table)), table + " migration");
+            assertEquals(expected, tableStructure(initializerDefinition), table + " initializer");
+        }
     }
 
     @Test
@@ -177,6 +184,67 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(initializerDefinition), table);
         }
+    }
+
+    @Test
+    void incompatibleBackfillAuditColumnTypeLengthNullDefaultOrCollationFailsStartup() {
+        List<AgentSchemaInitializer.BackfillColumnDefinition> incompatible = List.of(
+                new AgentSchemaInitializer.BackfillColumnDefinition(
+                        "varchar", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new AgentSchemaInitializer.BackfillColumnDefinition(
+                        "char", "char(63)", false, null, "utf8mb4_0900_bin"),
+                new AgentSchemaInitializer.BackfillColumnDefinition(
+                        "char", "char(64)", true, null, "utf8mb4_0900_bin"),
+                new AgentSchemaInitializer.BackfillColumnDefinition(
+                        "char", "char(64)", false, "unexpected", "utf8mb4_0900_bin"),
+                new AgentSchemaInitializer.BackfillColumnDefinition(
+                        "char", "char(64)", false, null, "utf8mb4_0900_ai_ci"));
+
+        for (AgentSchemaInitializer.BackfillColumnDefinition definition : incompatible) {
+            IllegalStateException error = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(backfillColumnMismatchTemplate(definition))
+                            .afterPropertiesSet());
+            assertTrue(error.getMessage().contains("agent_task_backfill_issue.issue_key"),
+                    error.getMessage());
+            assertTrue(error.getMessage().contains("type/null/default/collation"),
+                    error.getMessage());
+        }
+    }
+
+    @Test
+    void incompatibleBackfillManifestIndexFailsStartup() {
+        JdbcTemplate failingTemplate = new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL intentionally inert.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if (sql.contains("information_schema.tables")) {
+                    return (List<T>) List.of(Integer.valueOf(
+                            args.length > 0 && String.valueOf(args[0]).startsWith("agent_task_backfill_") ? 1 : 0));
+                }
+                if (args.length > 1
+                        && "agent_task_backfill_manifest".equals(args[0])
+                        && "uk_task_backfill_manifest_row".equals(args[1])) {
+                    return (List<T>) List.of(
+                            new AgentSchemaInitializer.IndexColumn(0, "report_sha256", 1, null));
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+        assertTrue(error.getMessage().contains("uk_task_backfill_manifest_row"), error.getMessage());
     }
 
     @Test
@@ -927,6 +995,44 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
     private String readSchema() throws IOException {
         return readResource("db/schema.sql");
+    }
+
+    private JdbcTemplate backfillColumnMismatchTemplate(
+            AgentSchemaInitializer.BackfillColumnDefinition issueKeyDefinition) {
+        return new JdbcTemplate() {
+            @Override
+            public void execute(String sql) {
+                // DDL intentionally inert so catalog evidence controls the result.
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                if (sql.contains("TABLE_COLLATION")) {
+                    return (T) "utf8mb4_0900_bin";
+                }
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if (sql.contains("information_schema.tables")) {
+                    return (List<T>) List.of(Integer.valueOf(
+                            args.length > 0 && String.valueOf(args[0]).startsWith("agent_task_backfill_") ? 1 : 0));
+                }
+                if (sql.contains("SELECT DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT")) {
+                    if ("agent_task_backfill_issue".equals(args[0]) && "id".equals(args[1])) {
+                        return (List<T>) List.of(new AgentSchemaInitializer.BackfillColumnDefinition(
+                                "bigint", "bigint", false, null, null));
+                    }
+                    if ("agent_task_backfill_issue".equals(args[0]) && "issue_key".equals(args[1])) {
+                        return (List<T>) List.of(issueKeyDefinition);
+                    }
+                }
+                return List.of();
+            }
+        };
     }
 
     private String readResource(String resource) throws IOException {

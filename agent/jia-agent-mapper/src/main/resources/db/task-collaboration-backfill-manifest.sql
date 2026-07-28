@@ -1,75 +1,8 @@
--- B09 approved historical task member/work-item backfill (MySQL 8.0.21+).
--- Requires an immutable approved manifest imported by
--- task-collaboration-backfill-approve.sql. The apply transaction recomputes the
--- complete source row set and rejects any added, modified, deleted, re-scoped, or
--- differently resolved task before writing business/audit rows.
+-- B09 immutable approval manifest export (read-only, MySQL 8.0.21+).
+-- Save the complete --batch --raw output as TSV, review it together with the
+-- human dry-run report, then calculate sha256sum over this exact file. Values
+-- that may contain delimiters are hex encoded; "-" is the NULL sentinel.
 
-DROP PROCEDURE IF EXISTS b09_assert;
-DELIMITER $$
-CREATE PROCEDURE b09_assert(IN condition_ok BOOLEAN, IN failure_message VARCHAR(255))
-BEGIN
-    IF condition_ok IS NULL OR condition_ok = FALSE THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = failure_message;
-    END IF;
-END$$
-DELIMITER ;
-
-CALL b09_assert(
-    @b09_approved_report_sha256 REGEXP BINARY '^[0-9a-fA-F]{64}$',
-    'B09: set an approved immutable manifest SHA-256 before apply');
-CALL b09_assert(
-    @b09_operator IS NOT NULL
-        AND CHAR_LENGTH(@b09_operator) BETWEEN 1 AND 100
-        AND BINARY @b09_operator = BINARY TRIM(@b09_operator)
-        AND NOT REGEXP_LIKE(@b09_operator, '[[:cntrl:]]', 'c'),
-    'B09: operator must be byte-clean, non-blank, max 100 chars');
-CALL b09_assert(
-    (SELECT COUNT(*) FROM information_schema.tables
-      WHERE table_schema = DATABASE()
-        AND table_name IN ('agent_task_meta', 'agent_task_member', 'agent_task_work_item',
-                           'agent_identity_registry', 'agent_identity_alias',
-                           'agent_task_backfill_issue', 'agent_task_backfill_manifest',
-                           'agent_task_backfill_run')) = 8,
-    'B09: required A02/B01/B09 tables are missing');
-CALL b09_assert(
-    (SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
-       FROM information_schema.statistics
-      WHERE table_schema = DATABASE() AND table_name = 'agent_task_member'
-        AND index_name = 'uk_task_member_scope' AND non_unique = 0)
-        = 'tenant_id,client_id,task_id,agent_id',
-    'B09: incompatible member scope unique index');
-CALL b09_assert(
-    (SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
-       FROM information_schema.statistics
-      WHERE table_schema = DATABASE() AND table_name = 'agent_task_work_item'
-        AND index_name = 'uk_work_item_scope' AND non_unique = 0)
-        = 'tenant_id,client_id,work_item_id',
-    'B09: incompatible work-item scope unique index');
-CALL b09_assert(
-    (SELECT COUNT(*) FROM agent_task_backfill_manifest
-      WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256)) > 0,
-    'B09: approved manifest SHA was not found');
-CALL b09_assert(
-    (SELECT COUNT(DISTINCT BINARY approved_operator)
-       FROM agent_task_backfill_manifest
-      WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256)) = 1
-    AND (SELECT MIN(BINARY approved_operator = BINARY @b09_operator)
-           FROM agent_task_backfill_manifest
-          WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256)) = 1,
-    'B09: apply operator does not match the immutable approval');
-
-SET @b09_lock_name = LEFT(CONCAT('b09-task-backfill:', DATABASE()), 64);
-CALL b09_assert(GET_LOCK(@b09_lock_name, 0) = 1,
-    'B09: another task backfill session holds the migration lock');
-SET @b09_started_at = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED);
-SET @b09_now = @b09_started_at;
-SET @b09_run_id = UUID();
-
-DROP TEMPORARY TABLE IF EXISTS tmp_b09_resolution;
-SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-START TRANSACTION WITH CONSISTENT SNAPSHOT;
-
-CREATE TEMPORARY TABLE tmp_b09_resolution AS
 -- B09_RESOLUTION_CTE_BEGIN
 WITH
 meta_source AS (
@@ -690,176 +623,20 @@ manifest_rows AS (
     FROM task_outcomes o
 )
 -- B09_RESOLUTION_CTE_END
-SELECT * FROM manifest_rows;
-
-SET @b09_current_manifest_count = (SELECT COUNT(*) FROM tmp_b09_resolution);
-SET @b09_approved_manifest_count = (
-    SELECT COUNT(*) FROM agent_task_backfill_manifest
-    WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256));
-CALL b09_assert(@b09_current_manifest_count = @b09_approved_manifest_count,
-    'B09: current task row count differs from approved manifest');
-CALL b09_assert(
-    (SELECT COUNT(*)
-       FROM tmp_b09_resolution current_row
-       LEFT JOIN agent_task_backfill_manifest approved
-         ON BINARY approved.report_sha256 = BINARY LOWER(@b09_approved_report_sha256)
-        AND BINARY approved.manifest_row_key = BINARY current_row.manifest_row_key
-        AND BINARY approved.manifest_row_sha256 = BINARY current_row.manifest_row_sha256
-        AND approved.meta_id = current_row.meta_id
-        AND BINARY approved.task_id = BINARY current_row.task_id
-        AND BINARY approved.tenant_id <=> BINARY current_row.tenant_id
-        AND BINARY approved.client_id <=> BINARY current_row.client_id
-        AND BINARY approved.source_hash = BINARY current_row.source_hash
-        AND BINARY approved.source_format = BINARY current_row.source_format
-        AND BINARY approved.source_shape = BINARY current_row.source_shape
-        AND approved.source_ordinal = current_row.source_ordinal
-        AND BINARY approved.source_agent_id <=> BINARY current_row.normalized_agent_id
-        AND BINARY approved.canonical_agent_id <=> BINARY current_row.canonical_agent_id
-        AND BINARY approved.resolution_status = BINARY current_row.resolution_status
-        AND BINARY approved.task_resolution_status = BINARY current_row.task_resolution_status
-      WHERE approved.id IS NULL) = 0,
-    'B09: current task source/scope/resolution differs from approved manifest');
-CALL b09_assert(
-    (SELECT COUNT(*)
-       FROM agent_task_backfill_manifest approved
-       LEFT JOIN tmp_b09_resolution current_row
-         ON BINARY approved.manifest_row_key = BINARY current_row.manifest_row_key
-        AND BINARY approved.manifest_row_sha256 = BINARY current_row.manifest_row_sha256
-      WHERE BINARY approved.report_sha256 = BINARY LOWER(@b09_approved_report_sha256)
-        AND current_row.manifest_row_key IS NULL) = 0,
-    'B09: an approved task row was deleted or changed');
-
-SET @b09_source_issue_row_count = (
-    SELECT COUNT(*) FROM tmp_b09_resolution WHERE resolution_status <> 'ELIGIBLE');
-SET @b09_multi_agent_issue_row_count = (
-    SELECT COUNT(*) FROM (
-        SELECT meta_id FROM tmp_b09_resolution
-        WHERE task_resolution_status = 'ELIGIBLE'
-        GROUP BY meta_id HAVING MAX(canonical_agent_count) > 1
-    ) multi_agent_tasks);
-SET @b09_issue_row_count = @b09_source_issue_row_count + @b09_multi_agent_issue_row_count;
-
-INSERT INTO agent_task_backfill_issue (
-    issue_key, meta_id, task_id, source_hash, source_format, source_shape,
-    source_ordinal, raw_assignee, source_agent_id, issue_code, issue_reason,
-    first_report_sha256, last_report_sha256, first_seen_at, last_seen_at,
-    occurrence_count, last_operator, tenant_id, client_id, create_time, update_time)
 SELECT
-    SHA2(CONCAT_WS(CHAR(31), COALESCE(tenant_id, '<NULL>'), COALESCE(client_id, '<NULL>'),
-        task_id, meta_id, source_hash, source_shape, source_ordinal, resolution_status), 256),
-    meta_id, task_id, source_hash, source_format, source_shape, source_ordinal,
-    raw_assignee, normalized_agent_id, resolution_status, resolution_reason,
-    LOWER(@b09_approved_report_sha256), LOWER(@b09_approved_report_sha256),
-    @b09_now, @b09_now, 1, @b09_operator, tenant_id, client_id, @b09_now, @b09_now
-FROM tmp_b09_resolution
-WHERE resolution_status <> 'ELIGIBLE'
-ON DUPLICATE KEY UPDATE
-    last_report_sha256 = VALUES(last_report_sha256),
-    last_seen_at = VALUES(last_seen_at),
-    occurrence_count = occurrence_count + 1,
-    last_operator = VALUES(last_operator),
-    update_time = VALUES(update_time);
-
-INSERT INTO agent_task_backfill_issue (
-    issue_key, meta_id, task_id, source_hash, source_format, source_shape,
-    source_ordinal, raw_assignee, source_agent_id, issue_code, issue_reason,
-    first_report_sha256, last_report_sha256, first_seen_at, last_seen_at,
-    occurrence_count, last_operator, tenant_id, client_id, create_time, update_time)
-SELECT
-    SHA2(CONCAT_WS(CHAR(31), COALESCE(tenant_id, '<NULL>'), COALESCE(client_id, '<NULL>'),
-        task_id, meta_id, MAX(source_hash), 'REVIEW_MULTI_AGENT_WORK_ITEM_REQUIRED'), 256),
-    meta_id, task_id, MAX(source_hash), MAX(source_format), 'task', 0,
-    MAX(raw_assignee), NULL, 'REVIEW_MULTI_AGENT_WORK_ITEM_REQUIRED',
-    'Multiple historical assignees were resolved; members are safe but work-item decomposition requires human review',
-    LOWER(@b09_approved_report_sha256), LOWER(@b09_approved_report_sha256),
-    @b09_now, @b09_now, 1, @b09_operator, tenant_id, client_id, @b09_now, @b09_now
-FROM tmp_b09_resolution
-WHERE task_resolution_status = 'ELIGIBLE'
-GROUP BY meta_id, task_id, tenant_id, client_id
-HAVING MAX(canonical_agent_count) > 1
-ON DUPLICATE KEY UPDATE
-    last_report_sha256 = VALUES(last_report_sha256),
-    last_seen_at = VALUES(last_seen_at),
-    occurrence_count = occurrence_count + 1,
-    last_operator = VALUES(last_operator),
-    update_time = VALUES(update_time);
-
-INSERT INTO agent_task_member (
-    task_id, agent_id, member_role, member_status, assignment_source,
-    joined_at, accepted_at, started_at, completed_at, last_heartbeat_at,
-    failure_reason, version, tenant_id, client_id, create_time, update_time)
-SELECT DISTINCT
-    r.task_id, r.canonical_agent_id, 'worker', r.planned_member_status, 'migration',
-    COALESCE(r.assigned_at, r.create_time, r.update_time, @b09_now),
-    CASE WHEN r.planned_member_status IN ('accepted', 'working', 'blocked', 'done', 'failed')
-         THEN COALESCE(r.assigned_at, r.create_time, r.update_time, @b09_now) END,
-    CASE WHEN r.planned_member_status IN ('working', 'blocked', 'done', 'failed')
-         THEN COALESCE(r.started_at, r.assigned_at, r.create_time, r.update_time, @b09_now) END,
-    CASE WHEN r.planned_member_status IN ('done', 'failed', 'left')
-         THEN COALESCE(r.completed_at, r.update_time, r.create_time, @b09_now) END,
-    NULL,
-    CASE WHEN r.planned_member_status IN ('blocked', 'failed') THEN r.failure_reason END,
-    0, r.tenant_id, r.client_id,
-    COALESCE(r.create_time, r.assigned_at, @b09_now),
-    COALESCE(r.update_time, r.create_time, r.assigned_at, @b09_now)
-FROM tmp_b09_resolution r
-WHERE r.task_resolution_status = 'ELIGIBLE'
-  AND r.resolution_status = 'ELIGIBLE'
-  AND NOT EXISTS (
-      SELECT 1 FROM agent_task_member existing
-      WHERE BINARY existing.tenant_id = BINARY r.tenant_id
-        AND BINARY existing.client_id = BINARY r.client_id
-        AND BINARY existing.task_id = BINARY r.task_id
-        AND BINARY existing.agent_id = BINARY r.canonical_agent_id);
-SET @b09_member_insert_count = ROW_COUNT();
-
-INSERT INTO agent_task_work_item (
-    work_item_id, task_id, title, description, work_type, required_abilities,
-    assignee_agent_id, status, priority, required_item, dependency_json,
-    lease_token, lease_until, attempt_count, max_attempts, result_artifact_id,
-    submitted_at, completed_at, version, tenant_id, client_id, create_time, update_time)
-SELECT
-    MAX(r.planned_work_item_id), r.task_id, 'Historical task assignment',
-    CASE WHEN MAX(r.planned_work_item_status) = 'blocked'
-         THEN 'B09 migrated the legacy assignment in blocked state; explicitly review and resume under the B04 lease protocol.'
-         ELSE 'B09 deterministic default work item; original assigned_agent_id remains on agent_task_meta for audit.' END,
-    'legacy_task', MAX(r.required_abilities), MAX(r.canonical_agent_id),
-    MAX(r.planned_work_item_status), 0, 1, NULL, NULL, NULL, 0, 3, NULL,
-    CASE WHEN MAX(r.planned_work_item_status) = 'completed'
-         THEN COALESCE(MAX(r.completed_at), MAX(r.update_time), @b09_now) END,
-    CASE WHEN MAX(r.planned_work_item_status) IN ('completed', 'failed', 'cancelled')
-         THEN COALESCE(MAX(r.completed_at), MAX(r.update_time), MAX(r.create_time), @b09_now) END,
-    0, r.tenant_id, r.client_id,
-    COALESCE(MAX(r.create_time), MAX(r.assigned_at), @b09_now),
-    COALESCE(MAX(r.update_time), MAX(r.create_time), MAX(r.assigned_at), @b09_now)
-FROM tmp_b09_resolution r
-WHERE r.task_resolution_status = 'ELIGIBLE'
-  AND r.canonical_agent_count = 1
-  AND NOT EXISTS (
-      SELECT 1 FROM agent_task_work_item existing
-      WHERE BINARY existing.tenant_id = BINARY r.tenant_id
-        AND BINARY existing.client_id = BINARY r.client_id
-        AND BINARY existing.task_id = BINARY r.task_id)
-GROUP BY r.meta_id, r.task_id, r.tenant_id, r.client_id;
-SET @b09_work_item_insert_count = ROW_COUNT();
-SET @b09_completed_at = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED);
-
-INSERT INTO agent_task_backfill_run (
-    run_id, report_sha256, operator, manifest_row_count, issue_row_count,
-    member_insert_count, work_item_insert_count, started_at, completed_at,
-    run_status, create_time)
-VALUES (
-    @b09_run_id, LOWER(@b09_approved_report_sha256), @b09_operator,
-    @b09_current_manifest_count, @b09_issue_row_count, @b09_member_insert_count,
-    @b09_work_item_insert_count, @b09_started_at, @b09_completed_at,
-    'SUCCEEDED', @b09_completed_at);
-
-COMMIT;
-DO RELEASE_LOCK(@b09_lock_name);
-DROP TEMPORARY TABLE IF EXISTS tmp_b09_resolution;
-DROP PROCEDURE IF EXISTS b09_assert;
-
-SELECT run_id, report_sha256, operator, manifest_row_count, issue_row_count,
-       member_insert_count, work_item_insert_count, started_at, completed_at, run_status
-FROM agent_task_backfill_run
-WHERE BINARY run_id = BINARY @b09_run_id;
+    manifest_row_key,
+    manifest_row_sha256,
+    meta_id,
+    HEX(task_id) AS task_id_hex,
+    IF(tenant_id IS NULL, '-', HEX(tenant_id)) AS tenant_id_hex,
+    IF(client_id IS NULL, '-', HEX(client_id)) AS client_id_hex,
+    source_hash,
+    source_format,
+    source_shape,
+    source_ordinal,
+    IF(normalized_agent_id IS NULL, '-', HEX(normalized_agent_id)) AS source_agent_id_hex,
+    IF(canonical_agent_id IS NULL, '-', HEX(canonical_agent_id)) AS canonical_agent_id_hex,
+    resolution_status,
+    task_resolution_status
+FROM manifest_rows
+ORDER BY manifest_row_key;

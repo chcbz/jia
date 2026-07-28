@@ -516,6 +516,12 @@ public class AgentSchemaInitializer implements InitializingBean {
             String column, String referencedTable, String referencedColumn,
             int position, String updateRule, String deleteRule) {}
     static record TriggerDefinition(String name, String timing, String event, String statement) {}
+    static record BackfillColumnExpectation(
+            String table, String column, String dataType, String columnType,
+            boolean nullable, String defaultValue, String collation) {}
+    static record BackfillColumnDefinition(
+            String dataType, String columnType, boolean nullable,
+            String defaultValue, String collation) {}
 
     private void ensureIdentitySchema() {
         validateRuntimeIdentityProjection();
@@ -655,6 +661,10 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
     private void ensureTaskCollaborationSchema() {
+        boolean backfillIssueAlreadyExists = tableExists("agent_task_backfill_issue");
+        boolean backfillManifestAlreadyExists = tableExists("agent_task_backfill_manifest");
+        boolean backfillRunAlreadyExists = tableExists("agent_task_backfill_run");
+
         addRequiredColumnIfMissing("agent_task_meta", "collaboration_mode",
                 "collaboration_mode VARCHAR(20) NOT NULL DEFAULT 'single' COMMENT 'single/team'");
         addRequiredColumnIfMissing("agent_task_meta", "risk_level",
@@ -746,11 +756,11 @@ public class AgentSchemaInitializer implements InitializingBean {
                     source_agent_id         VARCHAR(100) DEFAULT NULL COMMENT 'Parsed historical Agent ID before resolution',
                     issue_code              VARCHAR(64) NOT NULL COMMENT 'Fail-closed B09 exception/review code',
                     issue_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable resolution reason',
-                    first_report_sha256     CHAR(64) NOT NULL COMMENT 'First reviewed dry-run report SHA-256',
-                    last_report_sha256      CHAR(64) NOT NULL COMMENT 'Latest reviewed dry-run report SHA-256',
+                    first_report_sha256     CHAR(64) NOT NULL COMMENT 'First reviewed manifest report SHA-256',
+                    last_report_sha256      CHAR(64) NOT NULL COMMENT 'Latest reviewed manifest report SHA-256',
                     first_seen_at           BIGINT NOT NULL COMMENT 'First apply observation time',
                     last_seen_at            BIGINT NOT NULL COMMENT 'Latest apply observation time',
-                    occurrence_count        BIGINT NOT NULL DEFAULT 1 COMMENT 'Number of reviewed apply observations',
+                    occurrence_count        BIGINT NOT NULL DEFAULT 1 COMMENT 'Number of approved apply observations',
                     last_operator           VARCHAR(100) NOT NULL COMMENT 'Latest approved migration operator',
                     tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source owner jiacn scope, nullable only for audited bad history',
                     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source OAuth/API client scope, nullable only for audited bad history',
@@ -761,6 +771,56 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_task_backfill_issue_scope_task (tenant_id, client_id, task_id, issue_code),
                     KEY idx_task_backfill_issue_code_seen (issue_code, last_seen_at, id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Auditable B09 historical task backfill exceptions'
+                """);
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest (
+                    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    report_sha256           CHAR(64) NOT NULL COMMENT 'SHA-256 of the approved manifest TSV',
+                    manifest_row_key        CHAR(64) NOT NULL COMMENT 'Deterministic source row identity',
+                    manifest_row_sha256     CHAR(64) NOT NULL COMMENT 'Byte-exact source/scope/resolution digest',
+                    meta_id                 BIGINT NOT NULL COMMENT 'Approved source agent_task_meta primary key',
+                    task_id                 VARCHAR(100) NOT NULL COMMENT 'Approved source task ID',
+                    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved tenant scope',
+                    client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved client scope',
+                    source_hash             CHAR(64) NOT NULL COMMENT 'Approved original assignee SHA-256',
+                    source_format           VARCHAR(32) NOT NULL COMMENT 'Approved source format',
+                    source_shape            VARCHAR(32) NOT NULL COMMENT 'Approved source element shape',
+                    source_ordinal          INT NOT NULL COMMENT 'Approved source element ordinal',
+                    source_agent_id         VARCHAR(100) DEFAULT NULL COMMENT 'Approved parsed source Agent ID',
+                    canonical_agent_id      VARCHAR(100) DEFAULT NULL COMMENT 'Approved canonical Agent ID',
+                    resolution_status       VARCHAR(64) NOT NULL COMMENT 'Approved row resolution',
+                    task_resolution_status  VARCHAR(32) NOT NULL COMMENT 'Approved task resolution',
+                    approved_operator       VARCHAR(100) NOT NULL COMMENT 'Operator/ticket that approved this manifest',
+                    approved_at             BIGINT NOT NULL COMMENT 'Approval time',
+                    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_backfill_manifest_row (report_sha256, manifest_row_key),
+                    KEY idx_task_backfill_manifest_meta (report_sha256, meta_id, source_ordinal, manifest_row_key),
+                    KEY idx_task_backfill_manifest_resolution
+                        (report_sha256, task_resolution_status, resolution_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable approved B09 line manifest'
+                """);
+
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_backfill_run (
+                    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    run_id                  CHAR(36) NOT NULL COMMENT 'Apply run UUID',
+                    report_sha256           CHAR(64) NOT NULL COMMENT 'Approved manifest TSV SHA-256',
+                    operator                VARCHAR(100) NOT NULL COMMENT 'Approved migration operator/ticket',
+                    manifest_row_count      BIGINT NOT NULL COMMENT 'Rows matched against approved manifest',
+                    issue_row_count         BIGINT NOT NULL DEFAULT 0 COMMENT 'Issue observations in this run',
+                    member_insert_count     BIGINT NOT NULL DEFAULT 0 COMMENT 'Members inserted in this run',
+                    work_item_insert_count  BIGINT NOT NULL DEFAULT 0 COMMENT 'Work items inserted in this run',
+                    started_at              BIGINT NOT NULL COMMENT 'Run start time',
+                    completed_at            BIGINT NOT NULL COMMENT 'Run commit time',
+                    run_status              VARCHAR(20) NOT NULL COMMENT 'SUCCEEDED only, failures roll back',
+                    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_backfill_run_id (run_id),
+                    KEY idx_task_backfill_run_report (report_sha256, completed_at, id),
+                    KEY idx_task_backfill_run_operator (operator, completed_at, id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable successful B09 apply run audit'
                 """);
 
         jdbcTemplate.execute("""
@@ -881,6 +941,31 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "CREATE INDEX idx_task_backfill_issue_code_seen "
                         + "ON agent_task_backfill_issue (issue_code, last_seen_at, id)");
 
+        ensureRequiredIndex("agent_task_backfill_manifest", "uk_task_backfill_manifest_row", true,
+                List.of("report_sha256", "manifest_row_key"),
+                "CREATE UNIQUE INDEX uk_task_backfill_manifest_row "
+                        + "ON agent_task_backfill_manifest (report_sha256, manifest_row_key)");
+        ensureRequiredIndex("agent_task_backfill_manifest", "idx_task_backfill_manifest_meta", false,
+                List.of("report_sha256", "meta_id", "source_ordinal", "manifest_row_key"),
+                "CREATE INDEX idx_task_backfill_manifest_meta ON agent_task_backfill_manifest "
+                        + "(report_sha256, meta_id, source_ordinal, manifest_row_key)");
+        ensureRequiredIndex("agent_task_backfill_manifest", "idx_task_backfill_manifest_resolution", false,
+                List.of("report_sha256", "task_resolution_status", "resolution_status"),
+                "CREATE INDEX idx_task_backfill_manifest_resolution ON agent_task_backfill_manifest "
+                        + "(report_sha256, task_resolution_status, resolution_status)");
+
+        ensureRequiredIndex("agent_task_backfill_run", "uk_task_backfill_run_id", true,
+                List.of("run_id"),
+                "CREATE UNIQUE INDEX uk_task_backfill_run_id ON agent_task_backfill_run (run_id)");
+        ensureRequiredIndex("agent_task_backfill_run", "idx_task_backfill_run_report", false,
+                List.of("report_sha256", "completed_at", "id"),
+                "CREATE INDEX idx_task_backfill_run_report "
+                        + "ON agent_task_backfill_run (report_sha256, completed_at, id)");
+        ensureRequiredIndex("agent_task_backfill_run", "idx_task_backfill_run_operator", false,
+                List.of("operator", "completed_at", "id"),
+                "CREATE INDEX idx_task_backfill_run_operator "
+                        + "ON agent_task_backfill_run (operator, completed_at, id)");
+
         ensureRequiredIndex("agent_task_request", "uk_task_request_scope", true,
                 List.of("tenant_id", "client_id", "request_id"),
                 "CREATE UNIQUE INDEX uk_task_request_scope "
@@ -918,6 +1003,187 @@ public class AgentSchemaInitializer implements InitializingBean {
                 List.of("tenant_id", "client_id", "content_hash"),
                 "CREATE INDEX idx_artifact_hash "
                         + "ON agent_task_artifact (tenant_id, client_id, content_hash)");
+
+        if (!isH2Database()) {
+            boolean backfillAuditAlreadyExists = backfillIssueAlreadyExists
+                    || backfillManifestAlreadyExists || backfillRunAlreadyExists;
+            if (backfillAuditAlreadyExists) {
+                validateBackfillAuditSchema();
+                validateBackfillAuditTriggers();
+            } else {
+                createBackfillAuditTriggers();
+            }
+        }
+    }
+
+    private void validateBackfillAuditSchema() {
+        validateBackfillTableCollation("agent_task_backfill_issue");
+        validateBackfillTableCollation("agent_task_backfill_manifest");
+        validateBackfillTableCollation("agent_task_backfill_run");
+
+        List<BackfillColumnExpectation> expected = List.of(
+                new BackfillColumnExpectation("agent_task_backfill_issue", "id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "issue_key", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "meta_id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "task_id", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "source_hash", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "source_format", "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "source_shape", "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "source_ordinal", "int", "int", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "raw_assignee", "varchar", "varchar(100)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "source_agent_id", "varchar", "varchar(100)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "issue_code", "varchar", "varchar(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "issue_reason", "varchar", "varchar(1000)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "first_report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "last_report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "first_seen_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "last_seen_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "occurrence_count", "bigint", "bigint", false, "1", null),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "last_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "tenant_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "client_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "create_time", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "update_time", "bigint", "bigint", true, null, null),
+
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "manifest_row_key", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "manifest_row_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "meta_id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "task_id", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "tenant_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "client_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "source_hash", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "source_format", "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "source_shape", "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "source_ordinal", "int", "int", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "source_agent_id", "varchar", "varchar(100)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "canonical_agent_id", "varchar", "varchar(100)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "resolution_status", "varchar", "varchar(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "task_resolution_status", "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "approved_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "approved_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "create_time", "bigint", "bigint", true, null, null),
+
+                new BackfillColumnExpectation("agent_task_backfill_run", "id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_run", "run_id", "char", "char(36)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_run", "report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_run", "operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_run", "manifest_row_count", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_run", "issue_row_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_backfill_run", "member_insert_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_backfill_run", "work_item_insert_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_backfill_run", "started_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_run", "completed_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_run", "run_status", "varchar", "varchar(20)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_run", "create_time", "bigint", "bigint", true, null, null));
+        for (BackfillColumnExpectation column : expected) {
+            validateBackfillColumn(column);
+        }
+    }
+
+    private void validateBackfillColumn(BackfillColumnExpectation expected) {
+        List<BackfillColumnDefinition> actual = jdbcTemplate.query("""
+                SELECT DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLLATION_NAME
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+                """, (rs, rowNum) -> new BackfillColumnDefinition(
+                rs.getString("DATA_TYPE"), rs.getString("COLUMN_TYPE"),
+                "YES".equalsIgnoreCase(rs.getString("IS_NULLABLE")),
+                rs.getString("COLUMN_DEFAULT"), rs.getString("COLLATION_NAME")),
+                expected.table(), expected.column());
+        if (actual.size() != 1) {
+            throw new IllegalStateException("B09 audit column " + expected.table() + "."
+                    + expected.column() + " is missing or duplicated");
+        }
+        BackfillColumnDefinition column = actual.get(0);
+        boolean matches = expected.dataType().equalsIgnoreCase(column.dataType())
+                && normalizeSql(expected.columnType()).equals(normalizeSql(column.columnType()))
+                && expected.nullable() == column.nullable()
+                && java.util.Objects.equals(expected.defaultValue(), column.defaultValue())
+                && (expected.collation() == null
+                    ? column.collation() == null
+                    : expected.collation().equalsIgnoreCase(column.collation()));
+        if (!matches) {
+            throw new IllegalStateException("B09 audit column " + expected.table() + "."
+                    + expected.column() + " has incompatible type/null/default/collation: " + column);
+        }
+    }
+
+    private void validateBackfillTableCollation(String table) {
+        String actual = jdbcTemplate.queryForObject("""
+                SELECT TABLE_COLLATION FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = ?
+                """, String.class, table);
+        if (!"utf8mb4_0900_bin".equalsIgnoreCase(actual)) {
+            throw new IllegalStateException("B09 audit table " + table
+                    + " must use utf8mb4_0900_bin but was " + actual);
+        }
+    }
+
+    private void validateBackfillAuditTriggers() {
+        java.util.Map<String, TriggerDefinition> expected = expectedBackfillAuditTriggers();
+        List<TriggerDefinition> actual = jdbcTemplate.query("""
+                SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ACTION_STATEMENT
+                FROM information_schema.triggers
+                WHERE trigger_schema = DATABASE()
+                  AND trigger_name IN (
+                    'trg_task_backfill_manifest_no_update', 'trg_task_backfill_manifest_no_delete',
+                    'trg_task_backfill_run_no_update', 'trg_task_backfill_run_no_delete')
+                """, (rs, rowNum) -> new TriggerDefinition(
+                rs.getString("TRIGGER_NAME"), rs.getString("ACTION_TIMING"),
+                rs.getString("EVENT_MANIPULATION"), rs.getString("ACTION_STATEMENT")));
+        if (actual.size() != expected.size()) {
+            throw new IllegalStateException("B09 requires four exact immutable audit triggers");
+        }
+        for (TriggerDefinition trigger : actual) {
+            TriggerDefinition required = expected.get(trigger.name());
+            if (required == null
+                    || !required.timing().equalsIgnoreCase(trigger.timing())
+                    || !required.event().equalsIgnoreCase(trigger.event())
+                    || !normalizeSql(required.statement()).equals(normalizeSql(trigger.statement()))) {
+                throw new IllegalStateException("B09 audit trigger " + trigger.name()
+                        + " has an incompatible definition");
+            }
+        }
+    }
+
+    private void createBackfillAuditTriggers() {
+        for (TriggerDefinition trigger : expectedBackfillAuditTriggers().values()) {
+            String table = trigger.name().contains("manifest")
+                    ? "agent_task_backfill_manifest" : "agent_task_backfill_run";
+            jdbcTemplate.execute("CREATE TRIGGER " + trigger.name() + " " + trigger.timing()
+                    + " " + trigger.event() + " ON " + table
+                    + " FOR EACH ROW " + trigger.statement());
+        }
+    }
+
+    private java.util.Map<String, TriggerDefinition> expectedBackfillAuditTriggers() {
+        return java.util.Map.of(
+                "trg_task_backfill_manifest_no_update", new TriggerDefinition(
+                        "trg_task_backfill_manifest_no_update", "BEFORE", "UPDATE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 approved manifest is immutable';
+                        END
+                        """),
+                "trg_task_backfill_manifest_no_delete", new TriggerDefinition(
+                        "trg_task_backfill_manifest_no_delete", "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 approved manifest cannot be deleted';
+                        END
+                        """),
+                "trg_task_backfill_run_no_update", new TriggerDefinition(
+                        "trg_task_backfill_run_no_update", "BEFORE", "UPDATE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 run audit is immutable';
+                        END
+                        """),
+                "trg_task_backfill_run_no_delete", new TriggerDefinition(
+                        "trg_task_backfill_run_no_delete", "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 run audit cannot be deleted';
+                        END
+                        """));
     }
 
     private boolean isH2Database() {
