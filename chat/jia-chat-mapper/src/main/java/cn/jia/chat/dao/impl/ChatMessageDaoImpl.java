@@ -41,15 +41,9 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
             String tenantId, String clientId, String conversationId, int limit) {
         requireScope(tenantId, clientId);
         requireId(conversationId, "conversationId");
-        int bounded = Math.max(1, Math.min(limit, 500));
-        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(ChatMessageEntity::getTenantId, tenantId)
-                .eq(ChatMessageEntity::getClientId, clientId)
-                .eq(ChatMessageEntity::getConversationId, conversationId)
-                .orderByDesc(ChatMessageEntity::getCreateTime)
-                .orderByDesc(ChatMessageEntity::getId)
-                .last("LIMIT " + bounded);
-        List<ChatMessageEntity> result = baseMapper.selectList(wrapper);
+        requireLimit(limit);
+        List<ChatMessageEntity> result = baseMapper.findExactByConversationScope(
+                tenantId, clientId, conversationId, limit);
         Collections.reverse(result);
         return result;
     }
@@ -149,8 +143,15 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     private void requireId(String value, String field) {
-        if (StringUtil.isBlank(value)) {
-            throw new IllegalArgumentException(field + " is required");
+        if (StringUtil.isBlank(value) || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+    }
+
+    private void requireLimit(int limit) {
+        if (limit < 1 || limit > 500) {
+            throw new IllegalArgumentException("limit must be between 1 and 500");
         }
     }
 

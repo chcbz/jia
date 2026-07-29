@@ -77,13 +77,16 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskMemberDao dao = new AgentTaskMemberDaoImpl(mapper);
 
         dao.findByTaskAndAgent("tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        dao.findByTaskAndAgentForUpdate(
+                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         dao.listByTask("tenant-a", "client-a", "task-1");
         dao.listByAgent("tenant-a", "client-a", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "working", 50);
 
-        ArgumentCaptor<Wrapper<AgentTaskMemberEntity>> one = ArgumentCaptor.forClass(Wrapper.class);
-        verify(mapper).selectOne(one.capture());
-        assertScoped(one.getValue(), "tenant-a", "client-a");
-        assertValues(one.getValue(), "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        verify(mapper).findExactByTaskAndAgent(
+                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        verify(mapper).findExactByTaskAndAgentForUpdate(
+                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        verify(mapper, never()).selectOne(any());
 
         ArgumentCaptor<Wrapper<AgentTaskMemberEntity>> lists = ArgumentCaptor.forClass(Wrapper.class);
         verify(mapper, org.mockito.Mockito.times(2)).selectList(lists.capture());

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -26,9 +27,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class AgentTaskThreadDaoTest {
     @BeforeAll
@@ -71,16 +74,39 @@ class AgentTaskThreadDaoTest {
         assertEquals("client-a", message.getClientId());
         verify(mapper).insert(message);
 
-        dao.findByConversationIdScoped("tenant-a", "client-a", "42", 999);
-        @SuppressWarnings("rawtypes")
-        ArgumentCaptor<Wrapper<ChatMessageEntity>> query = ArgumentCaptor.forClass(Wrapper.class);
-        verify(mapper).selectList(query.capture());
-        String sql = normalize(query.getValue().getSqlSegment());
-        assertTrue(sql.contains("tenant_id = #{"), sql);
-        assertTrue(sql.contains("client_id = #{"), sql);
-        assertTrue(sql.contains("conversation_id = #{"), sql);
-        assertTrue(sql.contains("order by create_time desc,id desc"), sql);
-        assertTrue(sql.endsWith("limit 500"), sql);
+        ChatMessageEntity newer = new ChatMessageEntity().setContent("newer");
+        ChatMessageEntity older = new ChatMessageEntity().setContent("older");
+        when(mapper.findExactByConversationScope("tenant-a", "client-a", "42", 500))
+                .thenReturn(new ArrayList<>(List.of(newer, older)));
+
+        List<ChatMessageEntity> result = dao.findByConversationIdScoped(
+                "tenant-a", "client-a", "42", 500);
+
+        verify(mapper).findExactByConversationScope("tenant-a", "client-a", "42", 500);
+        verify(mapper, never()).selectList(any());
+        assertEquals(List.of("older", "newer"),
+                result.stream().map(ChatMessageEntity::getContent).toList());
+    }
+
+
+    @Test
+    void scopedMessageReadRejectsInvalidScopeAndLimitBeforeMapperAccess() throws Exception {
+        ChatMessageMapper mapper = mock(ChatMessageMapper.class);
+        ChatMessageDaoImpl dao = new ChatMessageDaoImpl();
+        setBaseMapper(dao, mapper);
+
+        for (Runnable invalid : List.<Runnable>of(
+                () -> dao.findByConversationIdScoped("", "client-a", "42", 10),
+                () -> dao.findByConversationIdScoped("tenant-a ", "client-a", "42", 10),
+                () -> dao.findByConversationIdScoped("tenant-a", "client" + (char) 0 + "a", "42", 10),
+                () -> dao.findByConversationIdScoped("tenant-a", "client-a", " 42", 10),
+                () -> dao.findByConversationIdScoped("tenant-a", "client-a", "42", 0),
+                () -> dao.findByConversationIdScoped("tenant-a", "client-a", "42", 501))) {
+            assertThrows(IllegalArgumentException.class, invalid::run);
+        }
+
+        verify(mapper, never()).findExactByConversationScope(any(), any(), any(), anyInt());
+        verify(mapper, never()).selectList(any());
     }
 
     @Test

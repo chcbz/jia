@@ -5,14 +5,11 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.common.dao.BaseDaoImpl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.annotations.Update;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -36,23 +33,16 @@ class AgentTaskMetaStateDaoTest {
     }
 
     @Test
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    void scopedTaskLookupAlwaysBindsTenantClientAndTask() throws Exception {
+    void scopedTaskLookupDelegatesToByteExactMapperMethods() throws Exception {
         AgentTaskMetaMapper mapper = mock(AgentTaskMetaMapper.class);
         AgentTaskMetaDao dao = dao(mapper);
 
         dao.findByTaskId("tenant-a", "client-a", "task-1");
+        dao.findByTaskIdForUpdate("tenant-a", "client-a", "task-1");
 
-        ArgumentCaptor<Wrapper<AgentTaskMetaEntity>> wrapper = ArgumentCaptor.forClass(Wrapper.class);
-        verify(mapper).selectOne(wrapper.capture());
-        String sql = normalize(wrapper.getValue().getSqlSegment());
-        assertTrue(sql.contains("tenant_id"), sql);
-        assertTrue(sql.contains("client_id"), sql);
-        assertTrue(sql.contains("task_id"), sql);
-        AbstractWrapper<?, ?, ?> actual = (AbstractWrapper<?, ?, ?>) wrapper.getValue();
-        assertTrue(actual.getParamNameValuePairs().containsValue("tenant-a"));
-        assertTrue(actual.getParamNameValuePairs().containsValue("client-a"));
-        assertTrue(actual.getParamNameValuePairs().containsValue("task-1"));
+        verify(mapper).findExactByTaskScope("tenant-a", "client-a", "task-1");
+        verify(mapper).findExactByTaskScopeForUpdate("tenant-a", "client-a", "task-1");
+        verify(mapper, never()).selectOne(any());
     }
 
     @Test
