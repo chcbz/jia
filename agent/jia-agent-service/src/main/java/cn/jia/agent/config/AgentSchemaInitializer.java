@@ -1100,9 +1100,9 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "trg_task_backfill_issue_insert_guard", "trg_task_backfill_issue_update_guard",
                 "trg_task_backfill_issue_no_delete", "trg_task_backfill_manifest_batch_insert_guard",
                 "trg_task_backfill_manifest_batch_update_guard", "trg_task_backfill_manifest_batch_no_delete",
-                "trg_task_backfill_manifest_insert_guard", "trg_task_backfill_manifest_update_guard",
+                "trg_task_backfill_manifest_insert_guard", "trg_task_backfill_manifest_no_update",
                 "trg_task_backfill_manifest_no_delete", "trg_task_backfill_run_insert_guard",
-                "trg_task_backfill_run_update_guard", "trg_task_backfill_run_no_delete"));
+                "trg_task_backfill_run_no_update", "trg_task_backfill_run_no_delete"));
     }
 
     private int namedTriggerCount(List<String> names) {

@@ -68,6 +68,44 @@ class AgentSchemaInitializerMySqlTest {
     }
 
     @Test
+    void existingNoUpdateTriggersDoNotBootstrapOverPartialAuditProtection() {
+        new AgentSchemaInitializer(jdbc).afterPropertiesSet();
+        for (String table : List.of(
+                "agent_task_backfill_issue",
+                "agent_task_backfill_manifest_batch",
+                "agent_task_backfill_manifest",
+                "agent_task_backfill_run")) {
+            assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class), table);
+        }
+        for (String trigger : List.of(
+                "trg_task_backfill_issue_insert_guard",
+                "trg_task_backfill_issue_update_guard",
+                "trg_task_backfill_issue_no_delete",
+                "trg_task_backfill_manifest_batch_insert_guard",
+                "trg_task_backfill_manifest_batch_update_guard",
+                "trg_task_backfill_manifest_batch_no_delete",
+                "trg_task_backfill_manifest_insert_guard",
+                "trg_task_backfill_manifest_no_delete",
+                "trg_task_backfill_run_insert_guard",
+                "trg_task_backfill_run_no_delete")) {
+            jdbc.execute("DROP TRIGGER " + trigger);
+        }
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("B09 requires twelve exact procedure-gated audit triggers"),
+                error.getMessage());
+        assertEquals(List.of(
+                "trg_task_backfill_manifest_no_update",
+                "trg_task_backfill_run_no_update"), jdbc.queryForList("""
+                SELECT trigger_name FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE() AND trigger_name LIKE 'trg_task_backfill_%'
+                ORDER BY trigger_name
+                """, String.class));
+    }
+
+    @Test
     void incompatibleNamedScopedIndexFailsBeforeLegacyGlobalUniqueIsRemoved() {
         jdbc.execute("ALTER TABLE agent_task_meta DROP INDEX uk_agent_task_meta_scope, "
                 + "ADD UNIQUE INDEX uk_agent_task_meta_scope (task_id, tenant_id, client_id), "
