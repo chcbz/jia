@@ -380,12 +380,15 @@ public class AgentServiceImpl implements AgentService {
                     })
                     .toList();
         }
-        return Optional.ofNullable(agentTaskMetaDao.findByAgentId(agentId))
-                .orElseGet(Collections::emptyList)
-                .stream()
-                .filter(meta -> Objects.equals(tenantId, meta.getTenantId())
-                        && Objects.equals(clientId, meta.getClientId())
-                        && Objects.equals(agentId, meta.getAssignedAgentId()))
+        List<AgentTaskMetaEntity> legacyTasks = Optional.ofNullable(
+                agentTaskMetaDao.findByAgentId(
+                        tenantId, clientId, agentId, TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
+                .orElseGet(Collections::emptyList);
+        require(legacyTasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
+                "Legacy Agent task snapshot exceeds the safe limit");
+        return legacyTasks.stream()
+                .peek(meta -> requireScopedLegacyAgentTaskProjection(
+                        meta, tenantId, clientId, agentId))
                 .map(this::toTaskDTO)
                 .toList();
     }
@@ -597,10 +600,6 @@ public class AgentServiceImpl implements AgentService {
                 validateAbility(agent, meta);
             }
         }
-        if (meta.getId() == null) {
-            saveMeta(meta);
-        }
-
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
                         tenantId, clientId, taskId, agentIds, automatic);
@@ -780,6 +779,17 @@ public class AgentServiceImpl implements AgentService {
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
         requireScopedTaskProjection(task, tenantId, clientId, taskId);
         return task;
+    }
+
+    private void requireScopedLegacyAgentTaskProjection(
+            AgentTaskMetaEntity task, String tenantId, String clientId, String agentId) {
+        if (task == null || !Objects.equals(tenantId, task.getTenantId())
+                || !Objects.equals(clientId, task.getClientId())
+                || !Objects.equals(agentId, task.getAssignedAgentId())
+                || !isExactStoredText(task.getTaskId(), 100)) {
+            throw new IllegalArgumentException(
+                    "Persisted legacy Agent task is outside the byte-exact requested scope");
+        }
     }
 
     private void requireScopedTaskProjection(
@@ -1284,8 +1294,17 @@ codexTimeoutMs=900000
             stats.setIntelligence(persona.getIntelligence());
             stats.setLeadership(persona.getLeadership());
         }
-        List<AgentTaskMetaEntity> tasks = Optional.ofNullable(agentTaskMetaDao.findByAgentId(entity.getAgentId()))
-                .orElseGet(Collections::emptyList);
+        String tenantId = entity.getOwnerJiacn();
+        String clientId = entity.getClientId();
+        List<AgentTaskMetaEntity> tasks = StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId)
+                ? List.of()
+                : Optional.ofNullable(agentTaskMetaDao.findByAgentId(
+                        tenantId, clientId, entity.getAgentId(), TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
+                        .orElseGet(Collections::emptyList);
+        require(tasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
+                "Agent task statistics snapshot exceeds the safe limit");
+        tasks.forEach(task -> requireScopedLegacyAgentTaskProjection(
+                task, tenantId, clientId, entity.getAgentId()));
         stats.setCompletedTaskCount((int) tasks.stream()
                 .filter(task -> AgentConstants.TASK_STATUS_COMPLETED.equals(task.getRewardStatus()))
                 .count());

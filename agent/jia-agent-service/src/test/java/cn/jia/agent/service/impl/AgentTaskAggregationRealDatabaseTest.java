@@ -360,7 +360,7 @@ class AgentTaskAggregationRealDatabaseTest {
 
     private AgentTaskAggregationService aggregateService(AgentTaskMetaDao metaDao) {
         AgentIdentityService identityService = org.mockito.Mockito.mock(AgentIdentityService.class);
-        org.mockito.Mockito.when(identityService.resolveAgentIdInScope(
+        org.mockito.Mockito.when(identityService.requirePersistedCanonicalAgentIdInScope(
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString()))
                 .thenAnswer(invocation -> {

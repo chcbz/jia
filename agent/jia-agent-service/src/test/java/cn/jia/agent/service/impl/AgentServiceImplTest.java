@@ -1104,9 +1104,69 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(1, result.size());
         assertEquals(List.of("agent-wuyong", "agent-linchong"),
                 result.getFirst().getAssignedAgentIds());
-        verify(agentTaskMetaDao, never()).findByAgentId("agent-linchong");
+        verify(agentTaskMetaDao, never()).findByAgentId("juyiting", "jia_client", "agent-linchong", 500);
     }
 
+
+    @Test
+    void legacyTaskFallbackPushesExactScopeAndAgentIntoBoundedDaoQuery() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-linchong", "Lin Chong", AgentConstants.STATUS_ONLINE, "[]");
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(agent);
+        AgentTaskMetaEntity task = new AgentTaskMetaEntity();
+        task.setId(1L);
+        task.setTaskId("task-legacy");
+        task.setTenantId("juyiting");
+        task.setClientId("jia_client");
+        task.setAssignedAgentId("agent-linchong");
+        task.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
+        when(agentTaskMetaDao.findByAgentId(
+                "juyiting", "jia_client", "agent-linchong", 500))
+                .thenReturn(List.of(task));
+
+        List<AgentTaskDTO> result = agentService.getAgentTasks("agent-linchong");
+
+        assertEquals(1, result.size());
+        assertEquals("task-legacy", result.getFirst().getId());
+        verify(agentTaskMetaDao).findByAgentId(
+                "juyiting", "jia_client", "agent-linchong", 500);
+    }
+
+    @Test
+    void legacyTaskFallbackTruncationFailsClosed() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-linchong", "Lin Chong", AgentConstants.STATUS_ONLINE, "[]");
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(agent);
+        AgentTaskMetaEntity task = new AgentTaskMetaEntity();
+        task.setTaskId("task-legacy");
+        task.setTenantId("juyiting");
+        task.setClientId("jia_client");
+        task.setAssignedAgentId("agent-linchong");
+        when(agentTaskMetaDao.findByAgentId(
+                "juyiting", "jia_client", "agent-linchong", 500))
+                .thenReturn(java.util.Collections.nCopies(500, task));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> agentService.getAgentTasks("agent-linchong"));
+    }
+
+    @Test
+    void legacyTaskFallbackRejectsScopeAgentAndTaskIdDrift() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-linchong", "Lin Chong", AgentConstants.STATUS_ONLINE, "[]");
+        when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(agent);
+        AgentTaskMetaEntity drifted = new AgentTaskMetaEntity();
+        drifted.setTaskId("task-legacy ");
+        drifted.setTenantId("JUYITING");
+        drifted.setClientId("jia_client");
+        drifted.setAssignedAgentId("agent-wuyong");
+        when(agentTaskMetaDao.findByAgentId(
+                "juyiting", "jia_client", "agent-linchong", 500))
+                .thenReturn(List.of(drifted));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> agentService.getAgentTasks("agent-linchong"));
+    }
 
     @Test
     void memberTaskProjectionFailsClosedWhenScopedTaskIsMissing() {
@@ -1121,7 +1181,7 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> agentService.getAgentTasks("agent-linchong"));
-        verify(agentTaskMetaDao, never()).findByAgentId("agent-linchong");
+        verify(agentTaskMetaDao, never()).findByAgentId("juyiting", "jia_client", "agent-linchong", 500);
     }
 
     @Test
@@ -1441,14 +1501,21 @@ class AgentServiceImplTest extends BaseMockTest {
 
         AgentTaskMetaEntity completed = new AgentTaskMetaEntity();
         completed.setTaskId("task-001");
+        completed.setTenantId("juyiting");
+        completed.setClientId("jia_client");
+        completed.setAssignedAgentId("agent-001");
         completed.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
         completed.setStartedAt(1_000L);
         completed.setCompletedAt(61_000L);
 
         AgentTaskMetaEntity failed = new AgentTaskMetaEntity();
         failed.setTaskId("task-002");
+        failed.setTenantId("juyiting");
+        failed.setClientId("jia_client");
+        failed.setAssignedAgentId("agent-001");
         failed.setRewardStatus(AgentConstants.TASK_STATUS_FAILED);
-        when(agentTaskMetaDao.findByAgentId("agent-001")).thenReturn(List.of(completed, failed));
+        when(agentTaskMetaDao.findByAgentId("juyiting", "jia_client", "agent-001", 500))
+                .thenReturn(List.of(completed, failed));
 
         AgentRuntimeDTO result = agentService.getStats("agent-001");
 

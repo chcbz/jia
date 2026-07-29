@@ -7,8 +7,14 @@ public interface AgentIdentityRegistryDao extends IBaseDao<AgentIdentityRegistry
     AgentIdentityRegistryEntity findExactByCanonicalInScope(String tenantId, String clientId,
             String ownerJiacn, String canonicalAgentId);
 
+    AgentIdentityRegistryEntity findExactByCanonicalInScopeForUpdate(
+            String tenantId, String clientId, String ownerJiacn, String canonicalAgentId);
+
     AgentIdentityRegistryEntity findExactByBindingInScope(String tenantId, String clientId,
             String ownerJiacn, long bindingId);
+
+    AgentIdentityRegistryEntity findExactByBindingInScopeForUpdate(
+            String tenantId, String clientId, String ownerJiacn, long bindingId);
 
     int activateProvisioned(long id, long activatedAt);
 

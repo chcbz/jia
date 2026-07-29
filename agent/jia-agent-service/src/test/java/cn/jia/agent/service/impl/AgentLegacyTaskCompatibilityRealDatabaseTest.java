@@ -141,6 +141,40 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                     throw new AgentTaskCollaborationException(
                             Reason.FORBIDDEN, "canonical identity not registered");
                 });
+        org.mockito.Mockito.when(identityService.lockActiveCanonicalAgentIdsInScope(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyList()))
+                .thenAnswer(invocation -> {
+                    String tenantId = invocation.getArgument(0);
+                    String clientId = invocation.getArgument(1);
+                    String ownerJiacn = invocation.getArgument(2);
+                    List<String> canonicalAgentIds = invocation.getArgument(3);
+                    if (TENANT.equals(tenantId) && CLIENT.equals(clientId)
+                            && TENANT.equals(ownerJiacn)
+                            && canonicalAgentIds.stream().allMatch(Set.of(
+                                    AGENT_A, AGENT_B, AGENT_C, LEGACY_AGENT)::contains)) {
+                        return List.copyOf(canonicalAgentIds);
+                    }
+                    throw new AgentTaskCollaborationException(
+                            Reason.FORBIDDEN, "canonical identity is not active");
+                });
+        org.mockito.Mockito.when(identityService.requirePersistedCanonicalAgentIdInScope(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> {
+                    String tenantId = invocation.getArgument(0);
+                    String clientId = invocation.getArgument(1);
+                    String ownerJiacn = invocation.getArgument(2);
+                    String canonicalAgentId = invocation.getArgument(3);
+                    if (TENANT.equals(tenantId) && CLIENT.equals(clientId)
+                            && TENANT.equals(ownerJiacn)
+                            && Set.of(AGENT_A, AGENT_B, AGENT_C, LEGACY_AGENT)
+                            .contains(canonicalAgentId)) {
+                        return canonicalAgentId;
+                    }
+                    throw new AgentTaskCollaborationException(
+                            Reason.FORBIDDEN, "persisted identity not registered");
+                });
         AgentTaskAggregationService aggregationService = transactionalInterfaceProxy(
                 new AgentTaskAggregationServiceImpl(
                         taskMetaDao, identityService,
@@ -415,8 +449,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     }
 
     @Test
-    void concurrentDuplicateAssignmentCreatesOneTeamAndOneNoop() throws Exception {
-        insertTask(TASK, TENANT, "assigned", 0L);
+    void concurrentFirstAssignmentCreatesOneRootOneTeamAndOneNoop() throws Exception {
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
@@ -433,6 +466,13 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                     left.get(10, TimeUnit.SECONDS).changed(),
                     right.get(10, TimeUnit.SECONDS).changed());
             assertEquals(1L, changes.stream().filter(Boolean::booleanValue).count());
+            assertEquals(1, count("agent_task_meta"));
+            assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
+            assertEquals("team", value("SELECT collaboration_mode FROM agent_task_meta"));
+            assertEquals("low", value("SELECT risk_level FROM agent_task_meta"));
+            assertEquals(2L, number("SELECT max_agents FROM agent_task_meta"));
+            assertEquals(0L, number("SELECT task_version FROM agent_task_meta"));
+            assertEquals(0L, number("SELECT current_event_version FROM agent_task_meta"));
             assertEquals(2, count("agent_task_member"));
             assertEquals(2, count("agent_task_work_item"));
         } finally {
@@ -440,8 +480,82 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         }
     }
 
+
     @Test
-    void defaultWorkItemLookupFiltersTypeBeforeLimit() {
+    void concurrentDifferentFirstAssignmentsYieldOneBusinessFailureWithoutPartialRows()
+            throws Exception {
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Object> left = executor.submit(() -> assignOutcomeAfterBarrier(
+                    start, List.of(AGENT_A)));
+            Future<Object> right = executor.submit(() -> assignOutcomeAfterBarrier(
+                    start, List.of(AGENT_B)));
+            start.countDown();
+            List<Object> outcomes = List.of(
+                    left.get(10, TimeUnit.SECONDS), right.get(10, TimeUnit.SECONDS));
+            List<AgentLegacyTaskCompatibilityService.AssignOutcome> successes = outcomes.stream()
+                    .filter(AgentLegacyTaskCompatibilityService.AssignOutcome.class::isInstance)
+                    .map(AgentLegacyTaskCompatibilityService.AssignOutcome.class::cast)
+                    .toList();
+            List<AgentTaskCollaborationException> failures = outcomes.stream()
+                    .filter(AgentTaskCollaborationException.class::isInstance)
+                    .map(AgentTaskCollaborationException.class::cast)
+                    .toList();
+            assertEquals(1, successes.size());
+            assertTrue(successes.getFirst().changed());
+            assertEquals(1, failures.size());
+            assertEquals(Reason.INVALID_REQUEST, failures.getFirst().getReason());
+            assertEquals(1, count("agent_task_meta"));
+            assertEquals(1, count("agent_task_member"));
+            assertEquals(1, count("agent_task_work_item"));
+            String winner = (String) value("SELECT assigned_agent_id FROM agent_task_meta");
+            assertEquals(winner, value("SELECT agent_id FROM agent_task_member"));
+            assertEquals(winner, value("SELECT assignee_agent_id FROM agent_task_work_item"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void missingMultipleAndMixedLegacyDefaultItemsHaveDistinctFailClosedReasons() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+
+        jdbc.update("DELETE FROM agent_task_work_item");
+        assertReasonMessage(Reason.INVALID_PERSISTED_STATE, "no legacy default work item",
+                () -> service.report(TENANT, CLIENT, TASK, AGENT_A, "completed", null));
+
+        jdbc.update("INSERT INTO agent_task_work_item "
+                        + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
+                        + "priority,required_item,attempt_count,max_attempts,version,"
+                        + "tenant_id,client_id,create_time,update_time) "
+                        + "VALUES ('legacy-one',?,'one','legacy_default',?,'ready',100,1,0,3,0,?,?,1,1)",
+                TASK, AGENT_A, TENANT, CLIENT);
+        jdbc.update("INSERT INTO agent_task_work_item "
+                        + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
+                        + "priority,required_item,attempt_count,max_attempts,version,"
+                        + "tenant_id,client_id,create_time,update_time) "
+                        + "VALUES ('legacy-two',?,'two','legacy_default',?,'ready',100,1,0,3,0,?,?,1,1)",
+                TASK, AGENT_A, TENANT, CLIENT);
+        assertReasonMessage(Reason.INVALID_PERSISTED_STATE,
+                "multiple legacy default work items",
+                () -> service.report(TENANT, CLIENT, TASK, AGENT_A, "completed", null));
+
+        jdbc.update("DELETE FROM agent_task_work_item WHERE work_item_id='legacy-two'");
+        jdbc.update("INSERT INTO agent_task_work_item "
+                        + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
+                        + "priority,required_item,attempt_count,max_attempts,version,"
+                        + "tenant_id,client_id,create_time,update_time) "
+                        + "VALUES ('b04-one',?,'b04','implementation',?,'ready',100,1,0,3,0,?,?,1,1)",
+                TASK, AGENT_A, TENANT, CLIENT);
+        assertReasonMessage(Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                "mixes legacy default and non-legacy work items",
+                () -> service.report(TENANT, CLIENT, TASK, AGENT_A, "completed", null));
+    }
+
+    @Test
+    void mixedLegacyAndNonLegacyWorkItemsAreClassifiedAsReservedProtocol() {
         insertTask(TASK, TENANT, "assigned", 0L);
         service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         for (int i = 0; i < 5; i++) {
@@ -453,9 +567,12 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                     "other-" + i, TASK, "other-" + i, AGENT_A, TENANT, CLIENT);
         }
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome outcome = service.report(
-                TENANT, CLIENT, TASK, AGENT_A, "completed", null);
-        assertEquals("completed", outcome.taskStatus());
+        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
+        assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
+        assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
+        assertEquals("ready", value("SELECT status FROM agent_task_work_item "
+                + "WHERE work_type='legacy_default'"));
         assertEquals(5, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_task_work_item WHERE work_type='implementation' "
                         + "AND status='ready'", Integer.class));
@@ -577,6 +694,25 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
         assertNull(value("SELECT assigned_agent_id FROM agent_task_meta"));
         assertNull(value("SELECT coordinator_agent_id FROM agent_task_meta"));
+    }
+
+
+    private Object assignOutcomeAfterBarrier(CountDownLatch start, List<String> agentIds) {
+        try {
+            if (!start.await(10, TimeUnit.SECONDS)) {
+                return new AssertionError("assignment barrier timeout");
+            }
+            return service.assign(TENANT, CLIENT, TASK, agentIds, false);
+        } catch (Throwable error) {
+            return error;
+        }
+    }
+
+    private void assertReasonMessage(Reason reason, String message, Runnable action) {
+        AgentTaskCollaborationException error = assertThrows(
+                AgentTaskCollaborationException.class, action::run);
+        assertEquals(reason, error.getReason());
+        assertTrue(error.getMessage().contains(message), error.getMessage());
     }
 
     private void createTables() {

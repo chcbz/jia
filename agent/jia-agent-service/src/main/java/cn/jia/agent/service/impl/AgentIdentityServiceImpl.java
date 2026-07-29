@@ -13,7 +13,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 @Service
@@ -22,6 +28,8 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     private static final Pattern OPAQUE_ID = Pattern.compile("agt_[0-9a-f]{32}");
     private static final Pattern OPAQUE_SHAPE_CASE_INSENSITIVE =
             Pattern.compile("agt_[0-9a-f]{32}", Pattern.CASE_INSENSITIVE);
+    private static final Comparator<String> BYTE_EXACT_ORDER =
+            AgentIdentityServiceImpl::compareUtf8Unsigned;
 
     private final AgentIdentityRegistryDao registryDao;
     private final AgentIdentityAliasDao aliasDao;
@@ -104,10 +112,11 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     @Transactional(rollbackFor = Exception.class)
     public AgentIdentityRegistryEntity activateForFirstRegistration(
             AgentIdentityRegistryEntity identity) {
-        if (identity == null || identity.getId() == null) {
+        if (identity == null || identity.getId() == null || identity.getBindingId() == null) {
             throw forbidden("Agent identity is missing");
         }
-        AgentIdentityRegistryEntity current = registryDao.findExactByCanonicalInScope(
+        AgentPersonaBindingEntity lockedBinding = bindingDao.findByIdForUpdate(identity.getBindingId());
+        AgentIdentityRegistryEntity current = registryDao.findExactByCanonicalInScopeForUpdate(
                 identity.getTenantId(), identity.getClientId(), identity.getOwnerJiacn(),
                 identity.getCanonicalAgentId());
         if (current == null
@@ -118,7 +127,7 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         validateRegistry(current, identity.getTenantId(), identity.getClientId(),
                 identity.getOwnerJiacn(), identity.getCanonicalAgentId(), true);
         identity = current;
-        requireBinding(identity, null, true);
+        requireBindingProjection(identity, lockedBinding, null, true);
         if (AgentConstants.IDENTITY_STATUS_ACTIVE.equals(identity.getLifecycleStatus())) {
             return identity;
         }
@@ -148,12 +157,16 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     @Transactional(rollbackFor = Exception.class)
     public void suspendForBinding(String tenantId, String clientId, String ownerJiacn, long bindingId) {
         requireScope(tenantId, clientId, ownerJiacn);
-        AgentIdentityRegistryEntity identity = registryDao.findExactByBindingInScope(
+        AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
+        requireBindingScope(binding, tenantId, clientId, ownerJiacn, bindingId);
+        AgentIdentityRegistryEntity identity = registryDao.findExactByBindingInScopeForUpdate(
                 tenantId, clientId, ownerJiacn, bindingId);
         if (identity == null) {
             throw forbidden("Agent identity registry is missing for binding");
         }
-        validateRegistry(identity, tenantId, clientId, ownerJiacn, identity.getCanonicalAgentId(), true);
+        validateRegistry(identity, tenantId, clientId, ownerJiacn,
+                identity.getCanonicalAgentId(), true);
+        requireBindingProjection(identity, binding, null, false);
         if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(identity.getLifecycleStatus())) {
             return;
         }
@@ -213,6 +226,65 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<String> lockActiveCanonicalAgentIdsInScope(
+            String tenantId, String clientId, String ownerJiacn,
+            List<String> canonicalAgentIds) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        if (canonicalAgentIds == null || canonicalAgentIds.isEmpty()) {
+            throw forbidden("At least one canonical Agent identity is required");
+        }
+        Set<String> unique = new LinkedHashSet<>();
+        for (String canonicalAgentId : canonicalAgentIds) {
+            requireAgentId(canonicalAgentId);
+            rejectSystem(canonicalAgentId);
+            if (!unique.add(canonicalAgentId)) {
+                throw forbidden("Canonical Agent identities must be byte-exact and unique");
+            }
+        }
+        List<String> ordered = new ArrayList<>(unique);
+        ordered.sort(BYTE_EXACT_ORDER);
+        for (String canonicalAgentId : ordered) {
+            AgentIdentityRegistryEntity observed = registryDao.findExactByCanonicalInScope(
+                    tenantId, clientId, ownerJiacn, canonicalAgentId);
+            if (observed == null || observed.getBindingId() == null) {
+                throw forbidden("Canonical Agent identity is not registered in this scope");
+            }
+            validateRegistry(observed, tenantId, clientId, ownerJiacn, canonicalAgentId, true);
+            AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(observed.getBindingId());
+            AgentIdentityRegistryEntity locked = registryDao.findExactByCanonicalInScopeForUpdate(
+                    tenantId, clientId, ownerJiacn, canonicalAgentId);
+            if (locked == null || !Objects.equals(observed.getId(), locked.getId())
+                    || !Objects.equals(observed.getBindingId(), locked.getBindingId())) {
+                throw forbidden("Agent identity changed while acquiring ownership locks");
+            }
+            validateRegistry(locked, tenantId, clientId, ownerJiacn, canonicalAgentId, true);
+            requireActiveLifecycle(locked);
+            requireBindingProjection(locked, binding, null, true);
+        }
+        return List.copyOf(canonicalAgentIds);
+    }
+
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public String requirePersistedCanonicalAgentIdInScope(
+            String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        requireAgentId(canonicalAgentId);
+        rejectSystem(canonicalAgentId);
+        AgentIdentityRegistryEntity identity = registryDao.findExactByCanonicalInScope(
+                tenantId, clientId, ownerJiacn, canonicalAgentId);
+        if (identity == null) {
+            throw forbidden("Persisted canonical Agent identity is not registered in this scope");
+        }
+        validateRegistry(identity, tenantId, clientId, ownerJiacn, canonicalAgentId, true);
+        requirePersistedRegistry(identity);
+        AgentPersonaBindingEntity binding = bindingDao.selectById(identity.getBindingId());
+        requirePersistedBinding(identity, binding);
+        return identity.getCanonicalAgentId();
+    }
+
+    @Override
     public String resolveLegacyAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String legacyAgentId) {
         requireScope(tenantId, clientId, ownerJiacn);
@@ -264,13 +336,15 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         AgentPersonaBindingEntity binding = forUpdate
                 ? bindingDao.findByIdForUpdate(identity.getBindingId())
                 : bindingDao.selectById(identity.getBindingId());
-        if (binding == null
-                || binding.getStatus() == null
-                || binding.getStatus() != AgentConstants.BINDING_STATUS_ACTIVE
-                || !Objects.equals(identity.getClientId(), binding.getClientId())
-                || !Objects.equals(identity.getOwnerJiacn(), binding.getJiacn())
-                || (binding.getTenantId() != null
-                    && !Objects.equals(identity.getTenantId(), binding.getTenantId()))) {
+        return requireBindingProjection(identity, binding, acceptedLegacyAlias, true);
+    }
+
+    private AgentPersonaBindingEntity requireBindingProjection(
+            AgentIdentityRegistryEntity identity, AgentPersonaBindingEntity binding,
+            String acceptedLegacyAlias, boolean requireActive) {
+        requireBindingScope(binding, identity.getTenantId(), identity.getClientId(),
+                identity.getOwnerJiacn(), identity.getBindingId());
+        if (requireActive && binding.getStatus() != AgentConstants.BINDING_STATUS_ACTIVE) {
             throw forbidden("Agent binding is inactive, missing, or outside identity scope");
         }
         if (Objects.equals(identity.getCanonicalAgentId(), binding.getAgentId())) {
@@ -279,15 +353,108 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         if (acceptedLegacyAlias != null && !Objects.equals(acceptedLegacyAlias, binding.getAgentId())) {
             throw forbidden("Accepted legacy alias does not match the audited binding Agent ID");
         }
-        AgentIdentityAliasEntity bindingAlias = aliasDao.findExactActiveLegacyAlias(
-                identity.getTenantId(), identity.getClientId(), identity.getOwnerJiacn(),
-                binding.getAgentId());
-        if (bindingAlias == null
-                || !Objects.equals(bindingAlias.getRegistryId(), identity.getId())
-                || !Objects.equals(bindingAlias.getCanonicalAgentId(), identity.getCanonicalAgentId())) {
-            throw forbidden("Binding Agent ID does not match canonical identity or an approved alias");
-        }
+        AgentIdentityAliasEntity bindingAlias = requireActive
+                ? aliasDao.findExactActiveLegacyAlias(identity.getTenantId(), identity.getClientId(),
+                        identity.getOwnerJiacn(), binding.getAgentId())
+                : aliasDao.findExactLegacyAlias(identity.getTenantId(), identity.getClientId(),
+                        identity.getOwnerJiacn(), binding.getAgentId());
+        validateBindingAlias(identity, binding, bindingAlias, requireActive);
         return binding;
+    }
+
+    private void requireBindingScope(AgentPersonaBindingEntity binding,
+            String tenantId, String clientId, String ownerJiacn, Long expectedBindingId) {
+        if (binding == null || binding.getId() == null || binding.getStatus() == null
+                || !Objects.equals(expectedBindingId, binding.getId())
+                || !Objects.equals(clientId, binding.getClientId())
+                || !Objects.equals(ownerJiacn, binding.getJiacn())
+                || binding.getTenantId() != null && !Objects.equals(tenantId, binding.getTenantId())
+                || binding.getStatus() != AgentConstants.BINDING_STATUS_PROVISIONED
+                    && binding.getStatus() != AgentConstants.BINDING_STATUS_ACTIVE
+                    && binding.getStatus() != AgentConstants.BINDING_STATUS_SUSPENDED
+                    && binding.getStatus() != AgentConstants.BINDING_STATUS_RETIRED
+                || binding.getBoundAt() == null || binding.getBoundAt() <= 0
+                || binding.getPersonaCode() == null || binding.getPersonaCode().isEmpty()
+                || binding.getAgentId() == null || binding.getAgentId().isEmpty()) {
+            throw forbidden("Agent binding is incomplete, missing, or outside identity scope");
+        }
+        requireExactText(binding.getPersonaCode(), "personaCode", 50);
+        requireAgentId(binding.getAgentId());
+    }
+
+    private void validateBindingAlias(AgentIdentityRegistryEntity identity,
+            AgentPersonaBindingEntity binding, AgentIdentityAliasEntity alias, boolean requireActive) {
+        if (alias == null || alias.getId() == null || alias.getId() <= 0
+                || !Objects.equals(alias.getRegistryId(), identity.getId())
+                || !Objects.equals(alias.getCanonicalAgentId(), identity.getCanonicalAgentId())
+                || !Objects.equals(alias.getAliasValue(), binding.getAgentId())
+                || !Objects.equals(alias.getTenantId(), identity.getTenantId())
+                || !Objects.equals(alias.getClientId(), identity.getClientId())
+                || !Objects.equals(alias.getOwnerJiacn(), identity.getOwnerJiacn())
+                || !AgentConstants.IDENTITY_ALIAS_TYPE_LEGACY_AGENT_ID.equals(alias.getAliasType())
+                || alias.getValidFrom() == null || alias.getValidFrom() <= 0
+                || alias.getAuditReason() == null || alias.getAuditReason().isEmpty()
+                || !alias.getAuditReason().equals(alias.getAuditReason().strip())
+                || alias.getAuditReason().chars().anyMatch(Character::isISOControl)) {
+            throw forbidden("Binding Agent ID does not match canonical identity or an audited alias");
+        }
+        boolean active = AgentConstants.IDENTITY_ALIAS_STATUS_ACTIVE.equals(alias.getAliasStatus())
+                && alias.getValidTo() == null;
+        boolean revoked = AgentConstants.IDENTITY_ALIAS_STATUS_REVOKED.equals(alias.getAliasStatus())
+                && alias.getValidTo() != null && alias.getValidTo() >= alias.getValidFrom();
+        if (requireActive ? !active : !active && !revoked) {
+            throw forbidden("Binding Agent alias lifecycle is invalid");
+        }
+    }
+
+    private void requirePersistedRegistry(AgentIdentityRegistryEntity identity) {
+        if (identity.getId() == null || identity.getId() <= 0
+                || identity.getBindingId() == null || identity.getBindingId() <= 0
+                || identity.getProvisionedAt() == null || identity.getProvisionedAt() <= 0
+                || identity.getAuditReason() == null || identity.getAuditReason().isEmpty()
+                || !identity.getAuditReason().equals(identity.getAuditReason().strip())
+                || identity.getAuditReason().chars().anyMatch(Character::isISOControl)) {
+            throw forbidden("Persisted Agent identity registry is incomplete");
+        }
+        if (identity.getActivatedAt() == null || identity.getActivatedAt() <= 0
+                || identity.getActivatedAt() < identity.getProvisionedAt()) {
+            throw forbidden("Persisted Agent identity was never validly activated");
+        }
+        String lifecycle = identity.getLifecycleStatus();
+        if (AgentConstants.IDENTITY_STATUS_ACTIVE.equals(lifecycle)) {
+            if (identity.getSuspendedAt() != null || identity.getRetiredAt() != null) {
+                throw forbidden("Persisted active Agent identity lifecycle is incomplete");
+            }
+        } else if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(lifecycle)) {
+            if (identity.getSuspendedAt() == null
+                    || identity.getSuspendedAt() < identity.getActivatedAt()
+                    || identity.getRetiredAt() != null) {
+                throw forbidden("Persisted suspended Agent identity lifecycle is incomplete");
+            }
+        } else if (AgentConstants.IDENTITY_STATUS_RETIRED.equals(lifecycle)) {
+            if (identity.getRetiredAt() == null
+                    || identity.getRetiredAt() < identity.getActivatedAt()
+                    || identity.getSuspendedAt() != null
+                        && identity.getRetiredAt() < identity.getSuspendedAt()) {
+                throw forbidden("Persisted retired Agent identity lifecycle is incomplete");
+            }
+        } else {
+            throw forbidden("Persisted Agent identity was never activated");
+        }
+    }
+
+    private void requirePersistedBinding(
+            AgentIdentityRegistryEntity identity, AgentPersonaBindingEntity binding) {
+        int expectedStatus = switch (identity.getLifecycleStatus()) {
+            case AgentConstants.IDENTITY_STATUS_ACTIVE -> AgentConstants.BINDING_STATUS_ACTIVE;
+            case AgentConstants.IDENTITY_STATUS_SUSPENDED -> AgentConstants.BINDING_STATUS_SUSPENDED;
+            case AgentConstants.IDENTITY_STATUS_RETIRED -> AgentConstants.BINDING_STATUS_RETIRED;
+            default -> throw forbidden("Persisted Agent identity lifecycle is unsupported");
+        };
+        requireBindingProjection(identity, binding, null, false);
+        if (binding.getStatus() != expectedStatus) {
+            throw forbidden("Persisted Agent identity and binding lifecycle do not match");
+        }
     }
 
     private AgentIdentityAliasEntity requireExactActiveAlias(
@@ -388,6 +555,20 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agentId)) {
             throw forbidden("System agent cannot be registered or resolved externally");
         }
+    }
+
+    private static int compareUtf8Unsigned(String left, String right) {
+        byte[] leftBytes = left.getBytes(StandardCharsets.UTF_8);
+        byte[] rightBytes = right.getBytes(StandardCharsets.UTF_8);
+        int length = Math.min(leftBytes.length, rightBytes.length);
+        for (int index = 0; index < length; index++) {
+            int compared = Integer.compare(
+                    Byte.toUnsignedInt(leftBytes[index]), Byte.toUnsignedInt(rightBytes[index]));
+            if (compared != 0) {
+                return compared;
+            }
+        }
+        return Integer.compare(leftBytes.length, rightBytes.length);
     }
 
     private AgentServiceImpl.AgentBizException forbidden(String message) {

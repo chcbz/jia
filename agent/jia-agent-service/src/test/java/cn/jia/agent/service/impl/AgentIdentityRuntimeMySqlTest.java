@@ -24,12 +24,24 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.mybatis.spring.SqlSessionTemplate;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.lang.reflect.Field;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -44,6 +56,7 @@ class AgentIdentityRuntimeMySqlTest {
     private String databaseName;
     private JdbcTemplate adminJdbc;
     private JdbcTemplate jdbc;
+    private DriverManagerDataSource databaseDataSource;
     private AgentIdentityRegistryDao registryDao;
     private AgentIdentityAliasDao aliasDao;
     private AgentIdentityService identityService;
@@ -62,12 +75,12 @@ class AgentIdentityRuntimeMySqlTest {
         databaseName = "a08_identity_" + Long.toUnsignedString(System.nanoTime());
         adminJdbc.execute("CREATE DATABASE " + databaseName
                 + " CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
-        DriverManagerDataSource database = dataSource(
+        databaseDataSource = dataSource(
                 databaseUrl(baseUrl, databaseName), username, password);
-        jdbc = new JdbcTemplate(database);
+        jdbc = new JdbcTemplate(databaseDataSource);
         createTables();
 
-        SqlSessionFactory factory = sqlSessionFactory(database);
+        SqlSessionFactory factory = sqlSessionFactory(databaseDataSource);
         SqlSessionTemplate template = new SqlSessionTemplate(factory);
         registryDao = wire(new AgentIdentityRegistryDaoImpl(),
                 template.getMapper(AgentIdentityRegistryMapper.class));
@@ -75,7 +88,8 @@ class AgentIdentityRuntimeMySqlTest {
                 template.getMapper(AgentIdentityAliasMapper.class));
         AgentPersonaBindingDao bindingDao = wire(new AgentPersonaBindingDaoImpl(),
                 template.getMapper(AgentPersonaBindingMapper.class));
-        identityService = new AgentIdentityServiceImpl(registryDao, aliasDao, bindingDao);
+        identityService = transactionalProxy(
+                new AgentIdentityServiceImpl(registryDao, aliasDao, bindingDao));
 
         jdbc.update("""
                 INSERT INTO agent_persona_binding
@@ -163,15 +177,80 @@ class AgentIdentityRuntimeMySqlTest {
     }
 
     @Test
-    void suspendedAndRetiredLifecycleCannotPassOwnershipBoundary() {
-        jdbc.update("UPDATE agent_identity_registry SET lifecycle_status='SUSPENDED', suspended_at=2");
+    void persistedBoundaryAllowsActivatedSuspendedAndRetiredButRejectsProvisionedAndAliasText() {
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> identityService.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, CLIENT, TENANT, CANONICAL));
+        AgentIdentityRegistryEntity registration = identityService.requireRegistrationIdentityInScope(
+                TENANT, CLIENT, TENANT, "legacy-wuyong");
+        identityService.activateForFirstRegistration(registration);
+        assertEquals(CANONICAL, identityService.requirePersistedCanonicalAgentIdInScope(
+                TENANT, CLIENT, TENANT, CANONICAL));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> identityService.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, CLIENT, TENANT, "legacy-wuyong"));
+
+        jdbc.update("UPDATE agent_persona_binding SET status=0");
+        identityService.suspendForBinding(TENANT, CLIENT, TENANT,
+                jdbc.queryForObject("SELECT id FROM agent_persona_binding", Long.class));
+        assertEquals(CANONICAL, identityService.requirePersistedCanonicalAgentIdInScope(
+                TENANT, CLIENT, TENANT, CANONICAL));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
                         TENANT, CLIENT, TENANT, CANONICAL));
-        jdbc.update("UPDATE agent_identity_registry SET lifecycle_status='RETIRED', retired_at=3");
+
+        jdbc.update("UPDATE agent_persona_binding SET status=3");
+        jdbc.update("UPDATE agent_identity_registry SET lifecycle_status='RETIRED', "
+                + "retired_at=suspended_at+1");
+        assertEquals(CANONICAL, identityService.requirePersistedCanonicalAgentIdInScope(
+                TENANT, CLIENT, TENANT, CANONICAL));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
                         TENANT, CLIENT, TENANT, CANONICAL));
+    }
+
+    @Test
+    void mysqlIdentityLockSerializesConcurrentSuspendWithoutDeadlock() throws Exception {
+        AgentIdentityRegistryEntity registration = identityService.requireRegistrationIdentityInScope(
+                TENANT, CLIENT, TENANT, "legacy-wuyong");
+        identityService.activateForFirstRegistration(registration);
+        long bindingId = jdbc.queryForObject(
+                "SELECT id FROM agent_persona_binding", Long.class);
+        DataSourceTransactionManager transactionManager =
+                new DataSourceTransactionManager(databaseDataSource);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch allowCommit = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Void> operation = executor.submit(() -> {
+                new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                    identityService.lockActiveCanonicalAgentIdsInScope(
+                            TENANT, CLIENT, TENANT, List.of(CANONICAL));
+                    locked.countDown();
+                    await(allowCommit);
+                });
+                return null;
+            });
+            assertTrue(locked.await(10, TimeUnit.SECONDS));
+            Future<Void> suspend = executor.submit(() -> {
+                new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                    jdbc.update("UPDATE agent_persona_binding SET status=0 WHERE id=?", bindingId);
+                    identityService.suspendForBinding(
+                            TENANT, CLIENT, TENANT, bindingId);
+                });
+                return null;
+            });
+            Thread.sleep(200L);
+            assertFalse(suspend.isDone(), "suspend must wait for the active identity lock");
+            allowCommit.countDown();
+            operation.get(10, TimeUnit.SECONDS);
+            suspend.get(10, TimeUnit.SECONDS);
+            assertEquals("SUSPENDED", jdbc.queryForObject(
+                    "SELECT lifecycle_status FROM agent_identity_registry", String.class));
+        } finally {
+            allowCommit.countDown();
+            executor.shutdownNow();
+        }
     }
 
     private void createTables() {
@@ -216,6 +295,27 @@ class AgentIdentityRuntimeMySqlTest {
                         (client_id, owner_jiacn, alias_type, alias_value, active_key)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
                 """);
+    }
+
+    private AgentIdentityService transactionalProxy(AgentIdentityServiceImpl target) {
+        ProxyFactory factory = new ProxyFactory(target);
+        factory.setInterfaces(AgentIdentityService.class);
+        TransactionInterceptor interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(new DataSourceTransactionManager(databaseDataSource));
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        factory.addAdvice(interceptor);
+        return (AgentIdentityService) factory.getProxy();
+    }
+
+    private void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("identity transaction barrier timeout");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(error);
+        }
     }
 
     private DriverManagerDataSource dataSource(String url, String username, String password) {

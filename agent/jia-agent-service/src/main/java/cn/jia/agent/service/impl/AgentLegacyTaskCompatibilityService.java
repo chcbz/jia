@@ -129,15 +129,18 @@ public class AgentLegacyTaskCompatibilityService {
         requireScope(tenantId, clientId, tenantId);
         requireExactText(taskId, "taskId", 100);
         List<String> agentIds = requireResolvedAgentIds(canonicalAgentIds);
-        for (String agentId : agentIds) {
-            String verified = identityService.requireCanonicalAgentIdInScope(
-                    tenantId, clientId, tenantId, agentId);
-            if (!agentId.equals(verified)) {
-                throw forbidden();
-            }
+        long reservedAt = now();
+        int reserved = taskMetaDao.reserveOpenTaskRoot(
+                tenantId, clientId, taskId, reservedAt);
+        if (reserved < 0 || reserved > 1) {
+            throw invalidPersisted("Scoped task root reservation affected an unexpected row count");
         }
-
         AgentTaskMetaEntity task = lockTask(tenantId, clientId, taskId);
+        List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
+                tenantId, clientId, tenantId, agentIds);
+        if (!agentIds.equals(lockedAgentIds)) {
+            throw forbidden();
+        }
         AgentTaskStatus taskStatus = persistedTaskStatus(task.getRewardStatus());
         if (taskStatus != AgentTaskStatus.OPEN && taskStatus != AgentTaskStatus.PLANNING
                 && taskStatus != AgentTaskStatus.ASSIGNED) {
@@ -159,7 +162,7 @@ public class AgentLegacyTaskCompatibilityService {
             return new AssignOutcome(persistedAgentIds, false);
         }
 
-        long changedAt = now();
+        long changedAt = reservedAt;
         applyAssignmentMeta(task, agentIds, changedAt);
         requireSingleMutation(taskMetaDao.updateById(task), "task assignment metadata");
 
@@ -188,13 +191,13 @@ public class AgentLegacyTaskCompatibilityService {
         requireScope(tenantId, clientId, tenantId);
         requireExactText(taskId, "taskId", 100);
         requireExactText(agentId, "agentId", 100);
-        String verifiedAgentId = identityService.requireCanonicalAgentIdInScope(
-                tenantId, clientId, tenantId, agentId);
-        if (!agentId.equals(verifiedAgentId)) {
-            throw forbidden();
-        }
         AgentTaskStatus reportStatus = requireReportStatus(requestedStatus);
         AgentTaskMetaEntity task = lockTask(tenantId, clientId, taskId);
+        List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
+                tenantId, clientId, tenantId, List.of(agentId));
+        if (!List.of(agentId).equals(lockedAgentIds)) {
+            throw forbidden();
+        }
         AgentTaskStatus previousTaskStatus = persistedTaskStatus(task.getRewardStatus());
         requireTaskVersion(task.getTaskVersion());
 
@@ -375,24 +378,26 @@ public class AgentLegacyTaskCompatibilityService {
 
     private AgentTaskWorkItemEntity requireUniqueDefaultWorkItem(
             String tenantId, String clientId, String taskId, String agentId) {
-        List<AgentTaskWorkItemEntity> items = defaultWorkItems(
-                tenantId, clientId, taskId, agentId);
-        if (items.isEmpty()) {
+        List<AgentTaskWorkItemEntity> items = requireSnapshot(
+                workItemDao.listByTaskAndAssignee(
+                        tenantId, clientId, taskId, agentId, MAX_COLLABORATION_ROWS),
+                "member work item");
+        rejectTruncatedSnapshot(items, "member work item");
+        List<AgentTaskWorkItemEntity> legacyItems = items.stream()
+                .filter(item -> WORK_TYPE.equals(item.getWorkType()))
+                .toList();
+        if (legacyItems.isEmpty()) {
             throw invalidPersisted("Task member has no legacy default work item");
         }
-        if (items.size() != 1) {
+        if (legacyItems.size() != 1) {
             throw invalidPersisted("Task member has multiple legacy default work items");
         }
-        AgentTaskWorkItemEntity item = items.getFirst();
+        if (items.size() != legacyItems.size()) {
+            throw reserved("Task member mixes legacy default and non-legacy work items");
+        }
+        AgentTaskWorkItemEntity item = legacyItems.getFirst();
         validateDefaultWorkItem(item, tenantId, clientId, taskId, agentId);
         return item;
-    }
-
-    private List<AgentTaskWorkItemEntity> defaultWorkItems(
-            String tenantId, String clientId, String taskId, String agentId) {
-        return requireSnapshot(workItemDao.listByTaskAssigneeAndType(
-                tenantId, clientId, taskId, agentId, WORK_TYPE, MAX_DEFAULT_ITEMS),
-                "legacy default work item");
     }
 
 

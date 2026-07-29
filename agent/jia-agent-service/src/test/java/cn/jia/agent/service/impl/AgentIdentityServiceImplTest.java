@@ -11,15 +11,20 @@ import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.mockito.Mock;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -82,6 +87,8 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_PROVISIONED);
         when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
                 .thenReturn(provisioned);
+        when(registryDao.findExactByCanonicalInScopeForUpdate(
+                TENANT, CLIENT, TENANT, CANONICAL)).thenReturn(provisioned);
         when(bindingDao.selectById(binding.getId())).thenReturn(binding);
         when(bindingDao.findByIdForUpdate(binding.getId())).thenReturn(binding);
         when(registryDao.activateProvisioned(eq(provisioned.getId()), anyLong())).thenReturn(1);
@@ -189,6 +196,126 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         }
     }
 
+
+    @Test
+    void persistedDirectCanonicalAllowsPreviouslyActivatedLifecycleStates() {
+        for (String lifecycle : List.of(
+                AgentConstants.IDENTITY_STATUS_ACTIVE,
+                AgentConstants.IDENTITY_STATUS_SUSPENDED,
+                AgentConstants.IDENTITY_STATUS_RETIRED)) {
+            AgentPersonaBindingEntity binding = binding(CANONICAL);
+            binding.setStatus(switch (lifecycle) {
+                case AgentConstants.IDENTITY_STATUS_ACTIVE -> AgentConstants.BINDING_STATUS_ACTIVE;
+                case AgentConstants.IDENTITY_STATUS_SUSPENDED -> AgentConstants.BINDING_STATUS_SUSPENDED;
+                case AgentConstants.IDENTITY_STATUS_RETIRED -> AgentConstants.BINDING_STATUS_RETIRED;
+                default -> throw new AssertionError(lifecycle);
+            });
+            AgentIdentityRegistryEntity identity = registry(binding, CANONICAL,
+                    AgentConstants.IDENTITY_TYPE_OPAQUE, lifecycle);
+            when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+                    .thenReturn(identity);
+            when(bindingDao.selectById(binding.getId())).thenReturn(binding);
+
+            assertEquals(CANONICAL, service.requirePersistedCanonicalAgentIdInScope(
+                    TENANT, CLIENT, TENANT, CANONICAL), lifecycle);
+        }
+    }
+
+    @Test
+    void persistedDirectCanonicalRejectsNeverActivatedSystemAliasUnknownAndTampering() {
+        AgentPersonaBindingEntity binding = binding(CANONICAL);
+        AgentIdentityRegistryEntity provisioned = registry(binding, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_PROVISIONED);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+                .thenReturn(provisioned);
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, CLIENT, TENANT, CANONICAL));
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, CLIENT, TENANT, "builtin-songjiang"));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, CLIENT, TENANT, "legacy-alias"));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, CLIENT, TENANT, CANONICAL + " "));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, "client-b", TENANT, CANONICAL));
+
+        AgentIdentityRegistryEntity active = registry(binding, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentPersonaBindingEntity tampered = binding(CANONICAL);
+        tampered.setJiacn("owner-b");
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+                .thenReturn(active);
+        when(bindingDao.selectById(binding.getId())).thenReturn(tampered);
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requirePersistedCanonicalAgentIdInScope(
+                        TENANT, CLIENT, TENANT, CANONICAL));
+    }
+
+    @Test
+    void activeMutationLocksIdentitiesInUnsignedUtf8ByteOrder() {
+        String canonicalB = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        AgentPersonaBindingEntity bindingA = binding(CANONICAL);
+        AgentPersonaBindingEntity bindingB = binding(canonicalB);
+        bindingB.setId(6L);
+        AgentIdentityRegistryEntity identityA = registry(bindingA, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentIdentityRegistryEntity identityB = registry(bindingB, canonicalB,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        identityB.setId(10L);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+                .thenReturn(identityA);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, canonicalB))
+                .thenReturn(identityB);
+        when(bindingDao.findByIdForUpdate(bindingA.getId())).thenReturn(bindingA);
+        when(bindingDao.findByIdForUpdate(bindingB.getId())).thenReturn(bindingB);
+        when(registryDao.findExactByCanonicalInScopeForUpdate(
+                TENANT, CLIENT, TENANT, CANONICAL)).thenReturn(identityA);
+        when(registryDao.findExactByCanonicalInScopeForUpdate(
+                TENANT, CLIENT, TENANT, canonicalB)).thenReturn(identityB);
+
+        assertIterableEquals(List.of(canonicalB, CANONICAL),
+                service.lockActiveCanonicalAgentIdsInScope(
+                        TENANT, CLIENT, TENANT, List.of(canonicalB, CANONICAL)));
+
+        InOrder order = inOrder(registryDao, bindingDao);
+        order.verify(registryDao).findExactByCanonicalInScope(
+                TENANT, CLIENT, TENANT, CANONICAL);
+        order.verify(bindingDao).findByIdForUpdate(bindingA.getId());
+        order.verify(registryDao).findExactByCanonicalInScopeForUpdate(
+                TENANT, CLIENT, TENANT, CANONICAL);
+        order.verify(registryDao).findExactByCanonicalInScope(
+                TENANT, CLIENT, TENANT, canonicalB);
+        order.verify(bindingDao).findByIdForUpdate(bindingB.getId());
+        order.verify(registryDao).findExactByCanonicalInScopeForUpdate(
+                TENANT, CLIENT, TENANT, canonicalB);
+    }
+
+    @Test
+    void activeMutationRejectsSuspendedDirectIdentityAndDuplicateInput() {
+        AgentPersonaBindingEntity binding = binding(CANONICAL);
+        binding.setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
+        AgentIdentityRegistryEntity suspended = registry(binding, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_SUSPENDED);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+                .thenReturn(suspended);
+        when(bindingDao.findByIdForUpdate(binding.getId())).thenReturn(binding);
+        when(registryDao.findExactByCanonicalInScopeForUpdate(
+                TENANT, CLIENT, TENANT, CANONICAL)).thenReturn(suspended);
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.lockActiveCanonicalAgentIdsInScope(
+                        TENANT, CLIENT, TENANT, List.of(CANONICAL)));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.lockActiveCanonicalAgentIdsInScope(
+                        TENANT, CLIENT, TENANT, List.of(CANONICAL, CANONICAL)));
+    }
+
     @Test
     void caseNulAndPaddingInputsFailClosedBeforeAliasFallback() {
         for (String invalid : new String[]{
@@ -238,6 +365,16 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         identity.setClientId(CLIENT);
         identity.setOwnerJiacn(TENANT);
         identity.setBindingId(binding.getId());
+        identity.setProvisionedAt(1L);
+        if (!AgentConstants.IDENTITY_STATUS_PROVISIONED.equals(lifecycle)) {
+            identity.setActivatedAt(2L);
+        }
+        if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(lifecycle)) {
+            identity.setSuspendedAt(3L);
+        }
+        if (AgentConstants.IDENTITY_STATUS_RETIRED.equals(lifecycle)) {
+            identity.setRetiredAt(4L);
+        }
         identity.setAuditReason("test");
         return identity;
     }

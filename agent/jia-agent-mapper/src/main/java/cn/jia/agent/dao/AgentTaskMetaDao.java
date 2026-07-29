@@ -11,6 +11,9 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
 
     AgentTaskMetaEntity findByTaskId(String tenantId, String clientId, String taskId);
 
+    int reserveOpenTaskRoot(
+            String tenantId, String clientId, String taskId, long createTime);
+
     AgentTaskMetaEntity findByTaskIdForUpdate(
             String tenantId, String clientId, String taskId);
 
@@ -21,7 +24,8 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
             long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
             String failureReason);
 
-    List<AgentTaskMetaEntity> findByAgentId(String agentId);
+    List<AgentTaskMetaEntity> findByAgentId(
+            String tenantId, String clientId, String agentId, int limit);
 
     List<AgentTaskMetaEntity> search(String status, String ability);
 }

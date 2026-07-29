@@ -13,6 +13,8 @@ import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.service.AbilityEvaluationService;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import lombok.RequiredArgsConstructor;
@@ -102,7 +104,15 @@ public class AbilityEvaluationServiceImpl implements AbilityEvaluationService {
 
     private AbilityEvaluationEntity buildEvaluation(AbilityEvaluationRequestDTO request) {
         AgentPersonaEntity persona = agentPersonaDao.findByName(request.getAgentName());
-        List<AgentTaskMetaEntity> tasks = agentTaskMetaDao.findByAgentId(request.getAgentName());
+        EsContext context = EsContextHolder.getContext();
+        require(!StringUtil.isBlank(context.getJiacn()) && !StringUtil.isBlank(context.getClientId()),
+                "tenant and client scope are required");
+        List<AgentTaskMetaEntity> tasks = agentTaskMetaDao.findByAgentId(
+                context.getJiacn(), context.getClientId(), request.getAgentName(), 500);
+        require(tasks != null && tasks.size() < 500,
+                "Agent task evaluation snapshot exceeds the safe limit");
+        validateScopedTaskSnapshot(
+                tasks, context.getJiacn(), context.getClientId(), request.getAgentName());
 
         int power = score(request, "power", valueOrZero(persona == null ? null : persona.getPower()));
         int intelligence = score(request, "intelligence", valueOrZero(persona == null ? null : persona.getIntelligence()));
@@ -172,6 +182,24 @@ public class AbilityEvaluationServiceImpl implements AbilityEvaluationService {
         long completed = tasks.stream().filter(task -> "completed".equals(task.getRewardStatus())).count();
         long failed = tasks.stream().filter(task -> "failed".equals(task.getRewardStatus())).count();
         return clamp((int) (70 + completed * 5 - failed * 10));
+    }
+
+    private void validateScopedTaskSnapshot(
+            List<AgentTaskMetaEntity> tasks, String tenantId, String clientId, String agentId) {
+        for (AgentTaskMetaEntity task : tasks) {
+            require(task != null
+                            && tenantId.equals(task.getTenantId())
+                            && clientId.equals(task.getClientId())
+                            && agentId.equals(task.getAssignedAgentId())
+                            && isExactText(task.getTaskId(), 100),
+                    "Persisted Agent task evaluation row is outside the byte-exact requested scope");
+        }
+    }
+
+    private boolean isExactText(String value, int maxLength) {
+        return value != null && !value.isEmpty() && value.length() <= maxLength
+                && value.equals(value.strip())
+                && value.chars().noneMatch(Character::isISOControl);
     }
 
     private int valueOrZero(Integer value) {

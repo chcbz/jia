@@ -269,7 +269,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
             return false;
         }
         try {
-            return agentId.equals(identityService.resolveAgentIdInScope(
+            return agentId.equals(identityService.requirePersistedCanonicalAgentIdInScope(
                     tenantId, clientId, tenantId, agentId));
         } catch (RuntimeException ignored) {
             return false;

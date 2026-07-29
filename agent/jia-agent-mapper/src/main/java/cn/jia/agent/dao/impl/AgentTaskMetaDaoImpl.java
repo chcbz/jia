@@ -33,15 +33,22 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public int reserveOpenTaskRoot(
+            String tenantId, String clientId, String taskId, long createTime) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(taskId, "taskId", 100);
+        if (createTime <= 0) {
+            throw new IllegalArgumentException("createTime must be positive");
+        }
+        return baseMapper.reserveOpenTaskRoot(tenantId, clientId, taskId, createTime);
+    }
+
+    @Override
     public AgentTaskMetaEntity findByTaskIdForUpdate(
             String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        return baseMapper.selectOne(new LambdaQueryWrapper<AgentTaskMetaEntity>()
-                .eq(AgentTaskMetaEntity::getTenantId, tenantId)
-                .eq(AgentTaskMetaEntity::getClientId, clientId)
-                .eq(AgentTaskMetaEntity::getTaskId, taskId)
-                .last("FOR UPDATE"));
+        requireExactId(taskId, "taskId", 100);
+        return baseMapper.selectScopedForUpdate(tenantId, clientId, taskId);
     }
 
     @Override
@@ -65,10 +72,21 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
-    public List<AgentTaskMetaEntity> findByAgentId(String agentId) {
-        return baseMapper.selectList(new LambdaQueryWrapper<AgentTaskMetaEntity>()
-                .eq(AgentTaskMetaEntity::getAssignedAgentId, agentId)
-                .orderByDesc(AgentTaskMetaEntity::getUpdateTime));
+    public List<AgentTaskMetaEntity> findByAgentId(
+            String tenantId, String clientId, String agentId, int limit) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(agentId, "agentId", 100);
+        return baseMapper.selectByAgentInScope(
+                tenantId, clientId, agentId, TaskCollaborationDaoSupport.boundedLimit(limit));
+    }
+
+    private void requireExactId(String value, String name, int maxLength) {
+        TaskCollaborationDaoSupport.requireId(value, name);
+        if (value.length() > maxLength || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(
+                    name + " must be byte-exact, unpadded, and free of control characters");
+        }
     }
 
     @Override

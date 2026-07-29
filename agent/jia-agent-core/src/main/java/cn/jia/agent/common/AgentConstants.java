@@ -8,8 +8,11 @@ public final class AgentConstants {
 
     public static final String BUILTIN_SONGJIANG_AGENT_ID = "builtin-songjiang";
     public static final String BUILTIN_SONGJIANG_PERSONA_CODE = "songjiang";
+    public static final int BINDING_STATUS_PROVISIONED = 2;
     public static final int BINDING_STATUS_ACTIVE = 1;
-    public static final int BINDING_STATUS_INACTIVE = 0;
+    public static final int BINDING_STATUS_SUSPENDED = 0;
+    public static final int BINDING_STATUS_INACTIVE = BINDING_STATUS_SUSPENDED;
+    public static final int BINDING_STATUS_RETIRED = 3;
 
     public static final String IDENTITY_TYPE_OPAQUE = "OPAQUE";
     public static final String IDENTITY_TYPE_LEGACY_CANONICAL = "LEGACY_CANONICAL";
@@ -20,6 +23,7 @@ public final class AgentConstants {
     public static final String IDENTITY_STATUS_RETIRED = "RETIRED";
     public static final String IDENTITY_ALIAS_TYPE_LEGACY_AGENT_ID = "LEGACY_AGENT_ID";
     public static final String IDENTITY_ALIAS_STATUS_ACTIVE = "ACTIVE";
+    public static final String IDENTITY_ALIAS_STATUS_REVOKED = "REVOKED";
 
     public static final String TASK_TYPE_AGENT = "agent";
     public static final String TASK_STATUS_OPEN = "open";

@@ -3,6 +3,7 @@ package cn.jia.agent.mapper;
 import cn.jia.agent.entity.AgentTaskAggregationSnapshotRow;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -10,6 +11,65 @@ import org.apache.ibatis.annotations.Update;
 import java.util.List;
 
 public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
+    @Insert("""
+            INSERT IGNORE INTO agent_task_meta
+                (task_id, reward_status, collaboration_mode, risk_level, max_agents,
+                 review_required, task_version, current_event_version,
+                 tenant_id, client_id, create_time, update_time)
+            VALUES
+                (#{taskId}, 'open', 'single', 'low', 1,
+                 0, 0, 0, #{tenantId}, #{clientId}, #{createTime}, #{createTime})
+            """)
+    int reserveOpenTaskRoot(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("createTime") long createTime);
+
+    @Select("""
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{taskId}, 1, 50) AS BINARY(200))
+              AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{taskId}, 51, 50) AS BINARY(200))
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+            LIMIT 1
+            FOR UPDATE
+            """)
+    AgentTaskMetaEntity selectScopedForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId);
+
+    @Select("""
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND assigned_agent_id = #{agentId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(assigned_agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
+              AND OCTET_LENGTH(assigned_agent_id) = OCTET_LENGTH(#{agentId})
+            ORDER BY update_time DESC, task_id ASC, id ASC
+            LIMIT #{limit}
+            """)
+    List<AgentTaskMetaEntity> selectByAgentInScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("agentId") String agentId,
+            @Param("limit") int limit);
+
     @Select("""
             SELECT 'member' AS row_type, tenant_id, client_id, task_id,
                    agent_id AS entity_id, member_role AS role, member_status AS status,

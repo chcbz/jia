@@ -39,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** MySQL 8.0.21 reproduction for the terminal aggregate versus late child insert race. */
@@ -96,6 +97,71 @@ class AgentTaskWorkItemParentGateMySqlTest {
         if (adminJdbc != null && databaseName != null) {
             adminJdbc.execute("DROP DATABASE IF EXISTS " + databaseName);
         }
+    }
+
+
+    @Test
+    void rootReservationIsConcurrentIdempotentAndInitializesOneDeterministicRow()
+            throws Exception {
+        String taskId = "root-concurrent";
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Integer> left = executor.submit(() -> {
+                start.await(10, TimeUnit.SECONDS);
+                return taskMetaDao.reserveOpenTaskRoot(TENANT, CLIENT, taskId, 100L);
+            });
+            Future<Integer> right = executor.submit(() -> {
+                start.await(10, TimeUnit.SECONDS);
+                return taskMetaDao.reserveOpenTaskRoot(TENANT, CLIENT, taskId, 200L);
+            });
+            start.countDown();
+            List<Integer> results = List.of(
+                    left.get(10, TimeUnit.SECONDS), right.get(10, TimeUnit.SECONDS));
+            assertEquals(1L, results.stream().filter(result -> result == 1).count());
+            assertEquals(1L, results.stream().filter(result -> result == 0).count());
+            assertEquals(1, jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM agent_task_meta WHERE task_id=?",
+                    Integer.class, taskId));
+            var row = jdbc.queryForMap(
+                    "SELECT reward_status,collaboration_mode,risk_level,max_agents,"
+                            + "review_required,task_version,current_event_version,tenant_id,client_id "
+                            + "FROM agent_task_meta WHERE task_id=?", taskId);
+            assertEquals("open", row.get("reward_status"));
+            assertEquals("single", row.get("collaboration_mode"));
+            assertEquals("low", row.get("risk_level"));
+            assertEquals(1, ((Number) row.get("max_agents")).intValue());
+            assertEquals(0, ((Number) row.get("review_required")).intValue());
+            assertEquals(0L, ((Number) row.get("task_version")).longValue());
+            assertEquals(0L, ((Number) row.get("current_event_version")).longValue());
+            assertEquals(TENANT, row.get("tenant_id"));
+            assertEquals(CLIENT, row.get("client_id"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void rootReservationAndLockNeverMergeCaseOrTrailingPaddingUnderCiCollation() {
+        String exact = "Root-Exact";
+        assertEquals(1, taskMetaDao.reserveOpenTaskRoot(
+                TENANT, CLIENT, exact, 100L));
+        assertEquals(0, taskMetaDao.reserveOpenTaskRoot(
+                TENANT, CLIENT, "root-exact", 101L));
+        assertThrows(IllegalArgumentException.class,
+                () -> taskMetaDao.reserveOpenTaskRoot(
+                        TENANT, CLIENT, exact + " ", 102L));
+
+        assertTrue(taskMetaDao.findByTaskIdForUpdate(
+                TENANT, CLIENT, exact) != null);
+        assertEquals(null, taskMetaDao.findByTaskIdForUpdate(
+                TENANT, CLIENT, "root-exact"));
+        assertThrows(IllegalArgumentException.class,
+                () -> taskMetaDao.findByTaskIdForUpdate(
+                        TENANT, CLIENT, exact + " "));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_meta WHERE task_id=?",
+                Integer.class, exact));
     }
 
     @Test
@@ -193,7 +259,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
         DataSourceTransactionManager transactionManager =
                 new DataSourceTransactionManager(jdbc.getDataSource());
         AgentIdentityService identityService = org.mockito.Mockito.mock(AgentIdentityService.class);
-        org.mockito.Mockito.when(identityService.resolveAgentIdInScope(
+        org.mockito.Mockito.when(identityService.requirePersistedCanonicalAgentIdInScope(
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString()))
                 .thenAnswer(invocation -> invocation.getArgument(3));
