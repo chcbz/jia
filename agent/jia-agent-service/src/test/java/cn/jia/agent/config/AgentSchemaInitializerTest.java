@@ -24,6 +24,7 @@ import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -260,6 +261,51 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 () -> new AgentSchemaInitializer(template).validateBackfillColumn(id));
         assertTrue(error.getMessage().contains("agent_task_backfill_issue.id"), error.getMessage());
         assertTrue(error.getMessage().contains("auto_increment"), error.getMessage());
+    }
+
+    @Test
+    void sqlNormalizationPreservesParenthesisLogicAndNormalizesOnlyItsWhitespace() {
+        AgentSchemaInitializer initializer = new AgentSchemaInitializer(mock(JdbcTemplate.class));
+        String left = initializer.normalizeSql("IF (a AND b) OR c THEN SIGNAL SQLSTATE '45000'; END IF");
+        String right = initializer.normalizeSql("IF a AND (b OR c) THEN SIGNAL SQLSTATE '45000'; END IF");
+        assertNotEquals(left, right);
+        assertEquals(left, initializer.normalizeSql(
+                " IF  (  a AND b  )  OR c THEN SIGNAL SQLSTATE '45000'; END IF "));
+    }
+
+    @Test
+    void parenthesisLogicCollisionInTriggerFailsClosed() throws IOException {
+        List<AgentSchemaInitializer.TriggerDefinition> definitions =
+                new java.util.ArrayList<>(backfillAuditTriggers(
+                        readResource("db/task-collaboration-backfill-audit-schema.sql")));
+        int index = java.util.stream.IntStream.range(0, definitions.size())
+                .filter(i -> "trg_task_backfill_manifest_batch_update_guard"
+                        .equals(definitions.get(i).name()))
+                .findFirst().orElseThrow();
+        AgentSchemaInitializer.TriggerDefinition original = definitions.get(index);
+        String altered = original.statement().replace(
+                "if not (\n        binary old.seal_status",
+                "if (not\n        binary old.seal_status");
+        assertNotEquals(original.statement(), altered);
+        definitions.set(index, new AgentSchemaInitializer.TriggerDefinition(
+                original.name(), original.table(), original.timing(), original.event(), altered));
+        JdbcTemplate template = new JdbcTemplate() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper) {
+                return sql.contains("information_schema.triggers")
+                        ? (List<T>) definitions : List.of();
+            }
+
+            @Override
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                return query(sql, rowMapper);
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(template).validateBackfillAuditTriggers());
+        assertTrue(error.getMessage().contains(original.name()), error.getMessage());
     }
 
     @Test
@@ -1061,6 +1107,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
     private List<AgentSchemaInitializer.TriggerDefinition> backfillAuditTriggers(String migration) {
         return List.of(
+                backfillAuditTrigger(migration, "trg_task_backfill_manifest_batch_insert_guard",
+                        "agent_task_backfill_manifest_batch", "INSERT"),
                 backfillAuditTrigger(migration, "trg_task_backfill_manifest_batch_update_guard",
                         "agent_task_backfill_manifest_batch", "UPDATE"),
                 backfillAuditTrigger(migration, "trg_task_backfill_manifest_batch_no_delete",
@@ -1071,6 +1119,14 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                         "agent_task_backfill_manifest", "UPDATE"),
                 backfillAuditTrigger(migration, "trg_task_backfill_manifest_no_delete",
                         "agent_task_backfill_manifest", "DELETE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_issue_insert_guard",
+                        "agent_task_backfill_issue", "INSERT"),
+                backfillAuditTrigger(migration, "trg_task_backfill_issue_update_guard",
+                        "agent_task_backfill_issue", "UPDATE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_issue_no_delete",
+                        "agent_task_backfill_issue", "DELETE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_run_insert_guard",
+                        "agent_task_backfill_run", "INSERT"),
                 backfillAuditTrigger(migration, "trg_task_backfill_run_no_update",
                         "agent_task_backfill_run", "UPDATE"),
                 backfillAuditTrigger(migration, "trg_task_backfill_run_no_delete",

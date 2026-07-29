@@ -60,10 +60,10 @@ class AgentTaskCollaborationBackfillSchemaTest {
     void dryRunManifestAndApplyUseTheSameResolutionCte() throws IOException {
         String dryRun = readResource("db/task-collaboration-backfill-dry-run.sql");
         String manifest = readResource("db/task-collaboration-backfill-manifest.sql");
-        String apply = readResource("db/task-collaboration-backfill.sql");
+        String routines = readResource("db/task-collaboration-backfill-routines.sql");
 
         assertEquals(resolutionCte(dryRun), resolutionCte(manifest));
-        assertEquals(resolutionCte(dryRun), resolutionCte(apply));
+        assertEquals(resolutionCte(dryRun), resolutionCte(routines));
         assertTrue(resolutionCte(dryRun).contains("manifest_rows as ("));
         assertTrue(resolutionCte(dryRun).contains("b09-manifest-content-v2"));
     }
@@ -72,81 +72,83 @@ class AgentTaskCollaborationBackfillSchemaTest {
     void canonicalManifestDigestIsDatabaseRecomputedOrderedAndUntruncated() throws IOException {
         String manifest = readResource("db/task-collaboration-backfill-manifest.sql");
         String staging = readResource("db/task-collaboration-backfill-staging.sql");
-        String approve = readResource("db/task-collaboration-backfill-approve.sql");
-        String apply = readResource("db/task-collaboration-backfill.sql");
+        String routines = readResource("db/task-collaboration-backfill-routines.sql");
 
         assertTrue(manifest.contains("b09-manifest-batch-chain-v2"));
         assertTrue(manifest.contains("b09-manifest-batch-final-v2"));
         assertTrue(manifest.contains("order by binary manifest_row_key"));
         String digestSection = manifest.substring(manifest.indexOf("drop procedure if exists b09_compute_export_manifest_digest_v3"));
         assertFalse(digestSection.contains("group_concat("));
-        assertTrue(approve.contains("canonical digest mismatch"));
-        assertTrue(approve.contains("row key or row digest is forged"));
-        assertTrue(approve.contains("binary computed_digest <> binary approved_manifest_digest"));
-        assertTrue(apply.contains("sealed manifest canonical digest mismatch"));
-        assertTrue(apply.contains("sealed manifest row count mismatch"));
+        assertFalse(routines.contains("group_concat("));
+        assertTrue(routines.contains("canonical digest mismatch"));
+        assertTrue(routines.contains("row key or row digest is forged"));
+        assertTrue(routines.contains("binary computed_digest <> binary approved_manifest_digest"));
+        assertTrue(routines.contains("sealed manifest canonical digest mismatch"));
+        assertTrue(routines.contains("sealed manifest row count mismatch"));
         assertTrue(staging.contains("task_id_hex                     longtext null"));
         assertTrue(staging.contains("required_abilities_hex          longtext null"));
         assertFalse(staging.contains("varchar("));
-        assertTrue(approve.contains("octet_length(unhex(task_id_hex)) > 400"));
-        assertTrue(approve.contains("hex(convert(unhex(task_id_hex) using utf8mb4))"));
+        assertTrue(routines.contains("octet_length(unhex(task_id_hex)) > 400"));
+        assertTrue(routines.contains("hex(convert(unhex(task_id_hex) using utf8mb4))"));
     }
 
     @Test
     void sealedManifestRejectsAppendUpdateDeleteAndApplyRejectsDrift() throws IOException {
-        String approve = readResource("db/task-collaboration-backfill-approve.sql");
         String audit = readResource("db/task-collaboration-backfill-audit-schema.sql");
-        String apply = readResource("db/task-collaboration-backfill.sql");
+        String routines = readResource("db/task-collaboration-backfill-routines.sql");
 
-        assertTrue(approve.contains("insert into agent_task_backfill_manifest_batch"));
-        assertTrue(approve.contains("'loading'"));
-        assertTrue(approve.contains("seal_status = 'sealed'"));
+        assertTrue(routines.contains("insert into agent_task_backfill_manifest_batch"));
+        assertTrue(routines.contains("'loading'"));
+        assertTrue(routines.contains("seal_status = 'sealed'"));
+        assertTrue(audit.contains("trg_task_backfill_manifest_batch_insert_guard"));
         assertTrue(audit.contains("trg_task_backfill_manifest_insert_guard"));
-        assertTrue(audit.contains("matching unsealed batch"));
-        assertTrue(audit.contains("trg_task_backfill_manifest_no_update"));
-        assertTrue(audit.contains("trg_task_backfill_manifest_no_delete"));
-        assertTrue(apply.contains("current task row count differs from sealed manifest"));
-        assertTrue(apply.contains("current source/scope/resolution differs from sealed manifest"));
-        assertTrue(apply.contains("a sealed source row was deleted or changed"));
-        assertTrue(apply.contains("approved.manifest_row_sha256 = binary current_row.manifest_row_sha256"));
-        assertTrue(apply.contains("binary approved.tenant_id <=> binary current_row.tenant_id"));
-        assertTrue(apply.contains("binary approved.resolution_status = binary current_row.resolution_status"));
+        assertTrue(audit.contains("procedure-owned loading batch"));
+        assertTrue(audit.contains("trg_task_backfill_issue_insert_guard"));
+        assertTrue(audit.contains("trg_task_backfill_run_insert_guard"));
+        assertTrue(audit.contains("matching sealed approval"));
+        assertTrue(audit.contains("complete matching sealed approval"));
+        assertTrue(routines.contains("current task row count differs from sealed manifest"));
+        assertTrue(routines.contains("current source/scope/resolution differs from sealed manifest"));
+        assertTrue(routines.contains("a sealed source row was deleted or changed"));
+        assertTrue(routines.contains("approved.manifest_row_sha256 = binary current_row.manifest_row_sha256"));
     }
 
     @Test
     void approvalAndApplyAreSingleAtomicCallsSafeUnderMysqlForce() throws IOException {
         String approve = readResource("db/task-collaboration-backfill-approve.sql");
         String apply = readResource("db/task-collaboration-backfill.sql");
+        String routines = readResource("db/task-collaboration-backfill-routines.sql");
 
-        for (String sql : List.of(approve, apply)) {
-            assertTrue(sql.contains("declare exit handler for sqlexception"));
-            assertTrue(sql.contains("rollback;"));
-            assertTrue(sql.contains("resignal;"));
-        }
-        assertTrue(approve.contains("call b09_approve_manifest_atomic_v3("));
-        assertTrue(apply.contains("call b09_apply_manifest_atomic_v3("));
-        assertTrue(apply.contains("insert into agent_task_backfill_run"));
-        assertTrue(apply.contains("'succeeded'"));
-        assertTrue(apply.indexOf("insert into agent_task_backfill_run") < apply.indexOf("commit;"));
-        assertTrue(apply.contains("regexp_like(applying_operator, '[[:cntrl:]]', 'c')"));
-        assertTrue(approve.contains("regexp_like(approving_operator, '[[:cntrl:]]', 'c')"));
+        assertTrue(routines.contains("declare exit handler for sqlexception"));
+        assertTrue(routines.contains("rollback;"));
+        assertTrue(routines.contains("resignal;"));
+        assertTrue(routines.contains("create definer=`cyf_b09_definer`@`localhost` procedure"));
+        assertEquals(4, routines.split("sql security definer", -1).length - 1);
+        assertTrue(approve.contains("call b09_approve_manifest_atomic_v4("));
+        assertTrue(apply.contains("call b09_apply_manifest_atomic_v4("));
+        assertFalse(approve.contains("create procedure"));
+        assertFalse(apply.contains("create procedure"));
+        assertTrue(routines.contains("insert into agent_task_backfill_run"));
+        assertTrue(routines.indexOf("insert into agent_task_backfill_run") < routines.lastIndexOf("commit;"));
+        assertTrue(routines.contains("regexp_like(applying_operator, '[[:cntrl:]]', 'c')"));
+        assertTrue(routines.contains("regexp_like(approving_operator, '[[:cntrl:]]', 'c')"));
     }
 
     @Test
     void applyIsTransactionalTaskAtomicAndBusinessIdempotent() throws IOException {
-        String apply = readResource("db/task-collaboration-backfill.sql");
+        String routines = readResource("db/task-collaboration-backfill-routines.sql");
 
-        assertTrue(apply.contains("get_lock(lock_name, 0)"));
-        assertTrue(apply.contains("start transaction with consistent snapshot"));
-        assertTrue(apply.contains("where r.task_resolution_status = 'eligible'"));
-        assertTrue(apply.contains("and r.resolution_status = 'eligible'"));
-        assertTrue(apply.contains("not exists (\n      select 1 from agent_task_work_item"));
-        assertTrue(apply.contains("not exists (\n      select 1 from agent_task_member"));
-        assertFalse(apply.contains("on duplicate key update id = id"));
+        assertTrue(routines.contains("get_lock(lock_name, 0)"));
+        assertTrue(routines.contains("start transaction with consistent snapshot"));
+        assertTrue(routines.contains("where r.task_resolution_status = 'eligible'"));
+        assertTrue(routines.contains("and r.resolution_status = 'eligible'"));
+        assertTrue(routines.contains("not exists (\n      select 1 from agent_task_work_item"));
+        assertTrue(routines.contains("not exists (\n      select 1 from agent_task_member"));
+        assertFalse(routines.contains("on duplicate key update id = id"));
         assertFalse(Pattern.compile("(?im)^\\s*(insert|replace)\\s+into\\s+agent_identity_")
-                .matcher(withoutLineComments(apply)).find());
+                .matcher(withoutLineComments(routines)).find());
         assertFalse(Pattern.compile("(?im)^\\s*update\\s+agent_task_meta\\b")
-                .matcher(withoutLineComments(apply)).find());
+                .matcher(withoutLineComments(routines)).find());
     }
 
     @Test
@@ -172,14 +174,25 @@ class AgentTaskCollaborationBackfillSchemaTest {
     @Test
     void aiCiEquivalentBusinessKeysAreAuditedAndNeverNoOpInserted() throws IOException {
         String cte = resolutionCte(readResource("db/task-collaboration-backfill-dry-run.sql"));
-        String apply = readResource("db/task-collaboration-backfill.sql");
+        String routines = readResource("db/task-collaboration-backfill-routines.sql");
 
         assertTrue(cte.contains("existing_member_collation_conflicts"));
         assertTrue(cte.contains("existing_work_item_collation_conflicts"));
         assertTrue(cte.contains("collate utf8mb4_0900_ai_ci"));
         assertTrue(cte.contains("blocked_existing_member_collation_conflict"));
         assertTrue(cte.contains("blocked_existing_work_item_collation_conflict"));
-        assertFalse(apply.contains("on duplicate key update id = id"));
+        assertFalse(routines.contains("on duplicate key update id = id"));
+    }
+
+    @Test
+    void applyValidatesIndexesStructurallyWithoutGroupConcat() throws IOException {
+        String routines = readResource("db/task-collaboration-backfill-routines.sql");
+        assertFalse(routines.contains("group_concat("));
+        assertTrue(routines.contains("seq_in_index = 4 and binary column_name = binary 'agent_id'"));
+        assertTrue(routines.contains("seq_in_index = 3 and binary column_name = binary 'work_item_id'"));
+        assertTrue(routines.contains("sub_part is null"));
+        assertTrue(routines.contains("index_type = 'btree'"));
+        assertTrue(routines.contains("is_visible = 'yes'"));
     }
 
     @Test
@@ -188,6 +201,7 @@ class AgentTaskCollaborationBackfillSchemaTest {
                 + readResource("db/task-collaboration-backfill-dry-run.sql")
                 + readResource("db/task-collaboration-backfill-manifest.sql")
                 + readResource("db/task-collaboration-backfill-approve.sql")
+                + readResource("db/task-collaboration-backfill-routines.sql")
                 + readResource("db/task-collaboration-backfill-audit-schema.sql");
 
         assertFalse(withoutLineComments(combined).contains("create trigger if not exists"));

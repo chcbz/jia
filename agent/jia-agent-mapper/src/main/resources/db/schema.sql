@@ -325,7 +325,7 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest_batch (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     report_sha256           CHAR(64) NOT NULL COMMENT 'Database-recomputed canonical manifest digest',
     manifest_row_count      BIGINT NOT NULL DEFAULT 0 COMMENT 'Exact sealed manifest row count',
-    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED, SEALED is terminal',
+    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED/LEGACY_UNSEALED, only SEALED is consumable',
     approved_operator       VARCHAR(100) NOT NULL COMMENT 'Operator/ticket that approved this manifest',
     approved_at             BIGINT NOT NULL COMMENT 'Approval time',
     sealed_at               BIGINT DEFAULT NULL COMMENT 'Seal time, non-null only when SEALED',

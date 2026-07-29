@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest_batch (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     report_sha256           CHAR(64) NOT NULL COMMENT 'Database-recomputed canonical manifest digest',
     manifest_row_count      BIGINT NOT NULL DEFAULT 0 COMMENT 'Exact sealed manifest row count',
-    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED, SEALED is terminal',
+    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED/LEGACY_UNSEALED, only SEALED is consumable',
     approved_operator       VARCHAR(100) NOT NULL COMMENT 'Operator/ticket that approved this manifest',
     approved_at             BIGINT NOT NULL COMMENT 'Approval time',
     sealed_at               BIGINT DEFAULT NULL COMMENT 'Seal time, non-null only when SEALED',
@@ -91,17 +91,79 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_run (
     KEY idx_task_backfill_run_operator (operator, completed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable successful B09 apply run audit';
 
--- Manifest batches are built only while LOADING, sealed once, and then immutable.
--- Rows/runs are append-only. MySQL 8.0.21 has no CREATE TRIGGER IF NOT EXISTS,
--- so deploy by exact replacement.
+-- Existing three-table approvals are retained but explicitly quarantined. They
+-- were not bound to the V2 canonical digest and can never be consumed by v4.
+DROP PROCEDURE IF EXISTS b09_upgrade_legacy_manifest_batches_v4;
+DELIMITER $$
+CREATE PROCEDURE b09_upgrade_legacy_manifest_batches_v4()
+SQL SECURITY INVOKER
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM agent_task_backfill_manifest m
+        LEFT JOIN agent_task_backfill_manifest_batch b
+          ON BINARY b.report_sha256 = BINARY m.report_sha256
+        WHERE b.id IS NULL
+        GROUP BY m.report_sha256
+        HAVING COUNT(DISTINCT HEX(m.approved_operator)) <> 1
+            OR COUNT(DISTINCT m.approved_at) <> 1
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 legacy manifest approval metadata is inconsistent';
+    END IF;
+
+    INSERT INTO agent_task_backfill_manifest_batch (
+        report_sha256, manifest_row_count, seal_status, approved_operator,
+        approved_at, sealed_at, create_time)
+    SELECT m.report_sha256, COUNT(*), 'LEGACY_UNSEALED', MIN(m.approved_operator),
+           MIN(m.approved_at), NULL, MIN(m.create_time)
+    FROM agent_task_backfill_manifest m
+    LEFT JOIN agent_task_backfill_manifest_batch b
+      ON BINARY b.report_sha256 = BINARY m.report_sha256
+    WHERE b.id IS NULL
+    GROUP BY m.report_sha256;
+END$$
+DELIMITER ;
+CALL b09_upgrade_legacy_manifest_batches_v4();
+DROP PROCEDURE IF EXISTS b09_upgrade_legacy_manifest_batches_v4;
+
+-- Approval and apply writes are available only through DBA-installed SQL
+-- SECURITY DEFINER routines. These triggers add structural/association checks;
+-- privilege revocation, not a caller-controlled session variable, is the strong
+-- boundary against direct audit forgery.
+DROP TRIGGER IF EXISTS trg_task_backfill_manifest_batch_insert_guard;
 DROP TRIGGER IF EXISTS trg_task_backfill_manifest_batch_update_guard;
 DROP TRIGGER IF EXISTS trg_task_backfill_manifest_batch_no_delete;
 DROP TRIGGER IF EXISTS trg_task_backfill_manifest_insert_guard;
 DROP TRIGGER IF EXISTS trg_task_backfill_manifest_no_update;
 DROP TRIGGER IF EXISTS trg_task_backfill_manifest_no_delete;
+DROP TRIGGER IF EXISTS trg_task_backfill_issue_insert_guard;
+DROP TRIGGER IF EXISTS trg_task_backfill_issue_update_guard;
+DROP TRIGGER IF EXISTS trg_task_backfill_issue_no_delete;
+DROP TRIGGER IF EXISTS trg_task_backfill_run_insert_guard;
 DROP TRIGGER IF EXISTS trg_task_backfill_run_no_update;
 DROP TRIGGER IF EXISTS trg_task_backfill_run_no_delete;
 DELIMITER $$
+CREATE TRIGGER trg_task_backfill_manifest_batch_insert_guard
+BEFORE INSERT ON agent_task_backfill_manifest_batch
+FOR EACH ROW
+BEGIN
+    IF NEW.report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.approved_operator IS NULL
+       OR CHAR_LENGTH(NEW.approved_operator) NOT BETWEEN 1 AND 100
+       OR BINARY NEW.approved_operator <> BINARY TRIM(NEW.approved_operator)
+       OR REGEXP_LIKE(NEW.approved_operator, '[[:cntrl:]]', 'c')
+       OR NOT (
+           (BINARY NEW.seal_status = BINARY 'LOADING'
+            AND NEW.manifest_row_count = 0 AND NEW.sealed_at IS NULL
+            AND NEW.approved_at > 0 AND NEW.create_time = NEW.approved_at)
+           OR
+           (BINARY NEW.seal_status = BINARY 'LEGACY_UNSEALED'
+            AND NEW.manifest_row_count > 0 AND NEW.sealed_at IS NULL
+            AND NEW.approved_at > 0)
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest batch insert requires exact loading or quarantined legacy state';
+    END IF;
+END$$
 CREATE TRIGGER trg_task_backfill_manifest_batch_update_guard
 BEFORE UPDATE ON agent_task_backfill_manifest_batch
 FOR EACH ROW
@@ -117,8 +179,9 @@ BEGIN
         AND NEW.approved_at = OLD.approved_at
         AND NEW.create_time <=> OLD.create_time
         AND (SELECT COUNT(*) FROM agent_task_backfill_manifest m
-             WHERE BINARY m.report_sha256 = BINARY OLD.report_sha256)
-            = NEW.manifest_row_count
+             WHERE BINARY m.report_sha256 = BINARY OLD.report_sha256
+               AND BINARY m.approved_operator = BINARY OLD.approved_operator
+               AND m.approved_at = OLD.approved_at) = NEW.manifest_row_count
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest batch permits only exact LOADING to SEALED transition';
     END IF;
@@ -133,10 +196,17 @@ CREATE TRIGGER trg_task_backfill_manifest_insert_guard
 BEFORE INSERT ON agent_task_backfill_manifest
 FOR EACH ROW
 BEGIN
-    IF (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
-        WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
-          AND BINARY b.seal_status = BINARY 'LOADING') <> 1 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest rows require the matching unsealed batch';
+    IF NEW.manifest_row_key NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.manifest_row_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.source_hash NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+           WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
+             AND BINARY b.seal_status = BINARY 'LOADING'
+             AND b.manifest_row_count = 0 AND b.sealed_at IS NULL
+             AND BINARY b.approved_operator = BINARY NEW.approved_operator
+             AND b.approved_at = NEW.approved_at
+             AND b.create_time <=> NEW.create_time) <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest rows require the matching procedure-owned loading batch';
     END IF;
 END$$
 CREATE TRIGGER trg_task_backfill_manifest_no_update
@@ -150,6 +220,84 @@ BEFORE DELETE ON agent_task_backfill_manifest
 FOR EACH ROW
 BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 approved manifest cannot be deleted';
+END$$
+CREATE TRIGGER trg_task_backfill_issue_insert_guard
+BEFORE INSERT ON agent_task_backfill_issue
+FOR EACH ROW
+BEGIN
+    IF NEW.issue_key NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.first_report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR BINARY NEW.first_report_sha256 <> BINARY NEW.last_report_sha256
+       OR NEW.occurrence_count <> 1
+       OR NEW.first_seen_at <> NEW.last_seen_at
+       OR NEW.create_time <> NEW.first_seen_at
+       OR NEW.update_time <> NEW.last_seen_at
+       OR (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+           WHERE BINARY b.report_sha256 = BINARY NEW.last_report_sha256
+             AND BINARY b.seal_status = BINARY 'SEALED'
+             AND BINARY b.approved_operator = BINARY NEW.last_operator) <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 issue insert requires a matching sealed approval';
+    END IF;
+END$$
+CREATE TRIGGER trg_task_backfill_issue_update_guard
+BEFORE UPDATE ON agent_task_backfill_issue
+FOR EACH ROW
+BEGIN
+    IF NOT (
+        NEW.id = OLD.id
+        AND BINARY NEW.issue_key = BINARY OLD.issue_key
+        AND NEW.meta_id = OLD.meta_id
+        AND BINARY NEW.task_id = BINARY OLD.task_id
+        AND BINARY NEW.source_hash = BINARY OLD.source_hash
+        AND BINARY NEW.source_format = BINARY OLD.source_format
+        AND BINARY NEW.source_shape = BINARY OLD.source_shape
+        AND NEW.source_ordinal = OLD.source_ordinal
+        AND BINARY NEW.raw_assignee <=> BINARY OLD.raw_assignee
+        AND BINARY NEW.source_agent_id <=> BINARY OLD.source_agent_id
+        AND BINARY NEW.issue_code = BINARY OLD.issue_code
+        AND BINARY NEW.issue_reason = BINARY OLD.issue_reason
+        AND BINARY NEW.first_report_sha256 = BINARY OLD.first_report_sha256
+        AND NEW.first_seen_at = OLD.first_seen_at
+        AND NEW.occurrence_count = OLD.occurrence_count + 1
+        AND NEW.last_seen_at >= OLD.last_seen_at
+        AND BINARY NEW.tenant_id <=> BINARY OLD.tenant_id
+        AND BINARY NEW.client_id <=> BINARY OLD.client_id
+        AND NEW.create_time <=> OLD.create_time
+        AND NEW.update_time = NEW.last_seen_at
+        AND (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+             WHERE BINARY b.report_sha256 = BINARY NEW.last_report_sha256
+               AND BINARY b.seal_status = BINARY 'SEALED'
+               AND BINARY b.approved_operator = BINARY NEW.last_operator) = 1
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 issue audit permits only one sealed apply observation increment';
+    END IF;
+END$$
+CREATE TRIGGER trg_task_backfill_issue_no_delete
+BEFORE DELETE ON agent_task_backfill_issue
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 issue audit cannot be deleted';
+END$$
+CREATE TRIGGER trg_task_backfill_run_insert_guard
+BEFORE INSERT ON agent_task_backfill_run
+FOR EACH ROW
+BEGIN
+    IF NEW.run_id IS NULL OR CHAR_LENGTH(NEW.run_id) <> 36
+       OR NEW.report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR BINARY NEW.run_status <> BINARY 'SUCCEEDED'
+       OR NEW.manifest_row_count <= 0 OR NEW.issue_row_count < 0
+       OR NEW.member_insert_count < 0 OR NEW.work_item_insert_count < 0
+       OR NEW.completed_at < NEW.started_at OR NEW.create_time <> NEW.completed_at
+       OR (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+           WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
+             AND BINARY b.seal_status = BINARY 'SEALED'
+             AND BINARY b.approved_operator = BINARY NEW.operator
+             AND b.manifest_row_count = NEW.manifest_row_count) <> 1
+       OR (SELECT COUNT(*) FROM agent_task_backfill_manifest m
+           WHERE BINARY m.report_sha256 = BINARY NEW.report_sha256)
+          <> NEW.manifest_row_count THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 run insert requires a complete matching sealed approval';
+    END IF;
 END$$
 CREATE TRIGGER trg_task_backfill_run_no_update
 BEFORE UPDATE ON agent_task_backfill_run

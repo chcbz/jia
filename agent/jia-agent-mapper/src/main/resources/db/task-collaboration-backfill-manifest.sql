@@ -346,7 +346,13 @@ identity_counts AS (
         candidate_key,
         COUNT(DISTINCT BINARY canonical_agent_id) AS canonical_count,
         MAX(canonical_agent_id) AS canonical_agent_id,
-        GROUP_CONCAT(DISTINCT match_source ORDER BY match_source) AS identity_match
+        CASE
+            WHEN MAX(BINARY match_source = BINARY 'alias') = 1
+             AND MAX(BINARY match_source = BINARY 'registry') = 1 THEN 'alias,registry'
+            WHEN MAX(BINARY match_source = BINARY 'alias') = 1 THEN 'alias'
+            WHEN MAX(BINARY match_source = BINARY 'registry') = 1 THEN 'registry'
+            ELSE NULL
+        END AS identity_match
     FROM identity_candidates
     GROUP BY candidate_key
 ),

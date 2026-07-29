@@ -478,7 +478,7 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
 
-    private String normalizeSql(String sql) {
+    String normalizeSql(String sql) {
         if (sql == null) {
             return "";
         }
@@ -486,7 +486,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                 .replace("`", "")
                 .replace("_utf8mb4", "")
                 .replace("\\", "")
-                .replaceAll("[()]", " ")
+                .replaceAll("\\s*\\(\\s*", "(")
+                .replaceAll("\\s*\\)\\s*", ")")
                 .replaceAll("\\s*,\\s*", ",")
                 .replaceAll("\\s+", " ")
                 .trim();
@@ -796,7 +797,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                     report_sha256           CHAR(64) NOT NULL COMMENT 'Database-recomputed canonical manifest digest',
                     manifest_row_count      BIGINT NOT NULL DEFAULT 0 COMMENT 'Exact sealed manifest row count',
-                    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED, SEALED is terminal',
+                    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED/LEGACY_UNSEALED, only SEALED is consumable',
                     approved_operator       VARCHAR(100) NOT NULL COMMENT 'Operator/ticket that approved this manifest',
                     approved_at             BIGINT NOT NULL COMMENT 'Approval time',
                     sealed_at               BIGINT DEFAULT NULL COMMENT 'Seal time, non-null only when SEALED',
@@ -1200,11 +1201,16 @@ public class AgentSchemaInitializer implements InitializingBean {
                 FROM information_schema.triggers
                 WHERE trigger_schema = DATABASE()
                   AND trigger_name IN (
+                    'trg_task_backfill_manifest_batch_insert_guard',
                     'trg_task_backfill_manifest_batch_update_guard',
                     'trg_task_backfill_manifest_batch_no_delete',
                     'trg_task_backfill_manifest_insert_guard',
                     'trg_task_backfill_manifest_no_update',
                     'trg_task_backfill_manifest_no_delete',
+                    'trg_task_backfill_issue_insert_guard',
+                    'trg_task_backfill_issue_update_guard',
+                    'trg_task_backfill_issue_no_delete',
+                    'trg_task_backfill_run_insert_guard',
                     'trg_task_backfill_run_no_update',
                     'trg_task_backfill_run_no_delete')
                 """, (rs, rowNum) -> new TriggerDefinition(
@@ -1212,7 +1218,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 rs.getString("ACTION_TIMING"), rs.getString("EVENT_MANIPULATION"),
                 rs.getString("ACTION_STATEMENT")));
         if (actual.size() != expected.size()) {
-            throw new IllegalStateException("B09 requires seven exact sealing/immutable audit triggers");
+            throw new IllegalStateException("B09 requires twelve exact procedure-gated audit triggers");
         }
         for (TriggerDefinition trigger : actual) {
             TriggerDefinition required = expected.get(trigger.name());
@@ -1237,9 +1243,31 @@ public class AgentSchemaInitializer implements InitializingBean {
 
     private java.util.Map<String, TriggerDefinition> expectedBackfillAuditTriggers() {
         return java.util.Map.ofEntries(
+                java.util.Map.entry("trg_task_backfill_manifest_batch_insert_guard", new TriggerDefinition(
+                        "trg_task_backfill_manifest_batch_insert_guard", "agent_task_backfill_manifest_batch",
+                        "BEFORE", "INSERT", """
+                        BEGIN
+                            IF NEW.report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+                               OR NEW.approved_operator IS NULL
+                               OR CHAR_LENGTH(NEW.approved_operator) NOT BETWEEN 1 AND 100
+                               OR BINARY NEW.approved_operator <> BINARY TRIM(NEW.approved_operator)
+                               OR REGEXP_LIKE(NEW.approved_operator, '[[:cntrl:]]', 'c')
+                               OR NOT (
+                                   (BINARY NEW.seal_status = BINARY 'LOADING'
+                                    AND NEW.manifest_row_count = 0 AND NEW.sealed_at IS NULL
+                                    AND NEW.approved_at > 0 AND NEW.create_time = NEW.approved_at)
+                                   OR
+                                   (BINARY NEW.seal_status = BINARY 'LEGACY_UNSEALED'
+                                    AND NEW.manifest_row_count > 0 AND NEW.sealed_at IS NULL
+                                    AND NEW.approved_at > 0)
+                               ) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest batch insert requires exact loading or quarantined legacy state';
+                            END IF;
+                        END
+                        """)),
                 java.util.Map.entry("trg_task_backfill_manifest_batch_update_guard", new TriggerDefinition(
-                        "trg_task_backfill_manifest_batch_update_guard",
-                        "agent_task_backfill_manifest_batch", "BEFORE", "UPDATE", """
+                        "trg_task_backfill_manifest_batch_update_guard", "agent_task_backfill_manifest_batch",
+                        "BEFORE", "UPDATE", """
                         BEGIN
                             IF NOT (
                                 BINARY OLD.seal_status = BINARY 'LOADING'
@@ -1252,28 +1280,36 @@ public class AgentSchemaInitializer implements InitializingBean {
                                 AND NEW.approved_at = OLD.approved_at
                                 AND NEW.create_time <=> OLD.create_time
                                 AND (SELECT COUNT(*) FROM agent_task_backfill_manifest m
-                                     WHERE BINARY m.report_sha256 = BINARY OLD.report_sha256)
-                                    = NEW.manifest_row_count
+                                     WHERE BINARY m.report_sha256 = BINARY OLD.report_sha256
+                                       AND BINARY m.approved_operator = BINARY OLD.approved_operator
+                                       AND m.approved_at = OLD.approved_at) = NEW.manifest_row_count
                             ) THEN
                                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest batch permits only exact LOADING to SEALED transition';
                             END IF;
                         END
                         """)),
                 java.util.Map.entry("trg_task_backfill_manifest_batch_no_delete", new TriggerDefinition(
-                        "trg_task_backfill_manifest_batch_no_delete",
-                        "agent_task_backfill_manifest_batch", "BEFORE", "DELETE", """
+                        "trg_task_backfill_manifest_batch_no_delete", "agent_task_backfill_manifest_batch",
+                        "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest batch cannot be deleted';
                         END
                         """)),
                 java.util.Map.entry("trg_task_backfill_manifest_insert_guard", new TriggerDefinition(
-                        "trg_task_backfill_manifest_insert_guard",
-                        "agent_task_backfill_manifest", "BEFORE", "INSERT", """
+                        "trg_task_backfill_manifest_insert_guard", "agent_task_backfill_manifest",
+                        "BEFORE", "INSERT", """
                         BEGIN
-                            IF (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
-                                WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
-                                  AND BINARY b.seal_status = BINARY 'LOADING') <> 1 THEN
-                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest rows require the matching unsealed batch';
+                            IF NEW.manifest_row_key NOT REGEXP BINARY '^[0-9a-f]{64}$'
+                               OR NEW.manifest_row_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+                               OR NEW.source_hash NOT REGEXP BINARY '^[0-9a-f]{64}$'
+                               OR (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+                                   WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
+                                     AND BINARY b.seal_status = BINARY 'LOADING'
+                                     AND b.manifest_row_count = 0 AND b.sealed_at IS NULL
+                                     AND BINARY b.approved_operator = BINARY NEW.approved_operator
+                                     AND b.approved_at = NEW.approved_at
+                                     AND b.create_time <=> NEW.create_time) <> 1 THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest rows require the matching procedure-owned loading batch';
                             END IF;
                         END
                         """)),
@@ -1289,6 +1325,88 @@ public class AgentSchemaInitializer implements InitializingBean {
                         "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 approved manifest cannot be deleted';
+                        END
+                        """)),
+                java.util.Map.entry("trg_task_backfill_issue_insert_guard", new TriggerDefinition(
+                        "trg_task_backfill_issue_insert_guard", "agent_task_backfill_issue",
+                        "BEFORE", "INSERT", """
+                        BEGIN
+                            IF NEW.issue_key NOT REGEXP BINARY '^[0-9a-f]{64}$'
+                               OR NEW.first_report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+                               OR BINARY NEW.first_report_sha256 <> BINARY NEW.last_report_sha256
+                               OR NEW.occurrence_count <> 1
+                               OR NEW.first_seen_at <> NEW.last_seen_at
+                               OR NEW.create_time <> NEW.first_seen_at
+                               OR NEW.update_time <> NEW.last_seen_at
+                               OR (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+                                   WHERE BINARY b.report_sha256 = BINARY NEW.last_report_sha256
+                                     AND BINARY b.seal_status = BINARY 'SEALED'
+                                     AND BINARY b.approved_operator = BINARY NEW.last_operator) <> 1 THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 issue insert requires a matching sealed approval';
+                            END IF;
+                        END
+                        """)),
+                java.util.Map.entry("trg_task_backfill_issue_update_guard", new TriggerDefinition(
+                        "trg_task_backfill_issue_update_guard", "agent_task_backfill_issue",
+                        "BEFORE", "UPDATE", """
+                        BEGIN
+                            IF NOT (
+                                NEW.id = OLD.id
+                                AND BINARY NEW.issue_key = BINARY OLD.issue_key
+                                AND NEW.meta_id = OLD.meta_id
+                                AND BINARY NEW.task_id = BINARY OLD.task_id
+                                AND BINARY NEW.source_hash = BINARY OLD.source_hash
+                                AND BINARY NEW.source_format = BINARY OLD.source_format
+                                AND BINARY NEW.source_shape = BINARY OLD.source_shape
+                                AND NEW.source_ordinal = OLD.source_ordinal
+                                AND BINARY NEW.raw_assignee <=> BINARY OLD.raw_assignee
+                                AND BINARY NEW.source_agent_id <=> BINARY OLD.source_agent_id
+                                AND BINARY NEW.issue_code = BINARY OLD.issue_code
+                                AND BINARY NEW.issue_reason = BINARY OLD.issue_reason
+                                AND BINARY NEW.first_report_sha256 = BINARY OLD.first_report_sha256
+                                AND NEW.first_seen_at = OLD.first_seen_at
+                                AND NEW.occurrence_count = OLD.occurrence_count + 1
+                                AND NEW.last_seen_at >= OLD.last_seen_at
+                                AND BINARY NEW.tenant_id <=> BINARY OLD.tenant_id
+                                AND BINARY NEW.client_id <=> BINARY OLD.client_id
+                                AND NEW.create_time <=> OLD.create_time
+                                AND NEW.update_time = NEW.last_seen_at
+                                AND (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+                                     WHERE BINARY b.report_sha256 = BINARY NEW.last_report_sha256
+                                       AND BINARY b.seal_status = BINARY 'SEALED'
+                                       AND BINARY b.approved_operator = BINARY NEW.last_operator) = 1
+                            ) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 issue audit permits only one sealed apply observation increment';
+                            END IF;
+                        END
+                        """)),
+                java.util.Map.entry("trg_task_backfill_issue_no_delete", new TriggerDefinition(
+                        "trg_task_backfill_issue_no_delete", "agent_task_backfill_issue",
+                        "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 issue audit cannot be deleted';
+                        END
+                        """)),
+                java.util.Map.entry("trg_task_backfill_run_insert_guard", new TriggerDefinition(
+                        "trg_task_backfill_run_insert_guard", "agent_task_backfill_run",
+                        "BEFORE", "INSERT", """
+                        BEGIN
+                            IF NEW.run_id IS NULL OR CHAR_LENGTH(NEW.run_id) <> 36
+                               OR NEW.report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+                               OR BINARY NEW.run_status <> BINARY 'SUCCEEDED'
+                               OR NEW.manifest_row_count <= 0 OR NEW.issue_row_count < 0
+                               OR NEW.member_insert_count < 0 OR NEW.work_item_insert_count < 0
+                               OR NEW.completed_at < NEW.started_at OR NEW.create_time <> NEW.completed_at
+                               OR (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+                                   WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
+                                     AND BINARY b.seal_status = BINARY 'SEALED'
+                                     AND BINARY b.approved_operator = BINARY NEW.operator
+                                     AND b.manifest_row_count = NEW.manifest_row_count) <> 1
+                               OR (SELECT COUNT(*) FROM agent_task_backfill_manifest m
+                                   WHERE BINARY m.report_sha256 = BINARY NEW.report_sha256)
+                                  <> NEW.manifest_row_count THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 run insert requires a complete matching sealed approval';
+                            END IF;
                         END
                         """)),
                 java.util.Map.entry("trg_task_backfill_run_no_update", new TriggerDefinition(
