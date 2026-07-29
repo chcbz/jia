@@ -122,6 +122,61 @@ PREPARE b01_stmt FROM @b01_ddl;
 EXECUTE b01_stmt;
 DEALLOCATE PREPARE b01_stmt;
 
+-- B08 root reservation is scoped. Install the scoped UNIQUE first, then remove the
+-- legacy global UNIQUE(task_id). A crash between the two steps remains fail-closed
+-- (temporarily over-restrictive) and a repeated run completes the migration.
+SET @b01_ddl = (
+    SELECT IF(COUNT(*) = 3
+                  AND SUM(non_unique = 0) = 3
+                  AND SUM(sub_part IS NULL) = 3
+                  AND GROUP_CONCAT(LOWER(column_name) ORDER BY seq_in_index SEPARATOR ',')
+                      = 'tenant_id,client_id,task_id',
+              'SELECT 1',
+              'CREATE UNIQUE INDEX uk_agent_task_meta_scope ON agent_task_meta (tenant_id, client_id, task_id)')
+    FROM information_schema.statistics
+    WHERE table_schema = @b01_schema
+      AND table_name = 'agent_task_meta'
+      AND index_name = 'uk_agent_task_meta_scope'
+);
+PREPARE b01_stmt FROM @b01_ddl;
+EXECUTE b01_stmt;
+DEALLOCATE PREPARE b01_stmt;
+
+SET SESSION group_concat_max_len = 8192;
+SET @b01_global_task_unique_count = (
+    SELECT COUNT(*)
+    FROM (
+        SELECT index_name
+        FROM information_schema.statistics
+        WHERE table_schema = @b01_schema
+          AND table_name = 'agent_task_meta'
+          AND non_unique = 0
+          AND index_name <> 'PRIMARY'
+        GROUP BY index_name
+        HAVING COUNT(*) = 1 AND MAX(LOWER(column_name)) = 'task_id'
+    ) global_task_uniques
+);
+SET @b01_global_task_unique_drops = (
+    SELECT GROUP_CONCAT(CONCAT('DROP INDEX `', REPLACE(index_name, '`', '``'), '`')
+                        ORDER BY index_name SEPARATOR ', ')
+    FROM (
+        SELECT index_name
+        FROM information_schema.statistics
+        WHERE table_schema = @b01_schema
+          AND table_name = 'agent_task_meta'
+          AND non_unique = 0
+          AND index_name <> 'PRIMARY'
+        GROUP BY index_name
+        HAVING COUNT(*) = 1 AND MAX(LOWER(column_name)) = 'task_id'
+    ) global_task_uniques
+);
+SET @b01_ddl = IF(@b01_global_task_unique_count = 0,
+                  'SELECT 1',
+                  CONCAT('ALTER TABLE agent_task_meta ', @b01_global_task_unique_drops));
+PREPARE b01_stmt FROM @b01_ddl;
+EXECUTE b01_stmt;
+DEALLOCATE PREPARE b01_stmt;
+
 CREATE TABLE IF NOT EXISTS agent_task_member (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',

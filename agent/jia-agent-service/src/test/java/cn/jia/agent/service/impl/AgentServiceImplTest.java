@@ -146,12 +146,16 @@ class AgentServiceImplTest extends BaseMockTest {
         runtime.setClientId("client-a");
         runtime.setOwnerJiacn("tenant-a");
         runtime.setStatus(AgentConstants.STATUS_ONLINE);
+        runtime.setBindingId(1L);
         when(agentRuntimeDao.findByAgentId("agent-owned")).thenReturn(runtime);
         AgentPersonaBindingEntity active = binding("agent-owned", "wuyong");
         active.setClientId("client-a");
         active.setJiacn("tenant-a");
-        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(
-                "client-a", "tenant-a", "agent-owned")).thenReturn(active);
+        AgentIdentityRegistryEntity identity = identity(active, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        when(agentIdentityService.requireCanonicalAgentIdInScope(
+                "tenant-a", "client-a", "tenant-a", "agent-owned")).thenReturn("agent-owned");
+        when(agentIdentityService.requireActiveIdentityForBinding(
+                "tenant-a", "client-a", "tenant-a", 1L, "agent-owned")).thenReturn(identity);
 
         assertEquals("agent-owned", agentService.requireApiKeyOwnedAgent(
                 "client-a", "tenant-a", "agent-owned").getAgentId());
@@ -199,9 +203,12 @@ class AgentServiceImplTest extends BaseMockTest {
         runtime.setClientId("client-a");
         runtime.setOwnerJiacn("tenant-a");
         runtime.setStatus(AgentConstants.STATUS_ONLINE);
+        runtime.setBindingId(1L);
         when(agentRuntimeDao.findByAgentId("agent-unbound")).thenReturn(runtime);
-        when(agentPersonaBindingDao.findActiveByClientJiacnAndAgentId(
-                "client-a", "tenant-a", "agent-unbound")).thenReturn(null);
+        when(agentIdentityService.requireActiveIdentityForBinding(
+                "tenant-a", "client-a", "tenant-a", 1L, "agent-unbound"))
+                .thenThrow(new AgentServiceImpl.AgentBizException(
+                        AgentErrorConstants.AGENT_FORBIDDEN, "binding inactive"));
 
         AgentServiceImpl.AgentBizException denied = assertThrows(
                 AgentServiceImpl.AgentBizException.class,

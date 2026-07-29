@@ -119,10 +119,14 @@ public class AgentTaskThreadCreationTransaction {
     private AgentRuntimeDTO requireLockedWriter(
             String tenantId, String clientId, String taskId, String actorAgentId) {
         try {
-            AgentRuntimeDTO runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                    clientId, tenantId, actorAgentId);
+            // Keep the cross-module lock order aligned with B08 mutations: task root/member first,
+            // then binding/identity/runtime ownership locks. This preserves B07's append TOCTOU gate
+            // without introducing an identity -> task deadlock edge.
             AgentTaskAccessLevel access = accessService.resolveMemberAccessForUpdate(
                     tenantId, clientId, taskId, actorAgentId);
+            AgentRuntimeDTO runtime = access.canWrite()
+                    ? agentService.requireApiKeyOwnedAgentForUpdate(clientId, tenantId, actorAgentId)
+                    : null;
             if (runtime == null || !actorAgentId.equals(runtime.getAgentId()) || !access.canWrite()) {
                 throw unavailable();
             }

@@ -34,7 +34,7 @@ class AgentTaskMetaScopedDaoTest {
     @Test
     void taskRootLockAndLegacyFallbackAreByteExactScopedAndDeterministic() throws Exception {
         Method lock = AgentTaskMetaMapper.class.getDeclaredMethod(
-                "selectScopedForUpdate", String.class, String.class, String.class);
+                "findExactByTaskScopeForUpdate", String.class, String.class, String.class);
         String lockSql = normalize(String.join(" ", lock.getAnnotation(Select.class).value()));
         assertExactScope(lockSql);
         assertTrue(lockSql.contains("substring(task_id, 1, 50)"), lockSql);

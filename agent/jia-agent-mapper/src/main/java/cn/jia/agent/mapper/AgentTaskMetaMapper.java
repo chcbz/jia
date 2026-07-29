@@ -63,7 +63,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             LIMIT 1
             FOR UPDATE
             """)
-    AgentTaskMetaEntity selectScopedForUpdate(
+    AgentTaskMetaEntity findExactByTaskScopeForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("taskId") String taskId);

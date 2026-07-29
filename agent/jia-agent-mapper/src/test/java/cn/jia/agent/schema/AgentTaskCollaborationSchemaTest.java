@@ -80,6 +80,13 @@ class AgentTaskCollaborationSchemaTest {
                 + "(tenant_id, client_id, reward_status, update_time, id)"));
         assertTrue(meta.contains("key idx_agent_task_meta_scope_coordinator "
                 + "(tenant_id, client_id, coordinator_agent_id, reward_status)"));
+        assertTrue(meta.contains("unique key uk_agent_task_meta_scope "
+                + "(tenant_id, client_id, task_id)"));
+        assertFalse(meta.contains("unique key uk_agent_task_meta_task_id (task_id)"));
+        assertTrue(migration.contains("create unique index uk_agent_task_meta_scope"));
+        assertTrue(migration.contains("count(*) = 3"));
+        assertTrue(migration.contains("group_concat(lower(column_name) order by seq_in_index separator ',')"));
+        assertTrue(migration.contains("having count(*) = 1 and max(lower(column_name)) = 'task_id'"));
     }
 
     @Test

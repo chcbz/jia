@@ -44,7 +44,7 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
             String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         requireExactId(taskId, "taskId", 100);
-        return baseMapper.selectScopedForUpdate(tenantId, clientId, taskId);
+        return baseMapper.findExactByTaskScopeForUpdate(tenantId, clientId, taskId);
     }
 
     @Override

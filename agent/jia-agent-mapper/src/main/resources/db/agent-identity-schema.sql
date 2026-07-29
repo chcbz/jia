@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
         REFERENCES agent_identity_registry
         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
+        ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped legacy Agent ID compatibility aliases | collation binary enforces exact case matching';
 
 -- A02 uses a temporary assertion procedure so structural drift fails with a clear

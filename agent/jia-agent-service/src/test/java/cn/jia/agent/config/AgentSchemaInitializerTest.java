@@ -982,10 +982,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     private List<AgentSchemaInitializer.ForeignKeyColumn> identityForeignKey(boolean cascadeDelete) {
         List<String> columns = List.of(
                 "registry_id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");
+        List<String> referencedColumns = List.of(
+                "id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");
         java.util.ArrayList<AgentSchemaInitializer.ForeignKeyColumn> result = new java.util.ArrayList<>();
         for (int i = 0; i < columns.size(); i++) {
             result.add(new AgentSchemaInitializer.ForeignKeyColumn(
-                    columns.get(i), "agent_identity_registry", columns.get(i), i + 1,
+                    columns.get(i), "agent_identity_registry", referencedColumns.get(i), i + 1,
                     "RESTRICT", cascadeDelete ? "CASCADE" : "RESTRICT"));
         }
         return result;

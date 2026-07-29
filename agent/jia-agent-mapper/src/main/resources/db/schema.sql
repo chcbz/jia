@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
         REFERENCES agent_identity_registry
         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
+        ON UPDATE RESTRICT ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped legacy Agent ID compatibility aliases | collation binary enforces exact case matching';
 
 CREATE TABLE IF NOT EXISTS dialogue_template (
@@ -227,7 +228,7 @@ CREATE TABLE IF NOT EXISTS agent_task_meta (
     tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Owner jiacn scope；历史记录兼容可空',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'OAuth/API client；历史记录兼容可空',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_agent_task_meta_task_id (task_id),
+    UNIQUE KEY uk_agent_task_meta_scope (tenant_id, client_id, task_id),
     KEY idx_agent_task_meta_status (reward_status),
     KEY idx_agent_task_meta_agent_id (assigned_agent_id),
     KEY idx_agent_task_meta_scope_status (tenant_id, client_id, reward_status, update_time, id),

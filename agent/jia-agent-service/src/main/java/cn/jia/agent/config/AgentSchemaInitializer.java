@@ -117,7 +117,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "tenant_id IS NULL OR tenant_id = owner_jiacn");
     }
 
-    private void validateExistingIdentityTables() {
+    private void validateExistingIdentityTables(boolean validateTriggers) {
         boolean registryExists = tableExists("agent_identity_registry");
         boolean aliasExists = tableExists("agent_identity_alias");
         if (registryExists != aliasExists) {
@@ -163,7 +163,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
         validateIdentityColumn("agent_identity_alias", "active_key",
                 "tinyint", "tinyint", true, null,
-                "case when alias_status = 'ACTIVE' and valid_to is null then 1 else null end");
+                "(case when ((alias_status = 'ACTIVE') and (valid_to is null)) then 1 else null end)");
 
         ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_agent", true,
                 List.of("canonical_agent_id"), "");
@@ -185,7 +185,9 @@ public class AgentSchemaInitializer implements InitializingBean {
             validateTableCollation("agent_identity_alias", "utf8mb4_0900_bin");
             validateIdentityChecks();
             validateIdentityAliasForeignKey();
-            validateIdentityTriggers();
+            if (validateTriggers) {
+                validateIdentityTriggers();
+            }
         }
     }
 
@@ -221,8 +223,8 @@ public class AgentSchemaInitializer implements InitializingBean {
             matches &= collation.equalsIgnoreCase(actual.collation());
         }
         if (generationExpression != null) {
-            matches &= normalizeSql(generationExpression)
-                    .equals(normalizeSql(actual.generationExpression()));
+            matches &= normalizeIdentityExpression(generationExpression)
+                    .equals(normalizeIdentityExpression(actual.generationExpression()));
         } else {
             matches &= actual.generationExpression() == null
                     || actual.generationExpression().isBlank();
@@ -326,14 +328,14 @@ public class AgentSchemaInitializer implements InitializingBean {
         java.util.Map<String, String> actualByName = new java.util.HashMap<>();
         for (CheckDefinition definition : actual) {
             actualByName.put(definition.table() + "." + definition.name(),
-                    normalizeSql(definition.clause()));
+                    normalizeIdentityExpression(definition.clause()));
         }
         if (!actualByName.keySet().equals(expected.keySet())) {
             throw new IllegalStateException("A02 identity CHECK constraint set is incompatible: "
                     + actualByName.keySet());
         }
         for (var entry : expected.entrySet()) {
-            if (!normalizeSql(entry.getValue()).equals(actualByName.get(entry.getKey()))) {
+            if (!normalizeIdentityExpression(entry.getValue()).equals(actualByName.get(entry.getKey()))) {
                 throw new IllegalStateException("A02 CHECK " + entry.getKey()
                         + " has an incompatible definition");
             }
@@ -359,11 +361,13 @@ public class AgentSchemaInitializer implements InitializingBean {
                 rs.getString("UPDATE_RULE"), rs.getString("DELETE_RULE")));
         List<String> expectedColumns = List.of(
                 "registry_id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");
+        List<String> expectedReferencedColumns = List.of(
+                "id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");
         boolean matches = columns.size() == expectedColumns.size();
         for (int i = 0; matches && i < columns.size(); i++) {
             ForeignKeyColumn column = columns.get(i);
             matches = expectedColumns.get(i).equalsIgnoreCase(column.column())
-                    && expectedColumns.get(i).equalsIgnoreCase(column.referencedColumn())
+                    && expectedReferencedColumns.get(i).equalsIgnoreCase(column.referencedColumn())
                     && "agent_identity_registry".equalsIgnoreCase(column.referencedTable())
                     && column.position() == i + 1
                     && "RESTRICT".equalsIgnoreCase(column.updateRule())
@@ -493,6 +497,20 @@ public class AgentSchemaInitializer implements InitializingBean {
                 .trim();
     }
 
+    private String normalizeIdentityExpression(String sql) {
+        if (sql == null) {
+            return "";
+        }
+        return sql.toLowerCase(Locale.ROOT)
+                .replace("`", "")
+                .replace("_utf8mb4", "")
+                .replace("\\", "")
+                .replaceAll("[()]", " ")
+                .replaceAll("\\s*,\\s*", ",")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
     private boolean tableExists(String table) {
         String catalogQuery = isH2Database()
                 ? """
@@ -534,7 +552,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         validateRuntimeIdentityProjection();
         boolean identityTablesAlreadyExist = tableExists("agent_identity_registry")
                 || tableExists("agent_identity_alias");
-        validateExistingIdentityTables();
+        validateExistingIdentityTables(false);
         String generatedColumnStorage = isH2Database() ? "" : " STORED";
         String activeAliasColumn = "active_key TINYINT GENERATED ALWAYS AS "
                 + "( CASE WHEN alias_status = 'ACTIVE' AND valid_to IS NULL THEN 1 ELSE NULL END)"
@@ -630,6 +648,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                         (registry_id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
                         REFERENCES agent_identity_registry
                         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id)
+                        ON UPDATE RESTRICT ON DELETE RESTRICT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped legacy Agent ID compatibility aliases | collation binary enforces exact case matching'
                 """.formatted(activeAliasColumn));
 
@@ -661,10 +680,12 @@ public class AgentSchemaInitializer implements InitializingBean {
                 List.of("canonical_agent_id", "alias_status"),
                 "CREATE INDEX idx_identity_alias_canonical "
                         + "ON agent_identity_alias (canonical_agent_id, alias_status)");
-        if (!identityTablesAlreadyExist && !isH2Database()) {
+        if (!isH2Database() && (!identityTablesAlreadyExist
+                || identityProtectionTriggerCount() == 0 && tablesAreEmpty(
+                        "agent_identity_registry", "agent_identity_alias"))) {
             createIdentityTriggers();
         }
-        validateExistingIdentityTables();
+        validateExistingIdentityTables(true);
     }
 
     private void ensureTaskCollaborationSchema() {
@@ -675,13 +696,19 @@ public class AgentSchemaInitializer implements InitializingBean {
         boolean backfillAuditAlreadyExists = backfillIssueAlreadyExists
                 || backfillBatchAlreadyExists || backfillManifestAlreadyExists
                 || backfillRunAlreadyExists;
+        boolean bootstrapBackfillTriggers = false;
         if (backfillAuditAlreadyExists && !isH2Database()) {
             if (!(backfillIssueAlreadyExists && backfillBatchAlreadyExists
                     && backfillManifestAlreadyExists && backfillRunAlreadyExists)) {
                 throw new IllegalStateException("B09 audit schema is partial; run the exact B09 audit migration");
             }
             validateBackfillAuditSchema();
-            validateBackfillAuditTriggers();
+            bootstrapBackfillTriggers = backfillAuditTriggerCount() == 0 && tablesAreEmpty(
+                    "agent_task_backfill_issue", "agent_task_backfill_manifest_batch",
+                    "agent_task_backfill_manifest", "agent_task_backfill_run");
+            if (!bootstrapBackfillTriggers) {
+                validateBackfillAuditTriggers();
+            }
         }
 
         addRequiredColumnIfMissing("agent_task_meta", "collaboration_mode",
@@ -698,6 +725,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "task_version BIGINT NOT NULL DEFAULT 0 COMMENT 'Task aggregate optimistic lock version'");
         addRequiredColumnIfMissing("agent_task_meta", "current_event_version",
                 "current_event_version BIGINT NOT NULL DEFAULT 0 COMMENT 'Latest persisted task event version'");
+        migrateTaskMetaScopedUniqueness();
 
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_task_member (
@@ -1050,9 +1078,98 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "CREATE INDEX idx_artifact_hash "
                         + "ON agent_task_artifact (tenant_id, client_id, content_hash)");
 
-        if (!isH2Database() && !backfillAuditAlreadyExists) {
-            createBackfillAuditTriggers();
+        if (!isH2Database()) {
+            if (!backfillAuditAlreadyExists || bootstrapBackfillTriggers) {
+                createBackfillAuditTriggers();
+            }
+            if (backfillAuditAlreadyExists) {
+                validateBackfillAuditSchema();
+                validateBackfillAuditTriggers();
+            }
         }
+    }
+
+    private int identityProtectionTriggerCount() {
+        return namedTriggerCount(List.of(
+                "trg_identity_registry_immutable_update", "trg_identity_registry_no_delete",
+                "trg_identity_alias_immutable_update", "trg_identity_alias_no_delete"));
+    }
+
+    private int backfillAuditTriggerCount() {
+        return namedTriggerCount(List.of(
+                "trg_task_backfill_issue_insert_guard", "trg_task_backfill_issue_update_guard",
+                "trg_task_backfill_issue_no_delete", "trg_task_backfill_manifest_batch_insert_guard",
+                "trg_task_backfill_manifest_batch_update_guard", "trg_task_backfill_manifest_batch_no_delete",
+                "trg_task_backfill_manifest_insert_guard", "trg_task_backfill_manifest_update_guard",
+                "trg_task_backfill_manifest_no_delete", "trg_task_backfill_run_insert_guard",
+                "trg_task_backfill_run_update_guard", "trg_task_backfill_run_no_delete"));
+    }
+
+    private int namedTriggerCount(List<String> names) {
+        String placeholders = String.join(",", java.util.Collections.nCopies(names.size(), "?"));
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.triggers "
+                        + "WHERE trigger_schema = DATABASE() AND trigger_name IN (" + placeholders + ")",
+                Integer.class, names.toArray());
+        return count == null ? 0 : count;
+    }
+
+    private boolean tablesAreEmpty(String... tables) {
+        for (String table : tables) {
+            Long count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
+            if (count == null || count != 0L) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void migrateTaskMetaScopedUniqueness() {
+        ensureRequiredIndex("agent_task_meta", "uk_agent_task_meta_scope", true,
+                List.of("tenant_id", "client_id", "task_id"),
+                "CREATE UNIQUE INDEX uk_agent_task_meta_scope "
+                        + "ON agent_task_meta (tenant_id, client_id, task_id)");
+        for (String indexName : inspectSingleColumnUniqueIndexes("agent_task_meta", "task_id")) {
+            if (!indexName.matches("[A-Za-z0-9_$]+")) {
+                throw new IllegalStateException("Unsafe legacy agent_task_meta index name: " + indexName);
+            }
+            String dropSql = isH2Database()
+                    ? "DROP INDEX " + indexName
+                    : "ALTER TABLE agent_task_meta DROP INDEX `" + indexName + "`";
+            jdbcTemplate.execute(dropSql);
+        }
+        if (!inspectSingleColumnUniqueIndexes("agent_task_meta", "task_id").isEmpty()) {
+            throw new IllegalStateException(
+                    "Legacy global UNIQUE(task_id) remains on agent_task_meta");
+        }
+    }
+
+    private List<String> inspectSingleColumnUniqueIndexes(String table, String column) {
+        if (jdbcTemplate.getDataSource() == null) {
+            return List.of();
+        }
+        String sql = isH2Database() ? """
+                SELECT INDEX_NAME
+                FROM information_schema.index_columns
+                WHERE table_schema = SCHEMA()
+                  AND LOWER(table_name) = LOWER(?)
+                  AND IS_UNIQUE = TRUE
+                  AND LOWER(index_name) <> 'primary_key'
+                GROUP BY INDEX_NAME
+                HAVING COUNT(*) = 1 AND LOWER(MAX(COLUMN_NAME)) = LOWER(?)
+                ORDER BY INDEX_NAME
+                """ : """
+                SELECT INDEX_NAME
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = ?
+                  AND NON_UNIQUE = 0
+                  AND index_name <> 'PRIMARY'
+                GROUP BY INDEX_NAME
+                HAVING COUNT(*) = 1 AND LOWER(MAX(COLUMN_NAME)) = LOWER(?)
+                ORDER BY INDEX_NAME
+                """;
+        return jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("INDEX_NAME"), table, column);
     }
 
     private void validateBackfillAuditSchema() {

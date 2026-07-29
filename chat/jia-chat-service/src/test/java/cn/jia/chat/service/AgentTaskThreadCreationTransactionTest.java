@@ -86,7 +86,9 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
         AgentRuntimeDTO runtime = new AgentRuntimeDTO();
         runtime.setAgentId(AGENT);
         runtime.setName("Agent A");
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, AGENT)).thenReturn(runtime);
+        if (access.canWrite()) {
+            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, AGENT)).thenReturn(runtime);
+        }
         when(accessService.resolveMemberAccessForUpdate(TENANT, CLIENT, TASK, AGENT)).thenReturn(access);
     }
 
