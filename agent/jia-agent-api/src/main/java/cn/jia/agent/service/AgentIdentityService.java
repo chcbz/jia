@@ -16,6 +16,10 @@ public interface AgentIdentityService {
 
     void suspendForBinding(String tenantId, String clientId, String ownerJiacn, long bindingId);
 
+    /** Resolves an active direct canonical identity first, otherwise an exact approved alias. */
+    String resolveAgentIdInScope(
+            String tenantId, String clientId, String ownerJiacn, String requestedAgentId);
+
     String requireCanonicalAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String canonicalAgentId);
 

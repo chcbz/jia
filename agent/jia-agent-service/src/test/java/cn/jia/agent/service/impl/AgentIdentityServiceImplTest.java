@@ -108,6 +108,8 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
 
         assertEquals(legacy, service.requireCanonicalAgentIdInScope(
                 TENANT, CLIENT, TENANT, legacy));
+        assertEquals(legacy, service.resolveAgentIdInScope(
+                TENANT, CLIENT, TENANT, legacy));
         verify(aliasDao, never()).findExactActiveLegacyAlias(any(), any(), any(), any());
     }
 
@@ -116,6 +118,9 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         for (String value : new String[]{CANONICAL, CANONICAL.toUpperCase()}) {
             assertThrows(AgentServiceImpl.AgentBizException.class,
                     () -> service.requireRegistrationIdentityInScope(
+                            TENANT, CLIENT, TENANT, value));
+            assertThrows(AgentServiceImpl.AgentBizException.class,
+                    () -> service.resolveAgentIdInScope(
                             TENANT, CLIENT, TENANT, value));
         }
         verify(aliasDao, never()).findExactActiveLegacyAlias(any(), any(), any(), any());
@@ -126,7 +131,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         String legacy = "jyt-client-a-wuyong";
 
         AgentServiceImpl.AgentBizException error = assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> service.requireRegistrationIdentityInScope(TENANT, CLIENT, TENANT, legacy));
+                () -> service.resolveAgentIdInScope(TENANT, CLIENT, TENANT, legacy));
 
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, error.getCode());
         assertTrue(error.getMessage().contains("not explicitly approved"));
@@ -146,9 +151,25 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
 
         assertEquals(CANONICAL, service.resolveLegacyAgentIdInScope(
                 TENANT, CLIENT, TENANT, legacy));
+        assertEquals(CANONICAL, service.resolveAgentIdInScope(
+                TENANT, CLIENT, TENANT, legacy));
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.resolveLegacyAgentIdInScope(TENANT, "CLIENT-A", TENANT, legacy));
+    }
+
+    @Test
+    void unifiedResolverNeverFallsBackWhenDirectRegistryIsPresentButInvalid() {
+        AgentPersonaBindingEntity binding = binding(CANONICAL);
+        AgentIdentityRegistryEntity damaged = registry(binding, CANONICAL,
+                AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_SUSPENDED);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+                .thenReturn(damaged);
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.resolveAgentIdInScope(TENANT, CLIENT, TENANT, CANONICAL));
+
+        verify(aliasDao, never()).findExactActiveLegacyAlias(any(), any(), any(), any());
     }
 
     @Test

@@ -163,6 +163,39 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     }
 
     @Override
+    public String resolveAgentIdInScope(
+            String tenantId, String clientId, String ownerJiacn, String requestedAgentId) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        requireAgentId(requestedAgentId);
+        rejectSystem(requestedAgentId);
+
+        AgentIdentityRegistryEntity direct = registryDao.findExactByCanonicalInScope(
+                tenantId, clientId, ownerJiacn, requestedAgentId);
+        if (direct != null) {
+            validateRegistry(direct, tenantId, clientId, ownerJiacn, requestedAgentId, true);
+            requireActiveLifecycle(direct);
+            requireActiveBinding(direct, null);
+            return direct.getCanonicalAgentId();
+        }
+        if (OPAQUE_SHAPE_CASE_INSENSITIVE.matcher(requestedAgentId).matches()) {
+            throw forbidden("Opaque-shaped Agent ID must resolve directly and byte-exactly");
+        }
+
+        AgentIdentityAliasEntity alias = requireExactActiveAlias(
+                tenantId, clientId, ownerJiacn, requestedAgentId);
+        AgentIdentityRegistryEntity resolved = registryDao.findExactByCanonicalInScope(
+                tenantId, clientId, ownerJiacn, alias.getCanonicalAgentId());
+        if (resolved == null || !Objects.equals(alias.getRegistryId(), resolved.getId())) {
+            throw forbidden("Legacy Agent alias target is missing or inconsistent");
+        }
+        validateRegistry(resolved, tenantId, clientId, ownerJiacn,
+                alias.getCanonicalAgentId(), true);
+        requireActiveLifecycle(resolved);
+        requireActiveBinding(resolved, requestedAgentId);
+        return resolved.getCanonicalAgentId();
+    }
+
+    @Override
     public String requireCanonicalAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
         requireScope(tenantId, clientId, ownerJiacn);

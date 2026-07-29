@@ -42,6 +42,7 @@ import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
+import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.service.AgentService;
 import cn.jia.core.context.EsContext;
@@ -97,6 +98,7 @@ public class AgentServiceImpl implements AgentService {
     private static final String REGION_MAIN_SEAT = "main-seat";
     private static final long SCENE_EXPECTED_ARRIVAL_MILLIS = 20_000L;
     private static final long SCENE_STATE_EXPIRY_MILLIS = 300_000L;
+    private static final int TASK_MEMBERSHIP_SNAPSHOT_LIMIT = 500;
 
     private final AgentRuntimeDao agentRuntimeDao;
     private final AgentIdentityService agentIdentityService;
@@ -340,9 +342,52 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
-    public List<AgentTaskDTO> getAgentTasks(String agentId) {
+    public List<AgentTaskDTO> getAgentTasks(String requestedAgentId) {
+        String tenantId = resolveCurrentJiacn();
+        String clientId = resolveCurrentClientId();
+        String agentId = legacyTaskCompatibilityService.resolveAgentId(
+                tenantId, clientId, tenantId, requestedAgentId);
         requireOwnedAgent(requireAgent(agentId));
-        return agentTaskMetaDao.findByAgentId(agentId).stream().map(this::toTaskDTO).toList();
+        List<AgentTaskMemberEntity> memberships = Optional.ofNullable(
+                agentTaskMemberDao.listByAgent(tenantId, clientId, agentId, null,
+                        TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
+                .orElseGet(Collections::emptyList);
+        if (!memberships.isEmpty()) {
+            require(memberships.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
+                    "Agent task membership snapshot exceeds the safe limit");
+            LinkedHashSet<String> taskIds = new LinkedHashSet<>();
+            for (AgentTaskMemberEntity member : memberships) {
+                require(Objects.equals(tenantId, member.getTenantId())
+                                && Objects.equals(clientId, member.getClientId())
+                                && Objects.equals(agentId, member.getAgentId())
+                                && isExactStoredText(member.getTaskId(), 100),
+                        "Persisted Agent task membership is outside the requested scope");
+                AgentTaskMemberStatus memberStatus =
+                        AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus());
+                if (memberStatus != AgentTaskMemberStatus.REJECTED
+                        && memberStatus != AgentTaskMemberStatus.LEFT) {
+                    taskIds.add(member.getTaskId());
+                }
+            }
+            return taskIds.stream()
+                    .map(taskId -> {
+                        AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskId(
+                                tenantId, clientId, taskId);
+                        require(task != null,
+                                "Persisted Agent task membership has no scoped task");
+                        requireScopedTaskProjection(task, tenantId, clientId, taskId);
+                        return toTaskDTO(task);
+                    })
+                    .toList();
+        }
+        return Optional.ofNullable(agentTaskMetaDao.findByAgentId(agentId))
+                .orElseGet(Collections::emptyList)
+                .stream()
+                .filter(meta -> Objects.equals(tenantId, meta.getTenantId())
+                        && Objects.equals(clientId, meta.getClientId())
+                        && Objects.equals(agentId, meta.getAssignedAgentId()))
+                .map(this::toTaskDTO)
+                .toList();
     }
 
     @Override
@@ -491,13 +536,21 @@ public class AgentServiceImpl implements AgentService {
         List<AgentTaskMemberEntity> members = Optional.ofNullable(
                 agentTaskMemberDao.listByTask(tenantId, clientId, taskId)).orElseGet(Collections::emptyList);
         if (!members.isEmpty()) {
-            return members.stream()
-                    .filter(member -> !"rejected".equals(member.getMemberStatus())
-                            && !"left".equals(member.getMemberStatus()))
-                    .map(AgentTaskMemberEntity::getAgentId)
-                    .filter(agentId -> !StringUtil.isBlank(agentId))
-                    .distinct()
-                    .toList();
+            LinkedHashSet<String> agentIds = new LinkedHashSet<>();
+            for (AgentTaskMemberEntity member : members) {
+                require(Objects.equals(tenantId, member.getTenantId())
+                                && Objects.equals(clientId, member.getClientId())
+                                && Objects.equals(taskId, member.getTaskId())
+                                && isExactStoredText(member.getAgentId(), 100),
+                        "Persisted task member is outside the requested scope");
+                AgentTaskMemberStatus status =
+                        AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus());
+                if (status != AgentTaskMemberStatus.REJECTED
+                        && status != AgentTaskMemberStatus.LEFT) {
+                    agentIds.add(member.getAgentId());
+                }
+            }
+            return List.copyOf(agentIds);
         }
 
         AgentTaskMetaEntity legacyMeta = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
@@ -514,40 +567,62 @@ public class AgentServiceImpl implements AgentService {
 
     private AgentTaskDTO assignTaskInternal(
             String taskId, AgentTaskAssignDTO request, boolean automatic) {
-        List<String> agentIds = normalizeAssignAgentIds(request);
-        require(!agentIds.isEmpty(), "agentId is required");
+        List<String> requestedAgentIds = normalizeAssignAgentIds(request);
+        require(!requestedAgentIds.isEmpty(), "agentId is required");
+        String tenantId = resolveCurrentJiacn();
+        String clientId = resolveCurrentClientId();
+        List<String> agentIds = legacyTaskCompatibilityService.resolveAgentIds(
+                tenantId, clientId, tenantId, requestedAgentIds);
         List<AgentRuntimeEntity> assignedAgents = agentIds.stream()
                 .map(this::requireAgent)
                 .toList();
         assignedAgents.forEach(this::requireOwnedAgent);
         boolean allowQueue = Boolean.TRUE.equals(request.getAllowQueue());
-        assignedAgents.forEach(agent -> validateAssignableAgent(agent, allowQueue));
 
-        String tenantId = resolveCurrentJiacn();
-        String clientId = resolveCurrentClientId();
-        AgentTaskMetaEntity meta = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseGet(() -> {
-            AgentTaskMetaEntity created = new AgentTaskMetaEntity();
-            created.setTaskId(taskId);
-            created.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
-            created.setTaskVersion(0L);
-            created.setCurrentEventVersion(0L);
-            return created;
-        });
+        AgentTaskMetaEntity meta = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        if (meta == null) {
+            meta = new AgentTaskMetaEntity();
+            meta.setTaskId(taskId);
+            meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+            meta.setTaskVersion(0L);
+            meta.setCurrentEventVersion(0L);
+        }
         require(taskId.equals(meta.getTaskId()), "taskId does not match current scope");
         validateLegacyAssignableTask(meta);
-        assignedAgents.forEach(agent -> validateAbility(agent, meta));
-        meta.setAssignedAgentId(agentIds.size() == 1 ? agentIds.getFirst() : JsonUtil.toJson(agentIds));
-        meta.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
-        if (meta.getAssignedAt() == null) {
-            meta.setAssignedAt(System.currentTimeMillis());
+        boolean mayBeIdempotent = meta.getId() != null
+                && AgentConstants.TASK_STATUS_ASSIGNED.equals(meta.getRewardStatus());
+        if (!mayBeIdempotent) {
+            for (AgentRuntimeEntity agent : assignedAgents) {
+                validateAssignableAgent(agent, allowQueue);
+                validateAbility(agent, meta);
+            }
         }
-        saveMeta(meta);
-        legacyTaskCompatibilityService.assign(tenantId, clientId, taskId, agentIds, automatic);
+        if (meta.getId() == null) {
+            saveMeta(meta);
+        }
 
-        AgentTaskDTO task = toTaskDTO(meta);
-        task.setActionDispatchResults(dispatchTaskAssignedActions(task, assignedAgents));
-        publishTaskEvent("task_assigned", task);
+        AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
+                legacyTaskCompatibilityService.assignResolved(
+                        tenantId, clientId, taskId, agentIds, automatic);
+        if (outcome.changed() && mayBeIdempotent) {
+            for (AgentRuntimeEntity agent : assignedAgents) {
+                validateAssignableAgent(agent, allowQueue);
+                validateAbility(agent, meta);
+            }
+        }
+        AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
+                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
+                new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
+        requireScopedTaskProjection(assignedMeta, tenantId, clientId, taskId);
+        applyAssignmentProjection(assignedMeta, outcome.agentIds());
+        AgentTaskDTO task = toTaskDTO(assignedMeta);
+        applyTaskAssignees(task, outcome.agentIds());
+        if (!outcome.changed()) {
+            task.setActionDispatchResults(List.of());
+            return task;
+        }
+        task.setActionDispatchResults(List.of());
+        publishTaskAssignmentSideEffectsAfterCommit(task, assignedAgents);
         publishTaskAssignmentSceneStates(taskId, assignedAgents);
         return task;
     }
@@ -590,32 +665,50 @@ public class AgentServiceImpl implements AgentService {
     public AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request) {
         require(request != null, "report request is required");
         require(!StringUtil.isBlank(request.getAgentId()), "agentId is required");
-        AgentRuntimeEntity reportingAgent = requireAgent(request.getAgentId());
-        requireOwnedAgent(reportingAgent);
-
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
-        AgentLegacyTaskCompatibilityService.ReportOutcome outcome = legacyTaskCompatibilityService.report(
-                tenantId, clientId, taskId, request.getAgentId(),
-                request.getStatus(), request.getFailureReason());
+        String reportingAgentId = legacyTaskCompatibilityService.resolveAgentId(
+                tenantId, clientId, tenantId, request.getAgentId());
+        requireOwnedAgent(requireAgent(reportingAgentId));
+
+        AgentLegacyTaskCompatibilityService.ReportOutcome outcome =
+                legacyTaskCompatibilityService.reportResolved(
+                        tenantId, clientId, taskId, reportingAgentId,
+                        request.getStatus(), request.getFailureReason());
         AgentTaskMetaEntity meta = Optional.ofNullable(
                 agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        require(taskId.equals(meta.getTaskId()) && outcome.taskStatus().equals(meta.getRewardStatus()),
+        requireScopedTaskProjection(meta, tenantId, clientId, taskId);
+        require(outcome.taskStatus().equals(meta.getRewardStatus())
+                        && Objects.equals(outcome.taskVersion(), meta.getTaskVersion()),
                 "task aggregate does not match the compatibility report outcome");
 
-        AgentStatusDTO status = new AgentStatusDTO();
-        status.setStatus(resolveAgentStatus(request.getStatus()));
-        status.setCurrentTaskId(AgentConstants.TASK_STATUS_COMPLETED.equals(request.getStatus())
-                ? null : meta.getTaskId());
-        status.setCurrentTaskTitle(request.getCurrentTaskTitle());
-        status.setErrorMessage(request.getFailureReason());
-        AgentRuntimeDTO updatedAgent = updateStatus(request.getAgentId(), status);
-
         AgentTaskDTO task = toTaskDTO(meta);
-        publishTaskEvent("task_" + meta.getRewardStatus(), task);
-        if (isTerminalTaskStatus(meta.getRewardStatus())) {
-            publishReturnHomeSceneStates(meta.getTaskId(), List.of(updatedAgent));
+        applyTaskAssignees(task, outcome.memberAgentIds());
+        if (!outcome.changed()) {
+            return task;
+        }
+
+        List<AgentRuntimeDTO> updatedAgents;
+        if (outcome.terminalTransition()) {
+            updatedAgents = outcome.memberAgentIds().stream()
+                    .map(agentId -> updateLegacyReportRuntime(
+                            agentId, meta.getTaskId(),
+                            terminalRuntimeReportStatus(agentId, outcome.reportingAgentId(),
+                                    meta.getRewardStatus()),
+                            null, Objects.equals(agentId, outcome.reportingAgentId())
+                                    ? request.getFailureReason() : null,
+                            true))
+                    .toList();
+        } else {
+            updatedAgents = List.of(updateLegacyReportRuntime(
+                    outcome.reportingAgentId(), meta.getTaskId(), request.getStatus(),
+                    request.getCurrentTaskTitle(), request.getFailureReason(), false));
+        }
+        publishLegacyReportSideEffectsAfterCommit(
+                "task_" + meta.getRewardStatus(), task, updatedAgents);
+        if (outcome.terminalTransition()) {
+            publishReturnHomeSceneStates(meta.getTaskId(), updatedAgents);
         }
         return task;
     }
@@ -651,7 +744,7 @@ public class AgentServiceImpl implements AgentService {
         saveMeta(meta);
         AgentTaskDTO task = toTaskDTO(meta);
         publishTaskEvent("task_archived", task);
-        publishReturnHomeSceneStatesForAgentIds(meta.getTaskId(), parseAssignedAgentIds(meta.getAssignedAgentId()));
+        publishReturnHomeSceneStatesForAgentIds(meta.getTaskId(), resolveTaskAssigneeIds(meta));
         return task;
     }
 
@@ -680,18 +773,39 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentTaskMetaEntity requireTask(String taskId) {
-        return Optional.ofNullable(agentTaskMetaDao.findByTaskId(taskId)).orElseThrow(() ->
+        String tenantId = resolveCurrentJiacn();
+        String clientId = resolveCurrentClientId();
+        AgentTaskMetaEntity task = Optional.ofNullable(
+                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
+        requireScopedTaskProjection(task, tenantId, clientId, taskId);
+        return task;
+    }
+
+    private void requireScopedTaskProjection(
+            AgentTaskMetaEntity task, String tenantId, String clientId, String taskId) {
+        require(task != null
+                        && Objects.equals(tenantId, task.getTenantId())
+                        && Objects.equals(clientId, task.getClientId())
+                        && Objects.equals(taskId, task.getTaskId()),
+                "Persisted task does not match the byte-exact current scope");
     }
 
     private List<String> normalizeAssignAgentIds(AgentTaskAssignDTO request) {
-        List<String> agentIds = Optional.ofNullable(request.getAgentIds()).orElseGet(Collections::emptyList);
+        List<String> agentIds = Optional.ofNullable(request.getAgentIds())
+                .orElseGet(Collections::emptyList);
         if (agentIds.isEmpty() && !StringUtil.isBlank(request.getAgentId())) {
             agentIds = List.of(request.getAgentId());
         }
         return new ArrayList<>(new LinkedHashSet<>(agentIds.stream()
                 .filter(agentId -> !StringUtil.isBlank(agentId))
                 .toList()));
+    }
+
+    private boolean isExactStoredText(String value, int maxLength) {
+        return value != null && !value.isEmpty() && value.length() <= maxLength
+                && value.equals(value.strip())
+                && value.chars().noneMatch(Character::isISOControl);
     }
 
     private void validateAssignableAgent(AgentRuntimeEntity agent, boolean allowQueue) {
@@ -1404,14 +1518,8 @@ codexTimeoutMs=900000
         dto.setStatus(meta.getRewardStatus());
         dto.setRequiredAbilities(parseList(meta.getRequiredAbilities()));
         dto.setReward(meta.getReward());
-        dto.setAssignedAgentId(meta.getAssignedAgentId());
-        List<String> assignedAgentIds = parseAssignedAgentIds(meta.getAssignedAgentId());
-        dto.setAssignedAgentIds(assignedAgentIds);
-        dto.setAssignees(assignedAgentIds.stream().map(this::toAssigneeDTO).toList());
-        if (!assignedAgentIds.isEmpty()) {
-            dto.setAssignedAgentId(assignedAgentIds.getFirst());
-            dto.setAssignedAgentName(dto.getAssignees().isEmpty() ? null : dto.getAssignees().getFirst().getAgentName());
-        }
+        List<String> assignedAgentIds = resolveTaskAssigneeIds(meta);
+        applyTaskAssignees(dto, assignedAgentIds);
         dto.setCreatedAt(meta.getCreateTime());
         dto.setUpdatedAt(meta.getUpdateTime());
         dto.setAssignedAt(meta.getAssignedAt());
@@ -1420,6 +1528,41 @@ codexTimeoutMs=900000
         dto.setFailureReason(meta.getFailureReason());
         enrichTaskPlan(dto, meta.getTaskId());
         return dto;
+    }
+
+    private void applyAssignmentProjection(
+            AgentTaskMetaEntity meta, List<String> agentIds) {
+        require(agentIds != null && !agentIds.isEmpty(), "assigned agentIds are required");
+        String primaryAgentId = agentIds.getFirst();
+        meta.setAssignedAgentId(primaryAgentId);
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
+        meta.setCollaborationMode(agentIds.size() == 1 ? "single" : "team");
+        meta.setMaxAgents(agentIds.size());
+        meta.setCoordinatorAgentId(primaryAgentId);
+    }
+
+    private List<String> resolveTaskAssigneeIds(AgentTaskMetaEntity meta) {
+        if (meta != null && !StringUtil.isBlank(meta.getTenantId())
+                && !StringUtil.isBlank(meta.getClientId())
+                && !StringUtil.isBlank(meta.getTaskId())) {
+            List<String> memberAgentIds = listTaskMemberAgentIds(
+                    meta.getTenantId(), meta.getClientId(), meta.getTaskId());
+            if (!memberAgentIds.isEmpty()) {
+                return memberAgentIds;
+            }
+        }
+        return meta == null ? List.of() : parseAssignedAgentIds(meta.getAssignedAgentId());
+    }
+
+    private void applyTaskAssignees(AgentTaskDTO task, List<String> agentIds) {
+        List<String> exactAgentIds = agentIds == null
+                ? List.of()
+                : new ArrayList<>(new LinkedHashSet<>(agentIds));
+        task.setAssignedAgentIds(exactAgentIds);
+        task.setAssignees(exactAgentIds.stream().map(this::toAssigneeDTO).toList());
+        task.setAssignedAgentId(exactAgentIds.isEmpty() ? null : exactAgentIds.getFirst());
+        task.setAssignedAgentName(task.getAssignees().isEmpty()
+                ? null : task.getAssignees().getFirst().getAgentName());
     }
 
     private AgentTaskNoteDTO toTaskNoteDTO(AgentTaskNoteEntity entity) {
@@ -1524,6 +1667,55 @@ codexTimeoutMs=900000
             case AgentConstants.TASK_STATUS_FAILED -> AgentConstants.STATUS_ERROR;
             default -> AgentConstants.STATUS_ONLINE;
         };
+    }
+
+    private AgentRuntimeDTO updateLegacyReportRuntime(
+            String agentId, String taskId, String reportedStatus,
+            String currentTaskTitle, String failureReason, boolean wholeTeamTerminal) {
+        AgentRuntimeEntity entity = requireAgent(agentId);
+        requireOwnedAgent(entity);
+        entity.setStatus(resolveAgentStatus(reportedStatus));
+        boolean memberTerminal = AgentConstants.TASK_STATUS_COMPLETED.equals(reportedStatus)
+                || AgentConstants.TASK_STATUS_FAILED.equals(reportedStatus);
+        if (wholeTeamTerminal || memberTerminal) {
+            entity.setCurrentTaskId(null);
+            entity.setCurrentTaskTitle(null);
+        } else {
+            entity.setCurrentTaskId(taskId);
+            entity.setCurrentTaskTitle(currentTaskTitle);
+        }
+        entity.setErrorMessage(AgentConstants.TASK_STATUS_FAILED.equals(reportedStatus)
+                ? failureReason : null);
+        entity.setLastSeenAt(System.currentTimeMillis());
+        require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
+        return toRuntimeDTO(entity);
+    }
+
+    private String terminalRuntimeReportStatus(
+            String agentId, String reportingAgentId, String aggregateStatus) {
+        if (AgentConstants.TASK_STATUS_FAILED.equals(aggregateStatus)
+                && Objects.equals(agentId, reportingAgentId)) {
+            return AgentConstants.TASK_STATUS_FAILED;
+        }
+        return AgentConstants.TASK_STATUS_COMPLETED;
+    }
+
+    private void publishTaskAssignmentSideEffectsAfterCommit(
+            AgentTaskDTO task, List<AgentRuntimeEntity> assignedAgents) {
+        List<AgentRuntimeEntity> agents = List.copyOf(assignedAgents);
+        publishOptionalAfterCommit("legacy-task-assignment", () -> {
+            task.setActionDispatchResults(dispatchTaskAssignedActions(task, agents));
+            publishTaskEvent("task_assigned", task);
+        });
+    }
+
+    private void publishLegacyReportSideEffectsAfterCommit(
+            String eventType, AgentTaskDTO task, List<AgentRuntimeDTO> updatedAgents) {
+        List<AgentRuntimeDTO> agents = List.copyOf(updatedAgents);
+        publishOptionalAfterCommit("legacy-task-report", () -> {
+            agents.forEach(this::publishAgentStatus);
+            publishTaskEvent(eventType, task);
+        });
     }
 
     private void publishTaskAssignmentSceneStates(
@@ -1661,11 +1853,15 @@ codexTimeoutMs=900000
         if (!sceneFeatureFlags.sceneStateEnabled()) {
             return;
         }
+        publishOptionalAfterCommit(operation, publication);
+    }
+
+    private void publishOptionalAfterCommit(String operation, Runnable publication) {
         Runnable isolatedPublication = () -> {
             try {
                 publication.run();
             } catch (RuntimeException failure) {
-                log.warn("Optional scene publication failed: operation={}, failureType={}",
+                log.warn("Optional after-commit side effect failed: operation={}, failureType={}",
                         operation, failure.getClass().getSimpleName());
             }
         };
@@ -1679,18 +1875,13 @@ codexTimeoutMs=900000
                     }
                 });
             } catch (RuntimeException registrationFailure) {
-                log.warn("Optional scene publication could not be scheduled: operation={}, failureType={}",
+                log.warn("Optional after-commit side effect could not be scheduled: "
+                                + "operation={}, failureType={}",
                         operation, registrationFailure.getClass().getSimpleName());
             }
             return;
         }
         isolatedPublication.run();
-    }
-
-    private boolean isTerminalTaskStatus(String status) {
-        return AgentConstants.TASK_STATUS_COMPLETED.equals(status)
-                || AgentConstants.TASK_STATUS_FAILED.equals(status)
-                || AgentConstants.TASK_STATUS_ARCHIVED.equals(status);
     }
 
     private void publishAgentStatus(AgentRuntimeDTO agent) {

@@ -16,6 +16,7 @@ import cn.jia.agent.exception.AgentTaskStateException.Reason;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
@@ -358,8 +359,19 @@ class AgentTaskAggregationRealDatabaseTest {
     }
 
     private AgentTaskAggregationService aggregateService(AgentTaskMetaDao metaDao) {
+        AgentIdentityService identityService = org.mockito.Mockito.mock(AgentIdentityService.class);
+        org.mockito.Mockito.when(identityService.resolveAgentIdInScope(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> {
+                    String requestedAgentId = invocation.getArgument(3);
+                    if (AGENT_A.equals(requestedAgentId) || AGENT_B.equals(requestedAgentId)) {
+                        return requestedAgentId;
+                    }
+                    throw new IllegalArgumentException("identity is not registered");
+                });
         return transactionalProxy(new AgentTaskAggregationServiceImpl(
-                metaDao, new AgentTaskAggregationCalculator(), () -> 1_000L),
+                metaDao, identityService, new AgentTaskAggregationCalculator(), () -> 1_000L),
                 AgentTaskAggregationService.class);
     }
 

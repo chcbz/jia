@@ -12,6 +12,7 @@ import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
@@ -24,34 +25,37 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.LongSupplier;
-import java.util.regex.Pattern;
 
 /**
  * Transactional adapter from the legacy task-level assign/report API to the scoped collaboration
- * model. It intentionally does not expose or weaken B04 lease/result operations: only adapter-owned
- * leases carry the {@code legacy_} prefix, while a B04-owned claim/lease is rejected fail closed.
+ * model. Identity authenticity is delegated to A08. This adapter owns only deterministic
+ * {@code legacy_*} leases and result markers; B04/B06-owned work is rejected fail closed.
  */
 @Named
 public class AgentLegacyTaskCompatibilityService {
     static final String WORK_TYPE = "legacy_default";
-    private static final String MEMBER_ROLE = "worker";
+    private static final String MEMBER_ROLE_COORDINATOR = "coordinator";
+    private static final String MEMBER_ROLE_WORKER = "worker";
     private static final String ASSIGNMENT_MANUAL = "manual";
     private static final String ASSIGNMENT_AUTO = "auto";
-    private static final Pattern CANONICAL_AGENT_ID = Pattern.compile("^agt_[0-9a-f]{32}$");
     private static final Set<String> MEMBER_ROLES = Set.of("coordinator", "worker", "reviewer", "observer");
     private static final Set<String> ASSIGNMENT_SOURCES = Set.of(ASSIGNMENT_MANUAL, ASSIGNMENT_AUTO, "migration");
     private static final int MAX_DEFAULT_ITEMS = 2;
+    private static final int MAX_COLLABORATION_ROWS = 500;
     private static final long LEGACY_LEASE_UNTIL = Long.MAX_VALUE - 1;
 
     private final AgentTaskMetaDao taskMetaDao;
     private final AgentTaskMemberDao memberDao;
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskAggregationService aggregationService;
+    private final AgentIdentityService identityService;
     private final LongSupplier clock;
 
     @Inject
@@ -59,8 +63,10 @@ public class AgentLegacyTaskCompatibilityService {
             AgentTaskMetaDao taskMetaDao,
             AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao,
-            AgentTaskAggregationService aggregationService) {
-        this(taskMetaDao, memberDao, workItemDao, aggregationService, System::currentTimeMillis);
+            AgentTaskAggregationService aggregationService,
+            AgentIdentityService identityService) {
+        this(taskMetaDao, memberDao, workItemDao, aggregationService,
+                identityService, System::currentTimeMillis);
     }
 
     AgentLegacyTaskCompatibilityService(
@@ -68,45 +74,128 @@ public class AgentLegacyTaskCompatibilityService {
             AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao,
             AgentTaskAggregationService aggregationService,
+            AgentIdentityService identityService,
             LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.aggregationService = Objects.requireNonNull(aggregationService, "aggregationService");
+        this.identityService = Objects.requireNonNull(identityService, "identityService");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    @Transactional(rollbackFor = Exception.class)
-    public void assign(String tenantId, String clientId, String taskId,
-            List<String> agentIds, boolean automatic) {
-        requireScope(tenantId, clientId, taskId);
-        if (agentIds == null || agentIds.isEmpty()) {
-            throw invalid("At least one canonical agentId is required");
+    public String resolveAgentId(
+            String tenantId, String clientId, String ownerJiacn, String requestedAgentId) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        requireExactText(requestedAgentId, "agentId", 100);
+        String canonical = identityService.resolveAgentIdInScope(
+                tenantId, clientId, ownerJiacn, requestedAgentId);
+        requireExactText(canonical, "resolved agentId", 100);
+        return canonical;
+    }
+
+    public List<String> resolveAgentIds(
+            String tenantId, String clientId, String ownerJiacn, List<String> requestedAgentIds) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        if (requestedAgentIds == null || requestedAgentIds.isEmpty()) {
+            throw invalid("At least one registered agentId is required");
         }
-        agentIds.forEach(this::requireCanonicalAgentId);
+        if (requestedAgentIds.size() >= MAX_COLLABORATION_ROWS) {
+            throw invalid("Legacy assignment exceeds the safe member limit");
+        }
+        LinkedHashSet<String> canonical = new LinkedHashSet<>();
+        for (String requestedAgentId : requestedAgentIds) {
+            String resolved = resolveAgentId(tenantId, clientId, ownerJiacn, requestedAgentId);
+            if (!canonical.add(resolved)) {
+                throw invalid("Requested Agent identities resolve to a duplicate canonical member");
+            }
+        }
+        if (canonical.isEmpty()) {
+            throw invalid("At least one registered agentId is required");
+        }
+        return List.copyOf(canonical);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public AssignOutcome assign(String tenantId, String clientId, String taskId,
+            List<String> requestedAgentIds, boolean automatic) {
+        return assignResolved(tenantId, clientId, taskId,
+                resolveAgentIds(tenantId, clientId, tenantId, requestedAgentIds), automatic);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public AssignOutcome assignResolved(String tenantId, String clientId, String taskId,
+            List<String> canonicalAgentIds, boolean automatic) {
+        requireScope(tenantId, clientId, tenantId);
+        requireExactText(taskId, "taskId", 100);
+        List<String> agentIds = requireResolvedAgentIds(canonicalAgentIds);
+        for (String agentId : agentIds) {
+            String verified = identityService.requireCanonicalAgentIdInScope(
+                    tenantId, clientId, tenantId, agentId);
+            if (!agentId.equals(verified)) {
+                throw forbidden();
+            }
+        }
 
         AgentTaskMetaEntity task = lockTask(tenantId, clientId, taskId);
         AgentTaskStatus taskStatus = persistedTaskStatus(task.getRewardStatus());
-        if (taskStatus != AgentTaskStatus.ASSIGNED) {
-            throw invalid("Legacy collaboration rows may only be created for an assigned task");
+        if (taskStatus != AgentTaskStatus.OPEN && taskStatus != AgentTaskStatus.PLANNING
+                && taskStatus != AgentTaskStatus.ASSIGNED) {
+            throw invalid("Task cannot be assigned in its current status");
+        }
+
+        List<AgentTaskMemberEntity> members = requireSnapshot(
+                memberDao.listByTask(tenantId, clientId, taskId), "task member");
+        List<AgentTaskWorkItemEntity> defaultItems = requireSnapshot(
+                workItemDao.listByTask(
+                        tenantId, clientId, taskId, null, MAX_COLLABORATION_ROWS),
+                "task work item");
+        rejectTruncatedSnapshot(members, "task member");
+        rejectTruncatedSnapshot(defaultItems, "legacy default work item");
+
+        if (!members.isEmpty() || !defaultItems.isEmpty()) {
+            List<String> persistedAgentIds = validateIdempotentAssignment(
+                    task, taskId, agentIds, members, defaultItems);
+            return new AssignOutcome(persistedAgentIds, false);
         }
 
         long changedAt = now();
+        applyAssignmentMeta(task, agentIds, changedAt);
+        requireSingleMutation(taskMetaDao.updateById(task), "task assignment metadata");
+
         String source = automatic ? ASSIGNMENT_AUTO : ASSIGNMENT_MANUAL;
-        for (String agentId : agentIds) {
-            ensureMember(tenantId, clientId, taskId, agentId, source, changedAt);
-            ensureDefaultWorkItem(tenantId, clientId, taskId, agentId);
+        for (int index = 0; index < agentIds.size(); index++) {
+            String agentId = agentIds.get(index);
+            insertMember(tenantId, clientId, taskId, agentId, source, changedAt,
+                    index == 0 ? MEMBER_ROLE_COORDINATOR : MEMBER_ROLE_WORKER);
+            insertDefaultWorkItem(tenantId, clientId, taskId, agentId);
         }
+        return new AssignOutcome(agentIds, true);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public ReportOutcome report(String tenantId, String clientId, String taskId,
+            String requestedAgentId, String requestedStatus, String failureReason) {
+        String canonicalAgentId = resolveAgentId(
+                tenantId, clientId, tenantId, requestedAgentId);
+        return reportResolved(tenantId, clientId, taskId,
+                canonicalAgentId, requestedStatus, failureReason);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ReportOutcome reportResolved(String tenantId, String clientId, String taskId,
             String agentId, String requestedStatus, String failureReason) {
-        requireScope(tenantId, clientId, taskId);
-        requireCanonicalAgentId(agentId);
+        requireScope(tenantId, clientId, tenantId);
+        requireExactText(taskId, "taskId", 100);
+        requireExactText(agentId, "agentId", 100);
+        String verifiedAgentId = identityService.requireCanonicalAgentIdInScope(
+                tenantId, clientId, tenantId, agentId);
+        if (!agentId.equals(verifiedAgentId)) {
+            throw forbidden();
+        }
         AgentTaskStatus reportStatus = requireReportStatus(requestedStatus);
         AgentTaskMetaEntity task = lockTask(tenantId, clientId, taskId);
-        persistedTaskStatus(task.getRewardStatus());
+        AgentTaskStatus previousTaskStatus = persistedTaskStatus(task.getRewardStatus());
         requireTaskVersion(task.getTaskVersion());
 
         AgentTaskMemberEntity member = memberDao.findByTaskAndAgent(
@@ -114,21 +203,41 @@ public class AgentLegacyTaskCompatibilityService {
         if (member == null) {
             throw forbidden();
         }
-        validateMember(member, taskId, agentId);
+        validateMember(member, tenantId, clientId, taskId, agentId);
         AgentTaskWorkItemEntity item = requireUniqueDefaultWorkItem(
                 tenantId, clientId, taskId, agentId);
+        rejectB04B06OwnedState(item, taskId, agentId);
+        LegacyReportState currentState = validateLegacyReportState(
+                member, item, taskId, agentId);
+        boolean exactDuplicate = currentState.matches(reportStatus);
+        validateTaskForLegacyReport(
+                previousTaskStatus, reportStatus, exactDuplicate, failureReason, member);
 
         long changedAt = now();
-        updateMemberForReport(tenantId, clientId, taskId, agentId,
+        boolean memberChanged = updateMemberForReport(
+                tenantId, clientId, taskId, agentId,
                 member, reportStatus, failureReason, changedAt);
-        updateWorkItemForReport(tenantId, clientId, taskId, agentId,
+        boolean itemChanged = updateWorkItemForReport(
+                tenantId, clientId, taskId, agentId,
                 item, reportStatus, changedAt);
 
         AgentTaskAggregationCommandDTO command = new AgentTaskAggregationCommandDTO();
         command.setExpectedVersion(task.getTaskVersion());
         AgentTaskAggregationDTO aggregate = aggregationService.aggregate(
                 tenantId, clientId, taskId, command);
-        return new ReportOutcome(aggregate.getStatus(), aggregate.getTaskVersion());
+        boolean aggregateChanged = Boolean.TRUE.equals(aggregate.getChanged());
+        if (exactDuplicate && aggregateChanged) {
+            throw invalidPersisted("Duplicate legacy report exposed aggregate state drift");
+        }
+        validateAggregateResult(reportStatus, aggregate);
+        boolean changed = memberChanged || itemChanged || aggregateChanged;
+        boolean terminalTransition = aggregateChanged
+                && !previousTaskStatus.isOperationalTerminal()
+                && persistedTaskStatus(aggregate.getStatus()).isOperationalTerminal();
+        List<String> memberAgentIds = currentMemberAgentIds(
+                tenantId, clientId, taskId);
+        return new ReportOutcome(aggregate.getStatus(), aggregate.getTaskVersion(), changed,
+                terminalTransition, agentId, memberAgentIds);
     }
 
     private AgentTaskMetaEntity lockTask(String tenantId, String clientId, String taskId) {
@@ -144,42 +253,110 @@ public class AgentLegacyTaskCompatibilityService {
         return task;
     }
 
-    private void ensureMember(String tenantId, String clientId, String taskId,
-            String agentId, String source, long changedAt) {
-        AgentTaskMemberEntity existing = memberDao.findByTaskAndAgent(
-                tenantId, clientId, taskId, agentId);
-        if (existing != null) {
-            validateMember(existing, taskId, agentId);
-            AgentTaskMemberStatus status = persistedMemberStatus(existing.getMemberStatus());
-            if (status != AgentTaskMemberStatus.ACCEPTED && status != AgentTaskMemberStatus.WORKING) {
-                throw invalid("Existing task member cannot be reassigned through the legacy adapter");
-            }
-            return;
-        }
+    private void applyAssignmentMeta(
+            AgentTaskMetaEntity task, List<String> agentIds, long changedAt) {
+        String primaryAgentId = agentIds.getFirst();
+        task.setAssignedAgentId(primaryAgentId);
+        task.setRewardStatus(AgentTaskStatus.ASSIGNED.value());
+        task.setAssignedAt(firstNonNull(task.getAssignedAt(), changedAt));
+        task.setCollaborationMode(agentIds.size() == 1 ? "single" : "team");
+        task.setMaxAgents(agentIds.size());
+        task.setCoordinatorAgentId(primaryAgentId);
+    }
 
+    private List<String> validateIdempotentAssignment(
+            AgentTaskMetaEntity task,
+            String taskId,
+            List<String> requestedAgentIds,
+            List<AgentTaskMemberEntity> members,
+            List<AgentTaskWorkItemEntity> defaultItems) {
+        if (persistedTaskStatus(task.getRewardStatus()) != AgentTaskStatus.ASSIGNED) {
+            throw invalid("Existing collaboration rows cannot be reassigned in the current task status");
+        }
+        Set<String> requested = new LinkedHashSet<>(requestedAgentIds);
+        Set<String> persistedMembers = new LinkedHashSet<>();
+        String persistedCoordinator = null;
+        for (AgentTaskMemberEntity member : members) {
+            requireExactText(member.getAgentId(), "persisted member agentId", 100);
+            validateMember(member, task.getTenantId(), task.getClientId(),
+                    taskId, member.getAgentId());
+            AgentTaskMemberStatus memberStatus = persistedMemberStatus(member.getMemberStatus());
+            if (memberStatus != AgentTaskMemberStatus.ACCEPTED
+                    || member.getStartedAt() != null || member.getCompletedAt() != null
+                    || member.getFailureReason() != null) {
+                throw invalidPersisted("Assigned task contains a progressed legacy member");
+            }
+            if (MEMBER_ROLE_COORDINATOR.equals(member.getMemberRole())) {
+                if (persistedCoordinator != null) {
+                    throw invalidPersisted("Legacy assignment has multiple coordinators");
+                }
+                persistedCoordinator = member.getAgentId();
+            } else if (!MEMBER_ROLE_WORKER.equals(member.getMemberRole())) {
+                throw invalidPersisted("Legacy assignment contains a non-adapter member role");
+            }
+            if (!persistedMembers.add(member.getAgentId())) {
+                throw invalidPersisted("Task has duplicate member identities");
+            }
+        }
+        Set<String> persistedItems = new LinkedHashSet<>();
+        for (AgentTaskWorkItemEntity item : defaultItems) {
+            requireExactText(item.getAssigneeAgentId(), "persisted work item assignee", 100);
+            validateDefaultWorkItem(item, task.getTenantId(), task.getClientId(),
+                    taskId, item.getAssigneeAgentId());
+            if (persistedWorkItemStatus(item.getStatus()) != AgentTaskWorkItemStatus.READY
+                    || !Objects.equals(item.getAttemptCount(), 0)
+                    || item.getLeaseToken() != null || item.getLeaseUntil() != null
+                    || item.getResultArtifactId() != null || item.getSubmittedAt() != null
+                    || item.getCompletedAt() != null) {
+                throw invalidPersisted("Assigned task contains a progressed legacy work item");
+            }
+            if (!persistedItems.add(item.getAssigneeAgentId())) {
+                throw invalidPersisted("Task member has multiple legacy default work items");
+            }
+        }
+        if (!requested.equals(persistedMembers) || !requested.equals(persistedItems)
+                || members.size() != requested.size() || defaultItems.size() != requested.size()) {
+            throw invalid("Legacy reassignment must preserve the byte-exact member set");
+        }
+        String primary = task.getCoordinatorAgentId();
+        if (StringUtil.isBlank(primary)) {
+            primary = task.getAssignedAgentId();
+        }
+        if (!requested.contains(primary)
+                || !Objects.equals(persistedCoordinator, primary)
+                || !Objects.equals(task.getAssignedAgentId(), primary)
+                || !Objects.equals(task.getCoordinatorAgentId(), primary)
+                || !Objects.equals(task.getMaxAgents(), requested.size())
+                || !Objects.equals(task.getCollaborationMode(), requested.size() == 1 ? "single" : "team")
+                || task.getAssignedAt() == null || task.getAssignedAt() <= 0
+                || task.getStartedAt() != null || task.getCompletedAt() != null
+                || task.getFailureReason() != null) {
+            throw invalidPersisted("Task collaboration metadata does not match its member set");
+        }
+        String finalPrimary = primary;
+        List<String> ordered = new ArrayList<>();
+        ordered.add(finalPrimary);
+        members.stream().map(AgentTaskMemberEntity::getAgentId)
+                .filter(agentId -> !finalPrimary.equals(agentId))
+                .forEachOrdered(ordered::add);
+        return List.copyOf(ordered);
+    }
+
+    private void insertMember(String tenantId, String clientId, String taskId,
+            String agentId, String source, long changedAt, String role) {
         AgentTaskMemberDTO member = new AgentTaskMemberDTO();
         member.setTaskId(taskId);
         member.setAgentId(agentId);
-        member.setMemberRole(MEMBER_ROLE);
+        member.setMemberRole(role);
         member.setMemberStatus(AgentTaskMemberStatus.ACCEPTED.value());
         member.setAssignmentSource(source);
         member.setJoinedAt(changedAt);
         member.setAcceptedAt(changedAt);
-        requireSingleInsert(memberDao.insert(tenantId, clientId, member), "task member");
+        requireSingleMutation(memberDao.insert(tenantId, clientId, member), "task member");
     }
 
-    private void ensureDefaultWorkItem(
+    private void insertDefaultWorkItem(
             String tenantId, String clientId, String taskId, String agentId) {
-        List<AgentTaskWorkItemEntity> existing = defaultWorkItems(
-                tenantId, clientId, taskId, agentId);
-        if (existing.size() > 1) {
-            throw invalidPersisted("Task member has multiple legacy default work items");
-        }
-        if (existing.size() == 1) {
-            validateDefaultWorkItem(existing.getFirst(), taskId, agentId);
-            return;
-        }
-
         AgentTaskWorkItemDTO item = new AgentTaskWorkItemDTO();
         item.setWorkItemId(defaultWorkItemId(taskId, agentId));
         item.setTaskId(taskId);
@@ -193,7 +370,7 @@ public class AgentLegacyTaskCompatibilityService {
         item.setDependencyJson("[]");
         item.setAttemptCount(0);
         item.setMaxAttempts(3);
-        requireSingleInsert(workItemDao.insert(tenantId, clientId, item), "default work item");
+        requireSingleMutation(workItemDao.insert(tenantId, clientId, item), "default work item");
     }
 
     private AgentTaskWorkItemEntity requireUniqueDefaultWorkItem(
@@ -207,21 +384,116 @@ public class AgentLegacyTaskCompatibilityService {
             throw invalidPersisted("Task member has multiple legacy default work items");
         }
         AgentTaskWorkItemEntity item = items.getFirst();
-        validateDefaultWorkItem(item, taskId, agentId);
+        validateDefaultWorkItem(item, tenantId, clientId, taskId, agentId);
         return item;
     }
 
     private List<AgentTaskWorkItemEntity> defaultWorkItems(
             String tenantId, String clientId, String taskId, String agentId) {
-        List<AgentTaskWorkItemEntity> rows = workItemDao.listByTaskAssigneeAndType(
-                tenantId, clientId, taskId, agentId, WORK_TYPE, MAX_DEFAULT_ITEMS);
-        if (rows == null) {
-            throw invalidPersisted("Default work item query returned no snapshot");
-        }
-        return rows;
+        return requireSnapshot(workItemDao.listByTaskAssigneeAndType(
+                tenantId, clientId, taskId, agentId, WORK_TYPE, MAX_DEFAULT_ITEMS),
+                "legacy default work item");
     }
 
-    private void updateMemberForReport(
+
+    private LegacyReportState validateLegacyReportState(
+            AgentTaskMemberEntity member, AgentTaskWorkItemEntity item,
+            String taskId, String agentId) {
+        AgentTaskMemberStatus memberStatus = persistedMemberStatus(member.getMemberStatus());
+        AgentTaskWorkItemStatus itemStatus = persistedWorkItemStatus(item.getStatus());
+        switch (memberStatus) {
+            case ACCEPTED -> {
+                if (itemStatus != AgentTaskWorkItemStatus.READY
+                        || member.getCompletedAt() != null || member.getFailureReason() != null) {
+                    throw invalidPersisted("Accepted legacy member/item state is not byte-exact");
+                }
+                validateLegacyMutableState(item, taskId, agentId, itemStatus);
+            }
+            case WORKING -> {
+                if (itemStatus != AgentTaskWorkItemStatus.RUNNING
+                        || member.getStartedAt() == null || member.getStartedAt() <= 0
+                        || member.getCompletedAt() != null || member.getFailureReason() != null) {
+                    throw invalidPersisted("Working legacy member/item state is not byte-exact");
+                }
+                validateIdempotentWorkItem(item, taskId, agentId, itemStatus);
+            }
+            case DONE -> {
+                if (itemStatus != AgentTaskWorkItemStatus.COMPLETED
+                        || member.getCompletedAt() == null || member.getCompletedAt() <= 0
+                        || member.getFailureReason() != null) {
+                    throw invalidPersisted("Completed legacy member/item state is not byte-exact");
+                }
+                validateIdempotentWorkItem(item, taskId, agentId, itemStatus);
+            }
+            case FAILED -> {
+                if (itemStatus != AgentTaskWorkItemStatus.FAILED
+                        || member.getCompletedAt() == null || member.getCompletedAt() <= 0
+                        || StringUtil.isBlank(member.getFailureReason())) {
+                    throw invalidPersisted("Failed legacy member/item state is not byte-exact");
+                }
+                validateIdempotentWorkItem(item, taskId, agentId, itemStatus);
+            }
+            default -> throw invalid("Task member is not owned by the legacy report state machine");
+        }
+        return new LegacyReportState(memberStatus, itemStatus);
+    }
+
+    private void validateTaskForLegacyReport(
+            AgentTaskStatus taskStatus, AgentTaskStatus reportStatus, boolean exactDuplicate,
+            String failureReason, AgentTaskMemberEntity member) {
+        if (taskStatus.isOperationalTerminal()) {
+            if (!exactDuplicate || taskStatus != reportStatus
+                    || taskStatus == AgentTaskStatus.CANCELLED
+                    || taskStatus == AgentTaskStatus.ARCHIVED) {
+                throw invalid("Terminal task accepts only an exact duplicate legacy report");
+            }
+            if (reportStatus == AgentTaskStatus.FAILED
+                    && !Objects.equals(member.getFailureReason(), requiredFailureReason(failureReason))) {
+                throw invalid("Duplicate failed report must preserve the byte-exact failure reason");
+            }
+            return;
+        }
+        if (taskStatus != AgentTaskStatus.ASSIGNED && taskStatus != AgentTaskStatus.RUNNING) {
+            throw invalid("Task is not in a legacy-reportable aggregate state");
+        }
+        if (exactDuplicate && reportStatus == AgentTaskStatus.FAILED
+                && !Objects.equals(member.getFailureReason(), requiredFailureReason(failureReason))) {
+            throw invalid("Duplicate failed report must preserve the byte-exact failure reason");
+        }
+    }
+
+    private void validateAggregateResult(
+            AgentTaskStatus reportStatus, AgentTaskAggregationDTO aggregate) {
+        AgentTaskStatus aggregateStatus = persistedTaskStatus(aggregate.getStatus());
+        if (reportStatus == AgentTaskStatus.RUNNING && aggregateStatus != AgentTaskStatus.RUNNING) {
+            throw invalidPersisted("Running legacy report produced an inconsistent aggregate result");
+        }
+        if (reportStatus == AgentTaskStatus.FAILED && aggregateStatus != AgentTaskStatus.FAILED) {
+            throw invalidPersisted("Failed legacy report did not produce a failed aggregate");
+        }
+        if (reportStatus == AgentTaskStatus.COMPLETED
+                && aggregateStatus != AgentTaskStatus.RUNNING
+                && aggregateStatus != AgentTaskStatus.COMPLETED) {
+            throw invalidPersisted("Completed legacy report produced an inconsistent aggregate result");
+        }
+        if (aggregateStatus == AgentTaskStatus.COMPLETED
+                && (aggregate.getRequiredWorkItemCount() == null
+                || aggregate.getRequiredCompletedCount() == null
+                || aggregate.getRequiredWorkItemCount() <= 0
+                || !aggregate.getRequiredWorkItemCount().equals(
+                        aggregate.getRequiredCompletedCount())
+                || aggregate.getRequiredFailedCount() == null
+                || aggregate.getRequiredFailedCount() != 0)) {
+            throw invalidPersisted("Completed task aggregate is not backed by all required results");
+        }
+        if (aggregateStatus == AgentTaskStatus.FAILED
+                && (aggregate.getRequiredFailedCount() == null
+                || aggregate.getRequiredFailedCount() <= 0)) {
+            throw invalidPersisted("Failed task aggregate is not backed by a required failure");
+        }
+    }
+
+    private boolean updateMemberForReport(
             String tenantId, String clientId, String taskId, String agentId,
             AgentTaskMemberEntity current, AgentTaskStatus reportStatus,
             String failureReason, long changedAt) {
@@ -233,7 +505,15 @@ public class AgentLegacyTaskCompatibilityService {
             default -> throw invalid("Unsupported legacy report status");
         };
         if (currentStatus == target) {
-            return;
+            if (target.isTerminal()
+                    && (current.getCompletedAt() == null || current.getCompletedAt() <= 0)) {
+                throw invalidPersisted("Terminal task member has no completion marker");
+            }
+            if (target == AgentTaskMemberStatus.FAILED
+                    && StringUtil.isBlank(current.getFailureReason())) {
+                throw invalidPersisted("Failed task member has no failure reason");
+            }
+            return false;
         }
         if (currentStatus.isTerminal()) {
             throw invalid("Terminal task member cannot report a different status");
@@ -255,9 +535,10 @@ public class AgentLegacyTaskCompatibilityService {
                 ? requiredFailureReason(failureReason) : null);
         requireSingleCas(memberDao.updateByVersion(
                 tenantId, clientId, taskId, agentId, current.getVersion(), update), "task member");
+        return true;
     }
 
-    private void updateWorkItemForReport(
+    private boolean updateWorkItemForReport(
             String tenantId, String clientId, String taskId, String agentId,
             AgentTaskWorkItemEntity current, AgentTaskStatus reportStatus, long changedAt) {
         AgentTaskWorkItemStatus currentStatus = persistedWorkItemStatus(current.getStatus());
@@ -268,35 +549,33 @@ public class AgentLegacyTaskCompatibilityService {
             default -> throw invalid("Unsupported legacy report status");
         };
         if (currentStatus == target) {
-            validateIdempotentWorkItem(current, target);
-            return;
+            validateIdempotentWorkItem(current, taskId, agentId, target);
+            return false;
+        }
+        if (currentStatus == AgentTaskWorkItemStatus.SUBMITTED) {
+            throw reserved("Submitted work item is owned by the B04/B06 result protocol");
         }
         if (currentStatus.isTerminal()) {
             throw invalid("Terminal default work item cannot report a different status");
         }
         if (currentStatus == AgentTaskWorkItemStatus.CLAIMED
-                || currentStatus == AgentTaskWorkItemStatus.RUNNING) {
-            if (!isLegacyLease(current.getLeaseToken())) {
-                throw new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL,
-                        "B04-owned work item must use the lease/result protocol");
-            }
-        } else if (current.getLeaseToken() != null || current.getLeaseUntil() != null) {
-            throw invalidPersisted("Non-active default work item retains lease state");
+                || currentStatus == AgentTaskWorkItemStatus.BLOCKED) {
+            throw reserved("Non-legacy work item state must use the lease/result protocol");
         }
+        validateLegacyMutableState(current, taskId, agentId, currentStatus);
+
         if (target == AgentTaskWorkItemStatus.RUNNING
                 && currentStatus != AgentTaskWorkItemStatus.READY) {
             throw invalid("Legacy running report requires a ready default work item");
         }
         if (target == AgentTaskWorkItemStatus.COMPLETED
                 && currentStatus != AgentTaskWorkItemStatus.READY
-                && currentStatus != AgentTaskWorkItemStatus.RUNNING
-                && currentStatus != AgentTaskWorkItemStatus.SUBMITTED) {
+                && currentStatus != AgentTaskWorkItemStatus.RUNNING) {
             throw invalid("Legacy completed report cannot advance the current work item status");
         }
         if (target == AgentTaskWorkItemStatus.FAILED
                 && currentStatus != AgentTaskWorkItemStatus.READY
-                && currentStatus != AgentTaskWorkItemStatus.RUNNING
-                && currentStatus != AgentTaskWorkItemStatus.BLOCKED) {
+                && currentStatus != AgentTaskWorkItemStatus.RUNNING) {
             throw invalid("Legacy failed report cannot advance the current work item status");
         }
 
@@ -310,6 +589,9 @@ public class AgentLegacyTaskCompatibilityService {
             update.setLeaseUntil(null);
         }
         if (target == AgentTaskWorkItemStatus.COMPLETED) {
+            if (current.getResultArtifactId() != null) {
+                throw reserved("Legacy report cannot replace an existing result artifact");
+            }
             update.setResultArtifactId(legacyResultId(taskId, agentId));
             update.setSubmittedAt(firstNonNull(update.getSubmittedAt(), changedAt));
             update.setCompletedAt(firstNonNull(update.getCompletedAt(), changedAt));
@@ -321,12 +603,101 @@ public class AgentLegacyTaskCompatibilityService {
         requireSingleCas(workItemDao.updateByVersion(
                 tenantId, clientId, current.getWorkItemId(), current.getVersion(), update),
                 "default work item");
+        return true;
     }
 
-    private void validateMember(AgentTaskMemberEntity member, String taskId, String agentId) {
-        if (!taskId.equals(member.getTaskId()) || !agentId.equals(member.getAgentId())
+    private void rejectB04B06OwnedState(
+            AgentTaskWorkItemEntity item, String taskId, String agentId) {
+        AgentTaskWorkItemStatus status = persistedWorkItemStatus(item.getStatus());
+        if (status == AgentTaskWorkItemStatus.SUBMITTED) {
+            throw reserved("Submitted work item is owned by the B04/B06 result protocol");
+        }
+        if (status == AgentTaskWorkItemStatus.CLAIMED
+                || status == AgentTaskWorkItemStatus.BLOCKED
+                || status == AgentTaskWorkItemStatus.RUNNING
+                && (!legacyLeaseToken(taskId, agentId).equals(item.getLeaseToken())
+                || !Objects.equals(item.getLeaseUntil(), LEGACY_LEASE_UNTIL))) {
+            throw reserved("Work item is owned by the B04 lease protocol");
+        }
+        if (item.getResultArtifactId() != null
+                && !legacyResultId(taskId, agentId).equals(item.getResultArtifactId())) {
+            throw reserved("Legacy report cannot replace an existing result artifact");
+        }
+    }
+
+    private void validateLegacyMutableState(
+            AgentTaskWorkItemEntity item, String taskId, String agentId,
+            AgentTaskWorkItemStatus status) {
+        String expectedLease = legacyLeaseToken(taskId, agentId);
+        if (status == AgentTaskWorkItemStatus.RUNNING) {
+            if (!expectedLease.equals(item.getLeaseToken())
+                    || !Objects.equals(item.getLeaseUntil(), LEGACY_LEASE_UNTIL)
+                    || item.getResultArtifactId() != null) {
+                throw reserved("Running work item is not owned by the exact legacy lease");
+            }
+            return;
+        }
+        if (item.getLeaseToken() != null || item.getLeaseUntil() != null) {
+            throw invalidPersisted("Non-running legacy work item retains lease state");
+        }
+        if (item.getResultArtifactId() != null) {
+            throw reserved("Legacy report cannot replace an existing result artifact");
+        }
+    }
+
+    private void validateIdempotentWorkItem(
+            AgentTaskWorkItemEntity item, String taskId, String agentId,
+            AgentTaskWorkItemStatus status) {
+        if (status == AgentTaskWorkItemStatus.RUNNING) {
+            validateLegacyMutableState(item, taskId, agentId, status);
+            return;
+        }
+        if (item.getLeaseToken() != null || item.getLeaseUntil() != null) {
+            throw invalidPersisted("Terminal default work item retains lease state");
+        }
+        if (status == AgentTaskWorkItemStatus.COMPLETED
+                && (!legacyResultId(taskId, agentId).equals(item.getResultArtifactId())
+                || item.getSubmittedAt() == null || item.getSubmittedAt() <= 0
+                || item.getCompletedAt() == null || item.getCompletedAt() <= 0)) {
+            throw reserved("Completed work item is not an exact legacy result");
+        }
+        if (status == AgentTaskWorkItemStatus.FAILED
+                && (!Objects.equals(item.getAttemptCount(), item.getMaxAttempts())
+                || item.getResultArtifactId() != null || item.getSubmittedAt() != null
+                || item.getCompletedAt() == null || item.getCompletedAt() <= 0)) {
+            throw invalidPersisted("Failed default work item is incomplete");
+        }
+    }
+
+    private List<String> currentMemberAgentIds(
+            String tenantId, String clientId, String taskId) {
+        List<AgentTaskMemberEntity> members = requireSnapshot(
+                memberDao.listByTask(tenantId, clientId, taskId), "task member");
+        rejectTruncatedSnapshot(members, "task member");
+        LinkedHashSet<String> agentIds = new LinkedHashSet<>();
+        for (AgentTaskMemberEntity member : members) {
+            requireExactText(member.getAgentId(), "persisted member agentId", 100);
+            validateMember(member, tenantId, clientId, taskId, member.getAgentId());
+            AgentTaskMemberStatus status = persistedMemberStatus(member.getMemberStatus());
+            if (status == AgentTaskMemberStatus.REJECTED || status == AgentTaskMemberStatus.LEFT) {
+                continue;
+            }
+            if (!agentIds.add(member.getAgentId())) {
+                throw invalidPersisted("Task has duplicate member identities");
+            }
+        }
+        return List.copyOf(agentIds);
+    }
+
+    private void validateMember(
+            AgentTaskMemberEntity member, String tenantId, String clientId,
+            String taskId, String agentId) {
+        if (!tenantId.equals(member.getTenantId()) || !clientId.equals(member.getClientId())
+                || !taskId.equals(member.getTaskId()) || !agentId.equals(member.getAgentId())
                 || !MEMBER_ROLES.contains(member.getMemberRole())
                 || !ASSIGNMENT_SOURCES.contains(member.getAssignmentSource())
+                || member.getJoinedAt() == null || member.getJoinedAt() <= 0
+                || member.getAcceptedAt() == null || member.getAcceptedAt() <= 0
                 || member.getVersion() == null || member.getVersion() < 0
                 || member.getVersion() == Long.MAX_VALUE) {
             throw invalidPersisted("Persisted task member is incomplete or mismatched");
@@ -335,10 +706,14 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     private void validateDefaultWorkItem(
-            AgentTaskWorkItemEntity item, String taskId, String agentId) {
-        if (!taskId.equals(item.getTaskId()) || !agentId.equals(item.getAssigneeAgentId())
+            AgentTaskWorkItemEntity item, String tenantId, String clientId,
+            String taskId, String agentId) {
+        if (!tenantId.equals(item.getTenantId()) || !clientId.equals(item.getClientId())
+                || !taskId.equals(item.getTaskId()) || !agentId.equals(item.getAssigneeAgentId())
+                || !defaultWorkItemId(taskId, agentId).equals(item.getWorkItemId())
                 || !WORK_TYPE.equals(item.getWorkType()) || !Boolean.TRUE.equals(item.getRequiredItem())
-                || StringUtil.isBlank(item.getWorkItemId()) || StringUtil.isBlank(item.getTitle())
+                || !"[]".equals(item.getDependencyJson())
+                || StringUtil.isBlank(item.getTitle())
                 || item.getPriority() == null || item.getAttemptCount() == null
                 || item.getMaxAttempts() == null || item.getAttemptCount() < 0
                 || item.getMaxAttempts() <= 0 || item.getAttemptCount() > item.getMaxAttempts()
@@ -347,28 +722,6 @@ public class AgentLegacyTaskCompatibilityService {
             throw invalidPersisted("Persisted legacy default work item is incomplete or mismatched");
         }
         persistedWorkItemStatus(item.getStatus());
-    }
-
-    private void validateIdempotentWorkItem(
-            AgentTaskWorkItemEntity item, AgentTaskWorkItemStatus status) {
-        if (status == AgentTaskWorkItemStatus.RUNNING) {
-            if (!isLegacyLease(item.getLeaseToken())
-                    || item.getLeaseUntil() == null || item.getLeaseUntil() <= 0) {
-                throw new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL,
-                        "B04-owned work item must use the lease/result protocol");
-            }
-        } else if (item.getLeaseToken() != null || item.getLeaseUntil() != null) {
-            throw invalidPersisted("Terminal default work item retains lease state");
-        }
-        if (status == AgentTaskWorkItemStatus.COMPLETED
-                && (StringUtil.isBlank(item.getResultArtifactId())
-                || item.getCompletedAt() == null || item.getCompletedAt() <= 0)) {
-            throw invalidPersisted("Completed default work item has no accepted result marker");
-        }
-        if (status == AgentTaskWorkItemStatus.FAILED
-                && !Objects.equals(item.getAttemptCount(), item.getMaxAttempts())) {
-            throw invalidPersisted("Failed default work item has not exhausted attempts");
-        }
     }
 
     private AgentTaskMemberDTO copyMember(AgentTaskMemberEntity current) {
@@ -443,17 +796,38 @@ public class AgentLegacyTaskCompatibilityService {
         }
     }
 
-    private void requireScope(String tenantId, String clientId, String taskId) {
-        if (StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId)
-                || StringUtil.isBlank(taskId)) {
-            throw invalid("tenantId, clientId and taskId are required");
+    private void requireScope(String tenantId, String clientId, String ownerJiacn) {
+        requireExactText(tenantId, "tenantId", 50);
+        requireExactText(clientId, "clientId", 50);
+        requireExactText(ownerJiacn, "ownerJiacn", 50);
+        if (!tenantId.equals(ownerJiacn)) {
+            throw forbidden();
         }
     }
 
-    private void requireCanonicalAgentId(String agentId) {
-        if (agentId == null || !CANONICAL_AGENT_ID.matcher(agentId).matches()) {
-            throw invalid("agentId must be an ADR-001 canonical identifier");
+    private void requireExactText(String value, String name, int maxLength) {
+        if (value == null || value.isEmpty() || value.length() > maxLength
+                || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw invalid(name + " must be nonblank, unpadded, and free of control characters");
         }
+    }
+
+    private List<String> requireResolvedAgentIds(List<String> agentIds) {
+        if (agentIds == null || agentIds.isEmpty()) {
+            throw invalid("At least one resolved agentId is required");
+        }
+        if (agentIds.size() >= MAX_COLLABORATION_ROWS) {
+            throw invalid("Legacy assignment exceeds the safe member limit");
+        }
+        LinkedHashSet<String> exact = new LinkedHashSet<>();
+        for (String agentId : agentIds) {
+            requireExactText(agentId, "resolved agentId", 100);
+            if (!exact.add(agentId)) {
+                throw invalid("Resolved Agent identities must be unique");
+            }
+        }
+        return List.copyOf(exact);
     }
 
     private void requireTaskVersion(Long version) {
@@ -462,9 +836,22 @@ public class AgentLegacyTaskCompatibilityService {
         }
     }
 
-    private void requireSingleInsert(int inserted, String aggregate) {
-        if (inserted != 1) {
-            throw invalidPersisted("Scoped " + aggregate + " insert affected an unexpected row count");
+    private <T> List<T> requireSnapshot(List<T> rows, String aggregate) {
+        if (rows == null) {
+            throw invalidPersisted("Scoped " + aggregate + " query returned no snapshot");
+        }
+        return rows;
+    }
+
+    private void rejectTruncatedSnapshot(List<?> rows, String aggregate) {
+        if (rows.size() >= MAX_COLLABORATION_ROWS) {
+            throw invalidPersisted("Scoped " + aggregate + " snapshot exceeds the safe limit");
+        }
+    }
+
+    private void requireSingleMutation(int affected, String aggregate) {
+        if (affected != 1) {
+            throw invalidPersisted("Scoped " + aggregate + " mutation affected an unexpected row count");
         }
     }
 
@@ -481,11 +868,12 @@ public class AgentLegacyTaskCompatibilityService {
         if (StringUtil.isBlank(failureReason)) {
             return "Legacy task report failed";
         }
+        if (failureReason.length() > 1000
+                || !failureReason.equals(failureReason.strip())
+                || failureReason.chars().anyMatch(Character::isISOControl)) {
+            throw invalid("failureReason must fit storage, be unpadded, and contain no control characters");
+        }
         return failureReason;
-    }
-
-    private boolean isLegacyLease(String leaseToken) {
-        return leaseToken != null && leaseToken.startsWith("legacy_") && leaseToken.length() == 39;
     }
 
     private String defaultWorkItemId(String taskId, String agentId) {
@@ -512,8 +900,8 @@ public class AgentLegacyTaskCompatibilityService {
 
     private long now() {
         long value = clock.getAsLong();
-        if (value < 0) {
-            throw invalidPersisted("Compatibility clock returned a negative timestamp");
+        if (value <= 0) {
+            throw invalidPersisted("Compatibility clock returned a nonpositive timestamp");
         }
         return value;
     }
@@ -544,6 +932,41 @@ public class AgentLegacyTaskCompatibilityService {
         return new AgentTaskCollaborationException(Reason.VERSION_CONFLICT, message);
     }
 
-    public record ReportOutcome(String taskStatus, long taskVersion) {
+    private AgentTaskCollaborationException reserved(String message) {
+        return new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL, message);
+    }
+
+
+    private record LegacyReportState(
+            AgentTaskMemberStatus memberStatus, AgentTaskWorkItemStatus workItemStatus) {
+        boolean matches(AgentTaskStatus reportStatus) {
+            return switch (reportStatus) {
+                case RUNNING -> memberStatus == AgentTaskMemberStatus.WORKING
+                        && workItemStatus == AgentTaskWorkItemStatus.RUNNING;
+                case COMPLETED -> memberStatus == AgentTaskMemberStatus.DONE
+                        && workItemStatus == AgentTaskWorkItemStatus.COMPLETED;
+                case FAILED -> memberStatus == AgentTaskMemberStatus.FAILED
+                        && workItemStatus == AgentTaskWorkItemStatus.FAILED;
+                default -> false;
+            };
+        }
+    }
+
+    public record AssignOutcome(List<String> agentIds, boolean changed) {
+        public AssignOutcome {
+            agentIds = List.copyOf(agentIds);
+        }
+    }
+
+    public record ReportOutcome(
+            String taskStatus,
+            long taskVersion,
+            boolean changed,
+            boolean terminalTransition,
+            String reportingAgentId,
+            List<String> memberAgentIds) {
+        public ReportOutcome {
+            memberAgentIds = List.copyOf(memberAgentIds);
+        }
     }
 }

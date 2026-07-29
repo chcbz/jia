@@ -236,6 +236,8 @@ class AgentIdentityRuntimeRealTransactionTest {
 
         assertEquals(canonical, identityService.resolveLegacyAgentIdInScope(
                 "owner-a", "client-a", "owner-a", "legacy-alias"));
+        assertEquals(canonical, identityService.resolveAgentIdInScope(
+                "owner-a", "client-a", "owner-a", "legacy-alias"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.resolveLegacyAgentIdInScope(
                         "owner-a", "client-b", "owner-a", "legacy-alias"));
@@ -265,6 +267,8 @@ class AgentIdentityRuntimeRealTransactionTest {
                 """, bindingId);
 
         assertEquals("legacy-wuyong", identityService.requireCanonicalAgentIdInScope(
+                "owner-a", "client-a", "owner-a", "legacy-wuyong"));
+        assertEquals("legacy-wuyong", identityService.resolveAgentIdInScope(
                 "owner-a", "client-a", "owner-a", "legacy-wuyong"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
@@ -305,6 +309,7 @@ class AgentIdentityRuntimeRealTransactionTest {
         AgentServiceImpl raw = new AgentServiceImpl(
                 selectedRuntime, selectedIdentity, personaDao, selectedBinding,
                 mock(AgentTaskMetaDao.class), mock(AgentTaskMemberDao.class),
+                mock(AgentLegacyTaskCompatibilityService.class),
                 mock(AgentTaskNoteDao.class), mock(DialogueTemplateDao.class),
                 provider(), provider(), provider(), provider(),
                 new AgentSceneFeatureFlags(false, false));

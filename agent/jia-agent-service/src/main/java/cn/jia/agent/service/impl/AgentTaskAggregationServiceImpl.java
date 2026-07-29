@@ -9,6 +9,7 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
@@ -22,26 +23,29 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.LongSupplier;
-import java.util.regex.Pattern;
 
 @Named
 public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationService {
-    private static final Pattern CANONICAL_AGENT_ID = Pattern.compile("^agt_[0-9a-f]{32}$");
     private static final int MAX_LEASE_TOKEN_LENGTH = 100;
     private final AgentTaskMetaDao taskMetaDao;
+    private final AgentIdentityService identityService;
     private final AgentTaskAggregationCalculator calculator;
     private final LongSupplier clock;
 
     @Inject
-    public AgentTaskAggregationServiceImpl(AgentTaskMetaDao taskMetaDao) {
-        this(taskMetaDao, new AgentTaskAggregationCalculator(), System::currentTimeMillis);
+    public AgentTaskAggregationServiceImpl(
+            AgentTaskMetaDao taskMetaDao, AgentIdentityService identityService) {
+        this(taskMetaDao, identityService,
+                new AgentTaskAggregationCalculator(), System::currentTimeMillis);
     }
 
     AgentTaskAggregationServiceImpl(
             AgentTaskMetaDao taskMetaDao,
+            AgentIdentityService identityService,
             AgentTaskAggregationCalculator calculator,
             LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
+        this.identityService = Objects.requireNonNull(identityService, "identityService");
         this.calculator = Objects.requireNonNull(calculator, "calculator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -186,7 +190,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
         if (member == null || !tenantId.equals(member.getTenantId())
                 || !clientId.equals(member.getClientId())
                 || !taskId.equals(member.getTaskId())
-                || StringUtil.isBlank(member.getAgentId())) {
+                || !isCanonicalStoredAgentId(tenantId, clientId, member.getAgentId())) {
             throw invalidPersisted("Persisted member identity does not match the aggregate scope");
         }
         try {
@@ -205,9 +209,9 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
         if (item == null || !tenantId.equals(item.getTenantId())
                 || !clientId.equals(item.getClientId())
                 || !taskId.equals(item.getTaskId())
-                || StringUtil.isBlank(item.getWorkItemId())
+                || !isExactStoredText(item.getWorkItemId(), 100)
                 || StringUtil.isBlank(item.getTitle())
-                || StringUtil.isBlank(item.getWorkType())) {
+                || !isExactStoredText(item.getWorkType(), 30)) {
             throw invalidPersisted("Persisted work item identity is incomplete or out of scope");
         }
         AgentTaskWorkItemStatus status;
@@ -230,21 +234,45 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
         }
         boolean activeLeaseStatus = status == AgentTaskWorkItemStatus.CLAIMED
                 || status == AgentTaskWorkItemStatus.RUNNING;
+        boolean hasAssignee = item.getAssigneeAgentId() != null;
+        boolean canonicalAssignee = !hasAssignee || isCanonicalStoredAgentId(
+                tenantId, clientId, item.getAssigneeAgentId());
         if (activeLeaseStatus) {
-            if (StringUtil.isBlank(item.getAssigneeAgentId())
-                    || !CANONICAL_AGENT_ID.matcher(item.getAssigneeAgentId()).matches()
-                    || StringUtil.isBlank(item.getLeaseToken())
-                    || item.getLeaseToken().length() > MAX_LEASE_TOKEN_LENGTH
+            if (!hasAssignee || !canonicalAssignee
+                    || !isExactStoredText(item.getLeaseToken(), MAX_LEASE_TOKEN_LENGTH)
                     || item.getLeaseUntil() == null || item.getLeaseUntil() <= 0) {
                 throw invalidPersisted("Persisted active lease is incomplete or non-canonical");
             }
         } else if (item.getLeaseToken() != null || item.getLeaseUntil() != null) {
             throw invalidPersisted("Non-active work item status retains active lease state");
         }
-        if (item.getAssigneeAgentId() != null
-                && (StringUtil.isBlank(item.getAssigneeAgentId())
-                || !CANONICAL_AGENT_ID.matcher(item.getAssigneeAgentId()).matches())) {
+        if (hasAssignee && !canonicalAssignee) {
             throw invalidPersisted("Persisted work item assignee is blank or non-canonical");
+        }
+        if (item.getResultArtifactId() != null
+                && !isExactStoredText(item.getResultArtifactId(), 100)) {
+            throw invalidPersisted("Persisted result artifact identity is non-canonical");
+        }
+    }
+
+    private boolean isExactStoredText(String value, int maxLength) {
+        return value != null && !value.isEmpty() && value.length() <= maxLength
+                && value.equals(value.strip())
+                && value.chars().noneMatch(Character::isISOControl);
+    }
+
+    private boolean isCanonicalStoredAgentId(
+            String tenantId, String clientId, String agentId) {
+        if (agentId == null || agentId.isEmpty() || agentId.length() > 100
+                || !agentId.equals(agentId.strip())
+                || agentId.chars().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        try {
+            return agentId.equals(identityService.resolveAgentIdInScope(
+                    tenantId, clientId, tenantId, agentId));
+        } catch (RuntimeException ignored) {
+            return false;
         }
     }
 

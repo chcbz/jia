@@ -11,6 +11,7 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
@@ -191,8 +192,14 @@ class AgentTaskWorkItemParentGateMySqlTest {
     private AgentTaskAggregationService aggregateServiceWithDao(AgentTaskMetaDao taskMetaDao) {
         DataSourceTransactionManager transactionManager =
                 new DataSourceTransactionManager(jdbc.getDataSource());
+        AgentIdentityService identityService = org.mockito.Mockito.mock(AgentIdentityService.class);
+        org.mockito.Mockito.when(identityService.resolveAgentIdInScope(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(3));
         return transactionalProxy(new AgentTaskAggregationServiceImpl(
-                taskMetaDao, new AgentTaskAggregationCalculator(), () -> 1_000L),
+                taskMetaDao, identityService,
+                new AgentTaskAggregationCalculator(), () -> 1_000L),
                 transactionManager);
     }
 
