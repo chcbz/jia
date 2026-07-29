@@ -94,6 +94,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_request"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_artifact"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_issue"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest_batch"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_run"));
         assertTrue(sql.contains("uk_task_backfill_issue_key"));
@@ -156,7 +157,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         String auditMigration = readResource("db/task-collaboration-backfill-audit-schema.sql");
 
         for (String table : Set.of(
-                "agent_task_backfill_issue", "agent_task_backfill_manifest", "agent_task_backfill_run")) {
+                "agent_task_backfill_issue", "agent_task_backfill_manifest_batch",
+                "agent_task_backfill_manifest", "agent_task_backfill_run")) {
             String initializerDefinition = initializerSql.stream()
                     .filter(sql -> sql.contains("create table if not exists " + table))
                     .findFirst().orElseThrow();
@@ -206,35 +208,115 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                             .afterPropertiesSet());
             assertTrue(error.getMessage().contains("agent_task_backfill_issue.issue_key"),
                     error.getMessage());
-            assertTrue(error.getMessage().contains("type/null/default/collation"),
+            assertTrue(error.getMessage().contains("type/null/default/collation/auto_increment"),
                     error.getMessage());
         }
     }
 
     @Test
-    void incompatibleBackfillManifestIndexFailsStartup() {
-        JdbcTemplate failingTemplate = new JdbcTemplate() {
-            @Override
-            public void execute(String sql) {
-                // DDL intentionally inert.
-            }
+    void missingOrWrongBackfillPrimaryKeyFailsClosed() {
+        List<List<AgentSchemaInitializer.IndexColumn>> incompatible = List.of(
+                List.of(),
+                List.of(new AgentSchemaInitializer.IndexColumn(0, "other_id", 1, null)),
+                List.of(
+                        new AgentSchemaInitializer.IndexColumn(0, "id", 1, null),
+                        new AgentSchemaInitializer.IndexColumn(0, "other_id", 2, null)));
 
-            @Override
-            @SuppressWarnings("unchecked")
-            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
-                return (T) Integer.valueOf(1);
-            }
+        for (List<AgentSchemaInitializer.IndexColumn> primary : incompatible) {
+            JdbcTemplate template = new JdbcTemplate() {
+                @Override
+                @SuppressWarnings("unchecked")
+                public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                    return sql.contains("information_schema.statistics")
+                            ? (List<T>) primary : List.of();
+                }
+            };
+            IllegalStateException error = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(template)
+                            .validateBackfillPrimaryKey("agent_task_backfill_issue"));
+            assertTrue(error.getMessage().contains("PRIMARY KEY (id)"), error.getMessage());
+        }
+    }
 
+    @Test
+    void missingBackfillIdAutoIncrementFailsClosed() {
+        JdbcTemplate template = new JdbcTemplate() {
             @Override
             @SuppressWarnings("unchecked")
             public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
-                if (sql.contains("information_schema.tables")) {
-                    return (List<T>) List.of(Integer.valueOf(
-                            args.length > 0 && String.valueOf(args[0]).startsWith("agent_task_backfill_") ? 1 : 0));
+                if (sql.contains("information_schema.columns")) {
+                    return (List<T>) List.of(new AgentSchemaInitializer.BackfillColumnDefinition(
+                            "bigint", "bigint", false, null, null, ""));
                 }
-                if (args.length > 1
-                        && "agent_task_backfill_manifest".equals(args[0])
-                        && "uk_task_backfill_manifest_row".equals(args[1])) {
+                return List.of();
+            }
+        };
+        AgentSchemaInitializer.BackfillColumnExpectation id =
+                new AgentSchemaInitializer.BackfillColumnExpectation(
+                        "agent_task_backfill_issue", "id", "bigint", "bigint",
+                        false, null, null);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(template).validateBackfillColumn(id));
+        assertTrue(error.getMessage().contains("agent_task_backfill_issue.id"), error.getMessage());
+        assertTrue(error.getMessage().contains("auto_increment"), error.getMessage());
+    }
+
+    @Test
+    void initializerAndMigrationKeepBackfillAuditTriggerDefinitionsInParity() throws Exception {
+        JdbcTemplate template = dialectTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        List<String> statements = executedStatements(template);
+        String migration = readResource("db/task-collaboration-backfill-audit-schema.sql");
+
+        for (AgentSchemaInitializer.TriggerDefinition expected : backfillAuditTriggers(migration)) {
+            String initializerTrigger = statements.stream()
+                    .filter(sql -> sql.toLowerCase(Locale.ROOT)
+                            .startsWith("create trigger " + expected.name()))
+                    .findFirst().orElseThrow();
+            assertEquals(migrationTriggerDefinition(migration, expected.name()),
+                    normalizeDefinition(initializerTrigger), expected.name());
+            assertTrue(normalizeDefinition(initializerTrigger).contains(
+                    " on " + expected.table() + " "), expected.name());
+        }
+    }
+
+    @Test
+    void backfillAuditTriggerOnWrongTableFailsClosed() throws IOException {
+        List<AgentSchemaInitializer.TriggerDefinition> definitions =
+                new java.util.ArrayList<>(backfillAuditTriggers(
+                        readResource("db/task-collaboration-backfill-audit-schema.sql")));
+        AgentSchemaInitializer.TriggerDefinition original = definitions.get(0);
+        definitions.set(0, new AgentSchemaInitializer.TriggerDefinition(
+                original.name(), "agent_task_backfill_issue", original.timing(),
+                original.event(), original.statement()));
+        JdbcTemplate template = new JdbcTemplate() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper) {
+                return sql.contains("information_schema.triggers")
+                        ? (List<T>) definitions : List.of();
+            }
+
+            @Override
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                return query(sql, rowMapper);
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(template).validateBackfillAuditTriggers());
+        assertTrue(error.getMessage().contains(original.name()), error.getMessage());
+        assertTrue(error.getMessage().contains("incompatible table"), error.getMessage());
+    }
+
+    @Test
+    void incompatibleBackfillManifestIndexFailsClosed() {
+        JdbcTemplate failingTemplate = new JdbcTemplate() {
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if (sql.contains("information_schema.statistics")) {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(0, "report_sha256", 1, null));
                 }
@@ -243,7 +325,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> invokeEnsureRequiredIndex(new AgentSchemaInitializer(failingTemplate),
+                        "agent_task_backfill_manifest", "uk_task_backfill_manifest_row", true,
+                        List.of("report_sha256", "manifest_row_key"), ""));
         assertTrue(error.getMessage().contains("uk_task_backfill_manifest_row"), error.getMessage());
     }
 
@@ -725,6 +809,15 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(error.getMessage().contains("incompatible definition"), error.getMessage());
     }
 
+    @Test
+    void identityTriggerOnWrongTableFailsClosed() {
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(identityCatalogTemplate("trigger-table"))
+                        .afterPropertiesSet());
+        assertTrue(error.getMessage().contains("trg_identity_registry_immutable_update"), error.getMessage());
+        assertTrue(error.getMessage().contains("incompatible definition"), error.getMessage());
+    }
+
     private JdbcTemplate identityCatalogTemplate(String fault) {
         return new JdbcTemplate() {
             @Override
@@ -774,7 +867,15 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) identityForeignKey("fk".equals(fault));
                 }
                 if (normalized.contains("from information_schema.triggers")) {
-                    return (List<T>) identityTriggers("trigger".equals(fault));
+                    List<AgentSchemaInitializer.TriggerDefinition> triggers =
+                            new java.util.ArrayList<>(identityTriggers("trigger".equals(fault)));
+                    if ("trigger-table".equals(fault)) {
+                        AgentSchemaInitializer.TriggerDefinition original = triggers.get(0);
+                        triggers.set(0, new AgentSchemaInitializer.TriggerDefinition(
+                                original.name(), "agent_identity_alias", original.timing(),
+                                original.event(), original.statement()));
+                    }
+                    return (List<T>) triggers;
                 }
                 return List.of();
             }
@@ -878,15 +979,18 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 """;
         return List.of(
                 new AgentSchemaInitializer.TriggerDefinition(
-                        "trg_identity_registry_immutable_update", "BEFORE", "UPDATE", registryUpdate),
+                        "trg_identity_registry_immutable_update", "agent_identity_registry",
+                        "BEFORE", "UPDATE", registryUpdate),
                 new AgentSchemaInitializer.TriggerDefinition(
-                        "trg_identity_registry_no_delete", "BEFORE", "DELETE", """
+                        "trg_identity_registry_no_delete", "agent_identity_registry",
+                        "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity registry is forbidden';
                         END
                         """),
                 new AgentSchemaInitializer.TriggerDefinition(
-                        "trg_identity_alias_immutable_update", "BEFORE", "UPDATE", """
+                        "trg_identity_alias_immutable_update", "agent_identity_alias",
+                        "BEFORE", "UPDATE", """
                         BEGIN
                             IF NOT (NEW.registry_id <=> OLD.registry_id)
                                OR NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id)
@@ -903,7 +1007,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                         END
                         """),
                 new AgentSchemaInitializer.TriggerDefinition(
-                        "trg_identity_alias_no_delete", "BEFORE", "DELETE", """
+                        "trg_identity_alias_no_delete", "agent_identity_alias",
+                        "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity alias is forbidden';
                         END
@@ -954,6 +1059,38 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         return result;
     }
 
+    private List<AgentSchemaInitializer.TriggerDefinition> backfillAuditTriggers(String migration) {
+        return List.of(
+                backfillAuditTrigger(migration, "trg_task_backfill_manifest_batch_update_guard",
+                        "agent_task_backfill_manifest_batch", "UPDATE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_manifest_batch_no_delete",
+                        "agent_task_backfill_manifest_batch", "DELETE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_manifest_insert_guard",
+                        "agent_task_backfill_manifest", "INSERT"),
+                backfillAuditTrigger(migration, "trg_task_backfill_manifest_no_update",
+                        "agent_task_backfill_manifest", "UPDATE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_manifest_no_delete",
+                        "agent_task_backfill_manifest", "DELETE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_run_no_update",
+                        "agent_task_backfill_run", "UPDATE"),
+                backfillAuditTrigger(migration, "trg_task_backfill_run_no_delete",
+                        "agent_task_backfill_run", "DELETE"));
+    }
+
+    private AgentSchemaInitializer.TriggerDefinition backfillAuditTrigger(
+            String migration, String name, String table, String event) {
+        int start = migration.indexOf("create trigger " + name);
+        assertTrue(start >= 0, name);
+        int bodyStart = migration.indexOf("for each row", start);
+        assertTrue(bodyStart > start, name);
+        bodyStart += "for each row".length();
+        int end = migration.indexOf("end$$", bodyStart);
+        assertTrue(end > bodyStart, name);
+        String statement = migration.substring(bodyStart, end + "end".length()).trim();
+        return new AgentSchemaInitializer.TriggerDefinition(
+                name, table, "BEFORE", event, statement);
+    }
+
     private String migrationTriggerDefinition(String migration, String trigger) {
         int start = migration.indexOf("create trigger " + trigger);
         assertTrue(start >= 0, trigger);
@@ -975,6 +1112,25 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         DataSource dataSource = dialectDataSource(productName);
         when(template.getDataSource()).thenReturn(dataSource);
         return template;
+    }
+
+    private void invokeEnsureRequiredIndex(
+            AgentSchemaInitializer initializer, String table, String indexName,
+            boolean unique, List<String> columns, String createSql) {
+        try {
+            var method = AgentSchemaInitializer.class.getDeclaredMethod(
+                    "ensureRequiredIndex", String.class, String.class,
+                    boolean.class, List.class, String.class);
+            method.setAccessible(true);
+            method.invoke(initializer, table, indexName, unique, columns, createSql);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new AssertionError(e.getCause());
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private DataSource dialectDataSource(String productName) throws Exception {
@@ -1021,10 +1177,15 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(Integer.valueOf(
                             args.length > 0 && String.valueOf(args[0]).startsWith("agent_task_backfill_") ? 1 : 0));
                 }
+                if (sql.contains("information_schema.statistics")
+                        && args.length > 1 && "PRIMARY".equals(args[1])) {
+                    return (List<T>) List.of(new AgentSchemaInitializer.IndexColumn(
+                            0, "id", 1, null));
+                }
                 if (sql.contains("SELECT DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT")) {
                     if ("agent_task_backfill_issue".equals(args[0]) && "id".equals(args[1])) {
                         return (List<T>) List.of(new AgentSchemaInitializer.BackfillColumnDefinition(
-                                "bigint", "bigint", false, null, null));
+                                "bigint", "bigint", false, null, null, "auto_increment"));
                     }
                     if ("agent_task_backfill_issue".equals(args[0]) && "issue_key".equals(args[1])) {
                         return (List<T>) List.of(issueKeyDefinition);

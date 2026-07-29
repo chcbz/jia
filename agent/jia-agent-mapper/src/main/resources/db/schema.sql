@@ -305,8 +305,8 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_issue (
     source_agent_id         VARCHAR(100) DEFAULT NULL COMMENT 'Parsed historical Agent ID before resolution',
     issue_code              VARCHAR(64) NOT NULL COMMENT 'Fail-closed B09 exception/review code',
     issue_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable resolution reason',
-    first_report_sha256     CHAR(64) NOT NULL COMMENT 'First reviewed manifest report SHA-256',
-    last_report_sha256      CHAR(64) NOT NULL COMMENT 'Latest reviewed manifest report SHA-256',
+    first_report_sha256     CHAR(64) NOT NULL COMMENT 'First approved canonical manifest digest',
+    last_report_sha256      CHAR(64) NOT NULL COMMENT 'Latest approved canonical manifest digest',
     first_seen_at           BIGINT NOT NULL COMMENT 'First apply observation time',
     last_seen_at            BIGINT NOT NULL COMMENT 'Latest apply observation time',
     occurrence_count        BIGINT NOT NULL DEFAULT 1 COMMENT 'Number of approved apply observations',
@@ -321,11 +321,25 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_issue (
     KEY idx_task_backfill_issue_code_seen (issue_code, last_seen_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Auditable B09 historical task backfill exceptions';
 
+CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest_batch (
+    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    report_sha256           CHAR(64) NOT NULL COMMENT 'Database-recomputed canonical manifest digest',
+    manifest_row_count      BIGINT NOT NULL DEFAULT 0 COMMENT 'Exact sealed manifest row count',
+    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED, SEALED is terminal',
+    approved_operator       VARCHAR(100) NOT NULL COMMENT 'Operator/ticket that approved this manifest',
+    approved_at             BIGINT NOT NULL COMMENT 'Approval time',
+    sealed_at               BIGINT DEFAULT NULL COMMENT 'Seal time, non-null only when SEALED',
+    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_task_backfill_manifest_batch_digest (report_sha256),
+    KEY idx_task_backfill_manifest_batch_status (seal_status, approved_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Sealed B09 canonical manifest approval batch';
+
 CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-    report_sha256           CHAR(64) NOT NULL COMMENT 'SHA-256 of the approved manifest TSV',
-    manifest_row_key        CHAR(64) NOT NULL COMMENT 'Deterministic source row identity',
-    manifest_row_sha256     CHAR(64) NOT NULL COMMENT 'Byte-exact source/scope/resolution digest',
+    report_sha256           CHAR(64) NOT NULL COMMENT 'Database-recomputed canonical manifest digest',
+    manifest_row_key        CHAR(64) NOT NULL COMMENT 'Database-verified deterministic source row identity',
+    manifest_row_sha256     CHAR(64) NOT NULL COMMENT 'Database-recomputed source/scope/resolution digest',
     meta_id                 BIGINT NOT NULL COMMENT 'Approved source agent_task_meta primary key',
     task_id                 VARCHAR(100) NOT NULL COMMENT 'Approved source task ID',
     tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved tenant scope',
@@ -345,14 +359,14 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest (
     UNIQUE KEY uk_task_backfill_manifest_row (report_sha256, manifest_row_key),
     KEY idx_task_backfill_manifest_meta (report_sha256, meta_id, source_ordinal, manifest_row_key),
     KEY idx_task_backfill_manifest_resolution (report_sha256, task_resolution_status, resolution_status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable approved B09 line manifest';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable rows of a sealed B09 canonical manifest';
 
 CREATE TABLE IF NOT EXISTS agent_task_backfill_run (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     run_id                  CHAR(36) NOT NULL COMMENT 'Apply run UUID',
-    report_sha256           CHAR(64) NOT NULL COMMENT 'Approved manifest TSV SHA-256',
+    report_sha256           CHAR(64) NOT NULL COMMENT 'Approved canonical manifest digest',
     operator                VARCHAR(100) NOT NULL COMMENT 'Approved migration operator/ticket',
-    manifest_row_count      BIGINT NOT NULL COMMENT 'Rows matched against approved manifest',
+    manifest_row_count      BIGINT NOT NULL COMMENT 'Rows matched against sealed manifest',
     issue_row_count         BIGINT NOT NULL DEFAULT 0 COMMENT 'Issue observations in this run',
     member_insert_count     BIGINT NOT NULL DEFAULT 0 COMMENT 'Members inserted in this run',
     work_item_insert_count  BIGINT NOT NULL DEFAULT 0 COMMENT 'Work items inserted in this run',

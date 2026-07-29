@@ -1,8 +1,10 @@
--- B09 immutable approval manifest export (read-only, MySQL 8.0.21+).
--- Save the complete --batch --raw output as TSV, review it together with the
--- human dry-run report, then calculate sha256sum over this exact file. Values
--- that may contain delimiters are hex encoded; "-" is the NULL sentinel.
+-- B09 machine-review manifest export (MySQL 8.0.21+).
+-- The database emits every canonical row-hash input plus a deterministic batch
+-- digest. Digest order is BINARY manifest_row_key; hashing is an iterative
+-- fixed-width SHA-256 chain, so it has no GROUP_CONCAT/truncation dependency.
 
+DROP TEMPORARY TABLE IF EXISTS tmp_b09_manifest_export;
+CREATE TEMPORARY TABLE tmp_b09_manifest_export AS
 -- B09_RESOLUTION_CTE_BEGIN
 WITH
 meta_source AS (
@@ -592,7 +594,7 @@ manifest_rows AS (
             CAST(o.meta_id AS CHAR), o.source_shape, CAST(o.source_ordinal AS CHAR)), 256)
             AS manifest_row_key,
         SHA2(CONCAT_WS(CHAR(31),
-            'B09-MANIFEST-CONTENT-V1',
+            'B09-MANIFEST-CONTENT-V2',
             CAST(o.meta_id AS CHAR),
             COALESCE(CONCAT('V', HEX(o.task_id)), 'N'),
             COALESCE(CONCAT('V', HEX(o.tenant_id)), 'N'),
@@ -630,13 +632,107 @@ SELECT
     HEX(task_id) AS task_id_hex,
     IF(tenant_id IS NULL, '-', HEX(tenant_id)) AS tenant_id_hex,
     IF(client_id IS NULL, '-', HEX(client_id)) AS client_id_hex,
+    HEX(reward_status) AS reward_status_hex,
     source_hash,
+    IF(required_abilities IS NULL, '-', HEX(required_abilities)) AS required_abilities_hex,
+    IF(assigned_at IS NULL, '-', CAST(assigned_at AS CHAR)) AS assigned_at_value,
+    IF(started_at IS NULL, '-', CAST(started_at AS CHAR)) AS started_at_value,
+    IF(completed_at IS NULL, '-', CAST(completed_at AS CHAR)) AS completed_at_value,
+    IF(failure_reason IS NULL, '-', HEX(failure_reason)) AS failure_reason_hex,
+    IF(create_time IS NULL, '-', CAST(create_time AS CHAR)) AS create_time_value,
+    IF(update_time IS NULL, '-', CAST(update_time AS CHAR)) AS update_time_value,
+    IF(source_time IS NULL, '-', CAST(source_time AS CHAR)) AS source_time_value,
     source_format,
     source_shape,
     source_ordinal,
     IF(normalized_agent_id IS NULL, '-', HEX(normalized_agent_id)) AS source_agent_id_hex,
     IF(canonical_agent_id IS NULL, '-', HEX(canonical_agent_id)) AS canonical_agent_id_hex,
+    IF(identity_match IS NULL, '-', HEX(identity_match)) AS identity_match_hex,
     resolution_status,
-    task_resolution_status
-FROM manifest_rows
-ORDER BY manifest_row_key;
+    HEX(resolution_reason) AS resolution_reason_hex,
+    task_resolution_status,
+    eligible_row_count,
+    blocked_row_count,
+    empty_row_count,
+    canonical_agent_count,
+    IF(planned_member_status IS NULL, '-', HEX(planned_member_status)) AS planned_member_status_hex,
+    IF(planned_work_item_status IS NULL, '-', HEX(planned_work_item_status)) AS planned_work_item_status_hex,
+    IF(planned_work_item_id IS NULL, '-', HEX(planned_work_item_id)) AS planned_work_item_id_hex
+FROM manifest_rows;
+
+DROP PROCEDURE IF EXISTS b09_compute_export_manifest_digest_v3;
+DELIMITER $$
+CREATE PROCEDURE b09_compute_export_manifest_digest_v3(
+    OUT computed_digest CHAR(64), OUT computed_row_count BIGINT)
+BEGIN
+    DECLARE done BOOLEAN DEFAULT FALSE;
+    DECLARE row_key CHAR(64);
+    DECLARE row_digest CHAR(64);
+    DECLARE chain_digest CHAR(64) DEFAULT SHA2('B09-MANIFEST-BATCH-CHAIN-V2', 256);
+    DECLARE manifest_cursor CURSOR FOR
+        SELECT manifest_row_key, manifest_row_sha256
+        FROM tmp_b09_manifest_export
+        ORDER BY BINARY manifest_row_key;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    SET computed_row_count = 0;
+    OPEN manifest_cursor;
+    digest_loop: LOOP
+        FETCH manifest_cursor INTO row_key, row_digest;
+        IF done THEN
+            LEAVE digest_loop;
+        END IF;
+        SET chain_digest = SHA2(CONCAT(
+            UNHEX(chain_digest), UNHEX(row_key), UNHEX(row_digest)), 256);
+        SET computed_row_count = computed_row_count + 1;
+    END LOOP;
+    CLOSE manifest_cursor;
+    SET computed_digest = SHA2(CONCAT(
+        CAST('B09-MANIFEST-BATCH-FINAL-V2' AS BINARY),
+        UNHEX(chain_digest),
+        UNHEX(LPAD(HEX(computed_row_count), 16, '0'))), 256);
+END$$
+DELIMITER ;
+
+CALL b09_compute_export_manifest_digest_v3(
+    @b09_export_manifest_digest, @b09_export_manifest_row_count);
+
+SELECT
+    @b09_export_manifest_digest AS manifest_digest,
+    manifest_row_key,
+    manifest_row_sha256,
+    meta_id,
+    task_id_hex,
+    tenant_id_hex,
+    client_id_hex,
+    reward_status_hex,
+    source_hash,
+    required_abilities_hex,
+    assigned_at_value,
+    started_at_value,
+    completed_at_value,
+    failure_reason_hex,
+    create_time_value,
+    update_time_value,
+    source_time_value,
+    source_format,
+    source_shape,
+    source_ordinal,
+    source_agent_id_hex,
+    canonical_agent_id_hex,
+    identity_match_hex,
+    resolution_status,
+    resolution_reason_hex,
+    task_resolution_status,
+    eligible_row_count,
+    blocked_row_count,
+    empty_row_count,
+    canonical_agent_count,
+    planned_member_status_hex,
+    planned_work_item_status_hex,
+    planned_work_item_id_hex
+FROM tmp_b09_manifest_export
+ORDER BY BINARY manifest_row_key;
+
+DROP PROCEDURE IF EXISTS b09_compute_export_manifest_digest_v3;
+DROP TEMPORARY TABLE IF EXISTS tmp_b09_manifest_export;

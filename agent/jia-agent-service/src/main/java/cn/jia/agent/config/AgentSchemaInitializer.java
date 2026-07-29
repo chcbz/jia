@@ -378,21 +378,24 @@ public class AgentSchemaInitializer implements InitializingBean {
     private void validateIdentityTriggers() {
         java.util.Map<String, TriggerDefinition> expected = expectedIdentityTriggers();
         List<TriggerDefinition> actual = jdbcTemplate.query("""
-                SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ACTION_STATEMENT
+                SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING,
+                       EVENT_MANIPULATION, ACTION_STATEMENT
                 FROM information_schema.triggers
                 WHERE trigger_schema = DATABASE()
                   AND trigger_name IN (
                     'trg_identity_registry_immutable_update', 'trg_identity_registry_no_delete',
                     'trg_identity_alias_immutable_update', 'trg_identity_alias_no_delete')
                 """, (rs, rowNum) -> new TriggerDefinition(
-                rs.getString("TRIGGER_NAME"), rs.getString("ACTION_TIMING"),
-                rs.getString("EVENT_MANIPULATION"), rs.getString("ACTION_STATEMENT")));
+                rs.getString("TRIGGER_NAME"), rs.getString("EVENT_OBJECT_TABLE"),
+                rs.getString("ACTION_TIMING"), rs.getString("EVENT_MANIPULATION"),
+                rs.getString("ACTION_STATEMENT")));
         if (actual.size() != expected.size()) {
             throw new IllegalStateException("A02 requires four exact identity protection triggers");
         }
         for (TriggerDefinition trigger : actual) {
             TriggerDefinition required = expected.get(trigger.name());
             boolean matches = required != null
+                    && required.table().equalsIgnoreCase(trigger.table())
                     && required.timing().equalsIgnoreCase(trigger.timing())
                     && required.event().equalsIgnoreCase(trigger.event())
                     && normalizeSql(required.statement()).equals(normalizeSql(trigger.statement()));
@@ -406,7 +409,7 @@ public class AgentSchemaInitializer implements InitializingBean {
     private java.util.Map<String, TriggerDefinition> expectedIdentityTriggers() {
         return java.util.Map.of(
                 "trg_identity_registry_immutable_update", new TriggerDefinition(
-                        "trg_identity_registry_immutable_update", "BEFORE", "UPDATE", """
+                        "trg_identity_registry_immutable_update", "agent_identity_registry", "BEFORE", "UPDATE", """
                         BEGIN
                             IF NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id) THEN
                                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: canonical_agent_id is immutable after insert';
@@ -432,13 +435,13 @@ public class AgentSchemaInitializer implements InitializingBean {
                         END
                         """),
                 "trg_identity_registry_no_delete", new TriggerDefinition(
-                        "trg_identity_registry_no_delete", "BEFORE", "DELETE", """
+                        "trg_identity_registry_no_delete", "agent_identity_registry", "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity registry is forbidden';
                         END
                         """),
                 "trg_identity_alias_immutable_update", new TriggerDefinition(
-                        "trg_identity_alias_immutable_update", "BEFORE", "UPDATE", """
+                        "trg_identity_alias_immutable_update", "agent_identity_alias", "BEFORE", "UPDATE", """
                         BEGIN
                             IF NOT (NEW.registry_id <=> OLD.registry_id)
                                OR NOT (NEW.canonical_agent_id <=> OLD.canonical_agent_id)
@@ -455,7 +458,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                         END
                         """),
                 "trg_identity_alias_no_delete", new TriggerDefinition(
-                        "trg_identity_alias_no_delete", "BEFORE", "DELETE", """
+                        "trg_identity_alias_no_delete", "agent_identity_alias", "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A02: physical delete of identity alias is forbidden';
                         END
@@ -469,15 +472,11 @@ public class AgentSchemaInitializer implements InitializingBean {
         jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_identity_alias_no_delete");
         for (TriggerDefinition trigger : expectedIdentityTriggers().values()) {
             jdbcTemplate.execute("CREATE TRIGGER " + trigger.name() + " " + trigger.timing()
-                    + " " + trigger.event() + " ON " + triggerTable(trigger.name())
+                    + " " + trigger.event() + " ON " + trigger.table()
                     + " FOR EACH ROW " + trigger.statement());
         }
     }
 
-    private String triggerTable(String triggerName) {
-        return triggerName.startsWith("trg_identity_registry_")
-                ? "agent_identity_registry" : "agent_identity_alias";
-    }
 
     private String normalizeSql(String sql) {
         if (sql == null) {
@@ -515,13 +514,20 @@ public class AgentSchemaInitializer implements InitializingBean {
     static record ForeignKeyColumn(
             String column, String referencedTable, String referencedColumn,
             int position, String updateRule, String deleteRule) {}
-    static record TriggerDefinition(String name, String timing, String event, String statement) {}
+    static record TriggerDefinition(
+            String name, String table, String timing, String event, String statement) {}
     static record BackfillColumnExpectation(
             String table, String column, String dataType, String columnType,
             boolean nullable, String defaultValue, String collation) {}
     static record BackfillColumnDefinition(
             String dataType, String columnType, boolean nullable,
-            String defaultValue, String collation) {}
+            String defaultValue, String collation, String extra) {
+        BackfillColumnDefinition(
+                String dataType, String columnType, boolean nullable,
+                String defaultValue, String collation) {
+            this(dataType, columnType, nullable, defaultValue, collation, "");
+        }
+    }
 
     private void ensureIdentitySchema() {
         validateRuntimeIdentityProjection();
@@ -662,8 +668,20 @@ public class AgentSchemaInitializer implements InitializingBean {
 
     private void ensureTaskCollaborationSchema() {
         boolean backfillIssueAlreadyExists = tableExists("agent_task_backfill_issue");
+        boolean backfillBatchAlreadyExists = tableExists("agent_task_backfill_manifest_batch");
         boolean backfillManifestAlreadyExists = tableExists("agent_task_backfill_manifest");
         boolean backfillRunAlreadyExists = tableExists("agent_task_backfill_run");
+        boolean backfillAuditAlreadyExists = backfillIssueAlreadyExists
+                || backfillBatchAlreadyExists || backfillManifestAlreadyExists
+                || backfillRunAlreadyExists;
+        if (backfillAuditAlreadyExists && !isH2Database()) {
+            if (!(backfillIssueAlreadyExists && backfillBatchAlreadyExists
+                    && backfillManifestAlreadyExists && backfillRunAlreadyExists)) {
+                throw new IllegalStateException("B09 audit schema is partial; run the exact B09 audit migration");
+            }
+            validateBackfillAuditSchema();
+            validateBackfillAuditTriggers();
+        }
 
         addRequiredColumnIfMissing("agent_task_meta", "collaboration_mode",
                 "collaboration_mode VARCHAR(20) NOT NULL DEFAULT 'single' COMMENT 'single/team'");
@@ -756,8 +774,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                     source_agent_id         VARCHAR(100) DEFAULT NULL COMMENT 'Parsed historical Agent ID before resolution',
                     issue_code              VARCHAR(64) NOT NULL COMMENT 'Fail-closed B09 exception/review code',
                     issue_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable resolution reason',
-                    first_report_sha256     CHAR(64) NOT NULL COMMENT 'First reviewed manifest report SHA-256',
-                    last_report_sha256      CHAR(64) NOT NULL COMMENT 'Latest reviewed manifest report SHA-256',
+                    first_report_sha256     CHAR(64) NOT NULL COMMENT 'First approved canonical manifest digest',
+                    last_report_sha256      CHAR(64) NOT NULL COMMENT 'Latest approved canonical manifest digest',
                     first_seen_at           BIGINT NOT NULL COMMENT 'First apply observation time',
                     last_seen_at            BIGINT NOT NULL COMMENT 'Latest apply observation time',
                     occurrence_count        BIGINT NOT NULL DEFAULT 1 COMMENT 'Number of approved apply observations',
@@ -774,11 +792,27 @@ public class AgentSchemaInitializer implements InitializingBean {
                 """);
 
         jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest_batch (
+                    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                    report_sha256           CHAR(64) NOT NULL COMMENT 'Database-recomputed canonical manifest digest',
+                    manifest_row_count      BIGINT NOT NULL DEFAULT 0 COMMENT 'Exact sealed manifest row count',
+                    seal_status             VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED, SEALED is terminal',
+                    approved_operator       VARCHAR(100) NOT NULL COMMENT 'Operator/ticket that approved this manifest',
+                    approved_at             BIGINT NOT NULL COMMENT 'Approval time',
+                    sealed_at               BIGINT DEFAULT NULL COMMENT 'Seal time, non-null only when SEALED',
+                    create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_backfill_manifest_batch_digest (report_sha256),
+                    KEY idx_task_backfill_manifest_batch_status (seal_status, approved_at, id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Sealed B09 canonical manifest approval batch'
+                """);
+
+        jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest (
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-                    report_sha256           CHAR(64) NOT NULL COMMENT 'SHA-256 of the approved manifest TSV',
-                    manifest_row_key        CHAR(64) NOT NULL COMMENT 'Deterministic source row identity',
-                    manifest_row_sha256     CHAR(64) NOT NULL COMMENT 'Byte-exact source/scope/resolution digest',
+                    report_sha256           CHAR(64) NOT NULL COMMENT 'Database-recomputed canonical manifest digest',
+                    manifest_row_key        CHAR(64) NOT NULL COMMENT 'Database-verified deterministic source row identity',
+                    manifest_row_sha256     CHAR(64) NOT NULL COMMENT 'Database-recomputed source/scope/resolution digest',
                     meta_id                 BIGINT NOT NULL COMMENT 'Approved source agent_task_meta primary key',
                     task_id                 VARCHAR(100) NOT NULL COMMENT 'Approved source task ID',
                     tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved tenant scope',
@@ -799,16 +833,16 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_task_backfill_manifest_meta (report_sha256, meta_id, source_ordinal, manifest_row_key),
                     KEY idx_task_backfill_manifest_resolution
                         (report_sha256, task_resolution_status, resolution_status)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable approved B09 line manifest'
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable rows of a sealed B09 canonical manifest'
                 """);
 
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_task_backfill_run (
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                     run_id                  CHAR(36) NOT NULL COMMENT 'Apply run UUID',
-                    report_sha256           CHAR(64) NOT NULL COMMENT 'Approved manifest TSV SHA-256',
+                    report_sha256           CHAR(64) NOT NULL COMMENT 'Approved canonical manifest digest',
                     operator                VARCHAR(100) NOT NULL COMMENT 'Approved migration operator/ticket',
-                    manifest_row_count      BIGINT NOT NULL COMMENT 'Rows matched against approved manifest',
+                    manifest_row_count      BIGINT NOT NULL COMMENT 'Rows matched against sealed manifest',
                     issue_row_count         BIGINT NOT NULL DEFAULT 0 COMMENT 'Issue observations in this run',
                     member_insert_count     BIGINT NOT NULL DEFAULT 0 COMMENT 'Members inserted in this run',
                     work_item_insert_count  BIGINT NOT NULL DEFAULT 0 COMMENT 'Work items inserted in this run',
@@ -941,6 +975,17 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "CREATE INDEX idx_task_backfill_issue_code_seen "
                         + "ON agent_task_backfill_issue (issue_code, last_seen_at, id)");
 
+        ensureRequiredIndex("agent_task_backfill_manifest_batch",
+                "uk_task_backfill_manifest_batch_digest", true,
+                List.of("report_sha256"),
+                "CREATE UNIQUE INDEX uk_task_backfill_manifest_batch_digest "
+                        + "ON agent_task_backfill_manifest_batch (report_sha256)");
+        ensureRequiredIndex("agent_task_backfill_manifest_batch",
+                "idx_task_backfill_manifest_batch_status", false,
+                List.of("seal_status", "approved_at", "id"),
+                "CREATE INDEX idx_task_backfill_manifest_batch_status "
+                        + "ON agent_task_backfill_manifest_batch (seal_status, approved_at, id)");
+
         ensureRequiredIndex("agent_task_backfill_manifest", "uk_task_backfill_manifest_row", true,
                 List.of("report_sha256", "manifest_row_key"),
                 "CREATE UNIQUE INDEX uk_task_backfill_manifest_row "
@@ -1004,22 +1049,21 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "CREATE INDEX idx_artifact_hash "
                         + "ON agent_task_artifact (tenant_id, client_id, content_hash)");
 
-        if (!isH2Database()) {
-            boolean backfillAuditAlreadyExists = backfillIssueAlreadyExists
-                    || backfillManifestAlreadyExists || backfillRunAlreadyExists;
-            if (backfillAuditAlreadyExists) {
-                validateBackfillAuditSchema();
-                validateBackfillAuditTriggers();
-            } else {
-                createBackfillAuditTriggers();
-            }
+        if (!isH2Database() && !backfillAuditAlreadyExists) {
+            createBackfillAuditTriggers();
         }
     }
 
     private void validateBackfillAuditSchema() {
         validateBackfillTableCollation("agent_task_backfill_issue");
+        validateBackfillTableCollation("agent_task_backfill_manifest_batch");
         validateBackfillTableCollation("agent_task_backfill_manifest");
         validateBackfillTableCollation("agent_task_backfill_run");
+        for (String table : List.of(
+                "agent_task_backfill_issue", "agent_task_backfill_manifest_batch",
+                "agent_task_backfill_manifest", "agent_task_backfill_run")) {
+            validateBackfillPrimaryKey(table);
+        }
 
         List<BackfillColumnExpectation> expected = List.of(
                 new BackfillColumnExpectation("agent_task_backfill_issue", "id", "bigint", "bigint", false, null, null),
@@ -1044,6 +1088,15 @@ public class AgentSchemaInitializer implements InitializingBean {
                 new BackfillColumnExpectation("agent_task_backfill_issue", "client_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
                 new BackfillColumnExpectation("agent_task_backfill_issue", "create_time", "bigint", "bigint", true, null, null),
                 new BackfillColumnExpectation("agent_task_backfill_issue", "update_time", "bigint", "bigint", true, null, null),
+
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "manifest_row_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "seal_status", "varchar", "varchar(16)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "approved_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "approved_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "sealed_at", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_backfill_manifest_batch", "create_time", "bigint", "bigint", true, null, null),
 
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "id", "bigint", "bigint", false, null, null),
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
@@ -1082,15 +1135,30 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
     }
 
-    private void validateBackfillColumn(BackfillColumnExpectation expected) {
+    void validateBackfillPrimaryKey(String table) {
+        List<IndexColumn> primary = inspectRequiredIndex(table, "PRIMARY");
+        boolean matches = primary != null && primary.size() == 1
+                && primary.get(0).nonUnique() == 0
+                && primary.get(0).sequence() == 1
+                && primary.get(0).subPart() == null
+                && "id".equalsIgnoreCase(primary.get(0).columnName());
+        if (!matches) {
+            throw new IllegalStateException("B09 audit table " + table
+                    + " must have PRIMARY KEY (id)");
+        }
+    }
+
+    void validateBackfillColumn(BackfillColumnExpectation expected) {
         List<BackfillColumnDefinition> actual = jdbcTemplate.query("""
-                SELECT DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLLATION_NAME
+                SELECT DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+                       COLLATION_NAME, EXTRA
                 FROM information_schema.columns
                 WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
                 """, (rs, rowNum) -> new BackfillColumnDefinition(
                 rs.getString("DATA_TYPE"), rs.getString("COLUMN_TYPE"),
                 "YES".equalsIgnoreCase(rs.getString("IS_NULLABLE")),
-                rs.getString("COLUMN_DEFAULT"), rs.getString("COLLATION_NAME")),
+                rs.getString("COLUMN_DEFAULT"), rs.getString("COLLATION_NAME"),
+                rs.getString("EXTRA")),
                 expected.table(), expected.column());
         if (actual.size() != 1) {
             throw new IllegalStateException("B09 audit column " + expected.table() + "."
@@ -1103,10 +1171,13 @@ public class AgentSchemaInitializer implements InitializingBean {
                 && java.util.Objects.equals(expected.defaultValue(), column.defaultValue())
                 && (expected.collation() == null
                     ? column.collation() == null
-                    : expected.collation().equalsIgnoreCase(column.collation()));
+                    : expected.collation().equalsIgnoreCase(column.collation()))
+                && (!"id".equals(expected.column())
+                    || "auto_increment".equalsIgnoreCase(column.extra()));
         if (!matches) {
             throw new IllegalStateException("B09 audit column " + expected.table() + "."
-                    + expected.column() + " has incompatible type/null/default/collation: " + column);
+                    + expected.column()
+                    + " has incompatible type/null/default/collation/auto_increment: " + column);
         }
     }
 
@@ -1121,69 +1192,119 @@ public class AgentSchemaInitializer implements InitializingBean {
         }
     }
 
-    private void validateBackfillAuditTriggers() {
+    void validateBackfillAuditTriggers() {
         java.util.Map<String, TriggerDefinition> expected = expectedBackfillAuditTriggers();
         List<TriggerDefinition> actual = jdbcTemplate.query("""
-                SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ACTION_STATEMENT
+                SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING,
+                       EVENT_MANIPULATION, ACTION_STATEMENT
                 FROM information_schema.triggers
                 WHERE trigger_schema = DATABASE()
                   AND trigger_name IN (
-                    'trg_task_backfill_manifest_no_update', 'trg_task_backfill_manifest_no_delete',
-                    'trg_task_backfill_run_no_update', 'trg_task_backfill_run_no_delete')
+                    'trg_task_backfill_manifest_batch_update_guard',
+                    'trg_task_backfill_manifest_batch_no_delete',
+                    'trg_task_backfill_manifest_insert_guard',
+                    'trg_task_backfill_manifest_no_update',
+                    'trg_task_backfill_manifest_no_delete',
+                    'trg_task_backfill_run_no_update',
+                    'trg_task_backfill_run_no_delete')
                 """, (rs, rowNum) -> new TriggerDefinition(
-                rs.getString("TRIGGER_NAME"), rs.getString("ACTION_TIMING"),
-                rs.getString("EVENT_MANIPULATION"), rs.getString("ACTION_STATEMENT")));
+                rs.getString("TRIGGER_NAME"), rs.getString("EVENT_OBJECT_TABLE"),
+                rs.getString("ACTION_TIMING"), rs.getString("EVENT_MANIPULATION"),
+                rs.getString("ACTION_STATEMENT")));
         if (actual.size() != expected.size()) {
-            throw new IllegalStateException("B09 requires four exact immutable audit triggers");
+            throw new IllegalStateException("B09 requires seven exact sealing/immutable audit triggers");
         }
         for (TriggerDefinition trigger : actual) {
             TriggerDefinition required = expected.get(trigger.name());
             if (required == null
+                    || !required.table().equalsIgnoreCase(trigger.table())
                     || !required.timing().equalsIgnoreCase(trigger.timing())
                     || !required.event().equalsIgnoreCase(trigger.event())
                     || !normalizeSql(required.statement()).equals(normalizeSql(trigger.statement()))) {
                 throw new IllegalStateException("B09 audit trigger " + trigger.name()
-                        + " has an incompatible definition");
+                        + " has an incompatible table or definition");
             }
         }
     }
 
     private void createBackfillAuditTriggers() {
         for (TriggerDefinition trigger : expectedBackfillAuditTriggers().values()) {
-            String table = trigger.name().contains("manifest")
-                    ? "agent_task_backfill_manifest" : "agent_task_backfill_run";
             jdbcTemplate.execute("CREATE TRIGGER " + trigger.name() + " " + trigger.timing()
-                    + " " + trigger.event() + " ON " + table
+                    + " " + trigger.event() + " ON " + trigger.table()
                     + " FOR EACH ROW " + trigger.statement());
         }
     }
 
     private java.util.Map<String, TriggerDefinition> expectedBackfillAuditTriggers() {
-        return java.util.Map.of(
-                "trg_task_backfill_manifest_no_update", new TriggerDefinition(
-                        "trg_task_backfill_manifest_no_update", "BEFORE", "UPDATE", """
+        return java.util.Map.ofEntries(
+                java.util.Map.entry("trg_task_backfill_manifest_batch_update_guard", new TriggerDefinition(
+                        "trg_task_backfill_manifest_batch_update_guard",
+                        "agent_task_backfill_manifest_batch", "BEFORE", "UPDATE", """
+                        BEGIN
+                            IF NOT (
+                                BINARY OLD.seal_status = BINARY 'LOADING'
+                                AND BINARY NEW.seal_status = BINARY 'SEALED'
+                                AND OLD.manifest_row_count = 0
+                                AND NEW.manifest_row_count > 0
+                                AND NEW.sealed_at IS NOT NULL
+                                AND BINARY NEW.report_sha256 = BINARY OLD.report_sha256
+                                AND BINARY NEW.approved_operator = BINARY OLD.approved_operator
+                                AND NEW.approved_at = OLD.approved_at
+                                AND NEW.create_time <=> OLD.create_time
+                                AND (SELECT COUNT(*) FROM agent_task_backfill_manifest m
+                                     WHERE BINARY m.report_sha256 = BINARY OLD.report_sha256)
+                                    = NEW.manifest_row_count
+                            ) THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest batch permits only exact LOADING to SEALED transition';
+                            END IF;
+                        END
+                        """)),
+                java.util.Map.entry("trg_task_backfill_manifest_batch_no_delete", new TriggerDefinition(
+                        "trg_task_backfill_manifest_batch_no_delete",
+                        "agent_task_backfill_manifest_batch", "BEFORE", "DELETE", """
+                        BEGIN
+                            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest batch cannot be deleted';
+                        END
+                        """)),
+                java.util.Map.entry("trg_task_backfill_manifest_insert_guard", new TriggerDefinition(
+                        "trg_task_backfill_manifest_insert_guard",
+                        "agent_task_backfill_manifest", "BEFORE", "INSERT", """
+                        BEGIN
+                            IF (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch b
+                                WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
+                                  AND BINARY b.seal_status = BINARY 'LOADING') <> 1 THEN
+                                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 manifest rows require the matching unsealed batch';
+                            END IF;
+                        END
+                        """)),
+                java.util.Map.entry("trg_task_backfill_manifest_no_update", new TriggerDefinition(
+                        "trg_task_backfill_manifest_no_update", "agent_task_backfill_manifest",
+                        "BEFORE", "UPDATE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 approved manifest is immutable';
                         END
-                        """),
-                "trg_task_backfill_manifest_no_delete", new TriggerDefinition(
-                        "trg_task_backfill_manifest_no_delete", "BEFORE", "DELETE", """
+                        """)),
+                java.util.Map.entry("trg_task_backfill_manifest_no_delete", new TriggerDefinition(
+                        "trg_task_backfill_manifest_no_delete", "agent_task_backfill_manifest",
+                        "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 approved manifest cannot be deleted';
                         END
-                        """),
-                "trg_task_backfill_run_no_update", new TriggerDefinition(
-                        "trg_task_backfill_run_no_update", "BEFORE", "UPDATE", """
+                        """)),
+                java.util.Map.entry("trg_task_backfill_run_no_update", new TriggerDefinition(
+                        "trg_task_backfill_run_no_update", "agent_task_backfill_run",
+                        "BEFORE", "UPDATE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 run audit is immutable';
                         END
-                        """),
-                "trg_task_backfill_run_no_delete", new TriggerDefinition(
-                        "trg_task_backfill_run_no_delete", "BEFORE", "DELETE", """
+                        """)),
+                java.util.Map.entry("trg_task_backfill_run_no_delete", new TriggerDefinition(
+                        "trg_task_backfill_run_no_delete", "agent_task_backfill_run",
+                        "BEFORE", "DELETE", """
                         BEGIN
                             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 run audit cannot be deleted';
                         END
-                        """));
+                        """)));
     }
 
     private boolean isH2Database() {

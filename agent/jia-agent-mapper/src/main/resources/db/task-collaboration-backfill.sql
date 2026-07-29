@@ -1,75 +1,140 @@
 -- B09 approved historical task member/work-item backfill (MySQL 8.0.21+).
--- Requires an immutable approved manifest imported by
--- task-collaboration-backfill-approve.sql. The apply transaction recomputes the
--- complete source row set and rejects any added, modified, deleted, re-scoped, or
--- differently resolved task before writing business/audit rows.
+-- All checks and durable DML execute inside one stored procedure with an EXIT
+-- HANDLER that ROLLBACKs and RESIGNALs. mysql --force may continue parsing after
+-- CALL failure, but there is no business/audit DML outside the atomic CALL.
 
-DROP PROCEDURE IF EXISTS b09_assert;
+DROP PROCEDURE IF EXISTS b09_compute_approved_manifest_digest_v3;
+DROP PROCEDURE IF EXISTS b09_apply_manifest_atomic_v3;
 DELIMITER $$
-CREATE PROCEDURE b09_assert(IN condition_ok BOOLEAN, IN failure_message VARCHAR(255))
+CREATE PROCEDURE b09_compute_approved_manifest_digest_v3(
+    IN approved_manifest_digest CHAR(64),
+    OUT computed_digest CHAR(64), OUT computed_row_count BIGINT)
 BEGIN
-    IF condition_ok IS NULL OR condition_ok = FALSE THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = failure_message;
-    END IF;
+    DECLARE done BOOLEAN DEFAULT FALSE;
+    DECLARE row_key CHAR(64);
+    DECLARE row_digest CHAR(64);
+    DECLARE chain_digest CHAR(64) DEFAULT SHA2('B09-MANIFEST-BATCH-CHAIN-V2', 256);
+    DECLARE manifest_cursor CURSOR FOR
+        SELECT manifest_row_key, manifest_row_sha256
+        FROM agent_task_backfill_manifest
+        WHERE BINARY report_sha256 = BINARY approved_manifest_digest
+        ORDER BY BINARY manifest_row_key;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    SET computed_row_count = 0;
+    OPEN manifest_cursor;
+    digest_loop: LOOP
+        FETCH manifest_cursor INTO row_key, row_digest;
+        IF done THEN
+            LEAVE digest_loop;
+        END IF;
+        SET chain_digest = SHA2(CONCAT(
+            UNHEX(chain_digest), UNHEX(row_key), UNHEX(row_digest)), 256);
+        SET computed_row_count = computed_row_count + 1;
+    END LOOP;
+    CLOSE manifest_cursor;
+    SET computed_digest = SHA2(CONCAT(
+        CAST('B09-MANIFEST-BATCH-FINAL-V2' AS BINARY),
+        UNHEX(chain_digest),
+        UNHEX(LPAD(HEX(computed_row_count), 16, '0'))), 256);
 END$$
-DELIMITER ;
 
-CALL b09_assert(
-    @b09_approved_report_sha256 REGEXP BINARY '^[0-9a-fA-F]{64}$',
-    'B09: set an approved immutable manifest SHA-256 before apply');
-CALL b09_assert(
-    @b09_operator IS NOT NULL
-        AND CHAR_LENGTH(@b09_operator) BETWEEN 1 AND 100
-        AND BINARY @b09_operator = BINARY TRIM(@b09_operator)
-        AND NOT REGEXP_LIKE(@b09_operator, '[[:cntrl:]]', 'c'),
-    'B09: operator must be byte-clean, non-blank, max 100 chars');
-CALL b09_assert(
-    (SELECT COUNT(*) FROM information_schema.tables
-      WHERE table_schema = DATABASE()
-        AND table_name IN ('agent_task_meta', 'agent_task_member', 'agent_task_work_item',
-                           'agent_identity_registry', 'agent_identity_alias',
-                           'agent_task_backfill_issue', 'agent_task_backfill_manifest',
-                           'agent_task_backfill_run')) = 8,
-    'B09: required A02/B01/B09 tables are missing');
-CALL b09_assert(
-    (SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
-       FROM information_schema.statistics
-      WHERE table_schema = DATABASE() AND table_name = 'agent_task_member'
-        AND index_name = 'uk_task_member_scope' AND non_unique = 0)
-        = 'tenant_id,client_id,task_id,agent_id',
-    'B09: incompatible member scope unique index');
-CALL b09_assert(
-    (SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
-       FROM information_schema.statistics
-      WHERE table_schema = DATABASE() AND table_name = 'agent_task_work_item'
-        AND index_name = 'uk_work_item_scope' AND non_unique = 0)
-        = 'tenant_id,client_id,work_item_id',
-    'B09: incompatible work-item scope unique index');
-CALL b09_assert(
-    (SELECT COUNT(*) FROM agent_task_backfill_manifest
-      WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256)) > 0,
-    'B09: approved manifest SHA was not found');
-CALL b09_assert(
-    (SELECT COUNT(DISTINCT BINARY approved_operator)
-       FROM agent_task_backfill_manifest
-      WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256)) = 1
-    AND (SELECT MIN(BINARY approved_operator = BINARY @b09_operator)
-           FROM agent_task_backfill_manifest
-          WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256)) = 1,
-    'B09: apply operator does not match the immutable approval');
+CREATE PROCEDURE b09_apply_manifest_atomic_v3(
+    IN approved_manifest_digest CHAR(64), IN applying_operator VARCHAR(100))
+main: BEGIN
+    DECLARE lock_acquired BOOLEAN DEFAULT FALSE;
+    DECLARE lock_name VARCHAR(64);
+    DECLARE sealed_row_count BIGINT;
+    DECLARE approved_row_count BIGINT;
+    DECLARE approved_computed_digest CHAR(64);
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        DROP TEMPORARY TABLE IF EXISTS tmp_b09_resolution;
+        IF lock_acquired THEN
+            DO RELEASE_LOCK(lock_name);
+        END IF;
+        RESIGNAL;
+    END;
 
-SET @b09_lock_name = LEFT(CONCAT('b09-task-backfill:', DATABASE()), 64);
-CALL b09_assert(GET_LOCK(@b09_lock_name, 0) = 1,
-    'B09: another task backfill session holds the migration lock');
-SET @b09_started_at = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED);
-SET @b09_now = @b09_started_at;
-SET @b09_run_id = UUID();
+    IF approved_manifest_digest IS NULL
+       OR approved_manifest_digest NOT REGEXP BINARY '^[0-9a-f]{64}$' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: invalid approved canonical manifest digest';
+    END IF;
+    IF applying_operator IS NULL
+       OR CHAR_LENGTH(applying_operator) NOT BETWEEN 1 AND 100
+       OR BINARY applying_operator <> BINARY TRIM(applying_operator)
+       OR REGEXP_LIKE(applying_operator, '[[:cntrl:]]', 'c') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: operator must be byte-clean';
+    END IF;
+    IF (SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema = DATABASE()
+          AND table_name IN ('agent_task_meta', 'agent_task_member', 'agent_task_work_item',
+                             'agent_identity_registry', 'agent_identity_alias',
+                             'agent_task_backfill_issue', 'agent_task_backfill_manifest_batch',
+                             'agent_task_backfill_manifest', 'agent_task_backfill_run')) <> 9 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: required A02/B01/B09 tables are missing';
+    END IF;
+    IF (SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'agent_task_member'
+          AND index_name = 'uk_task_member_scope' AND non_unique = 0)
+       <> 'tenant_id,client_id,task_id,agent_id' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: incompatible member scope unique index';
+    END IF;
+    IF (SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'agent_task_work_item'
+          AND index_name = 'uk_work_item_scope' AND non_unique = 0)
+       <> 'tenant_id,client_id,work_item_id' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: incompatible work-item scope unique index';
+    END IF;
 
-DROP TEMPORARY TABLE IF EXISTS tmp_b09_resolution;
-SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-START TRANSACTION WITH CONSISTENT SNAPSHOT;
+    SET lock_name = LEFT(CONCAT('b09-task-backfill:', DATABASE()), 64);
+    IF GET_LOCK(lock_name, 0) <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: another task backfill holds the lock';
+    END IF;
+    SET lock_acquired = TRUE;
+    SET @b09_approved_manifest_digest = approved_manifest_digest;
+    SET @b09_operator = applying_operator;
+    SET @b09_started_at = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED);
+    SET @b09_now = @b09_started_at;
+    SET @b09_run_id = UUID();
 
-CREATE TEMPORARY TABLE tmp_b09_resolution AS
+    DROP TEMPORARY TABLE IF EXISTS tmp_b09_resolution;
+    SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+    START TRANSACTION WITH CONSISTENT SNAPSHOT;
+
+    IF (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch
+        WHERE BINARY report_sha256 = BINARY approved_manifest_digest
+          AND BINARY seal_status = BINARY 'SEALED'
+          AND sealed_at IS NOT NULL
+          AND BINARY approved_operator = BINARY applying_operator) <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: sealed approved manifest batch was not found';
+    END IF;
+    SELECT manifest_row_count INTO sealed_row_count
+    FROM agent_task_backfill_manifest_batch
+    WHERE BINARY report_sha256 = BINARY approved_manifest_digest
+      AND BINARY seal_status = BINARY 'SEALED'
+    FOR UPDATE;
+
+    IF (SELECT COUNT(*) FROM agent_task_backfill_manifest
+        WHERE BINARY report_sha256 = BINARY approved_manifest_digest
+          AND (manifest_row_key NOT REGEXP BINARY '^[0-9a-f]{64}$'
+               OR manifest_row_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$')) <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: sealed manifest has malformed cryptographic fields';
+    END IF;
+    CALL b09_compute_approved_manifest_digest_v3(
+        approved_manifest_digest, approved_computed_digest, approved_row_count);
+    IF approved_row_count <> sealed_row_count THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: sealed manifest row count mismatch';
+    END IF;
+    IF approved_computed_digest IS NULL
+       OR BINARY approved_computed_digest <> BINARY approved_manifest_digest THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: sealed manifest canonical digest mismatch';
+    END IF;
+
+    CREATE TEMPORARY TABLE tmp_b09_resolution AS
 -- B09_RESOLUTION_CTE_BEGIN
 WITH
 meta_source AS (
@@ -659,7 +724,7 @@ manifest_rows AS (
             CAST(o.meta_id AS CHAR), o.source_shape, CAST(o.source_ordinal AS CHAR)), 256)
             AS manifest_row_key,
         SHA2(CONCAT_WS(CHAR(31),
-            'B09-MANIFEST-CONTENT-V1',
+            'B09-MANIFEST-CONTENT-V2',
             CAST(o.meta_id AS CHAR),
             COALESCE(CONCAT('V', HEX(o.task_id)), 'N'),
             COALESCE(CONCAT('V', HEX(o.tenant_id)), 'N'),
@@ -692,42 +757,40 @@ manifest_rows AS (
 -- B09_RESOLUTION_CTE_END
 SELECT * FROM manifest_rows;
 
-SET @b09_current_manifest_count = (SELECT COUNT(*) FROM tmp_b09_resolution);
-SET @b09_approved_manifest_count = (
-    SELECT COUNT(*) FROM agent_task_backfill_manifest
-    WHERE BINARY report_sha256 = BINARY LOWER(@b09_approved_report_sha256));
-CALL b09_assert(@b09_current_manifest_count = @b09_approved_manifest_count,
-    'B09: current task row count differs from approved manifest');
-CALL b09_assert(
-    (SELECT COUNT(*)
-       FROM tmp_b09_resolution current_row
-       LEFT JOIN agent_task_backfill_manifest approved
-         ON BINARY approved.report_sha256 = BINARY LOWER(@b09_approved_report_sha256)
-        AND BINARY approved.manifest_row_key = BINARY current_row.manifest_row_key
-        AND BINARY approved.manifest_row_sha256 = BINARY current_row.manifest_row_sha256
-        AND approved.meta_id = current_row.meta_id
-        AND BINARY approved.task_id = BINARY current_row.task_id
-        AND BINARY approved.tenant_id <=> BINARY current_row.tenant_id
-        AND BINARY approved.client_id <=> BINARY current_row.client_id
-        AND BINARY approved.source_hash = BINARY current_row.source_hash
-        AND BINARY approved.source_format = BINARY current_row.source_format
-        AND BINARY approved.source_shape = BINARY current_row.source_shape
-        AND approved.source_ordinal = current_row.source_ordinal
-        AND BINARY approved.source_agent_id <=> BINARY current_row.normalized_agent_id
-        AND BINARY approved.canonical_agent_id <=> BINARY current_row.canonical_agent_id
-        AND BINARY approved.resolution_status = BINARY current_row.resolution_status
-        AND BINARY approved.task_resolution_status = BINARY current_row.task_resolution_status
-      WHERE approved.id IS NULL) = 0,
-    'B09: current task source/scope/resolution differs from approved manifest');
-CALL b09_assert(
-    (SELECT COUNT(*)
-       FROM agent_task_backfill_manifest approved
-       LEFT JOIN tmp_b09_resolution current_row
-         ON BINARY approved.manifest_row_key = BINARY current_row.manifest_row_key
-        AND BINARY approved.manifest_row_sha256 = BINARY current_row.manifest_row_sha256
-      WHERE BINARY approved.report_sha256 = BINARY LOWER(@b09_approved_report_sha256)
-        AND current_row.manifest_row_key IS NULL) = 0,
-    'B09: an approved task row was deleted or changed');
+    SET @b09_current_manifest_count = (SELECT COUNT(*) FROM tmp_b09_resolution);
+    IF @b09_current_manifest_count <> sealed_row_count THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: current task row count differs from sealed manifest';
+    END IF;
+    IF (SELECT COUNT(*)
+        FROM tmp_b09_resolution current_row
+        LEFT JOIN agent_task_backfill_manifest approved
+          ON BINARY approved.report_sha256 = BINARY approved_manifest_digest
+         AND BINARY approved.manifest_row_key = BINARY current_row.manifest_row_key
+         AND BINARY approved.manifest_row_sha256 = BINARY current_row.manifest_row_sha256
+         AND approved.meta_id = current_row.meta_id
+         AND BINARY approved.task_id = BINARY current_row.task_id
+         AND BINARY approved.tenant_id <=> BINARY current_row.tenant_id
+         AND BINARY approved.client_id <=> BINARY current_row.client_id
+         AND BINARY approved.source_hash = BINARY current_row.source_hash
+         AND BINARY approved.source_format = BINARY current_row.source_format
+         AND BINARY approved.source_shape = BINARY current_row.source_shape
+         AND approved.source_ordinal = current_row.source_ordinal
+         AND BINARY approved.source_agent_id <=> BINARY current_row.normalized_agent_id
+         AND BINARY approved.canonical_agent_id <=> BINARY current_row.canonical_agent_id
+         AND BINARY approved.resolution_status = BINARY current_row.resolution_status
+         AND BINARY approved.task_resolution_status = BINARY current_row.task_resolution_status
+        WHERE approved.id IS NULL) <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: current source/scope/resolution differs from sealed manifest';
+    END IF;
+    IF (SELECT COUNT(*)
+        FROM agent_task_backfill_manifest approved
+        LEFT JOIN tmp_b09_resolution current_row
+          ON BINARY approved.manifest_row_key = BINARY current_row.manifest_row_key
+         AND BINARY approved.manifest_row_sha256 = BINARY current_row.manifest_row_sha256
+        WHERE BINARY approved.report_sha256 = BINARY approved_manifest_digest
+          AND current_row.manifest_row_key IS NULL) <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: a sealed source row was deleted or changed';
+    END IF;
 
 SET @b09_source_issue_row_count = (
     SELECT COUNT(*) FROM tmp_b09_resolution WHERE resolution_status <> 'ELIGIBLE');
@@ -749,7 +812,7 @@ SELECT
         task_id, meta_id, source_hash, source_shape, source_ordinal, resolution_status), 256),
     meta_id, task_id, source_hash, source_format, source_shape, source_ordinal,
     raw_assignee, normalized_agent_id, resolution_status, resolution_reason,
-    LOWER(@b09_approved_report_sha256), LOWER(@b09_approved_report_sha256),
+    @b09_approved_manifest_digest, @b09_approved_manifest_digest,
     @b09_now, @b09_now, 1, @b09_operator, tenant_id, client_id, @b09_now, @b09_now
 FROM tmp_b09_resolution
 WHERE resolution_status <> 'ELIGIBLE'
@@ -771,7 +834,7 @@ SELECT
     meta_id, task_id, MAX(source_hash), MAX(source_format), 'task', 0,
     MAX(raw_assignee), NULL, 'REVIEW_MULTI_AGENT_WORK_ITEM_REQUIRED',
     'Multiple historical assignees were resolved; members are safe but work-item decomposition requires human review',
-    LOWER(@b09_approved_report_sha256), LOWER(@b09_approved_report_sha256),
+    @b09_approved_manifest_digest, @b09_approved_manifest_digest,
     @b09_now, @b09_now, 1, @b09_operator, tenant_id, client_id, @b09_now, @b09_now
 FROM tmp_b09_resolution
 WHERE task_resolution_status = 'ELIGIBLE'
@@ -842,24 +905,36 @@ WHERE r.task_resolution_status = 'ELIGIBLE'
         AND BINARY existing.task_id = BINARY r.task_id)
 GROUP BY r.meta_id, r.task_id, r.tenant_id, r.client_id;
 SET @b09_work_item_insert_count = ROW_COUNT();
-SET @b09_completed_at = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED);
 
-INSERT INTO agent_task_backfill_run (
-    run_id, report_sha256, operator, manifest_row_count, issue_row_count,
-    member_insert_count, work_item_insert_count, started_at, completed_at,
-    run_status, create_time)
-VALUES (
-    @b09_run_id, LOWER(@b09_approved_report_sha256), @b09_operator,
-    @b09_current_manifest_count, @b09_issue_row_count, @b09_member_insert_count,
-    @b09_work_item_insert_count, @b09_started_at, @b09_completed_at,
-    'SUCCEEDED', @b09_completed_at);
+    SET @b09_completed_at = CAST(ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000) AS UNSIGNED);
+    INSERT INTO agent_task_backfill_run (
+        run_id, report_sha256, operator, manifest_row_count, issue_row_count,
+        member_insert_count, work_item_insert_count, started_at, completed_at,
+        run_status, create_time)
+    VALUES (
+        @b09_run_id, approved_manifest_digest, applying_operator,
+        @b09_current_manifest_count, @b09_issue_row_count, @b09_member_insert_count,
+        @b09_work_item_insert_count, @b09_started_at, @b09_completed_at,
+        'SUCCEEDED', @b09_completed_at);
+    IF ROW_COUNT() <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09: success run audit insert failed';
+    END IF;
 
-COMMIT;
-DO RELEASE_LOCK(@b09_lock_name);
-DROP TEMPORARY TABLE IF EXISTS tmp_b09_resolution;
-DROP PROCEDURE IF EXISTS b09_assert;
+    COMMIT;
+    DROP TEMPORARY TABLE IF EXISTS tmp_b09_resolution;
+    DO RELEASE_LOCK(lock_name);
+    SET lock_acquired = FALSE;
 
-SELECT run_id, report_sha256, operator, manifest_row_count, issue_row_count,
-       member_insert_count, work_item_insert_count, started_at, completed_at, run_status
-FROM agent_task_backfill_run
-WHERE BINARY run_id = BINARY @b09_run_id;
+    SELECT run_id, report_sha256 AS manifest_digest, operator, manifest_row_count,
+           issue_row_count, member_insert_count, work_item_insert_count,
+           started_at, completed_at, run_status
+    FROM agent_task_backfill_run
+    WHERE BINARY run_id = BINARY @b09_run_id;
+END$$
+DELIMITER ;
+
+CALL b09_apply_manifest_atomic_v3(
+    @b09_approved_manifest_digest, @b09_operator);
+
+DROP PROCEDURE IF EXISTS b09_apply_manifest_atomic_v3;
+DROP PROCEDURE IF EXISTS b09_compute_approved_manifest_digest_v3;

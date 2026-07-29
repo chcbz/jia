@@ -65,48 +65,78 @@ class AgentTaskCollaborationBackfillSchemaTest {
         assertEquals(resolutionCte(dryRun), resolutionCte(manifest));
         assertEquals(resolutionCte(dryRun), resolutionCte(apply));
         assertTrue(resolutionCte(dryRun).contains("manifest_rows as ("));
-        assertTrue(resolutionCte(dryRun).contains("b09-manifest-content-v1"));
+        assertTrue(resolutionCte(dryRun).contains("b09-manifest-content-v2"));
     }
 
     @Test
-    void approvedManifestIsLineBasedImmutableAndApplyRejectsAnyDrift() throws IOException {
+    void canonicalManifestDigestIsDatabaseRecomputedOrderedAndUntruncated() throws IOException {
+        String manifest = readResource("db/task-collaboration-backfill-manifest.sql");
         String staging = readResource("db/task-collaboration-backfill-staging.sql");
+        String approve = readResource("db/task-collaboration-backfill-approve.sql");
+        String apply = readResource("db/task-collaboration-backfill.sql");
+
+        assertTrue(manifest.contains("b09-manifest-batch-chain-v2"));
+        assertTrue(manifest.contains("b09-manifest-batch-final-v2"));
+        assertTrue(manifest.contains("order by binary manifest_row_key"));
+        String digestSection = manifest.substring(manifest.indexOf("drop procedure if exists b09_compute_export_manifest_digest_v3"));
+        assertFalse(digestSection.contains("group_concat("));
+        assertTrue(approve.contains("canonical digest mismatch"));
+        assertTrue(approve.contains("row key or row digest is forged"));
+        assertTrue(approve.contains("binary computed_digest <> binary approved_manifest_digest"));
+        assertTrue(apply.contains("sealed manifest canonical digest mismatch"));
+        assertTrue(apply.contains("sealed manifest row count mismatch"));
+        assertTrue(staging.contains("task_id_hex                     longtext null"));
+        assertTrue(staging.contains("required_abilities_hex          longtext null"));
+        assertFalse(staging.contains("varchar("));
+        assertTrue(approve.contains("octet_length(unhex(task_id_hex)) > 400"));
+        assertTrue(approve.contains("hex(convert(unhex(task_id_hex) using utf8mb4))"));
+    }
+
+    @Test
+    void sealedManifestRejectsAppendUpdateDeleteAndApplyRejectsDrift() throws IOException {
         String approve = readResource("db/task-collaboration-backfill-approve.sql");
         String audit = readResource("db/task-collaboration-backfill-audit-schema.sql");
         String apply = readResource("db/task-collaboration-backfill.sql");
 
-        assertTrue(staging.contains("create temporary table tmp_b09_approved_manifest_staging"));
-        assertTrue(approve.contains("insert into agent_task_backfill_manifest"));
-        assertTrue(approve.contains("staging contains duplicate manifest row keys"));
+        assertTrue(approve.contains("insert into agent_task_backfill_manifest_batch"));
+        assertTrue(approve.contains("'loading'"));
+        assertTrue(approve.contains("seal_status = 'sealed'"));
+        assertTrue(audit.contains("trg_task_backfill_manifest_insert_guard"));
+        assertTrue(audit.contains("matching unsealed batch"));
         assertTrue(audit.contains("trg_task_backfill_manifest_no_update"));
         assertTrue(audit.contains("trg_task_backfill_manifest_no_delete"));
-        assertTrue(apply.contains("current task row count differs from approved manifest"));
-        assertTrue(apply.contains("current task source/scope/resolution differs from approved manifest"));
-        assertTrue(apply.contains("an approved task row was deleted or changed"));
+        assertTrue(apply.contains("current task row count differs from sealed manifest"));
+        assertTrue(apply.contains("current source/scope/resolution differs from sealed manifest"));
+        assertTrue(apply.contains("a sealed source row was deleted or changed"));
         assertTrue(apply.contains("approved.manifest_row_sha256 = binary current_row.manifest_row_sha256"));
         assertTrue(apply.contains("binary approved.tenant_id <=> binary current_row.tenant_id"));
         assertTrue(apply.contains("binary approved.resolution_status = binary current_row.resolution_status"));
     }
 
     @Test
-    void operatorGateRejectsControlCharactersAndSuccessfulRunsAreAlwaysAudited() throws IOException {
+    void approvalAndApplyAreSingleAtomicCallsSafeUnderMysqlForce() throws IOException {
         String approve = readResource("db/task-collaboration-backfill-approve.sql");
         String apply = readResource("db/task-collaboration-backfill.sql");
 
-        assertTrue(approve.contains("regexp_like(@b09_operator, '[[:cntrl:]]', 'c')"));
-        assertTrue(apply.contains("regexp_like(@b09_operator, '[[:cntrl:]]', 'c')"));
-        assertTrue(apply.contains("apply operator does not match the immutable approval"));
+        for (String sql : List.of(approve, apply)) {
+            assertTrue(sql.contains("declare exit handler for sqlexception"));
+            assertTrue(sql.contains("rollback;"));
+            assertTrue(sql.contains("resignal;"));
+        }
+        assertTrue(approve.contains("call b09_approve_manifest_atomic_v3("));
+        assertTrue(apply.contains("call b09_apply_manifest_atomic_v3("));
         assertTrue(apply.contains("insert into agent_task_backfill_run"));
         assertTrue(apply.contains("'succeeded'"));
-        assertTrue(apply.contains("@b09_issue_row_count"));
         assertTrue(apply.indexOf("insert into agent_task_backfill_run") < apply.indexOf("commit;"));
+        assertTrue(apply.contains("regexp_like(applying_operator, '[[:cntrl:]]', 'c')"));
+        assertTrue(approve.contains("regexp_like(approving_operator, '[[:cntrl:]]', 'c')"));
     }
 
     @Test
     void applyIsTransactionalTaskAtomicAndBusinessIdempotent() throws IOException {
         String apply = readResource("db/task-collaboration-backfill.sql");
 
-        assertTrue(apply.contains("get_lock(@b09_lock_name, 0)"));
+        assertTrue(apply.contains("get_lock(lock_name, 0)"));
         assertTrue(apply.contains("start transaction with consistent snapshot"));
         assertTrue(apply.contains("where r.task_resolution_status = 'eligible'"));
         assertTrue(apply.contains("and r.resolution_status = 'eligible'"));
@@ -120,16 +150,20 @@ class AgentTaskCollaborationBackfillSchemaTest {
     }
 
     @Test
-    void auditSchemaIsSynchronizedForIssueManifestAndRun() throws IOException {
+    void auditSchemaIsSynchronizedForIssueBatchManifestAndRun() throws IOException {
         String schema = readResource("db/schema.sql");
         String audit = readResource("db/task-collaboration-backfill-audit-schema.sql");
 
         for (String table : List.of(
-                "agent_task_backfill_issue", "agent_task_backfill_manifest", "agent_task_backfill_run")) {
+                "agent_task_backfill_issue", "agent_task_backfill_manifest_batch",
+                "agent_task_backfill_manifest", "agent_task_backfill_run")) {
             String expected = compact(tableDefinition(schema, table));
             assertEquals(expected, compact(tableDefinition(audit, table)), table);
             assertTrue(expected.contains("utf8mb4_0900_bin"), table);
+            assertTrue(expected.contains("id bigint not null auto_increment"), table);
+            assertTrue(expected.contains("primary key (id)"), table);
         }
+        assertTrue(schema.contains("unique key uk_task_backfill_manifest_batch_digest (report_sha256)"));
         assertTrue(schema.contains("unique key uk_task_backfill_manifest_row (report_sha256, manifest_row_key)"));
         assertTrue(schema.contains("unique key uk_task_backfill_run_id (run_id)"));
         assertTrue(compact(schema).contains("issue_row_count bigint not null default 0"));

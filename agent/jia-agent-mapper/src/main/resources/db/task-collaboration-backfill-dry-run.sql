@@ -602,7 +602,7 @@ manifest_rows AS (
             CAST(o.meta_id AS CHAR), o.source_shape, CAST(o.source_ordinal AS CHAR)), 256)
             AS manifest_row_key,
         SHA2(CONCAT_WS(CHAR(31),
-            'B09-MANIFEST-CONTENT-V1',
+            'B09-MANIFEST-CONTENT-V2',
             CAST(o.meta_id AS CHAR),
             COALESCE(CONCAT('V', HEX(o.task_id)), 'N'),
             COALESCE(CONCAT('V', HEX(o.tenant_id)), 'N'),

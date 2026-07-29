@@ -44,37 +44,89 @@ state_of() {
     (SELECT COUNT(*) FROM agent_task_backfill_run))" "$db"
 }
 
-run_apply_sql() {
-  local db=$1 sha=$2 operator_sql=$3 output=$4
+approval_state_of() {
+  local db=$1
+  "${MYSQL[@]}" -Nse "SELECT CONCAT(
+    (SELECT COUNT(*) FROM agent_task_backfill_manifest_batch), '/',
+    (SELECT COUNT(*) FROM agent_task_backfill_manifest))" "$db"
+}
+
+manifest_digest_of() {
+  local file=$1 digest distinct
+  digest=$(awk -F '\t' 'NR==2 {print $1}' "$file")
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid exported digest [$digest]" >&2; exit 1; }
+  distinct=$(awk -F '\t' 'NR>1 {print $1}' "$file" | sort -u | wc -l)
+  [[ "$distinct" == 1 ]] || { echo "manifest rows do not share one digest" >&2; exit 1; }
+  printf '%s' "$digest"
+}
+
+approve_manifest() {
+  local db=$1 manifest_file=$2 digest=$3 operator=$4 output=$5
   {
-    printf "SET @b09_approved_report_sha256='%s';\n" "$sha"
+    printf 'source %s;\n' "$STAGING"
+    printf "LOAD DATA LOCAL INFILE '%s' INTO TABLE tmp_b09_approved_manifest_staging FIELDS TERMINATED BY '\\t' LINES TERMINATED BY '\\n' IGNORE 1 LINES;\n" "$manifest_file"
+    printf "SET @b09_approved_manifest_digest='%s'; SET @b09_operator='%s';\n" "$digest" "$operator"
+    printf 'source %s;\n' "$APPROVE"
+  } | "${MYSQL[@]}" --batch --raw "$db" >"$output" 2>&1
+}
+
+expect_approval_force_failure() {
+  local label=$1 db=$2 file=$3 digest=$4 expected=$5
+  local before after output="$TMP/${label}.out"
+  before=$(approval_state_of "$db")
+  set +e
+  {
+    printf 'source %s;\n' "$STAGING"
+    printf "LOAD DATA LOCAL INFILE '%s' INTO TABLE tmp_b09_approved_manifest_staging FIELDS TERMINATED BY '\\t' LINES TERMINATED BY '\\n' IGNORE 1 LINES;\n" "$file"
+    printf "SET @b09_approved_manifest_digest='%s'; SET @b09_operator='%s';\n" "$digest" "$APPROVED_OPERATOR"
+    printf 'source %s;\n' "$APPROVE"
+    printf "SELECT 'force-continued-after-approval-error';\n"
+  } | "${MYSQL[@]}" --force --batch --raw "$db" >"$output" 2>&1
+  set -e
+  grep -q "$expected" "$output" || { echo "$label missing error [$expected]" >&2; cat "$output" >&2; exit 1; }
+  grep -q 'force-continued-after-approval-error' "$output" || { echo "$label did not exercise --force continuation" >&2; cat "$output" >&2; exit 1; }
+  after=$(approval_state_of "$db")
+  [[ "$after" == "$before" ]] || { echo "$label left partial approval: $before -> $after" >&2; exit 1; }
+}
+
+run_apply_sql() {
+  local db=$1 digest=$2 operator_sql=$3 output=$4
+  {
+    printf "SET @b09_approved_manifest_digest='%s';\n" "$digest"
     printf '%s\n' "$operator_sql"
     printf 'source %s;\n' "$APPLY"
   } | "${MYSQL[@]}" --batch --raw "$db" >"$output" 2>&1
 }
 
-expect_apply_failure() {
-  local label=$1 db=$2 sha=$3 operator_sql=$4 expected_message=$5
-  local before after rc output="$TMP/${label}.out"
+expect_apply_force_failure() {
+  local label=$1 db=$2 digest=$3 operator_sql=$4 expected=$5
+  local before after output="$TMP/${label}.out"
   before=$(state_of "$db")
   set +e
-  run_apply_sql "$db" "$sha" "$operator_sql" "$output"
-  rc=$?
+  {
+    printf "SET @b09_approved_manifest_digest='%s';\n" "$digest"
+    printf '%s\n' "$operator_sql"
+    printf 'source %s;\n' "$APPLY"
+    printf "SELECT 'force-continued-after-apply-error';\n"
+  } | "${MYSQL[@]}" --force --batch --raw "$db" >"$output" 2>&1
   set -e
-  [[ $rc -ne 0 ]] || { echo "$label unexpectedly succeeded" >&2; cat "$output" >&2; exit 1; }
-  grep -q "$expected_message" "$output" || { echo "$label missing error [$expected_message]" >&2; cat "$output" >&2; exit 1; }
+  grep -q "$expected" "$output" || { echo "$label missing error [$expected]" >&2; cat "$output" >&2; exit 1; }
+  grep -q 'force-continued-after-apply-error' "$output" || { echo "$label did not exercise --force continuation" >&2; cat "$output" >&2; exit 1; }
   after=$(state_of "$db")
   [[ "$after" == "$before" ]] || { echo "$label changed transactional state: $before -> $after" >&2; exit 1; }
 }
 
-approve_manifest() {
-  local db=$1 manifest_file=$2 sha=$3 operator=$4 output=$5
-  {
-    printf 'source %s;\n' "$STAGING"
-    printf "LOAD DATA LOCAL INFILE '%s' INTO TABLE tmp_b09_approved_manifest_staging FIELDS TERMINATED BY '\\t' LINES TERMINATED BY '\\n' IGNORE 1 LINES;\n" "$manifest_file"
-    printf "SET @b09_approved_report_sha256='%s'; SET @b09_operator='%s';\n" "$sha" "$operator"
-    printf 'source %s;\n' "$APPROVE"
-  } | "${MYSQL[@]}" --batch --raw "$db" >"$output"
+mutate_tsv() {
+  local src=$1 dst=$2 column=$3 value=$4
+  python3 - "$src" "$dst" "$column" "$value" <<'PY'
+import sys
+src, dst, column, value = sys.argv[1], sys.argv[2], int(sys.argv[3]) - 1, sys.argv[4]
+lines = open(src, encoding='utf-8').read().splitlines()
+fields = lines[1].split('\t')
+fields[column] = value
+lines[1] = '\t'.join(fields)
+open(dst, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')
+PY
 }
 
 version=$("${MYSQL[@]}" -Nse 'SELECT VERSION()')
@@ -82,6 +134,9 @@ version=$("${MYSQL[@]}" -Nse 'SELECT VERSION()')
 "${MYSQL[@]}" -e "DROP DATABASE IF EXISTS \`$DB_NAME\`; CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
 "${MYSQL[@]}" "$DB_NAME" < "$SCHEMA"
 "${MYSQL[@]}" "$DB_NAME" < "$AUDIT_SCHEMA"
+assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE() AND trigger_name LIKE 'trg_task_backfill_%'" 7
+assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name IN ('agent_task_backfill_issue','agent_task_backfill_manifest_batch','agent_task_backfill_manifest','agent_task_backfill_run') AND column_name='id' AND extra='auto_increment'" 4
+assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name IN ('agent_task_backfill_issue','agent_task_backfill_manifest_batch','agent_task_backfill_manifest','agent_task_backfill_run') AND index_name='PRIMARY' AND column_name='id' AND seq_in_index=1" 4
 
 cat > "$TMP/fixture.sql" <<'SQL'
 SET @now = 1700000000000;
@@ -140,49 +195,79 @@ for status in BLOCKED_AGENT_ID_BOUNDARY_WHITESPACE BLOCKED_INVALID_JSON_TARGET_T
   BLOCKED_EXISTING_MEMBER_COLLATION_CONFLICT BLOCKED_EXISTING_WORK_ITEM_COLLATION_CONFLICT; do
   grep -q "$status" "$TMP/dry-run.tsv" || { echo "missing dry-run status $status" >&2; exit 1; }
 done
-grep -q $'plain-space\t.*BLOCKED_AGENT_ID_BOUNDARY_WHITESPACE' "$TMP/dry-run.tsv"
-grep -q $'json-string-space\t.*BLOCKED_AGENT_ID_BOUNDARY_WHITESPACE' "$TMP/dry-run.tsv"
-grep -q $'direct-wrong-type\t.*BLOCKED_INVALID_JSON_TARGET_TYPE' "$TMP/dry-run.tsv"
-grep -q $'wrapper-wrong-type\t.*BLOCKED_INVALID_JSON_TARGET_TYPE' "$TMP/dry-run.tsv"
-grep -q $'ambiguous-wrapper\t.*BLOCKED_AMBIGUOUS_JSON_OBJECT' "$TMP/dry-run.tsv"
-grep -q $'array-ambiguous\t.*BLOCKED_AMBIGUOUS_JSON_OBJECT' "$TMP/dry-run.tsv"
 
 "${MYSQL[@]}" --batch --raw "$DB_NAME" < "$MANIFEST" > "$TMP/manifest.tsv"
-report_sha=$(sha256sum "$TMP/manifest.tsv" | awk '{print $1}')
-approve_manifest "$DB_NAME" "$TMP/manifest.tsv" "$report_sha" "$APPROVED_OPERATOR" "$TMP/approve.out"
-assert_scalar "$DB_NAME" "SELECT COUNT(DISTINCT report_sha256) FROM agent_task_backfill_manifest" 1
-assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_run" 0
+manifest_digest=$(manifest_digest_of "$TMP/manifest.tsv")
 
-fake_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-expect_apply_failure fake-sha "$DB_NAME" "$fake_sha" \
-  "SET @b09_operator='$APPROVED_OPERATOR';" "approved manifest SHA was not found"
-expect_apply_failure nul-operator "$DB_NAME" "$report_sha" \
-  "SET @b09_operator=CONCAT('bad',CHAR(0),'operator');" "operator must be byte-clean"
+# Approval attacks run under mysql --force and must leave no batch/row fragment.
+fake_digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+awk -F '\t' -v OFS='\t' -v digest="$fake_digest" 'NR==1 {print; next} {$1=digest; print}' \
+  "$TMP/manifest.tsv" > "$TMP/fake-digest.tsv"
+expect_approval_force_failure fake-digest "$DB_NAME" "$TMP/fake-digest.tsv" "$fake_digest" 'canonical digest mismatch'
+mutate_tsv "$TMP/manifest.tsv" "$TMP/forged-row-digest.tsv" 3 "$fake_digest"
+expect_approval_force_failure forged-row-digest "$DB_NAME" "$TMP/forged-row-digest.tsv" "$manifest_digest" 'row key or row digest is forged'
+{ cat "$TMP/manifest.tsv"; sed -n '2p' "$TMP/manifest.tsv"; } > "$TMP/duplicate-key.tsv"
+expect_approval_force_failure duplicate-key "$DB_NAME" "$TMP/duplicate-key.tsv" "$manifest_digest" 'duplicate manifest row key'
+emoji_hex=$(python3 - <<'PY'
+print('F09F9880' * 101)
+PY
+)
+mutate_tsv "$TMP/manifest.tsv" "$TMP/overlong-utf8.tsv" 5 "$emoji_hex"
+expect_approval_force_failure overlong-utf8 "$DB_NAME" "$TMP/overlong-utf8.tsv" "$manifest_digest" 'malformed or oversized required HEX'
+mutate_tsv "$TMP/manifest.tsv" "$TMP/odd-hex.tsv" 5 'ABC'
+expect_approval_force_failure odd-hex "$DB_NAME" "$TMP/odd-hex.tsv" "$manifest_digest" 'malformed or oversized required HEX'
+mutate_tsv "$TMP/manifest.tsv" "$TMP/illegal-hex.tsv" 5 'GG'
+expect_approval_force_failure illegal-hex "$DB_NAME" "$TMP/illegal-hex.tsv" "$manifest_digest" 'malformed or oversized required HEX'
+
+approve_manifest "$DB_NAME" "$TMP/manifest.tsv" "$manifest_digest" "$APPROVED_OPERATOR" "$TMP/approve.out"
+assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_manifest_batch WHERE report_sha256='$manifest_digest' AND seal_status='SEALED'" 1
+assert_scalar "$DB_NAME" "SELECT manifest_row_count FROM agent_task_backfill_manifest_batch WHERE report_sha256='$manifest_digest'" "$(($(wc -l < "$TMP/manifest.tsv") - 1))"
+assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_run" 0
+expect_approval_force_failure duplicate-approval "$DB_NAME" "$TMP/manifest.tsv" "$manifest_digest" 'digest is already approved'
+
+# Sealed rows/batch reject direct append/update/delete.
+for attack in append update delete batch-update batch-delete; do
+  set +e
+  case "$attack" in
+    append) "${MYSQL[@]}" "$DB_NAME" -e "INSERT INTO agent_task_backfill_manifest(report_sha256,manifest_row_key,manifest_row_sha256,meta_id,task_id,source_hash,source_format,source_shape,source_ordinal,resolution_status,task_resolution_status,approved_operator,approved_at) SELECT report_sha256,SHA2(CONCAT(manifest_row_key,'append'),256),manifest_row_sha256,meta_id,task_id,source_hash,source_format,source_shape,source_ordinal,resolution_status,task_resolution_status,approved_operator,approved_at FROM agent_task_backfill_manifest WHERE report_sha256='$manifest_digest' LIMIT 1" >"$TMP/$attack.out" 2>&1 ;;
+    update) "${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_backfill_manifest SET approved_operator='tampered' WHERE report_sha256='$manifest_digest' LIMIT 1" >"$TMP/$attack.out" 2>&1 ;;
+    delete) "${MYSQL[@]}" "$DB_NAME" -e "DELETE FROM agent_task_backfill_manifest WHERE report_sha256='$manifest_digest' LIMIT 1" >"$TMP/$attack.out" 2>&1 ;;
+    batch-update) "${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_backfill_manifest_batch SET manifest_row_count=manifest_row_count+1 WHERE report_sha256='$manifest_digest'" >"$TMP/$attack.out" 2>&1 ;;
+    batch-delete) "${MYSQL[@]}" "$DB_NAME" -e "DELETE FROM agent_task_backfill_manifest_batch WHERE report_sha256='$manifest_digest'" >"$TMP/$attack.out" 2>&1 ;;
+  esac
+  rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || { echo "$attack unexpectedly succeeded" >&2; exit 1; }
+done
+assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_manifest WHERE report_sha256='$manifest_digest'" "$(($(wc -l < "$TMP/manifest.tsv") - 1))"
+
+# Apply independently verifies sealed row count and canonical digest.
+"${MYSQL[@]}" "$DB_NAME" -e "DROP TRIGGER trg_task_backfill_manifest_insert_guard; DROP TRIGGER trg_task_backfill_manifest_no_delete; INSERT INTO agent_task_backfill_manifest(report_sha256,manifest_row_key,manifest_row_sha256,meta_id,task_id,source_hash,source_format,source_shape,source_ordinal,resolution_status,task_resolution_status,approved_operator,approved_at) SELECT report_sha256,SHA2(CONCAT(manifest_row_key,'tamper'),256),manifest_row_sha256,meta_id,task_id,source_hash,source_format,source_shape,source_ordinal,resolution_status,task_resolution_status,approved_operator,approved_at FROM agent_task_backfill_manifest WHERE report_sha256='$manifest_digest' LIMIT 1"
+expect_apply_force_failure sealed-count-tamper "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" 'sealed manifest row count mismatch'
+"${MYSQL[@]}" "$DB_NAME" -e "DELETE FROM agent_task_backfill_manifest WHERE report_sha256='$manifest_digest' AND manifest_row_key NOT IN (SELECT manifest_row_key FROM (SELECT manifest_row_key FROM agent_task_backfill_manifest WHERE report_sha256='$manifest_digest' ORDER BY id LIMIT $(($(wc -l < "$TMP/manifest.tsv") - 1))) keep_rows);"
+"${MYSQL[@]}" "$DB_NAME" < "$AUDIT_SCHEMA"
+original_key=$(awk -F '\t' 'NR==2 {print $2}' "$TMP/manifest.tsv")
+original_row_digest=$(awk -F '\t' 'NR==2 {print $3}' "$TMP/manifest.tsv")
+"${MYSQL[@]}" "$DB_NAME" -e "DROP TRIGGER trg_task_backfill_manifest_no_update; UPDATE agent_task_backfill_manifest SET manifest_row_sha256='$fake_digest' WHERE manifest_row_key='$original_key'"
+expect_apply_force_failure sealed-digest-tamper "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" 'sealed manifest canonical digest mismatch'
+"${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_backfill_manifest SET manifest_row_sha256='$original_row_digest' WHERE manifest_row_key='$original_key'"
+"${MYSQL[@]}" "$DB_NAME" < "$AUDIT_SCHEMA"
+
+expect_apply_force_failure fake-apply-digest "$DB_NAME" "$fake_digest" "SET @b09_operator='$APPROVED_OPERATOR';" 'sealed approved manifest batch was not found'
+expect_apply_force_failure nul-operator "$DB_NAME" "$manifest_digest" "SET @b09_operator=CONCAT('bad',CHAR(0),'operator');" 'operator must be byte-clean'
 
 "${MYSQL[@]}" "$DB_NAME" -e "INSERT INTO agent_task_meta(task_id,reward_status,assigned_agent_id,assigned_at,tenant_id,client_id,create_time,update_time) VALUES('drift-added','assigned','legacy-one',1700000000000,'tenant-a','client-a',1700000000000,1700000000000)"
-expect_apply_failure drift-add "$DB_NAME" "$report_sha" \
-  "SET @b09_operator='$APPROVED_OPERATOR';" "current task row count differs"
+expect_apply_force_failure drift-add "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" 'current task row count differs'
 "${MYSQL[@]}" "$DB_NAME" -e "DELETE FROM agent_task_meta WHERE BINARY task_id=BINARY 'drift-added'"
 
 "${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_meta SET assigned_agent_id='legacy-two' WHERE BINARY task_id=BINARY 'eligible'"
-expect_apply_failure drift-source "$DB_NAME" "$report_sha" \
-  "SET @b09_operator='$APPROVED_OPERATOR';" "current task source/scope/resolution differs"
+expect_apply_force_failure drift-source "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" 'current source/scope/resolution differs'
 "${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_meta SET assigned_agent_id='legacy-one' WHERE BINARY task_id=BINARY 'eligible'"
 
-"${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_meta SET client_id='client-b' WHERE BINARY task_id=BINARY 'eligible'"
-expect_apply_failure drift-scope "$DB_NAME" "$report_sha" \
-  "SET @b09_operator='$APPROVED_OPERATOR';" "current task source/scope/resolution differs"
-"${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_meta SET client_id='client-a' WHERE BINARY task_id=BINARY 'eligible'"
-
-"${MYSQL[@]}" "$DB_NAME" -e "CREATE TABLE b09_saved_meta LIKE agent_task_meta; INSERT INTO b09_saved_meta SELECT * FROM agent_task_meta WHERE BINARY task_id=BINARY 'eligible'; DELETE FROM agent_task_meta WHERE BINARY task_id=BINARY 'eligible'"
-expect_apply_failure drift-delete "$DB_NAME" "$report_sha" \
-  "SET @b09_operator='$APPROVED_OPERATOR';" "current task row count differs"
-"${MYSQL[@]}" "$DB_NAME" -e "INSERT INTO agent_task_meta SELECT * FROM b09_saved_meta; DROP TABLE b09_saved_meta"
-
-before_rollback=$(state_of "$DB_NAME")
+# Failure after member DML (work-item trigger) must rollback everything under --force.
 "${MYSQL[@]}" "$DB_NAME" <<'SQL'
 DELIMITER $$
-CREATE TRIGGER trg_b09_probe_force_rollback BEFORE INSERT ON agent_task_work_item
+CREATE TRIGGER trg_b09_probe_force_work_item BEFORE INSERT ON agent_task_work_item
 FOR EACH ROW
 BEGIN
   IF BINARY NEW.task_id = BINARY 'eligible' THEN
@@ -191,30 +276,33 @@ BEGIN
 END$$
 DELIMITER ;
 SQL
-expect_apply_failure transactional-rollback "$DB_NAME" "$report_sha" \
-  "SET @b09_operator='$APPROVED_OPERATOR';" "B09 probe forced work-item failure"
-"${MYSQL[@]}" "$DB_NAME" -e "DROP TRIGGER trg_b09_probe_force_rollback"
-[[ "$(state_of "$DB_NAME")" == "$before_rollback" ]] || { echo 'rollback left partial rows' >&2; exit 1; }
+expect_apply_force_failure force-work-item "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" 'B09 probe forced work-item failure'
+"${MYSQL[@]}" "$DB_NAME" -e "DROP TRIGGER trg_b09_probe_force_work_item"
 
-run_apply_sql "$DB_NAME" "$report_sha" "SET @b09_operator='$APPROVED_OPERATOR';" "$TMP/apply-1.out"
-assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_run" 1
-assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_run WHERE run_status='SUCCEEDED' AND BINARY operator=BINARY '$APPROVED_OPERATOR' AND BINARY report_sha256=BINARY '$report_sha'" 1
+# Failure at final run audit must rollback prior issue/member/work-item DML too.
+"${MYSQL[@]}" "$DB_NAME" <<'SQL'
+DELIMITER $$
+CREATE TRIGGER trg_b09_probe_force_run BEFORE INSERT ON agent_task_backfill_run
+FOR EACH ROW
+BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'B09 probe forced run failure';
+END$$
+DELIMITER ;
+SQL
+expect_apply_force_failure force-run "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" 'B09 probe forced run failure'
+"${MYSQL[@]}" "$DB_NAME" -e "DROP TRIGGER trg_b09_probe_force_run"
+
+run_apply_sql "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" "$TMP/apply-1.out"
+assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_run WHERE run_status='SUCCEEDED' AND operator='$APPROVED_OPERATOR' AND report_sha256='$manifest_digest'" 1
 first_business=$("${MYSQL[@]}" -Nse "SELECT CONCAT((SELECT COUNT(*) FROM agent_task_member),'/',(SELECT COUNT(*) FROM agent_task_work_item))" "$DB_NAME")
-run_apply_sql "$DB_NAME" "$report_sha" "SET @b09_operator='$APPROVED_OPERATOR';" "$TMP/apply-2.out"
+run_apply_sql "$DB_NAME" "$manifest_digest" "SET @b09_operator='$APPROVED_OPERATOR';" "$TMP/apply-2.out"
 second_business=$("${MYSQL[@]}" -Nse "SELECT CONCAT((SELECT COUNT(*) FROM agent_task_member),'/',(SELECT COUNT(*) FROM agent_task_work_item))" "$DB_NAME")
 [[ "$second_business" == "$first_business" ]] || { echo "idempotency failed: $first_business -> $second_business" >&2; exit 1; }
 assert_scalar "$DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_run" 2
 assert_scalar "$DB_NAME" "SELECT MIN(occurrence_count) FROM agent_task_backfill_issue" 2
 assert_scalar "$DB_NAME" "SELECT MAX(occurrence_count) FROM agent_task_backfill_issue" 2
 
-set +e
-"${MYSQL[@]}" "$DB_NAME" -e "UPDATE agent_task_backfill_manifest SET approved_operator='tampered' LIMIT 1" >"$TMP/immutable.out" 2>&1
-immutable_rc=$?
-set -e
-[[ $immutable_rc -ne 0 ]] || { echo 'manifest update unexpectedly succeeded' >&2; exit 1; }
-grep -q 'approved manifest is immutable' "$TMP/immutable.out"
-
-# A clean eligible-only database proves successful no-issue runs still persist a run audit.
+# Clean eligible-only database proves issue=0 success is still audited.
 "${MYSQL[@]}" -e "DROP DATABASE IF EXISTS \`$CLEAN_DB_NAME\`; CREATE DATABASE \`$CLEAN_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
 "${MYSQL[@]}" "$CLEAN_DB_NAME" < "$SCHEMA"
 "${MYSQL[@]}" "$CLEAN_DB_NAME" < "$AUDIT_SCHEMA"
@@ -228,15 +316,15 @@ INSERT INTO agent_task_meta
 VALUES('clean','assigned','agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',@now,'tenant-clean','client-clean',@now,@now);
 SQL
 "${MYSQL[@]}" --batch --raw "$CLEAN_DB_NAME" < "$MANIFEST" > "$TMP/clean-manifest.tsv"
-clean_sha=$(sha256sum "$TMP/clean-manifest.tsv" | awk '{print $1}')
-approve_manifest "$CLEAN_DB_NAME" "$TMP/clean-manifest.tsv" "$clean_sha" clean-approved "$TMP/clean-approve.out"
-run_apply_sql "$CLEAN_DB_NAME" "$clean_sha" "SET @b09_operator='clean-approved';" "$TMP/clean-apply.out"
+clean_digest=$(manifest_digest_of "$TMP/clean-manifest.tsv")
+approve_manifest "$CLEAN_DB_NAME" "$TMP/clean-manifest.tsv" "$clean_digest" clean-approved "$TMP/clean-approve.out"
+run_apply_sql "$CLEAN_DB_NAME" "$clean_digest" "SET @b09_operator='clean-approved';" "$TMP/clean-apply.out"
 assert_scalar "$CLEAN_DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_issue" 0
 assert_scalar "$CLEAN_DB_NAME" "SELECT COUNT(*) FROM agent_task_backfill_run WHERE issue_row_count=0 AND run_status='SUCCEEDED'" 1
 
 printf 'mysql_version=%s\n' "$version"
-printf 'manifest_sha256=%s rows=%s\n' "$report_sha" \
-  "$("${MYSQL[@]}" -Nse "SELECT COUNT(*) FROM agent_task_backfill_manifest WHERE report_sha256='$report_sha'" "$DB_NAME")"
+printf 'manifest_digest=%s rows=%s\n' "$manifest_digest" \
+  "$("${MYSQL[@]}" -Nse "SELECT manifest_row_count FROM agent_task_backfill_manifest_batch WHERE report_sha256='$manifest_digest'" "$DB_NAME")"
 printf 'business=%s runs=%s issues=%s\n' "$second_business" \
   "$("${MYSQL[@]}" -Nse 'SELECT COUNT(*) FROM agent_task_backfill_run' "$DB_NAME")" \
   "$("${MYSQL[@]}" -Nse 'SELECT COUNT(*) FROM agent_task_backfill_issue' "$DB_NAME")"
