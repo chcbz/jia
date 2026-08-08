@@ -10,31 +10,21 @@ import org.apache.ibatis.annotations.Update;
 import java.util.List;
 
 /**
- * MyBatis mapper for {@code agent_task_event}.
+ * MyBatis mapper for {@code agent_task_event} (§7.5).
  *
- * <p>Key design invariants:
+ * <p>Key invariants:
  * <ul>
  *   <li>{@link #lockTaskMetaForEventVersion} uses SELECT ... FOR UPDATE to
  *       serialize event version allocation within a task scope.</li>
  *   <li>{@link #insertEvent} performs the event INSERT after version is allocated.</li>
- *   <li>{@link #incrementCurrentEventVersion} atomically updates
- *       {@code current_event_version} to the new value.
- *       This MUST be called AFTER the event insert succeeds, all in the same transaction.</li>
+ *   <li>{@link #incrementCurrentEventVersion} uses byte-exact CAS UPDATE
+ *       (CAST/OCTET_LENGTH on tenant/client/task + current_event_version check).</li>
  *   <li>All scope lookups use byte-exact CAST(... AS BINARY) + OCTET_LENGTH
  *       to fail closed on padding/collation mismatches.</li>
  * </ul>
  */
 public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
 
-    /**
-     * Lock the task meta row for event version allocation.
-     *
-     * <p>Returns the current event version (before increment). Caller
-     * computes {@code newEventVersion = current + 1}, inserts the event,
-     * then calls {@link #incrementCurrentEventVersion}.
-     *
-     * @return the current event version, or null if the task does not exist in scope
-     */
     @Select("""
             SELECT current_event_version
             FROM agent_task_meta
@@ -57,27 +47,30 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             @Param("clientId") String clientId,
             @Param("taskId") String taskId);
 
-    /**
-     * Insert a scoped event. Caller must have already allocated
-     * {@code eventVersion} via {@link #lockTaskMetaForEventVersion}.
-     */
     @Insert("""
             INSERT INTO agent_task_event
-                (event_id, task_id, event_version, event_type, actor,
-                 aggregate_type, aggregate_id, payload, created_at,
+                (task_id, event_version, event_id, event_type,
+                 actor_type, actor_id, aggregate_type, aggregate_id,
+                 event_json, occurred_at,
                  tenant_id, client_id, create_time, update_time)
             VALUES
-                (#{eventId}, #{taskId}, #{eventVersion}, #{eventType}, #{actor},
-                 #{aggregateType}, #{aggregateId}, #{payload}, #{createdAt},
+                (#{taskId}, #{eventVersion}, #{eventId}, #{eventType},
+                 #{actorType}, #{actorId}, #{aggregateType}, #{aggregateId},
+                 #{eventJson}, #{occurredAt},
                  #{tenantId}, #{clientId}, #{createTime}, #{updateTime})
             """)
     int insertEvent(AgentTaskEventEntity event);
 
     /**
-     * Atomically increment current_event_version.
-     * Must be called AFTER the event INSERT, in the same transaction.
+     * Byte-exact CAS update of current_event_version.
      *
-     * @return number of rows updated (1 on success, 0 if scope/version mismatch)
+     * <p>Conditions enforced:
+     * <ul>
+     *   <li>Byte-exact tenant/client/task match (CAST + OCTET_LENGTH)</li>
+     *   <li>current_event_version = expectedCurrentVersion (CAS)</li>
+     * </ul>
+     *
+     * @return 1 on success, 0 if scope or version mismatch
      */
     @Update("""
             UPDATE agent_task_meta
@@ -86,6 +79,15 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{taskId}, 1, 50) AS BINARY(200))
+              AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{taskId}, 51, 50) AS BINARY(200))
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND current_event_version = #{expectedCurrentVersion}
             """)
     int incrementCurrentEventVersion(
@@ -96,11 +98,11 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             @Param("newEventVersion") long newEventVersion,
             @Param("updateTime") long updateTime);
 
-    /**
-     * Find events for a task scope, ordered by event_version ascending.
-     */
     @Select("""
-            SELECT *
+            SELECT id, task_id, event_version, event_id, event_type,
+                   actor_type, actor_id, aggregate_type, aggregate_id,
+                   event_json, occurred_at,
+                   tenant_id, client_id, create_time, update_time
             FROM agent_task_event
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
@@ -118,11 +120,11 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             @Param("clientId") String clientId,
             @Param("taskId") String taskId);
 
-    /**
-     * Find events for a task scope starting from a specific version (inclusive).
-     */
     @Select("""
-            SELECT *
+            SELECT id, task_id, event_version, event_id, event_type,
+                   actor_type, actor_id, aggregate_type, aggregate_id,
+                   event_json, occurred_at,
+                   tenant_id, client_id, create_time, update_time
             FROM agent_task_event
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
@@ -142,11 +144,11 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             @Param("taskId") String taskId,
             @Param("sinceVersion") long sinceVersion);
 
-    /**
-     * Find a single event by exact event_id in scope.
-     */
     @Select("""
-            SELECT *
+            SELECT id, task_id, event_version, event_id, event_type,
+                   actor_type, actor_id, aggregate_type, aggregate_id,
+                   event_json, occurred_at,
+                   tenant_id, client_id, create_time, update_time
             FROM agent_task_event
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}

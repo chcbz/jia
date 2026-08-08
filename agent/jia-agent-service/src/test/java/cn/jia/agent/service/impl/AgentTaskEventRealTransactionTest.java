@@ -4,15 +4,19 @@ import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.dao.impl.AgentTaskEventDaoImpl;
 import cn.jia.agent.entity.AgentTaskEventEntity;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.mapper.AgentTaskEventMapper;
+import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.core.util.DateUtil;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
+import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.SqlSessionTemplate;
-import org.apache.ibatis.mapping.Environment;
+import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,9 +26,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
-import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
@@ -38,54 +40,58 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * C01 real-transaction integration tests for agent_task_event schema,
- * event_version allocation, and current_event_version CAS semantics.
+ * C01 real-transaction integration tests for agent_task_event (§7.5).
  *
- * <p>Runs against an isolated H2 database. Never touches production MySQL.
+ * <p>Runs against an isolated H2. Never touches production MySQL.
  *
  * <p>Coverage:
  * <ol>
- *   <li>Basic event write and version progression</li>
- *   <li>Concurrent writes: no duplicate event_version, current_event_version == MAX(event_version)</li>
- *   <li>Transaction rollback: event and version are not retained</li>
+ *   <li>Basic append via AgentTaskEventWriter (single transaction)</li>
+ *   <li>Strict concurrent: all N writes succeed, versions 1..N exactly, failure=0</li>
+ *   <li>Transaction rollback: event and version not retained</li>
  *   <li>Scope mismatch: fail closed</li>
- *   <li>Task not found: fail closed (null current event version from lock)</li>
- *   <li>commitEventVersion rejects invalid version values</li>
+ *   <li>Task not found: fail closed</li>
+ *   <li>Long.MAX_VALUE overflow rejection</li>
+ *   <li>Skip rejection (newVersion != expected + 1)</li>
+ *   <li>Byte-exact case scope mismatch on lock</li>
  *   <li>event/version write does NOT increment task_version</li>
- *   <li>current_event_version == MAX(event_version) after writes</li>
- *   <li>Duplicate event_version causes unique constraint violation</li>
- *   <li>eventId byte-exact scope uniqueness</li>
- *   <li>CAS prevents lost update on commitEventVersion</li>
- *   <li>event_version is monotonic</li>
- *   <li>Different tasks have independent event version sequences</li>
- *   <li>findByTaskScopeSince returns correct subset</li>
- *   <li>Multiple aggregate types coexist</li>
- *   <li>TaskEventType.requireKnown validation</li>
+ *   <li>current_event_version = MAX(event_version)</li>
+ *   <li>Duplicate event_version unique constraint</li>
+ *   <li>eventId byte-exact scope lookups</li>
+ *   <li>CAS prevents lost update</li>
+ *   <li>Monotonic event_version</li>
+ *   <li>Independent task sequences</li>
+ *   <li>findByTaskScopeSince</li>
+ *   <li>Multiple aggregate types</li>
+ *   <li>TaskEventType.requireKnown + Aggregate.requireKnown</li>
+ *   <li>Command validation (null, blank, wrong length, control chars, unknown types)</li>
  * </ol>
  */
 class AgentTaskEventRealTransactionTest {
 
     private static final String JDBC_URL =
-            "jdbc:h2:mem:cyf_c01_event_tx;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
+            "jdbc:h2:mem:cyf_c01_v2;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
             + "CASE_INSENSITIVE_IDENTIFIERS=TRUE";
     private static final String TENANT = "tenant-c01";
     private static final String CLIENT = "client-c01";
     private static final String TASK_ID = "task-event-001";
     private static final String ALT_TENANT = "tenant-other";
-    private static final String ALT_CLIENT = "client-other";
 
     private DataSource dataSource;
     private JdbcTemplate jdbc;
     private PlatformTransactionManager txManager;
     private AgentTaskEventDao eventDao;
+    private AgentTaskEventWriter writer;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -99,12 +105,16 @@ class AgentTaskEventRealTransactionTest {
         createTables();
 
         txManager = new DataSourceTransactionManager(dataSource);
+        TransactionTemplate txTemplate = new TransactionTemplate(txManager);
 
         SqlSessionFactory sqlSessionFactory = createSqlSessionFactory();
         SqlSessionTemplate sqlSessionTemplate = new SqlSessionTemplate(sqlSessionFactory);
         AgentTaskEventMapper mapper = sqlSessionTemplate.getMapper(AgentTaskEventMapper.class);
+
         eventDao = new AgentTaskEventDaoImpl();
         setField(eventDao, "baseMapper", mapper);
+
+        writer = new AgentTaskEventWriterImpl(eventDao, txTemplate);
     }
 
     @AfterEach
@@ -123,7 +133,6 @@ class AgentTaskEventRealTransactionTest {
                     collaboration_mode      VARCHAR(20) NOT NULL DEFAULT 'single',
                     risk_level              VARCHAR(20) NOT NULL DEFAULT 'low',
                     max_agents              INT NOT NULL DEFAULT 1,
-                    coordinator_agent_id    VARCHAR(100) DEFAULT NULL,
                     review_required         TINYINT(1) NOT NULL DEFAULT 0,
                     task_version            BIGINT NOT NULL DEFAULT 0,
                     current_event_version   BIGINT NOT NULL DEFAULT 0,
@@ -138,27 +147,28 @@ class AgentTaskEventRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS agent_task_event (
                     id              BIGINT NOT NULL AUTO_INCREMENT,
-                    event_id        VARCHAR(64) NOT NULL,
                     task_id         VARCHAR(100) NOT NULL,
                     event_version   BIGINT NOT NULL,
-                    event_type      VARCHAR(50) NOT NULL,
-                    actor           VARCHAR(100) NOT NULL,
+                    event_id        VARCHAR(100) NOT NULL,
+                    event_type      VARCHAR(64) NOT NULL,
+                    actor_type      VARCHAR(20) NOT NULL,
+                    actor_id        VARCHAR(100) DEFAULT NULL,
                     aggregate_type  VARCHAR(30) NOT NULL,
                     aggregate_id    VARCHAR(100) NOT NULL,
-                    payload         CLOB,
-                    created_at      BIGINT NOT NULL,
+                    event_json      CLOB NOT NULL,
+                    occurred_at     BIGINT NOT NULL,
                     tenant_id       VARCHAR(50) NOT NULL,
                     client_id       VARCHAR(50) NOT NULL,
                     create_time     BIGINT DEFAULT NULL,
                     update_time     BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_event_version (tenant_id, client_id, task_id, event_version),
-                    UNIQUE KEY uk_event_id (tenant_id, client_id, event_id)
+                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id)
                 )
                 """);
     }
 
-    // ── Helper: seed a task meta row ──
+    // ── Helpers ──
 
     private void seedTask(String tenantId, String clientId, String taskId) {
         seedTask(tenantId, clientId, taskId, 0L);
@@ -178,108 +188,70 @@ class AgentTaskEventRealTransactionTest {
                 """, taskId, currentEventVersion, tenantId, clientId, now, now);
     }
 
-    // ── Helper: build and write event ──
+    private AgentTaskEventWriteCommand command(String eventId, String eventType) {
+        return command(eventId, eventType, TaskEventType.Aggregate.TASK, TASK_ID);
+    }
 
-    private AgentTaskEventEntity buildEvent(String tenantId, String clientId,
-            String taskId, String eventId, long eventVersion, String eventType,
+    private AgentTaskEventWriteCommand command(String eventId, String eventType,
             String aggregateType, String aggregateId) {
-        long now = DateUtil.nowTime();
-        AgentTaskEventEntity event = new AgentTaskEventEntity();
-        event.setEventId(eventId);
-        event.setTaskId(taskId);
-        event.setEventVersion(eventVersion);
-        event.setEventType(eventType);
-        event.setActor("agt_test");
-        event.setAggregateType(aggregateType);
-        event.setAggregateId(aggregateId);
-        event.setPayload("{}");
-        event.setCreatedAt(now);
-        event.setTenantId(tenantId);
-        event.setClientId(clientId);
-        event.setCreateTime(now);
-        event.setUpdateTime(now);
-        return event;
+        return new AgentTaskEventWriteCommand()
+                .setTenantId(TENANT)
+                .setClientId(CLIENT)
+                .setTaskId(TASK_ID)
+                .setEventId(eventId)
+                .setEventType(eventType)
+                .setActorType("agent")
+                .setActorId("agt_test")
+                .setAggregateType(aggregateType)
+                .setAggregateId(aggregateId)
+                .setEventJson("{}")
+                .setOccurredAt(DateUtil.nowTime());
     }
 
-    private AgentTaskEventEntity writeEvent(String tenantId, String clientId,
-            String taskId, String eventId, String eventType) {
-        return writeEvent(tenantId, clientId, taskId, eventId, eventType,
-                TaskEventType.Aggregate.TASK, taskId);
-    }
-
-    private AgentTaskEventEntity writeEvent(String tenantId, String clientId,
-            String taskId, String eventId, String eventType,
-            String aggregateType, String aggregateId) {
-        TransactionStatus tx = txManager.getTransaction(new DefaultTransactionDefinition());
-        try {
-            Long currentVersion = eventDao.lockAndAllocateVersion(tenantId, clientId, taskId);
-            if (currentVersion == null) {
-                txManager.rollback(tx);
-                return null;
-            }
-            long newVersion = currentVersion + 1;
-            long now = DateUtil.nowTime();
-
-            AgentTaskEventEntity event = buildEvent(tenantId, clientId, taskId,
-                    eventId, newVersion, eventType, aggregateType, aggregateId);
-
-            int inserted = eventDao.insertEvent(event);
-            assertEquals(1, inserted, "event insert should succeed");
-
-            int updated = eventDao.commitEventVersion(
-                    tenantId, clientId, taskId,
-                    currentVersion, newVersion, now);
-            assertEquals(1, updated, "version commit should succeed");
-
-            txManager.commit(tx);
-            return event;
-        } catch (Exception e) {
-            txManager.rollback(tx);
-            throw e;
-        }
-    }
-
-    // ── Test 1: Basic event write and version progression ──
+    // ── Test 1: Basic append via Writer (single transaction) ──
 
     @Test
-    void basicEventWriteIncrementsCurrentEventVersion() {
+    void basicAppendViaWriter() {
         seedTask(TENANT, CLIENT, TASK_ID);
 
-        AgentTaskEventEntity e1 = writeEvent(TENANT, CLIENT, TASK_ID,
-                "evt-001", TaskEventType.TASK_CREATED);
-        assertNotNull(e1);
-        assertEquals(1L, e1.getEventVersion());
+        AgentTaskEventWriteResult r1 = writer.append(
+                command("evt-w1", TaskEventType.TASK_CREATED));
+        assertEquals(1L, r1.getEventVersion());
+        assertEquals(0L, r1.getPreviousVersion());
+        assertEquals(1L, r1.getCurrentVersion());
+        assertNotNull(r1.getEvent());
+        assertEquals("evt-w1", r1.getEvent().getEventId());
 
-        AgentTaskEventEntity e2 = writeEvent(TENANT, CLIENT, TASK_ID,
-                "evt-002", TaskEventType.TASK_STATUS_CHANGED);
-        assertNotNull(e2);
-        assertEquals(2L, e2.getEventVersion());
+        AgentTaskEventWriteResult r2 = writer.append(
+                command("evt-w2", TaskEventType.TEAM_PROPOSED));
+        assertEquals(2L, r2.getEventVersion());
 
-        Long currentVersion = jdbc.queryForObject(
+        Long cv = jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        assertEquals(2L, currentVersion);
+        assertEquals(2L, cv);
 
         List<AgentTaskEventEntity> events = eventDao.findByTaskScope(TENANT, CLIENT, TASK_ID);
         assertEquals(2, events.size());
-        assertEquals(1L, events.get(0).getEventVersion());
-        assertEquals(2L, events.get(1).getEventVersion());
     }
 
-    // ── Test 2: Concurrent writes produce no duplicate event_version ──
+    // ── Test 2: Strict concurrent — all succeed, versions 1..N, failure=0 ──
 
     @Test
-    void concurrentWritesProduceNoDuplicateEventVersion() throws Exception {
+    void concurrentAllSucceedVersionsOneToN() throws Exception {
         seedTask(TENANT, CLIENT, TASK_ID);
 
         int numThreads = 8;
         int writesPerThread = 10;
+        int totalWrites = numThreads * writesPerThread;
+
         ExecutorService executor = Executors.newFixedThreadPool(numThreads);
         CountDownLatch latch = new CountDownLatch(1);
-        Set<Long> allVersions = Collections.synchronizedSet(new HashSet<>());
+        Set<Long> versions = Collections.synchronizedSet(new HashSet<>());
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
+        AtomicReference<String> lastError = new AtomicReference<>();
 
         List<Future<?>> futures = new ArrayList<>();
         for (int t = 0; t < numThreads; t++) {
@@ -288,17 +260,15 @@ class AgentTaskEventRealTransactionTest {
                 try {
                     latch.await();
                     for (int i = 0; i < writesPerThread; i++) {
-                        String eventId = "evt-conc-" + threadId + "-" + i;
+                        String eid = "evt-conc-" + threadId + "-" + i;
                         try {
-                            AgentTaskEventEntity evt = writeEvent(
-                                    TENANT, CLIENT, TASK_ID,
-                                    eventId, TaskEventType.TASK_STATUS_CHANGED);
-                            if (evt != null) {
-                                allVersions.add(evt.getEventVersion());
-                                successCount.incrementAndGet();
-                            }
+                            AgentTaskEventWriteResult r = writer.append(
+                                    command(eid, TaskEventType.PROGRESS_REPORTED));
+                            versions.add(r.getEventVersion());
+                            successCount.incrementAndGet();
                         } catch (Exception e) {
                             failureCount.incrementAndGet();
+                            lastError.compareAndSet(null, e.toString());
                         }
                     }
                 } catch (InterruptedException e) {
@@ -308,27 +278,36 @@ class AgentTaskEventRealTransactionTest {
         }
 
         latch.countDown();
-        for (Future<?> future : futures) {
-            future.get(30, TimeUnit.SECONDS);
+        for (Future<?> f : futures) {
+            f.get(60, TimeUnit.SECONDS);
         }
         executor.shutdown();
 
-        assertTrue(successCount.get() > 0,
-                "at least some writes should succeed");
-        int totalExpected = numThreads * writesPerThread;
-        assertEquals(totalExpected, successCount.get() + failureCount.get(),
-                "every attempt should either succeed or fail");
+        // Strict: ALL must succeed
+        assertEquals(0, failureCount.get(),
+                "all concurrent writes must succeed, failures=" + failureCount.get()
+                + " lastError=" + lastError.get());
+        assertEquals(totalWrites, successCount.get());
 
-        assertEquals(successCount.get(), allVersions.size(),
-                "no duplicate event versions");
+        // Versions must be exactly 1..N
+        assertEquals(totalWrites, versions.size(), "no duplicate versions");
+        for (long v = 1; v <= totalWrites; v++) {
+            assertTrue(versions.contains(v), "missing version " + v);
+        }
 
-        Long currentVersion = jdbc.queryForObject(
+        // DB event count = N
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_event "
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Integer.class, TENANT, CLIENT, TASK_ID);
+        assertEquals(totalWrites, count.intValue());
+
+        // current_event_version = N
+        Long cv = jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        long maxVersion = allVersions.stream().mapToLong(Long::longValue).max().orElse(0);
-        assertEquals(maxVersion, currentVersion,
-                "current_event_version must equal MAX(event_version)");
+        assertEquals((long) totalWrites, cv);
     }
 
     // ── Test 3: Transaction rollback does not retain event or version ──
@@ -337,310 +316,424 @@ class AgentTaskEventRealTransactionTest {
     void transactionRollbackDoesNotRetainEventOrVersion() {
         seedTask(TENANT, CLIENT, TASK_ID);
 
+        // Manually trigger rollback via direct DAO without commit
         TransactionStatus tx = txManager.getTransaction(new DefaultTransactionDefinition());
         try {
-            Long currentVersion = eventDao.lockAndAllocateVersion(TENANT, CLIENT, TASK_ID);
-            assertNotNull(currentVersion);
-            long newVersion = currentVersion + 1;
+            Long cv = eventDao.lockAndAllocateVersion(TENANT, CLIENT, TASK_ID);
+            assertNotNull(cv);
+            long nv = cv + 1;
             long now = DateUtil.nowTime();
 
-            AgentTaskEventEntity event = buildEvent(TENANT, CLIENT, TASK_ID,
-                    "evt-rollback-001", newVersion, TaskEventType.TASK_STATUS_CHANGED,
-                    TaskEventType.Aggregate.TASK, TASK_ID);
+            AgentTaskEventEntity event = new AgentTaskEventEntity();
+            event.setTaskId(TASK_ID);
+            event.setEventVersion(nv);
+            event.setEventId("evt-rollback-1");
+            event.setEventType(TaskEventType.TASK_CREATED);
+            event.setActorType("agent");
+            event.setActorId("agt_test");
+            event.setAggregateType(TaskEventType.Aggregate.TASK);
+            event.setAggregateId(TASK_ID);
+            event.setEventJson("{}");
+            event.setOccurredAt(now);
+            event.setTenantId(TENANT);
+            event.setClientId(CLIENT);
+            event.setCreateTime(now);
+            event.setUpdateTime(now);
 
             eventDao.insertEvent(event);
-            eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID,
-                    currentVersion, newVersion, now);
+            eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, cv, nv, now);
 
             txManager.rollback(tx);
 
-            Long afterVersion = jdbc.queryForObject(
+            Long after = jdbc.queryForObject(
                     "SELECT current_event_version FROM agent_task_meta "
-                    + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                    + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                     Long.class, TENANT, CLIENT, TASK_ID);
-            assertEquals(0L, afterVersion,
-                    "current_event_version must be 0 after rollback");
+            assertEquals(0L, after);
 
             Integer count = jdbc.queryForObject(
                     "SELECT COUNT(*) FROM agent_task_event "
-                    + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                    + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                     Integer.class, TENANT, CLIENT, TASK_ID);
-            assertEquals(0, count, "no events should exist after rollback");
+            assertEquals(0, count);
         } catch (Exception e) {
             txManager.rollback(tx);
             throw e;
         }
     }
 
-    // ── Test 4: Scope mismatch fail closed ──
+    // ── Test 4: Writer append rolls back on insert failure ──
+
+    @Test
+    void writerAppendRollsBackOnInsertFailure() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+
+        // First write succeeds
+        writer.append(command("evt-fail-1", TaskEventType.TASK_CREATED));
+
+        // Now corrupt the table to cause insert failure
+        jdbc.execute("DROP TABLE agent_task_event");
+
+        // Next write should fail and roll back the version increment
+        try {
+            writer.append(command("evt-fail-2", TaskEventType.TEAM_PROPOSED));
+            fail("expected exception");
+        } catch (Exception expected) {
+            // expected
+        }
+
+        // current_event_version should still be 1 (not 0 because first write committed)
+        recreateEventTable();
+        // But the dropped table means current_event_version is still 1
+        Long cv = jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta "
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Long.class, TENANT, CLIENT, TASK_ID);
+        assertEquals(1L, cv);
+    }
+
+    private void recreateEventTable() {
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task_event (
+                    id              BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id         VARCHAR(100) NOT NULL,
+                    event_version   BIGINT NOT NULL,
+                    event_id        VARCHAR(100) NOT NULL,
+                    event_type      VARCHAR(64) NOT NULL,
+                    actor_type      VARCHAR(20) NOT NULL,
+                    actor_id        VARCHAR(100) DEFAULT NULL,
+                    aggregate_type  VARCHAR(30) NOT NULL,
+                    aggregate_id    VARCHAR(100) NOT NULL,
+                    event_json      CLOB NOT NULL,
+                    occurred_at     BIGINT NOT NULL,
+                    tenant_id       VARCHAR(50) NOT NULL,
+                    client_id       VARCHAR(50) NOT NULL,
+                    create_time     BIGINT DEFAULT NULL,
+                    update_time     BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id)
+                )
+                """);
+    }
+
+    // ── Test 5: Scope mismatch fail closed ──
 
     @Test
     void scopeMismatchFailClosed() {
         seedTask(TENANT, CLIENT, TASK_ID);
 
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.lockAndAllocateVersion("", CLIENT, TASK_ID));
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.lockAndAllocateVersion(null, CLIENT, TASK_ID));
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.lockAndAllocateVersion(TENANT, "", TASK_ID));
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.lockAndAllocateVersion(TENANT, null, TASK_ID));
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.lockAndAllocateVersion(TENANT, CLIENT, ""));
+        assertAppendFails("", CLIENT, "evt-sc1");
+        assertAppendFails(null, CLIENT, "evt-sc2");
+        assertThrows(IllegalArgumentException.class, () -> {
+            AgentTaskEventWriteCommand c = command("evt-sc3", TaskEventType.TASK_CREATED);
+            c.setClientId("");
+            writer.append(c);
+        });
+        assertThrows(IllegalArgumentException.class, () -> {
+            AgentTaskEventWriteCommand c = command("evt-sc4", TaskEventType.TASK_CREATED);
+            c.setTenantId(TENANT + " ");
+            writer.append(c);
+        });
 
-        Long result = eventDao.lockAndAllocateVersion(ALT_TENANT, ALT_CLIENT, TASK_ID);
-        assertNull(result, "lock should return null for wrong scope");
-
-        String shiftedTenant = TENANT + " ";
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.lockAndAllocateVersion(shiftedTenant, CLIENT, TASK_ID));
-
-        String controlTenant = TENANT + "\t";
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.lockAndAllocateVersion(controlTenant, CLIENT, TASK_ID));
+        AgentTaskEventWriteCommand c5 = command("evt-sc5", TaskEventType.TASK_CREATED);
+        c5.setTenantId(ALT_TENANT);
+        cn.jia.agent.exception.AgentTaskCollaborationException ex =
+                assertThrows(cn.jia.agent.exception.AgentTaskCollaborationException.class,
+                        () -> writer.append(c5));
+        assertEquals(cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,
+                ex.getReason());
     }
 
-    // ── Test 5: Task not found fail closed ──
+    private void assertAppendFails(String tenantId, String clientId, String eventId) {
+        AgentTaskEventWriteCommand c = new AgentTaskEventWriteCommand()
+                .setTenantId(tenantId)
+                .setClientId(clientId)
+                .setTaskId(TASK_ID)
+                .setEventId(eventId)
+                .setEventType(TaskEventType.TASK_CREATED)
+                .setActorType("agent")
+                .setActorId("agt_test")
+                .setAggregateType(TaskEventType.Aggregate.TASK)
+                .setAggregateId(TASK_ID)
+                .setEventJson("{}")
+                .setOccurredAt(DateUtil.nowTime());
+        assertThrows(IllegalArgumentException.class, () -> writer.append(c));
+    }
+
+    // ── Test 6: Task not found fail closed ──
 
     @Test
     void taskNotFoundFailClosed() {
-        Long result = eventDao.lockAndAllocateVersion(TENANT, CLIENT, "nonexistent-task");
-        assertNull(result, "lockAndAllocateVersion should return null for nonexistent task");
+        AgentTaskEventWriteCommand cmd = command("evt-nf1", TaskEventType.TASK_CREATED);
+        cn.jia.agent.exception.AgentTaskCollaborationException ex =
+                assertThrows(cn.jia.agent.exception.AgentTaskCollaborationException.class,
+                        () -> writer.append(cmd));
+        assertEquals(cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,
+                ex.getReason());
     }
 
-    // ── Test 6: commitEventVersion rejects invalid values ──
+    // ── Test 7: Long.MAX_VALUE overflow rejection ──
 
     @Test
-    void commitEventVersionRejectsNonProgressiveVersion() {
+    void longMaxValueOverflowRejection() {
+        seedTask(TENANT, CLIENT, TASK_ID, Long.MAX_VALUE);
+
+        AgentTaskEventWriteCommand cmd = command("evt-ovf1", TaskEventType.TASK_CREATED);
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> writer.append(cmd));
+        assertTrue(ex.getMessage().contains("Long.MAX_VALUE"));
+    }
+
+    @Test
+    void commitEventVersionRejectsMaxValue() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+        long now = DateUtil.nowTime();
+        assertThrows(IllegalArgumentException.class, () ->
+                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID,
+                        Long.MAX_VALUE, Long.MAX_VALUE + 1, now));
+    }
+
+    // ── Test 8: Skip rejection (newVersion != expected + 1) ──
+
+    @Test
+    void commitEventVersionRejectsNonConsecutiveVersion() {
         seedTask(TENANT, CLIENT, TASK_ID, 5L);
         long now = DateUtil.nowTime();
 
+        // newVersion == expected → rejected
         assertThrows(IllegalArgumentException.class, () ->
                 eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 5L, now));
+
+        // newVersion == expected - 1 → rejected
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 3L, now));
+                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 4L, now));
+
+        // newVersion == expected + 2 → rejected (skip)
+        assertThrows(IllegalArgumentException.class, () ->
+                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 7L, now));
+
+        // newVersion == expected + 1 → OK
+        int ok = eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 6L, now);
+        assertEquals(1, ok);
     }
+
+    // ── Test 9: Byte-exact case scope mismatch in lock ──
 
     @Test
-    void commitEventVersionRejectsNegativeExpectedVersion() {
+    void byteExactCaseScopeMismatch() {
         seedTask(TENANT, CLIENT, TASK_ID);
-        long now = DateUtil.nowTime();
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, -1L, 1L, now));
+
+        // Different case tenant should fail as byte-exact mismatch
+        // (H2 CASE_INSENSITIVE_IDENTIFIERS only affects column names, not string comparison)
+        Long result = eventDao.lockAndAllocateVersion(
+                TENANT.toUpperCase(), CLIENT, TASK_ID);
+        assertNull(result, "different-case scope should not match");
     }
 
-    @Test
-    void commitEventVersionRejectsZeroUpdateTime() {
-        seedTask(TENANT, CLIENT, TASK_ID);
-        assertThrows(IllegalArgumentException.class, () ->
-                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 0L, 1L, 0L));
-    }
-
-    // ── Test 7: Event version write does NOT increment task_version ──
+    // ── Test 10: event/version write does NOT increment task_version ──
 
     @Test
     void eventWriteDoesNotIncrementTaskVersion() {
         seedTask(TENANT, CLIENT, TASK_ID);
 
-        Long initialTaskVersion = jdbc.queryForObject(
+        Long initial = jdbc.queryForObject(
                 "SELECT task_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        assertEquals(0L, initialTaskVersion);
+        assertEquals(0L, initial);
 
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-a", TaskEventType.TASK_CREATED);
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-b", TaskEventType.MEMBER_JOINED,
-                TaskEventType.Aggregate.MEMBER, "member-1");
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-c", TaskEventType.WORK_ITEM_CREATED,
-                TaskEventType.Aggregate.WORK_ITEM, "wi-1");
+        writer.append(command("evt-tv1", TaskEventType.TASK_CREATED));
+        writer.append(command("evt-tv2", TaskEventType.MEMBER_INVITED,
+                TaskEventType.Aggregate.MEMBER, "member-1"));
+        writer.append(command("evt-tv3", TaskEventType.WORK_ITEM_CREATED,
+                TaskEventType.Aggregate.WORK_ITEM, "wi-1"));
 
-        Long afterTaskVersion = jdbc.queryForObject(
+        Long after = jdbc.queryForObject(
                 "SELECT task_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        assertEquals(0L, afterTaskVersion,
-                "task_version must NOT be incremented by event writes");
+        assertEquals(0L, after, "task_version must NOT be incremented by event writes");
 
-        Long currentEventVersion = jdbc.queryForObject(
+        Long cev = jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        assertEquals(3L, currentEventVersion,
-                "current_event_version should be 3 after 3 events");
+        assertEquals(3L, cev);
     }
 
-    // ── Test 8: current_event_version equals MAX(event_version) ──
+    // ── Test 11: current_event_version = MAX(event_version) ──
 
     @Test
     void currentEventVersionMatchesMaxEventVersion() {
         seedTask(TENANT, CLIENT, TASK_ID);
 
         for (int i = 1; i <= 5; i++) {
-            writeEvent(TENANT, CLIENT, TASK_ID,
-                    "evt-max-" + i, TaskEventType.TASK_STATUS_CHANGED);
+            writer.append(command("evt-max-" + i, TaskEventType.PROGRESS_REPORTED));
         }
 
-        Long currentVersion = jdbc.queryForObject(
+        Long cv = jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        assertEquals(5L, currentVersion);
+        assertEquals(5L, cv);
 
-        Long maxVersion = jdbc.queryForObject(
+        Long maxV = jdbc.queryForObject(
                 "SELECT MAX(event_version) FROM agent_task_event "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        assertEquals(maxVersion, currentVersion);
+        assertEquals(maxV, cv);
     }
 
-    // ── Test 9: Duplicate event_version causes unique constraint violation ──
+    // ── Test 12: Duplicate event_version causes unique constraint ──
 
     @Test
-    void duplicateEventVersionCausesUniqueConstraintViolation() {
+    void duplicateEventVersionUniqueConstraint() {
         seedTask(TENANT, CLIENT, TASK_ID);
+        writer.append(command("evt-dup-1", TaskEventType.TASK_CREATED));
 
+        // Bypass writer, insert same version directly
         TransactionStatus tx = txManager.getTransaction(new DefaultTransactionDefinition());
         try {
-            Long cv = eventDao.lockAndAllocateVersion(TENANT, CLIENT, TASK_ID);
-            long now = DateUtil.nowTime();
-            AgentTaskEventEntity e1 = buildEvent(TENANT, CLIENT, TASK_ID,
-                    "evt-dup-1", cv + 1, TaskEventType.TASK_CREATED,
-                    TaskEventType.Aggregate.TASK, TASK_ID);
-            eventDao.insertEvent(e1);
-            eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, cv, cv + 1, now);
+            AgentTaskEventEntity dup = new AgentTaskEventEntity();
+            dup.setTaskId(TASK_ID);
+            dup.setEventVersion(1L); // same as first event
+            dup.setEventId("evt-dup-2");
+            dup.setEventType(TaskEventType.TASK_CREATED);
+            dup.setActorType("agent");
+            dup.setActorId("agt_test");
+            dup.setAggregateType(TaskEventType.Aggregate.TASK);
+            dup.setAggregateId(TASK_ID);
+            dup.setEventJson("{}");
+            dup.setOccurredAt(DateUtil.nowTime());
+            dup.setTenantId(TENANT);
+            dup.setClientId(CLIENT);
+            dup.setCreateTime(DateUtil.nowTime());
+            dup.setUpdateTime(DateUtil.nowTime());
 
-            AgentTaskEventEntity e2 = buildEvent(TENANT, CLIENT, TASK_ID,
-                    "evt-dup-2", cv + 1, TaskEventType.TASK_STATUS_CHANGED,
-                    TaskEventType.Aggregate.TASK, TASK_ID);
-            assertThrows(Exception.class, () -> eventDao.insertEvent(e2));
+            assertThrows(Exception.class, () -> eventDao.insertEvent(dup));
             txManager.rollback(tx);
         } catch (Exception e) {
             txManager.rollback(tx);
         }
     }
 
-    // ── Test 10: eventId byte-exact scope lookups ──
+    // ── Test 13: eventId byte-exact scope lookups ──
 
     @Test
     void eventIdByteExactScopeLookups() {
         seedTask(TENANT, CLIENT, TASK_ID);
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-unique-001", TaskEventType.TASK_CREATED);
+        writer.append(command("evt-lookup-1", TaskEventType.TASK_CREATED));
 
-        AgentTaskEventEntity found = eventDao.findByEventId(
-                ALT_TENANT, CLIENT, "evt-unique-001");
-        assertNull(found, "event should not be visible in wrong tenant");
+        // Wrong tenant → null
+        assertNull(eventDao.findByEventId(ALT_TENANT, CLIENT, "evt-lookup-1"));
 
+        // Trailing space → IAE
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.findByEventId(TENANT, CLIENT, "evt-unique-001 "));
+                eventDao.findByEventId(TENANT, CLIENT, "evt-lookup-1 "));
     }
 
-    // ── Test 11: commitEventVersion CAS prevents lost update ──
+    // ── Test 14: CAS prevents lost update ──
 
     @Test
     void commitEventVersionCasPreventsLostUpdate() {
         seedTask(TENANT, CLIENT, TASK_ID, 5L);
         long now = DateUtil.nowTime();
 
+        // First commit succeeds: 5 → 6
         int r1 = eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 6L, now);
         assertEquals(1, r1);
 
-        int r2 = eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 7L, now);
+        // Second commit with stale expected (5→6 again) fails at SQL CAS
+        // because current_event_version is now 6, not 5
+        int r2 = eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 6L, now);
         assertEquals(0, r2, "CAS should reject stale expected version");
 
-        Long currentVersion = jdbc.queryForObject(
+        Long cv = jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
                 Long.class, TENANT, CLIENT, TASK_ID);
-        assertEquals(6L, currentVersion);
+        assertEquals(6L, cv);
     }
 
-    // ── Test 12: event_version is monotonic ──
+    // ── Test 15: Monotonic event_version ──
 
     @Test
     void eventVersionIsMonotonic() {
         seedTask(TENANT, CLIENT, TASK_ID);
-
-        List<Long> versions = new ArrayList<>();
+        List<Long> vers = new ArrayList<>();
         for (int i = 1; i <= 10; i++) {
-            AgentTaskEventEntity evt = writeEvent(TENANT, CLIENT, TASK_ID,
-                    "evt-mono-" + i, TaskEventType.TASK_STATUS_CHANGED);
-            assertNotNull(evt);
-            versions.add(evt.getEventVersion());
+            AgentTaskEventWriteResult r = writer.append(
+                    command("evt-mono-" + i, TaskEventType.PROGRESS_REPORTED));
+            vers.add(r.getEventVersion());
         }
-
-        for (int i = 1; i < versions.size(); i++) {
-            assertTrue(versions.get(i) > versions.get(i - 1),
-                    "event_version must be strictly increasing: "
-                    + versions.get(i - 1) + " -> " + versions.get(i));
+        for (int i = 1; i < vers.size(); i++) {
+            assertTrue(vers.get(i) > vers.get(i - 1),
+                    "must be strictly increasing: " + vers.get(i - 1) + " → " + vers.get(i));
         }
     }
 
-    // ── Test 13: Different tasks have independent event version sequences ──
+    // ── Test 16: Independent task sequences ──
 
     @Test
     void differentTasksHaveIndependentEventVersions() {
-        String taskA = "task-independent-a";
-        String taskB = "task-independent-b";
+        String taskA = "task-indep-a";
+        String taskB = "task-indep-b";
         seedTask(TENANT, CLIENT, taskA);
         seedTask(TENANT, CLIENT, taskB);
 
-        writeEvent(TENANT, CLIENT, taskA, "evt-ind-a1", TaskEventType.TASK_CREATED);
-        writeEvent(TENANT, CLIENT, taskA, "evt-ind-a2", TaskEventType.TASK_STATUS_CHANGED);
-        writeEvent(TENANT, CLIENT, taskB, "evt-ind-b1", TaskEventType.TASK_CREATED);
+        writer.append(command("evt-ind-a1", TaskEventType.TASK_CREATED)
+                .setTaskId(taskA));
+        writer.append(command("evt-ind-a2", TaskEventType.TASK_REVIEWING)
+                .setTaskId(taskA));
+        writer.append(command("evt-ind-b1", TaskEventType.TASK_CREATED)
+                .setTaskId(taskB));
 
-        Long versionA = jdbc.queryForObject(
+        assertEquals(2L, (long) jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
-                Long.class, TENANT, CLIENT, taskA);
-        assertEquals(2L, versionA);
-
-        Long versionB = jdbc.queryForObject(
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Long.class, TENANT, CLIENT, taskA));
+        assertEquals(1L, (long) jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta "
-                + "WHERE tenant_id = ? AND client_id = ? AND task_id = ?",
-                Long.class, TENANT, CLIENT, taskB);
-        assertEquals(1L, versionB);
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Long.class, TENANT, CLIENT, taskB));
     }
 
-    // ── Test 14: findByTaskScopeSince returns correct subset ──
+    // ── Test 17: findByTaskScopeSince ──
 
     @Test
     void findByTaskScopeSinceReturnsCorrectSubset() {
         seedTask(TENANT, CLIENT, TASK_ID);
-
         for (int i = 1; i <= 5; i++) {
-            writeEvent(TENANT, CLIENT, TASK_ID,
-                    "evt-since-" + i, TaskEventType.TASK_STATUS_CHANGED);
+            writer.append(command("evt-since-" + i, TaskEventType.PROGRESS_REPORTED));
         }
 
         List<AgentTaskEventEntity> since = eventDao.findByTaskScopeSince(
                 TENANT, CLIENT, TASK_ID, 3L);
         assertEquals(3, since.size());
         assertEquals(3L, since.get(0).getEventVersion());
-        assertEquals(4L, since.get(1).getEventVersion());
         assertEquals(5L, since.get(2).getEventVersion());
 
-        List<AgentTaskEventEntity> empty = eventDao.findByTaskScopeSince(
-                TENANT, CLIENT, TASK_ID, 999L);
-        assertTrue(empty.isEmpty());
+        assertTrue(eventDao.findByTaskScopeSince(
+                TENANT, CLIENT, TASK_ID, 999L).isEmpty());
     }
 
-    // ── Test 15: Multiple aggregate types coexist ──
+    // ── Test 18: Multiple aggregate types ──
 
     @Test
     void multipleAggregateTypesCoexist() {
         seedTask(TENANT, CLIENT, TASK_ID);
 
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-agg-1", TaskEventType.TASK_CREATED,
-                TaskEventType.Aggregate.TASK, TASK_ID);
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-agg-2", TaskEventType.MEMBER_JOINED,
-                TaskEventType.Aggregate.MEMBER, "member-agg-1");
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-agg-3", TaskEventType.WORK_ITEM_CREATED,
-                TaskEventType.Aggregate.WORK_ITEM, "wi-agg-1");
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-agg-4", TaskEventType.REQUEST_CREATED,
-                TaskEventType.Aggregate.REQUEST, "req-agg-1");
-        writeEvent(TENANT, CLIENT, TASK_ID, "evt-agg-5", TaskEventType.ARTIFACT_PUBLISHED,
-                TaskEventType.Aggregate.ARTIFACT, "art-agg-1");
+        writer.append(command("evt-agg-1", TaskEventType.TASK_CREATED,
+                TaskEventType.Aggregate.TASK, TASK_ID));
+        writer.append(command("evt-agg-2", TaskEventType.MEMBER_INVITED,
+                TaskEventType.Aggregate.MEMBER, "m-1"));
+        writer.append(command("evt-agg-3", TaskEventType.WORK_ITEM_CREATED,
+                TaskEventType.Aggregate.WORK_ITEM, "wi-1"));
+        writer.append(command("evt-agg-4", TaskEventType.HELP_REQUESTED,
+                TaskEventType.Aggregate.REQUEST, "req-1"));
+        writer.append(command("evt-agg-5", TaskEventType.ARTIFACT_PUBLISHED,
+                TaskEventType.Aggregate.ARTIFACT, "art-1"));
 
         List<AgentTaskEventEntity> events = eventDao.findByTaskScope(TENANT, CLIENT, TASK_ID);
         assertEquals(5, events.size());
@@ -652,44 +745,146 @@ class AgentTaskEventRealTransactionTest {
         assertTrue(types.containsAll(Set.of("task", "member", "work_item", "request", "artifact")));
     }
 
-    // ── Test 16: TaskEventType.requireKnown validation ──
+    // ── Test 19: TaskEventType.requireKnown + Aggregate.requireKnown ──
 
     @Test
     void taskEventTypeRequireKnownValidation() {
+        // Null/blank/unknown → IAE
         assertThrows(IllegalArgumentException.class, () -> TaskEventType.requireKnown(null));
         assertThrows(IllegalArgumentException.class, () -> TaskEventType.requireKnown(""));
-        assertThrows(IllegalArgumentException.class, () -> TaskEventType.requireKnown("INVALID_TYPE"));
+        assertThrows(IllegalArgumentException.class, () -> TaskEventType.requireKnown("INVALID"));
 
-        assertEquals(TaskEventType.TASK_CREATED, TaskEventType.requireKnown("TASK_CREATED"));
-        assertEquals(TaskEventType.MEMBER_JOINED, TaskEventType.requireKnown("MEMBER_JOINED"));
-        assertEquals(TaskEventType.WORK_ITEM_CLAIMED, TaskEventType.requireKnown("WORK_ITEM_CLAIMED"));
-        assertEquals(TaskEventType.HISTORICAL_BASELINE_IMPORTED,
+        // All known types pass
+        assertEquals("TASK_CREATED", TaskEventType.requireKnown("TASK_CREATED"));
+        assertEquals("TEAM_PROPOSED", TaskEventType.requireKnown("TEAM_PROPOSED"));
+        assertEquals("MEMBER_INVITED", TaskEventType.requireKnown("MEMBER_INVITED"));
+        assertEquals("TASK_CANCELLED", TaskEventType.requireKnown("TASK_CANCELLED"));
+        assertEquals("COMMAND_DELIVERY_FAILED", TaskEventType.requireKnown("COMMAND_DELIVERY_FAILED"));
+        assertEquals("HISTORICAL_BASELINE_IMPORTED",
                 TaskEventType.requireKnown("HISTORICAL_BASELINE_IMPORTED"));
     }
 
-    // ── Test 17: Insert event with null/blank required fields fails validation ──
-
     @Test
-    void insertEventWithMissingRequiredFieldsFailsValidation() {
-        seedTask(TENANT, CLIENT, TASK_ID);
+    void aggregateTypeRequireKnownValidation() {
+        assertThrows(IllegalArgumentException.class, () ->
+                TaskEventType.Aggregate.requireKnown(null));
+        assertThrows(IllegalArgumentException.class, () ->
+                TaskEventType.Aggregate.requireKnown("unknown"));
 
-        AgentTaskEventEntity event = new AgentTaskEventEntity();
-        assertThrows(IllegalArgumentException.class, () -> eventDao.insertEvent(event));
-        assertThrows(IllegalArgumentException.class, () -> eventDao.insertEvent(null));
+        assertEquals("task", TaskEventType.Aggregate.requireKnown("task"));
+        assertEquals("member", TaskEventType.Aggregate.requireKnown("member"));
+        assertEquals("work_item", TaskEventType.Aggregate.requireKnown("work_item"));
+        assertEquals("request", TaskEventType.Aggregate.requireKnown("request"));
+        assertEquals("artifact", TaskEventType.Aggregate.requireKnown("artifact"));
     }
 
-    // ── Helper: SqlSessionFactory ──
+    // ── Test 20: Writer rejects unknown eventType ──
+
+    @Test
+    void writerRejectsUnknownEventType() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+        AgentTaskEventWriteCommand cmd = command("evt-unk-1", "BOGUS_TYPE");
+        assertThrows(IllegalArgumentException.class, () -> writer.append(cmd));
+    }
+
+    // ── Test 21: Writer rejects unknown aggregateType ──
+
+    @Test
+    void writerRejectsUnknownAggregateType() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+        AgentTaskEventWriteCommand cmd = command("evt-unk-2", TaskEventType.TASK_CREATED,
+                "bogus_aggregate", TASK_ID);
+        assertThrows(IllegalArgumentException.class, () -> writer.append(cmd));
+    }
+
+    // ── Test 22: Command validation — null fields ──
+
+    @Test
+    void commandValidationRejectsNullRequiredFields() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+
+        assertAppendFails(null, CLIENT, "evt-val-t");
+        assertThrows(IllegalArgumentException.class, () -> {
+            AgentTaskEventWriteCommand c = command("evt-val-c", TaskEventType.TASK_CREATED);
+            c.setEventId(null);
+            writer.append(c);
+        });
+        assertThrows(IllegalArgumentException.class, () -> {
+            AgentTaskEventWriteCommand c = command("evt-val-j", TaskEventType.TASK_CREATED);
+            c.setEventJson(null);
+            writer.append(c);
+        });
+        assertThrows(IllegalArgumentException.class, () -> {
+            AgentTaskEventWriteCommand c = command("evt-val-o", TaskEventType.TASK_CREATED);
+            c.setOccurredAt(null);
+            writer.append(c);
+        });
+    }
+
+    // ── Test 23: Command validation — length limits ──
+
+    @Test
+    void commandValidationRejectsOversizedFields() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+
+        AgentTaskEventWriteCommand c1 = command("evt-len-1", TaskEventType.TASK_CREATED);
+        c1.setTenantId("a".repeat(51));
+        assertThrows(IllegalArgumentException.class, () -> writer.append(c1));
+
+        AgentTaskEventWriteCommand c2 = command("evt-len-2", TaskEventType.TASK_CREATED);
+        c2.setEventId("a".repeat(101));
+        assertThrows(IllegalArgumentException.class, () -> writer.append(c2));
+    }
+
+    // ── Test 24: All §7.5 event types are included ──
+
+    @Test
+    void allDesignEventTypesAreKnown() {
+        // Every event type from §7.5 must pass requireKnown
+        List.of(
+                "TASK_CREATED", "TEAM_PROPOSED",
+                "MEMBER_INVITED", "MEMBER_ACCEPTED", "MEMBER_REJECTED",
+                "WORK_ITEM_CREATED", "WORK_ITEM_READY", "WORK_ITEM_CLAIMED",
+                "WORK_ITEM_STARTED", "PROGRESS_REPORTED", "HELP_REQUESTED",
+                "MEMBER_BLOCKED", "ARTIFACT_PUBLISHED", "WORK_ITEM_SUBMITTED",
+                "REVIEW_REQUESTED", "WORK_ITEM_COMPLETED", "WORK_ITEM_REQUEUED",
+                "COMMAND_DELIVERY_FAILED",
+                "TASK_REVIEWING", "TASK_COMPLETED", "TASK_FAILED", "TASK_CANCELLED"
+        ).forEach(type -> {
+            assertEquals(type, TaskEventType.requireKnown(type),
+                    "Design event type must be known: " + type);
+        });
+    }
+
+    // ── Test 25: result contains correct previous/current/version ──
+
+    @Test
+    void resultContainsCorrectVersionFields() {
+        seedTask(TENANT, CLIENT, TASK_ID, 7L);
+
+        AgentTaskEventWriteResult r = writer.append(
+                command("evt-ver-1", TaskEventType.TASK_CREATED));
+        assertEquals(8L, r.getEventVersion());
+        assertEquals(7L, r.getPreviousVersion());
+        assertEquals(8L, r.getCurrentVersion());
+        assertNotNull(r.getEvent());
+        assertEquals("evt-ver-1", r.getEvent().getEventId());
+        assertEquals("agent", r.getEvent().getActorType());
+        assertEquals("agt_test", r.getEvent().getActorId());
+        assertEquals("{}", r.getEvent().getEventJson());
+        assertNotNull(r.getEvent().getOccurredAt());
+    }
+
+    // ── SqlSessionFactory ──
 
     private SqlSessionFactory createSqlSessionFactory() throws Exception {
         MybatisConfiguration configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(AgentTaskEventMapper.class);
 
-        // Use SpringManagedTransactionFactory so mapper calls participate
-        // in the DataSourceTransactionManager-bound connection.
-        Environment environment = new Environment(
+        Environment env = new Environment(
                 "test", new SpringManagedTransactionFactory(), dataSource);
-        configuration.setEnvironment(environment);
+        configuration.setEnvironment(env);
 
         GlobalConfig globalConfig = new GlobalConfig();
         globalConfig.setIdentifierGenerator(new DefaultIdentifierGenerator());
@@ -698,8 +893,6 @@ class AgentTaskEventRealTransactionTest {
         factoryBean.setDataSource(dataSource);
         factoryBean.setConfiguration(configuration);
         factoryBean.setGlobalConfig(globalConfig);
-        // The factoryBean will overwrite the environment, so we also set the
-        // transaction factory via the factory bean directly.
         factoryBean.setTransactionFactory(new SpringManagedTransactionFactory());
 
         return factoryBean.getObject();

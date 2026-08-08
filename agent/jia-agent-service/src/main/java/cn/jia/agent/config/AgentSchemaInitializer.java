@@ -1694,26 +1694,27 @@ public class AgentSchemaInitializer implements InitializingBean {
             jdbcTemplate.execute("""
                     CREATE TABLE IF NOT EXISTS agent_task_event (
                         id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-                        event_id        VARCHAR(64) NOT NULL COMMENT 'Deterministic stable event identifier',
                         task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
                         event_version   BIGINT NOT NULL COMMENT 'Monotonic event version',
-                        event_type      VARCHAR(50) NOT NULL COMMENT 'Event type classification',
-                        actor           VARCHAR(100) NOT NULL COMMENT 'Actor identity',
+                        event_id        VARCHAR(100) NOT NULL COMMENT 'Deterministic stable event identifier',
+                        event_type      VARCHAR(64) NOT NULL COMMENT 'Event type',
+                        actor_type      VARCHAR(20) NOT NULL COMMENT 'Actor classification',
+                        actor_id        VARCHAR(100) DEFAULT NULL COMMENT 'Actor identity',
                         aggregate_type  VARCHAR(30) NOT NULL COMMENT 'Aggregate type',
                         aggregate_id    VARCHAR(100) NOT NULL COMMENT 'Aggregate instance ID',
-                        payload         MEDIUMTEXT COMMENT 'Event payload JSON',
-                        created_at      BIGINT NOT NULL COMMENT 'Event creation timestamp',
+                        event_json      MEDIUMTEXT NOT NULL COMMENT 'Event payload JSON',
+                        occurred_at     BIGINT NOT NULL COMMENT 'Event occurrence timestamp',
                         tenant_id       VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
                         client_id       VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
                         create_time     BIGINT DEFAULT NULL COMMENT 'Create time',
                         update_time     BIGINT DEFAULT NULL COMMENT 'Update time',
                         PRIMARY KEY (id),
-                        UNIQUE KEY uk_event_version (tenant_id, client_id, task_id, event_version),
-                        UNIQUE KEY uk_event_id (tenant_id, client_id, event_id),
-                        KEY idx_event_task_time (tenant_id, client_id, task_id, created_at),
-                        KEY idx_event_actor_time (tenant_id, client_id, actor, created_at),
-                        KEY idx_event_type_time (tenant_id, client_id, event_type, created_at)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped task event journal'
+                        UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+                        UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
+                        KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
+                        KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
+                        KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task event journal'
                     """);
             return;
         }
@@ -1724,30 +1725,62 @@ public class AgentSchemaInitializer implements InitializingBean {
         if (isH2Database()) {
             return;
         }
-        validateIdentityColumn("agent_task_event", "event_id",
-                "varchar", "varchar(64)", false, "utf8mb4_0900_bin", null);
+        validateTableCollation("agent_task_event", "utf8mb4_0900_bin");
+
+        validateIdentityColumn("agent_task_event", "id",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "task_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
         validateIdentityColumn("agent_task_event", "event_version",
                 "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "event_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
         validateIdentityColumn("agent_task_event", "event_type",
-                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+                "varchar", "varchar(64)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "actor_type",
+                "varchar", "varchar(20)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "actor_id",
+                "varchar", "varchar(100)", true, "utf8mb4_0900_bin", null);
         validateIdentityColumn("agent_task_event", "aggregate_type",
                 "varchar", "varchar(30)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "aggregate_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_json",
+                "mediumtext", "mediumtext", false, null, null);
+        validateIdentityColumn("agent_task_event", "occurred_at",
+                "bigint", "bigint", false, null, null);
         validateIdentityColumn("agent_task_event", "tenant_id",
                 "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
         validateIdentityColumn("agent_task_event", "client_id",
                 "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
-        ensureRequiredIndex("agent_task_event", "uk_event_version", true,
+        validateIdentityColumn("agent_task_event", "create_time",
+                "bigint", "bigint", true, null, null);
+        validateIdentityColumn("agent_task_event", "update_time",
+                "bigint", "bigint", true, null, null);
+
+        ensureRequiredIndex("agent_task_event", "PRIMARY", true,
+                List.of("id"),
+                "ALTER TABLE agent_task_event ADD PRIMARY KEY (id)");
+        ensureRequiredIndex("agent_task_event", "uk_task_event_version", true,
                 List.of("tenant_id", "client_id", "task_id", "event_version"),
-                "CREATE UNIQUE INDEX uk_event_version ON agent_task_event "
+                "CREATE UNIQUE INDEX uk_task_event_version ON agent_task_event "
                         + "(tenant_id, client_id, task_id, event_version)");
-        ensureRequiredIndex("agent_task_event", "uk_event_id", true,
+        ensureRequiredIndex("agent_task_event", "uk_task_event_id", true,
                 List.of("tenant_id", "client_id", "event_id"),
-                "CREATE UNIQUE INDEX uk_event_id ON agent_task_event "
+                "CREATE UNIQUE INDEX uk_task_event_id ON agent_task_event "
                         + "(tenant_id, client_id, event_id)");
-        ensureRequiredIndex("agent_task_event", "idx_event_task_time", false,
-                List.of("tenant_id", "client_id", "task_id", "created_at"),
-                "CREATE INDEX idx_event_task_time ON agent_task_event "
-                        + "(tenant_id, client_id, task_id, created_at)");
+        ensureRequiredIndex("agent_task_event", "idx_task_event_occurred", false,
+                List.of("tenant_id", "client_id", "task_id", "occurred_at"),
+                "CREATE INDEX idx_task_event_occurred ON agent_task_event "
+                        + "(tenant_id, client_id, task_id, occurred_at)");
+        ensureRequiredIndex("agent_task_event", "idx_event_actor_time", false,
+                List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at"),
+                "CREATE INDEX idx_event_actor_time ON agent_task_event "
+                        + "(tenant_id, client_id, actor_type, actor_id, occurred_at)");
+        ensureRequiredIndex("agent_task_event", "idx_event_type_time", false,
+                List.of("tenant_id", "client_id", "event_type", "occurred_at"),
+                "CREATE INDEX idx_event_type_time ON agent_task_event "
+                        + "(tenant_id, client_id, event_type, occurred_at)");
     }
 
     private void seedWaterMarginPersonas() {

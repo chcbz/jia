@@ -16,7 +16,7 @@ public class AgentTaskEventDaoImpl
     @Override
     public Long lockAndAllocateVersion(String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        requireExactId(taskId, "taskId");
+        requireExactId(taskId, "taskId", 100);
         return baseMapper.lockTaskMetaForEventVersion(tenantId, clientId, taskId);
     }
 
@@ -32,14 +32,18 @@ public class AgentTaskEventDaoImpl
             long expectedCurrentVersion, long newEventVersion,
             long updateTime) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        requireExactId(taskId, "taskId");
+        requireExactId(taskId, "taskId", 100);
         if (expectedCurrentVersion < 0) {
             throw new IllegalArgumentException("expectedCurrentVersion must not be negative");
         }
-        if (newEventVersion <= expectedCurrentVersion) {
+        if (expectedCurrentVersion == Long.MAX_VALUE) {
             throw new IllegalArgumentException(
-                    "newEventVersion must be greater than expectedCurrentVersion: "
-                    + newEventVersion + " <= " + expectedCurrentVersion);
+                    "current_event_version has reached Long.MAX_VALUE; cannot allocate further versions");
+        }
+        if (newEventVersion != expectedCurrentVersion + 1) {
+            throw new IllegalArgumentException(
+                    "newEventVersion must be exactly expectedCurrentVersion + 1: "
+                    + newEventVersion + " != " + expectedCurrentVersion + " + 1");
         }
         if (updateTime <= 0) {
             throw new IllegalArgumentException("updateTime must be positive");
@@ -53,7 +57,7 @@ public class AgentTaskEventDaoImpl
     public List<AgentTaskEventEntity> findByTaskScope(
             String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        requireExactId(taskId, "taskId");
+        requireExactId(taskId, "taskId", 100);
         return baseMapper.findExactByTaskScope(tenantId, clientId, taskId);
     }
 
@@ -61,7 +65,7 @@ public class AgentTaskEventDaoImpl
     public List<AgentTaskEventEntity> findByTaskScopeSince(
             String tenantId, String clientId, String taskId, long sinceVersion) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        requireExactId(taskId, "taskId");
+        requireExactId(taskId, "taskId", 100);
         if (sinceVersion < 0) {
             throw new IllegalArgumentException("sinceVersion must not be negative");
         }
@@ -73,16 +77,17 @@ public class AgentTaskEventDaoImpl
     public AgentTaskEventEntity findByEventId(
             String tenantId, String clientId, String eventId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        requireExactId(eventId, "eventId");
+        requireExactId(eventId, "eventId", 100);
         return baseMapper.findExactByEventId(tenantId, clientId, eventId);
     }
 
-    private void requireExactId(String value, String name) {
+    private void requireExactId(String value, String name, int maxLength) {
         TaskCollaborationDaoSupport.requireId(value, name);
-        if (value.length() > 100 || !value.equals(value.strip())
+        if (value.length() > maxLength || !value.equals(value.strip())
                 || value.chars().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException(
-                    name + " must be byte-exact, unpadded, and free of control characters");
+                    name + " must be byte-exact, unpadded, and free of control characters"
+                    + " (max " + maxLength + " chars)");
         }
     }
 
@@ -90,27 +95,39 @@ public class AgentTaskEventDaoImpl
         if (event == null) {
             throw new IllegalArgumentException("event must not be null");
         }
-        requireExactId(event.getTenantId(), "tenantId");
-        requireExactId(event.getClientId(), "clientId");
-        requireExactId(event.getTaskId(), "taskId");
-        requireExactId(event.getEventId(), "eventId");
+        requireExactId(event.getTenantId(), "tenantId", 50);
+        requireExactId(event.getClientId(), "clientId", 50);
+        requireExactId(event.getTaskId(), "taskId", 100);
+        requireExactId(event.getEventId(), "eventId", 100);
         if (event.getEventVersion() == null || event.getEventVersion() <= 0) {
             throw new IllegalArgumentException("eventVersion must be positive");
         }
-        if (event.getEventType() == null || event.getEventType().isBlank()) {
-            throw new IllegalArgumentException("eventType is required");
+        if (event.getEventType() == null || event.getEventType().isBlank()
+                || event.getEventType().length() > 64) {
+            throw new IllegalArgumentException("eventType is required and ≤ 64 chars");
         }
-        if (event.getActor() == null || event.getActor().isBlank()) {
-            throw new IllegalArgumentException("actor is required");
+        if (event.getActorType() == null || event.getActorType().isBlank()
+                || event.getActorType().length() > 20) {
+            throw new IllegalArgumentException("actorType is required and ≤ 20 chars");
         }
-        if (event.getAggregateType() == null || event.getAggregateType().isBlank()) {
-            throw new IllegalArgumentException("aggregateType is required");
+        if (event.getActorId() != null && (event.getActorId().isBlank()
+                || event.getActorId().length() > 100
+                || !event.getActorId().equals(event.getActorId().strip()))) {
+            throw new IllegalArgumentException("actorId must be null or byte-exact ≤ 100 chars");
         }
-        if (event.getAggregateId() == null || event.getAggregateId().isBlank()) {
-            throw new IllegalArgumentException("aggregateId is required");
+        if (event.getAggregateType() == null || event.getAggregateType().isBlank()
+                || event.getAggregateType().length() > 30) {
+            throw new IllegalArgumentException("aggregateType is required and ≤ 30 chars");
         }
-        if (event.getCreatedAt() == null || event.getCreatedAt() <= 0) {
-            throw new IllegalArgumentException("createdAt must be positive");
+        if (event.getAggregateId() == null || event.getAggregateId().isBlank()
+                || event.getAggregateId().length() > 100) {
+            throw new IllegalArgumentException("aggregateId is required and ≤ 100 chars");
+        }
+        if (event.getEventJson() == null || event.getEventJson().isBlank()) {
+            throw new IllegalArgumentException("eventJson is required (NOT NULL)");
+        }
+        if (event.getOccurredAt() == null || event.getOccurredAt() <= 0) {
+            throw new IllegalArgumentException("occurredAt must be positive");
         }
     }
 }
