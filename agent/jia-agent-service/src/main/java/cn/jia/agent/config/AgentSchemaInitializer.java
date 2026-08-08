@@ -29,6 +29,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureTaskCollaborationSchema();
         ensureTaskNoteTable();
         ensureSceneTables();
+        ensureTaskEventSchema();
         seedWaterMarginPersonas();
     }
 
@@ -1686,6 +1687,67 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureRequiredIndex("agent_scene_version", "PRIMARY", true,
                 List.of("tenant_id", "client_id", "scene_id"),
                 "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, scene_id)");
+    }
+
+    private void ensureTaskEventSchema() {
+        if (!tableExists("agent_task_event")) {
+            jdbcTemplate.execute("""
+                    CREATE TABLE IF NOT EXISTS agent_task_event (
+                        id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                        event_id        VARCHAR(64) NOT NULL COMMENT 'Deterministic stable event identifier',
+                        task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                        event_version   BIGINT NOT NULL COMMENT 'Monotonic event version',
+                        event_type      VARCHAR(50) NOT NULL COMMENT 'Event type classification',
+                        actor           VARCHAR(100) NOT NULL COMMENT 'Actor identity',
+                        aggregate_type  VARCHAR(30) NOT NULL COMMENT 'Aggregate type',
+                        aggregate_id    VARCHAR(100) NOT NULL COMMENT 'Aggregate instance ID',
+                        payload         MEDIUMTEXT COMMENT 'Event payload JSON',
+                        created_at      BIGINT NOT NULL COMMENT 'Event creation timestamp',
+                        tenant_id       VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+                        client_id       VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+                        create_time     BIGINT DEFAULT NULL COMMENT 'Create time',
+                        update_time     BIGINT DEFAULT NULL COMMENT 'Update time',
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_event_version (tenant_id, client_id, task_id, event_version),
+                        UNIQUE KEY uk_event_id (tenant_id, client_id, event_id),
+                        KEY idx_event_task_time (tenant_id, client_id, task_id, created_at),
+                        KEY idx_event_actor_time (tenant_id, client_id, actor, created_at),
+                        KEY idx_event_type_time (tenant_id, client_id, event_type, created_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped task event journal'
+                    """);
+            return;
+        }
+        validateTaskEventSchema();
+    }
+
+    private void validateTaskEventSchema() {
+        if (isH2Database()) {
+            return;
+        }
+        validateIdentityColumn("agent_task_event", "event_id",
+                "varchar", "varchar(64)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_version",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "event_type",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "aggregate_type",
+                "varchar", "varchar(30)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "tenant_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "client_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        ensureRequiredIndex("agent_task_event", "uk_event_version", true,
+                List.of("tenant_id", "client_id", "task_id", "event_version"),
+                "CREATE UNIQUE INDEX uk_event_version ON agent_task_event "
+                        + "(tenant_id, client_id, task_id, event_version)");
+        ensureRequiredIndex("agent_task_event", "uk_event_id", true,
+                List.of("tenant_id", "client_id", "event_id"),
+                "CREATE UNIQUE INDEX uk_event_id ON agent_task_event "
+                        + "(tenant_id, client_id, event_id)");
+        ensureRequiredIndex("agent_task_event", "idx_event_task_time", false,
+                List.of("tenant_id", "client_id", "task_id", "created_at"),
+                "CREATE INDEX idx_event_task_time ON agent_task_event "
+                        + "(tenant_id, client_id, task_id, created_at)");
     }
 
     private void seedWaterMarginPersonas() {

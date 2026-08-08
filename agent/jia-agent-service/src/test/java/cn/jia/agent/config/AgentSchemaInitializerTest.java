@@ -98,6 +98,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest_batch"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest"));
         assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_backfill_run"));
+        assertTrue(sql.contains("CREATE TABLE IF NOT EXISTS agent_task_event"));
+        assertTrue(sql.contains("uk_event_version"));
+        assertTrue(sql.contains("uk_event_id"));
         assertTrue(sql.contains("uk_task_backfill_issue_key"));
         assertTrue(sql.contains("uk_task_backfill_manifest_row"));
         assertTrue(sql.contains("uk_task_backfill_run_id"));
