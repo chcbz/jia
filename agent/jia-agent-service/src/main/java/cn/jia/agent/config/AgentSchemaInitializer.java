@@ -29,6 +29,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureTaskCollaborationSchema();
         ensureTaskNoteTable();
         ensureSceneTables();
+        ensureTaskEventSchema();
         seedWaterMarginPersonas();
     }
 
@@ -1688,6 +1689,182 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, scene_id)");
     }
 
+    void ensureTaskEventSchema() {
+        if (!tableExists("agent_task_event")) {
+            jdbcTemplate.execute("""
+                    CREATE TABLE IF NOT EXISTS agent_task_event (
+                        id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                        task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                        event_version   BIGINT NOT NULL COMMENT 'Monotonic event version',
+                        event_id        VARCHAR(100) NOT NULL COMMENT 'Deterministic stable event identifier',
+                        event_type      VARCHAR(64) NOT NULL COMMENT 'Event type',
+                        actor_type      VARCHAR(20) NOT NULL COMMENT 'Actor classification',
+                        actor_id        VARCHAR(100) DEFAULT NULL COMMENT 'Actor identity',
+                        aggregate_type  VARCHAR(30) NOT NULL COMMENT 'Aggregate type',
+                        aggregate_id    VARCHAR(100) NOT NULL COMMENT 'Aggregate instance ID',
+                        event_json      MEDIUMTEXT NOT NULL COMMENT 'Event payload JSON',
+                        occurred_at     BIGINT NOT NULL COMMENT 'Event occurrence timestamp',
+                        tenant_id       VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+                        client_id       VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+                        create_time     BIGINT DEFAULT NULL COMMENT 'Create time',
+                        update_time     BIGINT DEFAULT NULL COMMENT 'Update time',
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+                        UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
+                        KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
+                        KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
+                        KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task event journal'
+                    """);
+        }
+        validateTaskEventSchema();
+    }
+
+    private void validateTaskEventSchema() {
+        if (!tableExists("agent_task_event")) {
+            throw new IllegalStateException(
+                    "agent_task_event is missing after CREATE TABLE IF NOT EXISTS");
+        }
+        if (isH2Database()) {
+            return;
+        }
+        if (!tableExists("agent_task_meta")) {
+            throw new IllegalStateException(
+                    "agent_task_meta is required for task event version allocation");
+        }
+        validateInnoDbTable("agent_task_meta");
+        validateInnoDbTable("agent_task_event");
+        validateTableCollation("agent_task_event", "utf8mb4_0900_bin");
+
+        validateIdentityColumn("agent_task_event", "id",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "task_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_version",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "event_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_type",
+                "varchar", "varchar(64)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "actor_type",
+                "varchar", "varchar(20)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "actor_id",
+                "varchar", "varchar(100)", true, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "aggregate_type",
+                "varchar", "varchar(30)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "aggregate_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_json",
+                "mediumtext", "mediumtext", false, null, null);
+        validateIdentityColumn("agent_task_event", "occurred_at",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "tenant_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "client_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "create_time",
+                "bigint", "bigint", true, null, null);
+        validateIdentityColumn("agent_task_event", "update_time",
+                "bigint", "bigint", true, null, null);
+
+        ensureRequiredIndex("agent_task_event", "PRIMARY", true,
+                List.of("id"),
+                "ALTER TABLE agent_task_event ADD PRIMARY KEY (id)");
+        ensureRequiredIndex("agent_task_event", "uk_task_event_version", true,
+                List.of("tenant_id", "client_id", "task_id", "event_version"),
+                "CREATE UNIQUE INDEX uk_task_event_version ON agent_task_event "
+                        + "(tenant_id, client_id, task_id, event_version)");
+        ensureRequiredIndex("agent_task_event", "uk_task_event_id", true,
+                List.of("tenant_id", "client_id", "event_id"),
+                "CREATE UNIQUE INDEX uk_task_event_id ON agent_task_event "
+                        + "(tenant_id, client_id, event_id)");
+        ensureRequiredIndex("agent_task_event", "idx_task_event_occurred", false,
+                List.of("tenant_id", "client_id", "task_id", "occurred_at"),
+                "CREATE INDEX idx_task_event_occurred ON agent_task_event "
+                        + "(tenant_id, client_id, task_id, occurred_at)");
+        ensureRequiredIndex("agent_task_event", "idx_event_actor_time", false,
+                List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at"),
+                "CREATE INDEX idx_event_actor_time ON agent_task_event "
+                        + "(tenant_id, client_id, actor_type, actor_id, occurred_at)");
+        ensureRequiredIndex("agent_task_event", "idx_event_type_time", false,
+                List.of("tenant_id", "client_id", "event_type", "occurred_at"),
+                "CREATE INDEX idx_event_type_time ON agent_task_event "
+                        + "(tenant_id, client_id, event_type, occurred_at)");
+
+        validateTaskEventAutoIncrement();
+        validateTaskEventUniqueIndexes();
+    }
+
+    void validateInnoDbTable(String table) {
+        String engine = jdbcTemplate.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = ?
+                """, String.class, table);
+        if (!"InnoDB".equalsIgnoreCase(engine)) {
+            throw new IllegalStateException(
+                    table + " must use InnoDB for transactional task event writes but was " + engine);
+        }
+    }
+
+    /**
+     * Enforce the minimal safe uniqueness policy for the task event journal.
+     * Required scoped UNIQUE indexes and PRIMARY must be exact; additional
+     * ordinary NON_UNIQUE indexes remain allowed for query optimization.
+     */
+    void validateTaskEventUniqueIndexes() {
+        List<TaskEventIndexColumn> rows = jdbcTemplate.query("""
+                SELECT INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, SUB_PART
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'agent_task_event'
+                  AND NON_UNIQUE = 0
+                ORDER BY INDEX_NAME, SEQ_IN_INDEX
+                """, (rs, rowNum) -> new TaskEventIndexColumn(
+                rs.getString("INDEX_NAME"),
+                rs.getString("COLUMN_NAME"),
+                rs.getInt("SEQ_IN_INDEX"),
+                rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART")));
+
+        java.util.Map<String, List<String>> expected = java.util.Map.of(
+                "PRIMARY", List.of("id"),
+                "uk_task_event_id", List.of("tenant_id", "client_id", "event_id"),
+                "uk_task_event_version",
+                List.of("tenant_id", "client_id", "task_id", "event_version"));
+        java.util.Map<String, java.util.ArrayList<String>> actual = new java.util.LinkedHashMap<>();
+        for (TaskEventIndexColumn row : rows) {
+            if (row.indexName() == null || row.columnName() == null
+                    || row.sequence() <= 0 || row.subPart() != null) {
+                throw new IllegalStateException(
+                        "agent_task_event has an incompatible UNIQUE index component: " + row);
+            }
+            java.util.ArrayList<String> columns = actual.computeIfAbsent(
+                    row.indexName(), ignored -> new java.util.ArrayList<>());
+            if (row.sequence() != columns.size() + 1) {
+                throw new IllegalStateException(
+                        "agent_task_event UNIQUE index has invalid ordered columns: " + row.indexName());
+            }
+            columns.add(row.columnName().toLowerCase(Locale.ROOT));
+        }
+        if (!expected.equals(actual)) {
+            throw new IllegalStateException(
+                    "agent_task_event UNIQUE indexes must be exactly " + expected
+                    + "; dangerous scoped-uniqueness drift found: " + actual);
+        }
+    }
+
+    private void validateTaskEventAutoIncrement() {
+        String extra = jdbcTemplate.queryForObject("""
+                SELECT EXTRA FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'agent_task_event'
+                  AND column_name = 'id'
+                """, String.class);
+        if (extra == null || !extra.toLowerCase(Locale.ROOT).contains("auto_increment")) {
+            throw new IllegalStateException(
+                    "agent_task_event.id must be AUTO_INCREMENT but EXTRA=" + extra);
+        }
+    }
+
     private void seedWaterMarginPersonas() {
         if (isH2Database() && !h2TableExists("agent_persona")) {
             log.info("Skipping Water Margin persona seeds because H2 does not provide the optional agent_persona table");
@@ -1864,6 +2041,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                     rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART"));
 
     static record IndexColumn(int nonUnique, String columnName, int sequence, Integer subPart) {}
+    static record TaskEventIndexColumn(
+            String indexName, String columnName, int sequence, Integer subPart) {}
 
     private String visualConfig(int rankNo) {
         int x = (rankNo - 1) % 6;
