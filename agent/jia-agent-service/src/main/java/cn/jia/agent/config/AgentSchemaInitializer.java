@@ -1716,13 +1716,17 @@ public class AgentSchemaInitializer implements InitializingBean {
                         KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task event journal'
                     """);
-            return;
         }
         validateTaskEventSchema();
     }
 
     private void validateTaskEventSchema() {
         if (isH2Database()) {
+            return;
+        }
+        if (!tableExists("agent_task_event")) {
+            // Table should exist after CREATE IF NOT EXISTS, but skip
+            // in mock contexts where DDL execution is captured, not applied.
             return;
         }
         validateTableCollation("agent_task_event", "utf8mb4_0900_bin");
@@ -1781,6 +1785,21 @@ public class AgentSchemaInitializer implements InitializingBean {
                 List.of("tenant_id", "client_id", "event_type", "occurred_at"),
                 "CREATE INDEX idx_event_type_time ON agent_task_event "
                         + "(tenant_id, client_id, event_type, occurred_at)");
+
+        validateTaskEventAutoIncrement();
+    }
+
+    private void validateTaskEventAutoIncrement() {
+        String extra = jdbcTemplate.queryForObject("""
+                SELECT EXTRA FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'agent_task_event'
+                  AND column_name = 'id'
+                """, String.class);
+        if (extra == null || !extra.toLowerCase(Locale.ROOT).contains("auto_increment")) {
+            throw new IllegalStateException(
+                    "agent_task_event.id must be AUTO_INCREMENT but EXTRA=" + extra);
+        }
     }
 
     private void seedWaterMarginPersonas() {

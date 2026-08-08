@@ -790,6 +790,25 @@ class AgentTaskEventRealTransactionTest {
     // ── Test 21: Writer rejects unknown aggregateType ──
 
     @Test
+    void writerRejectsUnknownActorType() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+        AgentTaskEventWriteCommand cmd = command("evt-unk-at", TaskEventType.TASK_CREATED);
+        cmd.setActorType("bogus_actor");
+        assertThrows(IllegalArgumentException.class, () -> writer.append(cmd));
+    }
+
+    @Test
+    void actorTypeRequireKnownValidation() {
+        assertThrows(IllegalArgumentException.class, () ->
+                TaskEventType.ActorType.requireKnown(null));
+        assertThrows(IllegalArgumentException.class, () ->
+                TaskEventType.ActorType.requireKnown("bogus"));
+        assertEquals("agent", TaskEventType.ActorType.requireKnown("agent"));
+        assertEquals("role", TaskEventType.ActorType.requireKnown("role"));
+        assertEquals("system", TaskEventType.ActorType.requireKnown("system"));
+    }
+
+    @Test
     void writerRejectsUnknownAggregateType() {
         seedTask(TENANT, CLIENT, TASK_ID);
         AgentTaskEventWriteCommand cmd = command("evt-unk-2", TaskEventType.TASK_CREATED,
@@ -798,6 +817,21 @@ class AgentTaskEventRealTransactionTest {
     }
 
     // ── Test 22: Command validation — null fields ──
+
+    @Test
+    void validateTaskEventAutoIncrement() {
+        // Verify validateTaskEventAutoIncrement called by initializer
+        // The real test is via AgentSchemaInitializerMySqlTest;
+        // here we verify the method exists and is reachable.
+        // Use reflection to confirm the method is present.
+        try {
+            var method = cn.jia.agent.config.AgentSchemaInitializer.class
+                    .getDeclaredMethod("validateTaskEventAutoIncrement");
+            assertNotNull(method);
+        } catch (NoSuchMethodException e) {
+            fail("validateTaskEventAutoIncrement must exist");
+        }
+    }
 
     @Test
     void commandValidationRejectsNullRequiredFields() {

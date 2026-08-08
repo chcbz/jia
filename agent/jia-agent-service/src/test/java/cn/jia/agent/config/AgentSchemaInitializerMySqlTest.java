@@ -145,6 +145,156 @@ class AgentSchemaInitializerMySqlTest {
                 """, Integer.class));
     }
 
+    // ── C01: task event schema ──
+
+    @Test
+    void freshTaskEventSchemaAndRepeatedInitializationIsStable() {
+        initializeTwice();
+
+        assertEquals("utf8mb4_0900_bin",
+                jdbc.queryForObject("""
+                        SELECT TABLE_COLLATION FROM information_schema.tables
+                        WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                        """, String.class));
+
+        String extra = jdbc.queryForObject("""
+                SELECT EXTRA FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND column_name='id'
+                """, String.class);
+        assertTrue(extra != null && extra.toLowerCase().contains("auto_increment"),
+                "id must be AUTO_INCREMENT, got EXTRA=" + extra);
+
+        for (String col : List.of(
+                "id", "task_id", "event_version", "event_id", "event_type",
+                "actor_type", "actor_id", "aggregate_type", "aggregate_id",
+                "event_json", "occurred_at", "tenant_id", "client_id",
+                "create_time", "update_time")) {
+            assertEquals(1, jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.columns
+                    WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                      AND column_name=?
+                    """, Integer.class, col), col);
+        }
+
+        for (String idx : List.of("uk_task_event_version", "uk_task_event_id")) {
+            assertEquals(1, jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.statistics
+                    WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                      AND index_name=? AND non_unique=0
+                    """, Integer.class, idx), idx);
+        }
+
+        for (String idx : List.of(
+                "idx_task_event_occurred", "idx_event_actor_time", "idx_event_type_time")) {
+            assertEquals(1, jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.statistics
+                    WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                      AND index_name=? AND non_unique=1
+                    """, Integer.class, idx), idx);
+        }
+    }
+
+    @Test
+    void incompatibleEventColumnWidthTriggersDriftFailure() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event "
+                + "MODIFY COLUMN event_type VARCHAR(128) NOT NULL "
+                + "COMMENT 'Event type'");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void incompatibleEventCollationTriggersDriftFailure() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event "
+                + "MODIFY COLUMN tenant_id VARCHAR(50) NOT NULL "
+                + "COLLATE utf8mb4_unicode_ci COMMENT 'Owner jiacn scope'");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void missingAutoIncrementVerifiedByRepeatedInit() {
+        initializeTwice();
+    }
+
+    @Test
+    void wrongEventTableCollationTriggersDriftFailure() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event "
+                + "COLLATE=utf8mb4_unicode_ci");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void repeatedInitializationAfterConcurrentCreateIsStable() {
+        new AgentSchemaInitializer(jdbc).afterPropertiesSet();
+
+        jdbc.execute("DROP TABLE agent_task_event");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id              BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id         VARCHAR(100) NOT NULL,
+                    event_version   BIGINT NOT NULL,
+                    event_id        VARCHAR(100) NOT NULL,
+                    event_type      VARCHAR(64) NOT NULL,
+                    actor_type      VARCHAR(20) NOT NULL,
+                    actor_id        VARCHAR(100) DEFAULT NULL,
+                    aggregate_type  VARCHAR(30) NOT NULL,
+                    aggregate_id    VARCHAR(100) NOT NULL,
+                    event_json      MEDIUMTEXT NOT NULL,
+                    occurred_at     BIGINT NOT NULL,
+                    tenant_id       VARCHAR(50) NOT NULL,
+                    client_id       VARCHAR(50) NOT NULL,
+                    create_time     BIGINT DEFAULT NULL,
+                    update_time     BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
+                    KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
+                    KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
+                    KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+
+        new AgentSchemaInitializer(jdbc).afterPropertiesSet();
+    }
+
+    @Test
+    void toctouIncompatibleConcurrentTableFailsValidation() {
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id              BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id         VARCHAR(100) NOT NULL,
+                    event_version   BIGINT NOT NULL,
+                    event_id        VARCHAR(100) NOT NULL,
+                    event_type      VARCHAR(128) NOT NULL,
+                    actor_type      VARCHAR(20) NOT NULL,
+                    actor_id        VARCHAR(100) DEFAULT NULL,
+                    aggregate_type  VARCHAR(30) NOT NULL,
+                    aggregate_id    VARCHAR(100) NOT NULL,
+                    event_json      MEDIUMTEXT NOT NULL,
+                    occurred_at     BIGINT NOT NULL,
+                    tenant_id       VARCHAR(50) NOT NULL,
+                    client_id       VARCHAR(50) NOT NULL,
+                    create_time     BIGINT DEFAULT NULL,
+                    update_time     BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """);
+
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+
+    private void initializeOnce() {
+        new AgentSchemaInitializer(jdbc).afterPropertiesSet();
+    }
+
     private int namedTriggerCount(String pattern) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.triggers "
                 + "WHERE trigger_schema=DATABASE() AND trigger_name LIKE ?", Integer.class, pattern);

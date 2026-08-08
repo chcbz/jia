@@ -87,6 +87,38 @@ public final class TaskEventType {
     }
 
     /**
+     *
+    /**
+     * Actor type classifications matching {@code agent_task_event.actor_type}.
+     */
+    public static final class ActorType {
+        private ActorType() {
+        }
+
+        public static final String AGENT = "agent";
+        public static final String ROLE = "role";
+        public static final String SYSTEM = "system";
+
+        private static final Set<String> KNOWN = Set.of(AGENT, ROLE, SYSTEM);
+
+        /**
+         * Validate that the given actor type is a known constant (fail-closed).
+         *
+         * @return the validated value
+         * @throws IllegalArgumentException if null or unknown
+         */
+        public static String requireKnown(String actorType) {
+            if (actorType == null || !KNOWN.contains(actorType)) {
+                throw new IllegalArgumentException(
+                        "Unknown actorType: " + actorType
+                        + "; expected one of " + KNOWN);
+            }
+            return actorType;
+        }
+    }
+
+
+    /**
      * Validate that the given event type is a known constant (fail-closed).
      *
      * @return the validated value

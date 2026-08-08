@@ -109,6 +109,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
 
         TaskEventType.requireKnown(cmd.getEventType());
         TaskEventType.Aggregate.requireKnown(cmd.getAggregateType());
+        TaskEventType.ActorType.requireKnown(cmd.getActorType());
     }
 
     private void requireNonBlank(String value, String name, int maxLength) {
