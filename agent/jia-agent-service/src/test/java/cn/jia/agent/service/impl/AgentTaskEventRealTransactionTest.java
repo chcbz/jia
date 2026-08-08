@@ -71,7 +71,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  *   <li>CAS prevents lost update</li>
  *   <li>Monotonic event_version</li>
  *   <li>Independent task sequences</li>
- *   <li>findByTaskScopeSince</li>
+ *   <li>exclusive findAfterVersion replay cursor</li>
  *   <li>Multiple aggregate types</li>
  *   <li>TaskEventType.requireKnown + Aggregate.requireKnown</li>
  *   <li>Command validation (null, blank, wrong length, control chars, unknown types)</li>
@@ -105,7 +105,6 @@ class AgentTaskEventRealTransactionTest {
         createTables();
 
         txManager = new DataSourceTransactionManager(dataSource);
-        TransactionTemplate txTemplate = new TransactionTemplate(txManager);
 
         SqlSessionFactory sqlSessionFactory = createSqlSessionFactory();
         SqlSessionTemplate sqlSessionTemplate = new SqlSessionTemplate(sqlSessionFactory);
@@ -114,7 +113,7 @@ class AgentTaskEventRealTransactionTest {
         eventDao = new AgentTaskEventDaoImpl();
         setField(eventDao, "baseMapper", mapper);
 
-        writer = new AgentTaskEventWriterImpl(eventDao, txTemplate);
+        writer = new AgentTaskEventWriterImpl(eventDao, txManager);
     }
 
     @AfterEach
@@ -360,6 +359,62 @@ class AgentTaskEventRealTransactionTest {
             txManager.rollback(tx);
             throw e;
         }
+    }
+
+    @Test
+    void appendParticipatesInOuterRequiredTransactionAndOuterRollbackRemovesAllWrites() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+        TransactionTemplate outer = new TransactionTemplate(txManager);
+
+        outer.executeWithoutResult(status -> {
+            jdbc.update("UPDATE agent_task_meta SET reward_status='working' "
+                    + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                    TENANT, CLIENT, TASK_ID);
+            writer.append(command("evt-outer-rollback", TaskEventType.TASK_CREATED));
+            status.setRollbackOnly();
+        });
+
+        assertEquals("open", jdbc.queryForObject(
+                "SELECT reward_status FROM agent_task_meta WHERE tenant_id=? AND client_id=? AND task_id=?",
+                String.class, TENANT, CLIENT, TASK_ID));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta "
+                        + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Long.class, TENANT, CLIENT, TASK_ID));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_event "
+                        + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Integer.class, TENANT, CLIENT, TASK_ID));
+    }
+
+    @Test
+    void innerAppendFailurePropagatesAndRollsBackOuterBusinessTransaction() {
+        seedTask(TENANT, CLIENT, TASK_ID);
+        writer.append(command("evt-existing", TaskEventType.TASK_CREATED));
+        TransactionTemplate outer = new TransactionTemplate(txManager);
+
+        assertThrows(RuntimeException.class, () -> outer.executeWithoutResult(status -> {
+            jdbc.update("UPDATE agent_task_meta SET reward_status='working' "
+                    + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                    TENANT, CLIENT, TASK_ID);
+            writer.append(command("evt-existing", TaskEventType.TEAM_PROPOSED));
+        }));
+
+        assertEquals("open", jdbc.queryForObject(
+                "SELECT reward_status FROM agent_task_meta WHERE tenant_id=? AND client_id=? AND task_id=?",
+                String.class, TENANT, CLIENT, TASK_ID));
+        assertEquals(1L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta "
+                        + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Long.class, TENANT, CLIENT, TASK_ID));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_event "
+                        + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Integer.class, TENANT, CLIENT, TASK_ID));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT task_version FROM agent_task_meta "
+                        + "WHERE tenant_id=? AND client_id=? AND task_id=?",
+                Long.class, TENANT, CLIENT, TASK_ID));
     }
 
     // ── Test 4: Writer append rolls back on insert failure ──
@@ -699,23 +754,25 @@ class AgentTaskEventRealTransactionTest {
                 Long.class, TENANT, CLIENT, taskB));
     }
 
-    // ── Test 17: findByTaskScopeSince ──
+    // ── Test 17: exclusive findAfterVersion replay cursor ──
 
     @Test
-    void findByTaskScopeSinceReturnsCorrectSubset() {
+    void findAfterVersionReturnsStrictlyNewerEvents() {
         seedTask(TENANT, CLIENT, TASK_ID);
         for (int i = 1; i <= 5; i++) {
             writer.append(command("evt-since-" + i, TaskEventType.PROGRESS_REPORTED));
         }
 
-        List<AgentTaskEventEntity> since = eventDao.findByTaskScopeSince(
-                TENANT, CLIENT, TASK_ID, 3L);
-        assertEquals(3, since.size());
-        assertEquals(3L, since.get(0).getEventVersion());
-        assertEquals(5L, since.get(2).getEventVersion());
+        List<AgentTaskEventEntity> after = eventDao.findAfterVersion(
+                TENANT, CLIENT, TASK_ID, 2L);
+        assertEquals(3, after.size());
+        assertEquals(3L, after.get(0).getEventVersion());
+        assertEquals(5L, after.get(2).getEventVersion());
 
-        assertTrue(eventDao.findByTaskScopeSince(
-                TENANT, CLIENT, TASK_ID, 999L).isEmpty());
+        assertTrue(eventDao.findAfterVersion(
+                TENANT, CLIENT, TASK_ID, 5L).isEmpty());
+        assertThrows(IllegalArgumentException.class, () ->
+                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, -1L));
     }
 
     // ── Test 18: Multiple aggregate types ──

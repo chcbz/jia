@@ -62,15 +62,15 @@ public class AgentTaskEventDaoImpl
     }
 
     @Override
-    public List<AgentTaskEventEntity> findByTaskScopeSince(
-            String tenantId, String clientId, String taskId, long sinceVersion) {
+    public List<AgentTaskEventEntity> findAfterVersion(
+            String tenantId, String clientId, String taskId, long afterVersion) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         requireExactId(taskId, "taskId", 100);
-        if (sinceVersion < 0) {
-            throw new IllegalArgumentException("sinceVersion must not be negative");
+        if (afterVersion < 0) {
+            throw new IllegalArgumentException("afterVersion must not be negative");
         }
-        return baseMapper.findExactByTaskScopeSince(
-                tenantId, clientId, taskId, sinceVersion);
+        return baseMapper.findExactByTaskScopeAfterVersion(
+                tenantId, clientId, taskId, afterVersion);
     }
 
     @Override

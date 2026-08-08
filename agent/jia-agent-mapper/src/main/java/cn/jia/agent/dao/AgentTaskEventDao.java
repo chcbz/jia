@@ -52,8 +52,14 @@ public interface AgentTaskEventDao extends IBaseDao<AgentTaskEventEntity> {
     List<AgentTaskEventEntity> findByTaskScope(
             String tenantId, String clientId, String taskId);
 
-    List<AgentTaskEventEntity> findByTaskScopeSince(
-            String tenantId, String clientId, String taskId, long sinceVersion);
+    /**
+     * Return events strictly after the supplied replay cursor.
+     *
+     * <p>The cursor is exclusive: only {@code event_version > afterVersion}
+     * is returned, ordered by event version ascending.
+     */
+    List<AgentTaskEventEntity> findAfterVersion(
+            String tenantId, String clientId, String taskId, long afterVersion);
 
     AgentTaskEventEntity findByEventId(
             String tenantId, String clientId, String eventId);

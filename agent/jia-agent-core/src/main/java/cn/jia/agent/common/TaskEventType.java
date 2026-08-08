@@ -87,8 +87,6 @@ public final class TaskEventType {
     }
 
     /**
-     *
-    /**
      * Actor type classifications matching {@code agent_task_event.actor_type}.
      */
     public static final class ActorType {

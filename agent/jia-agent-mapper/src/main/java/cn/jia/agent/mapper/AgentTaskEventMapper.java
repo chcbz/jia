@@ -129,7 +129,7 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
-              AND event_version >= #{sinceVersion}
+              AND event_version > #{afterVersion}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -138,11 +138,11 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             ORDER BY event_version ASC
             """)
-    List<AgentTaskEventEntity> findExactByTaskScopeSince(
+    List<AgentTaskEventEntity> findExactByTaskScopeAfterVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("taskId") String taskId,
-            @Param("sinceVersion") long sinceVersion);
+            @Param("afterVersion") long afterVersion);
 
     @Select("""
             SELECT id, task_id, event_version, event_id, event_type,

@@ -9,18 +9,33 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.core.util.DateUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
 
     private final AgentTaskEventDao eventDao;
     private final TransactionTemplate transactionTemplate;
+
+    public AgentTaskEventWriterImpl(
+            AgentTaskEventDao eventDao,
+            PlatformTransactionManager transactionManager) {
+        if (eventDao == null) {
+            throw new IllegalArgumentException("eventDao must not be null");
+        }
+        if (transactionManager == null) {
+            throw new IllegalArgumentException("transactionManager must not be null");
+        }
+        this.eventDao = eventDao;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.transactionTemplate.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRED);
+    }
 
     @Override
     public AgentTaskEventWriteResult append(AgentTaskEventWriteCommand command) {

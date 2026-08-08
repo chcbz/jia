@@ -149,8 +149,17 @@ class AgentSchemaInitializerMySqlTest {
 
     @Test
     void freshTaskEventSchemaAndRepeatedInitializationIsStable() {
+        jdbc.execute("DROP TABLE agent_task_event");
         initializeTwice();
 
+        assertEquals("InnoDB", jdbc.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name='agent_task_meta'
+                """, String.class));
+        assertEquals("InnoDB", jdbc.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                """, String.class));
         assertEquals("utf8mb4_0900_bin",
                 jdbc.queryForObject("""
                         SELECT TABLE_COLLATION FROM information_schema.tables
@@ -216,8 +225,19 @@ class AgentSchemaInitializerMySqlTest {
     }
 
     @Test
-    void missingAutoIncrementVerifiedByRepeatedInit() {
-        initializeTwice();
+    void missingAutoIncrementFailsClosed() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event MODIFY COLUMN id BIGINT NOT NULL");
+        String extra = jdbc.queryForObject("""
+                SELECT EXTRA FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND column_name='id'
+                """, String.class);
+        assertTrue(extra == null || !extra.toLowerCase().contains("auto_increment"),
+                "test precondition must remove AUTO_INCREMENT, got EXTRA=" + extra);
+
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
     }
 
     @Test
@@ -230,9 +250,7 @@ class AgentSchemaInitializerMySqlTest {
     }
 
     @Test
-    void repeatedInitializationAfterConcurrentCreateIsStable() {
-        new AgentSchemaInitializer(jdbc).afterPropertiesSet();
-
+    void compatiblePreexistingTaskEventTableIsStable() {
         jdbc.execute("DROP TABLE agent_task_event");
         jdbc.execute("""
                 CREATE TABLE agent_task_event (
@@ -264,7 +282,8 @@ class AgentSchemaInitializerMySqlTest {
     }
 
     @Test
-    void toctouIncompatibleConcurrentTableFailsValidation() {
+    void incompatiblePreexistingTaskEventTableFailsClosed() {
+        jdbc.execute("DROP TABLE agent_task_event");
         jdbc.execute("""
                 CREATE TABLE agent_task_event (
                     id              BIGINT NOT NULL AUTO_INCREMENT,
@@ -289,6 +308,49 @@ class AgentSchemaInitializerMySqlTest {
         assertThrows(IllegalStateException.class,
                 () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
     }
+
+
+    @Test
+    void eventTableNonTransactionalEngineFailsClosed() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event ENGINE=MyISAM");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void taskMetaNonTransactionalEngineFailsClosed() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_meta ENGINE=MyISAM");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void globalEventIdUniqueIndexFailsClosed() {
+        initializeOnce();
+        jdbc.execute("CREATE UNIQUE INDEX uk_global_event_id ON agent_task_event(event_id)");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void unscopedTaskVersionUniqueIndexFailsClosed() {
+        initializeOnce();
+        jdbc.execute("CREATE UNIQUE INDEX uk_unscoped_task_version "
+                + "ON agent_task_event(task_id, event_version)");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void harmlessOrdinaryTaskEventIndexIsAllowed() {
+        initializeOnce();
+        jdbc.execute("CREATE INDEX idx_task_event_aggregate "
+                + "ON agent_task_event(aggregate_type, aggregate_id)");
+        initializeTwice();
+    }
+
 
 
     private void initializeOnce() {

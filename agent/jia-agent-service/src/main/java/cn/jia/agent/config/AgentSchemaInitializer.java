@@ -1689,7 +1689,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, scene_id)");
     }
 
-    private void ensureTaskEventSchema() {
+    void ensureTaskEventSchema() {
         if (!tableExists("agent_task_event")) {
             jdbcTemplate.execute("""
                     CREATE TABLE IF NOT EXISTS agent_task_event (
@@ -1721,14 +1721,19 @@ public class AgentSchemaInitializer implements InitializingBean {
     }
 
     private void validateTaskEventSchema() {
+        if (!tableExists("agent_task_event")) {
+            throw new IllegalStateException(
+                    "agent_task_event is missing after CREATE TABLE IF NOT EXISTS");
+        }
         if (isH2Database()) {
             return;
         }
-        if (!tableExists("agent_task_event")) {
-            // Table should exist after CREATE IF NOT EXISTS, but skip
-            // in mock contexts where DDL execution is captured, not applied.
-            return;
+        if (!tableExists("agent_task_meta")) {
+            throw new IllegalStateException(
+                    "agent_task_meta is required for task event version allocation");
         }
+        validateInnoDbTable("agent_task_meta");
+        validateInnoDbTable("agent_task_event");
         validateTableCollation("agent_task_event", "utf8mb4_0900_bin");
 
         validateIdentityColumn("agent_task_event", "id",
@@ -1787,6 +1792,64 @@ public class AgentSchemaInitializer implements InitializingBean {
                         + "(tenant_id, client_id, event_type, occurred_at)");
 
         validateTaskEventAutoIncrement();
+        validateTaskEventUniqueIndexes();
+    }
+
+    void validateInnoDbTable(String table) {
+        String engine = jdbcTemplate.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = ?
+                """, String.class, table);
+        if (!"InnoDB".equalsIgnoreCase(engine)) {
+            throw new IllegalStateException(
+                    table + " must use InnoDB for transactional task event writes but was " + engine);
+        }
+    }
+
+    /**
+     * Enforce the minimal safe uniqueness policy for the task event journal.
+     * Required scoped UNIQUE indexes and PRIMARY must be exact; additional
+     * ordinary NON_UNIQUE indexes remain allowed for query optimization.
+     */
+    void validateTaskEventUniqueIndexes() {
+        List<TaskEventIndexColumn> rows = jdbcTemplate.query("""
+                SELECT INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, SUB_PART
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'agent_task_event'
+                  AND NON_UNIQUE = 0
+                ORDER BY INDEX_NAME, SEQ_IN_INDEX
+                """, (rs, rowNum) -> new TaskEventIndexColumn(
+                rs.getString("INDEX_NAME"),
+                rs.getString("COLUMN_NAME"),
+                rs.getInt("SEQ_IN_INDEX"),
+                rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART")));
+
+        java.util.Map<String, List<String>> expected = java.util.Map.of(
+                "PRIMARY", List.of("id"),
+                "uk_task_event_id", List.of("tenant_id", "client_id", "event_id"),
+                "uk_task_event_version",
+                List.of("tenant_id", "client_id", "task_id", "event_version"));
+        java.util.Map<String, java.util.ArrayList<String>> actual = new java.util.LinkedHashMap<>();
+        for (TaskEventIndexColumn row : rows) {
+            if (row.indexName() == null || row.columnName() == null
+                    || row.sequence() <= 0 || row.subPart() != null) {
+                throw new IllegalStateException(
+                        "agent_task_event has an incompatible UNIQUE index component: " + row);
+            }
+            java.util.ArrayList<String> columns = actual.computeIfAbsent(
+                    row.indexName(), ignored -> new java.util.ArrayList<>());
+            if (row.sequence() != columns.size() + 1) {
+                throw new IllegalStateException(
+                        "agent_task_event UNIQUE index has invalid ordered columns: " + row.indexName());
+            }
+            columns.add(row.columnName().toLowerCase(Locale.ROOT));
+        }
+        if (!expected.equals(actual)) {
+            throw new IllegalStateException(
+                    "agent_task_event UNIQUE indexes must be exactly " + expected
+                    + "; dangerous scoped-uniqueness drift found: " + actual);
+        }
     }
 
     private void validateTaskEventAutoIncrement() {
@@ -1978,6 +2041,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                     rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART"));
 
     static record IndexColumn(int nonUnique, String columnName, int sequence, Integer subPart) {}
+    static record TaskEventIndexColumn(
+            String indexName, String columnName, int sequence, Integer subPart) {}
 
     private String visualConfig(int rankNo) {
         int x = (rankNo - 1) % 6;
