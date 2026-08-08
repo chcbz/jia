@@ -186,22 +186,27 @@ class AgentSchemaInitializerMySqlTest {
                     """, Integer.class, col), col);
         }
 
-        for (String idx : List.of("uk_task_event_version", "uk_task_event_id")) {
-            assertEquals(1, jdbc.queryForObject("""
-                    SELECT COUNT(*) FROM information_schema.statistics
-                    WHERE table_schema=DATABASE() AND table_name='agent_task_event'
-                      AND index_name=? AND non_unique=0
-                    """, Integer.class, idx), idx);
-        }
+        assertEquals(List.of("PRIMARY", "uk_task_event_id", "uk_task_event_version"),
+                jdbc.queryForList("""
+                        SELECT DISTINCT index_name
+                        FROM information_schema.statistics
+                        WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                          AND non_unique=0
+                        ORDER BY index_name
+                        """, String.class),
+                "only the exact required UNIQUE semantics may exist");
+        assertIndexDefinition("PRIMARY", 0, List.of("id"));
+        assertIndexDefinition("uk_task_event_version", 0,
+                List.of("tenant_id", "client_id", "task_id", "event_version"));
+        assertIndexDefinition("uk_task_event_id", 0,
+                List.of("tenant_id", "client_id", "event_id"));
 
-        for (String idx : List.of(
-                "idx_task_event_occurred", "idx_event_actor_time", "idx_event_type_time")) {
-            assertEquals(1, jdbc.queryForObject("""
-                    SELECT COUNT(*) FROM information_schema.statistics
-                    WHERE table_schema=DATABASE() AND table_name='agent_task_event'
-                      AND index_name=? AND non_unique=1
-                    """, Integer.class, idx), idx);
-        }
+        assertIndexDefinition("idx_task_event_occurred", 1,
+                List.of("tenant_id", "client_id", "task_id", "occurred_at"));
+        assertIndexDefinition("idx_event_actor_time", 1,
+                List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at"));
+        assertIndexDefinition("idx_event_type_time", 1,
+                List.of("tenant_id", "client_id", "event_type", "occurred_at"));
     }
 
     @Test
@@ -352,6 +357,30 @@ class AgentSchemaInitializerMySqlTest {
     }
 
 
+
+    private void assertIndexDefinition(
+            String indexName, int expectedNonUnique, List<String> expectedColumns) {
+        assertEquals(List.of(expectedNonUnique), jdbc.queryForList("""
+                SELECT DISTINCT non_unique
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND index_name=?
+                ORDER BY non_unique
+                """, Integer.class, indexName), indexName + " uniqueness");
+        assertEquals(expectedColumns, jdbc.queryForList("""
+                SELECT column_name
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND index_name=? AND sub_part IS NULL
+                ORDER BY seq_in_index
+                """, String.class, indexName), indexName + " ordered columns");
+        assertEquals(expectedColumns.size(), jdbc.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND index_name=?
+                """, Integer.class, indexName), indexName + " complete components");
+    }
 
     private void initializeOnce() {
         new AgentSchemaInitializer(jdbc).afterPropertiesSet();
