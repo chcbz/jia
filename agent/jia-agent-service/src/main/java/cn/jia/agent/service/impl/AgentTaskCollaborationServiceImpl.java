@@ -289,7 +289,7 @@ public class AgentTaskCollaborationServiceImpl
         if (!VISIBILITIES.contains(visibility)) {
             throw invalid("visibility is not supported");
         }
-        TaskEventPayload.ContentDigest contentDigest = validateArtifactPayload(command);
+        ArtifactEventDigest contentDigest = validateArtifactPayload(command);
         int expectedPrevious = requireArtifactVersions(command);
 
         AgentTaskArtifactEntity latest = artifactDao.findLatestVersionForUpdate(
@@ -523,13 +523,16 @@ public class AgentTaskCollaborationServiceImpl
 
     private void appendArtifactEvent(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskArtifactEntity artifact,
-            TaskEventPayload.ContentDigest digest, long occurredAt) {
+            ArtifactEventDigest digest, long occurredAt) {
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
                 .put(TaskEventPayload.Key.ARTIFACT_ID, artifact.getArtifactId())
                 .put(TaskEventPayload.Key.ARTIFACT_TYPE, artifact.getArtifactType())
                 .put(TaskEventPayload.Key.ARTIFACT_VERSION, artifact.getArtifactVersion().longValue())
                 .put(TaskEventPayload.Key.VISIBILITY, artifact.getVisibility())
-                .putContentDigest(digest);
+                .put(TaskEventPayload.Key.CONTENT_SHA256, digest.sha256());
+        if (digest.byteLength() != null) {
+            payload.put(TaskEventPayload.Key.CONTENT_BYTE_LENGTH, digest.byteLength());
+        }
         if (artifact.getWorkItemId() != null) {
             payload.put(TaskEventPayload.Key.WORK_ITEM_ID, artifact.getWorkItemId());
         }
@@ -661,7 +664,7 @@ public class AgentTaskCollaborationServiceImpl
         }
     }
 
-    private TaskEventPayload.ContentDigest validateArtifactPayload(AgentTaskArtifactPublishDTO command) {
+    private ArtifactEventDigest validateArtifactPayload(AgentTaskArtifactPublishDTO command) {
         boolean hasContent = command.getContent() != null && !command.getContent().isEmpty();
         boolean hasStorage = !StringUtil.isBlank(command.getStorageUri());
         if (hasContent == hasStorage) {
@@ -671,7 +674,7 @@ public class AgentTaskCollaborationServiceImpl
         if (hash == null || !SHA256.matcher(hash).matches()) {
             throw invalid("contentHash must be lowercase SHA-256 hex");
         }
-        TaskEventPayload.ContentDigest digest;
+        ArtifactEventDigest digest;
         if (hasContent) {
             byte[] contentBytes = utf8Bytes(command.getContent(), "content");
             if (contentBytes.length > MAX_INLINE_CONTENT_BYTES) {
@@ -680,22 +683,35 @@ public class AgentTaskCollaborationServiceImpl
             if (!hash.equals(sha256(contentBytes))) {
                 throw invalid("contentHash does not match inline content");
             }
-            digest = new TaskEventPayload.ContentDigest(contentBytes.length, hash);
+            long exactLength = contentBytes.length;
+            digest = new ArtifactEventDigest(hash, exactLength);
             if (command.getContentByteLength() != null
-                    && command.getContentByteLength() != digest.byteLength()) {
+                    && command.getContentByteLength() != exactLength) {
                 throw invalid("contentByteLength does not match inline content");
             }
         } else {
             validateStorageUri(command.getStorageUri().trim());
-            if (command.getContentByteLength() == null || command.getContentByteLength() < 0) {
-                throw invalid("contentByteLength is required for external artifacts");
+            Long byteLength = command.getContentByteLength();
+            if (byteLength != null && byteLength < 0) {
+                throw invalid("contentByteLength must not be negative");
             }
-            digest = new TaskEventPayload.ContentDigest(command.getContentByteLength(), hash);
+            digest = new ArtifactEventDigest(hash, byteLength);
         }
         if (command.getMetadata() != null) {
             serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES);
         }
         return digest;
+    }
+
+    private record ArtifactEventDigest(String sha256, Long byteLength) {
+        private ArtifactEventDigest {
+            if (sha256 == null || !SHA256.matcher(sha256).matches()) {
+                throw new IllegalArgumentException("sha256 must be lowercase SHA-256 hex");
+            }
+            if (byteLength != null && byteLength < 0) {
+                throw new IllegalArgumentException("byteLength must not be negative");
+            }
+        }
     }
 
     private void validateStorageUri(String value) {

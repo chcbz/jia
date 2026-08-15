@@ -8,6 +8,7 @@ import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskNoteDaoImpl;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
+import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.event.AgentEventPublisher;
@@ -30,6 +31,7 @@ import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -43,6 +45,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -62,6 +65,8 @@ class AgentServiceTaskEventRealTransactionTest {
     private JdbcTemplate jdbc;
     private PlatformTransactionManager transactionManager;
     private AgentTaskEventWriter eventWriter;
+    private AgentEventPublisher eventPublisher;
+    private TaskService taskService;
     private AgentService service;
 
     @BeforeEach
@@ -101,6 +106,17 @@ class AgentServiceTaskEventRealTransactionTest {
         AgentTaskMutationTransaction mutationTransaction =
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
         eventWriter = mock(AgentTaskEventWriter.class);
+        eventPublisher = mock(AgentEventPublisher.class);
+        taskService = mock(TaskService.class);
+        doAnswer(invocation -> {
+            assertEquals(1, count("agent_task_meta"),
+                    "scoped task root must exist before TaskService.create");
+            cn.jia.task.entity.TaskPlanEntity plan = invocation.getArgument(0);
+            jdbc.update("INSERT INTO task_plan_fixture(id, name) VALUES (?, ?)",
+                    42L, plan.getName());
+            plan.setId(42L);
+            return plan;
+        }).when(taskService).create(any());
         AgentServiceImpl raw = new AgentServiceImpl(
                 mock(cn.jia.agent.dao.AgentRuntimeDao.class),
                 mock(cn.jia.agent.service.AgentIdentityService.class),
@@ -111,7 +127,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 mock(AgentLegacyTaskCompatibilityService.class),
                 taskNoteDao,
                 mock(cn.jia.agent.dao.DialogueTemplateDao.class),
-                provider(), provider(), provider(), provider(),
+                provider(eventPublisher), provider(taskService), provider(), provider(),
                 new AgentSceneFeatureFlags(false, false),
                 mutationTransaction, eventWriter);
         service = transactionalProxy(raw);
@@ -134,14 +150,29 @@ class AgentServiceTaskEventRealTransactionTest {
         }).when(eventWriter).append(any());
         assertThrows(IllegalStateException.class, () -> service.createTask(createRequest()));
         assertEquals(0, count("agent_task_meta"));
+        assertEquals(0, count("task_plan_fixture"));
+        verify(eventPublisher, never()).publishTaskEvent(any(), any());
 
-        reset(eventWriter);
+        reset(eventWriter, eventPublisher);
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         outer.executeWithoutResult(status -> {
             service.createTask(createRequest());
             status.setRollbackOnly();
         });
         assertEquals(0, count("agent_task_meta"));
+        assertEquals(0, count("task_plan_fixture"));
+        verify(eventPublisher, never()).publishTaskEvent(any(), any());
+    }
+
+    @Test
+    void successfulCreateRekeysReservedRootAndPublishesOnlyAfterCommit() {
+        AgentTaskDTO created = service.createTask(createRequest());
+
+        assertEquals("42", created.getId());
+        assertEquals(List.of("42"), jdbc.queryForList(
+                "SELECT task_id FROM agent_task_meta", String.class));
+        assertEquals(1, count("task_plan_fixture"));
+        verify(eventPublisher).publishTaskEvent("task_created", created);
     }
 
     @Test
@@ -157,8 +188,11 @@ class AgentServiceTaskEventRealTransactionTest {
         assertThrows(IllegalStateException.class, () -> service.archiveTask("task-1"));
         assertEquals(AgentConstants.TASK_STATUS_COMPLETED,
                 jdbc.queryForObject("SELECT reward_status FROM agent_task_meta", String.class));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT task_version FROM agent_task_meta", Long.class));
+        verify(eventPublisher, never()).publishTaskEvent(any(), any());
 
-        reset(eventWriter);
+        reset(eventWriter, eventPublisher);
         doAnswer(invocation -> {
             AgentTaskEventWriteCommand command = invocation.getArgument(0);
             if (TaskEventType.PROGRESS_REPORTED.equals(command.getEventType())) {
@@ -178,8 +212,42 @@ class AgentServiceTaskEventRealTransactionTest {
         insertTask("task-1", AgentConstants.TASK_STATUS_ARCHIVED);
         service.archiveTask("task-1");
         verify(eventWriter, never()).append(any());
+        verify(eventPublisher, never()).publishTaskEvent(any(), any());
         assertEquals(AgentConstants.TASK_STATUS_ARCHIVED,
                 jdbc.queryForObject("SELECT reward_status FROM agent_task_meta", String.class));
+    }
+
+    @Test
+    void invalidArchiveStateLeavesVersionAndPublicationsUntouched() {
+        insertTask("task-1", AgentConstants.TASK_STATUS_RUNNING);
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.archiveTask("task-1"));
+
+        assertEquals(AgentConstants.TASK_STATUS_RUNNING,
+                jdbc.queryForObject("SELECT reward_status FROM agent_task_meta", String.class));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT task_version FROM agent_task_meta", Long.class));
+        verify(eventWriter, never()).append(any());
+        verify(eventPublisher, never()).publishTaskEvent(any(), any());
+    }
+
+    @Test
+    void successfulArchiveUsesCasVersionAndPublishesAfterCommit() {
+        insertTask("task-1", AgentConstants.TASK_STATUS_FAILED);
+
+        AgentTaskDTO archived = service.archiveTask("task-1");
+
+        assertEquals(AgentConstants.TASK_STATUS_ARCHIVED, archived.getStatus());
+        assertEquals(1L, jdbc.queryForObject(
+                "SELECT task_version FROM agent_task_meta", Long.class));
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        String payload = event.getValue().getEventJson();
+        org.junit.jupiter.api.Assertions.assertTrue(payload.contains("\"expectedVersion\":0"));
+        org.junit.jupiter.api.Assertions.assertTrue(payload.contains("\"resultVersion\":1"));
+        verify(eventPublisher).publishTaskEvent("task_archived", archived);
     }
 
     @Test
@@ -192,6 +260,9 @@ class AgentServiceTaskEventRealTransactionTest {
         });
         assertEquals(AgentConstants.TASK_STATUS_COMPLETED,
                 jdbc.queryForObject("SELECT reward_status FROM agent_task_meta", String.class));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT task_version FROM agent_task_meta", Long.class));
+        verify(eventPublisher, never()).publishTaskEvent(any(), any());
 
         AgentTaskNoteDTO note = new AgentTaskNoteDTO();
         note.setNoteType("summary");
@@ -227,6 +298,13 @@ class AgentServiceTaskEventRealTransactionTest {
     @SuppressWarnings("unchecked")
     private <T> ObjectProvider<T> provider() {
         return mock(ObjectProvider.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> ObjectProvider<T> provider(T value) {
+        ObjectProvider<T> provider = mock(ObjectProvider.class);
+        org.mockito.Mockito.when(provider.getIfAvailable()).thenReturn(value);
+        return provider;
     }
 
     private AgentService transactionalProxy(AgentServiceImpl target) {
@@ -271,6 +349,12 @@ class AgentServiceTaskEventRealTransactionTest {
                     client_id VARCHAR(50) NOT NULL,
                     PRIMARY KEY (id),
                     UNIQUE (tenant_id, client_id, task_id)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE task_plan_fixture (
+                    id BIGINT NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    PRIMARY KEY (id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_note (

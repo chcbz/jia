@@ -131,7 +131,8 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                             AgentTaskMutationEventSupport.taskEvent(targetStatus.value()),
                             TaskEventType.Aggregate.TASK, taskId, null,
                             currentStatus.value(), targetStatus.value(), required.expectedVersion(),
-                            result.getVersion(), changedAt, null, null, null);
+                            result.getVersion(), changedAt, taskReasonCode(targetStatus),
+                            null, null, null);
                     return result;
                 });
     }
@@ -212,8 +213,8 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                 AgentTaskMutationEventSupport.memberEvent(change.result().getStatus()),
                 TaskEventType.Aggregate.MEMBER, agentId, null,
                 change.currentStatus(), change.result().getStatus(), change.expectedVersion(),
-                change.result().getVersion(), change.result().getChangedAt(), agentId,
-                change.update().getMemberRole(), null);
+                change.result().getVersion(), change.result().getChangedAt(), null,
+                agentId, change.update().getMemberRole(), null);
     }
 
     private void appendWorkItemEvent(String tenantId, String clientId, String taskId,
@@ -221,19 +222,21 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         appendStateEvent(tenantId, clientId, taskId, eventType,
                 TaskEventType.Aggregate.WORK_ITEM, change.current().getWorkItemId(), actorId,
                 change.currentStatus(), change.result().getStatus(), change.expectedVersion(),
-                change.result().getVersion(), change.result().getChangedAt(), null, null,
-                change.update().getAttemptCount());
+                change.result().getVersion(), change.result().getChangedAt(), null,
+                null, null, change.update().getAttemptCount());
     }
 
     private void appendStateEvent(String tenantId, String clientId, String taskId,
             String eventType, String aggregateType, String aggregateId, String actorId,
             String fromStatus, String toStatus, long expectedVersion, long resultVersion,
-            long occurredAt, String agentId, String role, Integer attemptCount) {
+            long occurredAt, String reasonCode, String agentId, String role,
+            Integer attemptCount) {
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
                 .put(TaskEventPayload.Key.FROM_STATUS, fromStatus)
                 .put(TaskEventPayload.Key.TO_STATUS, toStatus)
                 .put(TaskEventPayload.Key.EXPECTED_VERSION, expectedVersion)
                 .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion);
+        if (reasonCode != null) payload.put(TaskEventPayload.Key.REASON_CODE, reasonCode);
         if (agentId != null) payload.put(TaskEventPayload.Key.AGENT_ID, agentId);
         if (role != null) payload.put(TaskEventPayload.Key.ROLE, role);
         if (TaskEventType.Aggregate.WORK_ITEM.equals(aggregateType)) {
@@ -246,6 +249,15 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                 tenantId, clientId, taskId, eventType,
                 actorId == null ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.AGENT,
                 actorId, aggregateType, aggregateId, payload, occurredAt, resultVersion));
+    }
+
+    private String taskReasonCode(AgentTaskStatus targetStatus) {
+        return switch (targetStatus) {
+            case FAILED -> "failure_reported";
+            case BLOCKED -> "blocked_reported";
+            case CANCELLED -> "cancelled";
+            default -> "state_transition";
+        };
     }
 
     private MemberChange prepareMember(

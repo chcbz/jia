@@ -466,6 +466,26 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     }
 
     @Test
+    void legacyExternalArtifactWithoutLengthPersistsHashAndOmitsUnknownLengthAndUri() {
+        AgentTaskArtifactPublishDTO external = artifact("artifact-external", 1, 0);
+        external.setContent(null);
+        external.setStorageUri("s3://bucket/private/path/artifact.bin");
+        external.setContentByteLength(null);
+
+        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER, external);
+
+        String payload = jdbc.queryForObject(
+                "SELECT event_json FROM agent_task_event WHERE event_type='ARTIFACT_PUBLISHED'",
+                String.class);
+        assertTrue(payload.contains(external.getContentHash()));
+        assertFalse(payload.contains("contentByteLength"));
+        assertFalse(payload.contains(external.getStorageUri()));
+        assertEquals(external.getStorageUri(), jdbc.queryForObject(
+                "SELECT storage_uri FROM agent_task_artifact WHERE artifact_id='artifact-external'",
+                String.class));
+    }
+
+    @Test
     void requestAndArtifactEventsPersistWithCanonicalTypesAndRedactedPayloads() {
         requestService.create(TENANT, CLIENT, TASK, REQUESTER, createRequest("req-events"));
         requestService.acknowledge(TENANT, CLIENT, TASK, TARGET, "req-events",

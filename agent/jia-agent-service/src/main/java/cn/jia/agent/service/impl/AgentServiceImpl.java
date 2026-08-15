@@ -535,58 +535,95 @@ public class AgentServiceImpl implements AgentService {
     public AgentTaskDTO createTask(AgentTaskCreateDTO request) {
         require(request != null && !StringUtil.isBlank(request.getTitle()), "title is required");
 
-        String taskId = UUID.randomUUID().toString();
-        TaskService taskService = taskServiceProvider.getIfAvailable();
-        if (taskService != null) {
-            TaskPlanEntity taskPlan = new TaskPlanEntity();
-            taskPlan.setName(limitLength(request.getTitle(), 30));
-            taskPlan.setDescription(limitLength(request.getDescription(), 200));
-            taskPlan.setJiacn(resolveCurrentJiacn());
-            taskPlan.setPeriod(TaskConstants.TASK_PERIOD_ALLTIME);
-            taskPlan.setType(TaskConstants.TASK_TYPE_NOTIFY);
-            taskPlan.setStatus(TaskConstants.TASK_STATUS_ENABLE);
-            taskPlan.setRemind(TaskConstants.TASK_REMIND_NO);
-            if (request.getReward() != null) {
-                taskPlan.setAmount(BigDecimal.valueOf(request.getReward()));
-            }
-            taskService.create(taskPlan);
-            if (taskPlan.getId() != null) {
-                taskId = String.valueOf(taskPlan.getId());
-            }
-        }
-
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
-        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
-        meta.setTaskId(taskId);
-        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
-        meta.setRequiredAbilities(JsonUtil.toJson(
+        String reservedTaskId = UUID.randomUUID().toString();
+        AgentTaskMetaEntity reservedMeta = new AgentTaskMetaEntity();
+        reservedMeta.setTaskId(reservedTaskId);
+        reservedMeta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        reservedMeta.setRequiredAbilities(JsonUtil.toJson(
                 Optional.ofNullable(request.getRequiredAbilities()).orElseGet(Collections::emptyList)));
-        meta.setReward(request.getReward());
-        meta.setCollaborationMode("single");
-        meta.setRiskLevel("low");
-        meta.setMaxAgents(1);
-        meta.setReviewRequired(false);
-        meta.setTaskVersion(0L);
-        meta.setCurrentEventVersion(0L);
-        applyCurrentTaskScope(meta);
+        reservedMeta.setReward(request.getReward());
+        reservedMeta.setCollaborationMode("single");
+        reservedMeta.setRiskLevel("low");
+        reservedMeta.setMaxAgents(1);
+        reservedMeta.setReviewRequired(false);
+        reservedMeta.setTaskVersion(0L);
+        reservedMeta.setCurrentEventVersion(0L);
+        applyCurrentTaskScope(reservedMeta);
 
-        String scopedTaskId = taskId;
         return mutationTransaction.executeAfterTaskRootReservation(
-                tenantId, clientId, scopedTaskId,
-                () -> agentTaskMetaDao.insert(meta),
-                (taskRoot, rootCreated) -> {
-                    requireScopedTaskProjection(taskRoot, tenantId, clientId, scopedTaskId);
-                    AgentTaskDTO task = toTaskDTO(taskRoot);
-                    task.setTitle(request.getTitle());
-                    task.setDescription(request.getDescription());
+                tenantId, clientId, reservedTaskId,
+                () -> agentTaskMetaDao.insert(reservedMeta),
+                (reservedRoot, rootCreated) -> {
+                    requireScopedTaskProjection(
+                            reservedRoot, tenantId, clientId, reservedTaskId);
                     if (!rootCreated) {
-                        return task;
+                        return taskCreateResult(reservedRoot, request);
                     }
+
+                    String finalTaskId = reservedTaskId;
+                    TaskService taskService = taskServiceProvider.getIfAvailable();
+                    if (taskService != null) {
+                        TaskPlanEntity taskPlan = taskPlanFor(request);
+                        TaskPlanEntity persistedPlan = taskService.create(taskPlan);
+                        Long planId = taskPlan.getId() != null
+                                ? taskPlan.getId()
+                                : persistedPlan == null ? null : persistedPlan.getId();
+                        if (planId != null) {
+                            finalTaskId = String.valueOf(planId);
+                        }
+                    }
+
+                    AgentTaskMetaEntity taskRoot = reservedRoot;
+                    if (!reservedTaskId.equals(finalTaskId)) {
+                        AgentTaskMetaEntity existing = agentTaskMetaDao.findByTaskIdForUpdate(
+                                tenantId, clientId, finalTaskId);
+                        if (existing != null) {
+                            requireScopedTaskProjection(existing, tenantId, clientId, finalTaskId);
+                            require(agentTaskMetaDao.deleteReservedTaskRoot(
+                                            tenantId, clientId, reservedTaskId) == 1,
+                                    "Reserved task root cleanup failed");
+                            return taskCreateResult(existing, request);
+                        }
+                        long rekeyedAt = System.currentTimeMillis();
+                        require(agentTaskMetaDao.rekeyReservedTaskRoot(
+                                        tenantId, clientId, reservedTaskId,
+                                        finalTaskId, rekeyedAt) == 1,
+                                "Reserved task root planId backfill failed");
+                        reservedRoot.setTaskId(finalTaskId);
+                        reservedRoot.setUpdateTime(rekeyedAt);
+                    }
+
+                    AgentTaskDTO task = taskCreateResult(taskRoot, request);
                     appendTaskCreatedEvent(tenantId, clientId, taskRoot);
-                    publishTaskEvent("task_created", task);
+                    publishOptionalAfterCommit(
+                            "task-create", () -> publishTaskEvent("task_created", task));
                     return task;
                 });
+    }
+
+    private TaskPlanEntity taskPlanFor(AgentTaskCreateDTO request) {
+        TaskPlanEntity taskPlan = new TaskPlanEntity();
+        taskPlan.setName(limitLength(request.getTitle(), 30));
+        taskPlan.setDescription(limitLength(request.getDescription(), 200));
+        taskPlan.setJiacn(resolveCurrentJiacn());
+        taskPlan.setPeriod(TaskConstants.TASK_PERIOD_ALLTIME);
+        taskPlan.setType(TaskConstants.TASK_TYPE_NOTIFY);
+        taskPlan.setStatus(TaskConstants.TASK_STATUS_ENABLE);
+        taskPlan.setRemind(TaskConstants.TASK_REMIND_NO);
+        if (request.getReward() != null) {
+            taskPlan.setAmount(BigDecimal.valueOf(request.getReward()));
+        }
+        return taskPlan;
+    }
+
+    private AgentTaskDTO taskCreateResult(
+            AgentTaskMetaEntity taskRoot, AgentTaskCreateDTO request) {
+        AgentTaskDTO task = toTaskDTO(taskRoot);
+        task.setTitle(request.getTitle());
+        task.setDescription(request.getDescription());
+        return task;
     }
 
     @Override
@@ -825,18 +862,45 @@ public class AgentServiceImpl implements AgentService {
         return mutationTransaction.executeWithLockedTaskRoot(
                 tenantId, clientId, taskId, taskRoot -> {
                     requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
-                    String fromStatus = taskRoot.getRewardStatus();
-                    if (AgentConstants.TASK_STATUS_ARCHIVED.equals(fromStatus)) {
+                    AgentTaskStatus currentStatus;
+                    try {
+                        currentStatus = AgentTaskStatus.fromPersistedValue(
+                                taskRoot.getRewardStatus());
+                    } catch (IllegalArgumentException invalidStatus) {
+                        throw new AgentBizException(AgentErrorConstants.TASK_STATUS_INVALID,
+                                "Persisted task status is invalid");
+                    }
+                    if (currentStatus == AgentTaskStatus.ARCHIVED) {
                         return toTaskDTO(taskRoot);
                     }
-                    taskRoot.setRewardStatus(AgentConstants.TASK_STATUS_ARCHIVED);
-                    require(agentTaskMetaDao.updateById(taskRoot) == 1,
-                            "Task archive update failed");
+                    if (!currentStatus.canTransitionTo(AgentTaskStatus.ARCHIVED)) {
+                        throw new AgentBizException(AgentErrorConstants.TASK_STATUS_INVALID,
+                                "Task status cannot transition to archived");
+                    }
+                    Long persistedVersion = taskRoot.getTaskVersion();
+                    require(persistedVersion != null && persistedVersion >= 0,
+                            "Persisted taskVersion is invalid");
+                    long expectedVersion = persistedVersion;
+                    if (agentTaskMetaDao.updateStatusByVersion(
+                                    tenantId, clientId, taskId, expectedVersion,
+                                    AgentConstants.TASK_STATUS_ARCHIVED,
+                                    taskRoot.getStartedAt(), taskRoot.getCompletedAt(),
+                                    taskRoot.getFailureReason()) != 1) {
+                        throw new AgentBizException(
+                                AgentErrorConstants.TASK_STATUS_INVALID,
+                                "Task archive version conflict");
+                    }
+                    long resultVersion = expectedVersion + 1;
                     long occurredAt = System.currentTimeMillis();
+                    taskRoot.setRewardStatus(AgentConstants.TASK_STATUS_ARCHIVED);
+                    taskRoot.setTaskVersion(resultVersion);
+                    taskRoot.setUpdateTime(occurredAt);
                     appendTaskArchivedEvent(
-                            tenantId, clientId, taskRoot, fromStatus, occurredAt);
+                            tenantId, clientId, taskRoot, currentStatus.value(),
+                            expectedVersion, occurredAt);
                     AgentTaskDTO task = toTaskDTO(taskRoot);
-                    publishTaskEvent("task_archived", task);
+                    publishOptionalAfterCommit(
+                            "task-archive", () -> publishTaskEvent("task_archived", task));
                     publishReturnHomeSceneStatesForAgentIds(
                             taskRoot.getTaskId(), resolveTaskAssigneeIds(taskRoot));
                     return task;
@@ -861,12 +925,13 @@ public class AgentServiceImpl implements AgentService {
 
     private void appendTaskArchivedEvent(
             String tenantId, String clientId, AgentTaskMetaEntity task,
-            String fromStatus, long occurredAt) {
+            String fromStatus, long expectedVersion, long occurredAt) {
         long taskVersion = requireEventTaskVersion(task);
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
                 .put(TaskEventPayload.Key.TASK_ID, task.getTaskId())
                 .put(TaskEventPayload.Key.FROM_STATUS, fromStatus)
                 .put(TaskEventPayload.Key.TO_STATUS, AgentConstants.TASK_STATUS_ARCHIVED)
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, expectedVersion)
                 .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
                 .put(TaskEventPayload.Key.UPDATED_AT, occurredAt);
         taskEventWriter.append(AgentTaskMutationEventSupport.command(

@@ -33,6 +33,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 
 import java.util.Arrays;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -507,7 +508,29 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         assertEquals("system", event.getValue().getActorType());
         assertEquals("task", event.getValue().getAggregateType());
         assertTrue(event.getValue().getEventJson().contains("\"fromStatus\":\"assigned\""));
+        assertTrue(event.getValue().getEventJson().contains(
+                "\"reasonCode\":\"state_transition\""));
         assertFalse(event.getValue().getEventJson().contains("failureReason"));
+    }
+
+    @Test
+    void taskTransitionEventUsesDeterministicBoundedReasonCodeWithoutRawFailureReason() {
+        String rawReason = "database password leaked in raw failure text";
+        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID))
+                .thenReturn(task("running", 7L));
+        when(taskMetaDao.updateStatusByVersion(
+                TENANT, CLIENT, TASK_ID, 7L, "failed", null, null, rawReason)).thenReturn(1);
+
+        service.transitionTask(TENANT, CLIENT, TASK_ID,
+                transition("failed", 7L, rawReason));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        Map<String, Object> payload = cn.jia.core.util.JsonUtil.jsonToMap(
+                event.getValue().getEventJson());
+        assertEquals("failure_reported", payload.get("reasonCode"));
+        assertFalse(event.getValue().getEventJson().contains(rawReason));
     }
 
     @Test

@@ -3,8 +3,10 @@ package cn.jia.agent.dao;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.common.dao.BaseDaoImpl;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
@@ -29,6 +31,35 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(sql.contains("(task_id, reward_status, collaboration_mode, risk_level, max_agents,"), sql);
         assertTrue(sql.contains("values (#{taskid}, 'open', 'single', 'low', 1,"), sql);
         assertTrue(sql.contains("0, 0, 0, #{tenantid}, #{clientid}, #{createtime}, #{createtime})"), sql);
+    }
+
+    @Test
+    void reservedRootPlanIdBackfillAndCleanupAreByteExactAndStateGuarded() throws Exception {
+        Method rekey = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "rekeyReservedTaskRoot", String.class, String.class,
+                String.class, String.class, long.class);
+        String rekeySql = normalize(String.join(" ", rekey.getAnnotation(Update.class).value()));
+        assertTrue(rekeySql.startsWith("update agent_task_meta set task_id = #{finaltaskid}"), rekeySql);
+        assertTrue(rekeySql.contains("cast(tenant_id as binary(200)) = cast(#{tenantid} as binary(200))"), rekeySql);
+        assertTrue(rekeySql.contains("octet_length(tenant_id) = octet_length(#{tenantid})"), rekeySql);
+        assertTrue(rekeySql.contains("cast(client_id as binary(200)) = cast(#{clientid} as binary(200))"), rekeySql);
+        assertTrue(rekeySql.contains("octet_length(client_id) = octet_length(#{clientid})"), rekeySql);
+        assertTrue(rekeySql.contains("substring(task_id, 1, 50)"), rekeySql);
+        assertTrue(rekeySql.contains("substring(task_id, 51, 50)"), rekeySql);
+        assertTrue(rekeySql.contains("octet_length(task_id) = octet_length(#{reservedtaskid})"), rekeySql);
+        assertTrue(rekeySql.contains("reward_status = 'open'"), rekeySql);
+        assertTrue(rekeySql.contains("task_version = 0"), rekeySql);
+        assertTrue(rekeySql.contains("current_event_version = 0"), rekeySql);
+
+        Method delete = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "deleteReservedTaskRoot", String.class, String.class, String.class);
+        String deleteSql = normalize(String.join(" ", delete.getAnnotation(Delete.class).value()));
+        assertTrue(deleteSql.startsWith("delete from agent_task_meta"), deleteSql);
+        assertTrue(deleteSql.contains("substring(task_id, 1, 50)"), deleteSql);
+        assertTrue(deleteSql.contains("substring(task_id, 51, 50)"), deleteSql);
+        assertTrue(deleteSql.contains("octet_length(task_id) = octet_length(#{reservedtaskid})"), deleteSql);
+        assertTrue(deleteSql.contains("task_version = 0"), deleteSql);
+        assertTrue(deleteSql.contains("current_event_version = 0"), deleteSql);
     }
 
     @Test
@@ -115,6 +146,11 @@ class AgentTaskMetaScopedDaoTest {
 
         dao.reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);
         verify(mapper).reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);
+        dao.rekeyReservedTaskRoot("tenant-a", "client-a", "task-a", "42", 2L);
+        verify(mapper).rekeyReservedTaskRoot(
+                "tenant-a", "client-a", "task-a", "42", 2L);
+        dao.deleteReservedTaskRoot("tenant-a", "client-a", "task-a");
+        verify(mapper).deleteReservedTaskRoot("tenant-a", "client-a", "task-a");
     }
 
     private void assertExactScope(String sql) {

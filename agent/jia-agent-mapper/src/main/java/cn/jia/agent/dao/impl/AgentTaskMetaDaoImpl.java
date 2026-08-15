@@ -40,6 +40,28 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public int rekeyReservedTaskRoot(
+            String tenantId, String clientId, String reservedTaskId,
+            String finalTaskId, long updateTime) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(reservedTaskId, "reservedTaskId", 100);
+        requireExactId(finalTaskId, "finalTaskId", 100);
+        if (updateTime <= 0) {
+            throw new IllegalArgumentException("updateTime must be positive");
+        }
+        return baseMapper.rekeyReservedTaskRoot(
+                tenantId, clientId, reservedTaskId, finalTaskId, updateTime);
+    }
+
+    @Override
+    public int deleteReservedTaskRoot(
+            String tenantId, String clientId, String reservedTaskId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(reservedTaskId, "reservedTaskId", 100);
+        return baseMapper.deleteReservedTaskRoot(tenantId, clientId, reservedTaskId);
+    }
+
+    @Override
     public AgentTaskMetaEntity findByTaskIdForUpdate(
             String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

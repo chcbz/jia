@@ -3,6 +3,7 @@ package cn.jia.agent.mapper;
 import cn.jia.agent.entity.AgentTaskAggregationSnapshotRow;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -44,6 +45,56 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("clientId") String clientId,
             @Param("taskId") String taskId,
             @Param("createTime") long createTime);
+
+    @Update("""
+            UPDATE agent_task_meta
+            SET task_id = #{finalTaskId},
+                update_time = #{updateTime}
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{reservedTaskId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{reservedTaskId}, 1, 50) AS BINARY(200))
+              AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{reservedTaskId}, 51, 50) AS BINARY(200))
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{reservedTaskId})
+              AND reward_status = 'open'
+              AND task_version = 0
+              AND current_event_version = 0
+            """)
+    int rekeyReservedTaskRoot(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("reservedTaskId") String reservedTaskId,
+            @Param("finalTaskId") String finalTaskId,
+            @Param("updateTime") long updateTime);
+
+    @Delete("""
+            DELETE FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{reservedTaskId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{reservedTaskId}, 1, 50) AS BINARY(200))
+              AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{reservedTaskId}, 51, 50) AS BINARY(200))
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{reservedTaskId})
+              AND reward_status = 'open'
+              AND task_version = 0
+              AND current_event_version = 0
+            """)
+    int deleteReservedTaskRoot(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("reservedTaskId") String reservedTaskId);
 
     @Select("""
             SELECT *

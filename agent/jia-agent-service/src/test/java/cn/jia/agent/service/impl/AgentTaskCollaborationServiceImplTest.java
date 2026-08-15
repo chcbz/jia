@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -469,6 +470,34 @@ class AgentTaskCollaborationServiceImplTest {
                 () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
 
         assertEquals(Reason.INVALID_REQUEST, error.getReason());
+    }
+
+    @Test
+    void legacyExternalArtifactWithoutByteLengthRemainsCompatibleAndOmitsUnknownLength() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+        command.setContent(null);
+        command.setStorageUri("s3://bucket/path/artifact.txt");
+        command.setContentByteLength(null);
+        AgentTaskArtifactEntity stored = artifact(
+                "artifact-1", 1, ACTOR, "task_members");
+        stored.setContent(null);
+        stored.setStorageUri(command.getStorageUri());
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-1"))
+                .thenReturn(null);
+        when(artifactDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(artifactDao.findVersion(TENANT, CLIENT, TASK, "artifact-1", 1))
+                .thenReturn(stored);
+
+        service.publish(TENANT, CLIENT, TASK, ACTOR, command);
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        Map<String, Object> payload = JsonUtil.jsonToMap(event.getValue().getEventJson());
+        assertEquals(command.getContentHash(), payload.get("contentSha256"));
+        assertFalse(payload.containsKey("contentByteLength"));
+        assertFalse(event.getValue().getEventJson().contains(command.getStorageUri()));
     }
 
     @Test
