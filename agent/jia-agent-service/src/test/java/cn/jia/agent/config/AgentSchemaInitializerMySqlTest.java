@@ -106,6 +106,159 @@ class AgentSchemaInitializerMySqlTest {
     }
 
     @Test
+    void freshHistoricalEventAuditSchemaBootstrapsNineTriggersAndRepeatedInitializationIsStable() {
+        dropHistoricalEventAuditTables();
+
+        initializeTwice();
+
+        assertHistoricalEventAuditProtection();
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.routines
+                WHERE routine_schema=DATABASE() AND routine_name LIKE 'c01h_%'
+                """, Integer.class));
+    }
+
+    @Test
+    void partialHistoricalEventAuditSchemaFailsClosedBeforeCreateCanMaskIt() {
+        jdbc.execute("DROP TABLE agent_task_historical_event_run");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("C01H audit schema is partial"), error.getMessage());
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name='agent_task_historical_event_run'
+                """, Integer.class));
+    }
+
+    @Test
+    void historicalEventAuditWrongEngineFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_run ENGINE=MyISAM");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("agent_task_historical_event_run"),
+                error.getMessage());
+        assertTrue(error.getMessage().contains("MyISAM"), error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditWrongTableCollationFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "COLLATE=utf8mb4_0900_ai_ci");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("agent_task_historical_event_manifest_batch"),
+                error.getMessage());
+        assertTrue(error.getMessage().contains("utf8mb4_0900_ai_ci"), error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditWrongColumnCollationFailsClosed() {
+        jdbc.execute("""
+                ALTER TABLE agent_task_historical_event_manifest
+                MODIFY COLUMN tenant_id VARCHAR(50) CHARACTER SET utf8mb4
+                    COLLATE utf8mb4_0900_ai_ci NOT NULL
+                """);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains(
+                "agent_task_historical_event_manifest.tenant_id"), error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditMissingRequiredUniqueIndexFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "DROP INDEX uk_historical_event_batch_report");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("uk_historical_event_batch_report"),
+                error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditWrongRequiredUniqueIndexFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "DROP INDEX uk_historical_event_batch_report, "
+                + "ADD UNIQUE INDEX uk_historical_event_batch_report (b09_report_sha256)");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("uk_historical_event_batch_report"),
+                error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditExtraUniqueIndexFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "ADD UNIQUE INDEX uk_historical_event_extra (b09_run_id)");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("incompatible UNIQUE indexes"),
+                error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditMissingTriggerFailsClosed() {
+        initializeOnce();
+        jdbc.execute("DROP TRIGGER trg_historical_event_manifest_no_update");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("nine exact"), error.getMessage());
+        assertEquals(8, namedTriggerCount("trg_historical_event_%"));
+    }
+
+    @Test
+    void historicalEventAuditWeakenedTriggerFailsClosed() {
+        initializeOnce();
+        jdbc.execute("DROP TRIGGER trg_historical_event_manifest_no_update");
+        jdbc.execute("""
+                CREATE TRIGGER trg_historical_event_manifest_no_update
+                BEFORE UPDATE ON agent_task_historical_event_manifest FOR EACH ROW
+                BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'weakened'; END
+                """);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains(
+                "trg_historical_event_manifest_no_update"), error.getMessage());
+    }
+
+    @Test
+    void nonEmptyHistoricalAuditWithoutTriggersFailsClosedWithoutBootstrap() {
+        jdbc.update("""
+                INSERT INTO agent_task_historical_event_manifest_batch(
+                    report_sha256,b09_report_sha256,b09_run_id,b09_operator,b09_completed_at,
+                    manifest_row_count,insert_required_count,exact_noop_count,blocked_count,
+                    seal_status,approved_operator,approved_at,sealed_at,create_time)
+                VALUES (REPEAT('a',64),REPEAT('b',64),'00000000-0000-0000-0000-000000000001',
+                        'b09-operator',1,0,0,0,0,'LOADING','c01h-approver',2,NULL,2)
+                """);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("nine exact"), error.getMessage());
+        assertEquals(0, namedTriggerCount("trg_historical_event_%"));
+        assertEquals(1L, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_historical_event_manifest_batch", Long.class));
+    }
+
+    @Test
     void incompatibleNamedScopedIndexFailsBeforeLegacyGlobalUniqueIsRemoved() {
         jdbc.execute("ALTER TABLE agent_task_meta DROP INDEX uk_agent_task_meta_scope, "
                 + "ADD UNIQUE INDEX uk_agent_task_meta_scope (task_id, tenant_id, client_id), "
@@ -128,6 +281,7 @@ class AgentSchemaInitializerMySqlTest {
     private void assertProtectionAndScopedRootIndexes() {
         assertEquals(4, namedTriggerCount("trg_identity_%"));
         assertEquals(12, namedTriggerCount("trg_task_backfill_%"));
+        assertEquals(9, namedTriggerCount("trg_historical_event_%"));
         assertEquals(List.of("tenant_id", "client_id", "task_id"), jdbc.queryForList("""
                 SELECT column_name FROM information_schema.statistics
                 WHERE table_schema=DATABASE() AND table_name='agent_task_meta'
@@ -143,6 +297,61 @@ class AgentSchemaInitializerMySqlTest {
                   HAVING COUNT(*)=1 AND LOWER(MAX(column_name))='task_id'
                 ) x
                 """, Integer.class));
+    }
+
+    private void dropHistoricalEventAuditTables() {
+        for (String trigger : historicalEventTriggerNames()) {
+            jdbc.execute("DROP TRIGGER IF EXISTS " + trigger);
+        }
+        jdbc.execute("DROP TABLE IF EXISTS agent_task_historical_event_run");
+        jdbc.execute("DROP TABLE IF EXISTS agent_task_historical_event_manifest");
+        jdbc.execute("DROP TABLE IF EXISTS agent_task_historical_event_manifest_batch");
+    }
+
+    private void assertHistoricalEventAuditProtection() {
+        assertEquals(9, namedTriggerCount("trg_historical_event_%"));
+        for (String table : List.of(
+                "agent_task_historical_event_manifest_batch",
+                "agent_task_historical_event_manifest",
+                "agent_task_historical_event_run")) {
+            assertEquals("InnoDB", jdbc.queryForObject("""
+                    SELECT ENGINE FROM information_schema.tables
+                    WHERE table_schema=DATABASE() AND table_name=?
+                    """, String.class, table), table);
+            assertEquals("utf8mb4_0900_bin", jdbc.queryForObject("""
+                    SELECT TABLE_COLLATION FROM information_schema.tables
+                    WHERE table_schema=DATABASE() AND table_name=?
+                    """, String.class, table), table);
+            assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class), table);
+        }
+        assertEquals(List.of("PRIMARY", "uk_historical_event_batch_report"),
+                uniqueIndexes("agent_task_historical_event_manifest_batch"));
+        assertEquals(List.of("PRIMARY", "uk_historical_event_manifest_row",
+                        "uk_historical_event_manifest_scope"),
+                uniqueIndexes("agent_task_historical_event_manifest"));
+        assertEquals(List.of("PRIMARY", "uk_historical_event_run_id"),
+                uniqueIndexes("agent_task_historical_event_run"));
+    }
+
+    private List<String> uniqueIndexes(String table) {
+        return jdbc.queryForList("""
+                SELECT DISTINCT index_name FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name=? AND non_unique=0
+                ORDER BY index_name
+                """, String.class, table);
+    }
+
+    private List<String> historicalEventTriggerNames() {
+        return List.of(
+                "trg_historical_event_batch_insert_guard",
+                "trg_historical_event_batch_update_guard",
+                "trg_historical_event_batch_no_delete",
+                "trg_historical_event_manifest_insert_guard",
+                "trg_historical_event_manifest_no_update",
+                "trg_historical_event_manifest_no_delete",
+                "trg_historical_event_run_insert_guard",
+                "trg_historical_event_run_no_update",
+                "trg_historical_event_run_no_delete");
     }
 
     // ── C01: task event schema ──

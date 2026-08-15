@@ -301,7 +301,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         for (String table : Set.of(
                 "agent_task_member", "agent_task_work_item", "agent_task_request", "agent_task_artifact")) {
             String initializerDefinition = initializerSql.stream()
-                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .filter(sql -> sql.contains("create table if not exists " + table + " ("))
                     .findFirst().orElseThrow();
             TableStructure expected = tableStructure(tableDefinition(schema, table));
             assertEquals(expected, tableStructure(tableDefinition(migration, table)), table + " migration");
@@ -325,11 +325,143 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 "agent_task_backfill_issue", "agent_task_backfill_manifest_batch",
                 "agent_task_backfill_manifest", "agent_task_backfill_run")) {
             String initializerDefinition = initializerSql.stream()
-                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .filter(sql -> sql.contains("create table if not exists " + table + " ("))
                     .findFirst().orElseThrow();
             TableStructure expected = tableStructure(tableDefinition(schema, table));
             assertEquals(expected, tableStructure(tableDefinition(auditMigration, table)), table + " migration");
             assertEquals(expected, tableStructure(initializerDefinition), table + " initializer");
+        }
+    }
+
+    @Test
+    void initializerSchemaAndHistoricalBaselineAuditKeepTablesInParity() throws Exception {
+        JdbcTemplate template = schemaCaptureTemplate("H2");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        List<String> initializerSql = executedStatements(template).stream()
+                .map(sql -> sql.toLowerCase(Locale.ROOT))
+                .toList();
+        String schema = readResource("db/schema.sql");
+        String auditMigration = readResource("db/historical-task-event-baseline-audit-schema.sql");
+
+        for (String table : historicalEventAuditTables()) {
+            String initializerDefinition = initializerSql.stream()
+                    .filter(sql -> sql.contains("create table if not exists " + table + " ("))
+                    .findFirst().orElseThrow();
+            TableStructure expected = tableStructure(tableDefinition(schema, table));
+            assertEquals(expected, tableStructure(tableDefinition(auditMigration, table)),
+                    table + " migration");
+            assertEquals(expected, tableStructure(initializerDefinition), table + " initializer");
+        }
+    }
+
+    @Test
+    void initializerAndMigrationKeepHistoricalEventAuditTriggerDefinitionsInParity() throws Exception {
+        JdbcTemplate template = dialectTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        List<String> statements = executedStatements(template);
+        String migration = readResource("db/historical-task-event-baseline-audit-schema.sql");
+
+        for (AgentSchemaInitializer.TriggerDefinition expected : historicalEventAuditTriggers(migration)) {
+            String initializerTrigger = statements.stream()
+                    .filter(sql -> sql.toLowerCase(Locale.ROOT)
+                            .startsWith("create trigger " + expected.name()))
+                    .findFirst().orElseThrow();
+            assertEquals(migrationTriggerDefinition(migration, expected.name()),
+                    normalizeDefinition(initializerTrigger), expected.name());
+            assertTrue(normalizeDefinition(initializerTrigger).contains(
+                    " on " + expected.table() + " "), expected.name());
+        }
+    }
+
+    @Test
+    void initializerHistoricalBaselineBootstrapIsDdlOnlyWithoutRoutinesOrPrivileges() throws Exception {
+        JdbcTemplate template = dialectTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        List<String> historicalStatements = executedStatements(template).stream()
+                .map(sql -> sql.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT))
+                .filter(sql -> sql.contains("historical_event") || sql.contains("c01h"))
+                .toList();
+
+        assertEquals(12, historicalStatements.size(), historicalStatements.toString());
+        assertTrue(historicalStatements.stream().allMatch(sql ->
+                sql.startsWith("create table if not exists agent_task_historical_event_")
+                        || sql.startsWith("create trigger trg_historical_event_")),
+                historicalStatements.toString());
+        String allStatements = String.join("\n", executedStatements(template))
+                .toLowerCase(Locale.ROOT);
+        for (String forbidden : List.of(
+                "create procedure", "drop procedure", "create definer", "create user",
+                "grant ", "revoke ", "call c01h_", "insert into agent_task_historical_event_",
+                "update agent_task_historical_event_", "delete from agent_task_historical_event_",
+                "insert into agent_task_event", "update agent_task_meta")) {
+            assertFalse(allStatements.contains(forbidden), forbidden);
+        }
+    }
+
+    @Test
+    void partialHistoricalEventAuditSchemaFailsBeforeCreateCanMaskIt() throws Exception {
+        DataSource dataSource = dialectDataSource("MySQL");
+        JdbcTemplate partial = new JdbcTemplate(dataSource) {
+            @Override
+            public void execute(String sql) {
+                throw new AssertionError("partial schema must fail before C01H CREATE");
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                if (sql.toLowerCase(Locale.ROOT).contains("information_schema.tables")) {
+                    return (List<T>) List.of("agent_task_historical_event_manifest_batch"
+                            .equals(String.valueOf(args[0])) ? 1 : 0);
+                }
+                return List.of();
+            }
+        };
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(partial)
+                        .ensureHistoricalEventBaselineAuditSchema());
+        assertTrue(error.getMessage().contains("C01H audit schema is partial"), error.getMessage());
+    }
+
+    @Test
+    void missingOrDriftedHistoricalEventAuditTriggerFailsClosed() throws IOException {
+        String migration = readResource("db/historical-task-event-baseline-audit-schema.sql");
+        List<AgentSchemaInitializer.TriggerDefinition> exact =
+                new java.util.ArrayList<>(historicalEventAuditTriggers(migration));
+        List<List<AgentSchemaInitializer.TriggerDefinition>> invalid = new java.util.ArrayList<>();
+        invalid.add(exact.subList(1, exact.size()));
+        List<AgentSchemaInitializer.TriggerDefinition> drifted = new java.util.ArrayList<>(exact);
+        AgentSchemaInitializer.TriggerDefinition original = drifted.get(0);
+        drifted.set(0, new AgentSchemaInitializer.TriggerDefinition(
+                original.name(), original.table(), original.timing(), original.event(),
+                "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'weakened'; END"));
+        invalid.add(drifted);
+        List<AgentSchemaInitializer.TriggerDefinition> extra = new java.util.ArrayList<>(exact);
+        extra.add(new AgentSchemaInitializer.TriggerDefinition(
+                "unexpected_c01h_trigger", "agent_task_historical_event_manifest",
+                "BEFORE", "DELETE",
+                "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'unexpected'; END"));
+        invalid.add(extra);
+
+        for (List<AgentSchemaInitializer.TriggerDefinition> definitions : invalid) {
+            JdbcTemplate template = new JdbcTemplate() {
+                @Override
+                @SuppressWarnings("unchecked")
+                public <T> List<T> query(String sql, RowMapper<T> rowMapper) {
+                    return sql.contains("information_schema.triggers")
+                            ? (List<T>) definitions : List.of();
+                }
+
+                @Override
+                public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
+                    return query(sql, rowMapper);
+                }
+            };
+            IllegalStateException error = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(template)
+                            .validateHistoricalEventAuditTriggers());
+            assertTrue(error.getMessage().contains("C01H"), error.getMessage());
         }
     }
 
@@ -346,7 +478,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
         for (String table : Set.of("agent_identity_registry", "agent_identity_alias")) {
             String initializerDefinition = initializerSql.stream()
-                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .filter(sql -> sql.contains("create table if not exists " + table + " ("))
                     .findFirst().orElseThrow();
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(initializerDefinition), table);
@@ -924,7 +1056,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 "agent_scene_state", "agent_scene_event", "agent_scene_phase_report", "agent_scene_version")) {
             String resourceDefinition = tableDefinition(schema, table);
             String initializerDefinition = initializerSql.stream()
-                    .filter(sql -> sql.contains("create table if not exists " + table))
+                    .filter(sql -> sql.contains("create table if not exists " + table + " ("))
                     .findFirst().orElseThrow();
             assertEquals(tableStructure(resourceDefinition), tableStructure(initializerDefinition), table);
         }
@@ -1326,6 +1458,29 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         return result;
     }
 
+    private List<AgentSchemaInitializer.TriggerDefinition> historicalEventAuditTriggers(
+            String migration) {
+        return List.of(
+                backfillAuditTrigger(migration, "trg_historical_event_batch_insert_guard",
+                        "agent_task_historical_event_manifest_batch", "INSERT"),
+                backfillAuditTrigger(migration, "trg_historical_event_batch_update_guard",
+                        "agent_task_historical_event_manifest_batch", "UPDATE"),
+                backfillAuditTrigger(migration, "trg_historical_event_batch_no_delete",
+                        "agent_task_historical_event_manifest_batch", "DELETE"),
+                backfillAuditTrigger(migration, "trg_historical_event_manifest_insert_guard",
+                        "agent_task_historical_event_manifest", "INSERT"),
+                backfillAuditTrigger(migration, "trg_historical_event_manifest_no_update",
+                        "agent_task_historical_event_manifest", "UPDATE"),
+                backfillAuditTrigger(migration, "trg_historical_event_manifest_no_delete",
+                        "agent_task_historical_event_manifest", "DELETE"),
+                backfillAuditTrigger(migration, "trg_historical_event_run_insert_guard",
+                        "agent_task_historical_event_run", "INSERT"),
+                backfillAuditTrigger(migration, "trg_historical_event_run_no_update",
+                        "agent_task_historical_event_run", "UPDATE"),
+                backfillAuditTrigger(migration, "trg_historical_event_run_no_delete",
+                        "agent_task_historical_event_run", "DELETE"));
+    }
+
     private List<AgentSchemaInitializer.TriggerDefinition> backfillAuditTriggers(String migration) {
         return List.of(
                 backfillAuditTrigger(migration, "trg_task_backfill_manifest_batch_insert_guard",
@@ -1377,7 +1532,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     private String tableDefinition(String schema, String table) {
-        int start = schema.indexOf("create table if not exists " + table);
+        int start = schema.indexOf("create table if not exists " + table + " (");
         assertTrue(start >= 0, table);
         int end = schema.indexOf(";", start);
         assertTrue(end > start, table);
@@ -1398,10 +1553,23 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         DataSource dataSource = dialectDataSource(productName);
         lenient().when(template.getDataSource()).thenReturn(dataSource);
         AtomicBoolean eventCreated = new AtomicBoolean();
+        Set<String> historicalTables = new java.util.LinkedHashSet<>();
+        List<AgentSchemaInitializer.TriggerDefinition> historicalTriggers =
+                new java.util.ArrayList<>();
+        String historicalAudit = readResource("db/historical-task-event-baseline-audit-schema.sql");
         lenient().doAnswer(invocation -> {
             String sql = invocation.getArgument(0);
+            String normalized = sql.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
             if (sql.contains("CREATE TABLE IF NOT EXISTS agent_task_event")) {
                 eventCreated.set(true);
+            }
+            for (String table : historicalEventAuditTables()) {
+                if (normalized.startsWith("create table if not exists " + table + " ")) {
+                    historicalTables.add(table);
+                }
+            }
+            if (normalized.startsWith("create trigger trg_historical_event_")) {
+                historicalTriggers.add(triggerDefinitionFromCreate(sql));
             }
             return null;
         }).when(template).execute(anyString());
@@ -1418,14 +1586,31 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 if ("agent_task_meta".equals(table)) {
                     return List.of(1);
                 }
+                if (historicalEventAuditTables().contains(table)) {
+                    return List.of(historicalTables.contains(table) ? 1 : 0);
+                }
             }
-            if (normalized.contains("from information_schema.columns")
-                    && args.length > 1 && "agent_task_event".equals(args[0])) {
-                return List.of(taskEventColumn(String.valueOf(args[1])));
+            if (normalized.contains("from information_schema.columns") && args.length > 1) {
+                if ("agent_task_event".equals(args[0])) {
+                    return List.of(taskEventColumn(String.valueOf(args[1])));
+                }
+                if (historicalEventAuditTables().contains(String.valueOf(args[0]))) {
+                    return List.of(historicalEventColumn(
+                            historicalAudit, String.valueOf(args[0]), String.valueOf(args[1])));
+                }
             }
-            if (normalized.contains("from information_schema.statistics")
-                    && args.length > 1 && "agent_task_event".equals(args[0])) {
-                return taskEventIndex(String.valueOf(args[1]));
+            if (normalized.contains("from information_schema.statistics") && args.length > 1) {
+                if ("agent_task_event".equals(args[0])) {
+                    return taskEventIndex(String.valueOf(args[1]));
+                }
+                if (historicalEventAuditTables().contains(String.valueOf(args[0]))) {
+                    return historicalEventIndex(
+                            historicalAudit, String.valueOf(args[0]), String.valueOf(args[1]));
+                }
+            }
+            if (normalized.contains("from information_schema.triggers")
+                    && normalized.contains("agent_task_historical_event_manifest_batch")) {
+                return new java.util.ArrayList<>(historicalTriggers);
             }
             return List.of();
         }).when(template).query(anyString(), any(RowMapper.class), any(Object[].class));
@@ -1437,23 +1622,52 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     && normalized.contains("non_unique = 0")) {
                 return requiredTaskEventUniqueIndexes();
             }
+            if (normalized.contains("from information_schema.triggers")
+                    && normalized.contains("agent_task_historical_event_manifest_batch")) {
+                return new java.util.ArrayList<>(historicalTriggers);
+            }
             return List.of();
         }).when(template).query(anyString(), any(RowMapper.class));
+        lenient().doAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            Object[] invocationArgs = invocation.getArguments();
+            Object[] args = java.util.Arrays.copyOfRange(invocationArgs, 2, invocationArgs.length);
+            String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+            if (normalized.contains("from information_schema.statistics") && args.length > 0
+                    && historicalEventAuditTables().contains(String.valueOf(args[0]))) {
+                return historicalUniqueIndexes(historicalAudit, String.valueOf(args[0]));
+            }
+            return List.of();
+        }).when(template).queryForList(anyString(), any(Class.class), any(Object[].class));
         lenient().doAnswer(invocation -> {
             String sql = invocation.getArgument(0);
             Class<?> requiredType = invocation.getArgument(1);
             Object[] invocationArgs = invocation.getArguments();
             Object[] args = java.util.Arrays.copyOfRange(invocationArgs, 2, invocationArgs.length);
+            String normalized = sql.replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
             if (requiredType == String.class && sql.contains("SELECT ENGINE")) {
                 return "InnoDB";
             }
             if (requiredType == String.class && sql.contains("TABLE_COLLATION")
-                    && args.length > 0 && "agent_task_event".equals(args[0])) {
+                    && args.length > 0 && ("agent_task_event".equals(args[0])
+                    || historicalEventAuditTables().contains(String.valueOf(args[0])))) {
                 return "utf8mb4_0900_bin";
             }
             if (requiredType == String.class && sql.contains("SELECT EXTRA")
                     && sql.contains("agent_task_event")) {
                 return "auto_increment";
+            }
+            if (requiredType == Long.class && normalized.startsWith("select count(*) from ")
+                    && historicalEventAuditTables().stream()
+                    .anyMatch(table -> normalized.equals("select count(*) from " + table))) {
+                return 0L;
+            }
+            if (requiredType == Integer.class
+                    && normalized.contains("from information_schema.triggers")) {
+                Set<String> names = java.util.Arrays.stream(args)
+                        .map(String::valueOf).collect(java.util.stream.Collectors.toSet());
+                return (int) historicalTriggers.stream()
+                        .filter(trigger -> names.contains(trigger.name())).count();
             }
             return null;
         }).when(template).queryForObject(anyString(), any(Class.class), any(Object[].class));
@@ -1466,6 +1680,83 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             }
             return null;
         }).when(template).queryForObject(anyString(), any(Class.class));
+    }
+
+    private Set<String> historicalEventAuditTables() {
+        return Set.of(
+                "agent_task_historical_event_manifest_batch",
+                "agent_task_historical_event_manifest",
+                "agent_task_historical_event_run");
+    }
+
+    private AgentSchemaInitializer.BackfillColumnDefinition historicalEventColumn(
+            String migration, String table, String column) {
+        String definition = tableDefinition(migration, table);
+        Matcher matcher = Pattern.compile("(?m)^\\s*" + Pattern.quote(column)
+                + "\\s+((?:bigint|char\\(\\d+\\)|varchar\\(\\d+\\)))"
+                + "(?:\\s+(not null))?(?:\\s+default\\s+([^\\s]+))?")
+                .matcher(definition);
+        assertTrue(matcher.find(), table + "." + column);
+        String columnType = matcher.group(1);
+        String dataType = columnType.substring(0,
+                columnType.contains("(") ? columnType.indexOf('(') : columnType.length());
+        boolean nullable = matcher.group(2) == null;
+        String defaultValue = matcher.group(3);
+        if ("null".equals(defaultValue)) {
+            defaultValue = null;
+        }
+        String collation = dataType.equals("char") || dataType.equals("varchar")
+                ? "utf8mb4_0900_bin" : null;
+        String extra = "id".equals(column) ? "auto_increment" : "";
+        return new AgentSchemaInitializer.BackfillColumnDefinition(
+                dataType, columnType, nullable, defaultValue, collation, extra);
+    }
+
+    private List<AgentSchemaInitializer.IndexColumn> historicalEventIndex(
+            String migration, String table, String index) {
+        String compact = tableDefinition(migration, table).replaceAll("\\s+", " ");
+        String expression = "PRIMARY".equals(index)
+                ? "primary key\\s*\\(([^)]*)\\)"
+                : "(unique key|key)\\s+" + Pattern.quote(index) + "\\s*\\(([^)]*)\\)";
+        Matcher matcher = Pattern.compile(expression).matcher(compact);
+        assertTrue(matcher.find(), table + "." + index);
+        boolean unique = "PRIMARY".equals(index) || "unique key".equals(matcher.group(1));
+        String columns = "PRIMARY".equals(index) ? matcher.group(1) : matcher.group(2);
+        String[] names = columns.split("\\s*,\\s*");
+        List<AgentSchemaInitializer.IndexColumn> result = new java.util.ArrayList<>();
+        for (int i = 0; i < names.length; i++) {
+            result.add(new AgentSchemaInitializer.IndexColumn(
+                    unique ? 0 : 1, names[i].trim(), i + 1, null));
+        }
+        return result;
+    }
+
+    private List<String> historicalUniqueIndexes(String migration, String table) {
+        String compact = tableDefinition(migration, table).replaceAll("\\s+", " ");
+        List<String> result = new java.util.ArrayList<>();
+        if (compact.contains("primary key")) {
+            result.add("PRIMARY");
+        }
+        Matcher matcher = Pattern.compile("unique key\\s+([a-z][a-z0-9_]*)\\s*\\(")
+                .matcher(compact);
+        while (matcher.find()) {
+            result.add(matcher.group(1));
+        }
+        return result.stream().sorted().toList();
+    }
+
+    private AgentSchemaInitializer.TriggerDefinition triggerDefinitionFromCreate(String sql) {
+        Matcher matcher = Pattern.compile(
+                "(?is)^\\s*create trigger\\s+([a-z0-9_]+)\\s+"
+                        + "(before|after)\\s+(insert|update|delete)\\s+on\\s+"
+                        + "([a-z0-9_]+)\\s+for each row\\s+(.*)\\s*$")
+                .matcher(sql);
+        assertTrue(matcher.matches(), sql);
+        return new AgentSchemaInitializer.TriggerDefinition(
+                matcher.group(1).toLowerCase(Locale.ROOT),
+                matcher.group(4).toLowerCase(Locale.ROOT),
+                matcher.group(2).toUpperCase(Locale.ROOT),
+                matcher.group(3).toUpperCase(Locale.ROOT), matcher.group(5).trim());
     }
 
     private AgentSchemaInitializer.ColumnDefinition taskEventColumn(String column) {
@@ -1608,7 +1899,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         Map<String, String> columns = new LinkedHashMap<>();
         Matcher columnMatcher = Pattern.compile(
                 "(?m)^\\s*([a-z][a-z0-9_]*)\\s+"
-                        + "((?:(?:bigint|int|mediumtext|text)\\b|tinyint\\(1\\)|varchar\\(\\d+\\))[^,\\n]*)")
+                        + "((?:(?:bigint|int|mediumtext|text)\\b|tinyint\\(1\\)|char\\(\\d+\\)|varchar\\(\\d+\\))[^,\\n]*)")
                 .matcher(definition);
         while (columnMatcher.find()) {
             columns.put(columnMatcher.group(1), normalizeDefinition(columnMatcher.group(2)));
