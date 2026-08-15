@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS agent_task_event (
     event_type      VARCHAR(64) NOT NULL COMMENT 'Event type (SCREAMING_SNAKE_CASE)',
     actor_type      VARCHAR(20) NOT NULL COMMENT 'Actor classification: agent/role/system',
     actor_id        VARCHAR(100) DEFAULT NULL COMMENT 'Actor identity (canonical agentId or role key)',
-    aggregate_type  VARCHAR(30) NOT NULL COMMENT 'Aggregate type: task/member/work_item/request/artifact',
+    aggregate_type  VARCHAR(30) NOT NULL COMMENT 'Aggregate type: task/member/work_item/request/artifact/thread/message',
     aggregate_id    VARCHAR(100) NOT NULL COMMENT 'Aggregate instance ID',
     event_json      MEDIUMTEXT NOT NULL COMMENT 'Event payload JSON',
     occurred_at     BIGINT NOT NULL COMMENT 'Event occurrence timestamp (epoch millis)',

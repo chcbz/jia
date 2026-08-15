@@ -12,7 +12,8 @@ import java.io.Serializable;
  *
  * <p>This is the business contract. The service validates, allocates
  * an event_version, and produces an {@link AgentTaskEventWriteResult}.
- * Callers MUST NOT pre-assemble an {@link AgentTaskEventEntity}.
+ * Callers MUST NOT pre-assemble an {@link AgentTaskEventEntity}; payloads should
+ * be created with {@code TaskEventPayload.builder()} and are revalidated by the writer.
  */
 @Data
 @Accessors(chain = true)
@@ -42,13 +43,13 @@ public class AgentTaskEventWriteCommand implements Serializable {
     @Schema(description = "触发者标识 nullable (max 100 chars)")
     private String actorId;
 
-    @Schema(description = "聚合类型: task/member/work_item/request/artifact (max 30 chars)", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "聚合类型: task/member/work_item/request/artifact/thread/message (max 30 chars)", requiredMode = Schema.RequiredMode.REQUIRED)
     private String aggregateType;
 
     @Schema(description = "聚合实例ID (max 100 chars)", requiredMode = Schema.RequiredMode.REQUIRED)
     private String aggregateId;
 
-    @Schema(description = "事件负载JSON (NOT NULL)", requiredMode = Schema.RequiredMode.REQUIRED)
+    @Schema(description = "受限元数据 JSON object (NOT NULL, max 4096 UTF-8 bytes)", requiredMode = Schema.RequiredMode.REQUIRED)
     private String eventJson;
 
     @Schema(description = "事件发生时间 epoch millis (>0)", requiredMode = Schema.RequiredMode.REQUIRED)

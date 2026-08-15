@@ -25,6 +25,8 @@ import cn.jia.agent.entity.AgentTaskEventWriteResult;
  *   <li>{@code eventType} is validated via {@code TaskEventType.requireKnown}</li>
  *   <li>{@code aggregateType} is validated via {@code TaskEventType.Aggregate.requireKnown}</li>
  *   <li>All field lengths and byte-exactness are validated</li>
+ *   <li>{@code eventJson} is validated and canonicalized through the C01B bounded
+ *       payload allowlist before any task lock or version allocation</li>
  * </ul>
  */
 public interface AgentTaskEventWriter {
