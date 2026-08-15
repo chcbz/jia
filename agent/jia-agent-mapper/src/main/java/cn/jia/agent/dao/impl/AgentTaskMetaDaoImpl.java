@@ -48,6 +48,15 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public AgentTaskMetaEntity findByWorkItemIdForUpdate(
+            String tenantId, String clientId, String workItemId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(workItemId, "workItemId", 100);
+        return baseMapper.findTaskRootByWorkItemForUpdate(
+                tenantId, clientId, workItemId);
+    }
+
+    @Override
     public List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
             String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

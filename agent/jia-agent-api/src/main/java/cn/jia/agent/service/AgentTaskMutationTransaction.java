@@ -19,6 +19,12 @@ public interface AgentTaskMutationTransaction {
             String taskId,
             LockedTaskMutation<T> mutation);
 
+    <T> T executeWithLockedTaskRootForWorkItem(
+            String tenantId,
+            String clientId,
+            String workItemId,
+            LockedTaskMutation<T> mutation);
+
     <T> T executeAfterTaskRootReservation(
             String tenantId,
             String clientId,

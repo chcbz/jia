@@ -10,6 +10,8 @@ import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,6 +21,7 @@ import org.mockito.Mock;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,12 +50,23 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
     @Mock
     AgentTaskWorkItemDao workItemDao;
 
+    @Mock
+    AgentTaskMutationTransaction mutationTransaction;
+    @Mock
+    AgentTaskEventWriter eventWriter;
+
     AgentWorkItemLeaseServiceImpl service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(mutationTransaction.executeWithLockedTaskRoot(any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    return mutation.apply(new cn.jia.agent.entity.AgentTaskMetaEntity());
+                });
         service = new AgentWorkItemLeaseServiceImpl(
-                memberDao, workItemDao, () -> NOW, () -> TOKEN, MAX_DURATION);
+                memberDao, workItemDao, mutationTransaction, eventWriter,
+                () -> NOW, () -> TOKEN, MAX_DURATION);
         lenient().when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, AGENT))
                 .thenReturn(member(AGENT, "accepted"));
     }
@@ -183,16 +197,17 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         assertEquals("running", result.getStatus());
         assertEquals(TOKEN, result.getLeaseToken());
         assertEquals(1_200L, result.getLeaseUntil());
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("WORK_ITEM_STARTED", event.getValue().getEventType());
+        assertFalse(event.getValue().getEventJson().contains(TOKEN));
     }
 
     @Test
     void heartbeatExtendsWithoutShrinkingAndHonorsConfiguredLimit() {
         AgentTaskWorkItemEntity current = item("running", 5L, AGENT, TOKEN, 1_300L, 0, 3);
         when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(current);
-        when(workItemDao.updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
-                eq("running"), eq(1_300L), eq(5L), eq(NOW), any())).thenReturn(1);
-
         AgentWorkItemLeaseDTO noShrink = service.heartbeat(
                 TENANT, CLIENT, TASK, WORK, heartbeatCommand(AGENT, TOKEN, 5L, 100L));
         assertEquals(1_300L, noShrink.getLeaseUntil());
@@ -235,7 +250,7 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void releaseConsumesAttemptRequeuesAndClearsLease() {
+    void releaseRequeuesWithoutConsumingAttemptAndClearsLease() {
         AgentTaskWorkItemEntity current = item("running", 5L, AGENT, TOKEN, 1_200L, 1, 3);
         when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(current);
         when(workItemDao.updateActiveLeaseByVersion(
@@ -246,13 +261,13 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
                 TENANT, CLIENT, TASK, WORK, actionCommand(AGENT, TOKEN, 5L));
 
         assertEquals("ready", result.getStatus());
-        assertEquals(2, result.getAttemptCount());
+        assertEquals(1, result.getAttemptCount());
         assertNull(result.getLeaseToken());
         assertNull(result.getLeaseUntil());
     }
 
     @Test
-    void releaseAtMaxAttemptsFailsInsteadOfInfiniteRetry() {
+    void releaseAtMaxAttemptsStillProducesOnlyReadyRelease() {
         AgentTaskWorkItemEntity current = item("claimed", 5L, AGENT, TOKEN, 1_200L, 2, 3);
         when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(current);
         when(workItemDao.updateActiveLeaseByVersion(
@@ -262,8 +277,8 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         AgentWorkItemLeaseDTO result = service.release(
                 TENANT, CLIENT, TASK, WORK, actionCommand(AGENT, TOKEN, 5L));
 
-        assertEquals("failed", result.getStatus());
-        assertEquals(3, result.getAttemptCount());
+        assertEquals("ready", result.getStatus());
+        assertEquals(2, result.getAttemptCount());
     }
 
     @Test
@@ -280,6 +295,11 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         assertEquals("cancelled", result.getStatus());
         assertEquals(1, result.getAttemptCount());
         assertNull(result.getLeaseToken());
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("WORK_ITEM_CANCELLED", event.getValue().getEventType());
+        assertFalse(event.getValue().getEventJson().contains(TOKEN));
     }
 
     @Test
@@ -341,6 +361,10 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         fail.setWorkItemId("work-2");
         when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 10))
                 .thenReturn(List.of(requeue, fail));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+                .thenReturn(requeue);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-2"))
+                .thenReturn(fail);
         when(workItemDao.expireLeaseByVersion(
                 eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("claimed"), eq(900L), eq(4L), eq(NOW), any())).thenReturn(1);
@@ -357,24 +381,155 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         assertEquals(1, scan.getConflictCount());
         assertEquals("ready", scan.getTransitions().get(0).getStatus());
         assertEquals(1, scan.getTransitions().get(0).getAttemptCount());
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("WORK_ITEM_REQUEUED", event.getValue().getEventType());
+        assertFalse(event.getValue().getEventJson().contains(TOKEN));
     }
 
     @Test
     void expiryScannerRejectsIllegalPersistedLeaseTimeAndAttempts() {
+        AgentTaskWorkItemEntity invalidTime = item("claimed", 4L, AGENT, TOKEN, 0L, 0, 3);
         when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 10))
-                .thenReturn(List.of(item("claimed", 4L, AGENT, TOKEN, 0L, 0, 3)));
+                .thenReturn(List.of(invalidTime));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+                .thenReturn(invalidTime);
         AgentTaskStateException time = assertThrows(AgentTaskStateException.class,
                 () -> service.expireLeases(TENANT, CLIENT, 10));
         assertEquals(Reason.INVALID_PERSISTED_STATE, time.getReason());
 
+        AgentTaskWorkItemEntity invalidAttempts = item("claimed", 4L, AGENT, TOKEN, 900L, -1, 3);
         when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 10))
-                .thenReturn(List.of(item("claimed", 4L, AGENT, TOKEN, 900L, -1, 3)));
+                .thenReturn(List.of(invalidAttempts));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+                .thenReturn(invalidAttempts);
         AgentTaskStateException attempts = assertThrows(AgentTaskStateException.class,
                 () -> service.expireLeases(TENANT, CLIENT, 10));
         assertEquals(Reason.INVALID_PERSISTED_STATE, attempts.getReason());
         verify(workItemDao, never()).expireLeaseByVersion(
                 any(), any(), any(), any(), any(), any(), any(),
                 anyLong(), anyLong(), anyLong(), any());
+    }
+
+    @Test
+    void claimAndHeartbeatAppendCanonicalEventsWithoutLeaseToken() {
+        AgentTaskWorkItemEntity ready = item("ready", 3L, null, null, null, 1, 3);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(ready);
+        when(workItemDao.claimReadyByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(null), eq(3L), any()))
+                .thenReturn(1);
+        service.claim(TENANT, CLIENT, TASK, WORK, claimCommand(AGENT, 3L, 200L));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> claimEvent =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(claimEvent.capture());
+        assertEquals("WORK_ITEM_CLAIMED", claimEvent.getValue().getEventType());
+        assertFalse(claimEvent.getValue().getEventJson().contains(TOKEN));
+        assertTrue(claimEvent.getValue().getEventJson().contains("leaseExpiresAt"));
+    }
+
+    @Test
+    void heartbeatNoShrinkIsNoOpWithZeroCasAndZeroEvent() {
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK))
+                .thenReturn(item("running", 5L, AGENT, TOKEN, 1_300L, 0, 3));
+
+        AgentWorkItemLeaseDTO result = service.heartbeat(
+                TENANT, CLIENT, TASK, WORK,
+                heartbeatCommand(AGENT, TOKEN, 5L, 100L));
+
+        assertEquals(5L, result.getVersion());
+        verify(workItemDao, never()).updateActiveLeaseByVersion(
+                any(), any(), any(), any(), any(), any(), any(),
+                anyLong(), anyLong(), anyLong(), any());
+        verifyNoInteractions(eventWriter);
+    }
+
+    @Test
+    void releaseAppendsOnlyLeaseReleasedToReadyAndCancelAppendsCancelled() {
+        AgentTaskWorkItemEntity running = item("running", 5L, AGENT, TOKEN, 1_200L, 1, 3);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(running);
+        when(workItemDao.updateActiveLeaseByVersion(
+                any(), any(), any(), any(), any(), any(), any(),
+                anyLong(), anyLong(), anyLong(), any())).thenReturn(1);
+        service.release(TENANT, CLIENT, TASK, WORK, actionCommand(AGENT, TOKEN, 5L));
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("WORK_ITEM_LEASE_RELEASED", event.getValue().getEventType());
+        assertTrue(event.getValue().getEventJson().contains("\"toStatus\":\"ready\""));
+        assertFalse(event.getValue().getEventJson().contains(TOKEN));
+    }
+
+    @Test
+    void heartbeatRenewalAppendsRenewedEventWithoutToken() {
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK))
+                .thenReturn(item("running", 5L, AGENT, TOKEN, 1_100L, 0, 3));
+        when(workItemDao.updateActiveLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq("running"), eq(1_100L), eq(5L), eq(NOW), any())).thenReturn(1);
+
+        service.heartbeat(TENANT, CLIENT, TASK, WORK,
+                heartbeatCommand(AGENT, TOKEN, 5L, 300L));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("WORK_ITEM_LEASE_RENEWED", event.getValue().getEventType());
+        assertTrue(event.getValue().getEventJson().contains("previousLeaseExpiresAt"));
+        assertFalse(event.getValue().getEventJson().contains(TOKEN));
+    }
+
+    @Test
+    void expiryAtAttemptLimitAppendsOnlyFailedEvent() {
+        AgentTaskWorkItemEntity failed = item("running", 6L, AGENT, TOKEN, 900L, 2, 3);
+        when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 10))
+                .thenReturn(List.of(failed));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+                .thenReturn(failed);
+        when(workItemDao.expireLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq("running"), eq(900L), eq(6L), eq(NOW), any())).thenReturn(1);
+
+        AgentWorkItemLeaseScanDTO scan = service.expireLeases(TENANT, CLIENT, 10);
+
+        assertEquals(1, scan.getFailedCount());
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("WORK_ITEM_FAILED", event.getValue().getEventType());
+        assertFalse(event.getValue().getEventJson().contains(TOKEN));
+    }
+
+    @Test
+    void expiryPreservesDeterministicCandidateOrderAcrossTaskRootMutations() {
+        AgentTaskWorkItemEntity first = item("claimed", 4L, AGENT, TOKEN, 800L, 0, 3);
+        first.setWorkItemId("work-a");
+        AgentTaskWorkItemEntity second = item("running", 6L, OTHER_AGENT, "lease_other", 900L, 2, 3);
+        second.setWorkItemId("work-b");
+        when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 10))
+                .thenReturn(List.of(first, second));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-a"))
+                .thenReturn(first);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-b"))
+                .thenReturn(second);
+        when(workItemDao.expireLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq("work-a"), eq(AGENT), eq(TOKEN),
+                eq("claimed"), eq(800L), eq(4L), eq(NOW), any())).thenReturn(1);
+        when(workItemDao.expireLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq("work-b"), eq(OTHER_AGENT), eq("lease_other"),
+                eq("running"), eq(900L), eq(6L), eq(NOW), any())).thenReturn(1);
+
+        AgentWorkItemLeaseScanDTO scan = service.expireLeases(TENANT, CLIENT, 10);
+
+        assertEquals(List.of("work-a", "work-b"), scan.getTransitions().stream()
+                .map(AgentWorkItemLeaseDTO::getWorkItemId).toList());
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> events =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter, org.mockito.Mockito.times(2)).append(events.capture());
+        assertEquals(List.of("WORK_ITEM_REQUEUED", "WORK_ITEM_FAILED"),
+                events.getAllValues().stream().map(
+                        cn.jia.agent.entity.AgentTaskEventWriteCommand::getEventType).toList());
     }
 
     private AgentTaskMemberEntity member(String agentId, String status) {

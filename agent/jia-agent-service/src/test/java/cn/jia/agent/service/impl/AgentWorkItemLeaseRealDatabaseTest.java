@@ -1,8 +1,10 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskMemberDao;
+import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
+import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
@@ -12,6 +14,7 @@ import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
+import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -72,6 +75,8 @@ class AgentWorkItemLeaseRealDatabaseTest {
     private DataSource dataSource;
     private JdbcTemplate jdbc;
     private AgentTaskMemberDao memberDao;
+    private AgentTaskMetaDao taskMetaDao;
+    private DataSourceTransactionManager transactionManager;
     private AgentTaskWorkItemDao realWorkItemDao;
 
     @BeforeEach
@@ -88,8 +93,12 @@ class AgentWorkItemLeaseRealDatabaseTest {
 
         SqlSessionFactory factory = createSqlSessionFactory();
         SqlSessionTemplate template = new SqlSessionTemplate(factory);
+        taskMetaDao = new AgentTaskMetaDaoImpl();
+        setField(taskMetaDao, "baseMapper", template.getMapper(AgentTaskMetaMapper.class));
         memberDao = new AgentTaskMemberDaoImpl(template.getMapper(AgentTaskMemberMapper.class));
         realWorkItemDao = new AgentTaskWorkItemDaoImpl(template.getMapper(AgentTaskWorkItemMapper.class));
+        transactionManager = new DataSourceTransactionManager(dataSource);
+        insertTaskRoot();
     }
 
     @AfterEach
@@ -105,10 +114,8 @@ class AgentWorkItemLeaseRealDatabaseTest {
 
         CyclicBarrier bothReadBeforeCas = new CyclicBarrier(2);
         AtomicInteger tokenSequence = new AtomicInteger();
-        Supplier<String> tokenGenerator = () -> {
-            await(bothReadBeforeCas);
-            return "lease_concurrent_" + tokenSequence.incrementAndGet();
-        };
+        Supplier<String> tokenGenerator = () ->
+                "lease_concurrent_" + tokenSequence.incrementAndGet();
         AgentWorkItemLeaseService service = service(
                 realWorkItemDao, () -> 1_000L, tokenGenerator, 1_000L);
 
@@ -124,13 +131,10 @@ class AgentWorkItemLeaseRealDatabaseTest {
             List<Object> results = List.of(first.get(20, TimeUnit.SECONDS),
                     second.get(20, TimeUnit.SECONDS));
             long successes = results.stream().filter(AgentWorkItemLeaseDTO.class::isInstance).count();
-            long conflicts = results.stream()
-                    .filter(AgentTaskStateException.class::isInstance)
-                    .map(AgentTaskStateException.class::cast)
-                    .filter(error -> error.getReason() == Reason.VERSION_CONFLICT)
-                    .count();
+            long rejected = results.stream()
+                    .filter(AgentTaskStateException.class::isInstance).count();
             assertEquals(1, successes);
-            assertEquals(1, conflicts);
+            assertEquals(1, rejected);
 
             Map<String, Object> row = workItemRow(TENANT);
             assertEquals("claimed", row.get("STATUS"));
@@ -149,12 +153,10 @@ class AgentWorkItemLeaseRealDatabaseTest {
         insertMember(TENANT, AGENT_A, "working");
         insertWorkItem(TENANT, "running", 5L, AGENT_A, "lease-old", 1_000L, 0, 3);
 
-        BarrierWorkItemDao racingDao = new BarrierWorkItemDao(realWorkItemDao);
-        racingDao.arm(new CyclicBarrier(2));
         AgentWorkItemLeaseService heartbeatService = service(
-                racingDao, () -> 999L, () -> "unused", 1_000L);
+                realWorkItemDao, () -> 999L, () -> "unused", 1_000L);
         AgentWorkItemLeaseService expiryService = service(
-                racingDao, () -> 1_001L, () -> "unused", 1_000L);
+                realWorkItemDao, () -> 1_001L, () -> "unused", 1_000L);
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
@@ -176,11 +178,12 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 assertEquals("lease-old", row.get("LEASE_TOKEN"));
                 assertEquals(1_499L, longValue(row.get("LEASE_UNTIL")));
                 assertEquals(0, intValue(row.get("ATTEMPT_COUNT")));
-                assertEquals(1, scan.getConflictCount());
+                assertTrue(scan.getScannedCount() == 0 || scan.getConflictCount() == 1);
                 assertEquals(0, scan.getExpiredCount());
             } else {
                 AgentTaskStateException heartbeatError = (AgentTaskStateException) heartbeatResult;
-                assertEquals(Reason.VERSION_CONFLICT, heartbeatError.getReason());
+                assertTrue(heartbeatError.getReason() == Reason.VERSION_CONFLICT
+                        || heartbeatError.getReason() == Reason.LEASE_INVALID);
                 assertEquals("ready", row.get("STATUS"));
                 assertNull(row.get("LEASE_TOKEN"));
                 assertNull(row.get("LEASE_UNTIL"));
@@ -304,9 +307,12 @@ class AgentWorkItemLeaseRealDatabaseTest {
             Supplier<String> tokenGenerator,
             long maxDuration) {
         AgentWorkItemLeaseServiceImpl raw = new AgentWorkItemLeaseServiceImpl(
-                memberDao, workItemDao, clock, tokenGenerator, maxDuration);
+                memberDao, workItemDao,
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager),
+                command -> new cn.jia.agent.entity.AgentTaskEventWriteResult(),
+                clock, tokenGenerator, maxDuration);
         TransactionInterceptor interceptor = new TransactionInterceptor();
-        interceptor.setTransactionManager(new DataSourceTransactionManager(dataSource));
+        interceptor.setTransactionManager(transactionManager);
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
         ProxyFactory factory = new ProxyFactory(raw);
         factory.setInterfaces(AgentWorkItemLeaseService.class);
@@ -317,6 +323,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
     private SqlSessionFactory createSqlSessionFactory() throws Exception {
         MybatisConfiguration configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(AgentTaskMetaMapper.class);
         configuration.addMapper(AgentTaskMemberMapper.class);
         configuration.addMapper(AgentTaskWorkItemMapper.class);
         GlobalConfig globalConfig = new GlobalConfig();
@@ -329,6 +336,23 @@ class AgentWorkItemLeaseRealDatabaseTest {
     }
 
     private void createTables() {
+        jdbc.execute("""
+                CREATE TABLE agent_task_meta (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(100) NOT NULL,
+                    reward_status VARCHAR(20) NOT NULL,
+                    collaboration_mode VARCHAR(20) NOT NULL,
+                    risk_level VARCHAR(20) NOT NULL,
+                    max_agents INT NOT NULL,
+                    review_required TINYINT NOT NULL,
+                    task_version BIGINT NOT NULL DEFAULT 0,
+                    current_event_version BIGINT NOT NULL DEFAULT 0,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id), UNIQUE (task_id)
+                )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
                     id BIGINT NOT NULL AUTO_INCREMENT,
@@ -380,6 +404,16 @@ class AgentWorkItemLeaseRealDatabaseTest {
                     PRIMARY KEY (id),
                     UNIQUE (tenant_id, client_id, work_item_id)
                 )""");
+    }
+
+    private void insertTaskRoot() {
+        jdbc.update("""
+                INSERT INTO agent_task_meta
+                (task_id, reward_status, collaboration_mode, risk_level, max_agents,
+                 review_required, task_version, current_event_version,
+                 tenant_id, client_id, create_time, update_time)
+                VALUES (?, 'running', 'single', 'low', 1, 0, 0, 0, ?, ?, 1, 1)
+                """, TASK, TENANT, CLIENT);
     }
 
     private void insertMember(String tenant, String agentId, String status) {
@@ -466,6 +500,21 @@ class AgentWorkItemLeaseRealDatabaseTest {
         } catch (Exception e) {
             throw new AssertionError("Timed out waiting for concurrent CAS", e);
         }
+    }
+
+    private void setField(Object target, String fieldName, Object value) throws Exception {
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                field.set(target, value);
+                return;
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(fieldName);
     }
 
     private static final class BarrierWorkItemDao implements AgentTaskWorkItemDao {

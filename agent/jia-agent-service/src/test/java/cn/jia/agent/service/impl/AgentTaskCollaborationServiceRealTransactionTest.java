@@ -119,7 +119,11 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         requestService = (AgentTaskRequestService) proxy;
         artifactService = (AgentTaskArtifactService) proxy;
         AgentWorkItemLeaseServiceImpl rawLease = new AgentWorkItemLeaseServiceImpl(
-                memberDao, workItemDao, () -> LEASE_NOW, () -> "lease_generated", 1_000L);
+                memberDao, workItemDao,
+                new AgentTaskMutationTransactionImpl(
+                        taskDao, new DataSourceTransactionManager(dataSource)),
+                command -> new cn.jia.agent.entity.AgentTaskEventWriteResult(),
+                () -> LEASE_NOW, () -> "lease_generated", 1_000L);
         leaseService = (AgentWorkItemLeaseService) transactionalProxy(
                 rawLease, dataSource, AgentWorkItemLeaseService.class);
         AgentWorkItemResultCommitServiceImpl rawResult = new AgentWorkItemResultCommitServiceImpl(

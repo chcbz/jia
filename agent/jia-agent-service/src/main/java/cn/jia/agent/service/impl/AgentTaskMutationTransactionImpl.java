@@ -45,6 +45,19 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
     }
 
     @Override
+    public <T> T executeWithLockedTaskRootForWorkItem(
+            String tenantId, String clientId, String workItemId,
+            LockedTaskMutation<T> mutation) {
+        requireScopeId(tenantId, clientId, workItemId, "workItemId");
+        if (mutation == null) {
+            throw new IllegalArgumentException("mutation must not be null");
+        }
+        return requiredTransaction.execute(status -> mutation.apply(validateRoot(
+                taskMetaDao.findByWorkItemIdForUpdate(tenantId, clientId, workItemId),
+                tenantId, clientId, null)));
+    }
+
+    @Override
     public <T> T executeAfterTaskRootReservation(
             String tenantId,
             String clientId,
@@ -73,13 +86,19 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
             String tenantId, String clientId, String taskId) {
         AgentTaskMetaEntity root = taskMetaDao.findByTaskIdForUpdate(
                 tenantId, clientId, taskId);
+        return validateRoot(root, tenantId, clientId, taskId);
+    }
+
+    private AgentTaskMetaEntity validateRoot(AgentTaskMetaEntity root,
+            String tenantId, String clientId, String expectedTaskId) {
         if (root == null) {
             throw new AgentTaskCollaborationException(
                     Reason.NOT_FOUND, "Task not found in requested scope");
         }
         if (!tenantId.equals(root.getTenantId())
                 || !clientId.equals(root.getClientId())
-                || !taskId.equals(root.getTaskId())
+                || (expectedTaskId != null && !expectedTaskId.equals(root.getTaskId()))
+                || root.getTaskId() == null || root.getTaskId().isBlank()
                 || root.getTaskVersion() == null
                 || root.getTaskVersion() < 0
                 || root.getCurrentEventVersion() == null
@@ -89,6 +108,12 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
                     "Locked task root does not match the requested scope or version contract");
         }
         return root;
+    }
+
+    private void requireScopeId(String tenantId, String clientId, String id, String name) {
+        if (!isValidScopeId(tenantId, 50)) throw new IllegalArgumentException("tenantId is invalid");
+        if (!isValidScopeId(clientId, 50)) throw new IllegalArgumentException("clientId is invalid");
+        if (!isValidScopeId(id, 100)) throw new IllegalArgumentException(name + " is invalid");
     }
 
     private void requireScope(String tenantId, String clientId, String taskId) {

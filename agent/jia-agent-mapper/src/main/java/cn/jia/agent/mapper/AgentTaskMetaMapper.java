@@ -90,6 +90,27 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("limit") int limit);
 
     @Select("""
+            SELECT parent.*
+            FROM agent_task_meta parent
+            WHERE parent.tenant_id = #{tenantId}
+              AND parent.client_id = #{clientId}
+              AND EXISTS (
+                  SELECT 1
+                  FROM agent_task_work_item child
+                  WHERE child.tenant_id = #{tenantId}
+                    AND child.client_id = #{clientId}
+                    AND child.work_item_id = #{workItemId}
+                    AND child.task_id = parent.task_id
+              )
+            LIMIT 1
+            FOR UPDATE
+            """)
+    AgentTaskMetaEntity findTaskRootByWorkItemForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("workItemId") String workItemId);
+
+    @Select("""
             SELECT 'member' AS row_type, tenant_id, client_id, task_id,
                    agent_id AS entity_id, member_role AS role, member_status AS status,
                    NULL AS required_item, NULL AS attempt_count, NULL AS max_attempts,

@@ -72,6 +72,23 @@ class AgentTaskMutationTransactionTest extends BaseMockTest {
     }
 
     @Test
+    void workItemRouteLocksItsScopedTaskRootBeforeMutation() {
+        AgentTaskMetaEntity root = root();
+        when(taskMetaDao.findByWorkItemIdForUpdate(TENANT, CLIENT, "work-1"))
+                .thenReturn(root);
+        when(lockedMutation.apply(root)).thenReturn("changed");
+
+        assertEquals("changed", transaction.executeWithLockedTaskRootForWorkItem(
+                TENANT, CLIENT, "work-1", lockedMutation));
+
+        InOrder order = inOrder(transactionManager, taskMetaDao, lockedMutation);
+        order.verify(transactionManager).getTransaction(any());
+        order.verify(taskMetaDao).findByWorkItemIdForUpdate(TENANT, CLIENT, "work-1");
+        order.verify(lockedMutation).apply(root);
+        order.verify(transactionManager).commit(any());
+    }
+
+    @Test
     void missingOrDriftedRootFailsClosedBeforeMutation() {
         when(taskMetaDao.findByTaskIdForUpdate(TENANT, CLIENT, TASK)).thenReturn(null);
 
