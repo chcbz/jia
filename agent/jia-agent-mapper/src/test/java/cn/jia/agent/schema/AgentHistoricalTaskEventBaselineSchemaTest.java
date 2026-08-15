@@ -112,6 +112,153 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         }
     }
 
+    @Test
+    void auditSchemaHasThreeBinaryInnoDbTablesAndExactlyNineTamperTriggers() throws IOException {
+        String audit = read("db/historical-task-event-baseline-audit-schema.sql");
+
+        for (String table : List.of(
+                "agent_task_historical_event_manifest_batch",
+                "agent_task_historical_event_manifest",
+                "agent_task_historical_event_run")) {
+            String definition = tableDefinition(audit, table);
+            assertTrue(definition.contains("engine=innodb"), table);
+            assertTrue(definition.contains("collate=utf8mb4_0900_bin"), table);
+            assertTrue(definition.contains("id bigint not null auto_increment"), table);
+            assertTrue(definition.contains("primary key (id)"), table);
+        }
+        assertEquals(9, audit.split("create trigger trg_historical_event_", -1).length - 1);
+        for (String trigger : List.of(
+                "batch_insert_guard", "batch_update_guard", "batch_no_delete",
+                "manifest_insert_guard", "manifest_no_update", "manifest_no_delete",
+                "run_insert_guard", "run_no_update", "run_no_delete")) {
+            assertTrue(audit.contains("trg_historical_event_" + trigger), trigger);
+        }
+        assertTrue(audit.contains("new.insert_required_count + new.exact_noop_count = new.manifest_row_count"));
+        assertTrue(audit.contains("new.blocked_count = 0"));
+        assertTrue(audit.contains("new.event_insert_count <> new.version_update_count"));
+        assertTrue(audit.contains("new.event_insert_count + new.exact_noop_count <> new.manifest_row_count"));
+    }
+
+    @Test
+    void approvalRecomputesBytesAndSealsOnlyPositiveZeroBlockedManifestsAtomically() throws IOException {
+        String routines = read("db/historical-task-event-baseline-routines.sql");
+        String approve = read("db/historical-task-event-baseline-approve.sql");
+
+        assertTrue(approve.contains("call c01h_approve_manifest_atomic_v1("));
+        assertTrue(routines.contains("staging_count=0"));
+        assertTrue(routines.contains("zero candidates cannot be sealed"));
+        assertTrue(routines.contains("hex(convert(unhex(tenant_id_hex) using utf8mb4)) <> tenant_id_hex"));
+        assertTrue(routines.contains("binary manifest_row_key <> binary lower(sha2(concat('c01h-row-v1'"));
+        assertTrue(routines.contains("binary event_id <> binary concat('c01h-', lower(sha2(concat("));
+        assertTrue(routines.contains("binary manifest_row_sha256 <> binary lower(sha2(concat('c01h-manifest-row-v1'"));
+        assertTrue(routines.contains("insert_count+noop_count<>verified_count"));
+        assertTrue(routines.contains("blocked_count<>0"));
+        assertTrue(routines.contains("start transaction;"));
+        assertTrue(routines.contains("insert into agent_task_historical_event_manifest_batch"));
+        assertTrue(routines.contains("insert into agent_task_historical_event_manifest("));
+        assertTrue(routines.contains("seal_status='sealed'"));
+        assertTrue(routines.contains("rollback;"));
+        assertTrue(routines.contains("resignal;"));
+    }
+
+    @Test
+    void approveAndApplyUseLockedDefinerAndFrozenGlobalLockOrder() throws IOException {
+        String routines = read("db/historical-task-event-baseline-routines.sql");
+
+        assertEquals(5, routines.split("create definer=`cyf_c01h_definer`@`localhost` procedure", -1).length - 1);
+        assertEquals(5, routines.split("sql security definer", -1).length - 1);
+        int approveLock = routines.indexOf("get_lock(lock_approve_name,0)");
+        int backfillLock = routines.indexOf("get_lock(lock_backfill_name,0)", approveLock);
+        int c01hLock = routines.indexOf("get_lock(lock_c01h_name,0)", backfillLock);
+        assertTrue(approveLock >= 0 && approveLock < backfillLock && backfillLock < c01hLock);
+        int secondApprove = routines.indexOf("get_lock(lock_approve_name,0)", c01hLock + 1);
+        int secondBackfill = routines.indexOf("get_lock(lock_backfill_name,0)", secondApprove);
+        int secondC01h = routines.indexOf("get_lock(lock_c01h_name,0)", secondBackfill);
+        assertTrue(secondApprove > c01hLock && secondApprove < secondBackfill && secondBackfill < secondC01h);
+        assertTrue(routines.contains("b09-manifest-approve:"));
+        assertTrue(routines.contains("b09-task-backfill:"));
+        assertTrue(routines.contains("c01h-historical-baseline:"));
+        assertTrue(routines.contains("account lock"));
+        assertTrue(routines.contains("grant execute on procedure"));
+        assertTrue(routines.contains("never grant operators direct dml"));
+    }
+
+    @Test
+    void applyLocksAllRootsThenSnapshotsAndWritesEventCasRunInOneTransaction() throws IOException {
+        String routines = read("db/historical-task-event-baseline-routines.sql");
+        String apply = read("db/historical-task-event-baseline-apply.sql");
+
+        assertTrue(apply.contains("call c01h_apply_manifest_atomic_v1("));
+        int transaction = routines.lastIndexOf("start transaction;");
+        int roots = routines.indexOf("open root_cur", transaction);
+        int events = routines.indexOf("open event_cur", roots);
+        int members = routines.indexOf("open member_cur", events);
+        int workItems = routines.indexOf("open work_cur", members);
+        int current = routines.indexOf("call c01h_build_current_snapshot_v1", workItems);
+        int eventInsert = routines.indexOf("insert into agent_task_event", current);
+        int versionCas = routines.indexOf("update agent_task_meta set current_event_version", eventInsert);
+        int runInsert = routines.indexOf("insert into agent_task_historical_event_run", versionCas);
+        int commit = routines.indexOf("commit;", runInsert);
+        assertTrue(transaction >= 0 && transaction < roots && roots < events && events < members
+                && members < workItems && workItems < current && current < eventInsert
+                && eventInsert < versionCas && versionCas < runInsert && runInsert < commit);
+        assertTrue(routines.contains("order by binary m.tenant_id,binary m.client_id,binary m.task_id for update"));
+        assertTrue(routines.contains("task_version=v_task_version and current_event_version=v_expected-1"));
+        assertTrue(routines.contains("insert_count<>update_count or insert_count+noop_count<>sealed_count"));
+        assertTrue(routines.contains("'historical_baseline_imported','system','c01h-b09','task'"));
+        assertFalse(routines.contains("update agent_task_member"));
+        assertFalse(routines.contains("update agent_task_work_item"));
+        assertFalse(routines.contains("set task_version"));
+    }
+
+    @Test
+    void repeatedApplyAllowsOnlyExactPostStateAndAddsOnlySuccessfulRun() throws IOException {
+        String routines = read("db/historical-task-event-baseline-routines.sql");
+        String apply = read("db/historical-task-event-baseline-apply.sql");
+
+        assertTrue(apply.contains("repeating the same apply is an exact no-op"));
+        assertTrue(routines.contains("binary a.decision_status=binary 'insert_required' and binary c.decision_status=binary 'exact_noop'"));
+        assertTrue(routines.contains("c.current_event_version=a.current_event_version_snapshot+1"));
+        assertTrue(routines.contains("c.event_chain_count=a.event_chain_count+1"));
+        assertTrue(routines.contains("if exists(select 1 from agent_task_event"));
+        assertTrue(routines.contains("set noop_count=noop_count+1"));
+        assertTrue(routines.contains("'succeeded'"));
+        assertFalse(routines.contains("'failed'"));
+    }
+
+    private String tableDefinition(String sql, String table) {
+        int start = sql.indexOf("create table if not exists " + table + " (");
+        assertTrue(start >= 0, table);
+        int end = sql.indexOf(';', start);
+        assertTrue(end > start, table);
+        return sql.substring(start, end).replaceAll("\\s+", " ").trim();
+    }
+
+    @Test
+    void mysqlProbeIsolatedSafetyAndAdversarialCoverageAreFrozen() throws IOException {
+        String probe = readFile("src/test/scripts/historical-task-event-baseline-mysql-probe.sh");
+
+        assertTrue(probe.contains("--no-defaults"));
+        assertTrue(probe.contains("[[ \"$port\" == 33307 ]]"));
+        assertTrue(probe.contains("[[ \"$datadir\" == /tmp/* ]]"));
+        assertTrue(probe.contains("restricted operator unexpectedly performed direct dml"));
+        assertTrue(probe.contains("c01h probe injected event failure"));
+        assertTrue(probe.contains("--force"));
+        assertTrue(probe.contains("force-continued-after-c01h-error"));
+        assertTrue(probe.contains("version-drift"));
+        assertTrue(probe.contains("partial-baseline"));
+        assertTrue(probe.contains("concurrent-writer"));
+        assertTrue(probe.contains("named-lock"));
+        assertTrue(probe.contains("task_version/member/work-item changed"));
+        assertFalse(probe.contains(":3306"));
+        assertFalse(probe.contains("/home/isp/apps/mysql/data"));
+    }
+
+    private String readFile(String path) throws IOException {
+        return java.nio.file.Files.readString(java.nio.file.Path.of(path), StandardCharsets.UTF_8)
+                .toLowerCase(Locale.ROOT);
+    }
+
     private String exportSql() throws IOException {
         return read("db/historical-task-event-baseline-dry-run.sql");
     }

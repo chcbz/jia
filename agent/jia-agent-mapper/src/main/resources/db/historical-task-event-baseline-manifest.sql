@@ -393,7 +393,9 @@ SELECT @c01h_export_manifest_digest AS manifest_digest,
        event_id, decision_status, expected_event_version, content_sha256,
        member_count, work_item_count, task_version AS task_version_snapshot,
        current_event_version AS current_event_version_snapshot,
-       event_chain_count, event_chain_min_version, event_chain_max_version,
-       baseline_event_version
+       event_chain_count,
+       COALESCE(CAST(event_chain_min_version AS CHAR), '-') AS event_chain_min_version,
+       COALESCE(CAST(event_chain_max_version AS CHAR), '-') AS event_chain_max_version,
+       COALESCE(CAST(baseline_event_version AS CHAR), '-') AS baseline_event_version
 FROM tmp_c01h_export_rows
 ORDER BY BINARY tenant_id, BINARY client_id, BINARY task_id;
