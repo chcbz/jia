@@ -240,6 +240,8 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
             payload.put(TaskEventPayload.Key.WORK_ITEM_ID, aggregateId);
             if (attemptCount != null) payload.put(TaskEventPayload.Key.ATTEMPT_COUNT, attemptCount.longValue());
         }
+        // B03 mutation APIs carry no authenticated actor argument. Keep the actor SYSTEM
+        // rather than fabricating an Agent identity from the member/work-item aggregate.
         eventWriter.append(AgentTaskMutationEventSupport.command(
                 tenantId, clientId, taskId, eventType,
                 actorId == null ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.AGENT,

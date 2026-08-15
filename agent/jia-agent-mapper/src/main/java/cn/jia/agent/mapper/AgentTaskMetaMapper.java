@@ -94,14 +94,41 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             FROM agent_task_meta parent
             WHERE parent.tenant_id = #{tenantId}
               AND parent.client_id = #{clientId}
+              AND CAST(parent.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(parent.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(parent.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(parent.client_id) = OCTET_LENGTH(#{clientId})
               AND EXISTS (
                   SELECT 1
                   FROM agent_task_work_item child
                   WHERE child.tenant_id = #{tenantId}
                     AND child.client_id = #{clientId}
                     AND child.work_item_id = #{workItemId}
+                    AND CAST(child.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                    AND OCTET_LENGTH(child.tenant_id) = OCTET_LENGTH(#{tenantId})
+                    AND CAST(child.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                    AND OCTET_LENGTH(child.client_id) = OCTET_LENGTH(#{clientId})
+                    AND child.tenant_id = parent.tenant_id
+                    AND CAST(child.tenant_id AS BINARY(200))
+                        = CAST(parent.tenant_id AS BINARY(200))
+                    AND OCTET_LENGTH(child.tenant_id) = OCTET_LENGTH(parent.tenant_id)
+                    AND child.client_id = parent.client_id
+                    AND CAST(child.client_id AS BINARY(200))
+                        = CAST(parent.client_id AS BINARY(200))
+                    AND OCTET_LENGTH(child.client_id) = OCTET_LENGTH(parent.client_id)
+                    AND CAST(SUBSTRING(child.work_item_id, 1, 50) AS BINARY(200))
+                        = CAST(SUBSTRING(#{workItemId}, 1, 50) AS BINARY(200))
+                    AND CAST(SUBSTRING(child.work_item_id, 51, 50) AS BINARY(200))
+                        = CAST(SUBSTRING(#{workItemId}, 51, 50) AS BINARY(200))
+                    AND OCTET_LENGTH(child.work_item_id) = OCTET_LENGTH(#{workItemId})
                     AND child.task_id = parent.task_id
+                    AND CAST(SUBSTRING(child.task_id, 1, 50) AS BINARY(200))
+                        = CAST(SUBSTRING(parent.task_id, 1, 50) AS BINARY(200))
+                    AND CAST(SUBSTRING(child.task_id, 51, 50) AS BINARY(200))
+                        = CAST(SUBSTRING(parent.task_id, 51, 50) AS BINARY(200))
+                    AND OCTET_LENGTH(child.task_id) = OCTET_LENGTH(parent.task_id)
               )
+            ORDER BY parent.task_id ASC, parent.id ASC
             LIMIT 1
             FOR UPDATE
             """)

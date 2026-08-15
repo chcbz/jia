@@ -178,8 +178,12 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
                 List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), false,
                 context -> {
+                    int nextAttempt = incrementAttempt(context.current());
                     AgentTaskWorkItemDTO update = copyWorkItem(context.current());
-                    update.setStatus(AgentTaskWorkItemStatus.READY.value());
+                    update.setAttemptCount(nextAttempt);
+                    update.setStatus(nextAttempt >= context.current().getMaxAttempts()
+                            ? AgentTaskWorkItemStatus.FAILED.value()
+                            : AgentTaskWorkItemStatus.READY.value());
                     clearLease(update);
                     return new LeaseMutation(update, TaskEventType.WORK_ITEM_LEASE_RELEASED, null);
                 });

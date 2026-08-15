@@ -36,6 +36,7 @@ import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -507,6 +508,25 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         assertEquals("task", event.getValue().getAggregateType());
         assertTrue(event.getValue().getEventJson().contains("\"fromStatus\":\"assigned\""));
         assertFalse(event.getValue().getEventJson().contains("failureReason"));
+    }
+
+    @Test
+    void stateMutationWithoutActorParameterUsesSystemWithoutFabricatingMemberAsActor() {
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(memberDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+
+        service.transitionMember(
+                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("system", event.getValue().getActorType(),
+                "B03 has no authenticated actor argument, so the aggregate member is not an actor");
+        assertNull(event.getValue().getActorId());
+        assertEquals(AGENT_ID, event.getValue().getAggregateId());
     }
 
     @Test

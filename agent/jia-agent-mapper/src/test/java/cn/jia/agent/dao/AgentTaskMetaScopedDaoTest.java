@@ -54,6 +54,54 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(fallbackSql.endsWith("limit #{limit}"), fallbackSql);
     }
 
+
+    @Test
+    void workItemRootLockUsesByteExactScopeChildAndTaskJoinWithDeterministicOrder()
+            throws Exception {
+        Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "findTaskRootByWorkItemForUpdate", String.class, String.class, String.class);
+        String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
+
+        assertTrue(sql.contains("parent.tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("cast(parent.tenant_id as binary(200)) "
+                + "= cast(#{tenantid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(parent.tenant_id) = octet_length(#{tenantid})"), sql);
+        assertTrue(sql.contains("parent.client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("cast(parent.client_id as binary(200)) "
+                + "= cast(#{clientid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(parent.client_id) = octet_length(#{clientid})"), sql);
+
+        assertTrue(sql.contains("child.tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("cast(child.tenant_id as binary(200)) "
+                + "= cast(#{tenantid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(child.tenant_id) = octet_length(#{tenantid})"), sql);
+        assertTrue(sql.contains("child.client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("cast(child.client_id as binary(200)) "
+                + "= cast(#{clientid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(child.client_id) = octet_length(#{clientid})"), sql);
+        assertTrue(sql.contains("child.tenant_id = parent.tenant_id"), sql);
+        assertTrue(sql.contains("cast(child.tenant_id as binary(200)) "
+                + "= cast(parent.tenant_id as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(child.tenant_id) = octet_length(parent.tenant_id)"), sql);
+        assertTrue(sql.contains("child.client_id = parent.client_id"), sql);
+        assertTrue(sql.contains("cast(child.client_id as binary(200)) "
+                + "= cast(parent.client_id as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(child.client_id) = octet_length(parent.client_id)"), sql);
+
+        assertTrue(sql.contains("child.work_item_id = #{workitemid}"), sql);
+        assertTrue(sql.contains("substring(child.work_item_id, 1, 50)"), sql);
+        assertTrue(sql.contains("substring(child.work_item_id, 51, 50)"), sql);
+        assertTrue(sql.contains("octet_length(child.work_item_id) = octet_length(#{workitemid})"), sql);
+        assertTrue(sql.contains("child.task_id = parent.task_id"), sql);
+        assertTrue(sql.contains("substring(child.task_id, 1, 50)"), sql);
+        assertTrue(sql.contains("substring(parent.task_id, 1, 50)"), sql);
+        assertTrue(sql.contains("substring(child.task_id, 51, 50)"), sql);
+        assertTrue(sql.contains("substring(parent.task_id, 51, 50)"), sql);
+        assertTrue(sql.contains("octet_length(child.task_id) = octet_length(parent.task_id)"), sql);
+        assertTrue(sql.contains("order by parent.task_id asc, parent.id asc"), sql);
+        assertTrue(sql.endsWith("limit 1 for update"), sql);
+    }
+
     @Test
     void daoPushesScopeAndBoundedLimitIntoMapper() throws Exception {
         AgentTaskMetaMapper mapper = mock(AgentTaskMetaMapper.class);

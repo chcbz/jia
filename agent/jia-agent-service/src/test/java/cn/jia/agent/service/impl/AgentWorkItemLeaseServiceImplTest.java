@@ -250,7 +250,7 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void releaseRequeuesWithoutConsumingAttemptAndClearsLease() {
+    void releaseConsumesAttemptRequeuesAndClearsLease() {
         AgentTaskWorkItemEntity current = item("running", 5L, AGENT, TOKEN, 1_200L, 1, 3);
         when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(current);
         when(workItemDao.updateActiveLeaseByVersion(
@@ -261,13 +261,13 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
                 TENANT, CLIENT, TASK, WORK, actionCommand(AGENT, TOKEN, 5L));
 
         assertEquals("ready", result.getStatus());
-        assertEquals(1, result.getAttemptCount());
+        assertEquals(2, result.getAttemptCount());
         assertNull(result.getLeaseToken());
         assertNull(result.getLeaseUntil());
     }
 
     @Test
-    void releaseAtMaxAttemptsStillProducesOnlyReadyRelease() {
+    void releaseAtMaxAttemptsFailsAndStillAppendsOnlyReleaseEvent() {
         AgentTaskWorkItemEntity current = item("claimed", 5L, AGENT, TOKEN, 1_200L, 2, 3);
         when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(current);
         when(workItemDao.updateActiveLeaseByVersion(
@@ -277,8 +277,16 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         AgentWorkItemLeaseDTO result = service.release(
                 TENANT, CLIENT, TASK, WORK, actionCommand(AGENT, TOKEN, 5L));
 
-        assertEquals("ready", result.getStatus());
-        assertEquals(2, result.getAttemptCount());
+        assertEquals("failed", result.getStatus());
+        assertEquals(3, result.getAttemptCount());
+        assertNull(result.getLeaseToken());
+        assertNull(result.getLeaseUntil());
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("WORK_ITEM_LEASE_RELEASED", event.getValue().getEventType());
+        assertTrue(event.getValue().getEventJson().contains("\"toStatus\":\"failed\""));
+        assertFalse(event.getValue().getEventJson().contains(TOKEN));
     }
 
     @Test
@@ -458,6 +466,7 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         verify(eventWriter).append(event.capture());
         assertEquals("WORK_ITEM_LEASE_RELEASED", event.getValue().getEventType());
         assertTrue(event.getValue().getEventJson().contains("\"toStatus\":\"ready\""));
+        assertTrue(event.getValue().getEventJson().contains("\"attemptCount\":2"));
         assertFalse(event.getValue().getEventJson().contains(TOKEN));
     }
 

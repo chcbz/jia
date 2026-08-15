@@ -1,8 +1,10 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.dao.impl.AgentTaskEventDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
@@ -13,9 +15,11 @@ import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
+import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
@@ -78,6 +82,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
     private AgentTaskMetaDao taskMetaDao;
     private DataSourceTransactionManager transactionManager;
     private AgentTaskWorkItemDao realWorkItemDao;
+    private AgentTaskEventWriter realEventWriter;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -97,7 +102,10 @@ class AgentWorkItemLeaseRealDatabaseTest {
         setField(taskMetaDao, "baseMapper", template.getMapper(AgentTaskMetaMapper.class));
         memberDao = new AgentTaskMemberDaoImpl(template.getMapper(AgentTaskMemberMapper.class));
         realWorkItemDao = new AgentTaskWorkItemDaoImpl(template.getMapper(AgentTaskWorkItemMapper.class));
+        AgentTaskEventDao eventDao = new AgentTaskEventDaoImpl();
+        setField(eventDao, "baseMapper", template.getMapper(AgentTaskEventMapper.class));
         transactionManager = new DataSourceTransactionManager(dataSource);
+        realEventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager);
         insertTaskRoot();
     }
 
@@ -285,6 +293,133 @@ class AgentWorkItemLeaseRealDatabaseTest {
     }
 
     @Test
+    void releaseConsumesAttemptAndPersistsOnlyReadyReleaseEventBelowLimit() {
+        insertMember(TENANT, AGENT_A, "working");
+        insertWorkItem(TENANT, "running", 5L, AGENT_A, "lease-current", 1_500L, 1, 3);
+        AgentWorkItemLeaseService service = service(
+                realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L, realEventWriter);
+
+        AgentWorkItemLeaseDTO result = service.release(
+                TENANT, CLIENT, TASK, WORK,
+                actionCommand(AGENT_A, "lease-current", 5L));
+
+        assertEquals("ready", result.getStatus());
+        assertEquals(2, result.getAttemptCount());
+        Map<String, Object> row = workItemRow(TENANT);
+        assertEquals("ready", row.get("STATUS"));
+        assertEquals(2, intValue(row.get("ATTEMPT_COUNT")));
+        assertEquals(6L, longValue(row.get("VERSION")));
+        assertEquals(1L, currentEventVersion());
+        assertEquals(1, eventCount());
+        assertEquals("WORK_ITEM_LEASE_RELEASED", jdbc.queryForObject(
+                "SELECT event_type FROM agent_task_event", String.class));
+        assertTrue(jdbc.queryForObject(
+                "SELECT event_json FROM agent_task_event", String.class)
+                .contains("\"toStatus\":\"ready\""));
+    }
+
+    @Test
+    void releaseConsumesFinalAttemptAndPersistsOnlyFailedReleaseEventAtLimit() {
+        insertMember(TENANT, AGENT_A, "working");
+        insertWorkItem(TENANT, "running", 5L, AGENT_A, "lease-current", 1_500L, 2, 3);
+        AgentWorkItemLeaseService service = service(
+                realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L, realEventWriter);
+
+        AgentWorkItemLeaseDTO result = service.release(
+                TENANT, CLIENT, TASK, WORK,
+                actionCommand(AGENT_A, "lease-current", 5L));
+
+        assertEquals("failed", result.getStatus());
+        assertEquals(3, result.getAttemptCount());
+        Map<String, Object> row = workItemRow(TENANT);
+        assertEquals("failed", row.get("STATUS"));
+        assertEquals(3, intValue(row.get("ATTEMPT_COUNT")));
+        assertEquals(6L, longValue(row.get("VERSION")));
+        assertEquals(1L, currentEventVersion());
+        assertEquals(1, eventCount());
+        assertEquals("WORK_ITEM_LEASE_RELEASED", jdbc.queryForObject(
+                "SELECT event_type FROM agent_task_event", String.class));
+        assertTrue(jdbc.queryForObject(
+                "SELECT event_json FROM agent_task_event", String.class)
+                .contains("\"toStatus\":\"failed\""));
+    }
+
+    @Test
+    void claimAppendFailureRollsBackBusinessEventAndTaskEventVersion() {
+        insertMember(TENANT, AGENT_A, "accepted");
+        insertWorkItem(TENANT, "ready", 0L, null, null, null, 0, 3);
+        AgentWorkItemLeaseService service = service(
+                realWorkItemDao, () -> 1_000L, () -> "lease-new", 1_000L,
+                failAfterRealAppend());
+
+        assertThrows(IllegalStateException.class, () -> service.claim(
+                TENANT, CLIENT, TASK, WORK, claimCommand(AGENT_A, 0L, 500L)));
+
+        Map<String, Object> row = workItemRow(TENANT);
+        assertEquals("ready", row.get("STATUS"));
+        assertEquals(0L, longValue(row.get("VERSION")));
+        assertNull(row.get("LEASE_TOKEN"));
+        assertEquals(0L, currentEventVersion());
+        assertEquals(0, eventCount());
+    }
+
+    @Test
+    void releaseAppendFailureRollsBackAttemptStatusEventAndTaskEventVersion() {
+        insertMember(TENANT, AGENT_A, "working");
+        insertWorkItem(TENANT, "running", 5L, AGENT_A, "lease-current", 1_500L, 2, 3);
+        AgentWorkItemLeaseService service = service(
+                realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L,
+                failAfterRealAppend());
+
+        assertThrows(IllegalStateException.class, () -> service.release(
+                TENANT, CLIENT, TASK, WORK,
+                actionCommand(AGENT_A, "lease-current", 5L)));
+
+        Map<String, Object> row = workItemRow(TENANT);
+        assertEquals("running", row.get("STATUS"));
+        assertEquals(2, intValue(row.get("ATTEMPT_COUNT")));
+        assertEquals(5L, longValue(row.get("VERSION")));
+        assertEquals("lease-current", row.get("LEASE_TOKEN"));
+        assertEquals(0L, currentEventVersion());
+        assertEquals(0, eventCount());
+    }
+
+    @Test
+    void expiryAppendFailureRollsBackAttemptStatusEventAndTaskEventVersion() {
+        insertWorkItem(TENANT, "claimed", 2L, AGENT_A, "lease-expired", 900L, 0, 3);
+        AgentWorkItemLeaseService service = service(
+                realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L,
+                failAfterRealAppend());
+
+        assertThrows(IllegalStateException.class,
+                () -> service.expireLeases(TENANT, CLIENT, 10));
+
+        Map<String, Object> row = workItemRow(TENANT);
+        assertEquals("claimed", row.get("STATUS"));
+        assertEquals(0, intValue(row.get("ATTEMPT_COUNT")));
+        assertEquals(2L, longValue(row.get("VERSION")));
+        assertEquals("lease-expired", row.get("LEASE_TOKEN"));
+        assertEquals(0L, currentEventVersion());
+        assertEquals(0, eventCount());
+    }
+
+    @Test
+    void expiredLeaseDaoReturnsRealRowsInDeterministicLeaseAndWorkItemOrder() {
+        insertWorkItem("work-z", TENANT, "claimed", 1L,
+                AGENT_A, "lease-z", 800L, 0, 3);
+        insertWorkItem("work-b", TENANT, "running", 1L,
+                AGENT_A, "lease-b", 900L, 0, 3);
+        insertWorkItem("work-a", TENANT, "claimed", 1L,
+                AGENT_A, "lease-a", 900L, 0, 3);
+
+        List<AgentTaskWorkItemEntity> rows = realWorkItemDao.listExpiredLeases(
+                TENANT, CLIENT, 1_000L, 10);
+
+        assertEquals(List.of("work-z", "work-a", "work-b"), rows.stream()
+                .map(AgentTaskWorkItemEntity::getWorkItemId).toList());
+    }
+
+    @Test
     void crossTenantClaimIsGenericNotFoundAndLeavesOwnerRowUntouched() {
         insertMember(TENANT, AGENT_A, "accepted");
         insertWorkItem(TENANT, "ready", 0L, null, null, null, 0, 3);
@@ -306,11 +441,20 @@ class AgentWorkItemLeaseRealDatabaseTest {
             LongSupplier clock,
             Supplier<String> tokenGenerator,
             long maxDuration) {
+        return service(workItemDao, clock, tokenGenerator, maxDuration,
+                command -> new cn.jia.agent.entity.AgentTaskEventWriteResult());
+    }
+
+    private AgentWorkItemLeaseService service(
+            AgentTaskWorkItemDao workItemDao,
+            LongSupplier clock,
+            Supplier<String> tokenGenerator,
+            long maxDuration,
+            AgentTaskEventWriter eventWriter) {
         AgentWorkItemLeaseServiceImpl raw = new AgentWorkItemLeaseServiceImpl(
                 memberDao, workItemDao,
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager),
-                command -> new cn.jia.agent.entity.AgentTaskEventWriteResult(),
-                clock, tokenGenerator, maxDuration);
+                eventWriter, clock, tokenGenerator, maxDuration);
         TransactionInterceptor interceptor = new TransactionInterceptor();
         interceptor.setTransactionManager(transactionManager);
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
@@ -324,6 +468,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
         MybatisConfiguration configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(AgentTaskMetaMapper.class);
+        configuration.addMapper(AgentTaskEventMapper.class);
         configuration.addMapper(AgentTaskMemberMapper.class);
         configuration.addMapper(AgentTaskWorkItemMapper.class);
         GlobalConfig globalConfig = new GlobalConfig();
@@ -352,6 +497,27 @@ class AgentWorkItemLeaseRealDatabaseTest {
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
                     PRIMARY KEY (id), UNIQUE (task_id)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(100) NOT NULL,
+                    event_version BIGINT NOT NULL,
+                    event_id VARCHAR(100) NOT NULL,
+                    event_type VARCHAR(64) NOT NULL,
+                    actor_type VARCHAR(20) NOT NULL,
+                    actor_id VARCHAR(100) DEFAULT NULL,
+                    aggregate_type VARCHAR(30) NOT NULL,
+                    aggregate_id VARCHAR(100) NOT NULL,
+                    event_json CLOB NOT NULL,
+                    occurred_at BIGINT NOT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE (tenant_id, client_id, task_id, event_version),
+                    UNIQUE (tenant_id, client_id, event_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
@@ -429,6 +595,14 @@ class AgentWorkItemLeaseRealDatabaseTest {
             String tenant, String status, long version,
             String assignee, String token, Long leaseUntil,
             int attempts, int maxAttempts) {
+        insertWorkItem(WORK, tenant, status, version, assignee, token, leaseUntil,
+                attempts, maxAttempts);
+    }
+
+    private void insertWorkItem(
+            String workItemId, String tenant, String status, long version,
+            String assignee, String token, Long leaseUntil,
+            int attempts, int maxAttempts) {
         jdbc.update("""
                 INSERT INTO agent_task_work_item
                 (work_item_id, task_id, title, description, work_type, required_abilities,
@@ -438,8 +612,25 @@ class AgentWorkItemLeaseRealDatabaseTest {
                  tenant_id, client_id, create_time, update_time)
                 VALUES (?, ?, 'B04 real DB', 'preserve me', 'implementation', '[]',
                         ?, ?, 10, 1, '[]', ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, 1, 1)
-                """, WORK, TASK, assignee, status, token, leaseUntil,
+                """, workItemId, TASK, assignee, status, token, leaseUntil,
                 attempts, maxAttempts, version, tenant, CLIENT);
+    }
+
+    private AgentTaskEventWriter failAfterRealAppend() {
+        return command -> {
+            realEventWriter.append(command);
+            throw new IllegalStateException("event append failed after durable write");
+        };
+    }
+
+    private long currentEventVersion() {
+        return jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
+                Long.class, TASK);
+    }
+
+    private int eventCount() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class);
     }
 
     private Map<String, Object> workItemRow(String tenant) {
