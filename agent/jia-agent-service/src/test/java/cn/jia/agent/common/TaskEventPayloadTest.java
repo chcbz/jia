@@ -3,6 +3,7 @@ package cn.jia.agent.common;
 import cn.jia.core.util.JsonUtil;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,6 +35,37 @@ class TaskEventPayloadTest {
         assertEquals("33444ac5d717fb9107c511bc16adb2b4590ad6b9a96ad8db1514aff1fcbcbb82",
                 payload.get("contentSha256"));
         assertFalse(json.contains(body));
+    }
+
+    @Test
+    void idFieldsAllowCredentialLikeSubstringsWithoutRelaxingSensitiveContentGuards() {
+        String legalId = "id-authorization-api_key-api-key";
+        List<String> idKeys = List.of(
+                TaskEventPayload.Key.TASK_ID,
+                TaskEventPayload.Key.AGENT_ID,
+                TaskEventPayload.Key.MEMBER_ID,
+                TaskEventPayload.Key.WORK_ITEM_ID,
+                TaskEventPayload.Key.ASSIGNEE_AGENT_ID,
+                TaskEventPayload.Key.REQUEST_ID,
+                TaskEventPayload.Key.TARGET_ID,
+                TaskEventPayload.Key.ARTIFACT_ID,
+                TaskEventPayload.Key.THREAD_ID,
+                TaskEventPayload.Key.CONVERSATION_ID,
+                TaskEventPayload.Key.MESSAGE_ID,
+                TaskEventPayload.Key.SENDER_AGENT_ID,
+                TaskEventPayload.Key.NOTE_ID);
+        TaskEventPayload.Builder builder = TaskEventPayload.builder();
+        idKeys.forEach(key -> builder.put(key, legalId));
+
+        Map<String, Object> payload = JsonUtil.jsonToMap(builder.toJson());
+        idKeys.forEach(key -> assertEquals(legalId, payload.get(key)));
+        for (String sensitiveMetadata : List.of(
+                "api_key_secret", "credential_secret",
+                "authorization_header", "access_token")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> TaskEventPayload.builder().put(
+                            TaskEventPayload.Key.SOURCE, sensitiveMetadata));
+        }
     }
 
     @Test

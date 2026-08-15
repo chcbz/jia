@@ -27,9 +27,9 @@ public final class TaskEventPayload {
     private static final Pattern SHA_256 = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern METADATA_TOKEN =
             Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}");
-    private static final Set<String> SENSITIVE_VALUE_MARKERS = Set.of(
+    private static final Set<String> SENSITIVE_METADATA_MARKERS = Set.of(
             "authorization", "bearer ", "basic ", "api-key", "api_key",
-            "cookie=", "set-cookie", "private key", "lease token");
+            "cookie", "credential", "header", "private key", "token");
 
     private static final Set<String> ID_KEYS = Set.of(
             Key.TASK_ID, Key.AGENT_ID, Key.MEMBER_ID, Key.WORK_ITEM_ID,
@@ -159,12 +159,15 @@ public final class TaskEventPayload {
             throw new IllegalArgumentException(
                     "event payload string exceeds " + maxLength + " chars: " + key);
         }
-        if (STRING_KEYS.contains(key) && !METADATA_TOKEN.matcher(value).matches()) {
+        if (ID_KEYS.contains(key)) {
+            return;
+        }
+        if (!METADATA_TOKEN.matcher(value).matches()) {
             throw new IllegalArgumentException(
                     "event payload metadata must be a bounded code token: " + key);
         }
         String lowercase = value.toLowerCase(java.util.Locale.ROOT);
-        if (SENSITIVE_VALUE_MARKERS.stream().anyMatch(lowercase::contains)) {
+        if (SENSITIVE_METADATA_MARKERS.stream().anyMatch(lowercase::contains)) {
             throw new IllegalArgumentException("event payload contains sensitive material: " + key);
         }
     }

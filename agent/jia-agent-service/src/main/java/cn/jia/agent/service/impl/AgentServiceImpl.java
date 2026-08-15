@@ -581,10 +581,8 @@ public class AgentServiceImpl implements AgentService {
                                 tenantId, clientId, finalTaskId);
                         if (existing != null) {
                             requireScopedTaskProjection(existing, tenantId, clientId, finalTaskId);
-                            require(agentTaskMetaDao.deleteReservedTaskRoot(
-                                            tenantId, clientId, reservedTaskId) == 1,
-                                    "Reserved task root cleanup failed");
-                            return taskCreateResult(existing, request);
+                            throw new IllegalStateException(
+                                    "Task plan ID collides with an existing scoped task root");
                         }
                         long rekeyedAt = System.currentTimeMillis();
                         require(agentTaskMetaDao.rekeyReservedTaskRoot(
@@ -880,6 +878,11 @@ public class AgentServiceImpl implements AgentService {
                     Long persistedVersion = taskRoot.getTaskVersion();
                     require(persistedVersion != null && persistedVersion >= 0,
                             "Persisted taskVersion is invalid");
+                    if (persistedVersion == Long.MAX_VALUE) {
+                        throw new AgentBizException(
+                                AgentErrorConstants.TASK_STATUS_INVALID,
+                                "Persisted taskVersion cannot be incremented");
+                    }
                     long expectedVersion = persistedVersion;
                     if (agentTaskMetaDao.updateStatusByVersion(
                                     tenantId, clientId, taskId, expectedVersion,

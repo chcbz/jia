@@ -707,6 +707,32 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void requestIdWithCredentialLikeSubstringsRemainsValidWithoutDescriptionLeak() {
+        String requestId = "req-authorization-api_key-api-key";
+        String secretDescription = "Authorization: Bearer request-secret";
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, requestId))
+                .thenReturn(request(requestId, "open", 0L, ACTOR, "agent", TARGET));
+        AgentTaskRequestCreateDTO command = createRequest();
+        command.setRequestId(requestId);
+        command.setDescription(secretDescription);
+
+        service.create(TENANT, CLIENT, TASK, ACTOR, command);
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertTrue(event.getValue().getEventJson().contains(requestId));
+        assertFalse(event.getValue().getEventJson().contains(secretDescription));
+        assertFalse(event.getValue().getEventJson().contains("request-secret"));
+    }
+
+    @Test
     void requestCasConflictAppendsNoEvent() {
         allow(TARGET, "reviewer");
         when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
@@ -716,6 +742,35 @@ class AgentTaskCollaborationServiceImplTest {
                 TENANT, CLIENT, TASK, TARGET, "req-1", transition(3L, null)));
 
         verify(eventWriter, never()).append(any());
+    }
+
+    @Test
+    void artifactIdWithCredentialLikeSubstringsRemainsValidWithoutContentLeak() {
+        String artifactId = "artifact-authorization-api_key-api-key";
+        String secretContent = "Authorization: Bearer artifact-secret";
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+        command.setArtifactId(artifactId);
+        command.setContent(secretContent);
+        command.setContentHash(sha256(secretContent));
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, artifactId))
+                .thenReturn(null);
+        when(artifactDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        AgentTaskArtifactEntity stored = artifact(
+                artifactId, 1, ACTOR, "task_members");
+        stored.setContent(secretContent);
+        stored.setContentHash(command.getContentHash());
+        when(artifactDao.findVersion(TENANT, CLIENT, TASK, artifactId, 1))
+                .thenReturn(stored);
+
+        service.publish(TENANT, CLIENT, TASK, ACTOR, command);
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertTrue(event.getValue().getEventJson().contains(artifactId));
+        assertFalse(event.getValue().getEventJson().contains(secretContent));
+        assertFalse(event.getValue().getEventJson().contains("artifact-secret"));
     }
 
     @Test

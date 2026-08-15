@@ -109,11 +109,15 @@ class AgentServiceTaskEventRealTransactionTest {
         eventPublisher = mock(AgentEventPublisher.class);
         taskService = mock(TaskService.class);
         doAnswer(invocation -> {
-            assertEquals(1, count("agent_task_meta"),
-                    "scoped task root must exist before TaskService.create");
+            assertEquals(1, jdbc.queryForObject(
+                            "SELECT COUNT(*) FROM agent_task_meta WHERE task_id <> '42'",
+                            Integer.class),
+                    "one scoped reserved task root must exist before TaskService.create");
             cn.jia.task.entity.TaskPlanEntity plan = invocation.getArgument(0);
             jdbc.update("INSERT INTO task_plan_fixture(id, name) VALUES (?, ?)",
                     42L, plan.getName());
+            jdbc.update("INSERT INTO task_item_fixture(id, plan_id) VALUES (?, ?)",
+                    1L, 42L);
             plan.setId(42L);
             return plan;
         }).when(taskService).create(any());
@@ -151,6 +155,7 @@ class AgentServiceTaskEventRealTransactionTest {
         assertThrows(IllegalStateException.class, () -> service.createTask(createRequest()));
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("task_plan_fixture"));
+        assertEquals(0, count("task_item_fixture"));
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
 
         reset(eventWriter, eventPublisher);
@@ -161,6 +166,32 @@ class AgentServiceTaskEventRealTransactionTest {
         });
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("task_plan_fixture"));
+        assertEquals(0, count("task_item_fixture"));
+        verify(eventPublisher, never()).publishTaskEvent(any(), any());
+    }
+
+    @Test
+    void numericPlanIdCollisionRollsBackReservationPlanItemAndLeavesExistingEventUntouched() {
+        insertTask("42", AgentConstants.TASK_STATUS_OPEN, 9L, 7L);
+        jdbc.update("""
+                INSERT INTO agent_task_event
+                (task_id,event_version,event_id,event_type,event_json,tenant_id,client_id)
+                VALUES ('42',7,'evt-existing','TASK_CREATED','{}','juyiting','jia_client')
+                """);
+
+        assertThrows(IllegalStateException.class, () -> service.createTask(createRequest()));
+
+        assertEquals(1, count("agent_task_meta"));
+        assertEquals(9L, jdbc.queryForObject(
+                "SELECT task_version FROM agent_task_meta WHERE task_id='42'", Long.class));
+        assertEquals(7L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id='42'", Long.class));
+        assertEquals(1, count("agent_task_event"));
+        assertEquals("evt-existing", jdbc.queryForObject(
+                "SELECT event_id FROM agent_task_event", String.class));
+        assertEquals(0, count("task_plan_fixture"));
+        assertEquals(0, count("task_item_fixture"));
+        verify(eventWriter, never()).append(any());
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
     }
 
@@ -172,6 +203,7 @@ class AgentServiceTaskEventRealTransactionTest {
         assertEquals(List.of("42"), jdbc.queryForList(
                 "SELECT task_id FROM agent_task_meta", String.class));
         assertEquals(1, count("task_plan_fixture"));
+        assertEquals(1, count("task_item_fixture"));
         verify(eventPublisher).publishTaskEvent("task_created", created);
     }
 
@@ -282,13 +314,18 @@ class AgentServiceTaskEventRealTransactionTest {
     }
 
     private void insertTask(String taskId, String status) {
+        insertTask(taskId, status, 0L, 0L);
+    }
+
+    private void insertTask(
+            String taskId, String status, long taskVersion, long eventVersion) {
         jdbc.update("""
                 INSERT INTO agent_task_meta
                 (task_id,reward_status,collaboration_mode,risk_level,max_agents,
                  review_required,task_version,current_event_version,
                  tenant_id,client_id,create_time,update_time)
-                VALUES (?,?,'single','low',1,0,0,0,'juyiting','jia_client',1,1)
-                """, taskId, status);
+                VALUES (?,?,'single','low',1,0,?,?,'juyiting','jia_client',1,1)
+                """, taskId, status, taskVersion, eventVersion);
     }
 
     private int count(String table) {
@@ -355,6 +392,26 @@ class AgentServiceTaskEventRealTransactionTest {
                     id BIGINT NOT NULL,
                     name VARCHAR(255) NOT NULL,
                     PRIMARY KEY (id)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE task_item_fixture (
+                    id BIGINT NOT NULL,
+                    plan_id BIGINT NOT NULL,
+                    PRIMARY KEY (id)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(100) NOT NULL,
+                    event_version BIGINT NOT NULL,
+                    event_id VARCHAR(100) NOT NULL,
+                    event_type VARCHAR(64) NOT NULL,
+                    event_json CLOB NOT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE (tenant_id, client_id, task_id, event_version),
+                    UNIQUE (tenant_id, client_id, event_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_note (

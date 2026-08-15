@@ -67,6 +67,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -396,6 +397,33 @@ class AgentServiceImplTest extends BaseMockTest {
             TransactionSynchronizationManager.clearSynchronization();
             TransactionSynchronizationManager.setActualTransactionActive(false);
         }
+    }
+
+    @Test
+    void createPlanIdCollisionFailsClosedBeforeEventOrPublisher() {
+        when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
+        doAnswer(invocation -> {
+            invocation.<TaskPlanEntity>getArgument(0).setId(42L);
+            return invocation.getArgument(0);
+        }).when(taskService).create(any(TaskPlanEntity.class));
+        AgentTaskMetaEntity existing = new AgentTaskMetaEntity()
+                .setId(42L).setTaskId("42")
+                .setRewardStatus(AgentConstants.TASK_STATUS_OPEN)
+                .setTaskVersion(9L).setCurrentEventVersion(7L);
+        existing.setTenantId("juyiting");
+        existing.setClientId("jia_client");
+        when(agentTaskMetaDao.findByTaskIdForUpdate("juyiting", "jia_client", "42"))
+                .thenReturn(existing);
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+        request.setTitle("collision");
+
+        assertThrows(IllegalStateException.class, () -> agentService.createTask(request));
+
+        verify(agentTaskMetaDao, never()).deleteReservedTaskRoot(any(), any(), any());
+        verify(agentTaskMetaDao, never()).rekeyReservedTaskRoot(
+                any(), any(), any(), any(), anyLong());
+        verify(taskEventWriter, never()).append(any());
+        verify(eventPublisherProvider, never()).getIfAvailable();
     }
 
     @Test
@@ -1048,6 +1076,55 @@ class AgentServiceImplTest extends BaseMockTest {
             TransactionSynchronizationManager.clearSynchronization();
             TransactionSynchronizationManager.setActualTransactionActive(false);
         }
+    }
+
+    @Test
+    void archiveAllowsCredentialLikeTaskIdWithoutLeakingFailureSecret() {
+        String taskId = "task-authorization-api_key-api-key";
+        String rawFailure = "Authorization: Bearer archive-secret";
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId(taskId);
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_FAILED);
+        meta.setFailureReason(rawFailure);
+        meta.setTaskVersion(5L);
+        meta.setCurrentEventVersion(2L);
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", taskId))
+                .thenReturn(meta);
+
+        AgentTaskDTO result = agentService.archiveTask(taskId);
+
+        assertEquals(AgentConstants.TASK_STATUS_ARCHIVED, result.getStatus());
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(taskEventWriter).append(event.capture());
+        assertTrue(event.getValue().getEventJson().contains(taskId));
+        assertFalse(event.getValue().getEventJson().contains(rawFailure));
+        assertFalse(event.getValue().getEventJson().contains("archive-secret"));
+    }
+
+    @Test
+    void archiveRejectsMaxTaskVersionBeforeCasEventOrPublisher() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-max-version");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_COMPLETED);
+        meta.setTaskVersion(Long.MAX_VALUE);
+        meta.setCurrentEventVersion(2L);
+        when(agentTaskMetaDao.findByTaskId(
+                "juyiting", "jia_client", "task-max-version")).thenReturn(meta);
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> agentService.archiveTask("task-max-version"));
+
+        verify(agentTaskMetaDao, never()).updateStatusByVersion(
+                any(), any(), any(), anyLong(), any(), any(), any(), any());
+        verify(taskEventWriter, never()).append(any());
+        verify(eventPublisherProvider, never()).getIfAvailable();
     }
 
     @Test
