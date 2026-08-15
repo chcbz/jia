@@ -24,7 +24,7 @@ public interface AgentTaskRequestMapper extends BaseMapper<AgentTaskRequestEntit
                 resolved_at = #{request.resolvedAt},
                 update_time = #{updateTime},
                 version = version + 1
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND request_id = #{requestId}

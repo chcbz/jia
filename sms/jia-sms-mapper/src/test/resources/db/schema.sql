@@ -8,7 +8,7 @@ CREATE TABLE sms_buy (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='短信充值情况';
 
@@ -22,7 +22,7 @@ CREATE TABLE sms_code (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='手机短信表';
 
@@ -36,7 +36,7 @@ CREATE TABLE sms_config (
   remain int DEFAULT '0' COMMENT '剩余可用数量',
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (client_id)
 ) COMMENT='客户端配置表';
 
@@ -53,7 +53,7 @@ CREATE TABLE sms_message (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='消息发送';
 
@@ -66,7 +66,7 @@ CREATE TABLE sms_package (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='短信套餐';
 
@@ -79,7 +79,7 @@ CREATE TABLE sms_reply (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='短信回复情况表';
 
@@ -91,7 +91,7 @@ CREATE TABLE sms_send (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (msgid)
 ) COMMENT='短信发送情况表';
 
@@ -106,6 +106,6 @@ CREATE TABLE sms_template (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (template_id)
 ) COMMENT='短信模板';

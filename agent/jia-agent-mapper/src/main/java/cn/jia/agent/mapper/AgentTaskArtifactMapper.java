@@ -9,7 +9,7 @@ public interface AgentTaskArtifactMapper extends BaseMapper<AgentTaskArtifactEnt
     @Select("""
             SELECT *
             FROM agent_task_artifact
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND artifact_id = #{artifactId}

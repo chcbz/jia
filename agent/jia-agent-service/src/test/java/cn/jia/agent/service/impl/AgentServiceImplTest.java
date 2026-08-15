@@ -717,6 +717,33 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("宋江首领负责议事、拆解、派令、追踪和复盘。", result.get(1).getCollaborationHint());
     }
 
+
+    @Test
+    void personaCatalogDoesNotResolveOtherOwnerBindingThroughCurrentScope() {
+        AgentPersonaEntity persona = persona("lujunyi", "卢俊义", "玉麒麟");
+        AgentPersonaBindingEntity otherOwnerBinding = binding("jyt-jiafewnnv58ec2379c-lujunyi", "lujunyi");
+        otherOwnerBinding.setJiacn("other-owner");
+        otherOwnerBinding.setTenantId("other-owner");
+
+        when(agentPersonaDao.selectAll()).thenReturn(List.of(persona));
+        when(agentPersonaBindingDao.findActiveByClientAndPersona("jia_client", "lujunyi"))
+                .thenReturn(otherOwnerBinding);
+
+        List<AgentRuntimeDTO> result = agentService.listPersonaCatalog();
+
+        assertEquals(1, result.size());
+        AgentRuntimeDTO dto = result.getFirst();
+        assertEquals("lujunyi", dto.getPersonaCode());
+        assertEquals(null, dto.getAgentId());
+        assertEquals("other-owner", dto.getOwnerJiacn());
+        assertEquals(true, dto.getBound());
+        assertEquals(false, dto.getBoundToMe());
+        assertEquals(false, dto.getCanBind());
+        assertEquals(AgentConstants.STATUS_OFFLINE, dto.getStatus());
+        verify(agentIdentityService, never()).requireRegistrationIdentityInScope(any(), any(), any(), any());
+        verify(agentRuntimeDao, never()).findByAgentId(any());
+    }
+
     @Test
     void newPersonaBindingIssuesOpaqueIdentityInsteadOfLegacyJytId() {
         AgentPersonaEntity persona = persona("wuyong", "吴用", "智多星");

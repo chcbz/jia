@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
     owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
     binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
@@ -322,7 +322,7 @@ ALTER TABLE agent_identity_registry
     MODIFY COLUMN lifecycle_status VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
     MODIFY COLUMN client_id VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
     MODIFY COLUMN owner_jiacn VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-    MODIFY COLUMN tenant_id VARCHAR(50) DEFAULT NULL COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+    MODIFY COLUMN tenant_id VARCHAR(50) DEFAULT '0' COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
     MODIFY COLUMN binding_id BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
     MODIFY COLUMN audit_reason VARCHAR(1000) NOT NULL COMMENT 'Auditable creation/migration reason | immutable after insert';
 ALTER TABLE agent_identity_registry COMMENT = 'Durable canonical Agent identity registry | collation binary enforces exact case matching';

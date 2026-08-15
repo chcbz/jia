@@ -9,13 +9,13 @@ public interface AgentTaskThreadMapper extends BaseMapper<AgentTaskThreadEntity>
     @Select("""
             SELECT *
             FROM agent_task_thread
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND thread_type = #{threadType}
               AND thread_key = #{threadKey}
-              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY) OR tenant_id = '0')
+              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
@@ -36,13 +36,13 @@ public interface AgentTaskThreadMapper extends BaseMapper<AgentTaskThreadEntity>
     @Select("""
             SELECT *
             FROM agent_task_thread
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND thread_type = #{threadType}
               AND thread_key = #{threadKey}
-              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY) OR tenant_id = '0')
+              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
@@ -64,11 +64,11 @@ public interface AgentTaskThreadMapper extends BaseMapper<AgentTaskThreadEntity>
     @Select("""
             SELECT *
             FROM agent_task_thread
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND conversation_id = #{conversationId}
-              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY) OR tenant_id = '0')
+              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(conversation_id AS BINARY) = CAST(#{conversationId} AS BINARY)

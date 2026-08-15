@@ -1105,7 +1105,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
-                handler, chatConversationEventBroker, builtinHallAgentSupport, chatMessageDao, scopeService);
+                handler, chatConversationEventBroker, builtinHallAgentSupport, chatMessageDao, agentService, scopeService);
 
         ChatMessageDTO chatMessage = new ChatMessageDTO();
         chatMessage.setContent("请回报当前进度");

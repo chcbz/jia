@@ -1244,11 +1244,13 @@ codexTimeoutMs=900000
         AgentPersonaBindingEntity binding = Boolean.TRUE.equals(persona.getSystemAgent())
                 ? null
                 : agentPersonaBindingDao.findActiveByClientAndPersona(clientId, persona.getPersonaCode());
+        boolean boundToMe = binding != null && jiacn.equals(binding.getJiacn());
         String catalogAgentId = null;
-        if (binding != null) {
+        if (boundToMe) {
             catalogAgentId = agentIdentityService.requireRegistrationIdentityInScope(
                     jiacn, clientId, jiacn, binding.getAgentId()).getCanonicalAgentId();
         }
+        AgentRuntimeEntity runtime = StringUtil.isBlank(catalogAgentId) ? null : agentRuntimeDao.findByAgentId(catalogAgentId);
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(catalogAgentId);
         dto.setName(persona.getName());
@@ -1261,13 +1263,10 @@ codexTimeoutMs=900000
         dto.setVisualConfig(persona.getVisualConfig());
         dto.setSystemAgent(Boolean.TRUE.equals(persona.getSystemAgent()));
         dto.setAbilities(parseList(persona.getAbilities()));
-        dto.setStatus(binding == null ? AgentConstants.STATUS_OFFLINE
-                : Optional.ofNullable(agentRuntimeDao.findByAgentId(catalogAgentId))
-                        .map(AgentRuntimeEntity::getStatus)
-                        .orElse(AgentConstants.STATUS_OFFLINE));
+        dto.setStatus(runtime == null ? AgentConstants.STATUS_OFFLINE : runtime.getStatus());
         dto.setOwnerJiacn(binding == null ? null : binding.getJiacn());
         dto.setBound(binding != null || Boolean.TRUE.equals(persona.getSystemAgent()));
-        dto.setBoundToMe(binding != null && jiacn.equals(binding.getJiacn()));
+        dto.setBoundToMe(boundToMe);
         dto.setCanBind(!Boolean.TRUE.equals(persona.getSystemAgent()) && binding == null);
         dto.setCanOperate(Boolean.TRUE.equals(dto.getBoundToMe()));
         AgentRuntimeEntity statsEntity = new AgentRuntimeEntity();

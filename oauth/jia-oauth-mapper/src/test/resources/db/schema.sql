@@ -14,7 +14,7 @@ CREATE TABLE oauth_client (
     token_settings varchar(2000) NOT NULL,
     create_time bigint DEFAULT NULL COMMENT '创建时间',
     update_time bigint DEFAULT NULL COMMENT '最后更新时间',
-    tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
     appcn varchar(32) DEFAULT NULL COMMENT '应用标识码',
     PRIMARY KEY (id)
 );
@@ -30,7 +30,7 @@ CREATE TABLE oauth_api_key (
     description VARCHAR(500) COMMENT '描述',
     create_time BIGINT COMMENT '创建时间',
     update_time BIGINT COMMENT '更新时间',
-    tenant_id VARCHAR(100) COMMENT '租户ID',
+    tenant_id VARCHAR(100) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     INDEX idx_api_key (api_key),
     INDEX idx_client_id (client_id)

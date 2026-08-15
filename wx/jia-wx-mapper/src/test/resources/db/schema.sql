@@ -16,7 +16,7 @@ CREATE TABLE wx_mp_info (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   status int DEFAULT '1' COMMENT '状态 1有效 0无效',
   appid varchar(50) NOT NULL COMMENT '开发者ID',
   secret varchar(50) NOT NULL COMMENT '开发者密码',
@@ -39,7 +39,7 @@ CREATE TABLE wx_mp_template (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (template_id)
 ) COMMENT='微信公众号消息模板表';
 
@@ -70,7 +70,7 @@ CREATE TABLE wx_mp_user (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='微信公众号用户信息';
 
@@ -97,7 +97,7 @@ CREATE TABLE wx_pay_info (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (acid),
   KEY wx_pay_info_idx_key (app_id) USING BTREE
 ) COMMENT='微信支付信息';
@@ -119,6 +119,6 @@ CREATE TABLE wx_pay_order (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='微信支付情况表';

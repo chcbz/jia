@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_legacy_manifest (
     binding_id                 BIGINT NOT NULL,
     source_client_id           VARCHAR(50) NOT NULL,
     source_owner_jiacn         VARCHAR(50) NOT NULL,
-    source_tenant_id           VARCHAR(50) DEFAULT NULL,
+    source_tenant_id           VARCHAR(50) DEFAULT '0',
     target_tenant_id           VARCHAR(50) NOT NULL,
     source_persona_code        VARCHAR(50) NOT NULL,
     source_agent_id            VARCHAR(100) NOT NULL,

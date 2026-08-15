@@ -1,5 +1,6 @@
 package cn.jia.chat.api;
 
+import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
@@ -67,6 +68,8 @@ class ChatControllerTest extends BaseMockTest {
     MemoryRepository memoryRepository;
     @Mock
     AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
+    @Mock
+    AgentService agentService;
 
     @AfterEach
     void tearDown() {
@@ -328,6 +331,7 @@ class ChatControllerTest extends BaseMockTest {
                 chatConversationEventBroker,
                 builtinHallAgentSupport,
                 chatMessageDao,
+                agentService,
                 scopeService
         );
         return new ChatController(

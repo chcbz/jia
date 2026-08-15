@@ -32,7 +32,7 @@ CREATE TABLE user_info (
     create_time bigint DEFAULT NULL COMMENT '创建时间',
     update_time bigint DEFAULT NULL COMMENT '最后更新时间',
     client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY user_info_jiacn_idx (jiacn),
     KEY user_info_openid_idx (openid),
@@ -49,7 +49,7 @@ CREATE TABLE user_group (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='用户组';
 
@@ -61,7 +61,7 @@ CREATE TABLE user_group_rel (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY user_group_rel_user_id_idx (user_id),
   KEY user_group_rel_group_id_idx (group_id)
@@ -78,7 +78,7 @@ CREATE TABLE user_msg (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='消息内容';
 
@@ -97,7 +97,7 @@ CREATE TABLE user_org (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY user_org_p_id_idx (p_id)
 ) COMMENT='组织表';
@@ -110,7 +110,7 @@ CREATE TABLE user_org_rel (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY user_org_rel_user_id_idx (user_id),
   KEY user_org_rel_org_id_idx (org_id)
@@ -125,7 +125,7 @@ CREATE TABLE user_role (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY user_role_name_idx (name)
 ) COMMENT='角色表';
@@ -139,7 +139,7 @@ CREATE TABLE user_role_rel (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY user_role_rel_user_id_idx (user_id),
   KEY user_role_rel_role_id_idx (role_id),
@@ -158,7 +158,7 @@ CREATE TABLE user_perms (
     create_time bigint DEFAULT NULL COMMENT '创建时间',
     update_time bigint DEFAULT NULL COMMENT '最后更新时间',
     client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     UNIQUE KEY d_c_f (module,func,client_id,tenant_id) USING BTREE
 ) COMMENT='资源表';
@@ -172,7 +172,7 @@ CREATE TABLE user_perms_rel (
     create_time bigint DEFAULT NULL COMMENT '创建时间',
     update_time bigint DEFAULT NULL COMMENT '最后更新时间',
     client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY user_perms_rel_role_id_idx (role_id),
     KEY user_perms_rel_perms_id_idx (perms_id)

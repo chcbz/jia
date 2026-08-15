@@ -1,6 +1,7 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.common.AgentProtocolConstants;
+import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
@@ -29,6 +30,7 @@ public class JuyitingAgentRelayService {
     private final ChatConversationEventBroker chatConversationEventBroker;
     private final BuiltinHallAgentSupport builtinHallAgentSupport;
     private final ChatMessageDao chatMessageDao;
+    private final AgentService agentService;
     private final JuyitingConversationScopeService scopeService;
 
     public JuyitingAgentRelayResult relay(ChatMessageDTO chatMessage, String conversationId, Supplier<Flux<String>> builtinAgentStream) {
@@ -36,6 +38,18 @@ public class JuyitingAgentRelayService {
         if (!JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING.equals(scopeService.resolveConversationType(chatMessage))
                 || scope.targetAgentIds().isEmpty()) {
             return new JuyitingAgentRelayResult(false, false, Flux.empty());
+        }
+
+        Optional<String> forbiddenTarget = forbiddenOwnedRosterTarget(scope);
+        if (forbiddenTarget.isPresent()) {
+            return new JuyitingAgentRelayResult(true, true, Flux.just(JsonUtil.toSafeJson(Map.of(
+                    "error", "target outside owned roster",
+                    "agentId", forbiddenTarget.get(),
+                    "conversationId", conversationId,
+                    "conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING,
+                    "conversationScopeType", scope.scopeType(),
+                    "conversationScopeKey", scope.scopeKey()
+            ))));
         }
 
         Optional<String> invalidBountyTarget = scopeService.invalidBountyTarget(chatMessage, scope);
@@ -97,6 +111,20 @@ public class JuyitingAgentRelayService {
     public String selectedAgentId(ChatMessageDTO chatMessage) {
         JuyitingConversationScope scope = scopeService.resolve(chatMessage);
         return scope.targetAgentId();
+    }
+
+    private Optional<String> forbiddenOwnedRosterTarget(JuyitingConversationScope scope) {
+        for (String agentId : scope.targetAgentIds()) {
+            if (builtinHallAgentSupport.isBuiltinAgent(agentId)) {
+                continue;
+            }
+            try {
+                agentService.get(agentId);
+            } catch (RuntimeException error) {
+                return Optional.of(agentId);
+            }
+        }
+        return Optional.empty();
     }
 
     private JuyitingAgentRelayResult relayMultiTargetAgentMessage(ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope) {

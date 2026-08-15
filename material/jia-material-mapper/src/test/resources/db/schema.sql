@@ -7,7 +7,7 @@ CREATE TABLE mat_media (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='媒体素材';
 
@@ -22,7 +22,7 @@ CREATE TABLE mat_news (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='图文素材';
 
@@ -38,7 +38,7 @@ CREATE TABLE mat_phrase (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='短语表';
 
@@ -50,7 +50,7 @@ CREATE TABLE mat_phrase_vote (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY phrase_vote_id (phrase_id),
   CONSTRAINT mat_phrase_vote_ibfk_1 FOREIGN KEY (phrase_id) REFERENCES mat_phrase (id) ON DELETE CASCADE
@@ -76,7 +76,7 @@ CREATE TABLE mat_pv_log (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='素材访问日志';
 
@@ -90,7 +90,7 @@ CREATE TABLE mat_tip (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='打赏情况表';
 
@@ -103,7 +103,7 @@ CREATE TABLE mat_vote (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='投票管理';
 
@@ -117,7 +117,7 @@ CREATE TABLE mat_vote_question (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY question_vote_id (vote_id),
   CONSTRAINT mat_vote_question_ibfk_1 FOREIGN KEY (vote_id) REFERENCES mat_vote (id) ON DELETE CASCADE
@@ -134,7 +134,7 @@ CREATE TABLE mat_vote_item (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY vote_item_question_id (question_id),
   CONSTRAINT mat_vote_item_ibfk_1 FOREIGN KEY (question_id) REFERENCES mat_vote_question (id) ON DELETE CASCADE
@@ -150,7 +150,7 @@ CREATE TABLE mat_vote_tick (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id),
   KEY vote_tick_question_id (question_id),
   KEY tick_vote_id (vote_id),

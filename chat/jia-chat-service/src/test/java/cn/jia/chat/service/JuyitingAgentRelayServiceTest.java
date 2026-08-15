@@ -1,6 +1,7 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.common.AgentProtocolConstants;
+import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentProtocolMessageNormalizer;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
 
 class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Mock
@@ -36,6 +38,8 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     BuiltinHallAgentSupport builtinHallAgentSupport;
     @Mock
     ChatMessageDao chatMessageDao;
+    @Mock
+    AgentService agentService;
 
     @AfterEach
     void tearDown() {
@@ -132,6 +136,21 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     }
 
     @Test
+    void rejectsTargetOutsideOwnedRosterWithoutSavingMessage() {
+        doThrow(new RuntimeException("forbidden")).when(agentService).get("agent-other");
+        JuyitingAgentRelayService service = service();
+
+        JuyitingAgentRelayResult result = service.relay(request(List.of("agent-other")), "1001", () -> Flux.just("builtin"));
+        List<String> events = result.stream().collectList().block();
+
+        assertTrue(result.attempted());
+        assertTrue(result.delivered());
+        assertTrue(events.getFirst().contains("target outside owned roster"));
+        verify(chatMessageDao, never()).insert(any(ChatMessageEntity.class));
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
+    }
+
+    @Test
     void rejectsBountyTargetOutsideParticipantsWithoutSavingMessage() {
         JuyitingAgentRelayService service = service();
         ChatMessageDTO request = request(List.of("agent-linchong"));
@@ -151,7 +170,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     private JuyitingAgentRelayService service() {
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport);
-        return new JuyitingAgentRelayService(agentWebSocketHandler, chatConversationEventBroker, builtinHallAgentSupport, chatMessageDao, scopeService);
+        return new JuyitingAgentRelayService(agentWebSocketHandler, chatConversationEventBroker, builtinHallAgentSupport, chatMessageDao, agentService, scopeService);
     }
 
     private ChatMessageDTO request(List<String> targetAgentIds) {

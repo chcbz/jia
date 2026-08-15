@@ -11,10 +11,10 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
             SELECT *
             FROM chat_conversation
             WHERE id = #{id}
-              AND tenant_id = #{tenantId}
+              AND (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
-              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY) OR tenant_id = '0')
+              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
             LIMIT 1

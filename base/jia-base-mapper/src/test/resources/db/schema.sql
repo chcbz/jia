@@ -12,7 +12,7 @@ CREATE TABLE core_dict (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='字典数据表';
 
@@ -29,7 +29,7 @@ CREATE TABLE core_log (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='日志';
 
@@ -42,6 +42,6 @@ CREATE TABLE core_notice (
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
-  tenant_id varchar(50) DEFAULT NULL COMMENT '租户ID',
+  tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   PRIMARY KEY (id)
 ) COMMENT='公告';

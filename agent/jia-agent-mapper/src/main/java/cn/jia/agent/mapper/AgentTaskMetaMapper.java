@@ -14,11 +14,11 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     @Select("""
             SELECT *
             FROM agent_task_meta
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
-              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY) OR tenant_id = '0')
+              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
@@ -48,11 +48,11 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     @Select("""
             SELECT *
             FROM agent_task_meta
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
-              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200)) OR tenant_id = '0')
+              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
               AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
@@ -71,11 +71,11 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     @Select("""
             SELECT *
             FROM agent_task_meta
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND assigned_agent_id = #{agentId}
-              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200)) OR tenant_id = '0')
+              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
               AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(assigned_agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
@@ -97,7 +97,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                    NULL AS title, NULL AS work_type, NULL AS lease_token,
                    NULL AS lease_until, NULL AS assignee_agent_id
             FROM agent_task_member
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
             UNION ALL
@@ -106,7 +106,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                    attempt_count, max_attempts, result_artifact_id, completed_at, version,
                    title, work_type, lease_token, lease_until, assignee_agent_id
             FROM agent_task_work_item
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
             ORDER BY row_type, entity_id
@@ -124,7 +124,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                 failure_reason = #{failureReason},
                 update_time = #{updateTime},
                 task_version = task_version + 1
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND task_version = #{expectedVersion}

@@ -127,7 +127,7 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         rows.add(column("conversation_id", "varchar", 100L, "NO", null, "utf8mb4_0900_bin", ""));
         rows.add(column("created_by_agent_id", "varchar", 100L, "NO", null, "utf8mb4_0900_bin", ""));
         rows.add(column("status", "varchar", 20L, "NO", "active", "utf8mb4_0900_bin", ""));
-        rows.add(column("tenant_id", "varchar", 50L, "NO", null, "utf8mb4_0900_bin", ""));
+        rows.add(column("tenant_id", "varchar", 50L, "NO", "0", "utf8mb4_0900_bin", ""));
         rows.add(column("client_id", "varchar", 50L, "NO", null, "utf8mb4_0900_bin", ""));
         rows.add(column("create_time", "bigint", null, "YES", null, null, ""));
         rows.add(column("update_time", "bigint", null, "YES", null, null, ""));

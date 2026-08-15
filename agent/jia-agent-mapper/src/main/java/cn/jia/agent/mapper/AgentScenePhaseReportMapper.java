@@ -23,7 +23,7 @@ public interface AgentScenePhaseReportMapper extends BaseMapper<AgentScenePhaseR
     @Select("""
             SELECT *
             FROM agent_scene_phase_report
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND scene_id = #{sceneId}
               AND report_id = #{reportId}

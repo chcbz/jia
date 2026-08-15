@@ -13,7 +13,7 @@ CREATE TABLE core_dict
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='字典数据表';
 
@@ -31,7 +31,7 @@ CREATE TABLE core_log
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='日志';
 
@@ -45,7 +45,7 @@ CREATE TABLE core_notice
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='公告';
 
@@ -61,7 +61,7 @@ CREATE TABLE dwz_record
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     UNIQUE KEY uri (uri)
 ) COMMENT='短网址记录';
@@ -78,7 +78,7 @@ create table isp_file
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 );
 
@@ -96,7 +96,7 @@ CREATE TABLE kefu_faq
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='常见问题';
 
@@ -116,7 +116,7 @@ CREATE TABLE kefu_message
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='留言信息';
 
@@ -137,7 +137,7 @@ CREATE TABLE kefu_msg_type
     create_time     bigint        DEFAULT NULL COMMENT '创建时间',
     update_time     bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id       varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id       varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id       varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='留言类型';
 
@@ -152,7 +152,7 @@ CREATE TABLE kefu_msg_subscribe
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='客户消息订阅';
 
@@ -168,7 +168,7 @@ CREATE TABLE kefu_msg_log
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='消息内容';
 
@@ -183,7 +183,7 @@ CREATE TABLE mat_media
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='媒体素材';
 
@@ -200,7 +200,7 @@ CREATE TABLE mat_news
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='图文素材';
 
@@ -217,7 +217,7 @@ CREATE TABLE mat_phrase
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='短语表';
 
@@ -230,7 +230,7 @@ CREATE TABLE mat_phrase_vote
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         phrase_vote_id (phrase_id),
     CONSTRAINT mat_phrase_vote_ibfk_1 FOREIGN KEY (phrase_id) REFERENCES mat_phrase (id) ON DELETE CASCADE
@@ -258,7 +258,7 @@ CREATE TABLE mat_pv_log
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='素材访问日志';
 
@@ -273,7 +273,7 @@ CREATE TABLE mat_tip
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='打赏情况表';
 
@@ -287,7 +287,7 @@ CREATE TABLE mat_vote
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='投票管理';
 
@@ -302,7 +302,7 @@ CREATE TABLE mat_vote_question
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         question_vote_id (vote_id),
     CONSTRAINT mat_vote_question_ibfk_1 FOREIGN KEY (vote_id) REFERENCES mat_vote (id) ON DELETE CASCADE
@@ -320,7 +320,7 @@ CREATE TABLE mat_vote_item
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         vote_item_question_id (question_id),
     CONSTRAINT mat_vote_item_ibfk_1 FOREIGN KEY (question_id) REFERENCES mat_vote_question (id) ON DELETE CASCADE
@@ -337,7 +337,7 @@ CREATE TABLE mat_vote_tick
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         vote_tick_question_id (question_id),
     KEY         tick_vote_id (vote_id),
@@ -361,7 +361,7 @@ CREATE TABLE oauth_client
     token_settings                varchar(2000)                           NOT NULL,
     create_time                   bigint        DEFAULT NULL COMMENT '创建时间',
     update_time                   bigint        DEFAULT NULL COMMENT '最后更新时间',
-    tenant_id                     varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id                     varchar(50)   DEFAULT '0' COMMENT '租户ID',
     appcn                         varchar(32)   DEFAULT NULL COMMENT '应用标识码',
     PRIMARY KEY (id)
 );
@@ -380,7 +380,7 @@ CREATE TABLE point_gift
     create_time  bigint        DEFAULT NULL COMMENT '创建时间',
     update_time  bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id    varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id    varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id    varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='礼品信息';
 
@@ -403,7 +403,7 @@ CREATE TABLE point_gift_usage
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='礼品兑换情况表';
 
@@ -417,7 +417,7 @@ CREATE TABLE point_record
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='积分记录';
 
@@ -429,7 +429,7 @@ CREATE TABLE point_referral
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='推荐信息';
 
@@ -444,7 +444,7 @@ CREATE TABLE point_sign
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='签到信息';
 
@@ -459,7 +459,7 @@ CREATE TABLE sms_buy
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='短信充值情况';
 
@@ -474,7 +474,7 @@ CREATE TABLE sms_code
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='手机短信表';
 
@@ -489,7 +489,7 @@ CREATE TABLE sms_config
     remain      int          DEFAULT '0' COMMENT '剩余可用数量',
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (client_id)
 ) COMMENT='客户端配置表';
 
@@ -507,7 +507,7 @@ CREATE TABLE sms_message
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='消息发送';
 
@@ -521,7 +521,7 @@ CREATE TABLE sms_package
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='短信套餐';
 
@@ -535,7 +535,7 @@ CREATE TABLE sms_reply
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='短信回复情况表';
 
@@ -548,7 +548,7 @@ CREATE TABLE sms_send
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (msgid)
 ) COMMENT='短信发送情况表';
 
@@ -564,7 +564,7 @@ CREATE TABLE sms_template
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (template_id)
 ) COMMENT='短信模板';
 
@@ -588,7 +588,7 @@ CREATE TABLE task_plan
     create_time  bigint               DEFAULT NULL COMMENT '创建时间',
     update_time  bigint               DEFAULT NULL COMMENT '最后更新时间',
     client_id    varchar(50)          DEFAULT NULL COMMENT '应用标识符',
-    tenant_id    varchar(50)          DEFAULT NULL COMMENT '租户ID',
+    tenant_id    varchar(50)          DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='任务计划';
 
@@ -601,7 +601,7 @@ CREATE TABLE task_item
     create_time  bigint      DEFAULT NULL COMMENT '创建时间',
     update_time  bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id    varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id    varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id    varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY          plan_id (plan_id),
     CONSTRAINT task_item_ibfk_1 FOREIGN KEY (plan_id) REFERENCES task_plan (id) ON DELETE CASCADE
@@ -662,7 +662,7 @@ CREATE TABLE user_info
     create_time bigint                      null comment '创建时间',
     update_time bigint                      null comment '最后更新时间',
     client_id   varchar(50)                 null comment '应用标识符',
-    tenant_id   varchar(50)                 null comment '租户ID',
+    tenant_id   varchar(50)                 DEFAULT '0' COMMENT '租户ID',
     weixinid    varchar(32)                 null comment '微信平台用户ID',
     weiboid     varchar(32)                 null comment '微博平台用户ID',
     githubid    varchar(32)                 null comment 'Github平台用户ID',
@@ -684,7 +684,7 @@ CREATE TABLE user_group
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='用户组';
 
@@ -697,7 +697,7 @@ CREATE TABLE user_group_rel
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         user_group_rel_user_id_idx (user_id),
     KEY         user_group_rel_group_id_idx (group_id)
@@ -715,7 +715,7 @@ CREATE TABLE user_msg
     create_time bigint        DEFAULT NULL COMMENT '创建时间',
     update_time bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='消息内容';
 
@@ -735,7 +735,7 @@ CREATE TABLE user_org
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         user_org_p_id_idx (p_id)
 ) COMMENT='组织表';
@@ -749,7 +749,7 @@ CREATE TABLE user_org_rel
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         user_org_rel_user_id_idx (user_id),
     KEY         user_org_rel_org_id_idx (org_id)
@@ -765,7 +765,7 @@ CREATE TABLE user_role
     create_time bigint               DEFAULT NULL COMMENT '创建时间',
     update_time bigint               DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)          DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)          DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)          DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         user_role_name_idx (name)
 ) COMMENT='角色表';
@@ -780,7 +780,7 @@ CREATE TABLE user_role_rel
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         user_role_rel_user_id_idx (user_id),
     KEY         user_role_rel_role_id_idx (role_id),
@@ -801,7 +801,7 @@ CREATE TABLE user_perms
     create_time bigint               DEFAULT NULL COMMENT '创建时间',
     update_time bigint               DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)          DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)          DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)          DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     UNIQUE KEY d_c_f (module,func,resource_id) USING BTREE
 ) COMMENT='资源表';
@@ -816,7 +816,7 @@ CREATE TABLE user_perms_rel
     create_time bigint      DEFAULT NULL COMMENT '创建时间',
     update_time bigint      DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50) DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50) DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50) DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id),
     KEY         user_perms_rel_role_id_idx (role_id),
     KEY         user_perms_rel_perms_id_idx (perms_id)
@@ -841,7 +841,7 @@ CREATE TABLE wx_mp_info
     create_time        bigint        DEFAULT NULL COMMENT '创建时间',
     update_time        bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id          varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id          varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id          varchar(50)   DEFAULT '0' COMMENT '租户ID',
     status             int           DEFAULT '1' COMMENT '状态 1有效 0无效',
     appid              varchar(50)  NOT NULL COMMENT '开发者ID',
     secret             varchar(50)  NOT NULL COMMENT '开发者密码',
@@ -865,7 +865,7 @@ CREATE TABLE wx_mp_template
     create_time      bigint       DEFAULT NULL COMMENT '创建时间',
     update_time      bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id        varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id        varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id        varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (template_id)
 ) COMMENT='微信公众号消息模板表';
 
@@ -897,7 +897,7 @@ CREATE TABLE wx_mp_user
     create_time      bigint        DEFAULT NULL COMMENT '创建时间',
     update_time      bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id        varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id        varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id        varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='微信公众号用户信息';
 
@@ -925,7 +925,7 @@ CREATE TABLE wx_pay_info
     create_time bigint       DEFAULT NULL COMMENT '创建时间',
     update_time bigint       DEFAULT NULL COMMENT '最后更新时间',
     client_id   varchar(50)  DEFAULT NULL COMMENT '应用标识符',
-    tenant_id   varchar(50)  DEFAULT NULL COMMENT '租户ID',
+    tenant_id   varchar(50)  DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (acid),
     KEY         wx_pay_info_idx_key (app_id) USING BTREE
 ) COMMENT='微信支付信息';
@@ -948,6 +948,6 @@ CREATE TABLE wx_pay_order
     create_time      bigint        DEFAULT NULL COMMENT '创建时间',
     update_time      bigint        DEFAULT NULL COMMENT '最后更新时间',
     client_id        varchar(50)   DEFAULT NULL COMMENT '应用标识符',
-    tenant_id        varchar(50)   DEFAULT NULL COMMENT '租户ID',
+    tenant_id        varchar(50)   DEFAULT '0' COMMENT '租户ID',
     PRIMARY KEY (id)
 ) COMMENT='微信支付情况表';

@@ -3,7 +3,9 @@ package cn.jia.common.dao;
 import cn.jia.common.entity.BaseEntityWrapper;
 import cn.jia.core.dao.IBaseDao;
 import cn.jia.core.entity.BaseEntity;
+import cn.jia.core.mybatis.TenantScopeHelper;
 import cn.jia.core.util.CollectionUtil;
+import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.enums.SqlMethod;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
@@ -161,11 +163,38 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
         return baseMapper.selectByMap(columnMap);
     }
 
+    /**
+     * 根据实体条件查询，自动追加 tenant 范围条件。
+     * <p>
+     * 当 entity.tenantId 不为空时，生成
+     * {@code (tenant_id = entity.tenantId OR tenant_id = '0')}，
+     * 确保公共数据（tenant_id='0'）同时被查出。
+     * </p>
+     */
     @Override
     public List<T> selectByEntity(T entity) {
-        QueryWrapper<T> queryWrapper = new QueryWrapper<>(entity);
-        appendQueryWrapper(entity, queryWrapper);
-        return baseMapper.selectList(queryWrapper);
+        String entityTenantId = entity.getTenantId();
+        // 临时清零 tenantId 避免 QueryWrapper 自动生成 tenant_id = ? 精确条件
+        entity.setTenantId(null);
+        try {
+            QueryWrapper<T> queryWrapper = new QueryWrapper<>(entity);
+            appendQueryWrapper(entity, queryWrapper);
+            applyTenantScope(queryWrapper, entityTenantId);
+            return baseMapper.selectList(queryWrapper);
+        } finally {
+            // 恢复原值，不污染调用方
+            entity.setTenantId(entityTenantId);
+        }
+    }
+
+    /**
+     * 追加 tenant 范围条件：当 tenantId 非空时，查
+     * {@code (tenant_id = tenantId OR tenant_id = '0')}。
+     */
+    private void applyTenantScope(QueryWrapper<T> queryWrapper, String tenantId) {
+        if (StringUtil.isNotBlank(tenantId) && !TenantScopeHelper.DEFAULT_TENANT.equals(tenantId)) {
+            queryWrapper.and(w -> w.eq("tenant_id", tenantId).or().eq("tenant_id", TenantScopeHelper.DEFAULT_TENANT));
+        }
     }
 
     protected void appendQueryWrapper(T entity, QueryWrapper<T> queryWrapper) {
@@ -176,7 +205,8 @@ public abstract class BaseDaoImpl<M extends BaseMapper<T>, T extends BaseEntity>
             Class<?> clazz = Class.forName(extendWrapperClass);
             Constructor<?> constructor = clazz.getDeclaredConstructor();
             constructor.setAccessible(true);
-            BaseEntityWrapper<T, T> entityWrapper = (BaseEntityWrapper) constructor.newInstance();
+            @SuppressWarnings("unchecked")
+            BaseEntityWrapper<T, T> entityWrapper = (BaseEntityWrapper<T, T>) constructor.newInstance();
             entityWrapper.appendQueryWrapper(entity, queryWrapper);
         } catch (ClassNotFoundException | NoSuchMethodException ignored) {
             // Wrapper 类不存在或无默认构造函数时静默忽略，保持向后兼容

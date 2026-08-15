@@ -43,7 +43,7 @@ public interface AgentSceneEventMapper extends BaseMapper<AgentSceneEventEntity>
     @Select("""
             SELECT current_version
             FROM agent_scene_version
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND scene_id = #{sceneId}
             LIMIT 1

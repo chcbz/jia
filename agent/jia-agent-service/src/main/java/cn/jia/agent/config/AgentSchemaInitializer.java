@@ -88,7 +88,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     %s,
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
-                    tenant_id           VARCHAR(50) DEFAULT NULL COMMENT 'Legacy nullable tenant, when populated must equal owner_jiacn',
+                    tenant_id           VARCHAR(50) DEFAULT '0' COMMENT 'Legacy tenant, when populated must equal owner_jiacn',
                     client_id           VARCHAR(50) DEFAULT NULL COMMENT 'Owner-scope client ID',
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_agent_binding_active_persona (client_id, owner_jiacn, active_persona_code),
@@ -97,7 +97,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status),
                     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-                    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id IS NULL OR tenant_id = owner_jiacn)
+                    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id = '0' OR tenant_id = owner_jiacn)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
                 """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
         addRequiredColumnIfMissing("agent_persona_binding", "owner_jiacn", ownerJiacnColumn);
@@ -114,7 +114,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_status",
                 "status IN (0, 1, 2, 3)");
         ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_tenant_owner",
-                "tenant_id IS NULL OR tenant_id = owner_jiacn");
+                "tenant_id = '0' OR tenant_id = owner_jiacn");
     }
 
     private void validateExistingIdentityTables(boolean validateTriggers) {
@@ -565,7 +565,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
                     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
                     owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-                    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+                    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
                     binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
                     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
                     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
@@ -809,7 +809,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     last_seen_at            BIGINT NOT NULL COMMENT 'Latest apply observation time',
                     occurrence_count        BIGINT NOT NULL DEFAULT 1 COMMENT 'Number of approved apply observations',
                     last_operator           VARCHAR(100) NOT NULL COMMENT 'Latest approved migration operator',
-                    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source owner jiacn scope, nullable only for audited bad history',
+                    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Source owner jiacn scope',
                     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source OAuth/API client scope, nullable only for audited bad history',
                     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -844,7 +844,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     manifest_row_sha256     CHAR(64) NOT NULL COMMENT 'Database-recomputed source/scope/resolution digest',
                     meta_id                 BIGINT NOT NULL COMMENT 'Approved source agent_task_meta primary key',
                     task_id                 VARCHAR(100) NOT NULL COMMENT 'Approved source task ID',
-                    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved tenant scope',
+                    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Approved tenant scope',
                     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved client scope',
                     source_hash             CHAR(64) NOT NULL COMMENT 'Approved original assignee SHA-256',
                     source_format           VARCHAR(32) NOT NULL COMMENT 'Approved source format',
@@ -1202,7 +1202,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 new BackfillColumnExpectation("agent_task_backfill_issue", "last_seen_at", "bigint", "bigint", false, null, null),
                 new BackfillColumnExpectation("agent_task_backfill_issue", "occurrence_count", "bigint", "bigint", false, "1", null),
                 new BackfillColumnExpectation("agent_task_backfill_issue", "last_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
-                new BackfillColumnExpectation("agent_task_backfill_issue", "tenant_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_issue", "tenant_id", "varchar", "varchar(50)", true, "0", "utf8mb4_0900_bin"),
                 new BackfillColumnExpectation("agent_task_backfill_issue", "client_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
                 new BackfillColumnExpectation("agent_task_backfill_issue", "create_time", "bigint", "bigint", true, null, null),
                 new BackfillColumnExpectation("agent_task_backfill_issue", "update_time", "bigint", "bigint", true, null, null),
@@ -1222,7 +1222,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "manifest_row_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "meta_id", "bigint", "bigint", false, null, null),
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "task_id", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
-                new BackfillColumnExpectation("agent_task_backfill_manifest", "tenant_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_backfill_manifest", "tenant_id", "varchar", "varchar(50)", true, "0", "utf8mb4_0900_bin"),
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "client_id", "varchar", "varchar(50)", true, null, "utf8mb4_0900_bin"),
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "source_hash", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
                 new BackfillColumnExpectation("agent_task_backfill_manifest", "source_format", "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin"),
@@ -1572,7 +1572,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     created_at          BIGINT NOT NULL COMMENT 'Note created time',
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
-                    tenant_id           VARCHAR(50) DEFAULT NULL COMMENT 'Tenant ID',
+                    tenant_id           VARCHAR(50) DEFAULT '0' COMMENT 'Tenant ID',
                     client_id           VARCHAR(50) DEFAULT NULL COMMENT 'Client ID',
                     PRIMARY KEY (id),
                     KEY idx_agent_task_note_task_id (task_id),

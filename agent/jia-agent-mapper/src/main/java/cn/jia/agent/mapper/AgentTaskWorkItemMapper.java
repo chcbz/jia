@@ -23,11 +23,11 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                    #{item.submittedAt}, #{item.completedAt}, #{item.version},
                    #{tenantId}, #{clientId}, #{item.createTime}, #{item.updateTime}
             FROM agent_task_meta parent
-            WHERE parent.tenant_id = #{tenantId}
+            WHERE (parent.tenant_id = #{tenantId} OR parent.tenant_id = '0')
               AND parent.client_id = #{clientId}
               AND parent.task_id = #{item.taskId}
-              AND CAST(parent.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
-              AND OCTET_LENGTH(parent.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND (CAST(parent.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200)) OR parent.tenant_id = '0')
+              AND (OCTET_LENGTH(parent.tenant_id) = OCTET_LENGTH(#{tenantId}) OR parent.tenant_id = '0')
               AND CAST(parent.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(parent.client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(SUBSTRING(parent.task_id, 1, 50) AS BINARY(200))
@@ -76,7 +76,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 completed_at = #{item.completedAt},
                 update_time = #{updateTime},
                 version = version + 1
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND work_item_id = #{workItemId}
               AND version = #{expectedVersion}
@@ -100,7 +100,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
@@ -130,7 +130,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
@@ -161,7 +161,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
@@ -197,7 +197,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
-            WHERE tenant_id = #{tenantId}
+            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
