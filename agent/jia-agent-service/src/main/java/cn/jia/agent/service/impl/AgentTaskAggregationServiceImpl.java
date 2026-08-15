@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.entity.AgentTaskAggregationCommandDTO;
 import cn.jia.agent.entity.AgentTaskAggregationDTO;
@@ -11,6 +13,8 @@ import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
@@ -30,12 +34,15 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     private final AgentTaskMetaDao taskMetaDao;
     private final AgentIdentityService identityService;
     private final AgentTaskAggregationCalculator calculator;
+    private final AgentTaskMutationTransaction mutationTransaction;
+    private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
 
     @Inject
     public AgentTaskAggregationServiceImpl(
-            AgentTaskMetaDao taskMetaDao, AgentIdentityService identityService) {
-        this(taskMetaDao, identityService,
+            AgentTaskMetaDao taskMetaDao, AgentIdentityService identityService,
+            AgentTaskMutationTransaction mutationTransaction, AgentTaskEventWriter eventWriter) {
+        this(taskMetaDao, identityService, mutationTransaction, eventWriter,
                 new AgentTaskAggregationCalculator(), System::currentTimeMillis);
     }
 
@@ -44,8 +51,18 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
             AgentIdentityService identityService,
             AgentTaskAggregationCalculator calculator,
             LongSupplier clock) {
+        this(taskMetaDao, identityService, directTransaction(taskMetaDao), command -> null,
+                calculator, clock);
+    }
+
+    AgentTaskAggregationServiceImpl(
+            AgentTaskMetaDao taskMetaDao, AgentIdentityService identityService,
+            AgentTaskMutationTransaction mutationTransaction, AgentTaskEventWriter eventWriter,
+            AgentTaskAggregationCalculator calculator, LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.identityService = Objects.requireNonNull(identityService, "identityService");
+        this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
+        this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.calculator = Objects.requireNonNull(calculator, "calculator");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -57,34 +74,35 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
             AgentTaskAggregationCommandDTO command) {
         requireScopeAndTask(tenantId, clientId, taskId);
         long expectedVersion = requireCommand(command);
-        long calculatedAt = now();
+        try {
+            return mutationTransaction.executeWithLockedTaskRoot(
+                    tenantId, clientId, taskId, task -> aggregateLocked(
+                            tenantId, clientId, taskId, expectedVersion, task));
+        } catch (cn.jia.agent.exception.AgentTaskCollaborationException e) {
+            throw switch (e.getReason()) {
+                case NOT_FOUND -> notFound();
+                case INVALID_PERSISTED_STATE -> invalidPersisted(e.getMessage());
+                default -> e;
+            };
+        }
+    }
 
-        // Lock the aggregate root, then load members and work items with one UNION
-        // statement. Statement-level MVCC makes the child snapshot indivisible: a
-        // concurrent child commit is wholly before or wholly after this read.
-        AgentTaskMetaEntity task = taskMetaDao.findByTaskIdForUpdate(
-                tenantId, clientId, taskId);
-        if (task == null) {
-            throw notFound();
-        }
+    private AgentTaskAggregationDTO aggregateLocked(
+            String tenantId, String clientId, String taskId, long expectedVersion,
+            AgentTaskMetaEntity task) {
+        long calculatedAt = now();
         validateTask(task, tenantId, clientId, taskId);
-        if (task.getTaskVersion() != expectedVersion) {
-            throw conflict();
-        }
+        if (task.getTaskVersion() != expectedVersion) throw conflict();
 
         List<AgentTaskAggregationSnapshotRow> snapshot = taskMetaDao.findAggregationSnapshot(
                 tenantId, clientId, taskId);
-        if (snapshot == null) {
-            throw invalidPersisted("Aggregate snapshot is incomplete");
-        }
+        if (snapshot == null) throw invalidPersisted("Aggregate snapshot is incomplete");
         List<AgentTaskMemberEntity> members = snapshot.stream()
                 .filter(row -> "member".equals(row.getRowType()))
-                .map(row -> memberFromSnapshot(row, tenantId, clientId, taskId))
-                .toList();
+                .map(row -> memberFromSnapshot(row, tenantId, clientId, taskId)).toList();
         List<AgentTaskWorkItemEntity> workItems = snapshot.stream()
                 .filter(row -> "work_item".equals(row.getRowType()))
-                .map(row -> workItemFromSnapshot(row, tenantId, clientId, taskId))
-                .toList();
+                .map(row -> workItemFromSnapshot(row, tenantId, clientId, taskId)).toList();
         if (members.size() + workItems.size() != snapshot.size()) {
             throw invalidPersisted("Aggregate snapshot contains an unknown row type");
         }
@@ -94,29 +112,43 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 currentStatus, members, workItems);
         boolean changed = decision.status() != currentStatus;
         long resultVersion = expectedVersion;
-
         if (changed) {
             Long startedAt = task.getStartedAt();
-            if (startedAt == null && startsTaskClock(decision.status())) {
-                startedAt = calculatedAt;
-            }
+            if (startedAt == null && startsTaskClock(decision.status())) startedAt = calculatedAt;
             Long completedAt = decision.status() == AgentTaskStatus.COMPLETED
-                    ? firstNonNull(task.getCompletedAt(), calculatedAt)
-                    : null;
-            String failureReason = aggregateFailureReason(decision);
-            int updated = taskMetaDao.updateStatusByVersion(
-                    tenantId, clientId, taskId, expectedVersion,
-                    decision.status().value(), startedAt, completedAt, failureReason);
-            if (updated == 0) {
-                throw conflict();
-            }
-            if (updated != 1) {
-                throw invalidPersisted("Scoped task CAS updated an unexpected row count");
-            }
+                    ? firstNonNull(task.getCompletedAt(), calculatedAt) : null;
+            int updated = taskMetaDao.updateStatusByVersion(tenantId, clientId, taskId,
+                    expectedVersion, decision.status().value(), startedAt, completedAt,
+                    aggregateFailureReason(decision));
+            if (updated == 0) throw conflict();
+            if (updated != 1) throw invalidPersisted(
+                    "Scoped task CAS updated an unexpected row count");
             resultVersion++;
+            appendAggregateEvent(tenantId, clientId, taskId, currentStatus, decision,
+                    expectedVersion, resultVersion, calculatedAt);
         }
-
         return result(taskId, currentStatus, decision, changed, resultVersion, calculatedAt);
+    }
+
+    private void appendAggregateEvent(String tenantId, String clientId, String taskId,
+            AgentTaskStatus currentStatus, AgentTaskAggregationCalculator.Decision decision,
+            long expectedVersion, long resultVersion, long occurredAt) {
+        AgentTaskAggregationCalculator.Counts counts = decision.counts();
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.FROM_STATUS, currentStatus.value())
+                .put(TaskEventPayload.Key.TO_STATUS, decision.status().value())
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, expectedVersion)
+                .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion)
+                .put(TaskEventPayload.Key.DECISION_CODE, decision.reason())
+                .put(TaskEventPayload.Key.MEMBER_COUNT, counts.memberCount())
+                .put(TaskEventPayload.Key.WORK_ITEM_COUNT, counts.workItemCount())
+                .put(TaskEventPayload.Key.COMPLETED_WORK_ITEM_COUNT,
+                        counts.requiredCompletedCount())
+                .put(TaskEventPayload.Key.FAILED_WORK_ITEM_COUNT, counts.requiredFailedCount());
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+                AgentTaskMutationEventSupport.taskEvent(decision.status().value()),
+                TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK, taskId,
+                payload, occurredAt, resultVersion));
     }
 
     private long requireCommand(AgentTaskAggregationCommandDTO command) {
@@ -347,6 +379,33 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 || StringUtil.isBlank(taskId)) {
             throw invalidRequest("tenantId, clientId and taskId are required");
         }
+    }
+
+    private static AgentTaskMutationTransaction directTransaction(AgentTaskMetaDao taskMetaDao) {
+        return new AgentTaskMutationTransaction() {
+            @Override
+            public <T> T executeWithLockedTaskRoot(String tenantId, String clientId, String taskId,
+                    LockedTaskMutation<T> mutation) {
+                AgentTaskMetaEntity root = taskMetaDao.findByTaskIdForUpdate(
+                        tenantId, clientId, taskId);
+                if (root == null) {
+                    throw new cn.jia.agent.exception.AgentTaskCollaborationException(
+                            cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,
+                            "Task not found in requested scope");
+                }
+                return mutation.apply(root);
+            }
+            @Override
+            public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
+                    String workItemId, LockedTaskMutation<T> mutation) {
+                throw new UnsupportedOperationException();
+            }
+            @Override
+            public <T> T executeAfterTaskRootReservation(String tenantId, String clientId,
+                    String taskId, TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+                throw new UnsupportedOperationException();
+            }
+        };
     }
 
     private AgentTaskStateException invalidRequest(String message) {

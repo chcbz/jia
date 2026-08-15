@@ -5,6 +5,11 @@ import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskRequestDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.agent.entity.AgentTaskArtifactEntity;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactQueryDTO;
@@ -20,6 +25,8 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
@@ -39,6 +46,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -57,6 +65,8 @@ class AgentTaskCollaborationServiceImplTest {
     private AgentTaskWorkItemDao workItemDao;
     private AgentTaskRequestDao requestDao;
     private AgentTaskArtifactDao artifactDao;
+    private AgentTaskMutationTransaction mutationTransaction;
+    private AgentTaskEventWriter eventWriter;
     private AgentTaskCollaborationServiceImpl service;
 
     @BeforeEach
@@ -66,8 +76,17 @@ class AgentTaskCollaborationServiceImplTest {
         workItemDao = mock(AgentTaskWorkItemDao.class);
         requestDao = mock(AgentTaskRequestDao.class);
         artifactDao = mock(AgentTaskArtifactDao.class);
+        mutationTransaction = mock(AgentTaskMutationTransaction.class);
+        eventWriter = mock(AgentTaskEventWriter.class);
+        when(mutationTransaction.executeWithLockedTaskRoot(
+                eq(TENANT), eq(CLIENT), eq(TASK), any())).thenAnswer(invocation -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+            AgentTaskMetaEntity root = taskDao.findByTaskId(TENANT, CLIENT, TASK);
+            return mutation.apply(root == null ? task(null) : root);
+        });
         service = new AgentTaskCollaborationServiceImpl(
-                taskDao, memberDao, workItemDao, requestDao, artifactDao, () -> NOW);
+                taskDao, memberDao, workItemDao, requestDao, artifactDao,
+                mutationTransaction, eventWriter, () -> NOW);
     }
 
     @Test
@@ -564,6 +583,137 @@ class AgentTaskCollaborationServiceImplTest {
         assertEquals(1, cn.jia.agent.service.AgentWorkItemResultCommitService.class.getDeclaredMethods().length);
     }
 
+
+    @ParameterizedTest
+    @CsvSource({
+            "help, HELP_REQUESTED",
+            "review, REVIEW_REQUESTED",
+            "approval, REQUEST_CREATED"
+    })
+    void requestCreateMapsCanonicalEventType(String requestType, String expectedEventType) {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        AgentTaskRequestEntity stored = request(
+                "req-1", "open", 0L, ACTOR, "agent", TARGET);
+        stored.setRequestType(requestType);
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1")).thenReturn(stored);
+        AgentTaskRequestCreateDTO command = createRequest();
+        command.setRequestType(requestType);
+
+        service.create(TENANT, CLIENT, TASK, ACTOR, command);
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals(expectedEventType, event.getValue().getEventType());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "acknowledged, REQUEST_ACKNOWLEDGED, open",
+            "resolved, REQUEST_RESOLVED, acknowledged",
+            "rejected, REQUEST_REJECTED, acknowledged",
+            "cancelled, REQUEST_CANCELLED, open"
+    })
+    void requestTransitionsAppendCanonicalEvents(
+            String targetStatus, String expectedEventType, String currentStatus) {
+        String actor = "cancelled".equals(targetStatus) ? ACTOR : TARGET;
+        allow(actor, "reviewer");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", currentStatus, 2L, ACTOR, "agent", TARGET));
+        when(requestDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq("req-1"),
+                eq(2L), any())).thenReturn(1);
+        Map<String, Object> response = switch (targetStatus) {
+            case "resolved", "rejected" -> Map.of("decision", targetStatus);
+            default -> null;
+        };
+        AgentTaskRequestTransitionDTO command = transition(2L, response);
+
+        switch (targetStatus) {
+            case "acknowledged" -> service.acknowledge(
+                    TENANT, CLIENT, TASK, actor, "req-1", command);
+            case "resolved" -> service.resolve(
+                    TENANT, CLIENT, TASK, actor, "req-1", command);
+            case "rejected" -> service.reject(
+                    TENANT, CLIENT, TASK, actor, "req-1", command);
+            case "cancelled" -> service.cancel(
+                    TENANT, CLIENT, TASK, actor, "req-1", command);
+            default -> throw new AssertionError(targetStatus);
+        }
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals(expectedEventType, event.getValue().getEventType());
+    }
+
+    @Test
+    void requestCreateLocksRootAndMapsReviewEventAfterInsert() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, "work-1"))
+                .thenReturn(workItem("work-1"));
+        when(requestDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 0L, ACTOR, "agent", TARGET));
+
+        service.create(TENANT, CLIENT, TASK, ACTOR, createRequest());
+
+        var order = inOrder(mutationTransaction, memberDao, requestDao, eventWriter);
+        order.verify(mutationTransaction).executeWithLockedTaskRoot(
+                eq(TENANT), eq(CLIENT), eq(TASK), any());
+        order.verify(memberDao).findByTaskAndAgent(TENANT, CLIENT, TASK, ACTOR);
+        order.verify(requestDao).insert(eq(TENANT), eq(CLIENT), any());
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        order.verify(eventWriter).append(event.capture());
+        assertEquals(TaskEventType.REVIEW_REQUESTED, event.getValue().getEventType());
+        assertEquals(TaskEventType.Aggregate.REQUEST, event.getValue().getAggregateType());
+        assertEquals("req-1", event.getValue().getAggregateId());
+    }
+
+    @Test
+    void requestCasConflictAppendsNoEvent() {
+        allow(TARGET, "reviewer");
+        when(requestDao.findByRequestId(TENANT, CLIENT, TASK, "req-1"))
+                .thenReturn(request("req-1", "open", 4L, ACTOR, "agent", TARGET));
+
+        assertThrows(AgentTaskCollaborationException.class, () -> service.acknowledge(
+                TENANT, CLIENT, TASK, TARGET, "req-1", transition(3L, null)));
+
+        verify(eventWriter, never()).append(any());
+    }
+
+    @Test
+    void artifactEventContainsOnlyBoundedDigestMetadata() {
+        allow(ACTOR, "worker");
+        AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+        command.setMetadata(Map.of("credential", "secret-metadata"));
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-1"))
+                .thenReturn(null);
+        when(artifactDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(artifactDao.findVersion(TENANT, CLIENT, TASK, "artifact-1", 1))
+                .thenReturn(artifact("artifact-1", 1, ACTOR, "task_members"));
+
+        service.publish(TENANT, CLIENT, TASK, ACTOR, command);
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals(TaskEventType.ARTIFACT_PUBLISHED, event.getValue().getEventType());
+        Map<String, Object> payload = JsonUtil.jsonToMap(event.getValue().getEventJson());
+        assertEquals(sha256("bounded-content"), payload.get("contentSha256"));
+        assertEquals((long) "bounded-content".getBytes(StandardCharsets.UTF_8).length,
+                ((Number) payload.get("contentByteLength")).longValue());
+        assertTrue(!event.getValue().getEventJson().contains("bounded-content"));
+        assertTrue(!event.getValue().getEventJson().contains("secret-metadata"));
+    }
+
     private void allow(String agentId, String role) {
         when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(task(null));
         when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, agentId))
@@ -574,6 +724,10 @@ class AgentTaskCollaborationServiceImplTest {
         AgentTaskMetaEntity entity = new AgentTaskMetaEntity();
         entity.setTaskId(TASK);
         entity.setCoordinatorAgentId(coordinator);
+        entity.setTaskVersion(0L);
+        entity.setCurrentEventVersion(0L);
+        entity.setTenantId(TENANT);
+        entity.setClientId(CLIENT);
         return entity;
     }
 

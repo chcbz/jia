@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskArtifactDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
@@ -23,6 +25,8 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import cn.jia.agent.service.AgentTaskRequestService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskRequestStatus;
 import cn.jia.core.util.JsonUtil;
@@ -79,30 +83,48 @@ public class AgentTaskCollaborationServiceImpl
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskRequestDao requestDao;
     private final AgentTaskArtifactDao artifactDao;
+    private final AgentTaskMutationTransaction mutationTransaction;
+    private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
 
     @Inject
     public AgentTaskCollaborationServiceImpl(
-            AgentTaskMetaDao taskMetaDao,
-            AgentTaskMemberDao memberDao,
-            AgentTaskWorkItemDao workItemDao,
-            AgentTaskRequestDao requestDao,
-            AgentTaskArtifactDao artifactDao) {
-        this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao, System::currentTimeMillis);
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
+            AgentTaskArtifactDao artifactDao, AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter) {
+        this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao,
+                mutationTransaction, eventWriter, System::currentTimeMillis);
     }
 
     AgentTaskCollaborationServiceImpl(
-            AgentTaskMetaDao taskMetaDao,
-            AgentTaskMemberDao memberDao,
-            AgentTaskWorkItemDao workItemDao,
-            AgentTaskRequestDao requestDao,
-            AgentTaskArtifactDao artifactDao,
-            LongSupplier clock) {
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
+            AgentTaskArtifactDao artifactDao) {
+        this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao,
+                System::currentTimeMillis);
+    }
+
+    AgentTaskCollaborationServiceImpl(
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
+            AgentTaskArtifactDao artifactDao, LongSupplier clock) {
+        this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao,
+                directTransaction(taskMetaDao), command -> null, clock);
+    }
+
+    AgentTaskCollaborationServiceImpl(
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
+            AgentTaskArtifactDao artifactDao, AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter, LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.requestDao = Objects.requireNonNull(requestDao, "requestDao");
         this.artifactDao = Objects.requireNonNull(artifactDao, "artifactDao");
+        this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
+        this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -110,7 +132,14 @@ public class AgentTaskCollaborationServiceImpl
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskRequestViewDTO create(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskRequestCreateDTO command) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true);
+        requireScope(tenantId, clientId, taskId, actorAgentId);
+        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
+                taskRoot -> createLocked(tenantId, clientId, taskId, actorAgentId, command, taskRoot));
+    }
+
+    private AgentTaskRequestViewDTO createLocked(String tenantId, String clientId, String taskId,
+            String actorAgentId, AgentTaskRequestCreateDTO command, AgentTaskMetaEntity taskRoot) {
+        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("request command is required");
         }
@@ -124,7 +153,7 @@ public class AgentTaskCollaborationServiceImpl
             throw invalid("targetType must be agent or role");
         }
         String targetId = requiredTrimmed(command.getTargetId(), "targetId", 100);
-        validateTarget(tenantId, clientId, taskId, targetType, targetId);
+        validateTarget(tenantId, clientId, taskId, targetType, targetId, taskRoot);
         String requestType = canonical(command.getRequestType(), "requestType");
         if (!REQUEST_TYPES.contains(requestType)) {
             throw invalid("requestType is not supported");
@@ -165,6 +194,12 @@ public class AgentTaskCollaborationServiceImpl
         if (stored == null) {
             throw invalidPersisted("Inserted request could not be read in its scope");
         }
+        if (stored.getVersion() == null || stored.getVersion() != 0L) {
+            throw invalidPersisted("Inserted request has an unexpected initial version");
+        }
+        appendRequestEvent(tenantId, clientId, taskId, actorAgentId, stored,
+                requestCreateEvent(requestType), null, AgentTaskRequestStatus.OPEN.value(),
+                0L, 0L, now());
         return requestView(stored);
     }
 
@@ -228,7 +263,14 @@ public class AgentTaskCollaborationServiceImpl
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskArtifactViewDTO publish(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskArtifactPublishDTO command) {
-        requireAccess(tenantId, clientId, taskId, actorAgentId, true);
+        requireScope(tenantId, clientId, taskId, actorAgentId);
+        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
+                taskRoot -> publishLocked(tenantId, clientId, taskId, actorAgentId, command, taskRoot));
+    }
+
+    private AgentTaskArtifactViewDTO publishLocked(String tenantId, String clientId, String taskId,
+            String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
+        requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("artifact command is required");
         }
@@ -247,7 +289,7 @@ public class AgentTaskCollaborationServiceImpl
         if (!VISIBILITIES.contains(visibility)) {
             throw invalid("visibility is not supported");
         }
-        validateArtifactPayload(command);
+        TaskEventPayload.ContentDigest contentDigest = validateArtifactPayload(command);
         int expectedPrevious = requireArtifactVersions(command);
 
         AgentTaskArtifactEntity latest = artifactDao.findLatestVersionForUpdate(
@@ -290,6 +332,16 @@ public class AgentTaskCollaborationServiceImpl
         if (stored == null) {
             throw invalidPersisted("Inserted artifact could not be read in its scope");
         }
+        if (!taskId.equals(stored.getTaskId())
+                || !insert.getArtifactId().equals(stored.getArtifactId())
+                || !artifactType.equals(stored.getArtifactType())
+                || !command.getArtifactVersion().equals(stored.getArtifactVersion())
+                || !visibility.equals(stored.getVisibility())
+                || !command.getContentHash().equals(stored.getContentHash())) {
+            throw invalidPersisted("Inserted artifact does not match its persisted event metadata");
+        }
+        appendArtifactEvent(tenantId, clientId, taskId, actorAgentId, stored,
+                contentDigest, now());
         return artifactView(stored);
     }
 
@@ -354,7 +406,17 @@ public class AgentTaskCollaborationServiceImpl
     AgentTaskRequestViewDTO transitionRequest(String tenantId, String clientId, String taskId,
             String actorAgentId, String requestId, AgentTaskRequestStatus target,
             AgentTaskRequestTransitionDTO command) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true);
+        requireScope(tenantId, clientId, taskId, actorAgentId);
+        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
+                taskRoot -> transitionRequestLocked(tenantId, clientId, taskId, actorAgentId,
+                        requestId, target, command, taskRoot));
+    }
+
+    private AgentTaskRequestViewDTO transitionRequestLocked(
+            String tenantId, String clientId, String taskId, String actorAgentId,
+            String requestId, AgentTaskRequestStatus target, AgentTaskRequestTransitionDTO command,
+            AgentTaskMetaEntity taskRoot) {
+        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
         AgentTaskRequestEntity current = requireRequest(tenantId, clientId, taskId, requestId);
         long expectedVersion = requireExpectedVersion(command);
         if (current.getVersion() == null || current.getVersion() < 0) {
@@ -414,13 +476,78 @@ public class AgentTaskCollaborationServiceImpl
         current.setResolvedAt(update.getResolvedAt());
         current.setVersion(expectedVersion + 1);
         current.setUpdateTime(changedAt);
+        appendRequestEvent(tenantId, clientId, taskId, actorAgentId, current,
+                requestTransitionEvent(target), currentStatus.value(), target.value(),
+                expectedVersion, expectedVersion + 1, changedAt);
         return requestView(current);
+    }
+
+    private String requestCreateEvent(String requestType) {
+        return switch (requestType) {
+            case "help" -> TaskEventType.HELP_REQUESTED;
+            case "review" -> TaskEventType.REVIEW_REQUESTED;
+            default -> TaskEventType.REQUEST_CREATED;
+        };
+    }
+
+    private String requestTransitionEvent(AgentTaskRequestStatus status) {
+        return switch (status) {
+            case ACKNOWLEDGED -> TaskEventType.REQUEST_ACKNOWLEDGED;
+            case RESOLVED -> TaskEventType.REQUEST_RESOLVED;
+            case REJECTED -> TaskEventType.REQUEST_REJECTED;
+            case CANCELLED -> TaskEventType.REQUEST_CANCELLED;
+            default -> throw invalidPersisted("Request status has no canonical mutation event");
+        };
+    }
+
+    private void appendRequestEvent(String tenantId, String clientId, String taskId,
+            String actorAgentId, AgentTaskRequestEntity request, String eventType,
+            String fromStatus, String toStatus, long expectedVersion, long resultVersion,
+            long occurredAt) {
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.REQUEST_ID, request.getRequestId())
+                .put(TaskEventPayload.Key.REQUEST_TYPE, request.getRequestType())
+                .put(TaskEventPayload.Key.TARGET_TYPE, request.getTargetType())
+                .put(TaskEventPayload.Key.TARGET_ID, request.getTargetId())
+                .put(TaskEventPayload.Key.TO_STATUS, toStatus)
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, expectedVersion)
+                .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion);
+        if (fromStatus != null) payload.put(TaskEventPayload.Key.FROM_STATUS, fromStatus);
+        if (request.getWorkItemId() != null) {
+            payload.put(TaskEventPayload.Key.WORK_ITEM_ID, request.getWorkItemId());
+        }
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+                eventType, TaskEventType.ActorType.AGENT, actorAgentId,
+                TaskEventType.Aggregate.REQUEST, request.getRequestId(), payload, occurredAt, resultVersion));
+    }
+
+    private void appendArtifactEvent(String tenantId, String clientId, String taskId,
+            String actorAgentId, AgentTaskArtifactEntity artifact,
+            TaskEventPayload.ContentDigest digest, long occurredAt) {
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.ARTIFACT_ID, artifact.getArtifactId())
+                .put(TaskEventPayload.Key.ARTIFACT_TYPE, artifact.getArtifactType())
+                .put(TaskEventPayload.Key.ARTIFACT_VERSION, artifact.getArtifactVersion().longValue())
+                .put(TaskEventPayload.Key.VISIBILITY, artifact.getVisibility())
+                .putContentDigest(digest);
+        if (artifact.getWorkItemId() != null) {
+            payload.put(TaskEventPayload.Key.WORK_ITEM_ID, artifact.getWorkItemId());
+        }
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+                TaskEventType.ARTIFACT_PUBLISHED, TaskEventType.ActorType.AGENT, actorAgentId,
+                TaskEventType.Aggregate.ARTIFACT, artifact.getArtifactId(), payload, occurredAt,
+                artifact.getArtifactVersion().longValue()));
     }
 
     private Access requireAccess(String tenantId, String clientId, String taskId,
             String actorAgentId, boolean write) {
         requireScope(tenantId, clientId, taskId, actorAgentId);
-        AgentTaskMetaEntity task = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        return requireAccess(tenantId, clientId, taskId, actorAgentId, write,
+                taskMetaDao.findByTaskId(tenantId, clientId, taskId));
+    }
+
+    private Access requireAccess(String tenantId, String clientId, String taskId,
+            String actorAgentId, boolean write, AgentTaskMetaEntity task) {
         if (task == null) {
             throw notFound();
         }
@@ -451,13 +578,12 @@ public class AgentTaskCollaborationServiceImpl
     }
 
     private void validateTarget(String tenantId, String clientId, String taskId,
-            String targetType, String targetId) {
+            String targetType, String targetId, AgentTaskMetaEntity taskRoot) {
         if ("agent".equals(targetType)) {
             AgentTaskMemberEntity target = memberDao.findByTaskAndAgent(
                     tenantId, clientId, taskId, targetId);
             if (target == null) {
-                AgentTaskMetaEntity task = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
-                if (task == null || !targetId.equals(task.getCoordinatorAgentId())) {
+                if (taskRoot == null || !targetId.equals(taskRoot.getCoordinatorAgentId())) {
                     throw notFound();
                 }
                 return;
@@ -471,8 +597,7 @@ public class AgentTaskCollaborationServiceImpl
         boolean present = memberDao.listByTask(tenantId, clientId, taskId).stream()
                 .anyMatch(member -> targetId.equals(member.getMemberRole()) && eligibleTargetMember(member));
         if (!present && "coordinator".equals(targetId)) {
-            AgentTaskMetaEntity task = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
-            present = task != null && !StringUtil.isBlank(task.getCoordinatorAgentId());
+            present = taskRoot != null && !StringUtil.isBlank(taskRoot.getCoordinatorAgentId());
         }
         if (!present) {
             throw notFound();
@@ -536,7 +661,7 @@ public class AgentTaskCollaborationServiceImpl
         }
     }
 
-    private void validateArtifactPayload(AgentTaskArtifactPublishDTO command) {
+    private TaskEventPayload.ContentDigest validateArtifactPayload(AgentTaskArtifactPublishDTO command) {
         boolean hasContent = command.getContent() != null && !command.getContent().isEmpty();
         boolean hasStorage = !StringUtil.isBlank(command.getStorageUri());
         if (hasContent == hasStorage) {
@@ -546,6 +671,7 @@ public class AgentTaskCollaborationServiceImpl
         if (hash == null || !SHA256.matcher(hash).matches()) {
             throw invalid("contentHash must be lowercase SHA-256 hex");
         }
+        TaskEventPayload.ContentDigest digest;
         if (hasContent) {
             byte[] contentBytes = utf8Bytes(command.getContent(), "content");
             if (contentBytes.length > MAX_INLINE_CONTENT_BYTES) {
@@ -554,12 +680,22 @@ public class AgentTaskCollaborationServiceImpl
             if (!hash.equals(sha256(contentBytes))) {
                 throw invalid("contentHash does not match inline content");
             }
+            digest = new TaskEventPayload.ContentDigest(contentBytes.length, hash);
+            if (command.getContentByteLength() != null
+                    && command.getContentByteLength() != digest.byteLength()) {
+                throw invalid("contentByteLength does not match inline content");
+            }
         } else {
             validateStorageUri(command.getStorageUri().trim());
+            if (command.getContentByteLength() == null || command.getContentByteLength() < 0) {
+                throw invalid("contentByteLength is required for external artifacts");
+            }
+            digest = new TaskEventPayload.ContentDigest(command.getContentByteLength(), hash);
         }
         if (command.getMetadata() != null) {
             serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES);
         }
+        return digest;
     }
 
     private void validateStorageUri(String value) {
@@ -867,6 +1003,26 @@ public class AgentTaskCollaborationServiceImpl
         if (updated != 1) {
             throw invalidPersisted("Scoped CAS affected an unexpected row count");
         }
+    }
+
+    private static AgentTaskMutationTransaction directTransaction(AgentTaskMetaDao taskMetaDao) {
+        return new AgentTaskMutationTransaction() {
+            @Override
+            public <T> T executeWithLockedTaskRoot(String tenantId, String clientId, String taskId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdate(tenantId, clientId, taskId));
+            }
+            @Override
+            public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
+                    String workItemId, LockedTaskMutation<T> mutation) {
+                throw new UnsupportedOperationException();
+            }
+            @Override
+            public <T> T executeAfterTaskRootReservation(String tenantId, String clientId,
+                    String taskId, TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+                throw new UnsupportedOperationException();
+            }
+        };
     }
 
     private AgentTaskCollaborationException invalid(String message) {
