@@ -1,5 +1,6 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.entity.AgentTaskEventEntity;
@@ -39,7 +40,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
 
     @Override
     public AgentTaskEventWriteResult append(AgentTaskEventWriteCommand command) {
-        validateCommand(command);
+        String normalizedEventJson = validateCommand(command);
 
         return transactionTemplate.execute(status -> {
             // 1. Lock and get current version
@@ -70,7 +71,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
             event.setActorId(command.getActorId());
             event.setAggregateType(command.getAggregateType());
             event.setAggregateId(command.getAggregateId());
-            event.setEventJson(command.getEventJson());
+            event.setEventJson(normalizedEventJson);
             event.setOccurredAt(command.getOccurredAt());
             event.setTenantId(command.getTenantId());
             event.setClientId(command.getClientId());
@@ -102,7 +103,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
         });
     }
 
-    private void validateCommand(AgentTaskEventWriteCommand cmd) {
+    private String validateCommand(AgentTaskEventWriteCommand cmd) {
         if (cmd == null) {
             throw new IllegalArgumentException("command must not be null");
         }
@@ -113,7 +114,6 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
         requireNonBlank(cmd.getActorType(), "actorType", 20);
         requireNonBlank(cmd.getAggregateType(), "aggregateType", 30);
         requireNonBlank(cmd.getAggregateId(), "aggregateId", 100);
-        requireNonBlank(cmd.getEventJson(), "eventJson", Integer.MAX_VALUE);
         if (cmd.getOccurredAt() == null || cmd.getOccurredAt() <= 0) {
             throw new IllegalArgumentException("occurredAt must be positive");
         }
@@ -125,6 +125,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
         TaskEventType.requireKnown(cmd.getEventType());
         TaskEventType.Aggregate.requireKnown(cmd.getAggregateType());
         TaskEventType.ActorType.requireKnown(cmd.getActorType());
+        return TaskEventPayload.normalizeAllowedJson(cmd.getEventJson());
     }
 
     private void requireNonBlank(String value, String name, int maxLength) {

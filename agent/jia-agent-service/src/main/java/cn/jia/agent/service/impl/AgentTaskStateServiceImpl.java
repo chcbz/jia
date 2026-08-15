@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
@@ -11,8 +13,11 @@ import cn.jia.agent.entity.AgentTaskStateDTO;
 import cn.jia.agent.entity.AgentTaskStateTransitionDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskStateService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
@@ -34,25 +39,63 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     private final AgentTaskMetaDao taskMetaDao;
     private final AgentTaskMemberDao memberDao;
     private final AgentTaskWorkItemDao workItemDao;
+    private final AgentTaskMutationTransaction mutationTransaction;
+    private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
 
     @Inject
     public AgentTaskStateServiceImpl(
             AgentTaskMetaDao taskMetaDao,
             AgentTaskMemberDao memberDao,
-            AgentTaskWorkItemDao workItemDao) {
-        this(taskMetaDao, memberDao, workItemDao, System::currentTimeMillis);
+            AgentTaskWorkItemDao workItemDao,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter) {
+        this(taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter,
+                System::currentTimeMillis);
     }
 
     AgentTaskStateServiceImpl(
             AgentTaskMetaDao taskMetaDao,
             AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter,
             LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
+        this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
+        this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    private <T> T withLockedTaskRoot(String tenantId, String clientId, String taskId,
+            AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
+        try {
+            return mutationTransaction.executeWithLockedTaskRoot(
+                    tenantId, clientId, taskId, mutation);
+        } catch (AgentTaskCollaborationException e) {
+            if (e.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
+                throw notFound("Task state was not found in the requested scope");
+            }
+            throw new AgentTaskStateException(
+                    Reason.INVALID_PERSISTED_STATE, "Locked task root failed validation");
+        }
+    }
+
+    private <T> T withLockedTaskRootForWorkItem(
+            String tenantId, String clientId, String workItemId,
+            AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
+        try {
+            return mutationTransaction.executeWithLockedTaskRootForWorkItem(
+                    tenantId, clientId, workItemId, mutation);
+        } catch (AgentTaskCollaborationException e) {
+            if (e.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
+                throw notFound("Task work item was not found in the requested scope");
+            }
+            throw new AgentTaskStateException(
+                    Reason.INVALID_PERSISTED_STATE, "Locked task root failed validation");
+        }
     }
 
     @Override
@@ -61,31 +104,37 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
             AgentTaskStateTransitionDTO transition) {
         requireScopeAndId(tenantId, clientId, taskId, "taskId");
         RequiredTransition required = requireTransition(transition);
-        AgentTaskMetaEntity current = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
-        if (current == null) {
-            throw notFound("Task state was not found in the requested scope");
-        }
-        requireCurrentVersion(current.getTaskVersion(), required.expectedVersion());
-        AgentTaskStatus currentStatus = persistedTaskStatus(current.getRewardStatus());
-        AgentTaskStatus targetStatus = requestedTaskStatus(required.targetStatus());
-        requireTransition(currentStatus.canTransitionTo(targetStatus), currentStatus.value(), targetStatus.value());
+        return withLockedTaskRoot(
+                tenantId, clientId, taskId, root -> {
+                    AgentTaskMetaEntity current = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
+                    if (current == null) {
+                        throw notFound("Task state was not found in the requested scope");
+                    }
+                    requireCurrentVersion(current.getTaskVersion(), required.expectedVersion());
+                    AgentTaskStatus currentStatus = persistedTaskStatus(current.getRewardStatus());
+                    AgentTaskStatus targetStatus = requestedTaskStatus(required.targetStatus());
+                    requireTransition(currentStatus.canTransitionTo(targetStatus),
+                            currentStatus.value(), targetStatus.value());
 
-        long changedAt = now();
-        Long startedAt = current.getStartedAt();
-        if (targetStatus == AgentTaskStatus.RUNNING && startedAt == null) {
-            startedAt = changedAt;
-        }
-        Long completedAt = current.getCompletedAt();
-        if (targetStatus == AgentTaskStatus.COMPLETED && completedAt == null) {
-            completedAt = changedAt;
-        }
-        String failureReason = taskFailureReason(current, targetStatus, required.failureReason());
-        int updated = taskMetaDao.updateStatusByVersion(
-                tenantId, clientId, taskId, required.expectedVersion(), targetStatus.value(),
-                startedAt, completedAt, failureReason);
-        requireSingleCasUpdate(updated);
-        return state(AGGREGATE_TASK, taskId, null, null,
-                targetStatus.value(), required.expectedVersion() + 1, changedAt);
+                    long changedAt = now();
+                    Long startedAt = current.getStartedAt();
+                    if (targetStatus == AgentTaskStatus.RUNNING && startedAt == null) startedAt = changedAt;
+                    Long completedAt = current.getCompletedAt();
+                    if (targetStatus == AgentTaskStatus.COMPLETED && completedAt == null) completedAt = changedAt;
+                    String failureReason = taskFailureReason(current, targetStatus, required.failureReason());
+                    requireSingleCasUpdate(taskMetaDao.updateStatusByVersion(
+                            tenantId, clientId, taskId, required.expectedVersion(), targetStatus.value(),
+                            startedAt, completedAt, failureReason));
+                    AgentTaskStateDTO result = state(AGGREGATE_TASK, taskId, null, null,
+                            targetStatus.value(), required.expectedVersion() + 1, changedAt);
+                    appendStateEvent(tenantId, clientId, taskId,
+                            AgentTaskMutationEventSupport.taskEvent(targetStatus.value()),
+                            TaskEventType.Aggregate.TASK, taskId, null,
+                            currentStatus.value(), targetStatus.value(), required.expectedVersion(),
+                            result.getVersion(), changedAt, taskReasonCode(targetStatus),
+                            null, null, null);
+                    return result;
+                });
     }
 
     @Override
@@ -94,11 +143,13 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
             AgentTaskStateTransitionDTO transition) {
         requireScopeAndId(tenantId, clientId, taskId, "taskId");
         requireId(agentId, "agentId");
-        MemberChange change = prepareMember(
-                tenantId, clientId, taskId, agentId, transition, now());
-        requireSingleCasUpdate(memberDao.updateByVersion(
-                tenantId, clientId, taskId, agentId, change.expectedVersion(), change.update()));
-        return change.result();
+        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+            MemberChange change = prepareMember(tenantId, clientId, taskId, agentId, transition, now());
+            requireSingleCasUpdate(memberDao.updateByVersion(
+                    tenantId, clientId, taskId, agentId, change.expectedVersion(), change.update()));
+            appendMemberEvent(tenantId, clientId, taskId, agentId, change);
+            return change.result();
+        });
     }
 
     @Override
@@ -106,11 +157,16 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     public AgentTaskStateDTO transitionWorkItem(String tenantId, String clientId, String workItemId,
             AgentTaskStateTransitionDTO transition) {
         requireScopeAndId(tenantId, clientId, workItemId, "workItemId");
-        WorkItemChange change = prepareWorkItem(
-                tenantId, clientId, null, workItemId, transition, now());
-        requireSingleCasUpdate(workItemDao.updateByVersion(
-                tenantId, clientId, workItemId, change.expectedVersion(), change.update()));
-        return change.result();
+        return withLockedTaskRootForWorkItem(tenantId, clientId, workItemId, root -> {
+            String taskId = root.getTaskId();
+            WorkItemChange change = prepareWorkItem(
+                    tenantId, clientId, taskId, workItemId, transition, now());
+            requireSingleCasUpdate(workItemDao.updateByVersion(
+                    tenantId, clientId, workItemId, change.expectedVersion(), change.update()));
+            appendWorkItemEvent(tenantId, clientId, taskId, change,
+                    AgentTaskMutationEventSupport.workItemEvent(change.result().getStatus()), null);
+            return change.result();
+        });
     }
 
     @Override
@@ -122,31 +178,86 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         requireScopeAndId(tenantId, clientId, taskId, "taskId");
         requireId(agentId, "agentId");
         requireId(workItemId, "workItemId");
-        long changedAt = now();
+        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+            long changedAt = now();
+            MemberChange memberChange = prepareMember(
+                    tenantId, clientId, taskId, agentId, memberTransition, changedAt);
+            WorkItemChange workItemChange = prepareWorkItem(
+                    tenantId, clientId, taskId, workItemId, workItemTransition, changedAt);
+            String assigneeAgentId = workItemChange.current().getAssigneeAgentId();
+            if (StringUtil.isBlank(assigneeAgentId)) {
+                throw invalidRequest("Work item must have a non-blank assignee for combined transition");
+            }
+            if (!agentId.equals(assigneeAgentId)) {
+                throw invalidRequest("Work item assignee does not match the transitioning member");
+            }
+            requireSingleCasUpdate(memberDao.updateByVersion(
+                    tenantId, clientId, taskId, agentId,
+                    memberChange.expectedVersion(), memberChange.update()));
+            requireSingleCasUpdate(workItemDao.updateByVersion(
+                    tenantId, clientId, workItemId,
+                    workItemChange.expectedVersion(), workItemChange.update()));
+            appendMemberEvent(tenantId, clientId, taskId, agentId, memberChange);
+            appendWorkItemEvent(tenantId, clientId, taskId, workItemChange,
+                    AgentTaskMutationEventSupport.workItemEvent(workItemChange.result().getStatus()), null);
+            AgentTaskMemberWorkItemStateDTO result = new AgentTaskMemberWorkItemStateDTO();
+            result.setMember(memberChange.result());
+            result.setWorkItem(workItemChange.result());
+            return result;
+        });
+    }
 
-        MemberChange memberChange = prepareMember(
-                tenantId, clientId, taskId, agentId, memberTransition, changedAt);
-        WorkItemChange workItemChange = prepareWorkItem(
-                tenantId, clientId, taskId, workItemId, workItemTransition, changedAt);
-        String assigneeAgentId = workItemChange.current().getAssigneeAgentId();
-        if (StringUtil.isBlank(assigneeAgentId)) {
-            throw invalidRequest("Work item must have a non-blank assignee for combined transition");
+    private void appendMemberEvent(String tenantId, String clientId, String taskId,
+            String agentId, MemberChange change) {
+        appendStateEvent(tenantId, clientId, taskId,
+                AgentTaskMutationEventSupport.memberEvent(change.result().getStatus()),
+                TaskEventType.Aggregate.MEMBER, agentId, null,
+                change.currentStatus(), change.result().getStatus(), change.expectedVersion(),
+                change.result().getVersion(), change.result().getChangedAt(), null,
+                agentId, change.update().getMemberRole(), null);
+    }
+
+    private void appendWorkItemEvent(String tenantId, String clientId, String taskId,
+            WorkItemChange change, String eventType, String actorId) {
+        appendStateEvent(tenantId, clientId, taskId, eventType,
+                TaskEventType.Aggregate.WORK_ITEM, change.current().getWorkItemId(), actorId,
+                change.currentStatus(), change.result().getStatus(), change.expectedVersion(),
+                change.result().getVersion(), change.result().getChangedAt(), null,
+                null, null, change.update().getAttemptCount());
+    }
+
+    private void appendStateEvent(String tenantId, String clientId, String taskId,
+            String eventType, String aggregateType, String aggregateId, String actorId,
+            String fromStatus, String toStatus, long expectedVersion, long resultVersion,
+            long occurredAt, String reasonCode, String agentId, String role,
+            Integer attemptCount) {
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.FROM_STATUS, fromStatus)
+                .put(TaskEventPayload.Key.TO_STATUS, toStatus)
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, expectedVersion)
+                .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion);
+        if (reasonCode != null) payload.put(TaskEventPayload.Key.REASON_CODE, reasonCode);
+        if (agentId != null) payload.put(TaskEventPayload.Key.AGENT_ID, agentId);
+        if (role != null) payload.put(TaskEventPayload.Key.ROLE, role);
+        if (TaskEventType.Aggregate.WORK_ITEM.equals(aggregateType)) {
+            payload.put(TaskEventPayload.Key.WORK_ITEM_ID, aggregateId);
+            if (attemptCount != null) payload.put(TaskEventPayload.Key.ATTEMPT_COUNT, attemptCount.longValue());
         }
-        if (!agentId.equals(assigneeAgentId)) {
-            throw invalidRequest("Work item assignee does not match the transitioning member");
-        }
+        // B03 mutation APIs carry no authenticated actor argument. Keep the actor SYSTEM
+        // rather than fabricating an Agent identity from the member/work-item aggregate.
+        eventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, taskId, eventType,
+                actorId == null ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.AGENT,
+                actorId, aggregateType, aggregateId, payload, occurredAt, resultVersion));
+    }
 
-        requireSingleCasUpdate(memberDao.updateByVersion(
-                tenantId, clientId, taskId, agentId,
-                memberChange.expectedVersion(), memberChange.update()));
-        requireSingleCasUpdate(workItemDao.updateByVersion(
-                tenantId, clientId, workItemId,
-                workItemChange.expectedVersion(), workItemChange.update()));
-
-        AgentTaskMemberWorkItemStateDTO result = new AgentTaskMemberWorkItemStateDTO();
-        result.setMember(memberChange.result());
-        result.setWorkItem(workItemChange.result());
-        return result;
+    private String taskReasonCode(AgentTaskStatus targetStatus) {
+        return switch (targetStatus) {
+            case FAILED -> "failure_reported";
+            case BLOCKED -> "blocked_reported";
+            case CANCELLED -> "cancelled";
+            default -> "state_transition";
+        };
     }
 
     private MemberChange prepareMember(
@@ -177,7 +288,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         update.setFailureReason(memberFailureReason(targetStatus, required.failureReason()));
         AgentTaskStateDTO result = state(AGGREGATE_MEMBER, taskId, agentId, null,
                 targetStatus.value(), required.expectedVersion() + 1, changedAt);
-        return new MemberChange(required.expectedVersion(), update, result);
+        return new MemberChange(currentStatus.value(), required.expectedVersion(), update, result);
     }
 
     private WorkItemChange prepareWorkItem(
@@ -217,7 +328,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         }
         AgentTaskStateDTO result = state(AGGREGATE_WORK_ITEM, current.getTaskId(), null, workItemId,
                 targetStatus.value(), required.expectedVersion() + 1, changedAt);
-        return new WorkItemChange(current, required.expectedVersion(), update, result);
+        return new WorkItemChange(current, currentStatus.value(), required.expectedVersion(), update, result);
     }
 
     private RequiredTransition requireTransition(AgentTaskStateTransitionDTO transition) {
@@ -436,11 +547,11 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     }
 
     private record MemberChange(
-            long expectedVersion, AgentTaskMemberDTO update, AgentTaskStateDTO result) {
+            String currentStatus, long expectedVersion, AgentTaskMemberDTO update, AgentTaskStateDTO result) {
     }
 
     private record WorkItemChange(
-            AgentTaskWorkItemEntity current, long expectedVersion,
+            AgentTaskWorkItemEntity current, String currentStatus, long expectedVersion,
             AgentTaskWorkItemDTO update, AgentTaskStateDTO result) {
     }
 }

@@ -1,5 +1,7 @@
 package cn.jia.agent.dao.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.entity.AgentTaskEventEntity;
 import cn.jia.agent.mapper.AgentTaskEventMapper;
@@ -23,6 +25,7 @@ public class AgentTaskEventDaoImpl
     @Override
     public int insertEvent(AgentTaskEventEntity event) {
         requireEventEntity(event);
+        event.setEventJson(TaskEventPayload.normalizeAllowedJson(event.getEventJson()));
         return baseMapper.insertEvent(event);
     }
 
@@ -112,22 +115,23 @@ public class AgentTaskEventDaoImpl
         }
         if (event.getActorId() != null && (event.getActorId().isBlank()
                 || event.getActorId().length() > 100
-                || !event.getActorId().equals(event.getActorId().strip()))) {
+                || !event.getActorId().equals(event.getActorId().strip())
+                || event.getActorId().chars().anyMatch(Character::isISOControl))) {
             throw new IllegalArgumentException("actorId must be null or byte-exact ≤ 100 chars");
         }
         if (event.getAggregateType() == null || event.getAggregateType().isBlank()
                 || event.getAggregateType().length() > 30) {
             throw new IllegalArgumentException("aggregateType is required and ≤ 30 chars");
         }
-        if (event.getAggregateId() == null || event.getAggregateId().isBlank()
-                || event.getAggregateId().length() > 100) {
-            throw new IllegalArgumentException("aggregateId is required and ≤ 100 chars");
-        }
+        requireExactId(event.getAggregateId(), "aggregateId", 100);
         if (event.getEventJson() == null || event.getEventJson().isBlank()) {
             throw new IllegalArgumentException("eventJson is required (NOT NULL)");
         }
         if (event.getOccurredAt() == null || event.getOccurredAt() <= 0) {
             throw new IllegalArgumentException("occurredAt must be positive");
         }
+        TaskEventType.requireKnown(event.getEventType());
+        TaskEventType.ActorType.requireKnown(event.getActorType());
+        TaskEventType.Aggregate.requireKnown(event.getAggregateType());
     }
 }

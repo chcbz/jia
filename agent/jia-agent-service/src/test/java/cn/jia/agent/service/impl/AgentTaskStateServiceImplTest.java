@@ -12,6 +12,8 @@ import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskStateService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
@@ -31,9 +33,11 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 
 import java.util.Arrays;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -60,11 +64,32 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Mock
     AgentTaskWorkItemDao workItemDao;
 
+    @Mock
+    AgentTaskMutationTransaction mutationTransaction;
+    @Mock
+    AgentTaskEventWriter eventWriter;
+
     AgentTaskStateServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new AgentTaskStateServiceImpl(taskMetaDao, memberDao, workItemDao, () -> NOW);
+        org.mockito.Mockito.lenient().when(mutationTransaction.executeWithLockedTaskRoot(any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    AgentTaskMetaEntity root = task("assigned", 0L);
+                    root.setCurrentEventVersion(0L);
+                    return mutation.apply(root);
+                });
+        org.mockito.Mockito.lenient().when(
+                mutationTransaction.executeWithLockedTaskRootForWorkItem(any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    AgentTaskMetaEntity root = task("assigned", 0L);
+                    root.setCurrentEventVersion(0L);
+                    return mutation.apply(root);
+                });
+        service = new AgentTaskStateServiceImpl(
+                taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter, () -> NOW);
     }
 
     @Test
@@ -242,6 +267,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
                 () -> service.transitionMember(
                         TENANT, CLIENT, TASK_ID, AGENT_ID, transition("working", 5L, null)));
         assertEquals(Reason.VERSION_CONFLICT, race.getReason());
+        verifyNoInteractions(eventWriter);
     }
 
     @Test
@@ -463,6 +489,128 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         assertEquals("done", result.getStatus());
     }
 
+
+    @Test
+    void taskTransitionAppendsCanonicalBoundedEventAfterCas() {
+        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(task("assigned", 4L));
+        when(taskMetaDao.updateStatusByVersion(
+                TENANT, CLIENT, TASK_ID, 4L, "running", NOW, null, null)).thenReturn(1);
+
+        service.transitionTask(TENANT, CLIENT, TASK_ID, transition("running", 4L, null));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        InOrder order = inOrder(taskMetaDao, eventWriter);
+        order.verify(taskMetaDao).updateStatusByVersion(
+                TENANT, CLIENT, TASK_ID, 4L, "running", NOW, null, null);
+        order.verify(eventWriter).append(event.capture());
+        assertEquals("TASK_STARTED", event.getValue().getEventType());
+        assertEquals("system", event.getValue().getActorType());
+        assertEquals("task", event.getValue().getAggregateType());
+        assertTrue(event.getValue().getEventJson().contains("\"fromStatus\":\"assigned\""));
+        assertTrue(event.getValue().getEventJson().contains(
+                "\"reasonCode\":\"state_transition\""));
+        assertFalse(event.getValue().getEventJson().contains("failureReason"));
+    }
+
+    @Test
+    void taskTransitionEventUsesDeterministicBoundedReasonCodeWithoutRawFailureReason() {
+        String rawReason = "database password leaked in raw failure text";
+        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID))
+                .thenReturn(task("running", 7L));
+        when(taskMetaDao.updateStatusByVersion(
+                TENANT, CLIENT, TASK_ID, 7L, "failed", null, null, rawReason)).thenReturn(1);
+
+        service.transitionTask(TENANT, CLIENT, TASK_ID,
+                transition("failed", 7L, rawReason));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        Map<String, Object> payload = cn.jia.core.util.JsonUtil.jsonToMap(
+                event.getValue().getEventJson());
+        assertEquals("failure_reported", payload.get("reasonCode"));
+        assertFalse(event.getValue().getEventJson().contains(rawReason));
+    }
+
+    @Test
+    void stateMutationWithoutActorParameterUsesSystemWithoutFabricatingMemberAsActor() {
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(memberDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+
+        service.transitionMember(
+                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter).append(event.capture());
+        assertEquals("system", event.getValue().getActorType(),
+                "B03 has no authenticated actor argument, so the aggregate member is not an actor");
+        assertNull(event.getValue().getActorId());
+        assertEquals(AGENT_ID, event.getValue().getAggregateId());
+    }
+
+    @Test
+    void combinedTransitionAppendsMemberThenWorkItemAndConflictAppendsNothing() {
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(workItem("running", 6L));
+        when(memberDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
+
+        service.transitionMemberAndWorkItem(
+                TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                transition("done", 3L, null), transition("submitted", 6L, null));
+
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> events =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        verify(eventWriter, org.mockito.Mockito.times(2)).append(events.capture());
+        assertEquals("MEMBER_DONE", events.getAllValues().get(0).getEventType());
+        assertEquals("WORK_ITEM_SUBMITTED", events.getAllValues().get(1).getEventType());
+    }
+
+    @Test
+    void memberMutationEntersTaskRootBoundaryBeforeChildReadAndWrite() {
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(memberDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+
+        service.transitionMember(
+                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null));
+
+        InOrder order = inOrder(mutationTransaction, memberDao, eventWriter);
+        order.verify(mutationTransaction).executeWithLockedTaskRoot(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), any());
+        order.verify(memberDao).findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID);
+        order.verify(memberDao).updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
+        order.verify(eventWriter).append(any());
+    }
+
+    @Test
+    void workItemMutationResolvesAndLocksTaskRootBeforeChildRead() {
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(workItem("running", 6L));
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
+
+        service.transitionWorkItem(
+                TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null));
+
+        InOrder order = inOrder(mutationTransaction, workItemDao, eventWriter);
+        order.verify(mutationTransaction).executeWithLockedTaskRootForWorkItem(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), any());
+        order.verify(workItemDao).findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID);
+        order.verify(workItemDao).updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any());
+        order.verify(eventWriter).append(any());
+    }
 
     private AgentTaskMetaEntity task(String status, long version) {
         AgentTaskMetaEntity entity = new AgentTaskMetaEntity();
