@@ -37,7 +37,8 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
             assertTrue(sql.contains("binary m." + field + " = binary s." + field), field);
             assertTrue(sql.contains("octet_length(m." + field + ") = octet_length(s." + field + ")"), field);
         }
-        assertTrue(sql.contains("concat('c01h-', lower(sha2(concat(lpad(octet_length(cast(s.tenant_id as binary)), 10, '0')"));
+        assertTrue(sql.contains("concat('c01h-', lower(sha2(concat('cyf-c01h-event-id-v1', lpad(octet_length(cast(s.tenant_id as binary)), 10, '0')"));
+        assertEquals(1, candidateCte(sql).split("'cyf-c01h-event-id-v1'", -1).length - 1);
         assertTrue(sql.contains("lpad(octet_length(cast(s.client_id as binary)), 10, '0')"));
         assertTrue(sql.contains("lpad(octet_length(cast(s.task_id as binary)), 10, '0')"));
         assertFalse(sql.contains("concat_ws("));
@@ -61,8 +62,13 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(sql.contains("e.event_chain_count = e.current_event_version"));
         assertTrue(sql.contains("e.event_chain_min_version = 1"));
         assertTrue(sql.contains("e.event_chain_max_version = e.current_event_version"));
-        assertTrue(sql.contains("coalesce(sum(binary e.event_id = binary c.event_id), 0) as deterministic_event_count"));
-        assertTrue(sql.contains("coalesce(sum(binary e.event_type = binary 'historical_baseline_imported'), 0) as baseline_type_count"));
+        assertTrue(sql.contains("and ((binary e.task_id = binary c.task_id"));
+        assertTrue(sql.contains("or (binary e.event_id = binary c.event_id"));
+        assertTrue(sql.contains("as deterministic_event_count"));
+        assertTrue(sql.contains("as baseline_type_count"));
+        assertTrue(sql.contains("binary e.existing_task_id = binary e.task_id"));
+        assertTrue(sql.contains("e.existing_create_time = e.b09_completed_at"));
+        assertTrue(sql.contains("e.existing_update_time = e.b09_completed_at"));
         assertTrue(sql.contains("{\"contentsha256\":\""));
         assertTrue(sql.contains("\"decisioncode\":\"c01h_b09_v1\""));
         assertTrue(sql.contains("\"membercount\":"));
@@ -92,7 +98,11 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         String dryRun = read("db/historical-task-event-baseline-dry-run.sql");
         String manifest = read("db/historical-task-event-baseline-manifest.sql");
 
-        assertEquals(candidateCte(dryRun), candidateCte(manifest));
+        List<String> dryRunCandidates = candidateCtes(dryRun);
+        assertEquals(2, dryRunCandidates.size());
+        assertEquals(dryRunCandidates.get(0), dryRunCandidates.get(1));
+        assertEquals(dryRunCandidates.get(0), candidateCte(manifest));
+        assertEquals(dryRunCandidates.get(0), candidateCte(read("db/historical-task-event-baseline-routines.sql")));
         assertTrue(manifest.contains("order by binary tenant_id, binary client_id, binary task_id"));
         assertTrue(manifest.contains("c01h-manifest-chain-v1"));
         assertTrue(manifest.contains("c01h-manifest-final-v1"));
@@ -169,7 +179,7 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(routines.contains("cast(convert(unhex(tenant_id_hex) using utf8mb4) as char(50)) tenant_id"));
         assertTrue(routines.contains("cast(convert(unhex(task_id_hex) using utf8mb4) as char(100)) task_id"));
         assertTrue(routines.contains("binary manifest_row_key <> binary lower(sha2(concat('c01h-row-v1'"));
-        assertTrue(routines.contains("binary event_id <> binary concat('c01h-', lower(sha2(concat("));
+        assertTrue(routines.contains("binary event_id <> binary concat('c01h-', lower(sha2(concat('cyf-c01h-event-id-v1'"));
         assertTrue(routines.contains("binary manifest_row_sha256 <> binary lower(sha2(concat('c01h-manifest-row-v1'"));
         assertTrue(routines.contains("insert_count+noop_count<>verified_count"));
         assertTrue(routines.contains("blocked_count<>0"));
@@ -215,15 +225,16 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         int transaction = routines.lastIndexOf("start transaction;");
         int roots = routines.indexOf("open root_cur", transaction);
         int events = routines.indexOf("open event_cur", roots);
-        int members = routines.indexOf("open member_cur", events);
+        int eventIds = routines.indexOf("open event_id_cur", events);
+        int members = routines.indexOf("open member_cur", eventIds);
         int workItems = routines.indexOf("open work_cur", members);
         int current = routines.indexOf("call c01h_build_current_snapshot_v1", workItems);
         int eventInsert = routines.indexOf("insert into agent_task_event", current);
         int versionCas = routines.indexOf("update agent_task_meta set current_event_version", eventInsert);
         int runInsert = routines.indexOf("insert into agent_task_historical_event_run", versionCas);
         int commit = routines.indexOf("commit;", runInsert);
-        assertTrue(transaction >= 0 && transaction < roots && roots < events && events < members
-                && members < workItems && workItems < current && current < eventInsert
+        assertTrue(transaction >= 0 && transaction < roots && roots < events && events < eventIds
+                && eventIds < members && members < workItems && workItems < current && current < eventInsert
                 && eventInsert < versionCas && versionCas < runInsert && runInsert < commit);
         assertTrue(routines.contains("order by binary m.tenant_id,binary m.client_id,binary m.task_id for update"));
         assertTrue(routines.contains("task_version=v_task_version and current_event_version=v_expected-1"));
@@ -243,7 +254,17 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(routines.contains("binary a.decision_status=binary 'insert_required' and binary c.decision_status=binary 'exact_noop'"));
         assertTrue(routines.contains("c.current_event_version=a.current_event_version_snapshot+1"));
         assertTrue(routines.contains("c.event_chain_count=a.event_chain_count+1"));
-        assertTrue(routines.contains("if exists(select 1 from agent_task_event"));
+        assertTrue(routines.contains("deterministic event id occupied or exact no-op evidence mismatch"));
+        assertTrue(routines.contains("binary e.task_id=binary v_task and octet_length(e.task_id)=octet_length(v_task)"));
+        assertTrue(routines.contains("e.event_version=v_expected"));
+        assertTrue(routines.contains("binary e.event_type=binary 'historical_baseline_imported'"));
+        assertTrue(routines.contains("binary e.actor_type=binary 'system' and binary e.actor_id=binary 'c01h-b09'"));
+        assertTrue(routines.contains("binary e.aggregate_type=binary 'task'"));
+        assertTrue(routines.contains("binary e.aggregate_id=binary v_task"));
+        assertTrue(routines.contains("binary e.event_json=binary concat("));
+        assertTrue(routines.contains("e.occurred_at=v_b09_completed and e.create_time=v_b09_completed and e.update_time=v_b09_completed"));
+        assertTrue(routines.contains("binary hr.run_status=binary 'succeeded'"));
+        assertTrue(routines.contains("hr.completed_at<=started"));
         assertTrue(routines.contains("set noop_count=noop_count+1"));
         assertTrue(routines.contains("'succeeded'"));
         assertFalse(routines.contains("'failed'"));
@@ -273,6 +294,9 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(probe.contains("force-continued-after-c01h-error"));
         assertTrue(probe.contains("version-drift"));
         assertTrue(probe.contains("partial-baseline"));
+        assertTrue(probe.contains("event-id-preemption"));
+        assertTrue(probe.contains("forged-same-task-event"));
+        assertTrue(probe.contains("cyf-c01h-event-id-v1"));
         assertTrue(probe.contains("concurrent-writer"));
         assertTrue(probe.contains("named-lock"));
         assertTrue(probe.contains("task_version/member/work-item changed"));
@@ -287,6 +311,23 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
 
     private String exportSql() throws IOException {
         return read("db/historical-task-event-baseline-dry-run.sql");
+    }
+
+    private List<String> candidateCtes(String sql) {
+        String begin = "-- c01h_candidate_cte_begin";
+        String end = "-- c01h_candidate_cte_end";
+        java.util.ArrayList<String> candidates = new java.util.ArrayList<>();
+        int offset = 0;
+        while (true) {
+            int start = sql.indexOf(begin, offset);
+            if (start < 0) {
+                return candidates;
+            }
+            int finish = sql.indexOf(end, start);
+            assertTrue(finish > start);
+            candidates.add(sql.substring(start, finish + end.length()));
+            offset = finish + end.length();
+        }
     }
 
     private String candidateCte(String sql) {

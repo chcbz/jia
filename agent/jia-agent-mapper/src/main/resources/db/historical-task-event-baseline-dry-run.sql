@@ -203,7 +203,7 @@ root_snapshot AS (
                     CASE WHEN m.update_time IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(m.update_time AS BINARY)), 10, '0'), CAST(m.update_time AS BINARY)) END,
                     CASE WHEN m.tenant_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(m.tenant_id AS BINARY)), 10, '0'), CAST(m.tenant_id AS BINARY)) END,
                     CASE WHEN m.client_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(m.client_id AS BINARY)), 10, '0'), CAST(m.client_id AS BINARY)) END), 256)) AS meta_sha256,
-           CONCAT('c01h-', LOWER(SHA2(CONCAT(LPAD(OCTET_LENGTH(CAST(s.tenant_id AS BINARY)), 10, '0'), CAST(s.tenant_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.client_id AS BINARY)), 10, '0'), CAST(s.client_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.task_id AS BINARY)), 10, '0'), CAST(s.task_id AS BINARY)), 256))) AS event_id,
+           CONCAT('c01h-', LOWER(SHA2(CONCAT('CYF-C01H-EVENT-ID-V1', LPAD(OCTET_LENGTH(CAST(s.tenant_id AS BINARY)), 10, '0'), CAST(s.tenant_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.client_id AS BINARY)), 10, '0'), CAST(s.client_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.task_id AS BINARY)), 10, '0'), CAST(s.task_id AS BINARY)), 256))) AS event_id,
            CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS root_count,
            CASE WHEN m.tenant_id IS NULL OR m.client_id IS NULL OR m.task_id IS NULL
                      OR OCTET_LENGTH(m.tenant_id) NOT BETWEEN 1 AND 200
@@ -243,27 +243,65 @@ content_snapshot AS (
 ),
 event_snapshot AS (
     SELECT c.*,
-           COUNT(e.id) AS event_chain_count,
-           MIN(e.event_version) AS event_chain_min_version,
-           MAX(e.event_version) AS event_chain_max_version,
-           COALESCE(SUM(BINARY e.event_id = BINARY c.event_id), 0) AS deterministic_event_count,
-           COALESCE(SUM(BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'), 0) AS baseline_type_count,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_version END) AS baseline_event_version,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_type END) AS existing_event_type,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.actor_type END) AS existing_actor_type,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.actor_id END) AS existing_actor_id,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.aggregate_type END) AS existing_aggregate_type,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.aggregate_id END) AS existing_aggregate_id,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_json END) AS existing_event_json,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.occurred_at END) AS existing_occurred_at
+           COUNT(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                           AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                      THEN e.id END) AS event_chain_count,
+           MIN(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                          AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                    THEN e.event_version END) AS event_chain_min_version,
+           MAX(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                          AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                    THEN e.event_version END) AS event_chain_max_version,
+           COALESCE(SUM(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                                  AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                             THEN 1 ELSE 0 END), 0) AS deterministic_event_count,
+           COALESCE(SUM(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                                  AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                                  AND BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'
+                             THEN 1 ELSE 0 END), 0) AS baseline_type_count,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.task_id END) AS existing_task_id,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.event_version END) AS baseline_event_version,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.event_type END) AS existing_event_type,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.actor_type END) AS existing_actor_type,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.actor_id END) AS existing_actor_id,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.aggregate_type END) AS existing_aggregate_type,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.aggregate_id END) AS existing_aggregate_id,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.event_json END) AS existing_event_json,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.occurred_at END) AS existing_occurred_at,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.create_time END) AS existing_create_time,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.update_time END) AS existing_update_time
     FROM content_snapshot c
     LEFT JOIN agent_task_event e
       ON BINARY e.tenant_id = BINARY c.tenant_id
      AND OCTET_LENGTH(e.tenant_id) = OCTET_LENGTH(c.tenant_id)
      AND BINARY e.client_id = BINARY c.client_id
      AND OCTET_LENGTH(e.client_id) = OCTET_LENGTH(c.client_id)
-     AND BINARY e.task_id = BINARY c.task_id
-     AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+     AND ((BINARY e.task_id = BINARY c.task_id
+       AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id))
+       OR (BINARY e.event_id = BINARY c.event_id
+       AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)))
     GROUP BY c.meta_id, c.tenant_id, c.client_id, c.task_id,
              c.b09_report_sha256, c.b09_run_id, c.b09_operator, c.b09_completed_at,
              c.b09_task_manifest_rows, c.eligible_task_rows, c.eligible_resolution_rows,
@@ -289,6 +327,9 @@ classified AS (
                      AND e.event_chain_max_version = e.current_event_version)) THEN 'BLOCKED'
              WHEN e.deterministic_event_count = 0 AND e.baseline_type_count = 0 THEN 'INSERT_REQUIRED'
              WHEN e.deterministic_event_count = 1 AND e.baseline_type_count = 1
+              AND BINARY e.existing_task_id = BINARY e.task_id
+              AND OCTET_LENGTH(e.existing_task_id) = OCTET_LENGTH(e.task_id)
+              AND e.baseline_event_version BETWEEN 1 AND e.current_event_version
               AND BINARY e.existing_event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'
               AND BINARY e.existing_actor_type = BINARY 'system'
               AND BINARY e.existing_actor_id = BINARY 'c01h-b09'
@@ -296,6 +337,8 @@ classified AS (
               AND BINARY e.existing_aggregate_id = BINARY e.task_id
               AND OCTET_LENGTH(e.existing_aggregate_id) = OCTET_LENGTH(e.task_id)
               AND e.existing_occurred_at = e.b09_completed_at
+              AND e.existing_create_time = e.b09_completed_at
+              AND e.existing_update_time = e.b09_completed_at
               AND BINARY e.existing_event_json = BINARY CONCAT('{"contentSha256":"', e.content_sha256,
                   '","decisionCode":"c01h_b09_v1","memberCount":', e.member_count,
                   ',"source":"b09","workItemCount":', e.work_item_count, '}')
@@ -305,13 +348,35 @@ classified AS (
                   JOIN agent_task_historical_event_manifest_batch hb
                     ON BINARY hb.report_sha256 = BINARY hm.report_sha256
                    AND BINARY hb.seal_status = BINARY 'SEALED'
+                   AND BINARY hb.b09_report_sha256 = BINARY hm.b09_report_sha256
+                   AND BINARY hb.b09_run_id = BINARY hm.b09_run_id
+                   AND BINARY hb.b09_operator = BINARY hm.b09_operator
+                   AND hb.b09_completed_at = hm.b09_completed_at
                   JOIN agent_task_historical_event_run hr
                     ON BINARY hr.report_sha256 = BINARY hm.report_sha256
+                   AND BINARY hr.b09_report_sha256 = BINARY hm.b09_report_sha256
+                   AND BINARY hr.b09_run_id = BINARY hm.b09_run_id
+                   AND BINARY hr.operator = BINARY hb.approved_operator
                    AND BINARY hr.run_status = BINARY 'SUCCEEDED'
+                   AND hr.manifest_row_count = hb.manifest_row_count
+                   AND hr.event_insert_count = hr.version_update_count
+                   AND hr.event_insert_count + hr.exact_noop_count = hr.manifest_row_count
+                   AND hr.completed_at >= hb.sealed_at
                   WHERE BINARY hm.event_id = BINARY e.event_id
+                    AND OCTET_LENGTH(hm.event_id) = OCTET_LENGTH(e.event_id)
+                    AND BINARY hm.tenant_id = BINARY e.tenant_id
+                    AND OCTET_LENGTH(hm.tenant_id) = OCTET_LENGTH(e.tenant_id)
+                    AND BINARY hm.client_id = BINARY e.client_id
+                    AND OCTET_LENGTH(hm.client_id) = OCTET_LENGTH(e.client_id)
+                    AND BINARY hm.task_id = BINARY e.task_id
+                    AND OCTET_LENGTH(hm.task_id) = OCTET_LENGTH(e.task_id)
+                    AND hm.expected_event_version = e.baseline_event_version
                     AND BINARY hm.content_sha256 = BINARY e.content_sha256
+                    AND hm.member_count = e.member_count
+                    AND hm.work_item_count = e.work_item_count
                     AND BINARY hm.b09_report_sha256 = BINARY e.b09_report_sha256
                     AND BINARY hm.b09_run_id = BINARY e.b09_run_id
+                    AND hm.b09_completed_at = e.b09_completed_at
               ) THEN 'EXACT_NOOP'
              ELSE 'BLOCKED'
            END AS decision_status
@@ -559,7 +624,7 @@ root_snapshot AS (
                     CASE WHEN m.update_time IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(m.update_time AS BINARY)), 10, '0'), CAST(m.update_time AS BINARY)) END,
                     CASE WHEN m.tenant_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(m.tenant_id AS BINARY)), 10, '0'), CAST(m.tenant_id AS BINARY)) END,
                     CASE WHEN m.client_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(m.client_id AS BINARY)), 10, '0'), CAST(m.client_id AS BINARY)) END), 256)) AS meta_sha256,
-           CONCAT('c01h-', LOWER(SHA2(CONCAT(LPAD(OCTET_LENGTH(CAST(s.tenant_id AS BINARY)), 10, '0'), CAST(s.tenant_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.client_id AS BINARY)), 10, '0'), CAST(s.client_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.task_id AS BINARY)), 10, '0'), CAST(s.task_id AS BINARY)), 256))) AS event_id,
+           CONCAT('c01h-', LOWER(SHA2(CONCAT('CYF-C01H-EVENT-ID-V1', LPAD(OCTET_LENGTH(CAST(s.tenant_id AS BINARY)), 10, '0'), CAST(s.tenant_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.client_id AS BINARY)), 10, '0'), CAST(s.client_id AS BINARY), LPAD(OCTET_LENGTH(CAST(s.task_id AS BINARY)), 10, '0'), CAST(s.task_id AS BINARY)), 256))) AS event_id,
            CASE WHEN m.id IS NULL THEN 0 ELSE 1 END AS root_count,
            CASE WHEN m.tenant_id IS NULL OR m.client_id IS NULL OR m.task_id IS NULL
                      OR OCTET_LENGTH(m.tenant_id) NOT BETWEEN 1 AND 200
@@ -599,27 +664,65 @@ content_snapshot AS (
 ),
 event_snapshot AS (
     SELECT c.*,
-           COUNT(e.id) AS event_chain_count,
-           MIN(e.event_version) AS event_chain_min_version,
-           MAX(e.event_version) AS event_chain_max_version,
-           COALESCE(SUM(BINARY e.event_id = BINARY c.event_id), 0) AS deterministic_event_count,
-           COALESCE(SUM(BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'), 0) AS baseline_type_count,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_version END) AS baseline_event_version,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_type END) AS existing_event_type,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.actor_type END) AS existing_actor_type,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.actor_id END) AS existing_actor_id,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.aggregate_type END) AS existing_aggregate_type,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.aggregate_id END) AS existing_aggregate_id,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_json END) AS existing_event_json,
-           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.occurred_at END) AS existing_occurred_at
+           COUNT(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                           AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                      THEN e.id END) AS event_chain_count,
+           MIN(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                          AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                    THEN e.event_version END) AS event_chain_min_version,
+           MAX(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                          AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                    THEN e.event_version END) AS event_chain_max_version,
+           COALESCE(SUM(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                                  AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                             THEN 1 ELSE 0 END), 0) AS deterministic_event_count,
+           COALESCE(SUM(CASE WHEN BINARY e.task_id = BINARY c.task_id
+                                  AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+                                  AND BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'
+                             THEN 1 ELSE 0 END), 0) AS baseline_type_count,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.task_id END) AS existing_task_id,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.event_version END) AS baseline_event_version,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.event_type END) AS existing_event_type,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.actor_type END) AS existing_actor_type,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.actor_id END) AS existing_actor_id,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.aggregate_type END) AS existing_aggregate_type,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.aggregate_id END) AS existing_aggregate_id,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.event_json END) AS existing_event_json,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.occurred_at END) AS existing_occurred_at,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.create_time END) AS existing_create_time,
+           MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id
+                          AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)
+                    THEN e.update_time END) AS existing_update_time
     FROM content_snapshot c
     LEFT JOIN agent_task_event e
       ON BINARY e.tenant_id = BINARY c.tenant_id
      AND OCTET_LENGTH(e.tenant_id) = OCTET_LENGTH(c.tenant_id)
      AND BINARY e.client_id = BINARY c.client_id
      AND OCTET_LENGTH(e.client_id) = OCTET_LENGTH(c.client_id)
-     AND BINARY e.task_id = BINARY c.task_id
-     AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
+     AND ((BINARY e.task_id = BINARY c.task_id
+       AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id))
+       OR (BINARY e.event_id = BINARY c.event_id
+       AND OCTET_LENGTH(e.event_id) = OCTET_LENGTH(c.event_id)))
     GROUP BY c.meta_id, c.tenant_id, c.client_id, c.task_id,
              c.b09_report_sha256, c.b09_run_id, c.b09_operator, c.b09_completed_at,
              c.b09_task_manifest_rows, c.eligible_task_rows, c.eligible_resolution_rows,
@@ -645,6 +748,9 @@ classified AS (
                      AND e.event_chain_max_version = e.current_event_version)) THEN 'BLOCKED'
              WHEN e.deterministic_event_count = 0 AND e.baseline_type_count = 0 THEN 'INSERT_REQUIRED'
              WHEN e.deterministic_event_count = 1 AND e.baseline_type_count = 1
+              AND BINARY e.existing_task_id = BINARY e.task_id
+              AND OCTET_LENGTH(e.existing_task_id) = OCTET_LENGTH(e.task_id)
+              AND e.baseline_event_version BETWEEN 1 AND e.current_event_version
               AND BINARY e.existing_event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'
               AND BINARY e.existing_actor_type = BINARY 'system'
               AND BINARY e.existing_actor_id = BINARY 'c01h-b09'
@@ -652,6 +758,8 @@ classified AS (
               AND BINARY e.existing_aggregate_id = BINARY e.task_id
               AND OCTET_LENGTH(e.existing_aggregate_id) = OCTET_LENGTH(e.task_id)
               AND e.existing_occurred_at = e.b09_completed_at
+              AND e.existing_create_time = e.b09_completed_at
+              AND e.existing_update_time = e.b09_completed_at
               AND BINARY e.existing_event_json = BINARY CONCAT('{"contentSha256":"', e.content_sha256,
                   '","decisionCode":"c01h_b09_v1","memberCount":', e.member_count,
                   ',"source":"b09","workItemCount":', e.work_item_count, '}')
@@ -661,13 +769,35 @@ classified AS (
                   JOIN agent_task_historical_event_manifest_batch hb
                     ON BINARY hb.report_sha256 = BINARY hm.report_sha256
                    AND BINARY hb.seal_status = BINARY 'SEALED'
+                   AND BINARY hb.b09_report_sha256 = BINARY hm.b09_report_sha256
+                   AND BINARY hb.b09_run_id = BINARY hm.b09_run_id
+                   AND BINARY hb.b09_operator = BINARY hm.b09_operator
+                   AND hb.b09_completed_at = hm.b09_completed_at
                   JOIN agent_task_historical_event_run hr
                     ON BINARY hr.report_sha256 = BINARY hm.report_sha256
+                   AND BINARY hr.b09_report_sha256 = BINARY hm.b09_report_sha256
+                   AND BINARY hr.b09_run_id = BINARY hm.b09_run_id
+                   AND BINARY hr.operator = BINARY hb.approved_operator
                    AND BINARY hr.run_status = BINARY 'SUCCEEDED'
+                   AND hr.manifest_row_count = hb.manifest_row_count
+                   AND hr.event_insert_count = hr.version_update_count
+                   AND hr.event_insert_count + hr.exact_noop_count = hr.manifest_row_count
+                   AND hr.completed_at >= hb.sealed_at
                   WHERE BINARY hm.event_id = BINARY e.event_id
+                    AND OCTET_LENGTH(hm.event_id) = OCTET_LENGTH(e.event_id)
+                    AND BINARY hm.tenant_id = BINARY e.tenant_id
+                    AND OCTET_LENGTH(hm.tenant_id) = OCTET_LENGTH(e.tenant_id)
+                    AND BINARY hm.client_id = BINARY e.client_id
+                    AND OCTET_LENGTH(hm.client_id) = OCTET_LENGTH(e.client_id)
+                    AND BINARY hm.task_id = BINARY e.task_id
+                    AND OCTET_LENGTH(hm.task_id) = OCTET_LENGTH(e.task_id)
+                    AND hm.expected_event_version = e.baseline_event_version
                     AND BINARY hm.content_sha256 = BINARY e.content_sha256
+                    AND hm.member_count = e.member_count
+                    AND hm.work_item_count = e.work_item_count
                     AND BINARY hm.b09_report_sha256 = BINARY e.b09_report_sha256
                     AND BINARY hm.b09_run_id = BINARY e.b09_run_id
+                    AND hm.b09_completed_at = e.b09_completed_at
               ) THEN 'EXACT_NOOP'
              ELSE 'BLOCKED'
            END AS decision_status

@@ -19,7 +19,7 @@ STAGING="$ROOT/src/main/resources/db/historical-task-event-baseline-staging.sql"
 APPROVE="$ROOT/src/main/resources/db/historical-task-event-baseline-approve.sql"
 APPLY="$ROOT/src/main/resources/db/historical-task-event-baseline-apply.sql"
 TMP=$(mktemp -d /tmp/c01h-mysql-probe.XXXXXX)
-DBS=("${BASE}_atomic" "${BASE}_version" "${BASE}_partial" "${BASE}_concurrency")
+DBS=("${BASE}_atomic" "${BASE}_version" "${BASE}_partial" "${BASE}_concurrency" "${BASE}_preemption")
 B09_REPORT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 B09_RUN=11111111-1111-1111-1111-111111111111
 B09_OPERATOR=b09-approved-probe
@@ -91,6 +91,10 @@ export_manifest() {
 }
 
 manifest_digest() { awk -F '\t' 'NR==2 {print $1}' "$1"; }
+manifest_field() {
+  local file=$1 name=$2
+  awk -F '\t' -v name="$name" 'NR==1 {for (i=1;i<=NF;i++) if ($i==name) column=i; next} NR==2 {if (!column) exit 2; print $column}' "$file"
+}
 
 approve_manifest() {
   local db=$1 file=$2 digest=$3 out=$4
@@ -130,6 +134,9 @@ expect_apply_failure() {
 # Atomic success, ACL denial, rollback injection, exact repeat no-op.
 db=${DBS[0]}; setup_db "$db"; execute_dry_run "$db" "$TMP/atomic-dry-run.out"; export_manifest "$db" "$TMP/atomic.tsv"; digest=$(manifest_digest "$TMP/atomic.tsv"); approve_manifest "$db" "$TMP/atomic.tsv" "$digest" "$TMP/approve.out"
 assert_scalar "$db" "SELECT CONCAT(manifest_row_count,'/',insert_required_count,'/',exact_noop_count,'/',blocked_count,'/',seal_status) FROM agent_task_historical_event_manifest_batch" '1/1/0/0/SEALED'
+event_id=$(manifest_field "$TMP/atomic.tsv" event_id)
+expected_event_id=$("${MYSQL[@]}" -Nse "SELECT CONCAT('c01h-',LOWER(SHA2(CONCAT('CYF-C01H-EVENT-ID-V1',LPAD(OCTET_LENGTH(CAST('tenant-C01H' AS BINARY)),10,'0'),CAST('tenant-C01H' AS BINARY),LPAD(OCTET_LENGTH(CAST('client-C01H' AS BINARY)),10,'0'),CAST('client-C01H' AS BINARY),LPAD(OCTET_LENGTH(CAST('task-C01H' AS BINARY)),10,'0'),CAST('task-C01H' AS BINARY)),256)))")
+[[ "$event_id" == "$expected_event_id" ]] || { echo "domain-separated deterministic event id mismatch" >&2; exit 1; }
 for sql in "UPDATE agent_task_meta SET current_event_version=99 WHERE id=9001" "INSERT INTO agent_task_event(task_id,event_version,event_id,event_type,actor_type,actor_id,aggregate_type,aggregate_id,event_json,occurred_at,tenant_id,client_id) VALUES('x',1,'x','HISTORICAL_BASELINE_IMPORTED','system','x','task','x','{}',1,'x','x')" "INSERT INTO agent_task_historical_event_run(run_id,report_sha256,b09_report_sha256,b09_run_id,operator,manifest_row_count,event_insert_count,version_update_count,exact_noop_count,started_at,completed_at,run_status) VALUES(UUID(),REPEAT('a',64),REPEAT('a',64),'$B09_RUN','x',1,1,1,0,1,1,'SUCCEEDED')"; do
   if "${OPMYSQL[@]}" -e "$sql" "$db" >/dev/null 2>&1; then echo "restricted operator unexpectedly performed direct DML" >&2; exit 1; fi
 done
@@ -149,6 +156,11 @@ apply_manifest "$db" "$digest" "$TMP/apply-repeat.out"
 assert_scalar "$db" "SELECT CONCAT((SELECT COUNT(*) FROM agent_task_event),'/',current_event_version,'/',(SELECT COUNT(*) FROM agent_task_historical_event_run),'/',(SELECT SUM(event_insert_count) FROM agent_task_historical_event_run),'/',(SELECT SUM(exact_noop_count) FROM agent_task_historical_event_run)) FROM agent_task_meta WHERE id=9001" '1/1/2/1/1'
 after_business=$("${MYSQL[@]}" -Nse "SELECT CONCAT(task_version,'/',(SELECT COUNT(*) FROM agent_task_member),'/',(SELECT COUNT(*) FROM agent_task_work_item)) FROM agent_task_meta WHERE id=9001" "$db")
 [[ "$before_business" == "$after_business" ]] || { echo "task_version/member/work-item changed: $before_business -> $after_business" >&2; exit 1; }
+# Prior SUCCEEDED evidence must not turn a forged same-task event field into a no-op.
+"${MYSQL[@]}" -e "UPDATE agent_task_event SET update_time=update_time+1 WHERE BINARY event_id=BINARY '$event_id'" "$db"
+expect_apply_failure forged-same-task-event "$db" "$digest" 'snapshot/event/version drift or partial baseline'
+assert_scalar "$db" "SELECT CONCAT(current_event_version,'/',(SELECT COUNT(*) FROM agent_task_historical_event_run),'/',(SELECT COALESCE(SUM(exact_noop_count),0) FROM agent_task_historical_event_run)) FROM agent_task_meta WHERE id=9001" '1/2/1'
+"${MYSQL[@]}" -e "UPDATE agent_task_event SET update_time=$B09_COMPLETED WHERE BINARY event_id=BINARY '$event_id'" "$db"
 
 # Version drift after approval is fail-closed and atomic.
 db=${DBS[1]}; setup_db "$db"; export_manifest "$db" "$TMP/version.tsv"; digest=$(manifest_digest "$TMP/version.tsv"); approve_manifest "$db" "$TMP/version.tsv" "$digest" "$TMP/version-approve.out"
@@ -164,6 +176,15 @@ work_count=$("${MYSQL[@]}" -Nse 'SELECT work_item_count FROM agent_task_historic
 "${MYSQL[@]}" -e "INSERT INTO agent_task_event(task_id,event_version,event_id,event_type,actor_type,actor_id,aggregate_type,aggregate_id,event_json,occurred_at,tenant_id,client_id) VALUES('task-C01H',1,'$event_id','HISTORICAL_BASELINE_IMPORTED','system','c01h-b09','task','task-C01H','{\"contentSha256\":\"$content\",\"decisionCode\":\"c01h_b09_v1\",\"memberCount\":$member_count,\"source\":\"b09\",\"workItemCount\":$work_count}',$B09_COMPLETED,'tenant-C01H','client-C01H'); UPDATE agent_task_meta SET current_event_version=1 WHERE id=9001" "$db"
 expect_apply_failure partial-baseline "$db" "$digest" 'snapshot/event/version drift or partial baseline'
 
+# A different task cannot preempt task A's deterministic event id or be counted as a no-op.
+db=${DBS[4]}; setup_db "$db"; export_manifest "$db" "$TMP/preemption-before.tsv"; digest=$(manifest_digest "$TMP/preemption-before.tsv"); approve_manifest "$db" "$TMP/preemption-before.tsv" "$digest" "$TMP/preemption-approve.out"
+event_id=$(manifest_field "$TMP/preemption-before.tsv" event_id)
+"${MYSQL[@]}" -e "INSERT INTO agent_task_event(task_id,event_version,event_id,event_type,actor_type,actor_id,aggregate_type,aggregate_id,event_json,occurred_at,tenant_id,client_id,create_time,update_time) VALUES('task-B',1,'$event_id','HISTORICAL_BASELINE_IMPORTED','system','c01h-b09','task','task-B','{}',$B09_COMPLETED,'tenant-C01H','client-C01H',$B09_COMPLETED,$B09_COMPLETED)" "$db"
+expect_apply_failure event-id-preemption "$db" "$digest" 'snapshot/event/version drift or partial baseline'
+assert_scalar "$db" "SELECT CONCAT(current_event_version,'/',(SELECT COUNT(*) FROM agent_task_historical_event_run),'/',(SELECT COALESCE(SUM(exact_noop_count),0) FROM agent_task_historical_event_run)) FROM agent_task_meta WHERE id=9001" '0/0/0'
+export_manifest "$db" "$TMP/preemption-after.tsv"
+[[ "$(manifest_field "$TMP/preemption-after.tsv" decision_status)" == BLOCKED ]] || { echo "global event-id occupancy was not exported as BLOCKED" >&2; cat "$TMP/preemption-after.tsv" >&2; exit 1; }
+
 # Concurrent root-first writer commits task_version drift before apply obtains all roots.
 db=${DBS[3]}; setup_db "$db"; export_manifest "$db" "$TMP/concurrency.tsv"; digest=$(manifest_digest "$TMP/concurrency.tsv"); approve_manifest "$db" "$TMP/concurrency.tsv" "$digest" "$TMP/concurrency-approve.out"
 ("${MYSQL[@]}" "$db" -e "START TRANSACTION; SELECT id FROM agent_task_meta WHERE id=9001 FOR UPDATE; DO SLEEP(2); UPDATE agent_task_meta SET task_version=task_version+1 WHERE id=9001; COMMIT" >"$TMP/writer.out" 2>&1) & writer_pid=$!
@@ -176,4 +197,4 @@ sleep 0.5
 expect_apply_failure named-lock "$db" "$digest" 'C01H apply: C01H lock busy'
 wait "$lock_pid"
 
-echo 'C01H isolated MySQL probe PASS: dry-run/manifest/snapshot execution, approval/apply, ACL, rollback, --force, exact repeat, partial baseline, version drift, root concurrency and lock contention'
+echo 'C01H isolated MySQL probe PASS: domain-separated id, global event-id preemption defense, strict same-task no-op evidence, dry-run/manifest/snapshot execution, approval/apply, ACL, rollback, --force, exact repeat, partial baseline, version drift, root concurrency and lock contention'
