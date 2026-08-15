@@ -13,6 +13,7 @@ OPMYSQL=("$MYSQL_BIN" --no-defaults --local-infile=1 -u"$OPERATOR" -p"$OPERATOR_
 SCHEMA="$ROOT/src/main/resources/db/schema.sql"
 AUDIT="$ROOT/src/main/resources/db/historical-task-event-baseline-audit-schema.sql"
 ROUTINES="$ROOT/src/main/resources/db/historical-task-event-baseline-routines.sql"
+DRY_RUN="$ROOT/src/main/resources/db/historical-task-event-baseline-dry-run.sql"
 MANIFEST="$ROOT/src/main/resources/db/historical-task-event-baseline-manifest.sql"
 STAGING="$ROOT/src/main/resources/db/historical-task-event-baseline-staging.sql"
 APPROVE="$ROOT/src/main/resources/db/historical-task-event-baseline-approve.sql"
@@ -41,7 +42,7 @@ datadir=$("${MYSQL[@]}" -Nse 'SELECT @@datadir')
 [[ "$port" == 33307 ]] || { echo "refusing non-isolated port $port (must be 33307)" >&2; exit 1; }
 [[ "$datadir" == /tmp/* ]] || { echo "refusing non-/tmp datadir $datadir" >&2; exit 1; }
 
-"${MYSQL[@]}" -e "DROP USER IF EXISTS '$OPERATOR'@'localhost'; DROP USER IF EXISTS 'cyf_c01h_definer'@'localhost'; CREATE USER '$OPERATOR'@'localhost' IDENTIFIED BY '$OPERATOR_PASSWORD'; CREATE USER 'cyf_c01h_definer'@'localhost' IDENTIFIED BY RANDOM PASSWORD ACCOUNT LOCK;"
+"${MYSQL[@]}" -e "DROP USER IF EXISTS '$OPERATOR'@'localhost'; DROP USER IF EXISTS 'cyf_c01h_definer'@'localhost'; CREATE USER '$OPERATOR'@'localhost' IDENTIFIED BY '$OPERATOR_PASSWORD'; CREATE USER 'cyf_c01h_definer'@'localhost' IDENTIFIED BY RANDOM PASSWORD ACCOUNT LOCK;" >/dev/null
 
 assert_scalar() {
   local db=$1 sql=$2 expected=$3 actual
@@ -68,9 +69,18 @@ VALUES('$B09_REPORT',REPEAT('b',64),REPEAT('c',64),9001,'task-C01H','tenant-C01H
 INSERT INTO agent_task_backfill_run(run_id,report_sha256,operator,manifest_row_count,issue_row_count,member_insert_count,work_item_insert_count,started_at,completed_at,run_status,create_time)
 VALUES('$B09_RUN','$B09_REPORT','$B09_OPERATOR',1,0,1,1,1700000000000,$B09_COMPLETED,'SUCCEEDED',$B09_COMPLETED);
 SQL
-  "${MYSQL[@]}" -e "GRANT SELECT ON \`$db\`.agent_task_meta TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_member TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_work_item TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_event TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_backfill_manifest_batch TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_backfill_manifest TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_backfill_run TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_historical_event_manifest_batch TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_historical_event_manifest TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_historical_event_run TO 'cyf_c01h_definer'@'localhost'; GRANT CREATE TEMPORARY TABLES ON \`$db\`.* TO 'cyf_c01h_definer'@'localhost'; GRANT UPDATE (current_event_version) ON \`$db\`.agent_task_meta TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT ON \`$db\`.agent_task_event TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT,UPDATE ON \`$db\`.agent_task_historical_event_manifest_batch TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT ON \`$db\`.agent_task_historical_event_manifest TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT ON \`$db\`.agent_task_historical_event_run TO 'cyf_c01h_definer'@'localhost'; GRANT CREATE TEMPORARY TABLES ON \`$db\`.* TO '$OPERATOR'@'localhost';"
+  "${MYSQL[@]}" -e "GRANT SELECT ON \`$db\`.agent_task_meta TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_member TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_work_item TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_event TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_backfill_manifest_batch TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_backfill_manifest TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_backfill_run TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_historical_event_manifest_batch TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_historical_event_manifest TO 'cyf_c01h_definer'@'localhost'; GRANT SELECT ON \`$db\`.agent_task_historical_event_run TO 'cyf_c01h_definer'@'localhost'; GRANT CREATE TEMPORARY TABLES, LOCK TABLES ON \`$db\`.* TO 'cyf_c01h_definer'@'localhost'; GRANT UPDATE (current_event_version) ON \`$db\`.agent_task_meta TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT ON \`$db\`.agent_task_event TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT,UPDATE ON \`$db\`.agent_task_historical_event_manifest_batch TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT ON \`$db\`.agent_task_historical_event_manifest TO 'cyf_c01h_definer'@'localhost'; GRANT INSERT ON \`$db\`.agent_task_historical_event_run TO 'cyf_c01h_definer'@'localhost'; GRANT CREATE TEMPORARY TABLES ON \`$db\`.* TO '$OPERATOR'@'localhost';"
   "${MYSQL[@]}" "$db" < "$ROUTINES"
-  "${MYSQL[@]}" -e "GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_approve_manifest_atomic_v1 TO '$OPERATOR'@'localhost'; GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_apply_manifest_atomic_v1 TO '$OPERATOR'@'localhost';"
+  "${MYSQL[@]}" -e "GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_compute_verified_digest_v1 TO 'cyf_c01h_definer'@'localhost'; GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_compute_approved_digest_v1 TO 'cyf_c01h_definer'@'localhost'; GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_build_current_snapshot_v1 TO 'cyf_c01h_definer'@'localhost'; GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_approve_manifest_atomic_v1 TO 'cyf_c01h_definer'@'localhost'; GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_apply_manifest_atomic_v1 TO 'cyf_c01h_definer'@'localhost'; GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_approve_manifest_atomic_v1 TO '$OPERATOR'@'localhost'; GRANT EXECUTE ON PROCEDURE \`$db\`.c01h_apply_manifest_atomic_v1 TO '$OPERATOR'@'localhost';"
+}
+
+execute_dry_run() {
+  local db=$1 out=$2
+  { printf "SET @c01h_b09_report_sha256='%s'; SET @c01h_b09_run_id='%s';\n" "$B09_REPORT" "$B09_RUN"; printf 'SOURCE %s;\n' "$DRY_RUN"; } |
+    "${MYSQL[@]}" --batch --raw "$db" > "$out"
+  grep -q 'REVIEW_REQUIRED' "$out" || { echo "dry-run report did not reach REVIEW_REQUIRED" >&2; cat "$out" >&2; exit 1; }
+  grep -q 'task_version_snapshot' "$out" || { echo "dry-run snapshot projection missing" >&2; cat "$out" >&2; exit 1; }
+  grep -q 'INSERT_REQUIRED' "$out" || { echo "dry-run task decision missing" >&2; cat "$out" >&2; exit 1; }
 }
 
 export_manifest() {
@@ -84,20 +94,31 @@ manifest_digest() { awk -F '\t' 'NR==2 {print $1}' "$1"; }
 
 approve_manifest() {
   local db=$1 file=$2 digest=$3 out=$4
-  { printf 'SOURCE %s;\n' "$STAGING"; printf "LOAD DATA LOCAL INFILE '%s' INTO TABLE tmp_c01h_approved_manifest_staging FIELDS TERMINATED BY '\\t' LINES TERMINATED BY '\\n' IGNORE 1 LINES;\n" "$file"; printf "SET @c01h_approved_manifest_digest='%s'; SET @c01h_operator='%s';\n" "$digest" "$C01H_OPERATOR"; printf 'SOURCE %s;\n' "$APPROVE"; } |
-    "${OPMYSQL[@]}" --batch --raw "$db" > "$out" 2>&1
+  if ! { printf 'SOURCE %s;\n' "$STAGING"; printf "LOAD DATA LOCAL INFILE '%s' INTO TABLE tmp_c01h_approved_manifest_staging FIELDS TERMINATED BY '\\t' LINES TERMINATED BY '\\n' IGNORE 1 LINES;\n" "$file"; printf "SET @c01h_approved_manifest_digest='%s'; SET @c01h_operator='%s';\n" "$digest" "$C01H_OPERATOR"; printf 'SOURCE %s;\n' "$APPROVE"; } |
+    "${OPMYSQL[@]}" --batch --raw "$db" > "$out" 2>&1; then
+    echo "manifest approval failed" >&2
+    cat "$out" >&2
+    exit 1
+  fi
 }
 
 apply_manifest() {
   local db=$1 digest=$2 out=$3 force=${4:-0}
-  local args=(--batch --raw)
+  local args=(--batch --raw) status=0
   [[ "$force" == 1 ]] && args+=(--force)
-  { printf "SET @c01h_approved_manifest_digest='%s'; SET @c01h_operator='%s';\n" "$digest" "$C01H_OPERATOR"; printf 'SOURCE %s;\n' "$APPLY"; [[ "$force" == 1 ]] && printf "SELECT 'force-continued-after-c01h-error';\n"; } |
-    "${OPMYSQL[@]}" "${args[@]}" "$db" > "$out" 2>&1
+  { printf "SET @c01h_approved_manifest_digest='%s'; SET @c01h_operator='%s';\n" "$digest" "$C01H_OPERATOR"; printf 'SOURCE %s;\n' "$APPLY"; if [[ "$force" == 1 ]]; then printf "SELECT 'force-continued-after-c01h-error';\n"; fi; } |
+    "${OPMYSQL[@]}" "${args[@]}" "$db" > "$out" 2>&1 || status=$?
+  if [[ "$force" == 0 && "$status" != 0 ]]; then
+    echo "manifest apply failed" >&2
+    cat "$out" >&2
+    exit "$status"
+  fi
+  return "$status"
 }
 
 expect_apply_failure() {
-  local label=$1 db=$2 digest=$3 expected=$4 before after out="$TMP/$label.out"
+  local label=$1 db=$2 digest=$3 expected=$4 before after
+  local out="$TMP/$label.out"
   before=$("${MYSQL[@]}" -Nse "SELECT CONCAT((SELECT COUNT(*) FROM agent_task_event),'/',(SELECT current_event_version FROM agent_task_meta WHERE id=9001),'/',(SELECT COUNT(*) FROM agent_task_historical_event_run))" "$db")
   set +e; apply_manifest "$db" "$digest" "$out" 1; set -e
   grep -q "$expected" "$out" || { echo "$label missing [$expected]" >&2; cat "$out" >&2; exit 1; }
@@ -107,7 +128,7 @@ expect_apply_failure() {
 }
 
 # Atomic success, ACL denial, rollback injection, exact repeat no-op.
-db=${DBS[0]}; setup_db "$db"; export_manifest "$db" "$TMP/atomic.tsv"; digest=$(manifest_digest "$TMP/atomic.tsv"); approve_manifest "$db" "$TMP/atomic.tsv" "$digest" "$TMP/approve.out"
+db=${DBS[0]}; setup_db "$db"; execute_dry_run "$db" "$TMP/atomic-dry-run.out"; export_manifest "$db" "$TMP/atomic.tsv"; digest=$(manifest_digest "$TMP/atomic.tsv"); approve_manifest "$db" "$TMP/atomic.tsv" "$digest" "$TMP/approve.out"
 assert_scalar "$db" "SELECT CONCAT(manifest_row_count,'/',insert_required_count,'/',exact_noop_count,'/',blocked_count,'/',seal_status) FROM agent_task_historical_event_manifest_batch" '1/1/0/0/SEALED'
 for sql in "UPDATE agent_task_meta SET current_event_version=99 WHERE id=9001" "INSERT INTO agent_task_event(task_id,event_version,event_id,event_type,actor_type,actor_id,aggregate_type,aggregate_id,event_json,occurred_at,tenant_id,client_id) VALUES('x',1,'x','HISTORICAL_BASELINE_IMPORTED','system','x','task','x','{}',1,'x','x')" "INSERT INTO agent_task_historical_event_run(run_id,report_sha256,b09_report_sha256,b09_run_id,operator,manifest_row_count,event_insert_count,version_update_count,exact_noop_count,started_at,completed_at,run_status) VALUES(UUID(),REPEAT('a',64),REPEAT('a',64),'$B09_RUN','x',1,1,1,0,1,1,'SUCCEEDED')"; do
   if "${OPMYSQL[@]}" -e "$sql" "$db" >/dev/null 2>&1; then echo "restricted operator unexpectedly performed direct DML" >&2; exit 1; fi
@@ -155,4 +176,4 @@ sleep 0.5
 expect_apply_failure named-lock "$db" "$digest" 'C01H apply: C01H lock busy'
 wait "$lock_pid"
 
-echo 'C01H isolated MySQL probe PASS: ACL, rollback, --force, exact repeat, partial baseline, version drift, root concurrency and lock contention'
+echo 'C01H isolated MySQL probe PASS: dry-run/manifest/snapshot execution, approval/apply, ACL, rollback, --force, exact repeat, partial baseline, version drift, root concurrency and lock contention'

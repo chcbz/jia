@@ -61,6 +61,8 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(sql.contains("e.event_chain_count = e.current_event_version"));
         assertTrue(sql.contains("e.event_chain_min_version = 1"));
         assertTrue(sql.contains("e.event_chain_max_version = e.current_event_version"));
+        assertTrue(sql.contains("coalesce(sum(binary e.event_id = binary c.event_id), 0) as deterministic_event_count"));
+        assertTrue(sql.contains("coalesce(sum(binary e.event_type = binary 'historical_baseline_imported'), 0) as baseline_type_count"));
         assertTrue(sql.contains("{\"contentsha256\":\""));
         assertTrue(sql.contains("\"decisioncode\":\"c01h_b09_v1\""));
         assertTrue(sql.contains("\"membercount\":"));
@@ -94,7 +96,22 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(manifest.contains("order by binary tenant_id, binary client_id, binary task_id"));
         assertTrue(manifest.contains("c01h-manifest-chain-v1"));
         assertTrue(manifest.contains("c01h-manifest-final-v1"));
+        assertTrue(manifest.contains("set export_row_count = export_row_count + 1"));
+        assertFalse(manifest.contains("select count(*) from tmp_c01h_export_rows"));
         assertFalse(manifest.contains("group_concat("));
+    }
+
+    @Test
+    void candidateCatalogProjectsSnapshotAliasesBeforeCanonicalRowDigest() throws IOException {
+        String sql = exportSql();
+        int candidates = sql.indexOf("candidate_rows as (");
+        int taskSnapshot = sql.indexOf("c.task_version as task_version_snapshot", candidates);
+        int eventSnapshot = sql.indexOf("c.current_event_version as current_event_version_snapshot", candidates);
+        int manifestRows = sql.indexOf("manifest_rows as (", candidates);
+
+        assertTrue(candidates >= 0 && candidates < taskSnapshot && taskSnapshot < eventSnapshot
+                && eventSnapshot < manifestRows);
+        assertFalse(candidateCte(sql).contains("group by binary"));
     }
 
     @Test
@@ -148,6 +165,9 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(routines.contains("staging_count=0"));
         assertTrue(routines.contains("zero candidates cannot be sealed"));
         assertTrue(routines.contains("hex(convert(unhex(tenant_id_hex) using utf8mb4)) <> tenant_id_hex"));
+        assertTrue(routines.contains("cast(convert(unhex(b09_operator_hex) using utf8mb4) as char(100)) b09_operator"));
+        assertTrue(routines.contains("cast(convert(unhex(tenant_id_hex) using utf8mb4) as char(50)) tenant_id"));
+        assertTrue(routines.contains("cast(convert(unhex(task_id_hex) using utf8mb4) as char(100)) task_id"));
         assertTrue(routines.contains("binary manifest_row_key <> binary lower(sha2(concat('c01h-row-v1'"));
         assertTrue(routines.contains("binary event_id <> binary concat('c01h-', lower(sha2(concat("));
         assertTrue(routines.contains("binary manifest_row_sha256 <> binary lower(sha2(concat('c01h-manifest-row-v1'"));
@@ -179,7 +199,10 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         assertTrue(routines.contains("b09-task-backfill:"));
         assertTrue(routines.contains("c01h-historical-baseline:"));
         assertTrue(routines.contains("account lock"));
+        assertTrue(routines.contains("grant create temporary tables, lock tables"));
         assertTrue(routines.contains("grant execute on procedure"));
+        assertTrue(routines.contains("c01h_compute_verified_digest_v1 to `cyf_c01h_definer`@`localhost`"));
+        assertTrue(routines.contains("c01h_build_current_snapshot_v1 to `cyf_c01h_definer`@`localhost`"));
         assertTrue(routines.contains("never grant operators direct dml"));
     }
 
@@ -239,6 +262,9 @@ class AgentHistoricalTaskEventBaselineSchemaTest {
         String probe = readFile("src/test/scripts/historical-task-event-baseline-mysql-probe.sh");
 
         assertTrue(probe.contains("--no-defaults"));
+        assertTrue(probe.contains("historical-task-event-baseline-dry-run.sql"));
+        assertTrue(probe.contains("execute_dry_run"));
+        assertTrue(probe.contains("dry-run snapshot projection missing"));
         assertTrue(probe.contains("[[ \"$port\" == 33307 ]]"));
         assertTrue(probe.contains("[[ \"$datadir\" == /tmp/* ]]"));
         assertTrue(probe.contains("restricted operator unexpectedly performed direct dml"));

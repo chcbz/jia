@@ -87,7 +87,7 @@ b09_task_scope AS (
     JOIN agent_task_backfill_manifest m
       ON BINARY m.report_sha256 = BINARY e.b09_report_sha256
     WHERE e.sealed_batch_count = 1 AND e.successful_run_count = 1
-    GROUP BY m.meta_id, BINARY m.tenant_id, BINARY m.client_id, BINARY m.task_id,
+    GROUP BY m.meta_id, m.tenant_id, m.client_id, m.task_id,
              e.b09_report_sha256, e.b09_run_id, e.b09_operator, e.b09_completed_at
     HAVING eligible_task_rows = b09_task_manifest_rows
        AND eligible_resolution_rows = b09_task_manifest_rows
@@ -148,11 +148,11 @@ member_summary AS (
      AND BINARY c.scope_task_id = BINARY o.scope_task_id
      AND c.row_no = o.row_no
     JOIN (SELECT scope_tenant_id, scope_client_id, scope_task_id, MAX(row_no) AS max_row_no
-          FROM member_ordered GROUP BY BINARY scope_tenant_id, BINARY scope_client_id, BINARY scope_task_id) z
+          FROM member_ordered GROUP BY scope_tenant_id, scope_client_id, scope_task_id) z
       ON BINARY z.scope_tenant_id = BINARY o.scope_tenant_id
      AND BINARY z.scope_client_id = BINARY o.scope_client_id
      AND BINARY z.scope_task_id = BINARY o.scope_task_id
-    GROUP BY BINARY o.scope_tenant_id, BINARY o.scope_client_id, BINARY o.scope_task_id
+    GROUP BY o.scope_tenant_id, o.scope_client_id, o.scope_task_id
 ),
 work_ordered AS (
     SELECT s.tenant_id AS scope_tenant_id, s.client_id AS scope_client_id,
@@ -221,11 +221,11 @@ work_summary AS (
      AND BINARY c.scope_task_id = BINARY o.scope_task_id
      AND c.row_no = o.row_no
     JOIN (SELECT scope_tenant_id, scope_client_id, scope_task_id, MAX(row_no) AS max_row_no
-          FROM work_ordered GROUP BY BINARY scope_tenant_id, BINARY scope_client_id, BINARY scope_task_id) z
+          FROM work_ordered GROUP BY scope_tenant_id, scope_client_id, scope_task_id) z
       ON BINARY z.scope_tenant_id = BINARY o.scope_tenant_id
      AND BINARY z.scope_client_id = BINARY o.scope_client_id
      AND BINARY z.scope_task_id = BINARY o.scope_task_id
-    GROUP BY BINARY o.scope_tenant_id, BINARY o.scope_client_id, BINARY o.scope_task_id
+    GROUP BY o.scope_tenant_id, o.scope_client_id, o.scope_task_id
 ),
 root_snapshot AS (
     SELECT s.*, m.current_event_version, m.task_version,
@@ -293,8 +293,8 @@ event_snapshot AS (
            COUNT(e.id) AS event_chain_count,
            MIN(e.event_version) AS event_chain_min_version,
            MAX(e.event_version) AS event_chain_max_version,
-           SUM(BINARY e.event_id = BINARY c.event_id) AS deterministic_event_count,
-           SUM(BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED') AS baseline_type_count,
+           COALESCE(SUM(BINARY e.event_id = BINARY c.event_id), 0) AS deterministic_event_count,
+           COALESCE(SUM(BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'), 0) AS baseline_type_count,
            MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_version END) AS baseline_event_version,
            MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_type END) AS existing_event_type,
            MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.actor_type END) AS existing_actor_type,
@@ -311,7 +311,7 @@ event_snapshot AS (
      AND OCTET_LENGTH(e.client_id) = OCTET_LENGTH(c.client_id)
      AND BINARY e.task_id = BINARY c.task_id
      AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
-    GROUP BY c.meta_id, BINARY c.tenant_id, BINARY c.client_id, BINARY c.task_id,
+    GROUP BY c.meta_id, c.tenant_id, c.client_id, c.task_id,
              c.b09_report_sha256, c.b09_run_id, c.b09_operator, c.b09_completed_at,
              c.b09_task_manifest_rows, c.eligible_task_rows, c.eligible_resolution_rows,
              c.current_event_version, c.task_version, c.meta_sha256, c.event_id,
@@ -366,6 +366,8 @@ classified AS (
 ),
 candidate_rows AS (
     SELECT c.*,
+           c.task_version AS task_version_snapshot,
+           c.current_event_version AS current_event_version_snapshot,
            CASE WHEN BINARY c.decision_status = BINARY 'INSERT_REQUIRED'
                 THEN c.current_event_version + 1 ELSE c.baseline_event_version END AS expected_event_version,
            LOWER(SHA2(CONCAT('c01h-row-v1', CASE WHEN c.tenant_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(c.tenant_id AS BINARY)), 10, '0'), CAST(c.tenant_id AS BINARY)) END, CASE WHEN c.client_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(c.client_id AS BINARY)), 10, '0'), CAST(c.client_id AS BINARY)) END, CASE WHEN c.task_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(c.task_id AS BINARY)), 10, '0'), CAST(c.task_id AS BINARY)) END), 256)) AS manifest_row_key
@@ -467,10 +469,10 @@ main: BEGIN
     DROP TEMPORARY TABLE IF EXISTS tmp_c01h_verified_manifest;
     CREATE TEMPORARY TABLE tmp_c01h_verified_manifest ENGINE=InnoDB AS SELECT
         manifest_digest,manifest_row_key,manifest_row_sha256,b09_report_sha256,b09_run_id,
-        CONVERT(UNHEX(b09_operator_hex) USING utf8mb4) b09_operator,
+        CAST(CONVERT(UNHEX(b09_operator_hex) USING utf8mb4) AS CHAR(100)) b09_operator,
         CAST(b09_completed_at_value AS UNSIGNED) b09_completed_at,CAST(meta_id_value AS UNSIGNED) meta_id,
-        CONVERT(UNHEX(tenant_id_hex) USING utf8mb4) tenant_id,CONVERT(UNHEX(client_id_hex) USING utf8mb4) client_id,
-        CONVERT(UNHEX(task_id_hex) USING utf8mb4) task_id,event_id,decision_status,
+        CAST(CONVERT(UNHEX(tenant_id_hex) USING utf8mb4) AS CHAR(50)) tenant_id,CAST(CONVERT(UNHEX(client_id_hex) USING utf8mb4) AS CHAR(50)) client_id,
+        CAST(CONVERT(UNHEX(task_id_hex) USING utf8mb4) AS CHAR(100)) task_id,event_id,decision_status,
         CAST(expected_event_version_value AS UNSIGNED) expected_event_version,content_sha256,
         CAST(member_count_value AS UNSIGNED) member_count,CAST(work_item_count_value AS UNSIGNED) work_item_count,
         CAST(task_version_snapshot_value AS UNSIGNED) task_version_snapshot,
@@ -613,12 +615,17 @@ DELIMITER ;
 -- GRANT SELECT ON `<db>`.agent_task_historical_event_manifest_batch TO `cyf_c01h_definer`@`localhost`;
 -- GRANT SELECT ON `<db>`.agent_task_historical_event_manifest TO `cyf_c01h_definer`@`localhost`;
 -- GRANT SELECT ON `<db>`.agent_task_historical_event_run TO `cyf_c01h_definer`@`localhost`;
--- GRANT CREATE TEMPORARY TABLES ON `<db>`.* TO `cyf_c01h_definer`@`localhost`;
+-- GRANT CREATE TEMPORARY TABLES, LOCK TABLES ON `<db>`.* TO `cyf_c01h_definer`@`localhost`;
 -- GRANT UPDATE (current_event_version) ON `<db>`.agent_task_meta TO `cyf_c01h_definer`@`localhost`;
 -- GRANT INSERT ON `<db>`.agent_task_event TO `cyf_c01h_definer`@`localhost`;
 -- GRANT INSERT,UPDATE ON `<db>`.agent_task_historical_event_manifest_batch TO `cyf_c01h_definer`@`localhost`;
 -- GRANT INSERT ON `<db>`.agent_task_historical_event_manifest TO `cyf_c01h_definer`@`localhost`;
 -- GRANT INSERT ON `<db>`.agent_task_historical_event_run TO `cyf_c01h_definer`@`localhost`;
+-- GRANT EXECUTE ON PROCEDURE `<db>`.c01h_compute_verified_digest_v1 TO `cyf_c01h_definer`@`localhost`;
+-- GRANT EXECUTE ON PROCEDURE `<db>`.c01h_compute_approved_digest_v1 TO `cyf_c01h_definer`@`localhost`;
+-- GRANT EXECUTE ON PROCEDURE `<db>`.c01h_build_current_snapshot_v1 TO `cyf_c01h_definer`@`localhost`;
+-- GRANT EXECUTE ON PROCEDURE `<db>`.c01h_approve_manifest_atomic_v1 TO `cyf_c01h_definer`@`localhost`;
+-- GRANT EXECUTE ON PROCEDURE `<db>`.c01h_apply_manifest_atomic_v1 TO `cyf_c01h_definer`@`localhost`;
 -- REVOKE ALL PRIVILEGES, GRANT OPTION FROM `<operator>`@`localhost`;
 -- GRANT CREATE TEMPORARY TABLES ON `<db>`.* TO `<operator>`@`localhost`;
 -- GRANT EXECUTE ON PROCEDURE `<db>`.c01h_approve_manifest_atomic_v1 TO `<operator>`@`localhost`;

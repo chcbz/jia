@@ -42,7 +42,7 @@ b09_task_scope AS (
     JOIN agent_task_backfill_manifest m
       ON BINARY m.report_sha256 = BINARY e.b09_report_sha256
     WHERE e.sealed_batch_count = 1 AND e.successful_run_count = 1
-    GROUP BY m.meta_id, BINARY m.tenant_id, BINARY m.client_id, BINARY m.task_id,
+    GROUP BY m.meta_id, m.tenant_id, m.client_id, m.task_id,
              e.b09_report_sha256, e.b09_run_id, e.b09_operator, e.b09_completed_at
     HAVING eligible_task_rows = b09_task_manifest_rows
        AND eligible_resolution_rows = b09_task_manifest_rows
@@ -103,11 +103,11 @@ member_summary AS (
      AND BINARY c.scope_task_id = BINARY o.scope_task_id
      AND c.row_no = o.row_no
     JOIN (SELECT scope_tenant_id, scope_client_id, scope_task_id, MAX(row_no) AS max_row_no
-          FROM member_ordered GROUP BY BINARY scope_tenant_id, BINARY scope_client_id, BINARY scope_task_id) z
+          FROM member_ordered GROUP BY scope_tenant_id, scope_client_id, scope_task_id) z
       ON BINARY z.scope_tenant_id = BINARY o.scope_tenant_id
      AND BINARY z.scope_client_id = BINARY o.scope_client_id
      AND BINARY z.scope_task_id = BINARY o.scope_task_id
-    GROUP BY BINARY o.scope_tenant_id, BINARY o.scope_client_id, BINARY o.scope_task_id
+    GROUP BY o.scope_tenant_id, o.scope_client_id, o.scope_task_id
 ),
 work_ordered AS (
     SELECT s.tenant_id AS scope_tenant_id, s.client_id AS scope_client_id,
@@ -176,11 +176,11 @@ work_summary AS (
      AND BINARY c.scope_task_id = BINARY o.scope_task_id
      AND c.row_no = o.row_no
     JOIN (SELECT scope_tenant_id, scope_client_id, scope_task_id, MAX(row_no) AS max_row_no
-          FROM work_ordered GROUP BY BINARY scope_tenant_id, BINARY scope_client_id, BINARY scope_task_id) z
+          FROM work_ordered GROUP BY scope_tenant_id, scope_client_id, scope_task_id) z
       ON BINARY z.scope_tenant_id = BINARY o.scope_tenant_id
      AND BINARY z.scope_client_id = BINARY o.scope_client_id
      AND BINARY z.scope_task_id = BINARY o.scope_task_id
-    GROUP BY BINARY o.scope_tenant_id, BINARY o.scope_client_id, BINARY o.scope_task_id
+    GROUP BY o.scope_tenant_id, o.scope_client_id, o.scope_task_id
 ),
 root_snapshot AS (
     SELECT s.*, m.current_event_version, m.task_version,
@@ -248,8 +248,8 @@ event_snapshot AS (
            COUNT(e.id) AS event_chain_count,
            MIN(e.event_version) AS event_chain_min_version,
            MAX(e.event_version) AS event_chain_max_version,
-           SUM(BINARY e.event_id = BINARY c.event_id) AS deterministic_event_count,
-           SUM(BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED') AS baseline_type_count,
+           COALESCE(SUM(BINARY e.event_id = BINARY c.event_id), 0) AS deterministic_event_count,
+           COALESCE(SUM(BINARY e.event_type = BINARY 'HISTORICAL_BASELINE_IMPORTED'), 0) AS baseline_type_count,
            MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_version END) AS baseline_event_version,
            MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.event_type END) AS existing_event_type,
            MAX(CASE WHEN BINARY e.event_id = BINARY c.event_id THEN e.actor_type END) AS existing_actor_type,
@@ -266,7 +266,7 @@ event_snapshot AS (
      AND OCTET_LENGTH(e.client_id) = OCTET_LENGTH(c.client_id)
      AND BINARY e.task_id = BINARY c.task_id
      AND OCTET_LENGTH(e.task_id) = OCTET_LENGTH(c.task_id)
-    GROUP BY c.meta_id, BINARY c.tenant_id, BINARY c.client_id, BINARY c.task_id,
+    GROUP BY c.meta_id, c.tenant_id, c.client_id, c.task_id,
              c.b09_report_sha256, c.b09_run_id, c.b09_operator, c.b09_completed_at,
              c.b09_task_manifest_rows, c.eligible_task_rows, c.eligible_resolution_rows,
              c.current_event_version, c.task_version, c.meta_sha256, c.event_id,
@@ -321,6 +321,8 @@ classified AS (
 ),
 candidate_rows AS (
     SELECT c.*,
+           c.task_version AS task_version_snapshot,
+           c.current_event_version AS current_event_version_snapshot,
            CASE WHEN BINARY c.decision_status = BINARY 'INSERT_REQUIRED'
                 THEN c.current_event_version + 1 ELSE c.baseline_event_version END AS expected_event_version,
            LOWER(SHA2(CONCAT('c01h-row-v1', CASE WHEN c.tenant_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(c.tenant_id AS BINARY)), 10, '0'), CAST(c.tenant_id AS BINARY)) END, CASE WHEN c.client_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(c.client_id AS BINARY)), 10, '0'), CAST(c.client_id AS BINARY)) END, CASE WHEN c.task_id IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(c.task_id AS BINARY)), 10, '0'), CAST(c.task_id AS BINARY)) END), 256)) AS manifest_row_key
@@ -362,6 +364,7 @@ READS SQL DATA
 BEGIN
     DECLARE done INT DEFAULT 0;
     DECLARE row_digest CHAR(64);
+    DECLARE export_row_count BIGINT DEFAULT 0;
     DECLARE chain_digest CHAR(64) DEFAULT LOWER(SHA2('c01h-manifest-chain-v1', 256));
     DECLARE row_cursor CURSOR FOR
         SELECT manifest_row_sha256 FROM tmp_c01h_export_rows
@@ -375,11 +378,12 @@ BEGIN
         SET chain_digest = LOWER(SHA2(CONCAT('c01h-manifest-chain-v1',
             CASE WHEN chain_digest IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(chain_digest AS BINARY)), 10, '0'), CAST(chain_digest AS BINARY)) END,
             CASE WHEN row_digest IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(row_digest AS BINARY)), 10, '0'), CAST(row_digest AS BINARY)) END), 256));
+        SET export_row_count = export_row_count + 1;
     END LOOP;
     CLOSE row_cursor;
     SET export_digest = LOWER(SHA2(CONCAT('c01h-manifest-final-v1',
         CASE WHEN chain_digest IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(chain_digest AS BINARY)), 10, '0'), CAST(chain_digest AS BINARY)) END,
-        CASE WHEN (SELECT COUNT(*) FROM tmp_c01h_export_rows) IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST((SELECT COUNT(*) FROM tmp_c01h_export_rows) AS BINARY)), 10, '0'), CAST((SELECT COUNT(*) FROM tmp_c01h_export_rows) AS BINARY)) END), 256));
+        CASE WHEN export_row_count IS NULL THEN 'N' ELSE CONCAT('V', LPAD(OCTET_LENGTH(CAST(export_row_count AS BINARY)), 10, '0'), CAST(export_row_count AS BINARY)) END), 256));
 END$$
 DELIMITER ;
 CALL c01h_compute_export_digest_v1(@c01h_export_manifest_digest);
@@ -391,8 +395,8 @@ SELECT @c01h_export_manifest_digest AS manifest_digest,
        b09_completed_at, meta_id, HEX(tenant_id) AS tenant_id_hex,
        HEX(client_id) AS client_id_hex, HEX(task_id) AS task_id_hex,
        event_id, decision_status, expected_event_version, content_sha256,
-       member_count, work_item_count, task_version AS task_version_snapshot,
-       current_event_version AS current_event_version_snapshot,
+       member_count, work_item_count, task_version_snapshot,
+       current_event_version_snapshot,
        event_chain_count,
        COALESCE(CAST(event_chain_min_version AS CHAR), '-') AS event_chain_min_version,
        COALESCE(CAST(event_chain_max_version AS CHAR), '-') AS event_chain_max_version,
