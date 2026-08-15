@@ -3,6 +3,8 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.common.AgentErrorConstants;
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
@@ -23,6 +25,7 @@ import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentStatsDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
@@ -39,8 +42,11 @@ import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
@@ -57,6 +63,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -106,6 +113,11 @@ class AgentServiceImplTest extends BaseMockTest {
     AgentEventPublisher eventPublisher;
     @Mock
     AgentSceneService sceneService;
+    @Mock
+    AgentTaskMutationTransaction mutationTransaction;
+    @Mock
+    AgentTaskEventWriter taskEventWriter;
+    private final AtomicReference<AgentTaskMetaEntity> lastInsertedTask = new AtomicReference<>();
     AgentServiceImpl agentService;
 
     @BeforeEach
@@ -125,7 +137,8 @@ class AgentServiceImplTest extends BaseMockTest {
                         AgentConstants.IDENTITY_STATUS_PROVISIONED));
         agentService = new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
-                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(true, true));
+                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(true, true),
+                mutationTransaction, taskEventWriter);
         org.mockito.Mockito.lenient().when(legacyTaskCompatibilityService.resolveAgentIds(
                         any(), any(), any(), any()))
                 .thenAnswer(invocation -> List.copyOf(invocation.<List<String>>getArgument(3)));
@@ -137,6 +150,43 @@ class AgentServiceImplTest extends BaseMockTest {
                 .thenAnswer(invocation -> new AgentLegacyTaskCompatibilityService.AssignOutcome(
                         invocation.getArgument(3), true));
         org.mockito.Mockito.lenient().when(agentRuntimeDao.updateById(any())).thenReturn(1);
+        org.mockito.Mockito.lenient().when(agentTaskMetaDao.insert(any(AgentTaskMetaEntity.class)))
+                .thenAnswer(invocation -> {
+                    AgentTaskMetaEntity meta = invocation.getArgument(0);
+                    if (meta.getId() == null) meta.setId(1L);
+                    if (meta.getCreateTime() == null) meta.setCreateTime(1_000L);
+                    if (meta.getUpdateTime() == null) meta.setUpdateTime(1_000L);
+                    lastInsertedTask.set(meta);
+                    return 1;
+                });
+        org.mockito.Mockito.lenient().when(agentTaskMetaDao.updateById(any())).thenReturn(1);
+        org.mockito.Mockito.lenient().when(agentTaskNoteDao.insert(any(AgentTaskNoteEntity.class)))
+                .thenAnswer(invocation -> {
+                    AgentTaskNoteEntity note = invocation.getArgument(0);
+                    if (note.getId() == null) note.setId(1L);
+                    return 1;
+                });
+        org.mockito.Mockito.lenient().when(mutationTransaction.executeAfterTaskRootReservation(
+                        any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    AgentTaskMutationTransaction.TaskRootReservation reservation = invocation.getArgument(3);
+                    boolean created = reservation.reserve() == 1;
+                    AgentTaskMetaEntity root = lastInsertedTask.get();
+                    if (root == null) {
+                        root = agentTaskMetaDao.findByTaskId(
+                                invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2));
+                    }
+                    AgentTaskMutationTransaction.ReservedTaskMutation<?> mutation = invocation.getArgument(4);
+                    return mutation.apply(root, created);
+                });
+        org.mockito.Mockito.lenient().when(mutationTransaction.executeWithLockedTaskRoot(
+                        any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    AgentTaskMetaEntity root = agentTaskMetaDao.findByTaskId(
+                            invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2));
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    return mutation.apply(root);
+                });
     }
 
     @Test
@@ -295,6 +345,38 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(eventPublisher).publishTaskEvent(eq("task_created"), eventTaskCaptor.capture());
         assertEquals("juyiting", eventTaskCaptor.getValue().getTenantId());
         assertEquals("jia_client", eventTaskCaptor.getValue().getClientId());
+        ArgumentCaptor<AgentTaskEventWriteCommand> persistent =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(taskEventWriter).append(persistent.capture());
+        assertEquals(TaskEventType.TASK_CREATED, persistent.getValue().getEventType());
+        assertEquals(TaskEventType.ActorType.SYSTEM, persistent.getValue().getActorType());
+    }
+
+    @Test
+    void duplicateCreateRootIsNoOpAndAllocatesNoPersistentEvent() {
+        AgentTaskMetaEntity existing = new AgentTaskMetaEntity()
+                .setId(7L).setTaskId("existing-task")
+                .setRewardStatus(AgentConstants.TASK_STATUS_OPEN)
+                .setTaskVersion(0L).setCurrentEventVersion(4L);
+        existing.setTenantId("juyiting");
+        existing.setClientId("jia_client");
+        when(agentTaskMetaDao.insert(any(AgentTaskMetaEntity.class))).thenReturn(0);
+        when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            invocation.<TaskPlanEntity>getArgument(0).setId(0L);
+            return null;
+        }).when(taskService).create(any(TaskPlanEntity.class));
+        existing.setTaskId("0");
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "0"))
+                .thenReturn(existing);
+
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+        request.setTitle("duplicate");
+        AgentTaskDTO result = agentService.createTask(request);
+
+        assertEquals("0", result.getId());
+        verify(taskEventWriter, never()).append(any());
+        verify(eventPublisherProvider, never()).getIfAvailable();
     }
 
     @Test
@@ -404,7 +486,8 @@ class AgentServiceImplTest extends BaseMockTest {
     void sceneStateDisabledPreservesTaskAssignmentWithoutSceneWrite() {
         agentService = new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
-                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(false, true));
+                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(false, true),
+                mutationTransaction, taskEventWriter);
         AgentRuntimeEntity agent = ownedAgent(
                 "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
         agent.setPersonaCode("wuyong");
@@ -865,6 +948,10 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(agentTaskMetaDao).updateById(meta);
         verify(agentRuntimeDao, never()).updateById(any());
         verify(eventPublisher).publishTaskEvent(eq("task_archived"), any(AgentTaskDTO.class));
+        ArgumentCaptor<AgentTaskEventWriteCommand> persistent =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(taskEventWriter).append(persistent.capture());
+        assertEquals(TaskEventType.TASK_ARCHIVED, persistent.getValue().getEventType());
         ArgumentCaptor<AgentSceneStateDTO> stateCaptor = ArgumentCaptor.forClass(AgentSceneStateDTO.class);
         verify(sceneService).upsertState(eq("juyiting-main"), stateCaptor.capture());
         AgentSceneStateDTO state = stateCaptor.getValue();
@@ -881,6 +968,8 @@ class AgentServiceImplTest extends BaseMockTest {
         meta.setTaskId("task-001");
         meta.setTenantId("juyiting");
         meta.setClientId("jia_client");
+        meta.setTaskVersion(0L);
+        meta.setCurrentEventVersion(0L);
         when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
                 .thenReturn(meta);
 
@@ -902,6 +991,13 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("接口联调完成，后续观察藏经阁入库。", saved.getContent());
         assertNotNull(saved.getCreatedAt());
         assertEquals(saved.getCreatedAt(), created.getCreatedAt());
+        ArgumentCaptor<AgentTaskEventWriteCommand> persistent =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(taskEventWriter).append(persistent.capture());
+        assertEquals(TaskEventType.PROGRESS_REPORTED, persistent.getValue().getEventType());
+        assertTrue(persistent.getValue().getEventJson().contains("contentSha256"));
+        assertTrue(persistent.getValue().getEventJson().contains("contentByteLength"));
+        assertTrue(!persistent.getValue().getEventJson().contains(request.getContent()));
 
         AgentTaskNoteEntity oldNote = new AgentTaskNoteEntity();
         oldNote.setTaskId("task-001");
@@ -926,6 +1022,45 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("先前纪要", notes.get(0).getContent());
         assertEquals("最新纪要", notes.get(1).getContent());
         verify(agentTaskNoteDao).findByTaskId("task-001");
+    }
+
+    @Test
+    void repeatedNotesUseDistinctEventIdsAndOnlyFrozenPayloadKeys() throws Exception {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity()
+                .setId(1L).setTaskId("task-001")
+                .setTaskVersion(0L).setCurrentEventVersion(0L);
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
+                .thenReturn(meta);
+        java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong();
+        when(agentTaskNoteDao.insert(any(AgentTaskNoteEntity.class))).thenAnswer(invocation -> {
+            invocation.<AgentTaskNoteEntity>getArgument(0).setId(ids.incrementAndGet());
+            return 1;
+        });
+
+        for (String content : List.of("first secret note", "second secret note")) {
+            AgentTaskNoteDTO note = new AgentTaskNoteDTO();
+            note.setNoteType("summary");
+            note.setContent(content);
+            agentService.addTaskNote("task-001", note);
+        }
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> events =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(taskEventWriter, times(2)).append(events.capture());
+        assertTrue(!events.getAllValues().get(0).getEventId()
+                .equals(events.getAllValues().get(1).getEventId()));
+        for (AgentTaskEventWriteCommand event : events.getAllValues()) {
+            Map<?, ?> payload = JsonUtil.getMapper().readValue(event.getEventJson(), Map.class);
+            assertEquals(Set.of(
+                            TaskEventPayload.Key.NOTE_ID,
+                            TaskEventPayload.Key.NOTE_TYPE,
+                            TaskEventPayload.Key.CONTENT_SHA256,
+                            TaskEventPayload.Key.CONTENT_BYTE_LENGTH),
+                    payload.keySet());
+            assertTrue(!event.getEventJson().contains("secret note"));
+        }
     }
 
     @Test

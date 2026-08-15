@@ -4,6 +4,8 @@ import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentSceneConstants;
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
@@ -42,6 +44,8 @@ import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.service.AgentService;
@@ -114,6 +118,8 @@ public class AgentServiceImpl implements AgentService {
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     private final ObjectProvider<AgentSceneService> sceneServiceProvider;
     private final AgentSceneFeatureFlags sceneFeatureFlags;
+    private final AgentTaskMutationTransaction mutationTransaction;
+    private final AgentTaskEventWriter taskEventWriter;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -527,7 +533,7 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO createTask(AgentTaskCreateDTO request) {
-        require(!StringUtil.isBlank(request.getTitle()), "title is required");
+        require(request != null && !StringUtil.isBlank(request.getTitle()), "title is required");
 
         String taskId = UUID.randomUUID().toString();
         TaskService taskService = taskServiceProvider.getIfAvailable();
@@ -549,18 +555,38 @@ public class AgentServiceImpl implements AgentService {
             }
         }
 
+        String tenantId = resolveCurrentJiacn();
+        String clientId = resolveCurrentClientId();
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setTaskId(taskId);
         meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
-        meta.setRequiredAbilities(JsonUtil.toJson(Optional.ofNullable(request.getRequiredAbilities()).orElseGet(Collections::emptyList)));
+        meta.setRequiredAbilities(JsonUtil.toJson(
+                Optional.ofNullable(request.getRequiredAbilities()).orElseGet(Collections::emptyList)));
         meta.setReward(request.getReward());
-        saveMeta(meta);
+        meta.setCollaborationMode("single");
+        meta.setRiskLevel("low");
+        meta.setMaxAgents(1);
+        meta.setReviewRequired(false);
+        meta.setTaskVersion(0L);
+        meta.setCurrentEventVersion(0L);
+        applyCurrentTaskScope(meta);
 
-        AgentTaskDTO task = toTaskDTO(meta);
-        task.setTitle(request.getTitle());
-        task.setDescription(request.getDescription());
-        publishTaskEvent("task_created", task);
-        return task;
+        String scopedTaskId = taskId;
+        return mutationTransaction.executeAfterTaskRootReservation(
+                tenantId, clientId, scopedTaskId,
+                () -> agentTaskMetaDao.insert(meta),
+                (taskRoot, rootCreated) -> {
+                    requireScopedTaskProjection(taskRoot, tenantId, clientId, scopedTaskId);
+                    AgentTaskDTO task = toTaskDTO(taskRoot);
+                    task.setTitle(request.getTitle());
+                    task.setDescription(request.getDescription());
+                    if (!rootCreated) {
+                        return task;
+                    }
+                    appendTaskCreatedEvent(tenantId, clientId, taskRoot);
+                    publishTaskEvent("task_created", task);
+                    return task;
+                });
     }
 
     @Override
@@ -751,18 +777,36 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public AgentTaskNoteDTO addTaskNote(String taskId, AgentTaskNoteDTO request) {
-        requireTask(taskId);
-        require(request != null && !StringUtil.isBlank(request.getContent()), "note content is required");
-        AgentTaskNoteEntity note = new AgentTaskNoteEntity();
-        note.setTaskId(taskId);
-        note.setAuthorId(request.getAuthorId());
-        note.setAuthorType(StringUtil.isBlank(request.getAuthorType()) ? "user" : request.getAuthorType());
-        note.setNoteType(StringUtil.isBlank(request.getNoteType()) ? "summary" : request.getNoteType());
-        note.setContent(request.getContent());
-        note.setCreatedAt(System.currentTimeMillis());
-        agentTaskNoteDao.insert(note);
-        return toTaskNoteDTO(note);
+        require(request != null && !StringUtil.isBlank(request.getContent()),
+                "note content is required");
+        String noteType = StringUtil.isBlank(request.getNoteType())
+                ? "summary" : request.getNoteType();
+        TaskEventPayload.ContentDigest digest =
+                TaskEventPayload.ContentDigest.fromUtf8(request.getContent());
+        // Validate the bounded code before any business row is written.
+        TaskEventPayload.builder().put(TaskEventPayload.Key.NOTE_TYPE, noteType);
+        String tenantId = resolveCurrentJiacn();
+        String clientId = resolveCurrentClientId();
+        return mutationTransaction.executeWithLockedTaskRoot(
+                tenantId, clientId, taskId, taskRoot -> {
+                    requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
+                    AgentTaskNoteEntity note = new AgentTaskNoteEntity();
+                    note.setTaskId(taskId);
+                    note.setTenantId(tenantId);
+                    note.setClientId(clientId);
+                    note.setAuthorId(request.getAuthorId());
+                    note.setAuthorType(StringUtil.isBlank(request.getAuthorType())
+                            ? "user" : request.getAuthorType());
+                    note.setNoteType(noteType);
+                    note.setContent(request.getContent());
+                    note.setCreatedAt(System.currentTimeMillis());
+                    int inserted = agentTaskNoteDao.insert(note);
+                    require(inserted == 1 && note.getId() != null, "Task note insert failed");
+                    appendTaskNoteEvent(tenantId, clientId, taskRoot, note, digest);
+                    return toTaskNoteDTO(note);
+                });
     }
 
     @Override
@@ -776,22 +820,95 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO archiveTask(String taskId) {
-        AgentTaskMetaEntity meta = requireTask(taskId);
-        meta.setRewardStatus(AgentConstants.TASK_STATUS_ARCHIVED);
-        saveMeta(meta);
-        AgentTaskDTO task = toTaskDTO(meta);
-        publishTaskEvent("task_archived", task);
-        publishReturnHomeSceneStatesForAgentIds(meta.getTaskId(), resolveTaskAssigneeIds(meta));
-        return task;
+        String tenantId = resolveCurrentJiacn();
+        String clientId = resolveCurrentClientId();
+        return mutationTransaction.executeWithLockedTaskRoot(
+                tenantId, clientId, taskId, taskRoot -> {
+                    requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
+                    String fromStatus = taskRoot.getRewardStatus();
+                    if (AgentConstants.TASK_STATUS_ARCHIVED.equals(fromStatus)) {
+                        return toTaskDTO(taskRoot);
+                    }
+                    taskRoot.setRewardStatus(AgentConstants.TASK_STATUS_ARCHIVED);
+                    require(agentTaskMetaDao.updateById(taskRoot) == 1,
+                            "Task archive update failed");
+                    long occurredAt = System.currentTimeMillis();
+                    appendTaskArchivedEvent(
+                            tenantId, clientId, taskRoot, fromStatus, occurredAt);
+                    AgentTaskDTO task = toTaskDTO(taskRoot);
+                    publishTaskEvent("task_archived", task);
+                    publishReturnHomeSceneStatesForAgentIds(
+                            taskRoot.getTaskId(), resolveTaskAssigneeIds(taskRoot));
+                    return task;
+                });
     }
 
-    private void saveMeta(AgentTaskMetaEntity meta) {
-        applyCurrentTaskScope(meta);
-        if (meta.getId() == null) {
-            agentTaskMetaDao.insert(meta);
-        } else {
-            agentTaskMetaDao.updateById(meta);
+    private void appendTaskCreatedEvent(
+            String tenantId, String clientId, AgentTaskMetaEntity task) {
+        long occurredAt = positiveEventTime(task.getCreateTime());
+        long taskVersion = requireEventTaskVersion(task);
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.TASK_ID, task.getTaskId())
+                .put(TaskEventPayload.Key.TASK_TYPE, "agent_task")
+                .put(TaskEventPayload.Key.STATUS, task.getRewardStatus())
+                .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
+                .put(TaskEventPayload.Key.CREATED_AT, occurredAt);
+        taskEventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, task.getTaskId(), TaskEventType.TASK_CREATED,
+                TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK,
+                task.getTaskId(), payload, occurredAt, taskVersion));
+    }
+
+    private void appendTaskArchivedEvent(
+            String tenantId, String clientId, AgentTaskMetaEntity task,
+            String fromStatus, long occurredAt) {
+        long taskVersion = requireEventTaskVersion(task);
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.TASK_ID, task.getTaskId())
+                .put(TaskEventPayload.Key.FROM_STATUS, fromStatus)
+                .put(TaskEventPayload.Key.TO_STATUS, AgentConstants.TASK_STATUS_ARCHIVED)
+                .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
+                .put(TaskEventPayload.Key.UPDATED_AT, occurredAt);
+        taskEventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, task.getTaskId(), TaskEventType.TASK_ARCHIVED,
+                TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK,
+                task.getTaskId(), payload, occurredAt, taskVersion));
+    }
+
+    private void appendTaskNoteEvent(
+            String tenantId, String clientId, AgentTaskMetaEntity task,
+            AgentTaskNoteEntity note, TaskEventPayload.ContentDigest digest) {
+        long occurredAt = positiveEventTime(note.getCreatedAt());
+        long taskVersion = requireEventTaskVersion(task);
+        String noteId = String.valueOf(note.getId());
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.NOTE_ID, noteId)
+                .put(TaskEventPayload.Key.NOTE_TYPE, note.getNoteType())
+                .putContentDigest(digest);
+        var command = AgentTaskMutationEventSupport.command(
+                tenantId, clientId, task.getTaskId(), TaskEventType.PROGRESS_REPORTED,
+                TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK,
+                task.getTaskId(), payload, occurredAt, taskVersion);
+        String noteSeed = tenantId + '\u0000' + clientId + '\u0000' + task.getTaskId()
+                + '\u0000' + TaskEventType.PROGRESS_REPORTED + '\u0000' + noteId;
+        command.setEventId("evt_"
+                + TaskEventPayload.ContentDigest.fromUtf8(noteSeed).sha256());
+        taskEventWriter.append(command);
+    }
+
+    private long requireEventTaskVersion(AgentTaskMetaEntity task) {
+        if (task.getTaskVersion() == null || task.getTaskVersion() < 0) {
+            throw new IllegalArgumentException("Persisted taskVersion is invalid");
         }
+        return task.getTaskVersion();
+    }
+
+    private long positiveEventTime(Long value) {
+        long result = value == null ? System.currentTimeMillis() : value;
+        if (result <= 0) {
+            throw new IllegalArgumentException("Task event timestamp is invalid");
+        }
+        return result;
     }
 
     private void applyCurrentTaskScope(AgentTaskMetaEntity meta) {

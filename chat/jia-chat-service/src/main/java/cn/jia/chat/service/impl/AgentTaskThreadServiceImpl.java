@@ -123,9 +123,6 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
         String senderName = optionalExactText(
                 request.getSenderName(), "senderName", MAX_SENDER_NAME_LENGTH);
         requireWriteAccess(scope);
-        // Ensure a stable binding exists; the actual append repeats ownership/member checks under row locks.
-        getOrCreateTeamThread(scope, null);
-
         Map<String, Object> metadata = new LinkedHashMap<>();
         if (request.getMetadata() != null) {
             metadata.putAll(request.getMetadata());
