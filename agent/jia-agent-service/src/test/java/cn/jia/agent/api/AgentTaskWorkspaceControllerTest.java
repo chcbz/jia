@@ -11,11 +11,22 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.security.web.DefaultSecurityFilterChain;
+import org.springframework.security.web.FilterChainProxy;
+import org.springframework.security.web.access.AccessDeniedHandlerImpl;
+import org.springframework.security.web.access.ExceptionTranslationFilter;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -111,6 +122,76 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 .andExpect(status().isNotFound())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("TASK_WORKSPACE_NOT_FOUND"));
+    }
+
+    @Test
+    void ownerClientTaskAndActorAreForwardedByteExactWithoutNormalization() throws Exception {
+        String tenant = "Tenant-A";
+        String client = "Client-A";
+        String task = "Task-1";
+        String actor = "Agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        JwtAuthenticationToken authentication = authenticate(tenant, client);
+        when(service.snapshot(tenant, client, task, actor)).thenReturn(snapshot("0"));
+
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", task)
+                        .queryParam("actorAgentId", actor).principal(authentication))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        verify(service).snapshot(tenant, client, task, actor);
+    }
+
+    @Test
+    void unicodeSpacePaddingIsRejectedForClaimsPathAndActor() throws Exception {
+        for (JwtAuthenticationToken claims : List.of(
+                authenticate("\u00a0tenant-a", "client-a"),
+                authenticate("tenant-a", "client-a\u2007"))) {
+            mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                            .queryParam("actorAgentId", ACTOR).principal(claims))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        }
+
+        JwtAuthenticationToken valid = authenticate("tenant-a", "client-a");
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", "\u202f" + TASK)
+                        .queryParam("actorAgentId", ACTOR).principal(valid))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR + "\u3000").principal(valid))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+    }
+
+    @Test
+    void realSecurityFilterChain401And403KeepNoStore() throws Exception {
+        ExceptionTranslationFilter exceptionTranslation = new ExceptionTranslationFilter(
+                new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED));
+        exceptionTranslation.setAccessDeniedHandler(new AccessDeniedHandlerImpl());
+        AuthorizationFilter denyAll = new AuthorizationFilter(
+                (authentication, request) -> new AuthorizationDecision(false));
+        DefaultSecurityFilterChain securityChain = new DefaultSecurityFilterChain(
+                AnyRequestMatcher.INSTANCE,
+                new AnonymousAuthenticationFilter("c04-test-key"),
+                exceptionTranslation, denyAll);
+        MockMvc secured = MockMvcBuilders.standaloneSetup(
+                        new AgentTaskWorkspaceController(service))
+                .addFilters(new AgentTaskWorkspaceCacheControlFilter(),
+                        new FilterChainProxy(securityChain))
+                .build();
+
+        SecurityContextHolder.clearContext();
+        secured.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+
+        SecurityContextHolder.getContext().setAuthentication(
+                UsernamePasswordAuthenticationToken.authenticated(
+                        "human", "n/a", List.of()));
+        secured.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR))
+                .andExpect(status().isForbidden())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
     }
 
     @Test

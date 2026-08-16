@@ -19,6 +19,9 @@ import cn.jia.agent.state.AgentTaskRequestStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
 import cn.jia.core.util.JsonUtil;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.annotation.Isolation;
@@ -55,6 +58,8 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
     private static final Set<String> COLLABORATION_MODES = Set.of("single", "team");
     private static final Set<String> RISK_LEVELS = Set.of("low", "medium", "high");
     private static final Set<String> VISIBILITIES = Set.of("task_members", "reviewer", "private");
+    private static final ObjectMapper STRICT_EVENT_JSON = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
 
     private final AgentService agentService;
     private final AgentTaskWorkspaceDao workspaceDao;
@@ -85,7 +90,7 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         }
 
         TaskRow task = workspaceDao.findTask(tenantId, clientId, taskId);
-        if (!validTask(task, tenantId, clientId, taskId)) {
+        if (!isExactTaskRow(task, tenantId, clientId, taskId)) {
             throw notFound();
         }
         MemberRow actor = workspaceDao.findActorMember(
@@ -93,9 +98,7 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         if (!validActorMember(actor, tenantId, clientId, taskId, actorAgentId)) {
             throw notFound();
         }
-        if (!validTaskProjection(task)) {
-            throw unavailable();
-        }
+        validateTaskIntegrity(task);
 
         boolean reviewerAccess = "reviewer".equals(actor.getMemberRole());
         boolean coordinatorAccess = "coordinator".equals(actor.getMemberRole())
@@ -158,22 +161,22 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         }
 
         long expected = currentVersion;
+        List<AgentTaskWorkspaceDTO.Event> projectedDescending =
+                new ArrayList<>(descending.size());
         for (EventRow row : descending) {
             validateEventRow(tenantId, clientId, task.getTaskId(), row);
             if (row.getEventVersion() != expected) {
                 throw unavailable();
             }
+            projectedDescending.add(eventDto(tenantId, clientId, task, actor, row,
+                    reviewerAccess, coordinatorAccess));
             expected--;
         }
 
-        int count = Math.min(RECENT_EVENT_LIMIT, descending.size());
-        List<EventRow> ascending = new ArrayList<>(descending.subList(0, count));
-        Collections.reverse(ascending);
-        List<AgentTaskWorkspaceDTO.Event> events = new ArrayList<>(ascending.size());
-        for (EventRow row : ascending) {
-            events.add(eventDto(tenantId, clientId, task, actor, row,
-                    reviewerAccess, coordinatorAccess));
-        }
+        int count = Math.min(RECENT_EVENT_LIMIT, projectedDescending.size());
+        List<AgentTaskWorkspaceDTO.Event> events =
+                new ArrayList<>(projectedDescending.subList(0, count));
+        Collections.reverse(events);
         if (events.isEmpty()
                 || !decimal(currentVersion).equals(events.get(events.size() - 1).getVersion())) {
             throw unavailable();
@@ -186,19 +189,24 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
             TaskRow task, MemberRow actor, EventRow row, boolean reviewerAccess,
             boolean coordinatorAccess) {
         Map<String, Object> payload = normalizedPayload(row.getEventJson());
-        if (TaskEventType.ARTIFACT_PUBLISHED.equals(row.getEventType())) {
-            if (!TaskEventType.Aggregate.ARTIFACT.equals(row.getAggregateType())) {
-                throw unavailable();
-            }
-            String artifactId = exactPayloadId(payload.get(TaskEventPayload.Key.ARTIFACT_ID));
-            int artifactVersion = exactArtifactVersion(
-                    payload.get(TaskEventPayload.Key.ARTIFACT_VERSION));
-            if (!artifactId.equals(row.getAggregateId())) {
-                throw unavailable();
-            }
+        final AgentTaskWorkspaceEventValidator.ArtifactClaim artifactClaim;
+        try {
+            artifactClaim = AgentTaskWorkspaceEventValidator.validate(
+                    row, payload, task.getTaskId());
+        } catch (IllegalArgumentException exception) {
+            throw unavailable(exception);
+        }
+        if (artifactClaim != null) {
             ArtifactRow artifact = workspaceDao.findArtifactVersion(
-                    tenantId, clientId, task.getTaskId(), artifactId, artifactVersion);
-            if (!validArtifact(artifact, tenantId, clientId, task.getTaskId())) {
+                    tenantId, clientId, task.getTaskId(), artifactClaim.artifactId(),
+                    artifactClaim.artifactVersion());
+            if (!validArtifact(artifact, tenantId, clientId, task.getTaskId())
+                    || !artifactClaim.artifactId().equals(artifact.getArtifactId())
+                    || artifactClaim.artifactVersion() != artifact.getArtifactVersion()
+                    || !artifactClaim.producerAgentId().equals(artifact.getProducerAgentId())
+                    || !artifactClaim.artifactType().equals(artifact.getArtifactType())
+                    || !artifactClaim.visibility().equals(artifact.getVisibility())
+                    || !Objects.equals(artifactClaim.workItemId(), artifact.getWorkItemId())) {
                 throw unavailable();
             }
             if (!canReadArtifact(actor.getAgentId(), actor.getMemberRole(),
@@ -252,6 +260,9 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
 
     private static Map<String, Object> normalizedPayload(String eventJson) {
         try {
+            // Parse once with duplicate detection before canonical normalization; otherwise
+            // a corrupt payload such as {"artifactId":"a","artifactId":"b"} is last-wins.
+            STRICT_EVENT_JSON.readTree(eventJson);
             String normalized = TaskEventPayload.normalizeAllowedJson(eventJson);
             @SuppressWarnings("unchecked")
             Map<String, Object> payload = JsonUtil.getMapper().readValue(normalized, Map.class);
@@ -259,30 +270,6 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         } catch (Exception exception) {
             throw unavailable(exception);
         }
-    }
-
-    private static String exactPayloadId(Object value) {
-        if (!(value instanceof String id)) {
-            throw unavailable();
-        }
-        try {
-            requireId(id, "artifactId", 100);
-            return id;
-        } catch (IllegalArgumentException exception) {
-            throw unavailable(exception);
-        }
-    }
-
-    private static int exactArtifactVersion(Object value) {
-        if (!(value instanceof Number number)) {
-            throw unavailable();
-        }
-        long version = number.longValue();
-        if (version <= 0 || version > Integer.MAX_VALUE
-                || (number instanceof Double || number instanceof Float)) {
-            throw unavailable();
-        }
-        return (int) version;
     }
 
     private static boolean canReadArtifact(String actorAgentId, String actorRole,
@@ -428,14 +415,31 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         return List.copyOf(result);
     }
 
-    private static boolean validTaskProjection(TaskRow row) {
-        return COLLABORATION_MODES.contains(row.getCollaborationMode())
-                && RISK_LEVELS.contains(row.getRiskLevel())
-                && row.getMaxAgents() != null && row.getMaxAgents() > 0
-                && row.getReviewRequired() != null
-                && (row.getAssignedAgentId() == null || validId(row.getAssignedAgentId(), 100))
-                && (row.getCoordinatorAgentId() == null
-                        || validId(row.getCoordinatorAgentId(), 100));
+    private static void validateTaskIntegrity(TaskRow row) {
+        try {
+            AgentTaskStatus.fromPersistedValue(row.getRewardStatus());
+        } catch (IllegalArgumentException exception) {
+            throw unavailable(exception);
+        }
+        if (row.getTaskVersion() == null || row.getTaskVersion() < 0
+                || row.getCurrentEventVersion() == null || row.getCurrentEventVersion() < 0
+                || !COLLABORATION_MODES.contains(row.getCollaborationMode())
+                || !RISK_LEVELS.contains(row.getRiskLevel())
+                || row.getMaxAgents() == null || row.getMaxAgents() <= 0
+                || row.getReviewRequired() == null
+                || row.getReward() != null && row.getReward() < 0
+                || !validNullableTime(row.getAssignedAt())
+                || !validNullableTime(row.getStartedAt())
+                || !validNullableTime(row.getCompletedAt())
+                || row.getAssignedAgentId() != null && !validId(row.getAssignedAgentId(), 100)
+                || row.getCoordinatorAgentId() != null
+                        && !validId(row.getCoordinatorAgentId(), 100)) {
+            throw unavailable();
+        }
+    }
+
+    private static boolean validNullableTime(Long value) {
+        return value == null || value >= 0;
     }
 
     private static boolean sameActorMember(MemberRow candidate, MemberRow actor) {
@@ -450,20 +454,10 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
                 && Objects.equals(candidate.getVersion(), actor.getVersion());
     }
 
-    private static boolean validTask(
+    private static boolean isExactTaskRow(
             TaskRow row, String tenantId, String clientId, String taskId) {
-        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
-                tenantId, clientId, taskId)
-                || row.getTaskVersion() == null || row.getTaskVersion() < 0
-                || row.getCurrentEventVersion() == null || row.getCurrentEventVersion() < 0) {
-            return false;
-        }
-        try {
-            AgentTaskStatus.fromPersistedValue(row.getRewardStatus());
-            return true;
-        } catch (IllegalArgumentException exception) {
-            return false;
-        }
+        return row != null && scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
+                tenantId, clientId, taskId);
     }
 
     private static boolean validActorMember(MemberRow row, String tenantId, String clientId,

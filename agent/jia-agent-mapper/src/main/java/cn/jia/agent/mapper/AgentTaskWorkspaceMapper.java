@@ -68,7 +68,8 @@ public interface AgentTaskWorkspaceMapper {
               AND client_id = #{clientId}
               AND task_id = #{taskId}
             """ + EXACT_TENANT + EXACT_CLIENT + EXACT_TASK + """
-            ORDER BY member_role ASC, agent_id ASC, id ASC
+            ORDER BY member_role ASC, CAST(agent_id AS BINARY) ASC,
+                     OCTET_LENGTH(agent_id) ASC, id ASC
             LIMIT 500
             """)
     List<MemberRow> findMembers(@Param("tenantId") String tenantId,
@@ -84,7 +85,8 @@ public interface AgentTaskWorkspaceMapper {
               AND client_id = #{clientId}
               AND task_id = #{taskId}
             """ + EXACT_TENANT + EXACT_CLIENT + EXACT_TASK + """
-            ORDER BY priority DESC, create_time ASC, work_item_id ASC, id ASC
+            ORDER BY priority DESC, create_time ASC, CAST(work_item_id AS BINARY) ASC,
+                     OCTET_LENGTH(work_item_id) ASC, id ASC
             LIMIT 500
             """)
     List<WorkItemRow> findWorkItems(@Param("tenantId") String tenantId,
@@ -100,7 +102,8 @@ public interface AgentTaskWorkspaceMapper {
               AND task_id = #{taskId}
               AND status IN ('open', 'acknowledged')
             """ + EXACT_TENANT + EXACT_CLIENT + EXACT_TASK + """
-            ORDER BY priority DESC, create_time ASC, request_id ASC, id ASC
+            ORDER BY priority DESC, create_time ASC, CAST(request_id AS BINARY) ASC,
+                     OCTET_LENGTH(request_id) ASC, id ASC
             LIMIT 500
             """)
     List<RequestRow> findOpenRequests(@Param("tenantId") String tenantId,
@@ -124,7 +127,8 @@ public interface AgentTaskWorkspaceMapper {
                     OR (#{coordinatorAccess} = TRUE AND visibility IN ('reviewer', 'private'))
                   )
             """ + EXACT_TENANT + EXACT_CLIENT + EXACT_TASK + """
-            ORDER BY created_at DESC, artifact_id ASC, artifact_version DESC, id DESC
+            ORDER BY created_at DESC, CAST(artifact_id AS BINARY) ASC,
+                     OCTET_LENGTH(artifact_id) ASC, artifact_version DESC, id DESC
             LIMIT 101
             """)
     List<ArtifactRow> findVisibleArtifacts(@Param("tenantId") String tenantId,

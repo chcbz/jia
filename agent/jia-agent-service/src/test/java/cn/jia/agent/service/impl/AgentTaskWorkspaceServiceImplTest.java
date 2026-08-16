@@ -208,6 +208,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     void hiddenArtifactEventPreservesContinuityAsVersionAndRedactedOnly() throws Exception {
         task.setCurrentEventVersion(1L);
         ArtifactRow privateArtifact = artifact("artifact-private", 1, OTHER, "private");
+        privateArtifact.setCreatedAt(999L);
         when(dao.findArtifactVersion(TENANT, CLIENT, TASK, "artifact-private", 1))
                 .thenReturn(privateArtifact);
         when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(
@@ -264,6 +265,17 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void hundredFirstTimelineSentinelIsAlsoSemanticallyValidated() {
+        task.setCurrentEventVersion(101L);
+        List<EventRow> rows = eventsDescending(101);
+        EventRow sentinel = rows.get(100);
+        sentinel.setAggregateType(TaskEventType.Aggregate.ARTIFACT);
+        sentinel.setAggregateId("hidden-corrupt-artifact");
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(rows);
+        assertSnapshotUnavailable();
+    }
+
+    @Test
     void middleGapAndMissingFinalVersionFailClosed() {
         task.setCurrentEventVersion(3L);
         when(dao.findLatestEvents(TENANT, CLIENT, TASK))
@@ -274,6 +286,209 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
 
         when(dao.findLatestEvents(TENANT, CLIENT, TASK))
                 .thenReturn(List.of(event(2L), event(1L)));
+        assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+    }
+
+
+    @Test
+    void taskAbsenceOrNonExactScopeIs404ButAuthorizedTaskCorruptionIs503() {
+        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(null);
+        assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+
+        TaskRow wrongScope = task(0L);
+        wrongScope.setClientId("CLIENT-A");
+        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(wrongScope);
+        assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+
+        task.setRewardStatus("RUNNING");
+        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(task);
+        assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+        verify(dao).findActorMember(TENANT, CLIENT, TASK, ACTOR);
+    }
+
+    @Test
+    void taskVersionsAndProjectionCorruptionFailAs503OnlyAfterStrictMemberGate() {
+        task.setTaskVersion(null);
+        assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+
+        task.setTaskVersion(0L);
+        task.setCurrentEventVersion(-1L);
+        assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+
+        task.setCurrentEventVersion(0L);
+        task.setMaxAgents(0);
+        assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+
+        when(dao.findActorMember(TENANT, CLIENT, TASK, ACTOR)).thenReturn(null);
+        assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+    }
+
+    @Test
+    void canonicalWriterVariantsRemainAcceptedWithoutInventedRequirements() {
+        task.setCurrentEventVersion(1L);
+        EventRow assigned = event(1L);
+        assigned.setEventType(TaskEventType.TASK_ASSIGNED);
+        assigned.setEventJson(TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.FROM_STATUS, "open")
+                .put(TaskEventPayload.Key.TO_STATUS, "assigned")
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, 0L)
+                .put(TaskEventPayload.Key.RESULT_VERSION, 1L).toJson());
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(assigned));
+        assertEquals(TaskEventType.TASK_ASSIGNED,
+                service.snapshot(TENANT, CLIENT, TASK, ACTOR)
+                        .getRecentEvents().get(0).getEventType());
+
+        EventRow submitted = event(1L);
+        submitted.setEventType(TaskEventType.WORK_ITEM_SUBMITTED);
+        submitted.setAggregateType(TaskEventType.Aggregate.WORK_ITEM);
+        submitted.setAggregateId("work-1");
+        submitted.setEventJson(TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.WORK_ITEM_ID, "work-1")
+                .put(TaskEventPayload.Key.FROM_STATUS, "running")
+                .put(TaskEventPayload.Key.TO_STATUS, "submitted")
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, 0L)
+                .put(TaskEventPayload.Key.RESULT_VERSION, 1L).toJson());
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(submitted));
+        assertEquals(TaskEventType.WORK_ITEM_SUBMITTED,
+                service.snapshot(TENANT, CLIENT, TASK, ACTOR)
+                        .getRecentEvents().get(0).getEventType());
+    }
+
+    @Test
+    void knownEventTypeCannotUseWrongAggregateActorOrSemanticPayload() {
+        task.setCurrentEventVersion(1L);
+        EventRow corrupt = event(1L);
+        corrupt.setAggregateType(TaskEventType.Aggregate.ARTIFACT);
+        corrupt.setAggregateId("artifact-private");
+        assertEventUnavailable(corrupt);
+
+        corrupt = event(1L);
+        corrupt.setActorType(TaskEventType.ActorType.AGENT);
+        corrupt.setActorId(ACTOR);
+        assertEventUnavailable(corrupt);
+
+        corrupt = event(1L);
+        corrupt.setEventJson(TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.FROM_STATUS, "assigned")
+                .put(TaskEventPayload.Key.TO_STATUS, "completed")
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, 0L)
+                .put(TaskEventPayload.Key.RESULT_VERSION, 1L).toJson());
+        assertEventUnavailable(corrupt);
+
+        corrupt = event(1L);
+        corrupt.setEventJson("{\"fromStatus\":\"assigned\","
+                + "\"toStatus\":\"running\",\"toStatus\":\"running\","
+                + "\"expectedVersion\":0,\"resultVersion\":1}");
+        assertEventUnavailable(corrupt);
+    }
+
+    @Test
+    void duplicateVersionWrongScopeAndArtifactDisguisedAsTaskEventFailClosed() {
+        task.setCurrentEventVersion(2L);
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK))
+                .thenReturn(List.of(event(2L), event(2L)));
+        assertSnapshotUnavailable();
+
+        EventRow wrongScope = event(1L);
+        wrongScope.setTenantId("TENANT-A");
+        task.setCurrentEventVersion(1L);
+        assertEventUnavailable(wrongScope);
+
+        EventRow disguised = event(1L);
+        disguised.setAggregateType(TaskEventType.Aggregate.ARTIFACT);
+        disguised.setAggregateId("artifact-private");
+        disguised.setEventJson(TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.ARTIFACT_ID, "artifact-private")
+                .put(TaskEventPayload.Key.ARTIFACT_TYPE, "document")
+                .put(TaskEventPayload.Key.ARTIFACT_VERSION, 1L)
+                .put(TaskEventPayload.Key.VISIBILITY, "private")
+                .put(TaskEventPayload.Key.CONTENT_SHA256, "a".repeat(64)).toJson());
+        assertEventUnavailable(disguised);
+    }
+
+    @Test
+    void artifactEventMustMatchExactPersistedProducerTypeVisibilityWorkItemAndScope() {
+        task.setCurrentEventVersion(1L);
+        ArtifactRow canonical = artifact("artifact-private", 1, OTHER, "private");
+        canonical.setWorkItemId("work-1");
+        EventRow event = artifactEvent(1L, canonical);
+
+        List<ArtifactRow> corruptRows = new ArrayList<>();
+        ArtifactRow producerCase = artifact("artifact-private", 1,
+                OTHER.toUpperCase(java.util.Locale.ROOT), "private");
+        producerCase.setWorkItemId("work-1");
+        corruptRows.add(producerCase);
+        ArtifactRow artifactIdCase = artifact("Artifact-private", 1, OTHER, "private");
+        artifactIdCase.setWorkItemId("work-1");
+        corruptRows.add(artifactIdCase);
+        ArtifactRow artifactVersion = artifact("artifact-private", 2, OTHER, "private");
+        artifactVersion.setWorkItemId("work-1");
+        artifactVersion.setCreatedAt(1001L);
+        corruptRows.add(artifactVersion);
+        ArtifactRow type = artifact("artifact-private", 1, OTHER, "private");
+        type.setArtifactType("image");
+        type.setWorkItemId("work-1");
+        corruptRows.add(type);
+        ArtifactRow visibility = artifact("artifact-private", 1, OTHER, "reviewer");
+        visibility.setWorkItemId("work-1");
+        corruptRows.add(visibility);
+        ArtifactRow workItem = artifact("artifact-private", 1, OTHER, "private");
+        workItem.setWorkItemId("work-2");
+        corruptRows.add(workItem);
+        ArtifactRow scope = artifact("artifact-private", 1, OTHER, "private");
+        scope.setWorkItemId("work-1");
+        scope.setTaskId("TASK-1");
+        corruptRows.add(scope);
+
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(event));
+        for (ArtifactRow corrupt : corruptRows) {
+            when(dao.findArtifactVersion(TENANT, CLIENT, TASK, "artifact-private", 1))
+                    .thenReturn(corrupt);
+            assertSnapshotUnavailable();
+        }
+    }
+
+    @Test
+    void artifactAggregateIsAlwaysCanonicalAndAclChecked() {
+        task.setCurrentEventVersion(1L);
+        EventRow wrongType = artifactEvent(1L,
+                artifact("artifact-private", 1, OTHER, "private"));
+        wrongType.setEventType(TaskEventType.TASK_STARTED);
+        assertEventUnavailable(wrongType);
+
+        ArtifactRow privateArtifact = artifact("artifact-private", 1, OTHER, "private");
+        EventRow canonical = artifactEvent(1L, privateArtifact);
+        when(dao.findArtifactVersion(TENANT, CLIENT, TASK, "artifact-private", 1))
+                .thenReturn(privateArtifact);
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(canonical));
+        AgentTaskWorkspaceDTO.Event projected = service.snapshot(
+                TENANT, CLIENT, TASK, ACTOR).getRecentEvents().get(0);
+        assertEquals(Boolean.TRUE, projected.getRedacted());
+    }
+
+
+    private void assertEventUnavailable(EventRow row) {
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(row));
+        assertSnapshotUnavailable();
+    }
+
+    private void assertSnapshotUnavailable() {
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
                         () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
@@ -386,20 +601,38 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         row.setAggregateType(TaskEventType.Aggregate.TASK);
         row.setAggregateId(TASK);
         row.setEventJson(TaskEventPayload.builder()
-                .put(TaskEventPayload.Key.TASK_ID, TASK).toJson());
+                .put(TaskEventPayload.Key.FROM_STATUS, "assigned")
+                .put(TaskEventPayload.Key.TO_STATUS, "running")
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, Math.max(0L, version - 1L))
+                .put(TaskEventPayload.Key.RESULT_VERSION, version).toJson());
         row.setOccurredAt(1000L + version);
         return row;
     }
 
     private static EventRow artifactEvent(long version, String artifactId, int artifactVersion) {
+        return artifactEvent(version,
+                artifact(artifactId, artifactVersion, OTHER, "private"));
+    }
+
+    private static EventRow artifactEvent(long version, ArtifactRow artifact) {
         EventRow row = event(version);
         row.setEventType(TaskEventType.ARTIFACT_PUBLISHED);
+        row.setActorType(TaskEventType.ActorType.AGENT);
+        row.setActorId(artifact.getProducerAgentId());
         row.setAggregateType(TaskEventType.Aggregate.ARTIFACT);
-        row.setAggregateId(artifactId);
-        row.setEventJson(TaskEventPayload.builder()
-                .put(TaskEventPayload.Key.ARTIFACT_ID, artifactId)
-                .put(TaskEventPayload.Key.ARTIFACT_VERSION, artifactVersion)
-                .toJson());
+        row.setAggregateId(artifact.getArtifactId());
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.ARTIFACT_ID, artifact.getArtifactId())
+                .put(TaskEventPayload.Key.ARTIFACT_TYPE, artifact.getArtifactType())
+                .put(TaskEventPayload.Key.ARTIFACT_VERSION,
+                        artifact.getArtifactVersion().longValue())
+                .put(TaskEventPayload.Key.VISIBILITY, artifact.getVisibility())
+                .put(TaskEventPayload.Key.CONTENT_SHA256, "a".repeat(64));
+        if (artifact.getWorkItemId() != null) {
+            payload.put(TaskEventPayload.Key.WORK_ITEM_ID, artifact.getWorkItemId());
+        }
+        row.setEventJson(payload.toJson());
+        row.setOccurredAt(artifact.getCreatedAt());
         return row;
     }
 

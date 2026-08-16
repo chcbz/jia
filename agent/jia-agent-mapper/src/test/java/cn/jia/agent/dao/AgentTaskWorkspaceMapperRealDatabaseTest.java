@@ -59,20 +59,36 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
     }
 
     @Test
-    void daoRejectsUnicodeSpacePaddingBeforeIssuingSql() {
+    void daoRejectsUnicodeSpacePaddingForEveryScopeDimensionBeforeIssuingSql() {
         AgentTaskWorkspaceDao dao = new AgentTaskWorkspaceDaoImpl(mapper);
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> dao.findTask("\u00a0" + TENANT, CLIENT, TASK));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> dao.findTask(TENANT, CLIENT + "\u2007", TASK));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> dao.findTask(TENANT, CLIENT, "\u202f" + TASK));
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> dao.findActorMember(TENANT, CLIENT, TASK, ACTOR + "\u2007"));
     }
 
     @Test
-    void byteExactPredicatesRejectCaseInsensitiveScopeMatches() {
-        insertTask("Tenant-A", CLIENT, TASK, 0L);
-        assertNull(mapper.findTask(TENANT, CLIENT, TASK));
+    void byteExactPredicatesRejectCaseInsensitiveOwnerClientTaskAndActorMatches() {
+        insertTask("Tenant-A", "Client-A", "Task-1", 0L);
+        jdbc.update("INSERT INTO agent_task_member "
+                        + "(task_id,agent_id,member_role,member_status,assignment_source,version,"
+                        + "tenant_id,client_id) VALUES (?,?,?,?,?,?,?,?)",
+                "Task-1", "Agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "worker", "accepted",
+                "manual", 0L, "Tenant-A", "Client-A");
+
+        assertNull(mapper.findTask(TENANT, "Client-A", "Task-1"));
+        assertNull(mapper.findTask("Tenant-A", CLIENT, "Task-1"));
         assertNull(mapper.findTask("Tenant-A", "Client-A", TASK));
-        assertEquals(TASK, mapper.findTask("Tenant-A", CLIENT, TASK).getTaskId());
+        assertEquals("Task-1", mapper.findTask(
+                "Tenant-A", "Client-A", "Task-1").getTaskId());
+        assertNull(mapper.findActorMember("Tenant-A", "Client-A", "Task-1", ACTOR));
+        assertEquals("Agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                mapper.findActorMember("Tenant-A", "Client-A", "Task-1",
+                        "Agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").getAgentId());
     }
 
     @Test
@@ -95,6 +111,24 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
         assertEquals(ACTOR, mapper.findActorMember(TENANT, CLIENT, TASK, ACTOR).getAgentId());
         assertNull(mapper.findActorMember(TENANT, CLIENT, TASK, ACTOR.toUpperCase()));
         assertNull(mapper.findActorMember("Tenant-A", CLIENT, TASK, ACTOR));
+    }
+
+    @Test
+    void artifactOrderingUsesCanonicalBytesWhenCollationTreatsIdsAsEqual() {
+        insertTask(TENANT, CLIENT, TASK, 0L);
+        insertArtifact("artifact-a", 1, "other", "task_members", 1000L);
+        insertArtifact("Artifact-a", 1, "other", "task_members", 1000L);
+        List<ArtifactRow> rows = mapper.findVisibleArtifacts(
+                TENANT, CLIENT, TASK, ACTOR, false, false);
+        assertEquals(List.of("Artifact-a", "artifact-a"),
+                rows.stream().map(ArtifactRow::getArtifactId).toList());
+        // H2 VARCHAR_IGNORECASE cannot faithfully model a third all-uppercase lookup
+        // when both case-colliding rows exist. Exact original spellings remain deterministic;
+        // the service independently cross-validates the returned row identity fail-closed.
+        assertEquals("Artifact-a", mapper.findArtifactVersion(
+                TENANT, CLIENT, TASK, "Artifact-a", 1).getArtifactId());
+        assertEquals("artifact-a", mapper.findArtifactVersion(
+                TENANT, CLIENT, TASK, "artifact-a", 1).getArtifactId());
     }
 
     @Test
