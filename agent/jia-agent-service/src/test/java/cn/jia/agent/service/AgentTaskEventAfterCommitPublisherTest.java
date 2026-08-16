@@ -24,6 +24,7 @@ import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,6 +62,9 @@ class AgentTaskEventAfterCommitPublisherTest {
         if (subscription != null) {
             subscription.dispose();
         }
+        if (publisher != null) {
+            publisher.close();
+        }
         if (broker != null) {
             broker.close();
         }
@@ -71,15 +75,15 @@ class AgentTaskEventAfterCommitPublisherTest {
     }
 
     @Test
-    void commitPublishesOnceInAppendOrderUsingOneTransactionSynchronization() {
+    void commitPublishesOnceInAppendOrderUsingOneWakeupSynchronizationAlongsideGuard() {
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         transaction.executeWithoutResult(status -> {
-            assertEquals(0, TransactionSynchronizationManager.getSynchronizations().size());
-            publisher.enqueue(scope, 1L);
             assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
+            publisher.enqueue(scope, 1L);
+            assertEquals(2, TransactionSynchronizationManager.getSynchronizations().size());
             publisher.enqueue(scope, 2L);
             publisher.enqueue(scope, 3L);
-            assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
+            assertEquals(2, TransactionSynchronizationManager.getSynchronizations().size());
             assertTrue(received.isEmpty());
         });
 
@@ -111,7 +115,7 @@ class AgentTaskEventAfterCommitPublisherTest {
             publisher.enqueue(scope, 1L);
             required.executeWithoutResult(inner -> {
                 publisher.enqueue(scope, 2L);
-                assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
+                assertEquals(2, TransactionSynchronizationManager.getSynchronizations().size());
             });
             publisher.enqueue(scope, 3L);
             assertTrue(received.isEmpty());
@@ -180,7 +184,7 @@ class AgentTaskEventAfterCommitPublisherTest {
     }
 
     @Test
-    void nestedFirstUseRejectionRestoresTheOuterTransactionContext() {
+    void nestedFirstUseTaintsOnlyThatPhysicalTransactionAndNextOuterRestores() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         TransactionTemplate nested = new TransactionTemplate(transactionManager);
         nested.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
@@ -189,11 +193,102 @@ class AgentTaskEventAfterCommitPublisherTest {
             assertThrows(NestedTransactionNotSupportedException.class,
                     () -> nested.executeWithoutResult(
                             inner -> publisher.enqueue(scope, 1L)));
-            publisher.enqueue(scope, 2L);
+            assertThrows(NestedTransactionNotSupportedException.class,
+                    () -> publisher.enqueue(scope, 2L));
         });
 
-        awaitReceived(List.of(2L));
+        assertTrue(received.isEmpty());
+        outer.executeWithoutResult(status -> publisher.enqueue(scope, 3L));
+        awaitReceived(List.of(3L));
         assertEquals(1L, publisher.publishedWakeupCount());
+    }
+
+    @Test
+    void manualSavepointReleaseBeforeFirstUseTaintsTransactionAndPublishesNothing() {
+        TransactionTemplate outer = new TransactionTemplate(transactionManager);
+
+        outer.executeWithoutResult(status -> {
+            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
+            Object savepoint = status.createSavepoint();
+            status.releaseSavepoint(savepoint);
+            assertThrows(NestedTransactionNotSupportedException.class,
+                    () -> publisher.enqueue(scope, 1L));
+        });
+
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
+        assertTrue(received.isEmpty());
+        assertEquals(0L, publisher.publishedWakeupCount());
+    }
+
+    @Test
+    void manualSavepointRollbackBeforeFirstUseTaintsOuterButAllowsBusinessContinuation() {
+        TransactionTemplate outer = new TransactionTemplate(transactionManager);
+
+        outer.executeWithoutResult(status -> {
+            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
+            Object savepoint = status.createSavepoint();
+            jdbc.update("UPDATE commit_probe SET probe_value=99 WHERE id=1");
+            status.rollbackToSavepoint(savepoint);
+            assertThrows(NestedTransactionNotSupportedException.class,
+                    () -> publisher.enqueue(scope, 1L));
+            jdbc.update("UPDATE commit_probe SET probe_value=2 WHERE id=1");
+        });
+
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
+        assertTrue(received.isEmpty());
+        assertEquals(0L, publisher.publishedWakeupCount());
+    }
+
+    @Test
+    void requiresNewRemainsIndependentInsideSavepointTaintedOuterTransaction() {
+        TransactionTemplate outer = new TransactionTemplate(transactionManager);
+        TransactionTemplate requiresNew = new TransactionTemplate(transactionManager);
+        requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        outer.executeWithoutResult(status -> {
+            Object savepoint = status.createSavepoint();
+            status.releaseSavepoint(savepoint);
+            assertThrows(NestedTransactionNotSupportedException.class,
+                    () -> publisher.enqueue(scope, 1L));
+            requiresNew.executeWithoutResult(inner -> publisher.enqueue(scope, 2L));
+            awaitReceived(List.of(2L));
+        });
+
+        assertEquals(List.of(2L), received);
+    }
+
+    @Test
+    void closeRemovesListenerRejectsUseAndSuppressesAlreadyQueuedWakeups() {
+        assertEquals(1, transactionManager.getTransactionExecutionListeners().size());
+        publisher.close();
+        publisher.close();
+        assertTrue(publisher.isClosed());
+        assertEquals(0, transactionManager.getTransactionExecutionListeners().size());
+
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.executeWithoutResult(status -> {
+            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
+            assertThrows(IllegalStateException.class,
+                    () -> publisher.enqueue(scope, 1L));
+        });
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
+
+        AgentTaskEventAfterCommitPublisher replacement =
+                new AgentTaskEventAfterCommitPublisher(broker, transactionManager);
+        publisher = replacement;
+        assertEquals(1, transactionManager.getTransactionExecutionListeners().size());
+        transaction.executeWithoutResult(status -> {
+            replacement.enqueue(scope, 2L);
+            replacement.close();
+        });
+
+        assertTrue(replacement.isClosed());
+        assertEquals(0, transactionManager.getTransactionExecutionListeners().size());
+        assertTrue(received.isEmpty());
+        assertEquals(0L, replacement.publishedWakeupCount());
     }
 
     @Test
@@ -218,6 +313,7 @@ class AgentTaskEventAfterCommitPublisherTest {
     @Test
     void brokerFailureAfterCommitIsWarnLoggedContainedAndLaterWakeupsStillDrain() {
         subscription.dispose();
+        publisher.close();
         broker.close();
         AgentTaskEventBroker faultyBroker = new AgentTaskEventBroker() {
             @Override
@@ -231,6 +327,7 @@ class AgentTaskEventAfterCommitPublisherTest {
         broker = faultyBroker;
         AgentTaskEventAfterCommitPublisher isolatedPublisher =
                 new AgentTaskEventAfterCommitPublisher(faultyBroker, transactionManager);
+        publisher = isolatedPublisher;
         List<Long> later = new CopyOnWriteArrayList<>();
         subscription = faultyBroker.stream(scope)
                 .subscribe(wakeup -> later.add(wakeup.eventVersion()));

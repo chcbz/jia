@@ -17,12 +17,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTaskEventBrokerTest {
@@ -106,6 +109,7 @@ class AgentTaskEventBrokerTest {
         broker.publish(scope, 1L);
         assertEquals(0, broker.activeScopeCount());
         assertEquals(0, broker.subscriberCount(scope));
+        assertEquals(1L, broker.droppedWakeupCount());
     }
 
     @Test
@@ -150,6 +154,7 @@ class AgentTaskEventBrokerTest {
             bounded.publish(scope, 2L);
             bounded.publish(scope, 3L);
             assertEquals(List.of(1L), received);
+            assertEquals(1L, bounded.droppedWakeupCount());
             assertTrue(!publisherThread.equals(callbackThread.get()));
 
             releaseCallback.countDown();
@@ -159,6 +164,57 @@ class AgentTaskEventBrokerTest {
             subscription.dispose();
             bounded.close();
         }
+    }
+
+    @Test
+    void closeCompletesActiveChannelsAndRejectsPostCloseAllocationAndPublication() {
+        AtomicBoolean completed = new AtomicBoolean();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        var subscription = broker.stream(scope)
+                .subscribe(ignored -> { }, failure::set, () -> completed.set(true));
+        assertEquals(1, broker.activeScopeCount());
+
+        broker.close();
+
+        assertTrue(broker.isClosed());
+        assertTrue(completed.get());
+        assertNull(failure.get());
+        assertEquals(0, broker.activeScopeCount());
+        assertEquals(0, broker.subscriberCount(scope));
+        StepVerifier.create(broker.stream(scope))
+                .expectErrorMatches(error -> error instanceof IllegalStateException
+                        && error.getMessage().contains("closed"))
+                .verify(Duration.ofSeconds(1));
+        assertEquals(0, broker.activeScopeCount());
+        assertThrows(IllegalStateException.class, () -> broker.publish(scope, 1L));
+        assertEquals(1L, broker.droppedWakeupCount());
+        subscription.dispose();
+    }
+
+    @Test
+    void closeInterruptsBlockedWorkerAfterBoundedWaitWithoutCallbackNoise() {
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch callbackExited = new CountDownLatch(1);
+        CountDownLatch neverReleased = new CountDownLatch(1);
+        var subscription = broker.stream(scope).subscribe(wakeup -> {
+            callbackEntered.countDown();
+            try {
+                neverReleased.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } finally {
+                callbackExited.countDown();
+            }
+        });
+        broker.publish(scope, 1L);
+        await(callbackEntered);
+
+        assertTimeoutPreemptively(Duration.ofSeconds(2), broker::close);
+
+        await(callbackExited);
+        assertTrue(broker.isClosed());
+        assertEquals(0, broker.activeScopeCount());
+        subscription.dispose();
     }
 
     @Test

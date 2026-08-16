@@ -170,6 +170,7 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
 
     @Override
     public void close() {
+        afterCommitPublisher.close();
         eventBroker.close();
         if (h2) {
             jdbc.execute("DROP ALL OBJECTS DELETE FILES");

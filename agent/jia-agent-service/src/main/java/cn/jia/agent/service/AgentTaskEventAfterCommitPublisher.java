@@ -2,8 +2,10 @@ package cn.jia.agent.service;
 
 import cn.jia.agent.service.AgentTaskEventBroker.TaskEventWakeup;
 import cn.jia.agent.service.AgentTaskEventBroker.TaskScope;
+import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.Ordered;
 import org.springframework.transaction.ConfigurableTransactionManager;
 import org.springframework.transaction.NestedTransactionNotSupportedException;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -25,14 +27,18 @@ import java.util.concurrent.atomic.LongAdder;
  *
  * <p>REQUIRED participants discover and share the synchronization already registered in the
  * current synchronization context. REQUIRES_NEW suspends that context and therefore receives an
- * independent buffer. Savepoint nesting is intentionally unsupported for task-event publication.
+ * independent buffer. Any savepoint makes that physical transaction unsupported for task-event
+ * publication.
  */
 @Slf4j
 @Named
-public class AgentTaskEventAfterCommitPublisher {
+public class AgentTaskEventAfterCommitPublisher implements AutoCloseable {
     private final AgentTaskEventBroker broker;
+    private final ConfigurableTransactionManager transactionManager;
+    private final TransactionExecutionListener transactionListener;
     private final ThreadLocal<Deque<TransactionExecution>> transactionStack =
             new ThreadLocal<>();
+    private final AtomicBoolean closed = new AtomicBoolean();
     private final LongAdder publishedWakeups = new LongAdder();
     private final LongAdder publicationFailures = new LongAdder();
 
@@ -50,7 +56,9 @@ public class AgentTaskEventAfterCommitPublisher {
                     "transactionManager must support transaction execution listeners");
         }
         this.broker = broker;
-        configurableManager.addListener(new NestedScopeTracker());
+        this.transactionManager = configurableManager;
+        this.transactionListener = new TransactionScopeTracker();
+        configurableManager.addListener(transactionListener);
     }
 
     /**
@@ -58,23 +66,39 @@ public class AgentTaskEventAfterCommitPublisher {
      * transaction synchronization are active.
      */
     public void enqueue(TaskScope scope, long eventVersion) {
+        ensureOpen();
         TaskEventWakeup wakeup = new TaskEventWakeup(scope, eventVersion);
         if (!TransactionSynchronizationManager.isActualTransactionActive()
                 || !TransactionSynchronizationManager.isSynchronizationActive()) {
             throw new IllegalStateException(
                     "Task event wakeup requires an active synchronized transaction");
         }
-        if (isCurrentTransactionNested()) {
+
+        TransactionGuardSynchronization guard = currentGuard();
+        if (guard == null) {
+            throw new IllegalStateException(
+                    "Task event transaction guard is unavailable");
+        }
+        if (guard.isSavepointUnsupported() || isCurrentTransactionNested()) {
             throw new NestedTransactionNotSupportedException(
-                    "PROPAGATION_NESTED is unsupported for task event writer paths");
+                    "Savepoint transactions are unsupported for task event writer paths");
         }
 
-        WakeupSynchronization synchronization = currentSynchronization();
+        WakeupSynchronization synchronization = currentWakeupSynchronization();
         if (synchronization == null) {
-            synchronization = new WakeupSynchronization();
+            synchronization = new WakeupSynchronization(guard);
             TransactionSynchronizationManager.registerSynchronization(synchronization);
         }
         synchronization.enqueue(wakeup);
+    }
+
+    @PreDestroy
+    @Override
+    public void close() {
+        if (closed.compareAndSet(false, true)) {
+            transactionManager.getTransactionExecutionListeners().remove(transactionListener);
+            transactionStack.remove();
+        }
     }
 
     long publishedWakeupCount() {
@@ -85,6 +109,16 @@ public class AgentTaskEventAfterCommitPublisher {
         return publicationFailures.sum();
     }
 
+    boolean isClosed() {
+        return closed.get();
+    }
+
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new IllegalStateException("Task event after-commit publisher is closed");
+        }
+    }
+
     private boolean isCurrentTransactionNested() {
         Deque<TransactionExecution> stack = transactionStack.get();
         TransactionExecution current = stack == null ? null : stack.peek();
@@ -92,13 +126,20 @@ public class AgentTaskEventAfterCommitPublisher {
     }
 
     private void begin(TransactionExecution execution, Throwable beginFailure) {
-        if (beginFailure == null && execution.hasTransaction()) {
-            Deque<TransactionExecution> stack = transactionStack.get();
-            if (stack == null) {
-                stack = new ArrayDeque<>();
-                transactionStack.set(stack);
-            }
-            stack.push(execution);
+        if (closed.get() || beginFailure != null || !execution.hasTransaction()) {
+            return;
+        }
+        Deque<TransactionExecution> stack = transactionStack.get();
+        if (stack == null) {
+            stack = new ArrayDeque<>();
+            transactionStack.set(stack);
+        }
+        stack.push(execution);
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()
+                && currentGuard() == null) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionGuardSynchronization());
         }
     }
 
@@ -122,7 +163,18 @@ public class AgentTaskEventAfterCommitPublisher {
         }
     }
 
-    private WakeupSynchronization currentSynchronization() {
+    private TransactionGuardSynchronization currentGuard() {
+        for (TransactionSynchronization candidate
+                : TransactionSynchronizationManager.getSynchronizations()) {
+            if (candidate instanceof TransactionGuardSynchronization guard
+                    && guard.owner() == this) {
+                return guard;
+            }
+        }
+        return null;
+    }
+
+    private WakeupSynchronization currentWakeupSynchronization() {
         for (TransactionSynchronization candidate
                 : TransactionSynchronizationManager.getSynchronizations()) {
             if (candidate instanceof WakeupSynchronization synchronization
@@ -133,7 +185,7 @@ public class AgentTaskEventAfterCommitPublisher {
         return null;
     }
 
-    private final class NestedScopeTracker implements TransactionExecutionListener {
+    private final class TransactionScopeTracker implements TransactionExecutionListener {
         @Override
         public void afterBegin(TransactionExecution transaction, Throwable beginFailure) {
             begin(transaction, beginFailure);
@@ -150,11 +202,43 @@ public class AgentTaskEventAfterCommitPublisher {
         }
     }
 
+    private final class TransactionGuardSynchronization implements TransactionSynchronization {
+        private final AtomicBoolean savepointUnsupported = new AtomicBoolean();
+
+        private AgentTaskEventAfterCommitPublisher owner() {
+            return AgentTaskEventAfterCommitPublisher.this;
+        }
+
+        private boolean isSavepointUnsupported() {
+            return savepointUnsupported.get();
+        }
+
+        @Override
+        public int getOrder() {
+            return Ordered.HIGHEST_PRECEDENCE;
+        }
+
+        @Override
+        public void savepoint(Object savepoint) {
+            savepointUnsupported.set(true);
+        }
+
+        @Override
+        public void savepointRollback(Object savepoint) {
+            savepointUnsupported.set(true);
+        }
+    }
+
     private final class WakeupSynchronization implements TransactionSynchronization {
+        private final TransactionGuardSynchronization guard;
         private final List<TaskEventWakeup> wakeups = new ArrayList<>();
         private final AtomicBoolean committed = new AtomicBoolean();
         private final AtomicBoolean completed = new AtomicBoolean();
         private final AtomicBoolean savepointRolledBack = new AtomicBoolean();
+
+        private WakeupSynchronization(TransactionGuardSynchronization guard) {
+            this.guard = guard;
+        }
 
         private AgentTaskEventAfterCommitPublisher owner() {
             return AgentTaskEventAfterCommitPublisher.this;
@@ -170,7 +254,7 @@ public class AgentTaskEventAfterCommitPublisher {
         @Override
         public void savepoint(Object savepoint) {
             throw new NestedTransactionNotSupportedException(
-                    "PROPAGATION_NESTED is unsupported for task event writer paths");
+                    "Savepoint transactions are unsupported for task event writer paths");
         }
 
         @Override
@@ -181,10 +265,16 @@ public class AgentTaskEventAfterCommitPublisher {
 
         @Override
         public void afterCommit() {
-            if (savepointRolledBack.get() || !committed.compareAndSet(false, true)) {
+            if (closed.get()
+                    || guard.isSavepointUnsupported()
+                    || savepointRolledBack.get()
+                    || !committed.compareAndSet(false, true)) {
                 return;
             }
             for (TaskEventWakeup wakeup : List.copyOf(wakeups)) {
+                if (closed.get()) {
+                    return;
+                }
                 try {
                     broker.publish(wakeup.scope(), wakeup.eventVersion());
                     publishedWakeups.increment();
