@@ -2,6 +2,7 @@ package cn.jia.agent.service;
 
 import cn.jia.agent.service.AgentTaskEventBroker.TaskEventWakeup;
 import cn.jia.agent.service.AgentTaskEventBroker.TaskScope;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.publisher.BaseSubscriber;
@@ -17,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -26,6 +28,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AgentTaskEventBrokerTest {
     private final AgentTaskEventBroker broker = new AgentTaskEventBroker();
     private final TaskScope scope = new TaskScope("tenant-a", "client-a", "task-a");
+
+    @AfterEach
+    void tearDown() {
+        broker.close();
+    }
 
     @Test
     void isolatesByteExactCaseAndUnicodeScopesWithoutNormalizing() {
@@ -50,6 +57,7 @@ class AgentTaskEventBrokerTest {
             broker.publish(scopes.get(i), i + 1L);
         }
 
+        awaitCondition(() -> received.stream().allMatch(values -> values.size() == 1));
         for (int i = 0; i < scopes.size(); i++) {
             assertEquals(List.of(i + 1L), received.get(i), scopes.get(i).toString());
         }
@@ -77,6 +85,7 @@ class AgentTaskEventBrokerTest {
         assertThrows(NullPointerException.class, () -> broker.stream(null));
         assertThrows(IllegalArgumentException.class, () -> broker.publish(scope, 0));
         assertThrows(IllegalArgumentException.class, () -> broker.publish(scope, -1));
+        assertThrows(IllegalArgumentException.class, () -> new AgentTaskEventBroker(0));
 
         TaskScope exact = new TaskScope("tenant", "client", "a b");
         assertEquals("a b", exact.taskId());
@@ -107,14 +116,74 @@ class AgentTaskEventBrokerTest {
         broker.stream(scope).subscribe(slow);
 
         broker.publish(scope, 1L);
+        awaitCondition(() -> fastVersions.equals(List.of(1L)));
         slow.requestOne();
         broker.publish(scope, 2L);
 
-        assertEquals(List.of(1L, 2L), fastVersions);
-        assertEquals(List.of(2L), slow.versions);
+        awaitCondition(() -> fastVersions.equals(List.of(1L, 2L))
+                && slow.versions.equals(List.of(2L)));
         fast.dispose();
         slow.cancelNow();
         assertEquals(0, broker.activeScopeCount());
+    }
+
+    @Test
+    void boundedDispatcherDropsOverflowWithoutRunningCallbacksOnPublisherThread() {
+        AgentTaskEventBroker bounded = new AgentTaskEventBroker(1);
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        List<Long> received = new CopyOnWriteArrayList<>();
+        AtomicReference<String> callbackThread = new AtomicReference<>();
+        String publisherThread = Thread.currentThread().getName();
+        var subscription = bounded.stream(scope).subscribe(wakeup -> {
+            callbackThread.set(Thread.currentThread().getName());
+            received.add(wakeup.eventVersion());
+            if (wakeup.eventVersion() == 1L) {
+                callbackEntered.countDown();
+                await(releaseCallback);
+            }
+        });
+        try {
+            bounded.publish(scope, 1L);
+            await(callbackEntered);
+
+            bounded.publish(scope, 2L);
+            bounded.publish(scope, 3L);
+            assertEquals(List.of(1L), received);
+            assertTrue(!publisherThread.equals(callbackThread.get()));
+
+            releaseCallback.countDown();
+            awaitCondition(() -> received.equals(List.of(1L, 2L)));
+        } finally {
+            releaseCallback.countDown();
+            subscription.dispose();
+            bounded.close();
+        }
+    }
+
+    @Test
+    void blockingCallbackCannotDelayFinalSubscriberCleanup() throws Exception {
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        var subscription = broker.stream(scope).subscribe(wakeup -> {
+            callbackEntered.countDown();
+            await(releaseCallback);
+        });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            broker.publish(scope, 1L);
+            await(callbackEntered);
+
+            Future<?> dispose = executor.submit(subscription::dispose);
+            dispose.get(1, TimeUnit.SECONDS);
+            assertEquals(0, broker.activeScopeCount());
+            assertEquals(0, broker.subscriberCount(scope));
+        } finally {
+            releaseCallback.countDown();
+            subscription.dispose();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+        }
     }
 
     @Test
@@ -142,6 +211,7 @@ class AgentTaskEventBrokerTest {
                 })
                 .subscribe(ignored -> { }, failure::set);
         broker.publish(scope, 2L);
+        awaitCondition(() -> failure.get() != null);
         assertInstanceOf(IllegalStateException.class, failure.get());
         assertEquals(0, broker.activeScopeCount());
     }
@@ -171,7 +241,7 @@ class AgentTaskEventBrokerTest {
                 var replacement = broker.stream(scope)
                         .subscribe(wakeup -> replacementEvents.add(wakeup.eventVersion()));
                 broker.publish(scope, version + 10_000L);
-                assertEquals(List.of(version + 10_000L), replacementEvents);
+                awaitCondition(() -> replacementEvents.equals(List.of(version + 10_000L)));
                 replacement.dispose();
                 assertEquals(0, broker.activeScopeCount());
             }
@@ -179,6 +249,19 @@ class AgentTaskEventBrokerTest {
             executor.shutdownNow();
             assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
         }
+    }
+
+    private static void awaitCondition(BooleanSupplier condition) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(5L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        }
+        assertTrue(condition.getAsBoolean(), "condition was not satisfied before timeout");
     }
 
     private static void await(CountDownLatch latch) {

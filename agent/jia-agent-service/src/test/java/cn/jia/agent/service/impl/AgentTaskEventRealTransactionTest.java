@@ -116,7 +116,8 @@ class AgentTaskEventRealTransactionTest {
         setField(eventDao, "baseMapper", mapper);
 
         writer = new AgentTaskEventWriterImpl(eventDao, txManager,
-                new AgentTaskEventAfterCommitPublisher(new AgentTaskEventBroker()));
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), txManager));
     }
 
     @AfterEach

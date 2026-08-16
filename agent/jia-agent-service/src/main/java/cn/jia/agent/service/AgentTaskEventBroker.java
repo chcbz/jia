@@ -1,12 +1,18 @@
 package cn.jia.agent.service;
 
+import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Process-local, lossy wakeup fan-out for durable task events.
@@ -16,9 +22,39 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * their exact byte-preserving scope has subscribers; blind publication is intentionally dropped.
  */
 @Named
-public class AgentTaskEventBroker {
+public class AgentTaskEventBroker implements AutoCloseable {
+    private static final int DEFAULT_DISPATCH_QUEUE_CAPACITY = 1024;
+    private static final long DISPATCHER_IDLE_SECONDS = 30L;
+    private static final AtomicLong DISPATCHER_SEQUENCE = new AtomicLong();
+
     private final ConcurrentHashMap<TaskScope, ScopedChannel> channels =
             new ConcurrentHashMap<>();
+    private final ThreadPoolExecutor dispatcher;
+
+    public AgentTaskEventBroker() {
+        this(DEFAULT_DISPATCH_QUEUE_CAPACITY);
+    }
+
+    AgentTaskEventBroker(int dispatchQueueCapacity) {
+        if (dispatchQueueCapacity <= 0) {
+            throw new IllegalArgumentException("dispatchQueueCapacity must be positive");
+        }
+        long dispatcherId = DISPATCHER_SEQUENCE.incrementAndGet();
+        this.dispatcher = new ThreadPoolExecutor(
+                1,
+                1,
+                DISPATCHER_IDLE_SECONDS,
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(dispatchQueueCapacity),
+                runnable -> {
+                    Thread thread = new Thread(
+                            runnable, "agent-task-event-broker-" + dispatcherId);
+                    thread.setDaemon(true);
+                    return thread;
+                },
+                new ThreadPoolExecutor.AbortPolicy());
+        this.dispatcher.allowCoreThreadTimeOut(true);
+    }
 
     /** Subscribe to process-local wakeups for one exact task scope. */
     public Flux<TaskEventWakeup> stream(TaskScope scope) {
@@ -30,7 +66,13 @@ public class AgentTaskEventBroker {
         });
     }
 
-    /** Publish one immutable high-water hint; publication without subscribers is dropped. */
+    /**
+     * Queue one immutable high-water hint for best-effort asynchronous delivery.
+     *
+     * <p>Publication without subscribers or without bounded dispatcher capacity is dropped. The
+     * caller never executes subscriber code and therefore cannot be delayed by a blocking
+     * callback.
+     */
     public void publish(TaskScope scope, long eventVersion) {
         TaskEventWakeup wakeup = new TaskEventWakeup(scope, eventVersion);
         ScopedChannel channel = channels.get(wakeup.scope());
@@ -38,20 +80,17 @@ public class AgentTaskEventBroker {
             return;
         }
 
-        synchronized (channel) {
-            if (channels.get(wakeup.scope()) != channel || channel.subscribers == 0) {
-                return;
-            }
-            Sinks.EmitResult result = channel.sink.tryEmitNext(wakeup);
-            if (result == Sinks.EmitResult.OK
-                    || result == Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER
-                    || result == Sinks.EmitResult.FAIL_OVERFLOW
-                    || result == Sinks.EmitResult.FAIL_CANCELLED
-                    || result == Sinks.EmitResult.FAIL_TERMINATED) {
-                return;
-            }
-            throw new IllegalStateException("Unable to publish task event wakeup: " + result);
+        try {
+            dispatcher.execute(() -> emitIfCurrent(wakeup, channel));
+        } catch (RejectedExecutionException ignored) {
+            // Process-local wakeups are deliberately lossy. Durable replay remains the fact source.
         }
+    }
+
+    @PreDestroy
+    @Override
+    public void close() {
+        dispatcher.shutdownNow();
     }
 
     int activeScopeCount() {
@@ -66,6 +105,25 @@ public class AgentTaskEventBroker {
         synchronized (channel) {
             return channels.get(scope) == channel ? channel.subscribers : 0;
         }
+    }
+
+    private void emitIfCurrent(TaskEventWakeup wakeup, ScopedChannel channel) {
+        synchronized (channel) {
+            if (channels.get(wakeup.scope()) != channel || channel.subscribers == 0) {
+                return;
+            }
+        }
+
+        Sinks.EmitResult result = channel.sink.tryEmitNext(wakeup);
+        if (result == Sinks.EmitResult.OK
+                || result == Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER
+                || result == Sinks.EmitResult.FAIL_OVERFLOW
+                || result == Sinks.EmitResult.FAIL_CANCELLED
+                || result == Sinks.EmitResult.FAIL_TERMINATED
+                || result == Sinks.EmitResult.FAIL_NON_SERIALIZED) {
+            return;
+        }
+        throw new IllegalStateException("Unknown task event wakeup result: " + result);
     }
 
     private SubscriptionLease acquire(TaskScope scope) {

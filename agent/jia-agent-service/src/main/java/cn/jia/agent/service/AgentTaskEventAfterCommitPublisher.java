@@ -4,11 +4,18 @@ import cn.jia.agent.service.AgentTaskEventBroker.TaskEventWakeup;
 import cn.jia.agent.service.AgentTaskEventBroker.TaskScope;
 import jakarta.inject.Named;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.ConfigurableTransactionManager;
 import org.springframework.transaction.NestedTransactionNotSupportedException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionExecution;
+import org.springframework.transaction.TransactionExecutionListener;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
@@ -24,14 +31,26 @@ import java.util.concurrent.atomic.LongAdder;
 @Named
 public class AgentTaskEventAfterCommitPublisher {
     private final AgentTaskEventBroker broker;
+    private final ThreadLocal<Deque<TransactionExecution>> transactionStack =
+            new ThreadLocal<>();
     private final LongAdder publishedWakeups = new LongAdder();
     private final LongAdder publicationFailures = new LongAdder();
 
-    public AgentTaskEventAfterCommitPublisher(AgentTaskEventBroker broker) {
+    public AgentTaskEventAfterCommitPublisher(
+            AgentTaskEventBroker broker,
+            PlatformTransactionManager transactionManager) {
         if (broker == null) {
             throw new IllegalArgumentException("broker must not be null");
         }
+        if (transactionManager == null) {
+            throw new IllegalArgumentException("transactionManager must not be null");
+        }
+        if (!(transactionManager instanceof ConfigurableTransactionManager configurableManager)) {
+            throw new IllegalArgumentException(
+                    "transactionManager must support transaction execution listeners");
+        }
         this.broker = broker;
+        configurableManager.addListener(new NestedScopeTracker());
     }
 
     /**
@@ -44,6 +63,10 @@ public class AgentTaskEventAfterCommitPublisher {
                 || !TransactionSynchronizationManager.isSynchronizationActive()) {
             throw new IllegalStateException(
                     "Task event wakeup requires an active synchronized transaction");
+        }
+        if (isCurrentTransactionNested()) {
+            throw new NestedTransactionNotSupportedException(
+                    "PROPAGATION_NESTED is unsupported for task event writer paths");
         }
 
         WakeupSynchronization synchronization = currentSynchronization();
@@ -62,6 +85,43 @@ public class AgentTaskEventAfterCommitPublisher {
         return publicationFailures.sum();
     }
 
+    private boolean isCurrentTransactionNested() {
+        Deque<TransactionExecution> stack = transactionStack.get();
+        TransactionExecution current = stack == null ? null : stack.peek();
+        return current != null && current.isNested();
+    }
+
+    private void begin(TransactionExecution execution, Throwable beginFailure) {
+        if (beginFailure == null && execution.hasTransaction()) {
+            Deque<TransactionExecution> stack = transactionStack.get();
+            if (stack == null) {
+                stack = new ArrayDeque<>();
+                transactionStack.set(stack);
+            }
+            stack.push(execution);
+        }
+    }
+
+    private void complete(TransactionExecution execution) {
+        Deque<TransactionExecution> stack = transactionStack.get();
+        if (stack == null) {
+            return;
+        }
+        if (stack.peek() == execution) {
+            stack.pop();
+        } else {
+            for (Iterator<TransactionExecution> iterator = stack.iterator(); iterator.hasNext(); ) {
+                if (iterator.next() == execution) {
+                    iterator.remove();
+                    break;
+                }
+            }
+        }
+        if (stack.isEmpty()) {
+            transactionStack.remove();
+        }
+    }
+
     private WakeupSynchronization currentSynchronization() {
         for (TransactionSynchronization candidate
                 : TransactionSynchronizationManager.getSynchronizations()) {
@@ -71,6 +131,23 @@ public class AgentTaskEventAfterCommitPublisher {
             }
         }
         return null;
+    }
+
+    private final class NestedScopeTracker implements TransactionExecutionListener {
+        @Override
+        public void afterBegin(TransactionExecution transaction, Throwable beginFailure) {
+            begin(transaction, beginFailure);
+        }
+
+        @Override
+        public void afterCommit(TransactionExecution transaction, Throwable commitFailure) {
+            complete(transaction);
+        }
+
+        @Override
+        public void afterRollback(TransactionExecution transaction, Throwable rollbackFailure) {
+            complete(transaction);
+        }
     }
 
     private final class WakeupSynchronization implements TransactionSynchronization {

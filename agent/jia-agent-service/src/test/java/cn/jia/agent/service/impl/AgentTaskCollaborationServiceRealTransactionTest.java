@@ -129,7 +129,8 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         AgentTaskEventDaoImpl eventDao = new AgentTaskEventDaoImpl();
         setField(eventDao, "baseMapper", template.getMapper(AgentTaskEventMapper.class));
         eventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager,
-                new AgentTaskEventAfterCommitPublisher(new AgentTaskEventBroker()));
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), transactionManager));
         mutationTransaction = new AgentTaskMutationTransactionImpl(taskDao, transactionManager);
 
         AtomicLong collaborationClock = new AtomicLong(LEASE_NOW);

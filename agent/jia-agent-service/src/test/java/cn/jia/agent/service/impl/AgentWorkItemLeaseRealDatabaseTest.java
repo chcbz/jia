@@ -108,7 +108,8 @@ class AgentWorkItemLeaseRealDatabaseTest {
         setField(eventDao, "baseMapper", template.getMapper(AgentTaskEventMapper.class));
         transactionManager = new DataSourceTransactionManager(dataSource);
         realEventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager,
-                new AgentTaskEventAfterCommitPublisher(new AgentTaskEventBroker()));
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), transactionManager));
         insertTaskRoot();
     }
 

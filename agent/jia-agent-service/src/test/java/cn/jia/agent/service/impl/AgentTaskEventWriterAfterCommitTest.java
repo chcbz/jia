@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.service.AgentTaskEventBroker.TaskScope;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +10,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -52,9 +59,39 @@ class AgentTaskEventWriterAfterCommitTest {
             assertTrue(received.isEmpty());
         });
 
-        assertEquals(List.of(1L, 2L), received);
+        awaitReceived(List.of(1L, 2L));
         assertEquals(List.of(1L, 2L), fixture.eventVersions());
         assertEquals(2L, fixture.currentEventVersion());
+    }
+
+    @Test
+    void blockingSubscriberCannotDelayAfterCommitBusinessReturn() throws Exception {
+        subscription.dispose();
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        subscription = fixture.eventBroker.stream(new TaskScope(
+                        AgentTaskEventTestFixture.TENANT,
+                        AgentTaskEventTestFixture.CLIENT,
+                        AgentTaskEventTestFixture.TASK))
+                .subscribe(wakeup -> {
+                    callbackEntered.countDown();
+                    await(releaseCallback);
+                });
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<AgentTaskEventWriteResult> append = executor.submit(
+                    () -> fixture.writer.append(fixture.command("evt-c02-blocking")));
+            await(callbackEntered);
+
+            AgentTaskEventWriteResult result = append.get(1, TimeUnit.SECONDS);
+            assertEquals(1L, result.getEventVersion());
+            assertEquals(List.of(1L), fixture.eventVersions());
+            assertEquals(1L, fixture.currentEventVersion());
+        } finally {
+            releaseCallback.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+        }
     }
 
     @Test
@@ -73,7 +110,7 @@ class AgentTaskEventWriterAfterCommitTest {
     @Test
     void appendFailureQueuesNoPhantomWakeupAndLeavesNoVersionGap() {
         fixture.writer.append(fixture.command("evt-c02-existing"));
-        assertEquals(List.of(1L), received);
+        awaitReceived(List.of(1L));
         received.clear();
 
         assertThrows(RuntimeException.class,
@@ -94,5 +131,31 @@ class AgentTaskEventWriterAfterCommitTest {
         assertTrue(received.isEmpty());
         assertEquals(0, fixture.eventCount());
         assertEquals(0L, fixture.currentEventVersion());
+    }
+
+    private void awaitReceived(List<Long> expected) {
+        awaitCondition(() -> received.equals(expected));
+    }
+
+    private static void awaitCondition(BooleanSupplier condition) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(5L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        }
+        assertTrue(condition.getAsBoolean(), "condition was not satisfied before timeout");
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(2, TimeUnit.SECONDS));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
     }
 }
