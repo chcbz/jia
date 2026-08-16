@@ -237,33 +237,31 @@ public class AgentTaskEventReplayServiceImpl
 
         private void start() {
             if (closed.get()) {
-                sink.error(new IllegalStateException("Task event replay service is closed"));
+                deliverTerminal(winTerminal(StartClosedOutcome.INSTANCE));
                 return;
             }
             if (!claimResources()) {
-                sink.error(new ReplayCapacityException());
+                deliverTerminal(winTerminal(CapacityOutcome.INSTANCE));
                 return;
             }
 
             sink.onCancel(this::cancel);
             sink.onDispose(this::cancel);
+            sink.onRequest(ignored -> signalDelivery());
             if (sink.isCancelled() || logicalStopped.get()) {
                 cancel();
                 return;
             }
             if (closed.get()) {
+                TerminalOutcome winner = winTerminal(ServiceClosedOutcome.INSTANCE);
                 stopBeforeStart();
-                if (!sink.isCancelled()) {
-                    sink.error(new IllegalStateException(
-                            "Task event replay service is closed"));
-                }
+                deliverTerminal(winner);
                 return;
             }
             if (!startDeliveryLane()) {
+                TerminalOutcome winner = winTerminal(CapacityOutcome.INSTANCE);
                 stopBeforeStart();
-                if (!sink.isCancelled()) {
-                    sink.error(new ReplayCapacityException());
-                }
+                deliverTerminal(winner);
                 return;
             }
 
@@ -576,56 +574,37 @@ public class AgentTaskEventReplayServiceImpl
                 }
 
                 if (!signalQueue.isEmpty() && sink.requestedFromDownstream() <= 0) {
-                    if (outcome instanceof ServiceClosedOutcome) {
+                    if (outcome instanceof ServiceClosedOutcome
+                            || (outcome instanceof BackpressureOutcome backpressure
+                            && backpressure.discardQueued())) {
                         clearSignalQueue();
-                    } else {
-                        terminalBackpressure(false, true);
-                    }
-                    continue;
-                }
-                DurableEvent signal = signalQueue.poll();
-                if (signal != null) {
-                    if (downstreamCancelled.get() || sink.isCancelled()) {
-                        outstandingSignals.decrementAndGet();
-                        return;
-                    }
-                    try {
-                        sink.next(signal);
-                        deliveredVersion.set(signal.eventVersion());
-                    } catch (RuntimeException callbackFailure) {
+                    } else if (outcome == null) {
                         terminalBackpressure(true, true);
-                    } finally {
-                        outstandingSignals.decrementAndGet();
+                        continue;
                     }
-                    continue;
+                }
+                if (sink.requestedFromDownstream() > 0) {
+                    DurableEvent signal = signalQueue.poll();
+                    if (signal != null) {
+                        if (downstreamCancelled.get() || sink.isCancelled()) {
+                            outstandingSignals.decrementAndGet();
+                            return;
+                        }
+                        try {
+                            sink.next(signal);
+                            deliveredVersion.set(signal.eventVersion());
+                        } catch (RuntimeException callbackFailure) {
+                            terminalBackpressure(true, true);
+                        } finally {
+                            outstandingSignals.decrementAndGet();
+                        }
+                        continue;
+                    }
                 }
 
                 outcome = terminalOutcome.get();
-                if (outcome instanceof BackpressureOutcome) {
-                    if (downstreamTerminated.compareAndSet(false, true)
-                            && !sink.isCancelled()) {
-                        sink.error(new ReplayBackpressureException());
-                    }
-                    return;
-                }
-                if (outcome instanceof ResyncOutcome resync) {
-                    if (sink.requestedFromDownstream() <= 0) {
-                        terminalBackpressure(false, true);
-                        continue;
-                    }
-                    if (downstreamTerminated.compareAndSet(false, true)
-                            && !sink.isCancelled()) {
-                        sink.next(new ResyncRequired(
-                                scope, resync.currentVersion(), resync.reason()));
-                        sink.complete();
-                    }
-                    return;
-                }
-                if (outcome instanceof ServiceClosedOutcome) {
-                    if (downstreamTerminated.compareAndSet(false, true)
-                            && !sink.isCancelled()) {
-                        sink.complete();
-                    }
+                if (outcome != null && signalQueue.isEmpty()
+                        && deliverTerminal(outcome)) {
                     return;
                 }
                 try {
@@ -641,26 +620,55 @@ public class AgentTaskEventReplayServiceImpl
             cancel();
         }
 
-        private void terminalBackpressure(boolean discardQueued, boolean cancelWorker) {
-            BackpressureOutcome replacement = new BackpressureOutcome(discardQueued);
-            while (true) {
-                TerminalOutcome existing = terminalOutcome.get();
-                if (existing instanceof ServiceClosedOutcome) {
-                    break;
-                }
-                if (existing instanceof BackpressureOutcome backpressure) {
-                    if (discardQueued && !backpressure.discardQueued()) {
-                        terminalOutcome.compareAndSet(existing, replacement);
-                    }
-                    break;
-                }
-                if (terminalOutcome.compareAndSet(existing, replacement)) {
-                    break;
-                }
+        private TerminalOutcome winTerminal(TerminalOutcome candidate) {
+            TerminalOutcome existing = terminalOutcome.get();
+            if (existing != null) {
+                return existing;
             }
+            if (terminalOutcome.compareAndSet(null, candidate)) {
+                return candidate;
+            }
+            return terminalOutcome.get();
+        }
+
+        private boolean deliverTerminal(TerminalOutcome winner) {
+            if (winner instanceof ResyncOutcome
+                    && sink.requestedFromDownstream() <= 0) {
+                return false;
+            }
+            if (!downstreamTerminated.compareAndSet(false, true)) {
+                return true;
+            }
+            if (sink.isCancelled()) {
+                return true;
+            }
+            if (winner instanceof BackpressureOutcome) {
+                sink.error(new ReplayBackpressureException());
+            } else if (winner instanceof CapacityOutcome) {
+                sink.error(new ReplayCapacityException());
+            } else if (winner instanceof StartClosedOutcome) {
+                sink.error(new IllegalStateException(
+                        "Task event replay service is closed"));
+            } else if (winner instanceof ResyncOutcome resync) {
+                sink.next(new ResyncRequired(
+                        scope, resync.currentVersion(), resync.reason()));
+                if (!sink.isCancelled()) {
+                    sink.complete();
+                }
+            } else if (winner instanceof ServiceClosedOutcome) {
+                sink.complete();
+            } else {
+                throw new IllegalStateException("Unknown replay terminal outcome");
+            }
+            return true;
+        }
+
+        private void terminalBackpressure(boolean discardQueued, boolean cancelWorker) {
+            TerminalOutcome winner = winTerminal(new BackpressureOutcome(discardQueued));
             logicalStopped.set(true);
             cleanupLogical(cancelWorker);
-            if (discardQueued && terminalOutcome.get() instanceof BackpressureOutcome) {
+            if (winner instanceof BackpressureOutcome backpressure
+                    && backpressure.discardQueued()) {
                 clearSignalQueue();
             }
             signalDelivery();
@@ -670,17 +678,14 @@ public class AgentTaskEventReplayServiceImpl
                 ResyncReason reason,
                 long currentVersion,
                 boolean cancelWorker) {
-            if (!terminalOutcome.compareAndSet(null,
-                    new ResyncOutcome(reason, Math.max(0L, currentVersion)))) {
-                return;
-            }
+            winTerminal(new ResyncOutcome(reason, Math.max(0L, currentVersion)));
             logicalStopped.set(true);
             cleanupLogical(cancelWorker);
             signalDelivery();
         }
 
         private void serviceClosed() {
-            terminalOutcome.compareAndSet(null, ServiceClosedOutcome.INSTANCE);
+            winTerminal(ServiceClosedOutcome.INSTANCE);
             logicalStopped.set(true);
             cleanupLogical(true);
             signalDelivery();
@@ -834,10 +839,15 @@ public class AgentTaskEventReplayServiceImpl
     }
 
     private sealed interface TerminalOutcome
-            permits BackpressureOutcome, ResyncOutcome, ServiceClosedOutcome {
+            permits BackpressureOutcome, CapacityOutcome, ResyncOutcome,
+            ServiceClosedOutcome, StartClosedOutcome {
     }
 
     private record BackpressureOutcome(boolean discardQueued) implements TerminalOutcome {
+    }
+
+    private enum CapacityOutcome implements TerminalOutcome {
+        INSTANCE
     }
 
     private record ResyncOutcome(
@@ -846,6 +856,10 @@ public class AgentTaskEventReplayServiceImpl
     }
 
     private enum ServiceClosedOutcome implements TerminalOutcome {
+        INSTANCE
+    }
+
+    private enum StartClosedOutcome implements TerminalOutcome {
         INSTANCE
     }
 

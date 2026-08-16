@@ -29,10 +29,12 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -69,7 +71,7 @@ class AgentTaskEventReplayServiceImplTest {
     private AgentTaskEventDao eventDao;
     private MutableDurableStore store;
     private ThreadPoolExecutor worker;
-    private ThreadPoolExecutor delivery;
+    private ExecutorService delivery;
     private ScheduledThreadPoolExecutor timer;
     private AgentTaskEventReplayServiceImpl service;
 
@@ -357,6 +359,49 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
+    void resyncWinnerWaitsForDemandAfterAcceptedPrefixWithoutBecomingBackpressure() {
+        store.clearRowsAndSetCurrent(3L);
+        store.earliestSupplier = () -> 1L;
+        store.pageFunction = cursor -> cursor == 0L
+                ? List.of(entity(SCOPE, 1L), entity(SCOPE, 3L))
+                : List.of();
+
+        StepVerifier.create(service.replay(SCOPE, 0L), 1L)
+                .assertNext(signal -> assertDurable(signal, 1L))
+                .then(() -> awaitCondition(() -> service.activeSubscriptionCount() == 0
+                        && service.activeTimerCount() == 0
+                        && broker.trackedLeaseCount() == 0
+                        && service.deliveryPermitCount() == 1))
+                .thenRequest(1L)
+                .assertNext(signal -> assertResyncSignal(
+                        signal, 3L, ResyncReason.PAGE_GAP))
+                .expectComplete()
+                .verify(VERIFY_TIMEOUT);
+
+        awaitCleaned();
+    }
+
+    @Test
+    void zeroDemandRetainsResyncWinnerUntilLaterRequest() {
+        store.setCurrent(0L);
+
+        StepVerifier.create(service.replay(SCOPE, 1L), 0L)
+                .then(() -> awaitCondition(() -> service.activeSubscriptionCount() == 0
+                        && service.activeTimerCount() == 0
+                        && broker.trackedLeaseCount() == 0
+                        && service.inFlightCatchUpCount() == 0
+                        && service.deliveryPermitCount() == 1))
+                .expectNoEvent(Duration.ofMillis(50))
+                .thenRequest(1L)
+                .assertNext(signal -> assertResyncSignal(
+                        signal, 0L, ResyncReason.CURSOR_AHEAD))
+                .expectComplete()
+                .verify(VERIFY_TIMEOUT);
+
+        awaitCleaned();
+    }
+
+    @Test
     void replayBudgetExhaustionIsTerminalAfterBoundedPrefix() {
         replaceService(new AgentTaskEventReplayServiceImpl.ReplayPolicy(
                 2, 2, 4, 4, Duration.ofHours(1)));
@@ -612,7 +657,7 @@ class AgentTaskEventReplayServiceImplTest {
         }
         await(callbacksEntered);
         assertEquals(3, service.deliveryPermitCount());
-        int poolSizeAtCapacity = delivery.getPoolSize();
+        int poolSizeAtCapacity = ((ThreadPoolExecutor) delivery).getPoolSize();
         int pendingDeliveriesAtCapacity = service.pendingDeliveryTaskCount();
         int durableReadsAtCapacity = store.currentCalls.get();
 
@@ -627,7 +672,7 @@ class AgentTaskEventReplayServiceImplTest {
         assertEquals(0, broker.trackedLeaseCount());
         assertEquals(0, service.pendingTimerTaskCount());
         assertEquals(3, service.deliveryPermitCount());
-        assertEquals(poolSizeAtCapacity, delivery.getPoolSize());
+        assertEquals(poolSizeAtCapacity, ((ThreadPoolExecutor) delivery).getPoolSize());
         assertEquals(pendingDeliveriesAtCapacity, service.pendingDeliveryTaskCount());
         assertEquals(durableReadsAtCapacity, store.currentCalls.get());
         assertEquals(0, worker.getQueue().size());
@@ -847,50 +892,71 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void serviceCloseAndDeliveryExecutorRejectionRaceTerminatesExactlyOnceWithoutAllocation()
-            throws Exception {
+    void serviceCloseWinnerSurvivesDeliveryExecutorShutdownRejection() throws Exception {
         for (int iteration = 0; iteration < 12; iteration++) {
-            if (iteration != 0) {
-                replaceResources(
-                        policy(Duration.ofHours(1)), resourceLimits(4, 2, 4), 2, 4, 4);
-            }
+            BlockingRejectingExecutor rejecting = replaceWithRejectingDelivery();
             store.setCurrent(0L);
-            Flux<ReplaySignal> replay = service.replay(SCOPE, 0L);
-            delivery.shutdownNow();
             AtomicInteger completions = new AtomicInteger();
-            AtomicInteger errors = new AtomicInteger();
+            List<Throwable> errors = new CopyOnWriteArrayList<>();
             CountDownLatch terminal = new CountDownLatch(1);
-            CountDownLatch start = new CountDownLatch(1);
-            Thread subscriber = new Thread(() -> {
-                await(start);
-                replay.subscribe(ignored -> { }, ignored -> {
-                    errors.incrementAndGet();
-                    terminal.countDown();
-                }, () -> {
-                    completions.incrementAndGet();
-                    terminal.countDown();
-                });
-            }, "c03-rejected-delivery-subscriber-" + iteration);
-            Thread closer = new Thread(() -> {
-                await(start);
-                service.close();
-            }, "c03-rejected-delivery-close-" + iteration);
+            AtomicReference<Disposable> replay = new AtomicReference<>();
+            Thread subscriber = new Thread(() -> replay.set(service.replay(SCOPE, 0L).subscribe(
+                    ignored -> { },
+                    error -> {
+                        errors.add(error);
+                        terminal.countDown();
+                    },
+                    () -> {
+                        completions.incrementAndGet();
+                        terminal.countDown();
+                    })), "c03-close-first-rejected-delivery-" + iteration);
             subscriber.start();
-            closer.start();
-            start.countDown();
+            await(rejecting.executeEntered);
+
+            service.close();
+            rejecting.rejectPendingExecution();
             subscriber.join(TimeUnit.SECONDS.toMillis(2));
-            closer.join(TimeUnit.SECONDS.toMillis(2));
             await(terminal);
 
             assertTrue(!subscriber.isAlive());
-            assertTrue(!closer.isAlive());
-            assertEquals(1, completions.get() + errors.get());
-            assertEquals(0, broker.trackedLeaseCount());
-            assertEquals(0, service.activeSubscriptionCount());
-            assertEquals(0, service.activeTimerCount());
-            assertEquals(0, service.deliveryPermitCount());
-            assertEquals(0, service.scheduledWorkerTaskCount());
-            assertEquals(0, service.inFlightCatchUpCount());
+            assertEquals(1, completions.get());
+            assertTrue(errors.isEmpty(), errors.toString());
+            assertTrue(replay.get().isDisposed());
+            assertNoReplayAllocation();
+        }
+    }
+
+    @Test
+    void deliveryCapacityWinnerSurvivesLaterServiceClose() throws Exception {
+        for (int iteration = 0; iteration < 12; iteration++) {
+            BlockingRejectingExecutor rejecting = replaceWithRejectingDelivery();
+            store.setCurrent(0L);
+            AtomicInteger completions = new AtomicInteger();
+            List<Throwable> errors = new CopyOnWriteArrayList<>();
+            CountDownLatch terminal = new CountDownLatch(1);
+            Thread subscriber = new Thread(() -> service.replay(SCOPE, 0L).subscribe(
+                    ignored -> { },
+                    error -> {
+                        errors.add(error);
+                        terminal.countDown();
+                    },
+                    () -> {
+                        completions.incrementAndGet();
+                        terminal.countDown();
+                    }), "c03-capacity-first-rejected-delivery-" + iteration);
+            subscriber.start();
+            await(rejecting.executeEntered);
+
+            rejecting.rejectPendingExecution();
+            subscriber.join(TimeUnit.SECONDS.toMillis(2));
+            await(terminal);
+            service.close();
+
+            assertTrue(!subscriber.isAlive());
+            assertEquals(0, completions.get());
+            assertEquals(1, errors.size());
+            assertInstanceOf(ReplayCapacityException.class, errors.get(0));
+            assertNoReplayAllocation();
         }
     }
 
@@ -1080,6 +1146,30 @@ class AgentTaskEventReplayServiceImplTest {
         };
     }
 
+    private BlockingRejectingExecutor replaceWithRejectingDelivery() {
+        service.close();
+        shutdown(timer);
+        shutdown(worker);
+        shutdown(delivery);
+        worker = workerExecutor(2, 8);
+        delivery = new BlockingRejectingExecutor();
+        timer = timerExecutor();
+        service = new AgentTaskEventReplayServiceImpl(
+                eventDao, broker, worker, delivery, timer,
+                policy(Duration.ofHours(1)), resourceLimits(4, 2, 4));
+        return (BlockingRejectingExecutor) delivery;
+    }
+
+    private void assertNoReplayAllocation() {
+        assertEquals(0, broker.trackedLeaseCount());
+        assertEquals(0, service.activeSubscriptionCount());
+        assertEquals(0, service.activeTimerCount());
+        assertEquals(0, service.deliveryPermitCount());
+        assertEquals(0, service.scheduledWorkerTaskCount());
+        assertEquals(0, service.inFlightCatchUpCount());
+        assertEquals(0, service.inFlightDeliveryCount());
+    }
+
     private void replaceService(AgentTaskEventReplayServiceImpl.ReplayPolicy replacementPolicy) {
         service.close();
         service = new AgentTaskEventReplayServiceImpl(
@@ -1219,6 +1309,50 @@ class AgentTaskEventReplayServiceImplTest {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new AssertionError(interrupted);
+        }
+    }
+
+    private static final class BlockingRejectingExecutor extends AbstractExecutorService {
+        private final AtomicBoolean shutdown = new AtomicBoolean();
+        private final CountDownLatch executeEntered = new CountDownLatch(1);
+        private final CountDownLatch rejectExecution = new CountDownLatch(1);
+
+        @Override
+        public void shutdown() {
+            shutdown.set(true);
+            rejectExecution.countDown();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            shutdown();
+            return List.of();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return shutdown.get();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return shutdown.get() && rejectExecution.getCount() == 0;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return rejectExecution.await(timeout, unit);
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            executeEntered.countDown();
+            await(rejectExecution);
+            throw new RejectedExecutionException("controlled delivery rejection");
+        }
+
+        private void rejectPendingExecution() {
+            shutdown();
         }
     }
 
