@@ -57,23 +57,33 @@ public class AgentTaskEventDaoImpl
     }
 
     @Override
-    public List<AgentTaskEventEntity> findByTaskScope(
-            String tenantId, String clientId, String taskId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        requireExactId(taskId, "taskId", 100);
-        return baseMapper.findExactByTaskScope(tenantId, clientId, taskId);
-    }
-
-    @Override
     public List<AgentTaskEventEntity> findAfterVersion(
-            String tenantId, String clientId, String taskId, long afterVersion) {
+            String tenantId, String clientId, String taskId, long afterVersion, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         requireExactId(taskId, "taskId", 100);
         if (afterVersion < 0) {
             throw new IllegalArgumentException("afterVersion must not be negative");
         }
+        if (limit <= 0 || limit > MAX_REPLAY_PAGE_SIZE) {
+            throw new IllegalArgumentException(
+                    "limit must be between 1 and " + MAX_REPLAY_PAGE_SIZE);
+        }
         return baseMapper.findExactByTaskScopeAfterVersion(
-                tenantId, clientId, taskId, afterVersion);
+                tenantId, clientId, taskId, afterVersion, limit);
+    }
+
+    @Override
+    public Long findCurrentVersion(String tenantId, String clientId, String taskId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(taskId, "taskId", 100);
+        return baseMapper.findExactCurrentEventVersion(tenantId, clientId, taskId);
+    }
+
+    @Override
+    public Long findEarliestVersion(String tenantId, String clientId, String taskId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(taskId, "taskId", 100);
+        return baseMapper.findExactEarliestEventVersion(tenantId, clientId, taskId);
     }
 
     @Override
