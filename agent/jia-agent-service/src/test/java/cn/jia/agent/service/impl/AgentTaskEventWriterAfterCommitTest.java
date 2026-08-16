@@ -69,13 +69,18 @@ class AgentTaskEventWriterAfterCommitTest {
         subscription.dispose();
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
+        CountDownLatch callbackExited = new CountDownLatch(1);
         subscription = fixture.eventBroker.stream(new TaskScope(
                         AgentTaskEventTestFixture.TENANT,
                         AgentTaskEventTestFixture.CLIENT,
                         AgentTaskEventTestFixture.TASK))
                 .subscribe(wakeup -> {
                     callbackEntered.countDown();
-                    await(releaseCallback);
+                    try {
+                        await(releaseCallback);
+                    } finally {
+                        callbackExited.countDown();
+                    }
                 });
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
@@ -89,6 +94,7 @@ class AgentTaskEventWriterAfterCommitTest {
             assertEquals(1L, fixture.currentEventVersion());
         } finally {
             releaseCallback.countDown();
+            await(callbackExited);
             executor.shutdownNow();
             assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
         }

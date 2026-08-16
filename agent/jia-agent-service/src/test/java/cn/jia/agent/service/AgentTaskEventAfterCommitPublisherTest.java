@@ -12,19 +12,22 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.transaction.NestedTransactionNotSupportedException;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -75,15 +78,21 @@ class AgentTaskEventAfterCommitPublisherTest {
     }
 
     @Test
-    void commitPublishesOnceInAppendOrderUsingOneWakeupSynchronizationAlongsideGuard() {
+    void unrelatedTransactionHasNoSynchronizationAndPublisherUsesExactlyOneLazySynchronization() {
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         transaction.executeWithoutResult(status -> {
-            assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
+            assertEquals(0, TransactionSynchronizationManager.getSynchronizations().size());
+            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
+            assertEquals(0, TransactionSynchronizationManager.getSynchronizations().size());
+        });
+
+        transaction.executeWithoutResult(status -> {
+            assertEquals(0, TransactionSynchronizationManager.getSynchronizations().size());
             publisher.enqueue(scope, 1L);
-            assertEquals(2, TransactionSynchronizationManager.getSynchronizations().size());
+            assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
             publisher.enqueue(scope, 2L);
             publisher.enqueue(scope, 3L);
-            assertEquals(2, TransactionSynchronizationManager.getSynchronizations().size());
+            assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
             assertTrue(received.isEmpty());
         });
 
@@ -103,10 +112,12 @@ class AgentTaskEventAfterCommitPublisherTest {
 
         assertTrue(received.isEmpty());
         assertEquals(0L, publisher.publishedWakeupCount());
+        transaction.executeWithoutResult(status -> publisher.enqueue(scope, 3L));
+        awaitReceived(List.of(3L));
     }
 
     @Test
-    void requiredNestingSharesTheOuterBufferAndOrdering() {
+    void requiredNestingSharesOneBufferAndOrdering() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         TransactionTemplate required = new TransactionTemplate(transactionManager);
         required.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
@@ -115,17 +126,16 @@ class AgentTaskEventAfterCommitPublisherTest {
             publisher.enqueue(scope, 1L);
             required.executeWithoutResult(inner -> {
                 publisher.enqueue(scope, 2L);
-                assertEquals(2, TransactionSynchronizationManager.getSynchronizations().size());
+                assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
             });
             publisher.enqueue(scope, 3L);
-            assertTrue(received.isEmpty());
         });
 
         awaitReceived(List.of(1L, 2L, 3L));
     }
 
     @Test
-    void requiresNewUsesAnIndependentBufferAndRollbackDoesNotPoisonOuter() {
+    void requiresNewUsesIndependentBufferAndRollbackDoesNotPoisonOuter() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         TransactionTemplate requiresNew = new TransactionTemplate(transactionManager);
         requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -146,149 +156,173 @@ class AgentTaskEventAfterCommitPublisherTest {
     }
 
     @Test
-    void savepointNestingIsRejectedBeforeNestedTaskWorkCanProceed() {
+    void knownSavepointRollbackTruncatesBufferAndClearsNewerCheckpoints() {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
+        transaction.executeWithoutResult(status -> {
+            publisher.enqueue(scope, 1L);
+            Object first = status.createSavepoint();
+            publisher.enqueue(scope, 2L);
+            Object second = status.createSavepoint();
+            publisher.enqueue(scope, 3L);
+            status.rollbackToSavepoint(second);
+            publisher.enqueue(scope, 4L);
+            status.rollbackToSavepoint(first);
+            publisher.enqueue(scope, 5L);
+        });
+
+        awaitReceived(List.of(1L, 5L));
+    }
+
+    @Test
+    void unknownPreRegistrationSavepointRollbackClearsBufferButAllowsLaterOuterEnqueue() {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
+        transaction.executeWithoutResult(status -> {
+            Object savepoint = status.createSavepoint();
+            publisher.enqueue(scope, 1L);
+            publisher.enqueue(scope, 2L);
+            status.rollbackToSavepoint(savepoint);
+            publisher.enqueue(scope, 3L);
+        });
+
+        awaitReceived(List.of(3L));
+    }
+
+    @Test
+    void savepointRolledBackBeforeFirstEnqueueLeavesLaterOuterEventValid() {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
+        transaction.executeWithoutResult(status -> {
+            Object savepoint = status.createSavepoint();
+            jdbc.update("UPDATE commit_probe SET probe_value=99 WHERE id=1");
+            status.rollbackToSavepoint(savepoint);
+            publisher.enqueue(scope, 1L);
+            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
+        });
+
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
+        awaitReceived(List.of(1L));
+    }
+
+    @Test
+    void savepointReleasedBeforeFirstEnqueueLeavesLaterOuterEventValid() {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
+        transaction.executeWithoutResult(status -> {
+            Object savepoint = status.createSavepoint();
+            status.releaseSavepoint(savepoint);
+            publisher.enqueue(scope, 1L);
+        });
+
+        awaitReceived(List.of(1L));
+    }
+
+    @Test
+    void nestedCommitRetainsInnerWakeupsInOuterOrder() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         TransactionTemplate nested = new TransactionTemplate(transactionManager);
         nested.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
 
         outer.executeWithoutResult(status -> {
             publisher.enqueue(scope, 1L);
-            assertThrows(NestedTransactionNotSupportedException.class,
-                    () -> nested.executeWithoutResult(inner -> publisher.enqueue(scope, 2L)));
-            status.setRollbackOnly();
+            nested.executeWithoutResult(inner -> publisher.enqueue(scope, 2L));
+            publisher.enqueue(scope, 3L);
         });
 
-        assertTrue(received.isEmpty());
+        awaitReceived(List.of(1L, 2L, 3L));
     }
 
     @Test
-    void firstUseInsideNestedFailsClosedAndOuterTransactionStillCommits() {
+    void nestedRollbackTruncatesInnerWakeupsAndOuterContinues() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         TransactionTemplate nested = new TransactionTemplate(transactionManager);
         nested.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
 
         outer.executeWithoutResult(status -> {
-            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
-            assertThrows(NestedTransactionNotSupportedException.class,
-                    () -> nested.executeWithoutResult(inner -> {
-                        jdbc.update("UPDATE commit_probe SET probe_value=99 WHERE id=1");
-                        publisher.enqueue(scope, 1L);
-                    }));
-            jdbc.update("UPDATE commit_probe SET probe_value=2 WHERE id=1");
+            publisher.enqueue(scope, 1L);
+            nested.executeWithoutResult(inner -> {
+                publisher.enqueue(scope, 2L);
+                inner.setRollbackOnly();
+            });
+            publisher.enqueue(scope, 3L);
         });
 
-        assertEquals(2, jdbc.queryForObject(
-                "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
-        assertTrue(received.isEmpty());
-        assertEquals(0L, publisher.publishedWakeupCount());
+        awaitReceived(List.of(1L, 3L));
     }
 
     @Test
-    void nestedFirstUseTaintsOnlyThatPhysicalTransactionAndNextOuterRestores() {
+    void nestedFirstUseRollbackConservativelyClearsInnerAndOuterCanContinue() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         TransactionTemplate nested = new TransactionTemplate(transactionManager);
         nested.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
 
         outer.executeWithoutResult(status -> {
-            assertThrows(NestedTransactionNotSupportedException.class,
-                    () -> nested.executeWithoutResult(
-                            inner -> publisher.enqueue(scope, 1L)));
-            assertThrows(NestedTransactionNotSupportedException.class,
-                    () -> publisher.enqueue(scope, 2L));
+            nested.executeWithoutResult(inner -> {
+                publisher.enqueue(scope, 1L);
+                inner.setRollbackOnly();
+            });
+            publisher.enqueue(scope, 2L);
         });
 
-        assertTrue(received.isEmpty());
-        outer.executeWithoutResult(status -> publisher.enqueue(scope, 3L));
-        awaitReceived(List.of(3L));
-        assertEquals(1L, publisher.publishedWakeupCount());
+        awaitReceived(List.of(2L));
     }
 
     @Test
-    void manualSavepointReleaseBeforeFirstUseTaintsTransactionAndPublishesNothing() {
+    void nestedFirstUseCommitRetainsInnerAndOuterWakeups() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
+        TransactionTemplate nested = new TransactionTemplate(transactionManager);
+        nested.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
 
         outer.executeWithoutResult(status -> {
-            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
-            Object savepoint = status.createSavepoint();
-            status.releaseSavepoint(savepoint);
-            assertThrows(NestedTransactionNotSupportedException.class,
-                    () -> publisher.enqueue(scope, 1L));
+            nested.executeWithoutResult(inner -> publisher.enqueue(scope, 1L));
+            publisher.enqueue(scope, 2L);
         });
 
-        assertEquals(1, jdbc.queryForObject(
-                "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
-        assertTrue(received.isEmpty());
-        assertEquals(0L, publisher.publishedWakeupCount());
+        awaitReceived(List.of(1L, 2L));
     }
 
     @Test
-    void manualSavepointRollbackBeforeFirstUseTaintsOuterButAllowsBusinessContinuation() {
-        TransactionTemplate outer = new TransactionTemplate(transactionManager);
-
-        outer.executeWithoutResult(status -> {
-            jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
-            Object savepoint = status.createSavepoint();
-            jdbc.update("UPDATE commit_probe SET probe_value=99 WHERE id=1");
-            status.rollbackToSavepoint(savepoint);
-            assertThrows(NestedTransactionNotSupportedException.class,
-                    () -> publisher.enqueue(scope, 1L));
-            jdbc.update("UPDATE commit_probe SET probe_value=2 WHERE id=1");
-        });
-
-        assertEquals(2, jdbc.queryForObject(
-                "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
-        assertTrue(received.isEmpty());
-        assertEquals(0L, publisher.publishedWakeupCount());
-    }
-
-    @Test
-    void requiresNewRemainsIndependentInsideSavepointTaintedOuterTransaction() {
-        TransactionTemplate outer = new TransactionTemplate(transactionManager);
-        TransactionTemplate requiresNew = new TransactionTemplate(transactionManager);
-        requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-
-        outer.executeWithoutResult(status -> {
-            Object savepoint = status.createSavepoint();
-            status.releaseSavepoint(savepoint);
-            assertThrows(NestedTransactionNotSupportedException.class,
-                    () -> publisher.enqueue(scope, 1L));
-            requiresNew.executeWithoutResult(inner -> publisher.enqueue(scope, 2L));
-            awaitReceived(List.of(2L));
-        });
-
-        assertEquals(List.of(2L), received);
-    }
-
-    @Test
-    void closeRemovesListenerRejectsUseAndSuppressesAlreadyQueuedWakeups() {
-        assertEquals(1, transactionManager.getTransactionExecutionListeners().size());
-        publisher.close();
-        publisher.close();
-        assertTrue(publisher.isClosed());
-        assertEquals(0, transactionManager.getTransactionExecutionListeners().size());
-
+    void closeIsListenerFreeThreadLocalFreeConcurrentAndSuppressesActiveTransactionWakeups()
+            throws Exception {
+        int listenersBefore = transactionManager.getTransactionExecutionListeners().size();
+        assertFalse(Arrays.stream(AgentTaskEventAfterCommitPublisher.class.getDeclaredFields())
+                .anyMatch(field -> ThreadLocal.class.isAssignableFrom(field.getType())));
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
         transaction.executeWithoutResult(status -> {
+            publisher.enqueue(scope, 1L);
             jdbc.update("UPDATE commit_probe SET probe_value=1 WHERE id=1");
-            assertThrows(IllegalStateException.class,
-                    () -> publisher.enqueue(scope, 1L));
+            ExecutorService executor = Executors.newFixedThreadPool(4);
+            CountDownLatch start = new CountDownLatch(1);
+            try {
+                List<Future<?>> closes = new java.util.ArrayList<>();
+                for (int index = 0; index < 16; index++) {
+                    closes.add(executor.submit(() -> {
+                        await(start);
+                        publisher.close();
+                    }));
+                }
+                start.countDown();
+                for (Future<?> close : closes) {
+                    awaitFuture(close);
+                }
+            } finally {
+                executor.shutdownNow();
+                awaitTermination(executor);
+            }
         });
+
+        assertTrue(publisher.isClosed());
+        assertEquals(listenersBefore,
+                transactionManager.getTransactionExecutionListeners().size());
         assertEquals(1, jdbc.queryForObject(
                 "SELECT probe_value FROM commit_probe WHERE id=1", Integer.class));
-
-        AgentTaskEventAfterCommitPublisher replacement =
-                new AgentTaskEventAfterCommitPublisher(broker, transactionManager);
-        publisher = replacement;
-        assertEquals(1, transactionManager.getTransactionExecutionListeners().size());
-        transaction.executeWithoutResult(status -> {
-            replacement.enqueue(scope, 2L);
-            replacement.close();
-        });
-
-        assertTrue(replacement.isClosed());
-        assertEquals(0, transactionManager.getTransactionExecutionListeners().size());
         assertTrue(received.isEmpty());
-        assertEquals(0L, replacement.publishedWakeupCount());
+        assertEquals(0L, publisher.publishedWakeupCount());
+        assertThrows(IllegalStateException.class, () -> transaction.executeWithoutResult(
+                status -> publisher.enqueue(scope, 2L)));
     }
 
     @Test
@@ -379,5 +413,31 @@ class AgentTaskEventAfterCommitPublisherTest {
             }
         }
         assertTrue(condition.getAsBoolean(), "condition was not satisfied before timeout");
+    }
+
+    private static void awaitFuture(Future<?> future) {
+        try {
+            future.get(1, TimeUnit.SECONDS);
+        } catch (Exception failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static void awaitTermination(ExecutorService executor) {
+        try {
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(2, TimeUnit.SECONDS));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
     }
 }

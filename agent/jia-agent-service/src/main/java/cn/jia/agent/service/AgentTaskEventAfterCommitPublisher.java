@@ -5,19 +5,12 @@ import cn.jia.agent.service.AgentTaskEventBroker.TaskScope;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.Ordered;
-import org.springframework.transaction.ConfigurableTransactionManager;
-import org.springframework.transaction.NestedTransactionNotSupportedException;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionExecution;
-import org.springframework.transaction.TransactionExecutionListener;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
-import java.util.Iterator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
@@ -25,19 +18,16 @@ import java.util.concurrent.atomic.LongAdder;
 /**
  * Binds ordered task-event wakeups to the current physical Spring transaction.
  *
- * <p>REQUIRED participants discover and share the synchronization already registered in the
- * current synchronization context. REQUIRES_NEW suspends that context and therefore receives an
- * independent buffer. Any savepoint makes that physical transaction unsupported for task-event
- * publication.
+ * <p>The transaction-local state and its synchronization are created lazily on first enqueue.
+ * REQUIRED participants share the bound resource, while REQUIRES_NEW suspension gives the inner
+ * physical transaction an independent resource. Savepoint callbacks checkpoint and truncate the
+ * ordered buffer without treating nested transactions as unsupported.
  */
 @Slf4j
 @Named
 public class AgentTaskEventAfterCommitPublisher implements AutoCloseable {
     private final AgentTaskEventBroker broker;
-    private final ConfigurableTransactionManager transactionManager;
-    private final TransactionExecutionListener transactionListener;
-    private final ThreadLocal<Deque<TransactionExecution>> transactionStack =
-            new ThreadLocal<>();
+    private final Object transactionResourceKey = new Object();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final LongAdder publishedWakeups = new LongAdder();
     private final LongAdder publicationFailures = new LongAdder();
@@ -51,14 +41,7 @@ public class AgentTaskEventAfterCommitPublisher implements AutoCloseable {
         if (transactionManager == null) {
             throw new IllegalArgumentException("transactionManager must not be null");
         }
-        if (!(transactionManager instanceof ConfigurableTransactionManager configurableManager)) {
-            throw new IllegalArgumentException(
-                    "transactionManager must support transaction execution listeners");
-        }
         this.broker = broker;
-        this.transactionManager = configurableManager;
-        this.transactionListener = new TransactionScopeTracker();
-        configurableManager.addListener(transactionListener);
     }
 
     /**
@@ -74,31 +57,13 @@ public class AgentTaskEventAfterCommitPublisher implements AutoCloseable {
                     "Task event wakeup requires an active synchronized transaction");
         }
 
-        TransactionGuardSynchronization guard = currentGuard();
-        if (guard == null) {
-            throw new IllegalStateException(
-                    "Task event transaction guard is unavailable");
-        }
-        if (guard.isSavepointUnsupported() || isCurrentTransactionNested()) {
-            throw new NestedTransactionNotSupportedException(
-                    "Savepoint transactions are unsupported for task event writer paths");
-        }
-
-        WakeupSynchronization synchronization = currentWakeupSynchronization();
-        if (synchronization == null) {
-            synchronization = new WakeupSynchronization(guard);
-            TransactionSynchronizationManager.registerSynchronization(synchronization);
-        }
-        synchronization.enqueue(wakeup);
+        transactionState().enqueue(wakeup);
     }
 
     @PreDestroy
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            transactionManager.getTransactionExecutionListeners().remove(transactionListener);
-            transactionStack.remove();
-        }
+        closed.compareAndSet(false, true);
     }
 
     long publishedWakeupCount() {
@@ -119,156 +84,93 @@ public class AgentTaskEventAfterCommitPublisher implements AutoCloseable {
         }
     }
 
-    private boolean isCurrentTransactionNested() {
-        Deque<TransactionExecution> stack = transactionStack.get();
-        TransactionExecution current = stack == null ? null : stack.peek();
-        return current != null && current.isNested();
-    }
+    private TransactionState transactionState() {
+        Object current = TransactionSynchronizationManager.getResource(transactionResourceKey);
+        if (current instanceof TransactionState state) {
+            return state;
+        }
+        if (current != null) {
+            throw new IllegalStateException("Unexpected task event transaction resource");
+        }
 
-    private void begin(TransactionExecution execution, Throwable beginFailure) {
-        if (closed.get() || beginFailure != null || !execution.hasTransaction()) {
-            return;
-        }
-        Deque<TransactionExecution> stack = transactionStack.get();
-        if (stack == null) {
-            stack = new ArrayDeque<>();
-            transactionStack.set(stack);
-        }
-        stack.push(execution);
-
-        if (TransactionSynchronizationManager.isSynchronizationActive()
-                && currentGuard() == null) {
-            TransactionSynchronizationManager.registerSynchronization(
-                    new TransactionGuardSynchronization());
-        }
-    }
-
-    private void complete(TransactionExecution execution) {
-        Deque<TransactionExecution> stack = transactionStack.get();
-        if (stack == null) {
-            return;
-        }
-        if (stack.peek() == execution) {
-            stack.pop();
-        } else {
-            for (Iterator<TransactionExecution> iterator = stack.iterator(); iterator.hasNext(); ) {
-                if (iterator.next() == execution) {
-                    iterator.remove();
-                    break;
-                }
+        TransactionState state = new TransactionState();
+        TransactionSynchronizationManager.bindResource(transactionResourceKey, state);
+        try {
+            TransactionSynchronizationManager.registerSynchronization(state);
+            return state;
+        } catch (RuntimeException | Error registrationFailure) {
+            if (TransactionSynchronizationManager.getResource(transactionResourceKey) == state) {
+                TransactionSynchronizationManager.unbindResource(transactionResourceKey);
             }
-        }
-        if (stack.isEmpty()) {
-            transactionStack.remove();
-        }
-    }
-
-    private TransactionGuardSynchronization currentGuard() {
-        for (TransactionSynchronization candidate
-                : TransactionSynchronizationManager.getSynchronizations()) {
-            if (candidate instanceof TransactionGuardSynchronization guard
-                    && guard.owner() == this) {
-                return guard;
-            }
-        }
-        return null;
-    }
-
-    private WakeupSynchronization currentWakeupSynchronization() {
-        for (TransactionSynchronization candidate
-                : TransactionSynchronizationManager.getSynchronizations()) {
-            if (candidate instanceof WakeupSynchronization synchronization
-                    && synchronization.owner() == this) {
-                return synchronization;
-            }
-        }
-        return null;
-    }
-
-    private final class TransactionScopeTracker implements TransactionExecutionListener {
-        @Override
-        public void afterBegin(TransactionExecution transaction, Throwable beginFailure) {
-            begin(transaction, beginFailure);
-        }
-
-        @Override
-        public void afterCommit(TransactionExecution transaction, Throwable commitFailure) {
-            complete(transaction);
-        }
-
-        @Override
-        public void afterRollback(TransactionExecution transaction, Throwable rollbackFailure) {
-            complete(transaction);
+            state.clear();
+            throw registrationFailure;
         }
     }
 
-    private final class TransactionGuardSynchronization implements TransactionSynchronization {
-        private final AtomicBoolean savepointUnsupported = new AtomicBoolean();
-
-        private AgentTaskEventAfterCommitPublisher owner() {
-            return AgentTaskEventAfterCommitPublisher.this;
-        }
-
-        private boolean isSavepointUnsupported() {
-            return savepointUnsupported.get();
-        }
-
-        @Override
-        public int getOrder() {
-            return Ordered.HIGHEST_PRECEDENCE;
-        }
-
-        @Override
-        public void savepoint(Object savepoint) {
-            savepointUnsupported.set(true);
-        }
-
-        @Override
-        public void savepointRollback(Object savepoint) {
-            savepointUnsupported.set(true);
-        }
-    }
-
-    private final class WakeupSynchronization implements TransactionSynchronization {
-        private final TransactionGuardSynchronization guard;
+    private final class TransactionState implements TransactionSynchronization {
         private final List<TaskEventWakeup> wakeups = new ArrayList<>();
+        private final List<SavepointCheckpoint> checkpointOrder = new ArrayList<>();
+        private final IdentityHashMap<Object, SavepointCheckpoint> checkpoints =
+                new IdentityHashMap<>();
         private final AtomicBoolean committed = new AtomicBoolean();
         private final AtomicBoolean completed = new AtomicBoolean();
-        private final AtomicBoolean savepointRolledBack = new AtomicBoolean();
-
-        private WakeupSynchronization(TransactionGuardSynchronization guard) {
-            this.guard = guard;
-        }
-
-        private AgentTaskEventAfterCommitPublisher owner() {
-            return AgentTaskEventAfterCommitPublisher.this;
-        }
 
         private void enqueue(TaskEventWakeup wakeup) {
-            if (committed.get() || completed.get() || savepointRolledBack.get()) {
+            if (committed.get() || completed.get()) {
                 throw new IllegalStateException("Task event transaction buffer is already closed");
             }
             wakeups.add(wakeup);
         }
 
         @Override
+        public void suspend() {
+            if (TransactionSynchronizationManager.getResource(transactionResourceKey) == this) {
+                TransactionSynchronizationManager.unbindResource(transactionResourceKey);
+            }
+        }
+
+        @Override
+        public void resume() {
+            Object current = TransactionSynchronizationManager.getResource(transactionResourceKey);
+            if (current != null && current != this) {
+                throw new IllegalStateException("Task event transaction resource is already bound");
+            }
+            if (current == null) {
+                TransactionSynchronizationManager.bindResource(transactionResourceKey, this);
+            }
+        }
+
+        @Override
         public void savepoint(Object savepoint) {
-            throw new NestedTransactionNotSupportedException(
-                    "Savepoint transactions are unsupported for task event writer paths");
+            SavepointCheckpoint previous = checkpoints.remove(savepoint);
+            if (previous != null) {
+                checkpointOrder.remove(previous);
+            }
+            SavepointCheckpoint checkpoint = new SavepointCheckpoint(savepoint, wakeups.size());
+            checkpoints.put(savepoint, checkpoint);
+            checkpointOrder.add(checkpoint);
         }
 
         @Override
         public void savepointRollback(Object savepoint) {
-            savepointRolledBack.set(true);
-            wakeups.clear();
+            SavepointCheckpoint checkpoint = checkpoints.get(savepoint);
+            if (checkpoint == null) {
+                wakeups.clear();
+                clearCheckpoints();
+                return;
+            }
+
+            truncateWakeups(checkpoint.bufferSize());
+            int checkpointIndex = checkpointOrder.indexOf(checkpoint);
+            for (int index = checkpointOrder.size() - 1; index > checkpointIndex; index--) {
+                SavepointCheckpoint newer = checkpointOrder.remove(index);
+                checkpoints.remove(newer.savepoint());
+            }
         }
 
         @Override
         public void afterCommit() {
-            if (closed.get()
-                    || guard.isSavepointUnsupported()
-                    || savepointRolledBack.get()
-                    || !committed.compareAndSet(false, true)) {
+            if (closed.get() || !committed.compareAndSet(false, true)) {
                 return;
             }
             for (TaskEventWakeup wakeup : List.copyOf(wakeups)) {
@@ -288,9 +190,47 @@ public class AgentTaskEventAfterCommitPublisher implements AutoCloseable {
 
         @Override
         public void afterCompletion(int status) {
-            if (completed.compareAndSet(false, true)) {
-                wakeups.clear();
+            if (!completed.compareAndSet(false, true)) {
+                return;
             }
+            if (TransactionSynchronizationManager.getResource(transactionResourceKey) == this) {
+                TransactionSynchronizationManager.unbindResource(transactionResourceKey);
+            }
+            clear();
+        }
+
+        private void truncateWakeups(int size) {
+            if (size < wakeups.size()) {
+                wakeups.subList(size, wakeups.size()).clear();
+            }
+        }
+
+        private void clear() {
+            wakeups.clear();
+            clearCheckpoints();
+        }
+
+        private void clearCheckpoints() {
+            checkpoints.clear();
+            checkpointOrder.clear();
+        }
+    }
+
+    private static final class SavepointCheckpoint {
+        private final Object savepoint;
+        private final int bufferSize;
+
+        private SavepointCheckpoint(Object savepoint, int bufferSize) {
+            this.savepoint = savepoint;
+            this.bufferSize = bufferSize;
+        }
+
+        private Object savepoint() {
+            return savepoint;
+        }
+
+        private int bufferSize() {
+            return bufferSize;
         }
     }
 }

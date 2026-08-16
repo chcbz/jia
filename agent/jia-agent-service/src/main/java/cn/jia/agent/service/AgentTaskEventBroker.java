@@ -2,12 +2,16 @@ package cn.jia.agent.service;
 
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
+import org.reactivestreams.Subscription;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
@@ -15,6 +19,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -28,9 +33,19 @@ import java.util.concurrent.atomic.LongAdder;
 public class AgentTaskEventBroker implements AutoCloseable {
     private static final int DEFAULT_DISPATCH_QUEUE_CAPACITY = 1024;
     private static final long DISPATCHER_IDLE_SECONDS = 30L;
-    private static final long CLOSE_GRACE_MILLIS = 250L;
-    private static final long CLOSE_FORCE_MILLIS = 250L;
+    private static final long CLOSE_WAIT_MILLIS = 250L;
     private static final AtomicLong DISPATCHER_SEQUENCE = new AtomicLong();
+    private static final Subscription CANCELLED_SUBSCRIPTION = new Subscription() {
+        @Override
+        public void request(long requested) {
+            // Terminal sentinel.
+        }
+
+        @Override
+        public void cancel() {
+            // Terminal sentinel.
+        }
+    };
 
     private final ConcurrentHashMap<TaskScope, ScopedChannel> channels =
             new ConcurrentHashMap<>();
@@ -76,6 +91,7 @@ public class AgentTaskEventBroker implements AutoCloseable {
                 lease = acquire(requiredScope);
             }
             return lease.channel.sink.asFlux()
+                    .doOnSubscribe(lease::attach)
                     .doFinally(ignored -> lease.release());
         });
     }
@@ -95,7 +111,7 @@ public class AgentTaskEventBroker implements AutoCloseable {
                 throw closedFailure();
             }
             ScopedChannel channel = channels.get(wakeup.scope());
-            if (channel == null) {
+            if (channel == null || channel.leases.isEmpty()) {
                 droppedWakeups.increment();
                 return;
             }
@@ -113,45 +129,46 @@ public class AgentTaskEventBroker implements AutoCloseable {
     @Override
     public void close() {
         List<ScopedChannel> closingChannels;
+        List<SubscriptionLease> closingLeases = new ArrayList<>();
+        List<Runnable> queuedWakeups = new ArrayList<>();
         synchronized (lifecycleMonitor) {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
             closingChannels = List.copyOf(channels.values());
-            channels.clear();
-            List<Runnable> queuedWakeups = new ArrayList<>();
-            dispatcher.getQueue().drainTo(queuedWakeups);
-            countDiscarded(queuedWakeups);
-            if (!closingChannels.isEmpty()) {
-                try {
-                    dispatcher.execute(() -> closingChannels.forEach(
-                            channel -> channel.sink.tryEmitComplete()));
-                } catch (RejectedExecutionException ignored) {
-                    // The executor can only reject here during an external concurrent shutdown.
-                }
+            for (ScopedChannel channel : closingChannels) {
+                closingLeases.addAll(channel.leases);
+                channel.leases.clear();
             }
-            dispatcher.shutdown();
+            channels.clear();
+            dispatcher.getQueue().drainTo(queuedWakeups);
         }
 
-        if (!awaitTermination(CLOSE_GRACE_MILLIS)) {
-            countDiscarded(dispatcher.shutdownNow());
-            if (!Thread.currentThread().isInterrupted()) {
-                awaitTermination(CLOSE_FORCE_MILLIS);
-            }
-        }
+        countDiscarded(queuedWakeups);
+        closingLeases.forEach(SubscriptionLease::cancelAndReleaseDetached);
+        closingChannels.forEach(channel -> channel.sink.tryEmitComplete());
+        countDiscarded(dispatcher.shutdownNow());
+        awaitTermination(CLOSE_WAIT_MILLIS);
     }
 
     int activeScopeCount() {
-        return channels.size();
+        synchronized (lifecycleMonitor) {
+            return channels.size();
+        }
     }
 
     int subscriberCount(TaskScope scope) {
-        ScopedChannel channel = channels.get(scope);
-        if (channel == null) {
-            return 0;
+        synchronized (lifecycleMonitor) {
+            ScopedChannel channel = channels.get(scope);
+            return channel == null ? 0 : channel.leases.size();
         }
-        synchronized (channel) {
-            return channels.get(scope) == channel ? channel.subscribers : 0;
+    }
+
+    int activeLeaseCount() {
+        synchronized (lifecycleMonitor) {
+            return channels.values().stream()
+                    .mapToInt(channel -> channel.leases.size())
+                    .sum();
         }
     }
 
@@ -164,10 +181,10 @@ public class AgentTaskEventBroker implements AutoCloseable {
     }
 
     private void emitIfCurrent(TaskEventWakeup wakeup, ScopedChannel channel) {
-        synchronized (channel) {
+        synchronized (lifecycleMonitor) {
             if (closed.get()
                     || channels.get(wakeup.scope()) != channel
-                    || channel.subscribers == 0) {
+                    || channel.leases.isEmpty()) {
                 droppedWakeups.increment();
                 return;
             }
@@ -180,34 +197,21 @@ public class AgentTaskEventBroker implements AutoCloseable {
     }
 
     private SubscriptionLease acquire(TaskScope scope) {
-        ScopedChannel channel = channels.compute(scope, (ignored, current) -> {
-            ScopedChannel selected = current == null ? new ScopedChannel() : current;
-            synchronized (selected) {
-                selected.subscribers++;
-            }
-            return selected;
-        });
-        return new SubscriptionLease(scope, channel);
+        ScopedChannel channel = channels.computeIfAbsent(scope, ignored -> new ScopedChannel());
+        SubscriptionLease lease = new SubscriptionLease(scope, channel);
+        channel.leases.add(lease);
+        return lease;
     }
 
-    private void release(TaskScope scope, ScopedChannel channel) {
-        channels.compute(scope, (ignored, current) -> {
-            if (current != channel) {
-                return current;
+    private boolean detach(TaskScope scope, ScopedChannel channel, SubscriptionLease lease) {
+        synchronized (lifecycleMonitor) {
+            boolean removed = channel.leases.remove(lease);
+            if (removed && channel.leases.isEmpty() && channels.get(scope) == channel) {
+                channels.remove(scope, channel);
+                return true;
             }
-            synchronized (channel) {
-                if (channel.subscribers <= 0) {
-                    throw new IllegalStateException(
-                            "Task event broker subscriber count underflow");
-                }
-                channel.subscribers--;
-                if (channel.subscribers == 0) {
-                    channel.sink.tryEmitComplete();
-                    return null;
-                }
-                return channel;
-            }
-        });
+            return false;
+        }
     }
 
     private boolean awaitTermination(long timeoutMillis) {
@@ -267,10 +271,11 @@ public class AgentTaskEventBroker implements AutoCloseable {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
-    private static final class ScopedChannel {
+    private final class ScopedChannel {
         private final Sinks.Many<TaskEventWakeup> sink =
                 Sinks.many().multicast().directBestEffort();
-        private int subscribers;
+        private final Set<SubscriptionLease> leases =
+                Collections.newSetFromMap(new IdentityHashMap<>());
     }
 
     private final class EmissionTask implements Runnable {
@@ -291,6 +296,7 @@ public class AgentTaskEventBroker implements AutoCloseable {
     private final class SubscriptionLease {
         private final TaskScope scope;
         private final ScopedChannel channel;
+        private final AtomicReference<Subscription> upstream = new AtomicReference<>();
         private final AtomicBoolean released = new AtomicBoolean();
 
         private SubscriptionLease(TaskScope scope, ScopedChannel channel) {
@@ -298,9 +304,29 @@ public class AgentTaskEventBroker implements AutoCloseable {
             this.channel = channel;
         }
 
+        private void attach(Subscription subscription) {
+            Objects.requireNonNull(subscription, "subscription");
+            if (!upstream.compareAndSet(null, subscription)) {
+                subscription.cancel();
+            }
+        }
+
         private void release() {
-            if (released.compareAndSet(false, true)) {
-                AgentTaskEventBroker.this.release(scope, channel);
+            if (!released.compareAndSet(false, true)) {
+                return;
+            }
+            boolean finalLease = AgentTaskEventBroker.this.detach(scope, channel, this);
+            upstream.set(CANCELLED_SUBSCRIPTION);
+            if (finalLease) {
+                channel.sink.tryEmitComplete();
+            }
+        }
+
+        private void cancelAndReleaseDetached() {
+            released.set(true);
+            Subscription subscription = upstream.getAndSet(CANCELLED_SUBSCRIPTION);
+            if (subscription != null && subscription != CANCELLED_SUBSCRIPTION) {
+                subscription.cancel();
             }
         }
     }

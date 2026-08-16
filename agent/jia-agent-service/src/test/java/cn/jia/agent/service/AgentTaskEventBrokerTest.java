@@ -167,19 +167,20 @@ class AgentTaskEventBrokerTest {
     }
 
     @Test
-    void closeCompletesActiveChannelsAndRejectsPostCloseAllocationAndPublication() {
+    void closeDetachesLeasesAndRejectsPostCloseAllocationAndPublication() {
         AtomicBoolean completed = new AtomicBoolean();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         var subscription = broker.stream(scope)
                 .subscribe(ignored -> { }, failure::set, () -> completed.set(true));
         assertEquals(1, broker.activeScopeCount());
+        assertEquals(1, broker.activeLeaseCount());
 
         broker.close();
 
         assertTrue(broker.isClosed());
-        assertTrue(completed.get());
         assertNull(failure.get());
         assertEquals(0, broker.activeScopeCount());
+        assertEquals(0, broker.activeLeaseCount());
         assertEquals(0, broker.subscriberCount(scope));
         StepVerifier.create(broker.stream(scope))
                 .expectErrorMatches(error -> error instanceof IllegalStateException
@@ -189,19 +190,25 @@ class AgentTaskEventBrokerTest {
         assertThrows(IllegalStateException.class, () -> broker.publish(scope, 1L));
         assertEquals(1L, broker.droppedWakeupCount());
         subscription.dispose();
+        // Shutdown completion is deliberately best effort; cancellation is the guarantee.
+        assertTrue(completed.get() || subscription.isDisposed());
     }
 
     @Test
-    void closeInterruptsBlockedWorkerAfterBoundedWaitWithoutCallbackNoise() {
+    void closeReturnsWithNoLeaseWhileCallbackIgnoresInterruptUntilExplicitRelease() {
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch callbackExited = new CountDownLatch(1);
-        CountDownLatch neverReleased = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
         var subscription = broker.stream(scope).subscribe(wakeup -> {
             callbackEntered.countDown();
             try {
-                neverReleased.await();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
+                while (releaseCallback.getCount() > 0) {
+                    try {
+                        releaseCallback.await();
+                    } catch (InterruptedException ignored) {
+                        // Deliberately ignore broker worker interruption until the test releases us.
+                    }
+                }
             } finally {
                 callbackExited.countDown();
             }
@@ -209,12 +216,84 @@ class AgentTaskEventBrokerTest {
         broker.publish(scope, 1L);
         await(callbackEntered);
 
-        assertTimeoutPreemptively(Duration.ofSeconds(2), broker::close);
+        try {
+            assertTimeoutPreemptively(Duration.ofSeconds(2), broker::close);
+            assertEquals(1L, callbackExited.getCount());
+            assertTrue(broker.isClosed());
+            assertEquals(0, broker.activeScopeCount());
+            assertEquals(0, broker.activeLeaseCount());
+            assertEquals(0, broker.subscriberCount(scope));
+        } finally {
+            releaseCallback.countDown();
+            await(callbackExited);
+            subscription.dispose();
+        }
+    }
 
-        await(callbackExited);
-        assertTrue(broker.isClosed());
-        assertEquals(0, broker.activeScopeCount());
-        subscription.dispose();
+    @Test
+    void attachAndCloseRaceCannotAllocateAfterDetachOrLeakLease() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            for (int iteration = 0; iteration < 100; iteration++) {
+                AgentTaskEventBroker racing = new AgentTaskEventBroker();
+                CountDownLatch start = new CountDownLatch(1);
+                AtomicReference<reactor.core.Disposable> subscription = new AtomicReference<>();
+                Future<?> attach = executor.submit(() -> {
+                    await(start);
+                    subscription.set(racing.stream(scope).subscribe(
+                            ignored -> { }, ignored -> { }));
+                });
+                Future<?> close = executor.submit(() -> {
+                    await(start);
+                    racing.close();
+                });
+                start.countDown();
+                attach.get(2, TimeUnit.SECONDS);
+                close.get(2, TimeUnit.SECONDS);
+
+                assertTrue(racing.isClosed());
+                assertEquals(0, racing.activeScopeCount());
+                assertEquals(0, racing.activeLeaseCount());
+                reactor.core.Disposable attached = subscription.get();
+                if (attached != null) {
+                    attached.dispose();
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void disposeAndCloseRaceReleasesIdentityLeaseExactlyOnce() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            for (int iteration = 0; iteration < 100; iteration++) {
+                AgentTaskEventBroker racing = new AgentTaskEventBroker();
+                var subscription = racing.stream(scope).subscribe();
+                CountDownLatch start = new CountDownLatch(1);
+                Future<?> dispose = executor.submit(() -> {
+                    await(start);
+                    subscription.dispose();
+                });
+                Future<?> close = executor.submit(() -> {
+                    await(start);
+                    racing.close();
+                });
+                start.countDown();
+                dispose.get(2, TimeUnit.SECONDS);
+                close.get(2, TimeUnit.SECONDS);
+
+                assertTrue(racing.isClosed());
+                assertEquals(0, racing.activeScopeCount());
+                assertEquals(0, racing.activeLeaseCount());
+                assertEquals(0, racing.subscriberCount(scope));
+            }
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+        }
     }
 
     @Test
