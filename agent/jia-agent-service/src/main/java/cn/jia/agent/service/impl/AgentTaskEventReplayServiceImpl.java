@@ -26,6 +26,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
@@ -62,6 +63,7 @@ public class AgentTaskEventReplayServiceImpl
     private final ReplayPolicy policy;
     private final ReplayResourceLimits resourceLimits;
     private final boolean ownsExecutors;
+    private final Object lifecycleLock = new Object();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Set<SubscriptionState> deliveryReservations = ConcurrentHashMap.newKeySet();
     private final Semaphore activeSubscriptionPermits;
@@ -138,10 +140,13 @@ public class AgentTaskEventReplayServiceImpl
     @PreDestroy
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
+        List<SubscriptionState> subscriptions;
+        synchronized (lifecycleLock) {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            subscriptions = new ArrayList<>(deliveryReservations);
         }
-        List<SubscriptionState> subscriptions = new ArrayList<>(deliveryReservations);
         subscriptions.forEach(SubscriptionState::serviceClosed);
         if (ownsExecutors) {
             timerExecutor.shutdownNow();
@@ -220,6 +225,7 @@ public class AgentTaskEventReplayServiceImpl
         private final AtomicBoolean deliveryLaneStarted = new AtomicBoolean();
         private final AtomicBoolean deliveryWakePending = new AtomicBoolean();
         private final Semaphore deliveryWakeup = new Semaphore(0);
+        private final CountDownLatch deliveryStartGate = new CountDownLatch(1);
         private final AtomicReference<TerminalOutcome> terminalOutcome = new AtomicReference<>();
         private final AtomicReference<Disposable> liveSubscription = new AtomicReference<>();
         private final AtomicReference<ScheduledFuture<?>> timerTask = new AtomicReference<>();
@@ -241,36 +247,26 @@ public class AgentTaskEventReplayServiceImpl
         }
 
         private void start() {
-            if (closed.get()) {
-                deliverTerminal(winTerminal(StartClosedOutcome.INSTANCE));
-                return;
-            }
-            if (!claimResources()) {
-                deliverTerminal(winTerminal(CapacityOutcome.INSTANCE));
-                return;
-            }
-
+            StartDecision decision = beginStart();
             sink.onCancel(this::cancel);
             sink.onDispose(this::cancel);
             sink.onRequest(ignored -> signalDelivery());
-            if (sink.isCancelled() || logicalStopped.get()) {
+            deliveryStartGate.countDown();
+
+            if (sink.isCancelled()) {
                 cancel();
                 return;
             }
-            if (closed.get()) {
-                serviceClosed();
-                stopBeforeStart();
+            if (decision == StartDecision.SERVICE_CLOSED) {
                 deliverServiceShutdown();
                 return;
             }
-            if (!startDeliveryLane()) {
-                TerminalOutcome winner = winTerminal(CapacityOutcome.INSTANCE);
-                stopBeforeStart();
-                if (serviceShutdownRequested.get()) {
-                    deliverServiceShutdown();
-                } else {
-                    deliverTerminal(winner);
-                }
+            if (decision == StartDecision.CAPACITY_REJECTED) {
+                deliverTerminal(terminalOutcome.get());
+                return;
+            }
+            if (serviceShutdownRequested.get()) {
+                signalDelivery();
                 return;
             }
 
@@ -314,24 +310,42 @@ public class AgentTaskEventReplayServiceImpl
             triggerCatchUp();
         }
 
-        private boolean claimResources() {
-            if (!activeSubscriptionPermits.tryAcquire()) {
-                return false;
-            }
-            activePermitHeld.set(true);
-            if (!deliveryPermits.tryAcquire()) {
-                releaseActivePermit();
-                return false;
-            }
-            deliveryPermitHeld.set(true);
-            deliveryReservations.add(this);
-            return true;
-        }
+        private StartDecision beginStart() {
+            synchronized (lifecycleLock) {
+                if (closed.get()) {
+                    serviceShutdownRequested.set(true);
+                    logicalStopped.set(true);
+                    winTerminal(ServiceClosedOutcome.INSTANCE);
+                    return StartDecision.SERVICE_CLOSED;
+                }
+                if (!activeSubscriptionPermits.tryAcquire()) {
+                    winTerminal(CapacityOutcome.INSTANCE);
+                    return StartDecision.CAPACITY_REJECTED;
+                }
+                activePermitHeld.set(true);
+                if (!deliveryPermits.tryAcquire()) {
+                    releaseActivePermit();
+                    winTerminal(CapacityOutcome.INSTANCE);
+                    return StartDecision.CAPACITY_REJECTED;
+                }
+                deliveryPermitHeld.set(true);
 
-        private void stopBeforeStart() {
-            logicalStopped.set(true);
-            cleanupLogical(true);
-            releaseDeliveryPermitIfIdle();
+                DeliveryTask task = new DeliveryTask(this);
+                deliveryTask.set(task);
+                deliveryLaneStarted.set(true);
+                try {
+                    deliveryExecutor.execute(task);
+                } catch (RejectedExecutionException rejected) {
+                    deliveryTask.compareAndSet(task, null);
+                    deliveryLaneStarted.set(false);
+                    releaseDeliveryPermit();
+                    releaseActivePermit();
+                    winTerminal(CapacityOutcome.INSTANCE);
+                    return StartDecision.CAPACITY_REJECTED;
+                }
+                deliveryReservations.add(this);
+                return StartDecision.STARTED;
+            }
         }
 
         private void observeWakeup(TaskEventWakeup wakeup) {
@@ -552,25 +566,23 @@ public class AgentTaskEventReplayServiceImpl
             return !logicalStopped.get();
         }
 
-        private boolean startDeliveryLane() {
-            if (!deliveryLaneStarted.compareAndSet(false, true)) {
-                return true;
-            }
-            DeliveryTask task = new DeliveryTask(this);
-            deliveryTask.set(task);
-            try {
-                deliveryExecutor.execute(task);
-                return true;
-            } catch (RejectedExecutionException rejected) {
-                deliveryTask.compareAndSet(task, null);
-                deliveryLaneStarted.set(false);
-                return false;
-            }
-        }
-
         private void signalDelivery() {
             if (deliveryWakePending.compareAndSet(false, true)) {
                 deliveryWakeup.release();
+            }
+        }
+
+        private boolean awaitDeliveryStart() {
+            while (true) {
+                try {
+                    deliveryStartGate.await();
+                    return true;
+                } catch (InterruptedException interrupted) {
+                    if (downstreamCancelled.get() || sink.isCancelled()) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
             }
         }
 
@@ -674,9 +686,6 @@ public class AgentTaskEventReplayServiceImpl
                 sink.error(new ReplayBackpressureException());
             } else if (winner instanceof CapacityOutcome) {
                 sink.error(new ReplayCapacityException());
-            } else if (winner instanceof StartClosedOutcome) {
-                sink.error(new IllegalStateException(
-                        "Task event replay service is closed"));
             } else if (winner instanceof ResyncOutcome resync) {
                 sink.next(new ResyncRequired(
                         scope, resync.currentVersion(), resync.reason()));
@@ -863,7 +872,9 @@ public class AgentTaskEventReplayServiceImpl
             runner.set(Thread.currentThread());
             inFlightDeliveries.incrementAndGet();
             try {
-                state.runDelivery();
+                if (state.awaitDeliveryStart()) {
+                    state.runDelivery();
+                }
             } finally {
                 runner.set(null);
                 inFlightDeliveries.decrementAndGet();
@@ -879,9 +890,15 @@ public class AgentTaskEventReplayServiceImpl
         }
     }
 
+    private enum StartDecision {
+        STARTED,
+        SERVICE_CLOSED,
+        CAPACITY_REJECTED
+    }
+
     private sealed interface TerminalOutcome
             permits BackpressureOutcome, CapacityOutcome, ResyncOutcome,
-            ServiceClosedOutcome, StartClosedOutcome {
+            ServiceClosedOutcome {
     }
 
     private record BackpressureOutcome(boolean discardQueued) implements TerminalOutcome {
@@ -897,10 +914,6 @@ public class AgentTaskEventReplayServiceImpl
     }
 
     private enum ServiceClosedOutcome implements TerminalOutcome {
-        INSTANCE
-    }
-
-    private enum StartClosedOutcome implements TerminalOutcome {
         INSTANCE
     }
 

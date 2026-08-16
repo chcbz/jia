@@ -103,7 +103,7 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void rejectsNegativeCursorAndPostCloseSubscriptionsWithoutAllocatingLiveState() {
+    void rejectsNegativeCursorCompletesPrecreatedReplayAndRejectsNewPostCloseReplay() {
         StepVerifier.create(service.replay(SCOPE, -1L))
                 .expectErrorMatches(error -> error instanceof IllegalArgumentException
                         && error.getMessage().contains("negative"))
@@ -114,8 +114,7 @@ class AgentTaskEventReplayServiceImplTest {
         Flux<ReplaySignal> createdBeforeClose = service.replay(SCOPE, 0L);
         service.close();
         StepVerifier.create(createdBeforeClose)
-                .expectErrorMatches(error -> error instanceof IllegalStateException
-                        && error.getMessage().contains("closed"))
+                .expectComplete()
                 .verify(VERIFY_TIMEOUT);
         StepVerifier.create(service.replay(SCOPE, 0L))
                 .expectErrorMatches(error -> error instanceof IllegalStateException
@@ -897,6 +896,112 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
+    void closeCannotObserveClaimBeforeDeliveryLaneSubmission() throws Exception {
+        BlockingAcceptingExecutor accepting = replaceWithBlockingAcceptingDelivery();
+        store.setCurrent(0L);
+        AtomicInteger completions = new AtomicInteger();
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        CountDownLatch terminal = new CountDownLatch(1);
+        AtomicReference<Disposable> replay = new AtomicReference<>();
+        Thread subscriber = new Thread(() -> replay.set(service.replay(SCOPE, 0L).subscribe(
+                ignored -> { },
+                error -> {
+                    errors.add(error);
+                    terminal.countDown();
+                },
+                () -> {
+                    completions.incrementAndGet();
+                    terminal.countDown();
+                })), "c03-atomic-start-subscriber");
+        subscriber.start();
+        await(accepting.executeEntered);
+
+        Thread closer = new Thread(service::close, "c03-atomic-start-closer");
+        closer.start();
+        awaitCondition(() -> closer.getState() == Thread.State.BLOCKED);
+        accepting.allowSubmission();
+        subscriber.join(TimeUnit.SECONDS.toMillis(2));
+        closer.join(TimeUnit.SECONDS.toMillis(2));
+        await(terminal);
+
+        assertTrue(!subscriber.isAlive());
+        assertTrue(!closer.isAlive());
+        assertEquals(1, completions.get());
+        assertTrue(errors.isEmpty(), errors.toString());
+        assertTrue(replay.get().isDisposed());
+        awaitCleaned();
+    }
+
+    @Test
+    void productionStartCloseRaceHasNoHungSubscriptionAcrossFiveThousandStarts()
+            throws Exception {
+        service.close();
+        shutdown(timer);
+        shutdown(worker);
+        shutdown(delivery);
+        ExecutorService starters = new ThreadPoolExecutor(
+                8, 8, 30L, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(128), namedFactory("c03-production-start-racer"),
+                new ThreadPoolExecutor.CallerRunsPolicy());
+        int completedRounds = 0;
+        try {
+            for (int batch = 0; batch < 200; batch++) {
+                AgentTaskEventReplayServiceImpl batchService =
+                        new AgentTaskEventReplayServiceImpl(eventDao, broker);
+                service = batchService;
+                store.setCurrent(0L);
+                List<Flux<ReplaySignal>> replays = new ArrayList<>();
+                for (int index = 0; index < 25; index++) {
+                    replays.add(batchService.replay(SCOPE, 0L));
+                }
+                CountDownLatch firstWaveReady = new CountDownLatch(8);
+                CountDownLatch start = new CountDownLatch(1);
+                CountDownLatch terminal = new CountDownLatch(replays.size());
+                CountDownLatch tasksFinished = new CountDownLatch(replays.size());
+                AtomicInteger completions = new AtomicInteger();
+                List<Throwable> errors = new CopyOnWriteArrayList<>();
+                for (Flux<ReplaySignal> replay : replays) {
+                    starters.execute(() -> {
+                        firstWaveReady.countDown();
+                        await(start);
+                        try {
+                            replay.subscribe(ignored -> { }, error -> {
+                                errors.add(error);
+                                terminal.countDown();
+                            }, () -> {
+                                completions.incrementAndGet();
+                                terminal.countDown();
+                            });
+                        } finally {
+                            tasksFinished.countDown();
+                        }
+                    });
+                }
+                await(firstWaveReady);
+                Thread closer = new Thread(() -> {
+                    await(start);
+                    batchService.close();
+                }, "c03-production-close-racer-" + batch);
+                closer.start();
+                start.countDown();
+                await(terminal);
+                await(tasksFinished);
+                closer.join(TimeUnit.SECONDS.toMillis(2));
+
+                assertTrue(!closer.isAlive());
+                assertEquals(replays.size(), completions.get());
+                assertTrue(errors.isEmpty(), errors.toString());
+                awaitCleaned();
+                assertTrue(batchService.deliveryExecutorTerminated());
+                completedRounds += replays.size();
+            }
+        } finally {
+            shutdown(starters);
+        }
+        assertEquals(5_000, completedRounds);
+    }
+
+    @Test
     void serviceCloseCompletesWithoutManualDisposeAndReleasesAllResources() {
         store.setCurrent(0L);
         AtomicInteger completions = new AtomicInteger();
@@ -968,36 +1073,19 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void serviceCloseWinnerSurvivesDeliveryExecutorShutdownRejection() throws Exception {
+    void serviceCloseBeforeStartSkipsRejectedDeliveryExecutorAndCompletes() {
         for (int iteration = 0; iteration < 12; iteration++) {
             BlockingRejectingExecutor rejecting = replaceWithRejectingDelivery();
             store.setCurrent(0L);
-            AtomicInteger completions = new AtomicInteger();
-            List<Throwable> errors = new CopyOnWriteArrayList<>();
-            CountDownLatch terminal = new CountDownLatch(1);
-            AtomicReference<Disposable> replay = new AtomicReference<>();
-            Thread subscriber = new Thread(() -> replay.set(service.replay(SCOPE, 0L).subscribe(
-                    ignored -> { },
-                    error -> {
-                        errors.add(error);
-                        terminal.countDown();
-                    },
-                    () -> {
-                        completions.incrementAndGet();
-                        terminal.countDown();
-                    })), "c03-close-first-rejected-delivery-" + iteration);
-            subscriber.start();
-            await(rejecting.executeEntered);
-
+            Flux<ReplaySignal> replay = service.replay(SCOPE, 0L);
             service.close();
             rejecting.rejectPendingExecution();
-            subscriber.join(TimeUnit.SECONDS.toMillis(2));
-            await(terminal);
 
-            assertTrue(!subscriber.isAlive());
-            assertEquals(1, completions.get());
-            assertTrue(errors.isEmpty(), errors.toString());
-            assertTrue(replay.get().isDisposed());
+            StepVerifier.create(replay)
+                    .expectComplete()
+                    .verify(VERIFY_TIMEOUT);
+
+            assertEquals(1L, rejecting.executeEntered.getCount());
             assertNoReplayAllocation();
         }
     }
@@ -1263,6 +1351,20 @@ class AgentTaskEventReplayServiceImplTest {
         };
     }
 
+    private BlockingAcceptingExecutor replaceWithBlockingAcceptingDelivery() {
+        service.close();
+        shutdown(timer);
+        shutdown(worker);
+        shutdown(delivery);
+        worker = workerExecutor(2, 8);
+        delivery = new BlockingAcceptingExecutor();
+        timer = timerExecutor();
+        service = new AgentTaskEventReplayServiceImpl(
+                eventDao, broker, worker, delivery, timer,
+                policy(Duration.ofHours(1)), resourceLimits(4, 2, 4));
+        return (BlockingAcceptingExecutor) delivery;
+    }
+
     private BlockingRejectingExecutor replaceWithRejectingDelivery() {
         service.close();
         shutdown(timer);
@@ -1426,6 +1528,50 @@ class AgentTaskEventReplayServiceImplTest {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new AssertionError(interrupted);
+        }
+    }
+
+    private static final class BlockingAcceptingExecutor extends AbstractExecutorService {
+        private final ExecutorService delegate = deliveryExecutor(1);
+        private final CountDownLatch executeEntered = new CountDownLatch(1);
+        private final CountDownLatch allowSubmission = new CountDownLatch(1);
+
+        @Override
+        public void shutdown() {
+            allowSubmission.countDown();
+            delegate.shutdown();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            allowSubmission.countDown();
+            return delegate.shutdownNow();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return delegate.isShutdown();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return delegate.isTerminated();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return delegate.awaitTermination(timeout, unit);
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            executeEntered.countDown();
+            await(allowSubmission);
+            delegate.execute(command);
+        }
+
+        private void allowSubmission() {
+            allowSubmission.countDown();
         }
     }
 
