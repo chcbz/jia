@@ -5,6 +5,7 @@ import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.entity.AgentTaskEventEntity;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,8 @@ class AgentTaskEventPayloadGuardTest extends BaseMockTest {
     AgentTaskEventDao eventDao;
     @Mock
     PlatformTransactionManager transactionManager;
+    @Mock
+    AgentTaskEventAfterCommitPublisher afterCommitPublisher;
 
     AgentTaskEventWriterImpl writer;
 
@@ -35,7 +38,7 @@ class AgentTaskEventPayloadGuardTest extends BaseMockTest {
     void setUp() {
         lenient().when(transactionManager.getTransaction(any()))
                 .thenReturn(new SimpleTransactionStatus());
-        writer = new AgentTaskEventWriterImpl(eventDao, transactionManager);
+        writer = new AgentTaskEventWriterImpl(eventDao, transactionManager, afterCommitPublisher);
     }
 
     @Test

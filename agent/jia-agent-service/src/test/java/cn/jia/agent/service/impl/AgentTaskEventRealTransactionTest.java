@@ -7,6 +7,8 @@ import cn.jia.agent.entity.AgentTaskEventEntity;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.mapper.AgentTaskEventMapper;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.core.util.DateUtil;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -113,7 +115,8 @@ class AgentTaskEventRealTransactionTest {
         eventDao = new AgentTaskEventDaoImpl();
         setField(eventDao, "baseMapper", mapper);
 
-        writer = new AgentTaskEventWriterImpl(eventDao, txManager);
+        writer = new AgentTaskEventWriterImpl(eventDao, txManager,
+                new AgentTaskEventAfterCommitPublisher(new AgentTaskEventBroker()));
     }
 
     @AfterEach

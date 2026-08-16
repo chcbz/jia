@@ -19,6 +19,8 @@ import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -105,7 +107,8 @@ class AgentWorkItemLeaseRealDatabaseTest {
         AgentTaskEventDao eventDao = new AgentTaskEventDaoImpl();
         setField(eventDao, "baseMapper", template.getMapper(AgentTaskEventMapper.class));
         transactionManager = new DataSourceTransactionManager(dataSource);
-        realEventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager);
+        realEventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager,
+                new AgentTaskEventAfterCommitPublisher(new AgentTaskEventBroker()));
         insertTaskRoot();
     }
 
