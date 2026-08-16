@@ -5,6 +5,8 @@ import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.dao.impl.AgentTaskEventDaoImpl;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.mapper.AgentTaskEventMapper;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.core.util.DateUtil;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -38,6 +40,8 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
     final JdbcTemplate jdbc;
     final PlatformTransactionManager transactionManager;
     final AgentTaskEventDao eventDao;
+    final AgentTaskEventBroker eventBroker;
+    final AgentTaskEventAfterCommitPublisher afterCommitPublisher;
     final AgentTaskEventWriter writer;
 
     private AgentTaskEventTestFixture(
@@ -56,7 +60,11 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
         AgentTaskEventDaoImpl dao = new AgentTaskEventDaoImpl();
         setField(dao, "baseMapper", sqlSessionTemplate.getMapper(AgentTaskEventMapper.class));
         this.eventDao = dao;
-        this.writer = new AgentTaskEventWriterImpl(eventDao, transactionManager);
+        this.eventBroker = new AgentTaskEventBroker();
+        this.afterCommitPublisher = new AgentTaskEventAfterCommitPublisher(
+                eventBroker, transactionManager);
+        this.writer = new AgentTaskEventWriterImpl(
+                eventDao, transactionManager, afterCommitPublisher);
     }
 
     static AgentTaskEventTestFixture h2(String suffix) throws Exception {
@@ -162,6 +170,8 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
 
     @Override
     public void close() {
+        afterCommitPublisher.close();
+        eventBroker.close();
         if (h2) {
             jdbc.execute("DROP ALL OBJECTS DELETE FILES");
         } else if (adminJdbc != null && databaseName != null) {

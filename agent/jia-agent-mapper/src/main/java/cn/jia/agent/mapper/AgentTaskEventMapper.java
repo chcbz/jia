@@ -107,28 +107,6 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
-              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
-              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
-              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
-              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
-              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
-            ORDER BY event_version ASC
-            """)
-    List<AgentTaskEventEntity> findExactByTaskScope(
-            @Param("tenantId") String tenantId,
-            @Param("clientId") String clientId,
-            @Param("taskId") String taskId);
-
-    @Select("""
-            SELECT id, task_id, event_version, event_id, event_type,
-                   actor_type, actor_id, aggregate_type, aggregate_id,
-                   event_json, occurred_at,
-                   tenant_id, client_id, create_time, update_time
-            FROM agent_task_event
-            WHERE tenant_id = #{tenantId}
-              AND client_id = #{clientId}
-              AND task_id = #{taskId}
               AND event_version > #{afterVersion}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
@@ -137,12 +115,53 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             ORDER BY event_version ASC
+            LIMIT #{limit}
             """)
     List<AgentTaskEventEntity> findExactByTaskScopeAfterVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("taskId") String taskId,
-            @Param("afterVersion") long afterVersion);
+            @Param("afterVersion") long afterVersion,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT current_event_version
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{taskId}, 1, 50) AS BINARY(200))
+              AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
+                  = CAST(SUBSTRING(#{taskId}, 51, 50) AS BINARY(200))
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+            """)
+    Long findExactCurrentEventVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId);
+
+    @Select("""
+            SELECT MIN(event_version)
+            FROM agent_task_event
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+            """)
+    Long findExactEarliestEventVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId);
 
     @Select("""
             SELECT id, task_id, event_version, event_id, event_type,

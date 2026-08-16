@@ -15,6 +15,7 @@ import java.util.List;
  * which wraps lock/insert/commit atomically.
  */
 public interface AgentTaskEventDao extends IBaseDao<AgentTaskEventEntity> {
+    int MAX_REPLAY_PAGE_SIZE = 1000;
 
     /**
      * Lock the task meta row and return the current event version.
@@ -49,17 +50,20 @@ public interface AgentTaskEventDao extends IBaseDao<AgentTaskEventEntity> {
             long expectedCurrentVersion, long newEventVersion,
             long updateTime);
 
-    List<AgentTaskEventEntity> findByTaskScope(
-            String tenantId, String clientId, String taskId);
-
     /**
      * Return events strictly after the supplied replay cursor.
      *
      * <p>The cursor is exclusive: only {@code event_version > afterVersion}
-     * is returned, ordered by event version ascending.
+     * is returned, ordered by event version ascending and bounded by {@code limit}.
      */
     List<AgentTaskEventEntity> findAfterVersion(
-            String tenantId, String clientId, String taskId, long afterVersion);
+            String tenantId, String clientId, String taskId, long afterVersion, int limit);
+
+    /** Return the byte-exact task scope's durable high-water, or null when absent. */
+    Long findCurrentVersion(String tenantId, String clientId, String taskId);
+
+    /** Return the earliest retained byte-exact event version, or null when no event is retained. */
+    Long findEarliestVersion(String tenantId, String clientId, String taskId);
 
     AgentTaskEventEntity findByEventId(
             String tenantId, String clientId, String eventId);

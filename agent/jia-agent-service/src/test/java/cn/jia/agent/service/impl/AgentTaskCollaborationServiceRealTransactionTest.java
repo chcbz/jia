@@ -30,6 +30,8 @@ import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskRequestMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskRequestService;
@@ -126,7 +128,9 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         artifactDao = new AgentTaskArtifactDaoImpl(template.getMapper(AgentTaskArtifactMapper.class));
         AgentTaskEventDaoImpl eventDao = new AgentTaskEventDaoImpl();
         setField(eventDao, "baseMapper", template.getMapper(AgentTaskEventMapper.class));
-        eventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager);
+        eventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager,
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), transactionManager));
         mutationTransaction = new AgentTaskMutationTransactionImpl(taskDao, transactionManager);
 
         AtomicLong collaborationClock = new AtomicLong(LEASE_NOW);

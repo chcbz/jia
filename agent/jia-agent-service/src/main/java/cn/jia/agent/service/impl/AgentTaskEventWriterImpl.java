@@ -8,6 +8,8 @@ import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker.TaskScope;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.core.util.DateUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -21,18 +23,24 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
 
     private final AgentTaskEventDao eventDao;
+    private final AgentTaskEventAfterCommitPublisher afterCommitPublisher;
     private final TransactionTemplate transactionTemplate;
 
     public AgentTaskEventWriterImpl(
             AgentTaskEventDao eventDao,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            AgentTaskEventAfterCommitPublisher afterCommitPublisher) {
         if (eventDao == null) {
             throw new IllegalArgumentException("eventDao must not be null");
         }
         if (transactionManager == null) {
             throw new IllegalArgumentException("transactionManager must not be null");
         }
+        if (afterCommitPublisher == null) {
+            throw new IllegalArgumentException("afterCommitPublisher must not be null");
+        }
         this.eventDao = eventDao;
+        this.afterCommitPublisher = afterCommitPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.transactionTemplate.setPropagationBehavior(
                 TransactionDefinition.PROPAGATION_REQUIRED);
@@ -94,7 +102,11 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
                         + " new=" + newVersion + " rows=" + updated);
             }
 
-            // 5. Build result
+            // 5. Queue only the immutable scope/version wakeup in this transaction.
+            afterCommitPublisher.enqueue(new TaskScope(
+                    command.getTenantId(), command.getClientId(), command.getTaskId()), newVersion);
+
+            // 6. Build result
             return new AgentTaskEventWriteResult()
                     .setEventVersion(newVersion)
                     .setPreviousVersion(currentVersion)
@@ -129,20 +141,26 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
     }
 
     private void requireNonBlank(String value, String name, int maxLength) {
-        if (value == null || value.isBlank()
-                || value.length() > maxLength
-                || !value.equals(value.strip())
-                || value.chars().anyMatch(Character::isISOControl)) {
+        if (value == null || value.length() > maxLength
+                || value.codePoints().allMatch(AgentTaskEventWriterImpl::isPadding)
+                || isPadding(value.codePointAt(0))
+                || isPadding(value.codePointBefore(value.length()))
+                || value.codePoints().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException(
                     name + " is invalid: must be non-blank, byte-exact, ≤ " + maxLength + " chars");
         }
     }
 
+    private static boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+    }
+
     private void requireClean(String value, String name, int maxLength) {
-        if (value.isBlank()
-                || value.length() > maxLength
-                || !value.equals(value.strip())
-                || value.chars().anyMatch(Character::isISOControl)) {
+        if (value == null || value.length() > maxLength
+                || value.codePoints().allMatch(AgentTaskEventWriterImpl::isPadding)
+                || isPadding(value.codePointAt(0))
+                || isPadding(value.codePointBefore(value.length()))
+                || value.codePoints().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException(
                     name + " is invalid: must be clean, ≤ " + maxLength + " chars");
         }

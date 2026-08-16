@@ -7,6 +7,8 @@ import cn.jia.agent.entity.AgentTaskEventEntity;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.mapper.AgentTaskEventMapper;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.core.util.DateUtil;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -113,7 +115,9 @@ class AgentTaskEventRealTransactionTest {
         eventDao = new AgentTaskEventDaoImpl();
         setField(eventDao, "baseMapper", mapper);
 
-        writer = new AgentTaskEventWriterImpl(eventDao, txManager);
+        writer = new AgentTaskEventWriterImpl(eventDao, txManager,
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), txManager));
     }
 
     @AfterEach
@@ -231,7 +235,8 @@ class AgentTaskEventRealTransactionTest {
                 Long.class, TENANT, CLIENT, TASK_ID);
         assertEquals(2L, cv);
 
-        List<AgentTaskEventEntity> events = eventDao.findByTaskScope(TENANT, CLIENT, TASK_ID);
+        List<AgentTaskEventEntity> events = eventDao.findAfterVersion(
+                TENANT, CLIENT, TASK_ID, 0L, 2);
         assertEquals(2, events.size());
     }
 
@@ -764,15 +769,25 @@ class AgentTaskEventRealTransactionTest {
         }
 
         List<AgentTaskEventEntity> after = eventDao.findAfterVersion(
-                TENANT, CLIENT, TASK_ID, 2L);
-        assertEquals(3, after.size());
+                TENANT, CLIENT, TASK_ID, 2L, 2);
+        assertEquals(2, after.size());
         assertEquals(3L, after.get(0).getEventVersion());
-        assertEquals(5L, after.get(2).getEventVersion());
+        assertEquals(4L, after.get(1).getEventVersion());
+        assertEquals(5L, eventDao.findCurrentVersion(TENANT, CLIENT, TASK_ID));
+        assertEquals(1L, eventDao.findEarliestVersion(TENANT, CLIENT, TASK_ID));
+        assertNull(eventDao.findCurrentVersion(TENANT.toUpperCase(), CLIENT, TASK_ID));
+        assertNull(eventDao.findEarliestVersion(TENANT.toUpperCase(), CLIENT, TASK_ID));
+        assertTrue(eventDao.findAfterVersion(
+                TENANT.toUpperCase(), CLIENT, TASK_ID, 0L, 2).isEmpty());
 
         assertTrue(eventDao.findAfterVersion(
-                TENANT, CLIENT, TASK_ID, 5L).isEmpty());
+                TENANT, CLIENT, TASK_ID, 5L, 2).isEmpty());
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, -1L));
+                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, -1L, 2));
+        assertThrows(IllegalArgumentException.class, () ->
+                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, 0L, 0));
+        assertThrows(IllegalArgumentException.class, () ->
+                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, 0L, 1001));
     }
 
     // ── Test 18: Multiple aggregate types ──
@@ -792,7 +807,8 @@ class AgentTaskEventRealTransactionTest {
         writer.append(command("evt-agg-5", TaskEventType.ARTIFACT_PUBLISHED,
                 TaskEventType.Aggregate.ARTIFACT, "art-1"));
 
-        List<AgentTaskEventEntity> events = eventDao.findByTaskScope(TENANT, CLIENT, TASK_ID);
+        List<AgentTaskEventEntity> events = eventDao.findAfterVersion(
+                TENANT, CLIENT, TASK_ID, 0L, 5);
         assertEquals(5, events.size());
 
         Set<String> types = new HashSet<>();
