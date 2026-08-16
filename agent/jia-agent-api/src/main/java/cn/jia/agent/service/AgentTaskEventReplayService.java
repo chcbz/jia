@@ -94,6 +94,13 @@ public interface AgentTaskEventReplayService {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
+    /** Stable fail-fast outcome when bounded replay subscription capacity is exhausted. */
+    final class ReplayCapacityException extends IllegalStateException {
+        public ReplayCapacityException() {
+            super("Task event replay capacity is exhausted");
+        }
+    }
+
     /** Stable fail-closed outcome when downstream demand cannot keep replay bounded. */
     final class ReplayBackpressureException extends IllegalStateException {
         public ReplayBackpressureException() {

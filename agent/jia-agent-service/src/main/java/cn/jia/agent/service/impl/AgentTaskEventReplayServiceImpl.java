@@ -7,6 +7,7 @@ import cn.jia.agent.service.AgentTaskEventBroker.TaskEventWakeup;
 import cn.jia.agent.service.AgentTaskEventReplayService;
 import cn.jia.agent.service.AgentTaskEventReplayService.DurableEvent;
 import cn.jia.agent.service.AgentTaskEventReplayService.ReplayBackpressureException;
+import cn.jia.agent.service.AgentTaskEventReplayService.ReplayCapacityException;
 import cn.jia.agent.service.AgentTaskEventReplayService.ReplaySignal;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncReason;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncRequired;
@@ -31,6 +32,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -45,53 +47,77 @@ public class AgentTaskEventReplayServiceImpl
         implements AgentTaskEventReplayService, AutoCloseable {
     static final ReplayPolicy DEFAULT_POLICY = new ReplayPolicy(
             256, 4096, 32, 8, Duration.ofSeconds(5));
-    private static final int WORKER_THREADS = 4;
-    private static final int WORKER_QUEUE_CAPACITY = 256;
+    static final ReplayResourceLimits DEFAULT_RESOURCE_LIMITS =
+            new ReplayResourceLimits(256, 32, 64);
+    private static final int CATCH_UP_THREADS = 4;
+    private static final int CATCH_UP_QUEUE_CAPACITY = 256;
     private static final long CLOSE_WAIT_MILLIS = 500L;
     private static final AtomicLong RESOURCE_SEQUENCE = new AtomicLong();
 
     private final AgentTaskEventDao eventDao;
     private final AgentTaskEventBroker broker;
     private final ExecutorService catchUpExecutor;
+    private final ExecutorService deliveryExecutor;
     private final ScheduledExecutorService timerExecutor;
     private final ReplayPolicy policy;
+    private final ReplayResourceLimits resourceLimits;
     private final boolean ownsExecutors;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final Set<SubscriptionState> activeSubscriptions = ConcurrentHashMap.newKeySet();
+    private final Set<SubscriptionState> deliveryReservations = ConcurrentHashMap.newKeySet();
+    private final Semaphore activeSubscriptionPermits;
+    private final Semaphore deliveryPermits;
     private final AtomicInteger scheduledWorkerTasks = new AtomicInteger();
     private final AtomicInteger inFlightCatchUps = new AtomicInteger();
     private final AtomicInteger activeTimers = new AtomicInteger();
+    private final AtomicInteger inFlightDeliveries = new AtomicInteger();
 
     @Inject
     public AgentTaskEventReplayServiceImpl(
             AgentTaskEventDao eventDao,
             AgentTaskEventBroker broker) {
-        this(eventDao, broker, createCatchUpExecutor(), createTimerExecutor(),
-                DEFAULT_POLICY, true);
+        this(eventDao, broker,
+                createCatchUpExecutor(),
+                createDeliveryExecutor(DEFAULT_RESOURCE_LIMITS.maxDeliverySlots()),
+                createTimerExecutor(),
+                DEFAULT_POLICY,
+                DEFAULT_RESOURCE_LIMITS,
+                true);
     }
 
     AgentTaskEventReplayServiceImpl(
             AgentTaskEventDao eventDao,
             AgentTaskEventBroker broker,
             ExecutorService catchUpExecutor,
+            ExecutorService deliveryExecutor,
             ScheduledExecutorService timerExecutor,
-            ReplayPolicy policy) {
-        this(eventDao, broker, catchUpExecutor, timerExecutor, policy, false);
+            ReplayPolicy policy,
+            ReplayResourceLimits resourceLimits) {
+        this(eventDao, broker, catchUpExecutor, deliveryExecutor, timerExecutor,
+                policy, resourceLimits, false);
     }
 
     private AgentTaskEventReplayServiceImpl(
             AgentTaskEventDao eventDao,
             AgentTaskEventBroker broker,
             ExecutorService catchUpExecutor,
+            ExecutorService deliveryExecutor,
             ScheduledExecutorService timerExecutor,
             ReplayPolicy policy,
+            ReplayResourceLimits resourceLimits,
             boolean ownsExecutors) {
         this.eventDao = Objects.requireNonNull(eventDao, "eventDao is required");
         this.broker = Objects.requireNonNull(broker, "broker is required");
         this.catchUpExecutor = Objects.requireNonNull(
                 catchUpExecutor, "catchUpExecutor is required");
+        this.deliveryExecutor = Objects.requireNonNull(
+                deliveryExecutor, "deliveryExecutor is required");
         this.timerExecutor = Objects.requireNonNull(timerExecutor, "timerExecutor is required");
         this.policy = Objects.requireNonNull(policy, "replay policy is required");
+        this.resourceLimits = Objects.requireNonNull(
+                resourceLimits, "resourceLimits is required");
+        this.activeSubscriptionPermits = new Semaphore(
+                resourceLimits.maxActiveSubscriptions());
+        this.deliveryPermits = new Semaphore(resourceLimits.maxDeliverySlots());
         this.ownsExecutors = ownsExecutors;
     }
 
@@ -115,18 +141,30 @@ public class AgentTaskEventReplayServiceImpl
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        List<SubscriptionState> subscriptions = new ArrayList<>(activeSubscriptions);
+        List<SubscriptionState> subscriptions = new ArrayList<>(deliveryReservations);
         subscriptions.forEach(SubscriptionState::cancel);
         if (ownsExecutors) {
             timerExecutor.shutdownNow();
             catchUpExecutor.shutdownNow();
+            List<Runnable> abandonedDeliveries = deliveryExecutor.shutdownNow();
+            abandonedDeliveries.forEach(runnable -> {
+                if (runnable instanceof DeliveryTask task) {
+                    task.abandonBeforeRun();
+                }
+            });
             awaitTermination(timerExecutor);
             awaitTermination(catchUpExecutor);
+            awaitTermination(deliveryExecutor);
         }
     }
 
     int activeSubscriptionCount() {
-        return activeSubscriptions.size();
+        return resourceLimits.maxActiveSubscriptions()
+                - activeSubscriptionPermits.availablePermits();
+    }
+
+    int deliveryPermitCount() {
+        return resourceLimits.maxDeliverySlots() - deliveryPermits.availablePermits();
     }
 
     int scheduledWorkerTaskCount() {
@@ -141,21 +179,52 @@ public class AgentTaskEventReplayServiceImpl
         return activeTimers.get();
     }
 
+    int inFlightDeliveryCount() {
+        return inFlightDeliveries.get();
+    }
+
+    int pendingTimerTaskCount() {
+        if (timerExecutor instanceof ScheduledThreadPoolExecutor scheduled) {
+            return scheduled.getQueue().size();
+        }
+        return -1;
+    }
+
+    int pendingDeliveryTaskCount() {
+        if (deliveryExecutor instanceof ThreadPoolExecutor executor) {
+            return executor.getQueue().size();
+        }
+        return -1;
+    }
+
     private final class SubscriptionState {
         private final TaskScope scope;
         private final AgentTaskEventBroker.TaskScope wakeupScope;
         private final FluxSink<ReplaySignal> sink;
+        private final ArrayBlockingQueue<DurableEvent> signalQueue =
+                new ArrayBlockingQueue<>(resourceLimits.signalQueueCapacity());
+        private final AtomicLong catchUpVersion;
         private final AtomicLong deliveredVersion;
         private final AtomicLong highestHintedVersion;
         private final AtomicLong lastDurableHighWater;
+        private final AtomicInteger outstandingSignals = new AtomicInteger();
         private final AtomicBoolean dirty = new AtomicBoolean();
         private final AtomicBoolean workerScheduled = new AtomicBoolean();
-        private final AtomicBoolean terminated = new AtomicBoolean();
-        private final AtomicBoolean cleaned = new AtomicBoolean();
+        private final AtomicBoolean logicalStopped = new AtomicBoolean();
+        private final AtomicBoolean logicalCleaned = new AtomicBoolean();
+        private final AtomicBoolean downstreamCancelled = new AtomicBoolean();
+        private final AtomicBoolean downstreamTerminated = new AtomicBoolean();
         private final AtomicBoolean timerCounted = new AtomicBoolean();
+        private final AtomicBoolean activePermitHeld = new AtomicBoolean();
+        private final AtomicBoolean deliveryPermitHeld = new AtomicBoolean();
+        private final AtomicBoolean deliveryLaneStarted = new AtomicBoolean();
+        private final AtomicBoolean deliveryWakePending = new AtomicBoolean();
+        private final Semaphore deliveryWakeup = new Semaphore(0);
+        private final AtomicReference<TerminalOutcome> terminalOutcome = new AtomicReference<>();
         private final AtomicReference<Disposable> liveSubscription = new AtomicReference<>();
         private final AtomicReference<ScheduledFuture<?>> timerTask = new AtomicReference<>();
         private final AtomicReference<TrackedCatchUpTask> workerTask = new AtomicReference<>();
+        private final AtomicReference<DeliveryTask> deliveryTask = new AtomicReference<>();
 
         private SubscriptionState(
                 TaskScope scope,
@@ -165,6 +234,7 @@ public class AgentTaskEventReplayServiceImpl
             this.wakeupScope = new AgentTaskEventBroker.TaskScope(
                     scope.tenantId(), scope.clientId(), scope.taskId());
             this.sink = sink;
+            this.catchUpVersion = new AtomicLong(initialCursor);
             this.deliveredVersion = new AtomicLong(initialCursor);
             this.highestHintedVersion = new AtomicLong(initialCursor);
             this.lastDurableHighWater = new AtomicLong();
@@ -175,26 +245,47 @@ public class AgentTaskEventReplayServiceImpl
                 sink.error(new IllegalStateException("Task event replay service is closed"));
                 return;
             }
-            activeSubscriptions.add(this);
+            if (!claimResources()) {
+                sink.error(new ReplayCapacityException());
+                return;
+            }
+
             sink.onCancel(this::cancel);
             sink.onDispose(this::cancel);
-            if (closed.get()) {
+            if (sink.isCancelled() || logicalStopped.get()) {
                 cancel();
+                return;
+            }
+            if (closed.get()) {
+                stopBeforeStart();
                 if (!sink.isCancelled()) {
                     sink.error(new IllegalStateException(
                             "Task event replay service is closed"));
                 }
                 return;
             }
-
-            Disposable live = broker.stream(wakeupScope).subscribe(
-                    this::observeWakeup,
-                    ignored -> { /* Durable polling remains authoritative. */ },
-                    () -> { /* Broker shutdown completion is not a cleanup dependency. */ });
-            if (!liveSubscription.compareAndSet(null, live) || terminated.get()) {
-                live.dispose();
+            if (!startDeliveryLane()) {
+                stopBeforeStart();
+                if (!sink.isCancelled()) {
+                    sink.error(new ReplayCapacityException());
+                }
+                return;
             }
-            if (terminated.get()) {
+
+            try {
+                Disposable live = broker.stream(wakeupScope).subscribe(
+                        this::observeWakeup,
+                        ignored -> { /* Durable polling remains authoritative. */ },
+                        () -> { /* Broker completion is not a cleanup dependency. */ });
+                if (!liveSubscription.compareAndSet(null, live) || logicalStopped.get()) {
+                    live.dispose();
+                }
+            } catch (RuntimeException brokerFailure) {
+                terminalResync(ResyncReason.DURABLE_STATE_UNPROVABLE,
+                        terminalCurrentVersion(), true);
+                return;
+            }
+            if (logicalStopped.get()) {
                 return;
             }
 
@@ -207,7 +298,7 @@ public class AgentTaskEventReplayServiceImpl
                         policy.periodicCheck().toMillis(),
                         TimeUnit.MILLISECONDS);
                 timerTask.set(timer);
-                if (terminated.get() && timerTask.compareAndSet(timer, null)) {
+                if (logicalStopped.get() && timerTask.compareAndSet(timer, null)) {
                     timer.cancel(true);
                     decrementTimerCount();
                 }
@@ -221,21 +312,41 @@ public class AgentTaskEventReplayServiceImpl
             triggerCatchUp();
         }
 
+        private boolean claimResources() {
+            if (!activeSubscriptionPermits.tryAcquire()) {
+                return false;
+            }
+            activePermitHeld.set(true);
+            if (!deliveryPermits.tryAcquire()) {
+                releaseActivePermit();
+                return false;
+            }
+            deliveryPermitHeld.set(true);
+            deliveryReservations.add(this);
+            return true;
+        }
+
+        private void stopBeforeStart() {
+            logicalStopped.set(true);
+            cleanupLogical(true);
+            releaseDeliveryPermitIfIdle();
+        }
+
         private void observeWakeup(TaskEventWakeup wakeup) {
-            if (terminated.get() || wakeup == null || wakeup.eventVersion() <= 0
+            if (logicalStopped.get() || wakeup == null || wakeup.eventVersion() <= 0
                     || !wakeupScope.equals(wakeup.scope())) {
                 return;
             }
             long previous = highestHintedVersion.getAndAccumulate(
                     wakeup.eventVersion(), Math::max);
-            if (wakeup.eventVersion() > deliveredVersion.get()
+            if (wakeup.eventVersion() > catchUpVersion.get()
                     && wakeup.eventVersion() > previous) {
                 triggerCatchUp();
             }
         }
 
         private void triggerPeriodic() {
-            if (!terminated.get()) {
+            if (!logicalStopped.get()) {
                 triggerCatchUp();
             }
         }
@@ -246,20 +357,19 @@ public class AgentTaskEventReplayServiceImpl
         }
 
         private void scheduleWorker() {
-            if (terminated.get() || !workerScheduled.compareAndSet(false, true)) {
+            if (logicalStopped.get() || !workerScheduled.compareAndSet(false, true)) {
                 return;
             }
             TrackedCatchUpTask task = new TrackedCatchUpTask(this);
             workerTask.set(task);
-            if (terminated.get()) {
+            if (logicalStopped.get()) {
                 task.cancel(false);
                 return;
             }
             try {
                 catchUpExecutor.execute(task);
             } catch (RejectedExecutionException rejected) {
-                // Saturation is another lossy trigger. Never run downstream callbacks on the
-                // broker, timer, or subscribing thread; the periodic check will retry later.
+                // Saturation is a lossy trigger. The bounded periodic check retries later.
                 task.suppressReschedule();
                 task.cancel(false);
             }
@@ -268,7 +378,7 @@ public class AgentTaskEventReplayServiceImpl
         private void runCatchUpWorker() {
             inFlightCatchUps.incrementAndGet();
             try {
-                if (terminated.get() || sink.isCancelled()) {
+                if (logicalStopped.get() || sink.isCancelled()) {
                     return;
                 }
                 dirty.set(false);
@@ -276,7 +386,7 @@ public class AgentTaskEventReplayServiceImpl
             } catch (TerminalReplay terminal) {
                 terminalResync(terminal.reason, terminal.currentVersion, false);
             } catch (RuntimeException durableFailure) {
-                if (!terminated.get()) {
+                if (!logicalStopped.get()) {
                     terminalResync(ResyncReason.DURABLE_STATE_UNPROVABLE,
                             terminalCurrentVersion(), false);
                 }
@@ -287,13 +397,13 @@ public class AgentTaskEventReplayServiceImpl
 
         private void catchUpDurable() {
             int pagesRead = 0;
-            int eventsEmitted = 0;
+            int eventsQueued = 0;
             int highWaterReads = 0;
-            long cursor = deliveredVersion.get();
+            long cursor = catchUpVersion.get();
 
-            while (!terminated.get() && !sink.isCancelled()) {
+            while (!logicalStopped.get() && !sink.isCancelled()) {
                 if (Thread.currentThread().isInterrupted()) {
-                    if (terminated.get()) {
+                    if (logicalStopped.get()) {
                         return;
                     }
                     throw new IllegalStateException("Task event replay worker was interrupted");
@@ -335,9 +445,9 @@ public class AgentTaskEventReplayServiceImpl
                 }
 
                 long targetVersion = currentVersion;
-                while (cursor < targetVersion) {
+                while (cursor < targetVersion && !logicalStopped.get()) {
                     if (pagesRead >= policy.maxPages()
-                            || eventsEmitted >= policy.maxEvents()) {
+                            || eventsQueued >= policy.maxEvents()) {
                         throw terminal(ResyncReason.REPLAY_BUDGET_EXHAUSTED,
                                 currentVersion);
                     }
@@ -362,16 +472,16 @@ public class AgentTaskEventReplayServiceImpl
                         if (version > targetVersion) {
                             continue;
                         }
-                        if (eventsEmitted >= policy.maxEvents()) {
+                        if (eventsQueued >= policy.maxEvents()) {
                             throw terminal(ResyncReason.REPLAY_BUDGET_EXHAUSTED,
                                     currentVersion);
                         }
-                        if (!emitDurable(entity)) {
+                        if (!queueDurable(entity)) {
                             return;
                         }
-                        eventsEmitted++;
+                        eventsQueued++;
                         cursor = version;
-                        deliveredVersion.set(cursor);
+                        catchUpVersion.set(cursor);
                     }
                     if (cursor == priorCursor
                             || (cursor < targetVersion && page.size() < policy.pageSize())) {
@@ -404,15 +514,16 @@ public class AgentTaskEventReplayServiceImpl
             }
         }
 
-        private boolean emitDurable(AgentTaskEventEntity entity) {
-            if (terminated.get() || sink.isCancelled()) {
+        private boolean queueDurable(AgentTaskEventEntity entity) {
+            if (logicalStopped.get() || sink.isCancelled()) {
                 return false;
             }
-            if (sink.requestedFromDownstream() <= 0) {
-                terminalBackpressure();
+            long requested = sink.requestedFromDownstream();
+            if (requested <= outstandingSignals.get()) {
+                terminalBackpressure(false, false);
                 return false;
             }
-            sink.next(new DurableEvent(
+            DurableEvent signal = new DurableEvent(
                     scope,
                     entity.getEventVersion(),
                     entity.getEventId(),
@@ -422,37 +533,141 @@ public class AgentTaskEventReplayServiceImpl
                     entity.getAggregateType(),
                     entity.getAggregateId(),
                     entity.getEventJson(),
-                    entity.getOccurredAt()));
-            return !terminated.get() && !sink.isCancelled();
+                    entity.getOccurredAt());
+            outstandingSignals.incrementAndGet();
+            if (!signalQueue.offer(signal)) {
+                outstandingSignals.decrementAndGet();
+                terminalBackpressure(true, false);
+                return false;
+            }
+            if (downstreamCancelled.get() || sink.isCancelled()) {
+                if (signalQueue.remove(signal)) {
+                    outstandingSignals.decrementAndGet();
+                }
+                return false;
+            }
+            signalDelivery();
+            return !logicalStopped.get();
         }
 
-        private void terminalBackpressure() {
-            if (!terminated.compareAndSet(false, true)) {
-                return;
+        private boolean startDeliveryLane() {
+            if (!deliveryLaneStarted.compareAndSet(false, true)) {
+                return true;
             }
-            cleanup(false);
-            if (!sink.isCancelled()) {
-                sink.error(new ReplayBackpressureException());
+            DeliveryTask task = new DeliveryTask(this);
+            deliveryTask.set(task);
+            try {
+                deliveryExecutor.execute(task);
+                return true;
+            } catch (RejectedExecutionException rejected) {
+                deliveryTask.compareAndSet(task, null);
+                deliveryLaneStarted.set(false);
+                return false;
             }
+        }
+
+        private void signalDelivery() {
+            if (deliveryWakePending.compareAndSet(false, true)) {
+                deliveryWakeup.release();
+            }
+        }
+
+        private void runDelivery() {
+            while (!downstreamCancelled.get() && !sink.isCancelled()) {
+                TerminalOutcome outcome = terminalOutcome.get();
+                if (outcome instanceof BackpressureOutcome backpressure
+                        && backpressure.discardQueued()) {
+                    clearSignalQueue();
+                }
+
+                if (!signalQueue.isEmpty() && sink.requestedFromDownstream() <= 0) {
+                    terminalBackpressure(false, true);
+                    continue;
+                }
+                DurableEvent signal = signalQueue.poll();
+                if (signal != null) {
+                    if (downstreamCancelled.get() || sink.isCancelled()) {
+                        outstandingSignals.decrementAndGet();
+                        return;
+                    }
+                    try {
+                        sink.next(signal);
+                        deliveredVersion.set(signal.eventVersion());
+                    } catch (RuntimeException callbackFailure) {
+                        terminalBackpressure(true, true);
+                    } finally {
+                        outstandingSignals.decrementAndGet();
+                    }
+                    continue;
+                }
+
+                outcome = terminalOutcome.get();
+                if (outcome instanceof BackpressureOutcome) {
+                    if (downstreamTerminated.compareAndSet(false, true)
+                            && !sink.isCancelled()) {
+                        sink.error(new ReplayBackpressureException());
+                    }
+                    return;
+                }
+                if (outcome instanceof ResyncOutcome resync) {
+                    if (sink.requestedFromDownstream() <= 0) {
+                        terminalBackpressure(false, true);
+                        continue;
+                    }
+                    if (downstreamTerminated.compareAndSet(false, true)
+                            && !sink.isCancelled()) {
+                        sink.next(new ResyncRequired(
+                                scope, resync.currentVersion(), resync.reason()));
+                        sink.complete();
+                    }
+                    return;
+                }
+                try {
+                    deliveryWakeup.acquire();
+                    deliveryWakePending.set(false);
+                } catch (InterruptedException interrupted) {
+                    if (downstreamCancelled.get() || sink.isCancelled()) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+            cancel();
+        }
+
+        private void terminalBackpressure(boolean discardQueued, boolean cancelWorker) {
+            BackpressureOutcome replacement = new BackpressureOutcome(discardQueued);
+            while (true) {
+                TerminalOutcome existing = terminalOutcome.get();
+                if (existing instanceof BackpressureOutcome backpressure) {
+                    if (discardQueued && !backpressure.discardQueued()) {
+                        terminalOutcome.compareAndSet(existing, replacement);
+                    }
+                    break;
+                }
+                if (terminalOutcome.compareAndSet(existing, replacement)) {
+                    break;
+                }
+            }
+            logicalStopped.set(true);
+            cleanupLogical(cancelWorker);
+            if (discardQueued) {
+                clearSignalQueue();
+            }
+            signalDelivery();
         }
 
         private void terminalResync(
                 ResyncReason reason,
                 long currentVersion,
                 boolean cancelWorker) {
-            if (!terminated.compareAndSet(false, true)) {
+            if (!terminalOutcome.compareAndSet(null,
+                    new ResyncOutcome(reason, Math.max(0L, currentVersion)))) {
                 return;
             }
-            cleanup(cancelWorker);
-            if (sink.isCancelled()) {
-                return;
-            }
-            if (sink.requestedFromDownstream() <= 0) {
-                sink.error(new ReplayBackpressureException());
-                return;
-            }
-            sink.next(new ResyncRequired(scope, Math.max(0L, currentVersion), reason));
-            sink.complete();
+            logicalStopped.set(true);
+            cleanupLogical(cancelWorker);
+            signalDelivery();
         }
 
         private long terminalCurrentVersion() {
@@ -464,16 +679,24 @@ public class AgentTaskEventReplayServiceImpl
         }
 
         private void cancel() {
-            terminated.set(true);
-            cleanup(true);
+            downstreamCancelled.set(true);
+            logicalStopped.set(true);
+            clearSignalQueue();
+            cleanupLogical(true);
+            signalDelivery();
+            DeliveryTask task = deliveryTask.get();
+            if (task != null) {
+                task.interrupt();
+            }
+            releaseDeliveryPermitIfIdle();
         }
 
-        private void cleanup(boolean cancelWorker) {
-            if (!cleaned.compareAndSet(false, true)) {
+        private void cleanupLogical(boolean cancelWorker) {
+            if (!logicalCleaned.compareAndSet(false, true)) {
                 return;
             }
             dirty.set(false);
-            highestHintedVersion.set(deliveredVersion.get());
+            highestHintedVersion.set(catchUpVersion.get());
             Disposable live = liveSubscription.getAndSet(null);
             if (live != null) {
                 live.dispose();
@@ -489,13 +712,48 @@ public class AgentTaskEventReplayServiceImpl
                     worker.cancel(true);
                 }
             }
-            activeSubscriptions.remove(this);
+            releaseActivePermit();
+        }
+
+        private void clearSignalQueue() {
+            int removed = 0;
+            while (signalQueue.poll() != null) {
+                removed++;
+            }
+            if (removed != 0) {
+                outstandingSignals.addAndGet(-removed);
+            }
+        }
+
+        private void releaseActivePermit() {
+            if (activePermitHeld.compareAndSet(true, false)) {
+                activeSubscriptionPermits.release();
+            }
+        }
+
+        private void releaseDeliveryPermitIfIdle() {
+            if (!deliveryLaneStarted.get()) {
+                releaseDeliveryPermit();
+            }
+        }
+
+        private void releaseDeliveryPermit() {
+            if (deliveryPermitHeld.compareAndSet(true, false)) {
+                deliveryReservations.remove(this);
+                deliveryPermits.release();
+            }
         }
 
         private void decrementTimerCount() {
             if (timerCounted.compareAndSet(true, false)) {
                 activeTimers.decrementAndGet();
             }
+        }
+
+        private void deliveryExited(DeliveryTask task) {
+            deliveryTask.compareAndSet(task, null);
+            deliveryLaneStarted.set(false);
+            releaseDeliveryPermit();
         }
     }
 
@@ -522,10 +780,54 @@ public class AgentTaskEventReplayServiceImpl
             state.workerTask.compareAndSet(this, null);
             state.workerScheduled.set(false);
             if (rescheduleAllowed.get()
-                    && state.dirty.get() && !state.terminated.get()) {
+                    && state.dirty.get() && !state.logicalStopped.get()) {
                 state.scheduleWorker();
             }
         }
+    }
+
+    private final class DeliveryTask implements Runnable {
+        private final SubscriptionState state;
+        private final AtomicReference<Thread> runner = new AtomicReference<>();
+
+        private DeliveryTask(SubscriptionState state) {
+            this.state = state;
+        }
+
+        @Override
+        public void run() {
+            runner.set(Thread.currentThread());
+            inFlightDeliveries.incrementAndGet();
+            try {
+                state.runDelivery();
+            } finally {
+                runner.set(null);
+                inFlightDeliveries.decrementAndGet();
+                state.deliveryExited(this);
+            }
+        }
+
+        private void interrupt() {
+            Thread thread = runner.get();
+            if (thread != null) {
+                thread.interrupt();
+            }
+        }
+
+        private void abandonBeforeRun() {
+            state.deliveryExited(this);
+        }
+    }
+
+    private sealed interface TerminalOutcome permits BackpressureOutcome, ResyncOutcome {
+    }
+
+    private record BackpressureOutcome(boolean discardQueued) implements TerminalOutcome {
+    }
+
+    private record ResyncOutcome(
+            ResyncReason reason,
+            long currentVersion) implements TerminalOutcome {
     }
 
     record ReplayPolicy(
@@ -549,6 +851,23 @@ public class AgentTaskEventReplayServiceImpl
         }
     }
 
+    record ReplayResourceLimits(
+            int signalQueueCapacity,
+            int maxActiveSubscriptions,
+            int maxDeliverySlots) {
+        ReplayResourceLimits {
+            if (signalQueueCapacity <= 0
+                    || maxActiveSubscriptions <= 0
+                    || maxDeliverySlots <= 0) {
+                throw new IllegalArgumentException("replay resource limits must be positive");
+            }
+            if (maxDeliverySlots < maxActiveSubscriptions) {
+                throw new IllegalArgumentException(
+                        "delivery slots must cover all active subscriptions");
+            }
+        }
+    }
+
     private static final class TerminalReplay extends RuntimeException {
         private final ResyncReason reason;
         private final long currentVersion;
@@ -562,12 +881,25 @@ public class AgentTaskEventReplayServiceImpl
 
     private static ExecutorService createCatchUpExecutor() {
         ThreadPoolExecutor executor = new ThreadPoolExecutor(
-                WORKER_THREADS,
-                WORKER_THREADS,
+                CATCH_UP_THREADS,
+                CATCH_UP_THREADS,
                 30L,
                 TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(WORKER_QUEUE_CAPACITY),
+                new ArrayBlockingQueue<>(CATCH_UP_QUEUE_CAPACITY),
                 daemonThreadFactory("agent-task-replay-worker"),
+                new ThreadPoolExecutor.AbortPolicy());
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    private static ExecutorService createDeliveryExecutor(int maxDeliverySlots) {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                maxDeliverySlots,
+                maxDeliverySlots,
+                30L,
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(maxDeliverySlots),
+                daemonThreadFactory("agent-task-replay-delivery"),
                 new ThreadPoolExecutor.AbortPolicy());
         executor.allowCoreThreadTimeOut(true);
         return executor;
