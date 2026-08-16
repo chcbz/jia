@@ -402,6 +402,82 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
+    void productionServiceCloseAbortsZeroDemandResyncAndTerminatesDeliveryExecutor() {
+        service.close();
+        shutdown(timer);
+        shutdown(worker);
+        shutdown(delivery);
+        service = new AgentTaskEventReplayServiceImpl(eventDao, broker);
+        store.setCurrent(0L);
+        DemandControlledSubscriber subscriber = new DemandControlledSubscriber();
+        service.replay(SCOPE, 1L).subscribe(subscriber);
+        awaitCondition(() -> service.activeSubscriptionCount() == 0
+                && service.activeTimerCount() == 0
+                && broker.trackedLeaseCount() == 0
+                && service.inFlightCatchUpCount() == 0
+                && service.deliveryPermitCount() == 1);
+
+        service.close();
+        await(subscriber.terminal);
+
+        assertEquals(1, subscriber.completions.get());
+        assertTrue(subscriber.errors.isEmpty(), subscriber.errors.toString());
+        assertTrue(subscriber.signals.isEmpty(), subscriber.signals.toString());
+        assertTrue(subscriber.isDisposed());
+        awaitCleaned();
+        assertTrue(service.deliveryExecutorTerminated());
+        assertEquals(0, service.pendingDeliveryTaskCount());
+    }
+
+    @Test
+    void serviceCloseAndResyncRequestRaceHasOneTerminalAndNoPostTerminalSignal()
+            throws Exception {
+        for (int iteration = 0; iteration < 24; iteration++) {
+            if (iteration != 0) {
+                replaceResources(
+                        policy(Duration.ofHours(1)), resourceLimits(4, 2, 4), 2, 4, 4);
+            }
+            store.setCurrent(0L);
+            DemandControlledSubscriber subscriber = new DemandControlledSubscriber();
+            service.replay(SCOPE, 1L).subscribe(subscriber);
+            awaitCondition(() -> service.activeSubscriptionCount() == 0
+                    && service.activeTimerCount() == 0
+                    && broker.trackedLeaseCount() == 0
+                    && service.inFlightCatchUpCount() == 0
+                    && service.deliveryPermitCount() == 1);
+
+            CountDownLatch start = new CountDownLatch(1);
+            Thread requester = new Thread(() -> {
+                await(start);
+                subscriber.requestOne();
+            }, "c03-resync-request-racer-" + iteration);
+            Thread closer = new Thread(() -> {
+                await(start);
+                service.close();
+            }, "c03-resync-close-racer-" + iteration);
+            requester.start();
+            closer.start();
+            start.countDown();
+            requester.join(TimeUnit.SECONDS.toMillis(2));
+            closer.join(TimeUnit.SECONDS.toMillis(2));
+            await(subscriber.terminal);
+
+            assertTrue(!requester.isAlive());
+            assertTrue(!closer.isAlive());
+            assertEquals(1, subscriber.completions.get());
+            assertTrue(subscriber.errors.isEmpty(), subscriber.errors.toString());
+            assertTrue(subscriber.signals.size() <= 1, subscriber.signals.toString());
+            assertEquals(0, subscriber.postTerminalSignals.get());
+            if (!subscriber.signals.isEmpty()) {
+                assertResyncSignal(
+                        subscriber.signals.get(0), 0L, ResyncReason.CURSOR_AHEAD);
+            }
+            assertTrue(subscriber.isDisposed());
+            awaitCleaned();
+        }
+    }
+
+    @Test
     void replayBudgetExhaustionIsTerminalAfterBoundedPrefix() {
         replaceService(new AgentTaskEventReplayServiceImpl.ReplayPolicy(
                 2, 2, 4, 4, Duration.ofHours(1)));
@@ -961,7 +1037,7 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void serviceCloseDrainsAcceptedPrefixBeforeCompletingAndNeverEmitsAfterTerminal() {
+    void serviceCloseDiscardsUndeliveredPrefixAndNeverEmitsAfterTerminal() {
         store.appendRange(1L, 3L);
         CountDownLatch firstCallbackEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstCallback = new CountDownLatch(1);
@@ -993,7 +1069,7 @@ class AgentTaskEventReplayServiceImplTest {
         releaseFirstCallback.countDown();
         await(terminal);
 
-        assertEquals(List.of("event-1", "event-2", "event-3", "complete"), sequence);
+        assertEquals(List.of("event-1", "complete"), sequence);
         assertTrue(replay.isDisposed());
         awaitCleaned();
     }
@@ -1121,6 +1197,47 @@ class AgentTaskEventReplayServiceImplTest {
         service = new AgentTaskEventReplayServiceImpl(
                 eventDao, broker, worker, delivery, timer,
                 replacementPolicy, replacementLimits);
+    }
+
+    private static final class DemandControlledSubscriber
+            extends BaseSubscriber<ReplaySignal> {
+        private final List<ReplaySignal> signals = new CopyOnWriteArrayList<>();
+        private final List<Throwable> errors = new CopyOnWriteArrayList<>();
+        private final AtomicInteger completions = new AtomicInteger();
+        private final AtomicInteger postTerminalSignals = new AtomicInteger();
+        private final AtomicBoolean terminated = new AtomicBoolean();
+        private final CountDownLatch terminal = new CountDownLatch(1);
+
+        @Override
+        protected void hookOnSubscribe(Subscription subscription) {
+            // Demand is controlled explicitly by the test.
+        }
+
+        @Override
+        protected void hookOnNext(ReplaySignal value) {
+            if (terminated.get()) {
+                postTerminalSignals.incrementAndGet();
+            }
+            signals.add(value);
+        }
+
+        @Override
+        protected void hookOnError(Throwable throwable) {
+            terminated.set(true);
+            errors.add(throwable);
+            terminal.countDown();
+        }
+
+        @Override
+        protected void hookOnComplete() {
+            terminated.set(true);
+            completions.incrementAndGet();
+            terminal.countDown();
+        }
+
+        private void requestOne() {
+            request(1L);
+        }
     }
 
     private static BaseSubscriber<ReplaySignal> blockingSubscriber(

@@ -192,6 +192,10 @@ public class AgentTaskEventReplayServiceImpl
         return -1;
     }
 
+    boolean deliveryExecutorTerminated() {
+        return deliveryExecutor.isTerminated();
+    }
+
     private final class SubscriptionState {
         private final TaskScope scope;
         private final AgentTaskEventBroker.TaskScope wakeupScope;
@@ -209,6 +213,7 @@ public class AgentTaskEventReplayServiceImpl
         private final AtomicBoolean logicalCleaned = new AtomicBoolean();
         private final AtomicBoolean downstreamCancelled = new AtomicBoolean();
         private final AtomicBoolean downstreamTerminated = new AtomicBoolean();
+        private final AtomicBoolean serviceShutdownRequested = new AtomicBoolean();
         private final AtomicBoolean timerCounted = new AtomicBoolean();
         private final AtomicBoolean activePermitHeld = new AtomicBoolean();
         private final AtomicBoolean deliveryPermitHeld = new AtomicBoolean();
@@ -253,15 +258,19 @@ public class AgentTaskEventReplayServiceImpl
                 return;
             }
             if (closed.get()) {
-                TerminalOutcome winner = winTerminal(ServiceClosedOutcome.INSTANCE);
+                serviceClosed();
                 stopBeforeStart();
-                deliverTerminal(winner);
+                deliverServiceShutdown();
                 return;
             }
             if (!startDeliveryLane()) {
                 TerminalOutcome winner = winTerminal(CapacityOutcome.INSTANCE);
                 stopBeforeStart();
-                deliverTerminal(winner);
+                if (serviceShutdownRequested.get()) {
+                    deliverServiceShutdown();
+                } else {
+                    deliverTerminal(winner);
+                }
                 return;
             }
 
@@ -567,6 +576,11 @@ public class AgentTaskEventReplayServiceImpl
 
         private void runDelivery() {
             while (!downstreamCancelled.get() && !sink.isCancelled()) {
+                if (serviceShutdownRequested.get()) {
+                    clearSignalQueue();
+                    deliverServiceShutdown();
+                    return;
+                }
                 TerminalOutcome outcome = terminalOutcome.get();
                 if (outcome instanceof BackpressureOutcome backpressure
                         && backpressure.discardQueued()) {
@@ -590,6 +604,12 @@ public class AgentTaskEventReplayServiceImpl
                             outstandingSignals.decrementAndGet();
                             return;
                         }
+                        if (serviceShutdownRequested.get()) {
+                            outstandingSignals.decrementAndGet();
+                            clearSignalQueue();
+                            deliverServiceShutdown();
+                            return;
+                        }
                         try {
                             sink.next(signal);
                             deliveredVersion.set(signal.eventVersion());
@@ -602,6 +622,11 @@ public class AgentTaskEventReplayServiceImpl
                     }
                 }
 
+                if (serviceShutdownRequested.get()) {
+                    clearSignalQueue();
+                    deliverServiceShutdown();
+                    return;
+                }
                 outcome = terminalOutcome.get();
                 if (outcome != null && signalQueue.isEmpty()
                         && deliverTerminal(outcome)) {
@@ -632,6 +657,9 @@ public class AgentTaskEventReplayServiceImpl
         }
 
         private boolean deliverTerminal(TerminalOutcome winner) {
+            if (serviceShutdownRequested.get()) {
+                return deliverServiceShutdown();
+            }
             if (winner instanceof ResyncOutcome
                     && sink.requestedFromDownstream() <= 0) {
                 return false;
@@ -663,6 +691,16 @@ public class AgentTaskEventReplayServiceImpl
             return true;
         }
 
+        private boolean deliverServiceShutdown() {
+            if (!downstreamTerminated.compareAndSet(false, true)) {
+                return true;
+            }
+            if (!sink.isCancelled()) {
+                sink.complete();
+            }
+            return true;
+        }
+
         private void terminalBackpressure(boolean discardQueued, boolean cancelWorker) {
             TerminalOutcome winner = winTerminal(new BackpressureOutcome(discardQueued));
             logicalStopped.set(true);
@@ -685,10 +723,13 @@ public class AgentTaskEventReplayServiceImpl
         }
 
         private void serviceClosed() {
+            serviceShutdownRequested.set(true);
             winTerminal(ServiceClosedOutcome.INSTANCE);
             logicalStopped.set(true);
+            clearSignalQueue();
             cleanupLogical(true);
             signalDelivery();
+            releaseDeliveryPermitIfIdle();
         }
 
         private long terminalCurrentVersion() {
