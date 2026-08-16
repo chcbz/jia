@@ -142,16 +142,11 @@ public class AgentTaskEventReplayServiceImpl
             return;
         }
         List<SubscriptionState> subscriptions = new ArrayList<>(deliveryReservations);
-        subscriptions.forEach(SubscriptionState::cancel);
+        subscriptions.forEach(SubscriptionState::serviceClosed);
         if (ownsExecutors) {
             timerExecutor.shutdownNow();
             catchUpExecutor.shutdownNow();
-            List<Runnable> abandonedDeliveries = deliveryExecutor.shutdownNow();
-            abandonedDeliveries.forEach(runnable -> {
-                if (runnable instanceof DeliveryTask task) {
-                    task.abandonBeforeRun();
-                }
-            });
+            deliveryExecutor.shutdown();
             awaitTermination(timerExecutor);
             awaitTermination(catchUpExecutor);
             awaitTermination(deliveryExecutor);
@@ -540,7 +535,7 @@ public class AgentTaskEventReplayServiceImpl
                 terminalBackpressure(true, false);
                 return false;
             }
-            if (downstreamCancelled.get() || sink.isCancelled()) {
+            if (logicalStopped.get() || downstreamCancelled.get() || sink.isCancelled()) {
                 if (signalQueue.remove(signal)) {
                     outstandingSignals.decrementAndGet();
                 }
@@ -581,7 +576,11 @@ public class AgentTaskEventReplayServiceImpl
                 }
 
                 if (!signalQueue.isEmpty() && sink.requestedFromDownstream() <= 0) {
-                    terminalBackpressure(false, true);
+                    if (outcome instanceof ServiceClosedOutcome) {
+                        clearSignalQueue();
+                    } else {
+                        terminalBackpressure(false, true);
+                    }
                     continue;
                 }
                 DurableEvent signal = signalQueue.poll();
@@ -622,6 +621,13 @@ public class AgentTaskEventReplayServiceImpl
                     }
                     return;
                 }
+                if (outcome instanceof ServiceClosedOutcome) {
+                    if (downstreamTerminated.compareAndSet(false, true)
+                            && !sink.isCancelled()) {
+                        sink.complete();
+                    }
+                    return;
+                }
                 try {
                     deliveryWakeup.acquire();
                     deliveryWakePending.set(false);
@@ -639,6 +645,9 @@ public class AgentTaskEventReplayServiceImpl
             BackpressureOutcome replacement = new BackpressureOutcome(discardQueued);
             while (true) {
                 TerminalOutcome existing = terminalOutcome.get();
+                if (existing instanceof ServiceClosedOutcome) {
+                    break;
+                }
                 if (existing instanceof BackpressureOutcome backpressure) {
                     if (discardQueued && !backpressure.discardQueued()) {
                         terminalOutcome.compareAndSet(existing, replacement);
@@ -651,7 +660,7 @@ public class AgentTaskEventReplayServiceImpl
             }
             logicalStopped.set(true);
             cleanupLogical(cancelWorker);
-            if (discardQueued) {
+            if (discardQueued && terminalOutcome.get() instanceof BackpressureOutcome) {
                 clearSignalQueue();
             }
             signalDelivery();
@@ -670,6 +679,13 @@ public class AgentTaskEventReplayServiceImpl
             signalDelivery();
         }
 
+        private void serviceClosed() {
+            terminalOutcome.compareAndSet(null, ServiceClosedOutcome.INSTANCE);
+            logicalStopped.set(true);
+            cleanupLogical(true);
+            signalDelivery();
+        }
+
         private long terminalCurrentVersion() {
             return Math.max(0L, lastDurableHighWater.get());
         }
@@ -683,10 +699,12 @@ public class AgentTaskEventReplayServiceImpl
             logicalStopped.set(true);
             clearSignalQueue();
             cleanupLogical(true);
-            signalDelivery();
-            DeliveryTask task = deliveryTask.get();
-            if (task != null) {
-                task.interrupt();
+            if (!downstreamTerminated.get()) {
+                signalDelivery();
+                DeliveryTask task = deliveryTask.get();
+                if (task != null) {
+                    task.interrupt();
+                }
             }
             releaseDeliveryPermitIfIdle();
         }
@@ -813,13 +831,10 @@ public class AgentTaskEventReplayServiceImpl
                 thread.interrupt();
             }
         }
-
-        private void abandonBeforeRun() {
-            state.deliveryExited(this);
-        }
     }
 
-    private sealed interface TerminalOutcome permits BackpressureOutcome, ResyncOutcome {
+    private sealed interface TerminalOutcome
+            permits BackpressureOutcome, ResyncOutcome, ServiceClosedOutcome {
     }
 
     private record BackpressureOutcome(boolean discardQueued) implements TerminalOutcome {
@@ -828,6 +843,10 @@ public class AgentTaskEventReplayServiceImpl
     private record ResyncOutcome(
             ResyncReason reason,
             long currentVersion) implements TerminalOutcome {
+    }
+
+    private enum ServiceClosedOutcome implements TerminalOutcome {
+        INSTANCE
     }
 
     record ReplayPolicy(

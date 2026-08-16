@@ -776,28 +776,220 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void closeCancelsActiveSubscriptionAndIsIdempotentWithCancelRace() throws Exception {
+    void serviceCloseCompletesWithoutManualDisposeAndReleasesAllResources() {
         store.setCurrent(0L);
-        Disposable replay = service.replay(SCOPE, 0L).subscribe();
-        awaitCondition(() -> broker.trackedLeaseCount() == 1);
+        AtomicInteger completions = new AtomicInteger();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch terminal = new CountDownLatch(1);
+        Disposable replay = service.replay(SCOPE, 0L).subscribe(
+                ignored -> { },
+                error -> {
+                    failure.set(error);
+                    terminal.countDown();
+                },
+                () -> {
+                    completions.incrementAndGet();
+                    terminal.countDown();
+                });
+        awaitCondition(() -> broker.trackedLeaseCount() == 1
+                && service.activeTimerCount() == 1);
 
-        Thread cancel = new Thread(replay::dispose, "c03-cancel-racer");
-        cancel.start();
         service.close();
-        cancel.join(TimeUnit.SECONDS.toMillis(2));
-        assertTrue(!cancel.isAlive());
+        await(terminal);
 
+        assertEquals(1, completions.get());
+        assertEquals(null, failure.get());
+        assertTrue(replay.isDisposed());
         awaitCleaned();
         service.close();
         assertEquals(1, broker.finalSignals.get());
     }
 
     @Test
-    void productionDefaultsUseOwnedSharedWorkersAndCloseReleasesActiveState() {
+    void serviceCloseAndDownstreamDisposeRaceHasAtMostOneTerminalAndNoLeaks()
+            throws Exception {
+        for (int iteration = 0; iteration < 12; iteration++) {
+            if (iteration != 0) {
+                replaceResources(
+                        policy(Duration.ofHours(1)), resourceLimits(4, 2, 4), 2, 4, 4);
+            }
+            store.setCurrent(0L);
+            AtomicInteger completions = new AtomicInteger();
+            AtomicInteger errors = new AtomicInteger();
+            Disposable replay = service.replay(SCOPE, 0L).subscribe(
+                    ignored -> { },
+                    ignored -> errors.incrementAndGet(),
+                    completions::incrementAndGet);
+            awaitCondition(() -> broker.trackedLeaseCount() == 1
+                    && service.activeTimerCount() == 1);
+            CountDownLatch start = new CountDownLatch(1);
+            Thread closer = new Thread(() -> {
+                await(start);
+                service.close();
+            }, "c03-service-close-racer-" + iteration);
+            Thread disposer = new Thread(() -> {
+                await(start);
+                replay.dispose();
+            }, "c03-downstream-dispose-racer-" + iteration);
+            closer.start();
+            disposer.start();
+            start.countDown();
+            closer.join(TimeUnit.SECONDS.toMillis(2));
+            disposer.join(TimeUnit.SECONDS.toMillis(2));
+
+            assertTrue(!closer.isAlive());
+            assertTrue(!disposer.isAlive());
+            awaitCondition(replay::isDisposed);
+            awaitCleaned();
+            assertTrue(completions.get() <= 1);
+            assertEquals(0, errors.get());
+        }
+    }
+
+    @Test
+    void serviceCloseAndDeliveryExecutorRejectionRaceTerminatesExactlyOnceWithoutAllocation()
+            throws Exception {
+        for (int iteration = 0; iteration < 12; iteration++) {
+            if (iteration != 0) {
+                replaceResources(
+                        policy(Duration.ofHours(1)), resourceLimits(4, 2, 4), 2, 4, 4);
+            }
+            store.setCurrent(0L);
+            Flux<ReplaySignal> replay = service.replay(SCOPE, 0L);
+            delivery.shutdownNow();
+            AtomicInteger completions = new AtomicInteger();
+            AtomicInteger errors = new AtomicInteger();
+            CountDownLatch terminal = new CountDownLatch(1);
+            CountDownLatch start = new CountDownLatch(1);
+            Thread subscriber = new Thread(() -> {
+                await(start);
+                replay.subscribe(ignored -> { }, ignored -> {
+                    errors.incrementAndGet();
+                    terminal.countDown();
+                }, () -> {
+                    completions.incrementAndGet();
+                    terminal.countDown();
+                });
+            }, "c03-rejected-delivery-subscriber-" + iteration);
+            Thread closer = new Thread(() -> {
+                await(start);
+                service.close();
+            }, "c03-rejected-delivery-close-" + iteration);
+            subscriber.start();
+            closer.start();
+            start.countDown();
+            subscriber.join(TimeUnit.SECONDS.toMillis(2));
+            closer.join(TimeUnit.SECONDS.toMillis(2));
+            await(terminal);
+
+            assertTrue(!subscriber.isAlive());
+            assertTrue(!closer.isAlive());
+            assertEquals(1, completions.get() + errors.get());
+            assertEquals(0, broker.trackedLeaseCount());
+            assertEquals(0, service.activeSubscriptionCount());
+            assertEquals(0, service.activeTimerCount());
+            assertEquals(0, service.deliveryPermitCount());
+            assertEquals(0, service.scheduledWorkerTaskCount());
+            assertEquals(0, service.inFlightCatchUpCount());
+        }
+    }
+
+    @Test
+    void serviceCloseDrainsAcceptedPrefixBeforeCompletingAndNeverEmitsAfterTerminal() {
+        store.appendRange(1L, 3L);
+        CountDownLatch firstCallbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstCallback = new CountDownLatch(1);
+        CountDownLatch terminal = new CountDownLatch(1);
+        List<String> sequence = new CopyOnWriteArrayList<>();
+        AtomicBoolean completed = new AtomicBoolean();
+        Disposable replay = service.replay(SCOPE, 0L).subscribe(signal -> {
+            assertTrue(!completed.get(), "event must never follow service-close terminal");
+            long version = ((DurableEvent) signal).eventVersion();
+            sequence.add("event-" + version);
+            if (version == 1L) {
+                firstCallbackEntered.countDown();
+                await(releaseFirstCallback);
+            }
+        }, ignored -> terminal.countDown(), () -> {
+            completed.set(true);
+            sequence.add("complete");
+            terminal.countDown();
+        });
+        await(firstCallbackEntered);
+        awaitCondition(() -> store.pageCalls.get() >= 2
+                && service.inFlightCatchUpCount() == 0
+                && service.scheduledWorkerTaskCount() == 0);
+
+        service.close();
+        assertEquals(0, service.activeSubscriptionCount());
+        assertEquals(0, service.activeTimerCount());
+        assertEquals(0, broker.trackedLeaseCount());
+        releaseFirstCallback.countDown();
+        await(terminal);
+
+        assertEquals(List.of("event-1", "event-2", "event-3", "complete"), sequence);
+        assertTrue(replay.isDisposed());
+        awaitCleaned();
+    }
+
+    @Test
+    void serviceCloseIsBoundedWithPermanentCallbackAndCompletesAfterCallbackReturns() {
+        service.close();
+        store.append(1L);
+        service = new AgentTaskEventReplayServiceImpl(eventDao, broker);
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        CountDownLatch terminal = new CountDownLatch(1);
+        AtomicInteger completions = new AtomicInteger();
+        Disposable replay = service.replay(SCOPE, 0L).subscribe(ignored -> {
+            callbackEntered.countDown();
+            while (releaseCallback.getCount() > 0) {
+                try {
+                    releaseCallback.await();
+                } catch (InterruptedException ignoredInterrupt) {
+                    // Deliberately ignore interruption until the test releases the callback.
+                }
+            }
+        }, ignored -> terminal.countDown(), () -> {
+            completions.incrementAndGet();
+            terminal.countDown();
+        });
+        await(callbackEntered);
+        awaitCondition(() -> service.inFlightCatchUpCount() == 0
+                && service.scheduledWorkerTaskCount() == 0);
+
+        long closeStarted = System.nanoTime();
+        service.close();
+        long closeMillis = TimeUnit.NANOSECONDS.toMillis(
+                System.nanoTime() - closeStarted);
+
+        assertTrue(closeMillis < TimeUnit.SECONDS.toMillis(2),
+                "service close must remain bounded, took " + closeMillis + "ms");
+        assertEquals(0, service.activeSubscriptionCount());
+        assertEquals(0, service.activeTimerCount());
+        assertEquals(0, broker.trackedLeaseCount());
+        assertEquals(0, service.inFlightCatchUpCount());
+        assertEquals(1, service.deliveryPermitCount());
+
+        releaseCallback.countDown();
+        await(terminal);
+        assertEquals(1, completions.get());
+        assertTrue(replay.isDisposed());
+        awaitCleaned();
+    }
+
+    @Test
+    void productionDefaultsUseOwnedSharedWorkersAndCloseCompletesSubscription() {
         service.close();
         store.daoThreads.clear();
         service = new AgentTaskEventReplayServiceImpl(eventDao, broker);
-        Disposable replay = service.replay(SCOPE, 0L).subscribe();
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicInteger completions = new AtomicInteger();
+        Disposable replay = service.replay(SCOPE, 0L).subscribe(
+                ignored -> { }, ignored -> { }, () -> {
+                    completions.incrementAndGet();
+                    completed.countDown();
+                });
         awaitCondition(() -> store.currentCalls.get() >= 1
                 && service.scheduledWorkerTaskCount() == 0);
 
@@ -805,8 +997,10 @@ class AgentTaskEventReplayServiceImplTest {
                 name -> name.startsWith("agent-task-replay-worker-")),
                 store.daoThreads.toString());
         service.close();
+        await(completed);
+        assertEquals(1, completions.get());
+        assertTrue(replay.isDisposed());
         awaitCleaned();
-        replay.dispose();
     }
 
     @Test
