@@ -1,5 +1,6 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.service.AgentTaskEventAccessService;
 import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
@@ -45,14 +46,18 @@ public class AgentTaskEventStreamController {
 
     private final AgentTaskEventAccessService accessService;
     private final AgentTaskEventReplayService replayService;
+    private final AgentTaskEventsGate taskEventsGate;
 
     public AgentTaskEventStreamController(
             AgentTaskEventAccessService accessService,
-            AgentTaskEventReplayService replayService) {
+            AgentTaskEventReplayService replayService,
+            AgentTaskEventsGate taskEventsGate) {
         this.accessService = java.util.Objects.requireNonNull(
                 accessService, "accessService");
         this.replayService = java.util.Objects.requireNonNull(
                 replayService, "replayService");
+        this.taskEventsGate = java.util.Objects.requireNonNull(
+                taskEventsGate, "taskEventsGate");
     }
 
     @GetMapping(value = "/{taskId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -62,6 +67,9 @@ public class AgentTaskEventStreamController {
             Authentication authentication) {
         Scope jwt = requireJwtScope(authentication);
         RawRequest raw = requireRawRequest(taskId, request);
+        if (!taskEventsGate.allows(jwt.jiacn(), jwt.clientId())) {
+            throw unavailable();
+        }
         AuthorizedSubject subject = accessService.authorize(
                 jwt.jiacn(), jwt.clientId(), taskId, raw.actorAgentId());
         if (subject == null || TransactionSynchronizationManager.isActualTransactionActive()) {

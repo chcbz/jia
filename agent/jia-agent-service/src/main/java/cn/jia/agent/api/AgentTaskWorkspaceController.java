@@ -1,9 +1,11 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
 import cn.jia.core.util.JsonUtil;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -17,7 +19,6 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
@@ -34,13 +35,19 @@ public class AgentTaskWorkspaceController {
     static final String CACHE_CONTROL_VALUE = "private, no-store";
 
     private final AgentTaskWorkspaceService workspaceService;
+    private final AgentTaskEventsGate taskEventsGate;
 
     @GetMapping(value = "/{taskId}/workspace", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<byte[]> workspace(@PathVariable String taskId,
-            @RequestParam String actorAgentId, Authentication authentication) {
-        requireRequestId(taskId, "taskId", 100);
-        requireRequestId(actorAgentId, "actorAgentId", 100);
+            HttpServletRequest request, Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
+        requireRequestId(taskId, "taskId", 100);
+        String actorAgentId = singleRequiredQuery(request, "actorAgentId");
+        requireRequestId(actorAgentId, "actorAgentId", 100);
+        if (!taskEventsGate.allows(scope.jiacn(), scope.clientId())) {
+            throw new AgentTaskWorkspaceException(
+                    AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE);
+        }
         AgentTaskWorkspaceDTO snapshot = workspaceService.snapshot(
                 scope.jiacn(), scope.clientId(), taskId, actorAgentId);
         byte[] body;
@@ -111,6 +118,15 @@ public class AgentTaskWorkspaceController {
             throw new WorkspaceAuthenticationException(true);
         }
         return new Scope(tenant, client);
+    }
+
+    private static String singleRequiredQuery(
+            HttpServletRequest request, String name) {
+        String[] values = request.getParameterValues(name);
+        if (values == null || values.length != 1) {
+            throw new WorkspaceRequestException(name);
+        }
+        return values[0];
     }
 
     private static void requireRequestId(String value, String name, int maxLength) {

@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.service.AgentTaskEventAccessService;
 import cn.jia.agent.service.AgentTaskEventReplayService;
@@ -79,14 +80,16 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     @Mock AgentTaskEventAccessService accessService;
     @Mock AgentTaskEventReplayService replayService;
+    @Mock AgentTaskEventsGate taskEventsGate;
 
     private AgentTaskEventStreamController controller;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        controller = new AgentTaskEventStreamController(accessService, replayService);
+        controller = new AgentTaskEventStreamController(accessService, replayService, taskEventsGate);
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
+        lenient().when(taskEventsGate.allows(any(), any())).thenReturn(true);
         lenient().when(accessService.authorize(TENANT, CLIENT, TASK, ACTOR))
                 .thenReturn(subject());
     }
@@ -170,6 +173,42 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 .andExpect(status().isForbidden())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         verifyNoInteractions(replayService);
+    }
+
+    @Test
+    void authenticationAndSyntaxPrecedeFeatureGate() throws Exception {
+        mvc.perform(get("/agent/tasks/{taskId}/events", " padded "))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        mvc.perform(get("/agent/tasks/{taskId}/events", " padded ")
+                        .principal(authenticateClaims(TENANT, 123)))
+                .andExpect(status().isForbidden())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
+                        .queryParam("actorAgentId", ACTOR)
+                        .queryParam("sinceVersion", "01")
+                        .principal(authenticate(TENANT, CLIENT)))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+
+        verifyNoInteractions(taskEventsGate);
+        verifyNoInteractions(accessService, replayService);
+    }
+
+    @Test
+    void disabledGateReturnsNoStore503WithoutSseOrAclReplayAllocation() throws Exception {
+        when(taskEventsGate.allows(TENANT, CLIENT)).thenReturn(false);
+
+        mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
+                        .queryParam("actorAgentId", ACTOR)
+                        .principal(authenticate(TENANT, CLIENT)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(request().asyncNotStarted())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(header().doesNotExist("X-Accel-Buffering"));
+
+        verify(taskEventsGate).allows(TENANT, CLIENT);
+        verifyNoInteractions(accessService, replayService);
     }
 
     @Test

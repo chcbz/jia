@@ -1,5 +1,6 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.service.AgentTaskEventAccessService;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
 import cn.jia.agent.service.impl.AgentTaskWorkspaceServiceImpl;
@@ -79,12 +80,54 @@ class AgentTaskEventStreamArchitectureTest {
     }
 
     @Test
+    void c05fUsesOneImmutableGateBeforeAclSnapshotReplayAndEmitterAllocation()
+            throws Exception {
+        Path root = apiRoot();
+        String workspace = Files.readString(root.resolve(
+                "agent/jia-agent-service/src/main/java/cn/jia/agent/api/AgentTaskWorkspaceController.java"),
+                StandardCharsets.UTF_8);
+        String events = Files.readString(root.resolve(
+                "agent/jia-agent-service/src/main/java/cn/jia/agent/api/AgentTaskEventStreamController.java"),
+                StandardCharsets.UTF_8);
+
+        assertTrue(workspace.contains("private final AgentTaskEventsGate taskEventsGate;"));
+        assertTrue(events.contains("private final AgentTaskEventsGate taskEventsGate;"));
+        assertOrdered(workspace, "requireJwtScope(authentication)",
+                "singleRequiredQuery(request, \"actorAgentId\")",
+                "taskEventsGate.allows(", "workspaceService.snapshot(");
+        assertOrdered(events, "requireJwtScope(authentication)",
+                "requireRawRequest(taskId, request)", "taskEventsGate.allows(",
+                "accessService.authorize(", "replayService.replay(",
+                "new ManagedSseEmitter(");
+
+        assertTrue(java.lang.reflect.Modifier.isFinal(AgentTaskEventsGate.class.getModifiers()));
+        for (java.lang.reflect.Field field : AgentTaskEventsGate.class.getDeclaredFields()) {
+            if (!field.isSynthetic()) {
+                assertTrue(java.lang.reflect.Modifier.isFinal(field.getModifiers()),
+                        field.getName());
+            }
+        }
+        assertEquals(0, Arrays.stream(AgentTaskEventsGate.class.getMethods())
+                .filter(method -> method.getName().startsWith("set"))
+                .count());
+    }
+
+    @Test
     void everyAcceptedC03SourceAndTestFileRemainsByteExact() throws Exception {
         Path root = apiRoot();
         for (Map.Entry<String, String> entry : FROZEN_C03_SHA256.entrySet()) {
             Path file = root.resolve(entry.getKey());
             assertTrue(Files.isRegularFile(file), entry.getKey());
             assertEquals(entry.getValue(), sha256(Files.readAllBytes(file)), entry.getKey());
+        }
+    }
+
+    private static void assertOrdered(String source, String... tokens) {
+        int previous = -1;
+        for (String token : tokens) {
+            int current = source.indexOf(token);
+            assertTrue(current > previous, token + " is out of order");
+            previous = current;
         }
     }
 

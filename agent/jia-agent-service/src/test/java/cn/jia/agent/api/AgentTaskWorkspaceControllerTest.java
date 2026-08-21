@@ -1,5 +1,6 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
@@ -34,7 +35,11 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -46,12 +51,14 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     @Mock AgentTaskWorkspaceService service;
+    @Mock AgentTaskEventsGate taskEventsGate;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
+        lenient().when(taskEventsGate.allows(anyString(), anyString())).thenReturn(true);
         mvc = MockMvcBuilders.standaloneSetup(
-                new AgentTaskWorkspaceController(service)).build();
+                new AgentTaskWorkspaceController(service, taskEventsGate)).build();
     }
 
     @AfterEach
@@ -97,6 +104,54 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                         .queryParam("actorAgentId", ACTOR).principal(badClaims))
                 .andExpect(status().isForbidden())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+    }
+
+    @Test
+    void authenticationAndClaimsPrecedeSyntaxAndGate() throws Exception {
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", " padded "))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+
+        Jwt badClaimsJwt = Jwt.withTokenValue("token")
+                .header("alg", "none")
+                .claim("jiacn", "tenant-a")
+                .claim("client_id", 123)
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", " padded ")
+                        .principal(new JwtAuthenticationToken(badClaimsJwt, List.of())))
+                .andExpect(status().isForbidden())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .principal(authenticate("tenant-a", "client-a")))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        verifyNoInteractions(taskEventsGate, service);
+    }
+
+    @Test
+    void disabledGateReturnsNoStore503BeforeWorkspaceServiceAllocation() throws Exception {
+        when(taskEventsGate.allows("tenant-a", "client-a")).thenReturn(false);
+
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR)
+                        .principal(authenticate("tenant-a", "client-a")))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(jsonPath("$.code").value("TASK_WORKSPACE_UNAVAILABLE"));
+
+        verify(taskEventsGate).allows("tenant-a", "client-a");
+        verify(service, never()).snapshot(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void duplicateActorQueryIsSyntaxErrorBeforeGate() throws Exception {
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR, "other")
+                        .principal(authenticate("tenant-a", "client-a")))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        verifyNoInteractions(taskEventsGate, service);
     }
 
     @Test
@@ -227,7 +282,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 new AnonymousAuthenticationFilter("c04-test-key"),
                 exceptionTranslation, denyAll);
         MockMvc secured = MockMvcBuilders.standaloneSetup(
-                        new AgentTaskWorkspaceController(service))
+                        new AgentTaskWorkspaceController(service, taskEventsGate))
                 .addFilters(new AgentTaskWorkspaceCacheControlFilter(),
                         new FilterChainProxy(securityChain))
                 .build();
