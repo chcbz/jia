@@ -7,8 +7,12 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ServletRequestPathUtils;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 
 import java.io.IOException;
 
@@ -16,15 +20,15 @@ import java.io.IOException;
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class AgentTaskWorkspaceCacheControlFilter extends OncePerRequestFilter {
+    private static final PathPattern EVENTS_PATH = PathPatternParser.defaultInstance.parse(
+            "/agent/tasks/{taskId}/events");
+    private static final PathPattern WORKSPACE_PATH = PathPatternParser.defaultInstance.parse(
+            "/agent/tasks/{taskId}/workspace");
+
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
-        String context = request.getContextPath();
-        if (context != null && !context.isEmpty() && path.startsWith(context)) {
-            path = path.substring(context.length());
-        }
-        return !(path.startsWith("/agent/tasks/")
-                && (path.endsWith("/workspace") || path.endsWith("/events")));
+        PathContainer path = ServletRequestPathUtils.parse(request).pathWithinApplication();
+        return !EVENTS_PATH.matches(path) && !WORKSPACE_PATH.matches(path);
     }
 
     @Override
