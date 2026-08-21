@@ -275,6 +275,37 @@ class AgentTaskWorkspaceMySqlTest {
     }
 
     @Test
+    void realIdentityPathAcceptsUnicodeCodePointBoundariesAndRejectsInvalidScalars() {
+        String supplementary = new String(Character.toChars(0x1f642));
+        String tenant = "t" + supplementary.repeat(49);
+        String client = "c" + supplementary.repeat(49);
+        String actor = "a" + supplementary.repeat(99);
+        String task = "task-unicode-identity";
+        seedIdentity(tenant, client, actor, 2L, "LEGACY_CANONICAL");
+        insertTask(tenant, client, task, 0L);
+        insertMember(tenant, client, task, actor, "worker", "accepted", 0L);
+        connectionEvidence.beginCapture();
+
+        AgentTaskWorkspaceDTO snapshot = transactional(workspaceDao)
+                .snapshot(tenant, client, task, actor);
+
+        assertEquals(task, snapshot.getTask().getTaskId());
+        assertEquals(actor, snapshot.getMembers().get(0).getAgentId());
+        connectionEvidence.assertSingleTransactionalConnection(
+                "REPEATABLE-READ", true);
+        assertReadOnlyMapperCoverage();
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> realAgentService.requireApiKeyOwnedAgent(
+                        client, "t" + supplementary.repeat(50), actor));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> realAgentService.requireApiKeyOwnedAgent(
+                        client, tenant, "a" + supplementary.repeat(100)));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> realAgentService.requireApiKeyOwnedAgent(
+                        client, tenant, "agent-\ud800"));
+    }
+
+    @Test
     void repeatableReadCommitBeforeReturnsEntireNewSnapshotOnOnePhysicalConnection() {
         insertBeforeState();
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> mutate());
@@ -478,25 +509,30 @@ class AgentTaskWorkspaceMySqlTest {
     }
 
     private void seedIdentity() {
+        seedIdentity(TENANT, CLIENT, ACTOR, 1L, "OPAQUE");
+    }
+
+    private void seedIdentity(
+            String tenant, String client, String actor, long id, String canonicalType) {
         jdbc.update("""
                 INSERT INTO agent_persona_binding
                     (id,jiacn,persona_code,agent_id,bound_at,status,
                      tenant_id,client_id,create_time,update_time)
-                VALUES (1,?,?,?,?,?,?,?,?,?)
-                """, TENANT, "wuyong", ACTOR, 1L, 1, TENANT, CLIENT, 1L, 1L);
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, id, tenant, "wuyong", actor, 1L, 1, tenant, client, 1L, 1L);
         jdbc.update("""
                 INSERT INTO agent_identity_registry
                     (id,canonical_agent_id,canonical_type,lifecycle_status,owner_jiacn,
                      binding_id,provisioned_at,activated_at,audit_reason,
                      tenant_id,client_id,create_time,update_time)
-                VALUES (1,?,'OPAQUE','ACTIVE',?,1,1,1,'c04-r2',?,?,1,1)
-                """, ACTOR, TENANT, TENANT, CLIENT);
+                VALUES (?,?,?,'ACTIVE',?,?,1,1,'c04-r3',?,?,1,1)
+                """, id, actor, canonicalType, tenant, id, tenant, client);
         jdbc.update("""
                 INSERT INTO agent_runtime
                     (id,agent_id,name,owner_jiacn,persona_code,persona_name,binding_id,
                      abilities,status,last_seen_at,tenant_id,client_id,create_time,update_time)
-                VALUES (1,?,'Agent',?,'wuyong','Wu Yong',1,'[]','online',1,?,?,1,1)
-                """, ACTOR, TENANT, TENANT, CLIENT);
+                VALUES (?,?,'Agent',?,'wuyong','Wu Yong',?,'[]','online',1,?,?,1,1)
+                """, id, actor, tenant, id, tenant, client);
     }
 
     private void insertTask(String tenant, String client, String taskId, long currentVersion) {

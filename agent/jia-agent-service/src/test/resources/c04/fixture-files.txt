@@ -9,9 +9,11 @@ agent/jia-agent-mapper/src/test/java/cn/jia/agent/dao/AgentTaskWorkspaceMapperRe
 agent/jia-agent-service/build.gradle
 agent/jia-agent-service/src/main/java/cn/jia/agent/api/AgentTaskWorkspaceCacheControlFilter.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/api/AgentTaskWorkspaceController.java
+agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentIdentityServiceImpl.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskWorkspaceEventValidator.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskWorkspaceServiceImpl.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/api/AgentTaskWorkspaceControllerTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentIdentityServiceImplTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskWorkspaceFixtureManifestTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskWorkspaceMySqlTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskWorkspaceRepeatableReadTest.java
@@ -19,4 +21,5 @@ agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskWorkspa
 agent/jia-agent-service/src/test/resources/c04/compute-fixture-digest.sh
 agent/jia-agent-service/src/test/resources/c04/fixture-files.txt
 agent/jia-agent-service/src/test/scripts/run-c04-isolated-mysql.sh
+common/jia-common-service/src/main/java/cn/jia/core/config/DruidDataSourceConfig.java
 common/jia-common-service/src/main/java/cn/jia/core/config/db/DataSourceConfig.java
