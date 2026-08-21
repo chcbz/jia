@@ -1,21 +1,28 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.service.AgentTaskEventAccessService;
+import cn.jia.agent.service.AgentTaskWorkspaceService;
+import cn.jia.agent.service.impl.AgentTaskWorkspaceServiceImpl;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTaskEventStreamArchitectureTest {
+    private static final String FROZEN_C04_WORKSPACE_API_SHA256 =
+            "963949fe9fa44e9ff1022cf13fa12fe6cf82857e3967e7aa4b4ccfd6886cd437";
     private static final Map<String, String> FROZEN_C03_SHA256 = frozenC03();
 
     @Test
@@ -40,6 +47,35 @@ class AgentTaskEventStreamArchitectureTest {
         assertEquals(1, occurrences(combined, "replayService.replay("));
         assertTrue(combined.contains("new ManagedSseEmitter(SSE_TIMEOUT_MILLIS)"));
         assertEquals(30_000L, AgentTaskEventStreamController.SSE_TIMEOUT_MILLIS);
+    }
+
+    @Test
+    void publicWorkspaceApiRemainsByteExactAndC05UsesOnlyServiceModuleAccessContract()
+            throws Exception {
+        Path root = apiRoot();
+        Path workspaceApi = root.resolve(
+                "agent/jia-agent-api/src/main/java/cn/jia/agent/service/AgentTaskWorkspaceService.java");
+        assertEquals(FROZEN_C04_WORKSPACE_API_SHA256,
+                sha256(Files.readAllBytes(workspaceApi)));
+        assertEquals(Set.of("snapshot"), Arrays.stream(
+                        AgentTaskWorkspaceService.class.getDeclaredMethods())
+                .map(java.lang.reflect.Method::getName)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet()));
+        assertEquals(0, AgentTaskWorkspaceService.class.getDeclaredClasses().length);
+
+        Path internalAccess = root.resolve(
+                "agent/jia-agent-service/src/main/java/cn/jia/agent/service/AgentTaskEventAccessService.java");
+        assertTrue(Files.isRegularFile(internalAccess));
+        assertFalse(Files.exists(root.resolve(
+                "agent/jia-agent-api/src/main/java/cn/jia/agent/service/AgentTaskEventAccessService.java")));
+        assertTrue(AgentTaskEventAccessService.class.isAssignableFrom(
+                AgentTaskWorkspaceServiceImpl.class));
+
+        String controller = Files.readString(root.resolve(
+                "agent/jia-agent-service/src/main/java/cn/jia/agent/api/AgentTaskEventStreamController.java"),
+                StandardCharsets.UTF_8);
+        assertTrue(controller.contains("AgentTaskEventAccessService"));
+        assertFalse(controller.contains("AgentTaskWorkspaceService"));
     }
 
     @Test

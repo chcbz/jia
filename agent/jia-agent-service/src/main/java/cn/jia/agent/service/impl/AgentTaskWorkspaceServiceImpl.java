@@ -13,8 +13,9 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.WorkItemRow;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.exception.AgentTaskWorkspaceException.Reason;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.AgentTaskEventAccessService;
+import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
-import cn.jia.agent.service.AgentTaskWorkspaceService.AuthorizedSubject;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskRequestStatus;
 import cn.jia.agent.state.AgentTaskStatus;
@@ -39,7 +40,8 @@ import java.util.Set;
 
 /** Atomic C04 workspace snapshot. Every database read participates in this one transaction. */
 @Named
-public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService {
+public class AgentTaskWorkspaceServiceImpl
+        implements AgentTaskWorkspaceService, AgentTaskEventAccessService {
     static final int COMPLETE_COLLECTION_SENTINEL = 500;
     static final int RECENT_ARTIFACT_LIMIT = 100;
     static final int RECENT_EVENT_LIMIT = 100;
@@ -134,7 +136,6 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         result.setCurrentVersion(decimal(task.getCurrentEventVersion()));
         return result;
     }
-
 
     private Authorization authorizeRows(
             String tenantId, String clientId, String taskId, String actorAgentId) {

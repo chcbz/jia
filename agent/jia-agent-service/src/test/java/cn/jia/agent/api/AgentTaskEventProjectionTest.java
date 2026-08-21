@@ -5,7 +5,7 @@ import cn.jia.agent.service.AgentTaskEventReplayService.DurableEvent;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncReason;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncRequired;
 import cn.jia.agent.service.AgentTaskEventReplayService.TaskScope;
-import cn.jia.agent.service.AgentTaskWorkspaceService.AuthorizedSubject;
+import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -18,6 +18,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -35,7 +36,8 @@ class AgentTaskEventProjectionTest {
         long version = 9_007_199_254_740_993L;
         DurableEvent event = taskCreated(version, "evt-safe", """
                 {"taskId":"task-1","taskType":"agent_task","status":"assigned",
-                 "resultVersion":9007199254740993,"createdAt":1234}
+                 "resultVersion":9007199254740993,"expectedVersion":9223372036854775807,
+                 "createdAt":9223372036854775807,"updatedAt":9007199254740993}
                 """);
 
         AgentTaskEventProjection.Frame frame = AgentTaskEventProjection.project(
@@ -52,8 +54,14 @@ class AgentTaskEventProjectionTest {
         assertNull(frame.data().get("actorId"));
         @SuppressWarnings("unchecked")
         Map<String, Object> payload = (Map<String, Object>) frame.data().get("payload");
-        assertEquals(Set.of("createdAt", "resultVersion", "status", "taskId", "taskType"),
-                payload.keySet());
+        assertEquals(Set.of("createdAt", "expectedVersion", "resultVersion", "status",
+                "taskId", "taskType", "updatedAt"), payload.keySet());
+        assertEquals("9007199254740993", payload.get("resultVersion"));
+        assertEquals("9223372036854775807", payload.get("expectedVersion"));
+        assertEquals("9223372036854775807", payload.get("createdAt"));
+        assertEquals("9007199254740993", payload.get("updatedAt"));
+        assertInstanceOf(String.class, payload.get("resultVersion"));
+        assertInstanceOf(String.class, payload.get("createdAt"));
         assertFalse(frame.data().containsKey("tenantId"));
         assertFalse(frame.data().containsKey("clientId"));
         assertFalse(frame.data().containsKey("eventJson"));
@@ -128,6 +136,12 @@ class AgentTaskEventProjectionTest {
         assertThrows(IllegalArgumentException.class, () -> AgentTaskEventProjection.project(
                 subject("worker", OTHER), taskCreated(1, "evt-1",
                         validTaskPayload() + "{\"credential\":\"secret\"}")));
+        for (String invalidNumber : Set.of(
+                "1.5", "-1", "9223372036854775808")) {
+            assertThrows(IllegalArgumentException.class, () ->
+                    AgentTaskEventProjection.project(subject("worker", OTHER),
+                            taskCreated(1, "evt-1", numericTaskPayload(invalidNumber))));
+        }
         DurableEvent crossScope = new DurableEvent(
                 new TaskScope(TENANT, "client-b", TASK), 1, "evt-1",
                 TaskEventType.TASK_CREATED, "system", null, "task", TASK,
@@ -180,6 +194,12 @@ class AgentTaskEventProjectionTest {
 
     private static AuthorizedSubject subject(String role, String coordinator) {
         return new AuthorizedSubject(TENANT, CLIENT, TASK, ACTOR, role, coordinator);
+    }
+
+    private static String numericTaskPayload(String resultVersion) {
+        return "{\"taskId\":\"task-1\",\"taskType\":\"agent_task\","
+                + "\"status\":\"assigned\",\"resultVersion\":" + resultVersion
+                + ",\"createdAt\":1234}";
     }
 
     private static String validTaskPayload() {

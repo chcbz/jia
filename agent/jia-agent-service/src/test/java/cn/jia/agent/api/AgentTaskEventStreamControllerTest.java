@@ -2,6 +2,7 @@ package cn.jia.agent.api;
 
 import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
+import cn.jia.agent.service.AgentTaskEventAccessService;
 import cn.jia.agent.service.AgentTaskEventReplayService;
 import cn.jia.agent.service.AgentTaskEventReplayService.DurableEvent;
 import cn.jia.agent.service.AgentTaskEventReplayService.ReplayBackpressureException;
@@ -10,9 +11,9 @@ import cn.jia.agent.service.AgentTaskEventReplayService.ReplaySignal;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncReason;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncRequired;
 import cn.jia.agent.service.AgentTaskEventReplayService.TaskScope;
-import cn.jia.agent.service.AgentTaskWorkspaceService;
-import cn.jia.agent.service.AgentTaskWorkspaceService.AuthorizedSubject;
+import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import cn.jia.core.context.EsContext;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.test.BaseMockTest;
 import jakarta.servlet.http.HttpServletRequest;
@@ -42,6 +43,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -75,7 +77,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
     private static final String OTHER = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, TASK);
 
-    @Mock AgentTaskWorkspaceService workspaceService;
+    @Mock AgentTaskEventAccessService accessService;
     @Mock AgentTaskEventReplayService replayService;
 
     private AgentTaskEventStreamController controller;
@@ -83,9 +85,9 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     @BeforeEach
     void setUp() {
-        controller = new AgentTaskEventStreamController(workspaceService, replayService);
+        controller = new AgentTaskEventStreamController(accessService, replayService);
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
-        lenient().when(workspaceService.authorize(TENANT, CLIENT, TASK, ACTOR))
+        lenient().when(accessService.authorize(TENANT, CLIENT, TASK, ACTOR))
                 .thenReturn(subject());
     }
 
@@ -101,7 +103,8 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         poisoned.setJiacn("cookie-tenant");
         poisoned.setClientId("cookie-client");
         EsContextHolder.setContext(poisoned);
-        DurableEvent event = taskCreated(9_007_199_254_740_993L);
+        DurableEvent event = taskCreatedWithJson(9_007_199_254_740_993L,
+                largeIntegralTaskPayload());
         when(replayService.replay(SCOPE, 0L)).thenReturn(Flux.just(event));
 
         MvcResult result = complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
@@ -123,10 +126,26 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 + "data: ?\\{.*}\\r?\\n\\r?\\n$"), body);
         assertTrue(body.contains("\"version\":\"9007199254740993\""), body);
         assertTrue(body.contains("\"occurredAt\":\"1234\""), body);
+        assertTrue(body.contains("\"resultVersion\":\"9007199254740993\""), body);
+        assertTrue(body.contains("\"expectedVersion\":\"9223372036854775807\""), body);
+        assertTrue(body.contains("\"createdAt\":\"9223372036854775807\""), body);
+        assertTrue(body.contains("\"updatedAt\":\"9007199254740993\""), body);
+        assertFalse(body.contains("\"resultVersion\":9007199254740993"), body);
+        assertFalse(body.contains("\"createdAt\":9223372036854775807"), body);
+        Map<?, ?> wireData = wireData(body);
+        assertEquals("9007199254740993", wirePayload(wireData).get("resultVersion"));
+        assertEquals("9223372036854775807", wirePayload(wireData).get("expectedVersion"));
+        assertEquals("9223372036854775807", wirePayload(wireData).get("createdAt"));
+        assertEquals("9007199254740993", wirePayload(wireData).get("updatedAt"));
+        String roundTripJson = JsonUtil.getMapper().writeValueAsString(wireData);
+        Map<?, ?> roundTrip = JsonUtil.getMapper().readValue(roundTripJson, Map.class);
+        assertEquals(wirePayload(wireData), wirePayload(roundTrip));
+        assertInstanceOf(String.class, wirePayload(roundTrip).get("resultVersion"));
+        assertInstanceOf(String.class, wirePayload(roundTrip).get("createdAt"));
         assertFalse(body.contains("tenant-a"), body);
         assertFalse(body.contains("client-a"), body);
         assertFalse(body.contains("eventJson"), body);
-        verify(workspaceService).authorize(TENANT, CLIENT, TASK, ACTOR);
+        verify(accessService).authorize(TENANT, CLIENT, TASK, ACTOR);
         verify(replayService).replay(SCOPE, 0L);
     }
 
@@ -171,7 +190,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                     .andExpect(status().isForbidden())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
-        verify(workspaceService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
@@ -186,7 +205,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                         .principal(authenticate(TENANT, CLIENT)))
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        verify(workspaceService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
@@ -201,7 +220,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                         .principal(authenticate(TENANT, CLIENT)))
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        verify(workspaceService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
@@ -220,7 +239,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(get("/agent/tasks/{taskId}/events", TASK).principal(auth))
                 .andExpect(status().isBadRequest());
-        verify(workspaceService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
@@ -316,7 +335,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     @Test
     void generic404BodyIsByteEqualAcrossAllHiddenSubjectCategories() throws Exception {
-        when(workspaceService.authorize(TENANT, CLIENT, TASK, ACTOR)).thenThrow(
+        when(accessService.authorize(TENANT, CLIENT, TASK, ACTOR)).thenThrow(
                 new AgentTaskWorkspaceException(
                         AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN));
         byte[] expected = null;
@@ -378,7 +397,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     @Test
     void aclReturnsBeforeReplayAndNoTransactionExistsDuringSubscriptionOrSend() throws Exception {
-        when(workspaceService.authorize(TENANT, CLIENT, TASK, ACTOR)).thenAnswer(invocation -> {
+        when(accessService.authorize(TENANT, CLIENT, TASK, ACTOR)).thenAnswer(invocation -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return subject();
         });
@@ -396,7 +415,8 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
     }
 
     @Test
-    void cancelTimeoutAndSendFailureDisposeExactlyOnceAndForbidLaterSend() throws Exception {
+    void cancelTimeoutAndPartialWriteFailureDisposeExactlyOnceAndForbidLaterSend()
+            throws Exception {
         AtomicInteger cancel = new AtomicInteger();
         AgentTaskEventStreamController.ManagedSseEmitter emitter =
                 new AgentTaskEventStreamController.ManagedSseEmitter(30_000L);
@@ -420,16 +440,17 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         assertEquals(1, timeoutCancel.get());
 
         AtomicInteger sendCancel = new AtomicInteger();
-        FailingEmitter failing = new FailingEmitter(1);
+        PartialWriteFailingEmitter failing = new PartialWriteFailingEmitter();
         AgentTaskEventStreamController.StreamConnection failingConnection =
                 new AgentTaskEventStreamController.StreamConnection(failing, subject());
         failingConnection.start(Flux.concat(Flux.just(taskCreated(1L), taskCreated(2L)),
                 Flux.<ReplaySignal>never()).doOnCancel(sendCancel::incrementAndGet));
         assertEquals(1, failing.sendCount);
         assertEquals(1, sendCancel.get());
-        assertInstanceOf(AgentTaskEventStreamController.StreamUnavailableException.class,
-                failing.error);
-        assertEquals(0, failing.completeCount);
+        assertTrue(failing.partialWriteRecorded);
+        assertEquals(1, failing.completeCount);
+        assertEquals(0, failing.completeWithErrorCount);
+        assertNull(failing.error);
     }
 
     @Test
@@ -493,6 +514,22 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         assertEquals("private, no-store", response.getHeader(HttpHeaders.CACHE_CONTROL));
     }
 
+    private static Map<?, ?> wireData(String body) throws Exception {
+        String data = body.lines()
+                .filter(line -> line.startsWith("data:"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing SSE data line: " + body))
+                .substring("data:".length());
+        if (data.startsWith(" ")) {
+            data = data.substring(1);
+        }
+        return JsonUtil.getMapper().readValue(data, Map.class);
+    }
+
+    private static Map<?, ?> wirePayload(Map<?, ?> wireData) {
+        return assertInstanceOf(Map.class, wireData.get("payload"));
+    }
+
     private MvcResult complete(MvcResult initial) throws Exception {
         return mvc.perform(asyncDispatch(initial)).andReturn();
     }
@@ -514,6 +551,15 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     private static AuthorizedSubject subject() {
         return new AuthorizedSubject(TENANT, CLIENT, TASK, ACTOR, "worker", OTHER);
+    }
+
+    private static String largeIntegralTaskPayload() {
+        return "{\"taskId\":\"task-1\",\"taskType\":\"agent_task\","
+                + "\"status\":\"assigned\","
+                + "\"resultVersion\":9007199254740993,"
+                + "\"expectedVersion\":9223372036854775807,"
+                + "\"createdAt\":9223372036854775807,"
+                + "\"updatedAt\":9007199254740993}";
     }
 
     private static DurableEvent taskCreated(long version) {
@@ -569,25 +615,23 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         }
     }
 
-    private static final class FailingEmitter
+    private static final class PartialWriteFailingEmitter
             extends AgentTaskEventStreamController.ManagedSseEmitter {
-        private final int failAt;
         private int sendCount;
         private int completeCount;
+        private int completeWithErrorCount;
+        private boolean partialWriteRecorded;
         private Throwable error;
 
-        private FailingEmitter(int failAt) {
+        private PartialWriteFailingEmitter() {
             super(30_000L);
-            this.failAt = failAt;
         }
 
         @Override
         public synchronized void send(SseEmitter.SseEventBuilder builder) throws IOException {
             sendCount++;
-            if (sendCount >= failAt) {
-                throw new IOException("simulated send failure");
-            }
-            super.send(builder);
+            partialWriteRecorded = true;
+            throw new IOException("simulated failure after partial write");
         }
 
         @Override
@@ -598,8 +642,10 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
         @Override
         public void completeWithError(Throwable error) {
+            completeWithErrorCount++;
             this.error = error;
             super.completeWithError(error);
         }
     }
+
 }

@@ -2,11 +2,11 @@ package cn.jia.agent.api;
 
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import cn.jia.agent.service.AgentTaskEventReplayService.DurableEvent;
 import cn.jia.agent.service.AgentTaskEventReplayService.ReplaySignal;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncReason;
 import cn.jia.agent.service.AgentTaskEventReplayService.ResyncRequired;
-import cn.jia.agent.service.AgentTaskWorkspaceService.AuthorizedSubject;
 import cn.jia.agent.service.impl.AgentTaskWorkspaceEventValidator;
 import cn.jia.agent.service.impl.AgentTaskWorkspaceEventValidator.ArtifactClaim;
 import cn.jia.core.util.JsonUtil;
@@ -15,6 +15,7 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -90,7 +91,7 @@ final class AgentTaskEventProjection {
         data.put("actorId", event.actorId());
         data.put("aggregateType", event.aggregateType());
         data.put("aggregateId", event.aggregateId());
-        data.put("payload", new LinkedHashMap<>(payload));
+        data.put("payload", wirePayload(payload));
         data.put("occurredAt", Long.toString(event.occurredAt()));
         requireBounded(data);
         boolean revoke = (TaskEventType.MEMBER_LEFT.equals(event.eventType())
@@ -132,6 +133,34 @@ final class AgentTaskEventProjection {
         } catch (Exception exception) {
             throw invalid();
         }
+    }
+
+    private static Map<String, Object> wirePayload(Map<String, Object> payload) {
+        LinkedHashMap<String, Object> projected = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : payload.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof String string) {
+                projected.put(entry.getKey(), string);
+                continue;
+            }
+            if (!(value instanceof Byte || value instanceof Short
+                    || value instanceof Integer || value instanceof Long
+                    || value instanceof BigInteger)) {
+                throw invalid();
+            }
+            final long integral;
+            try {
+                integral = value instanceof BigInteger integer
+                        ? integer.longValueExact() : ((Number) value).longValue();
+            } catch (ArithmeticException exception) {
+                throw invalid();
+            }
+            if (integral < 0) {
+                throw invalid();
+            }
+            projected.put(entry.getKey(), Long.toString(integral));
+        }
+        return projected;
     }
 
     private static boolean artifactVisible(

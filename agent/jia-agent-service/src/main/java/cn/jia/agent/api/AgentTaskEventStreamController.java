@@ -1,11 +1,11 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
+import cn.jia.agent.service.AgentTaskEventAccessService;
+import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import cn.jia.agent.service.AgentTaskEventReplayService;
 import cn.jia.agent.service.AgentTaskEventReplayService.ReplaySignal;
 import cn.jia.agent.service.AgentTaskEventReplayService.TaskScope;
-import cn.jia.agent.service.AgentTaskWorkspaceService;
-import cn.jia.agent.service.AgentTaskWorkspaceService.AuthorizedSubject;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -43,14 +43,14 @@ public class AgentTaskEventStreamController {
     static final String X_ACCEL_BUFFERING = "X-Accel-Buffering";
     private static final Pattern CURSOR = Pattern.compile("0|[1-9][0-9]{0,18}");
 
-    private final AgentTaskWorkspaceService workspaceService;
+    private final AgentTaskEventAccessService accessService;
     private final AgentTaskEventReplayService replayService;
 
     public AgentTaskEventStreamController(
-            AgentTaskWorkspaceService workspaceService,
+            AgentTaskEventAccessService accessService,
             AgentTaskEventReplayService replayService) {
-        this.workspaceService = java.util.Objects.requireNonNull(
-                workspaceService, "workspaceService");
+        this.accessService = java.util.Objects.requireNonNull(
+                accessService, "accessService");
         this.replayService = java.util.Objects.requireNonNull(
                 replayService, "replayService");
     }
@@ -62,7 +62,7 @@ public class AgentTaskEventStreamController {
             Authentication authentication) {
         Scope jwt = requireJwtScope(authentication);
         RawRequest raw = requireRawRequest(taskId, request);
-        AuthorizedSubject subject = workspaceService.authorize(
+        AuthorizedSubject subject = accessService.authorize(
                 jwt.jiacn(), jwt.clientId(), taskId, raw.actorAgentId());
         if (subject == null || TransactionSynchronizationManager.isActualTransactionActive()) {
             throw unavailable();
@@ -286,7 +286,7 @@ public class AgentTaskEventStreamController {
         private final Object sendLock = new Object();
         private final AtomicBoolean terminal = new AtomicBoolean();
         private final AtomicBoolean cleaned = new AtomicBoolean();
-        private final AtomicBoolean frameSent = new AtomicBoolean();
+        private final AtomicBoolean sendAttempted = new AtomicBoolean();
         private final AtomicReference<Disposable> subscription = new AtomicReference<>();
 
         StreamConnection(
@@ -332,8 +332,8 @@ public class AgentTaskEventStreamController {
                         builder.id(frame.id());
                     }
                     builder.data(frame.data(), MediaType.APPLICATION_JSON);
+                    sendAttempted.set(true);
                     emitter.send(builder);
-                    frameSent.set(true);
                     if (frame.terminal() && terminal.compareAndSet(false, true)) {
                         close = true;
                     }
@@ -348,16 +348,16 @@ public class AgentTaskEventStreamController {
             }
         }
 
-        private void failure(Throwable failure) {
-            boolean beforeFirst;
+        private void failure(Throwable ignored) {
+            boolean beforeSendAttempt;
             synchronized (sendLock) {
                 if (!terminal.compareAndSet(false, true)) {
                     return;
                 }
-                beforeFirst = !frameSent.get();
+                beforeSendAttempt = !sendAttempted.get();
             }
             cleanup();
-            if (beforeFirst) {
+            if (beforeSendAttempt) {
                 emitter.completeWithError(unavailable());
             } else {
                 emitter.complete();
@@ -365,15 +365,15 @@ public class AgentTaskEventStreamController {
         }
 
         private void sourceComplete() {
-            boolean beforeFirst;
+            boolean beforeSendAttempt;
             synchronized (sendLock) {
                 if (!terminal.compareAndSet(false, true)) {
                     return;
                 }
-                beforeFirst = !frameSent.get();
+                beforeSendAttempt = !sendAttempted.get();
             }
             cleanup();
-            if (beforeFirst) {
+            if (beforeSendAttempt) {
                 emitter.completeWithError(unavailable());
             } else {
                 emitter.complete();

@@ -5,7 +5,7 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.MemberRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.TaskRow;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.service.AgentIdentityService;
-import cn.jia.agent.service.AgentTaskWorkspaceService.AuthorizedSubject;
+import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
