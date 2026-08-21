@@ -13,6 +13,8 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.WorkItemRow;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.exception.AgentTaskWorkspaceException.Reason;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.AgentTaskEventAccessService;
+import cn.jia.agent.service.AgentTaskEventAccessService.AuthorizedSubject;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskRequestStatus;
@@ -38,7 +40,8 @@ import java.util.Set;
 
 /** Atomic C04 workspace snapshot. Every database read participates in this one transaction. */
 @Named
-public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService {
+public class AgentTaskWorkspaceServiceImpl
+        implements AgentTaskWorkspaceService, AgentTaskEventAccessService {
     static final int COMPLETE_COLLECTION_SENTINEL = 500;
     static final int RECENT_ARTIFACT_LIMIT = 100;
     static final int RECENT_EVENT_LIMIT = 100;
@@ -73,39 +76,27 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
     }
 
     @Override
+    @Transactional(propagation = Propagation.REQUIRED, readOnly = true,
+            rollbackFor = Exception.class)
+    public AuthorizedSubject authorize(
+            String tenantId, String clientId, String taskId, String actorAgentId) {
+        return authorizeRows(tenantId, clientId, taskId, actorAgentId).subject();
+    }
+
+    @Override
     @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.REPEATABLE_READ,
             readOnly = true, rollbackFor = Exception.class)
     public AgentTaskWorkspaceDTO snapshot(
             String tenantId, String clientId, String taskId, String actorAgentId) {
-        requireId(tenantId, "tenantId", 50);
-        requireId(clientId, "clientId", 50);
-        requireId(taskId, "taskId", 100);
-        requireId(actorAgentId, "actorAgentId", 100);
-
-        try {
-            String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
-                    tenantId, clientId, tenantId, actorAgentId);
-            if (!actorAgentId.equals(canonicalAgentId)) {
-                throw notFound();
-            }
-        } catch (AgentServiceImpl.AgentBizException exception) {
-            throw notFound();
-        }
-
-        TaskRow task = workspaceDao.findTask(tenantId, clientId, taskId);
-        if (!isExactTaskRow(task, tenantId, clientId, taskId)) {
-            throw notFound();
-        }
-        MemberRow actor = workspaceDao.findActorMember(
+        Authorization authorization = authorizeRows(
                 tenantId, clientId, taskId, actorAgentId);
-        if (!validActorMember(actor, tenantId, clientId, taskId, actorAgentId)) {
-            throw notFound();
-        }
+        TaskRow task = authorization.task();
+        MemberRow actor = authorization.actor();
+        AuthorizedSubject subject = authorization.subject();
         validateTaskIntegrity(task);
 
-        boolean reviewerAccess = "reviewer".equals(actor.getMemberRole());
-        boolean coordinatorAccess = "coordinator".equals(actor.getMemberRole())
-                || actorAgentId.equals(task.getCoordinatorAgentId());
+        boolean reviewerAccess = subject.reviewerAccess();
+        boolean coordinatorAccess = subject.coordinatorAccess();
 
         List<MemberRow> memberRows = complete(
                 workspaceDao.findMembers(tenantId, clientId, taskId));
@@ -144,6 +135,38 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         result.setTimelineTruncated(timeline.truncated());
         result.setCurrentVersion(decimal(task.getCurrentEventVersion()));
         return result;
+    }
+
+    private Authorization authorizeRows(
+            String tenantId, String clientId, String taskId, String actorAgentId) {
+        requireId(tenantId, "tenantId", 50);
+        requireId(clientId, "clientId", 50);
+        requireId(taskId, "taskId", 100);
+        requireId(actorAgentId, "actorAgentId", 100);
+
+        try {
+            String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
+                    tenantId, clientId, tenantId, actorAgentId);
+            if (!actorAgentId.equals(canonicalAgentId)) {
+                throw notFound();
+            }
+        } catch (AgentServiceImpl.AgentBizException exception) {
+            throw notFound();
+        }
+
+        TaskRow task = workspaceDao.findTask(tenantId, clientId, taskId);
+        if (!isExactTaskRow(task, tenantId, clientId, taskId)) {
+            throw notFound();
+        }
+        MemberRow actor = workspaceDao.findActorMember(
+                tenantId, clientId, taskId, actorAgentId);
+        if (!validActorMember(actor, tenantId, clientId, taskId, actorAgentId)) {
+            throw notFound();
+        }
+        AuthorizedSubject subject = new AuthorizedSubject(
+                tenantId, clientId, taskId, actorAgentId,
+                actor.getMemberRole(), task.getCoordinatorAgentId());
+        return new Authorization(task, actor, subject);
     }
 
     private Timeline timeline(String tenantId, String clientId, TaskRow task,
@@ -195,7 +218,9 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         final AgentTaskWorkspaceEventValidator.ArtifactClaim artifactClaim;
         try {
             artifactClaim = AgentTaskWorkspaceEventValidator.validate(
-                    row, payload, task.getTaskId());
+                    row.getEventType(), row.getActorType(), row.getActorId(),
+                    row.getAggregateType(), row.getAggregateId(), payload,
+                    task.getTaskId());
         } catch (IllegalArgumentException exception) {
             throw unavailable(exception);
         }
@@ -637,6 +662,10 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
 
     private static AgentTaskWorkspaceException unavailable(Throwable cause) {
         return new AgentTaskWorkspaceException(Reason.SNAPSHOT_UNAVAILABLE, cause);
+    }
+
+    private record Authorization(
+            TaskRow task, MemberRow actor, AuthorizedSubject subject) {
     }
 
     private record Timeline(List<AgentTaskWorkspaceDTO.Event> events, boolean truncated) {
