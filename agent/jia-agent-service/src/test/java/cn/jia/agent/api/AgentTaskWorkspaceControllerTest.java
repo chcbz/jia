@@ -163,6 +163,59 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     @Test
+    void supplementaryCodePointBoundariesAreAcceptedWithoutNormalization() throws Exception {
+        String supplementary = new String(Character.toChars(0x1f642));
+        String tenant = "t" + supplementary.repeat(49);
+        String client = "c" + supplementary.repeat(49);
+        String task = "k" + supplementary.repeat(99);
+        String actor = "a" + supplementary.repeat(99);
+        JwtAuthenticationToken authentication = authenticate(tenant, client);
+        when(service.snapshot(tenant, client, task, actor)).thenReturn(snapshot("0"));
+
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", task)
+                        .queryParam("actorAgentId", actor).principal(authentication))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        verify(service).snapshot(tenant, client, task, actor);
+    }
+
+    @Test
+    void overCodePointLimitAndUnpairedSurrogateAreRejected() throws Exception {
+        String supplementary = new String(Character.toChars(0x1f642));
+        JwtAuthenticationToken authentication = authenticate("tenant-a", "client-a");
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", "k" + supplementary.repeat(100))
+                        .queryParam("actorAgentId", ACTOR).principal(authentication))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+
+        JwtAuthenticationToken malformedClaim = authenticate("tenant-\ud800", "client-a");
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR).principal(malformedClaim))
+                .andExpect(status().isForbidden())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+    }
+
+    @Test
+    void composedAndDecomposedIdsAreForwardedByteExactAndDistinct() throws Exception {
+        String composed = "task-\u00e9";
+        String decomposed = "task-e\u0301";
+        JwtAuthenticationToken authentication = authenticate("tenant-a", "client-a");
+        when(service.snapshot("tenant-a", "client-a", composed, ACTOR))
+                .thenReturn(snapshot("0"));
+        when(service.snapshot("tenant-a", "client-a", decomposed, ACTOR))
+                .thenReturn(snapshot("0"));
+
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", composed)
+                        .queryParam("actorAgentId", ACTOR).principal(authentication))
+                .andExpect(status().isOk());
+        mvc.perform(get("/agent/tasks/{taskId}/workspace", decomposed)
+                        .queryParam("actorAgentId", ACTOR).principal(authentication))
+                .andExpect(status().isOk());
+        verify(service).snapshot("tenant-a", "client-a", composed, ACTOR);
+        verify(service).snapshot("tenant-a", "client-a", decomposed, ACTOR);
+    }
+
+    @Test
     void realSecurityFilterChain401And403KeepNoStore() throws Exception {
         ExceptionTranslationFilter exceptionTranslation = new ExceptionTranslationFilter(
                 new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED));

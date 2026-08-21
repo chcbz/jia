@@ -585,11 +585,27 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
     }
 
     private static boolean validId(String value, int maxLength) {
-        return value != null && value.length() <= maxLength
+        return value != null && !hasUnpairedSurrogate(value)
+                && value.codePointCount(0, value.length()) <= maxLength
                 && !value.codePoints().allMatch(AgentTaskWorkspaceServiceImpl::isPadding)
                 && !isPadding(value.codePointAt(0))
                 && !isPadding(value.codePointBefore(value.length()))
                 && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(index))) {
+                    return true;
+                }
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isPadding(int codePoint) {
@@ -597,8 +613,9 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
     }
 
     private static boolean validText(String value, int maxLength) {
-        return value != null && !value.isBlank() && value.length() <= maxLength
-                && value.chars().noneMatch(Character::isISOControl);
+        return value != null && !value.isBlank() && !hasUnpairedSurrogate(value)
+                && value.codePointCount(0, value.length()) <= maxLength
+                && value.codePoints().noneMatch(Character::isISOControl);
     }
 
     private static void requireId(String value, String name, int maxLength) {

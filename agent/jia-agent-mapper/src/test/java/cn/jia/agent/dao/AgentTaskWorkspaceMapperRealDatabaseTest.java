@@ -3,6 +3,7 @@ package cn.jia.agent.dao;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.ArtifactRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.EventRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.MemberRow;
+import cn.jia.agent.entity.AgentTaskWorkspaceRows.TaskRow;
 import cn.jia.agent.dao.impl.AgentTaskWorkspaceDaoImpl;
 import cn.jia.agent.mapper.AgentTaskWorkspaceMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -22,6 +23,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Real H2/MyBatis evidence for C04 exact predicates, ordering and fixed sentinels. */
 class AgentTaskWorkspaceMapperRealDatabaseTest {
@@ -69,6 +72,22 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
                 () -> dao.findTask(TENANT, CLIENT, "\u202f" + TASK));
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> dao.findActorMember(TENANT, CLIENT, TASK, ACTOR + "\u2007"));
+    }
+
+    @Test
+    void daoUsesCodePointLimitsAndRejectsUnpairedSurrogates() {
+        String supplementary = new String(Character.toChars(0x1f642));
+        String boundaryTask = "t" + supplementary.repeat(99);
+        AgentTaskWorkspaceMapper acceptingMapper = mock(AgentTaskWorkspaceMapper.class);
+        TaskRow row = new TaskRow();
+        row.setTaskId(boundaryTask);
+        when(acceptingMapper.findTask(TENANT, CLIENT, boundaryTask)).thenReturn(row);
+        AgentTaskWorkspaceDao dao = new AgentTaskWorkspaceDaoImpl(acceptingMapper);
+        assertEquals(boundaryTask, dao.findTask(TENANT, CLIENT, boundaryTask).getTaskId());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> dao.findTask(TENANT, CLIENT, "t" + supplementary.repeat(100)));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> dao.findTask(TENANT, CLIENT, "task-\udc00"));
     }
 
     @Test

@@ -120,11 +120,27 @@ public class AgentTaskWorkspaceController {
     }
 
     private static boolean validExact(String value, int maxLength) {
-        return value != null && value.length() <= maxLength
+        return value != null && !hasUnpairedSurrogate(value)
+                && value.codePointCount(0, value.length()) <= maxLength
                 && !value.codePoints().allMatch(AgentTaskWorkspaceController::isPadding)
                 && !isPadding(value.codePointAt(0))
                 && !isPadding(value.codePointBefore(value.length()))
                 && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(index))) {
+                    return true;
+                }
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isPadding(int codePoint) {

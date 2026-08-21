@@ -340,6 +340,59 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void supplementaryTaskBoundaryAndC01hBaselineEventPassCanonicalValidation() {
+        String supplementary = new String(Character.toChars(0x1f642));
+        String supplementaryTask = "t" + supplementary.repeat(99);
+        TaskRow unicodeTask = task(1L);
+        unicodeTask.setTaskId(supplementaryTask);
+        MemberRow unicodeActor = member(ACTOR, "worker", "accepted", 0L);
+        unicodeActor.setTaskId(supplementaryTask);
+        EventRow baseline = event(1L);
+        baseline.setTaskId(supplementaryTask);
+        baseline.setEventType(TaskEventType.HISTORICAL_BASELINE_IMPORTED);
+        baseline.setActorType(TaskEventType.ActorType.SYSTEM);
+        baseline.setActorId("c01h-b09");
+        baseline.setAggregateType(TaskEventType.Aggregate.TASK);
+        baseline.setAggregateId(supplementaryTask);
+        baseline.setEventJson(TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.SOURCE, "b09")
+                .put(TaskEventPayload.Key.DECISION_CODE, "c01h_b09_v1")
+                .put(TaskEventPayload.Key.CONTENT_SHA256, "a".repeat(64))
+                .put(TaskEventPayload.Key.MEMBER_COUNT, 1L)
+                .put(TaskEventPayload.Key.WORK_ITEM_COUNT, 0L).toJson());
+
+        when(agentService.requireApiKeyOwnedAgent(CLIENT, TENANT, ACTOR))
+                .thenReturn(new AgentRuntimeDTO());
+        when(dao.findTask(TENANT, CLIENT, supplementaryTask)).thenReturn(unicodeTask);
+        when(dao.findActorMember(TENANT, CLIENT, supplementaryTask, ACTOR))
+                .thenReturn(unicodeActor);
+        when(dao.findMembers(TENANT, CLIENT, supplementaryTask))
+                .thenReturn(List.of(unicodeActor));
+        when(dao.findWorkItems(TENANT, CLIENT, supplementaryTask)).thenReturn(List.of());
+        when(dao.findOpenRequests(TENANT, CLIENT, supplementaryTask)).thenReturn(List.of());
+        when(dao.findVisibleArtifacts(TENANT, CLIENT, supplementaryTask, ACTOR, false, false))
+                .thenReturn(List.of());
+        when(dao.findLatestEvents(TENANT, CLIENT, supplementaryTask))
+                .thenReturn(List.of(baseline));
+
+        AgentTaskWorkspaceDTO snapshot = service.snapshot(
+                TENANT, CLIENT, supplementaryTask, ACTOR);
+        assertEquals(supplementaryTask, snapshot.getTask().getTaskId());
+        assertEquals(TaskEventType.HISTORICAL_BASELINE_IMPORTED,
+                snapshot.getRecentEvents().get(0).getEventType());
+    }
+
+    @Test
+    void overCodePointLimitAndUnpairedSurrogateFailBeforeIdentityOrDaoReads() {
+        String supplementary = new String(Character.toChars(0x1f642));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(TENANT, CLIENT,
+                        "t" + supplementary.repeat(100), ACTOR));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(TENANT, CLIENT, "task-\ud800", ACTOR));
+    }
+
+    @Test
     void canonicalWriterVariantsRemainAcceptedWithoutInventedRequirements() {
         task.setCurrentEventVersion(1L);
         EventRow assigned = event(1L);

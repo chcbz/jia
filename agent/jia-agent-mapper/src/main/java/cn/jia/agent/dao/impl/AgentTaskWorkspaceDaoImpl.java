@@ -89,13 +89,29 @@ public class AgentTaskWorkspaceDaoImpl implements AgentTaskWorkspaceDao {
     }
 
     private static void requireId(String value, String name, int maxLength) {
-        if (value == null || value.length() > maxLength
+        if (value == null || hasUnpairedSurrogate(value)
+                || value.codePointCount(0, value.length()) > maxLength
                 || value.codePoints().allMatch(AgentTaskWorkspaceDaoImpl::isPadding)
                 || isPadding(value.codePointAt(0))
                 || isPadding(value.codePointBefore(value.length()))
                 || value.codePoints().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException(name + " is invalid");
         }
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(index))) {
+                    return true;
+                }
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isPadding(int codePoint) {
