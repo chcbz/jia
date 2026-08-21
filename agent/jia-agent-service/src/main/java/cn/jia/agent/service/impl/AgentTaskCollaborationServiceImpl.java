@@ -152,7 +152,8 @@ public class AgentTaskCollaborationServiceImpl
         if (!TARGET_TYPES.contains(targetType)) {
             throw invalid("targetType must be agent or role");
         }
-        String targetId = requiredTrimmed(command.getTargetId(), "targetId", 100);
+        requireId(command.getTargetId(), "targetId", 100);
+        String targetId = command.getTargetId();
         validateTarget(tenantId, clientId, taskId, targetType, targetId, taskRoot);
         String requestType = canonical(command.getRequestType(), "requestType");
         if (!REQUEST_TYPES.contains(requestType)) {
@@ -163,12 +164,13 @@ public class AgentTaskCollaborationServiceImpl
         if (command.getDueAt() != null && command.getDueAt() < 0) {
             throw invalid("dueAt must not be negative");
         }
-        requireWorkItem(tenantId, clientId, taskId, command.getWorkItemId());
+        String workItemId = requireWorkItem(
+                tenantId, clientId, taskId, command.getWorkItemId());
 
         AgentTaskRequestDTO insert = new AgentTaskRequestDTO();
-        insert.setRequestId(command.getRequestId().trim());
+        insert.setRequestId(command.getRequestId());
         insert.setTaskId(taskId);
-        insert.setWorkItemId(trimToNull(command.getWorkItemId()));
+        insert.setWorkItemId(workItemId);
         insert.setRequesterAgentId(actorAgentId);
         insert.setTargetType(targetType);
         insert.setTargetId(targetId);
@@ -222,8 +224,8 @@ public class AgentTaskCollaborationServiceImpl
                 throw invalid("status is not supported");
             }
         }
-        String workItemId = query == null ? null : trimToNull(query.getWorkItemId());
-        requireWorkItem(tenantId, clientId, taskId, workItemId);
+        String workItemId = requireWorkItem(tenantId, clientId, taskId,
+                query == null ? null : query.getWorkItemId());
         int limit = boundedLimit(query == null ? null : query.getLimit());
         return requestDao.listByTask(
                         tenantId, clientId, taskId, status, workItemId, limit).stream()
@@ -279,7 +281,8 @@ public class AgentTaskCollaborationServiceImpl
         if (!actorAgentId.equals(command.getProducerAgentId())) {
             throw forbidden();
         }
-        requireWorkItem(tenantId, clientId, taskId, command.getWorkItemId());
+        String workItemId = requireWorkItem(
+                tenantId, clientId, taskId, command.getWorkItemId());
         String artifactType = canonical(command.getArtifactType(), "artifactType");
         if (!ARTIFACT_TYPES.contains(artifactType)) {
             throw invalid("artifactType is not supported");
@@ -293,7 +296,7 @@ public class AgentTaskCollaborationServiceImpl
         int expectedPrevious = requireArtifactVersions(command);
 
         AgentTaskArtifactEntity latest = artifactDao.findLatestVersionForUpdate(
-                tenantId, clientId, taskId, command.getArtifactId().trim());
+                tenantId, clientId, taskId, command.getArtifactId());
         int persistedLatest = latest == null ? 0 : requirePersistedArtifactVersion(latest);
         if (persistedLatest != expectedPrevious) {
             throw conflict("Artifact version changed concurrently", null);
@@ -303,9 +306,9 @@ public class AgentTaskCollaborationServiceImpl
         }
 
         AgentTaskArtifactDTO insert = new AgentTaskArtifactDTO();
-        insert.setArtifactId(command.getArtifactId().trim());
+        insert.setArtifactId(command.getArtifactId());
         insert.setTaskId(taskId);
-        insert.setWorkItemId(trimToNull(command.getWorkItemId()));
+        insert.setWorkItemId(workItemId);
         insert.setProducerAgentId(actorAgentId);
         insert.setArtifactType(artifactType);
         insert.setTitle(command.getTitle().trim());
@@ -378,8 +381,8 @@ public class AgentTaskCollaborationServiceImpl
     public List<AgentTaskArtifactViewDTO> list(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskArtifactQueryDTO query) {
         Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, false);
-        String workItemId = query == null ? null : trimToNull(query.getWorkItemId());
-        requireWorkItem(tenantId, clientId, taskId, workItemId);
+        String workItemId = requireWorkItem(tenantId, clientId, taskId,
+                query == null ? null : query.getWorkItemId());
         int limit = boundedLimit(query == null ? null : query.getLimit());
         List<AgentTaskArtifactEntity> entities = artifactDao.listVisibleByTask(
                 tenantId, clientId, taskId, workItemId, actorAgentId,
@@ -650,18 +653,18 @@ public class AgentTaskCollaborationServiceImpl
         return request;
     }
 
-    private void requireWorkItem(
+    private String requireWorkItem(
             String tenantId, String clientId, String taskId, String workItemId) {
-        String normalized = trimToNull(workItemId);
-        if (normalized == null) {
-            return;
+        if (workItemId == null || workItemId.isEmpty()) {
+            return null;
         }
-        requireId(normalized, "workItemId", 100);
+        requireId(workItemId, "workItemId", 100);
         AgentTaskWorkItemEntity item = workItemDao.findByTaskAndWorkItemId(
-                tenantId, clientId, taskId, normalized);
+                tenantId, clientId, taskId, workItemId);
         if (item == null || !taskId.equals(item.getTaskId())) {
             throw notFound();
         }
+        return workItemId;
     }
 
     private ArtifactEventDigest validateArtifactPayload(AgentTaskArtifactPublishDTO command) {

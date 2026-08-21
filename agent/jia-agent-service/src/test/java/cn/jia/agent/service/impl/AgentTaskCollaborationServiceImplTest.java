@@ -567,18 +567,88 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void requestTargetIdentifiersRejectUnicodeSpacePaddingWithoutNormalization() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        for (String padding : List.of("\u0020", "\u00a0", "\u2007", "\u202f")) {
+            for (String targetId : List.of(padding + TARGET, TARGET + padding)) {
+                AgentTaskRequestCreateDTO command = createRequest();
+                command.setTargetId(targetId);
+                AgentTaskCollaborationException error = assertThrows(
+                        AgentTaskCollaborationException.class,
+                        () -> service.create(TENANT, CLIENT, TASK, ACTOR, command));
+                assertEquals(Reason.INVALID_REQUEST, error.getReason());
+            }
+        }
+        AgentTaskRequestCreateDTO paddedRole = createRequest();
+        paddedRole.setTargetType("role");
+        paddedRole.setTargetId(" reviewer ");
+        assertEquals(Reason.INVALID_REQUEST, assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, paddedRole)).getReason());
+        verify(requestDao, never()).insert(any(), any(), any());
+        verify(eventWriter, never()).append(any());
+    }
+
+    @Test
+    void requestWorkItemIdentifiersRejectUnicodeSpacePaddingBeforeLookupOrWrite() {
+        allow(ACTOR, "worker");
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, TARGET))
+                .thenReturn(member(TARGET, "reviewer", "accepted"));
+        for (String padding : List.of("\u0020", "\u00a0", "\u2007", "\u202f")) {
+            for (String workItemId : List.of(padding + "work-1", "work-1" + padding)) {
+                AgentTaskRequestCreateDTO command = createRequest();
+                command.setWorkItemId(workItemId);
+                AgentTaskCollaborationException error = assertThrows(
+                        AgentTaskCollaborationException.class,
+                        () -> service.create(TENANT, CLIENT, TASK, ACTOR, command));
+                assertEquals(Reason.INVALID_REQUEST, error.getReason());
+            }
+        }
+        verify(workItemDao, never()).findByTaskAndWorkItemId(any(), any(), any(), any());
+        verify(requestDao, never()).insert(any(), any(), any());
+        verify(eventWriter, never()).append(any());
+    }
+
+    @Test
     void artifactIdentifiersRejectUnicodeSpacePaddingBeforePersistenceOrEvent() {
         allow(ACTOR, "worker");
         for (String padding : List.of("\u0020", "\u00a0", "\u2007", "\u202f")) {
-            AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
-            command.setArtifactId(padding + "artifact-1");
-            AgentTaskCollaborationException error = assertThrows(
-                    AgentTaskCollaborationException.class,
-                    () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
-            assertEquals(Reason.INVALID_REQUEST, error.getReason());
+            for (String artifactId : List.of(
+                    padding + "artifact-1", "artifact-1" + padding)) {
+                AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+                command.setArtifactId(artifactId);
+                assertEquals(Reason.INVALID_REQUEST, assertThrows(
+                        AgentTaskCollaborationException.class,
+                        () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command)).getReason());
+            }
+            for (String workItemId : List.of(
+                    padding + "work-1", "work-1" + padding)) {
+                AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+                command.setWorkItemId(workItemId);
+                assertEquals(Reason.INVALID_REQUEST, assertThrows(
+                        AgentTaskCollaborationException.class,
+                        () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command)).getReason());
+            }
         }
+        verify(workItemDao, never()).findByTaskAndWorkItemId(any(), any(), any(), any());
         verify(artifactDao, never()).insert(any(), any(), any());
         verify(eventWriter, never()).append(any());
+    }
+
+    @Test
+    void queryWorkItemIdentifiersRejectPaddingInsteadOfTreatingItAsAbsent() {
+        allow(ACTOR, "worker");
+        AgentTaskRequestQueryDTO query = new AgentTaskRequestQueryDTO();
+        query.setWorkItemId(" work-1 ");
+
+        AgentTaskCollaborationException error = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.list(TENANT, CLIENT, TASK, ACTOR, query));
+
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        verify(requestDao, never()).listByTask(any(), any(), any(), any(), any(), anyInt());
     }
 
     @Test
