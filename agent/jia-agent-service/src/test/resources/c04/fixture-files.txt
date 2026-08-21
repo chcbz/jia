@@ -1,4 +1,5 @@
 agent/jia-agent-api/src/main/java/cn/jia/agent/service/AgentTaskWorkspaceService.java
+agent/jia-agent-core/src/main/java/cn/jia/agent/common/TaskEventPayload.java
 agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskWorkspaceDTO.java
 agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskWorkspaceRows.java
 agent/jia-agent-core/src/main/java/cn/jia/agent/exception/AgentTaskWorkspaceException.java
@@ -10,10 +11,13 @@ agent/jia-agent-service/build.gradle
 agent/jia-agent-service/src/main/java/cn/jia/agent/api/AgentTaskWorkspaceCacheControlFilter.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/api/AgentTaskWorkspaceController.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentIdentityServiceImpl.java
+agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskWorkspaceEventValidator.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskWorkspaceServiceImpl.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/api/AgentTaskWorkspaceControllerTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/common/TaskEventPayloadTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentIdentityServiceImplTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImplTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskWorkspaceFixtureManifestTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskWorkspaceMySqlTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentTaskWorkspaceRepeatableReadTest.java

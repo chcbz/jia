@@ -103,6 +103,19 @@ class TaskEventPayloadTest {
     }
 
     @Test
+    void idFieldsRejectEveryUnicodeSpaceCategoryAtEitherBoundary() {
+        for (String padding : List.of("\u0020", "\u00a0", "\u2007", "\u202f")) {
+            assertThrows(IllegalArgumentException.class, () -> TaskEventPayload.builder()
+                    .put(TaskEventPayload.Key.ARTIFACT_ID, padding + "artifact"));
+            assertThrows(IllegalArgumentException.class, () -> TaskEventPayload.builder()
+                    .put(TaskEventPayload.Key.ARTIFACT_ID, "artifact" + padding));
+            assertThrows(IllegalArgumentException.class,
+                    () -> TaskEventPayload.normalizeAllowedJson(JsonUtil.toJson(Map.of(
+                            TaskEventPayload.Key.ARTIFACT_ID, padding + "artifact"))));
+        }
+    }
+
+    @Test
     void rawNormalizationUsesTheSameUnicodeScalarAndCodePointContract() {
         String supplementary = new String(Character.toChars(0x1f642));
         String exact = "a" + supplementary.repeat(99);

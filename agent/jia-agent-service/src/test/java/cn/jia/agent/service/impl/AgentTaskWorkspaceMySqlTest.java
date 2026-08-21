@@ -257,13 +257,43 @@ class AgentTaskWorkspaceMySqlTest {
         AgentTaskWorkspaceService service = transactional(workspaceDao);
         assertNotFound(() -> service.snapshot("foreign-owner", CLIENT, TASK, ACTOR));
         assertNotFound(() -> service.snapshot(TENANT, "foreign-client", TASK, ACTOR));
+        assertNotFound(() -> service.snapshot(TENANT, CLIENT, "foreign-task", ACTOR));
         assertNotFound(() -> service.snapshot(TENANT, CLIENT, TASK, "foreign-agent"));
         assertNotFound(() -> service.snapshot(
                 TENANT.toUpperCase(Locale.ROOT), CLIENT, TASK, ACTOR));
         assertNotFound(() -> service.snapshot(
                 TENANT, CLIENT.toUpperCase(Locale.ROOT), TASK, ACTOR));
         assertNotFound(() -> service.snapshot(
+                TENANT, CLIENT, TASK.toUpperCase(Locale.ROOT), ACTOR));
+        assertNotFound(() -> service.snapshot(
                 TENANT, CLIENT, TASK, ACTOR.toUpperCase(Locale.ROOT)));
+    }
+
+    @Test
+    void fullPathKeepsComposedAndDecomposedIdentifiersByteDistinct() {
+        String tenant = "owner-\u00e9";
+        String client = "client-\u00e9";
+        String task = "task-\u00e9";
+        String actor = "agent-\u00e9";
+        String decomposedTenant = "owner-e\u0301";
+        String decomposedClient = "client-e\u0301";
+        String decomposedTask = "task-e\u0301";
+        String decomposedActor = "agent-e\u0301";
+        seedIdentity(tenant, client, actor, 3L, "LEGACY_CANONICAL");
+        insertTask(tenant, client, task, 0L);
+        insertMember(tenant, client, task, actor, "worker", "accepted", 0L);
+
+        AgentTaskWorkspaceService service = transactional(workspaceDao);
+        assertEquals(task, service.snapshot(tenant, client, task, actor)
+                .getTask().getTaskId());
+        assertNotFound(() -> service.snapshot(
+                decomposedTenant, client, task, actor));
+        assertNotFound(() -> service.snapshot(
+                tenant, decomposedClient, task, actor));
+        assertNotFound(() -> service.snapshot(
+                tenant, client, decomposedTask, actor));
+        assertNotFound(() -> service.snapshot(
+                tenant, client, task, decomposedActor));
     }
 
     @Test

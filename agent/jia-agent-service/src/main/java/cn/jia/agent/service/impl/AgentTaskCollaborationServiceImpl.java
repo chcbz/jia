@@ -936,10 +936,23 @@ public class AgentTaskCollaborationServiceImpl
     }
 
     private void requireId(String value, String name, int maxLength) {
-        String normalized = requiredTrimmed(value, name, maxLength);
-        if (!normalized.equals(value)) {
+        if (value == null || value.isEmpty()) {
+            throw invalid(name + " is required");
+        }
+        int length = characterLength(value, name);
+        if (length > maxLength) {
+            throw invalid(name + " is too long");
+        }
+        if (value.codePoints().allMatch(AgentTaskCollaborationServiceImpl::isPadding)
+                || isPadding(value.codePointAt(0))
+                || isPadding(value.codePointBefore(value.length()))
+                || value.codePoints().anyMatch(Character::isISOControl)) {
             throw invalid(name + " must be canonical and contain no surrounding whitespace");
         }
+    }
+
+    private static boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
     private String requiredTrimmed(String value, String name, int maxLength) {

@@ -150,8 +150,10 @@ public final class TaskEventPayload {
     }
 
     private static void requireCleanString(String key, String value) {
-        if (value == null || value.isBlank() || !value.equals(value.strip())
-                || hasUnpairedSurrogate(value)
+        if (value == null || value.isBlank() || hasUnpairedSurrogate(value)
+                || value.codePoints().allMatch(TaskEventPayload::isPadding)
+                || isPadding(value.codePointAt(0))
+                || isPadding(value.codePointBefore(value.length()))
                 || value.chars().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException("event payload string is invalid: " + key);
         }
@@ -171,6 +173,10 @@ public final class TaskEventPayload {
         if (SENSITIVE_METADATA_MARKERS.stream().anyMatch(lowercase::contains)) {
             throw new IllegalArgumentException("event payload contains sensitive material: " + key);
         }
+    }
+
+    private static boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
     private static boolean hasUnpairedSurrogate(String value) {

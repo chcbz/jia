@@ -550,6 +550,38 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void scopeIdentifiersRejectUnicodeSpacePaddingBeforeTaskLookup() {
+        for (String padding : List.of("\u0020", "\u00a0", "\u2007", "\u202f")) {
+            AgentTaskCollaborationException leading = assertThrows(
+                    AgentTaskCollaborationException.class,
+                    () -> service.list(padding + TENANT, CLIENT, TASK, ACTOR,
+                            (AgentTaskRequestQueryDTO) null));
+            AgentTaskCollaborationException trailing = assertThrows(
+                    AgentTaskCollaborationException.class,
+                    () -> service.list(TENANT, CLIENT, TASK, ACTOR + padding,
+                            (AgentTaskRequestQueryDTO) null));
+            assertEquals(Reason.INVALID_REQUEST, leading.getReason());
+            assertEquals(Reason.INVALID_REQUEST, trailing.getReason());
+        }
+        verify(taskDao, never()).findByTaskId(any(), any(), any());
+    }
+
+    @Test
+    void artifactIdentifiersRejectUnicodeSpacePaddingBeforePersistenceOrEvent() {
+        allow(ACTOR, "worker");
+        for (String padding : List.of("\u0020", "\u00a0", "\u2007", "\u202f")) {
+            AgentTaskArtifactPublishDTO command = artifactCommand(1, 0);
+            command.setArtifactId(padding + "artifact-1");
+            AgentTaskCollaborationException error = assertThrows(
+                    AgentTaskCollaborationException.class,
+                    () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
+            assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        }
+        verify(artifactDao, never()).insert(any(), any(), any());
+        verify(eventWriter, never()).append(any());
+    }
+
+    @Test
     void overlongTenantScopeIsRejectedBeforeTaskDao() {
         AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
                 () -> service.list("t".repeat(51), CLIENT, TASK, ACTOR,
