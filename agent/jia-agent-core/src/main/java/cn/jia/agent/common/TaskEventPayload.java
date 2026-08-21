@@ -150,14 +150,17 @@ public final class TaskEventPayload {
     }
 
     private static void requireCleanString(String key, String value) {
-        if (value == null || value.isBlank() || !value.equals(value.strip())
+        if (value == null || value.isBlank() || hasUnpairedSurrogate(value)
+                || value.codePoints().allMatch(TaskEventPayload::isPadding)
+                || isPadding(value.codePointAt(0))
+                || isPadding(value.codePointBefore(value.length()))
                 || value.chars().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException("event payload string is invalid: " + key);
         }
         int maxLength = ID_KEYS.contains(key) ? 100 : 64;
-        if (value.length() > maxLength) {
+        if (value.codePointCount(0, value.length()) > maxLength) {
             throw new IllegalArgumentException(
-                    "event payload string exceeds " + maxLength + " chars: " + key);
+                    "event payload string exceeds " + maxLength + " code points: " + key);
         }
         if (ID_KEYS.contains(key)) {
             return;
@@ -170,6 +173,26 @@ public final class TaskEventPayload {
         if (SENSITIVE_METADATA_MARKERS.stream().anyMatch(lowercase::contains)) {
             throw new IllegalArgumentException("event payload contains sensitive material: " + key);
         }
+    }
+
+    private static boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char current = value.charAt(i);
+            if (Character.isHighSurrogate(current)) {
+                if (i + 1 >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(i + 1))) {
+                    return true;
+                }
+                i++;
+            } else if (Character.isLowSurrogate(current)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void requireLong(String key, long value) {

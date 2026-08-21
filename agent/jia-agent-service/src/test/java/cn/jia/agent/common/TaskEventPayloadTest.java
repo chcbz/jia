@@ -69,6 +69,69 @@ class TaskEventPayloadTest {
     }
 
     @Test
+    void idFieldsUseUnicodeCodePointBoundsAndRejectInvalidScalars() {
+        String supplementary = new String(Character.toChars(0x1f642));
+        String exactlyOneHundredCodePoints = "a" + supplementary.repeat(99);
+        String oneHundredOneCodePoints = "a" + supplementary.repeat(100);
+
+        String json = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.AGENT_ID, exactlyOneHundredCodePoints)
+                .toJson();
+        assertEquals(exactlyOneHundredCodePoints,
+                JsonUtil.jsonToMap(json).get(TaskEventPayload.Key.AGENT_ID));
+        assertThrows(IllegalArgumentException.class, () -> TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.AGENT_ID, oneHundredOneCodePoints));
+        assertThrows(IllegalArgumentException.class, () -> TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.AGENT_ID, "agent-\ud800"));
+        assertThrows(IllegalArgumentException.class, () -> TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.AGENT_ID, "agent-\udc00"));
+    }
+
+    @Test
+    void idFieldsRemainByteExactWithoutUnicodeNormalization() {
+        String composed = "agent-\u00e9";
+        String decomposed = "agent-e\u0301";
+
+        Map<String, Object> payload = JsonUtil.jsonToMap(TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.AGENT_ID, composed)
+                .put(TaskEventPayload.Key.SENDER_AGENT_ID, decomposed)
+                .toJson());
+
+        assertEquals(composed, payload.get(TaskEventPayload.Key.AGENT_ID));
+        assertEquals(decomposed, payload.get(TaskEventPayload.Key.SENDER_AGENT_ID));
+        assertFalse(composed.equals(decomposed));
+    }
+
+    @Test
+    void idFieldsRejectEveryUnicodeSpaceCategoryAtEitherBoundary() {
+        for (String padding : List.of("\u0020", "\u00a0", "\u2007", "\u202f")) {
+            assertThrows(IllegalArgumentException.class, () -> TaskEventPayload.builder()
+                    .put(TaskEventPayload.Key.ARTIFACT_ID, padding + "artifact"));
+            assertThrows(IllegalArgumentException.class, () -> TaskEventPayload.builder()
+                    .put(TaskEventPayload.Key.ARTIFACT_ID, "artifact" + padding));
+            assertThrows(IllegalArgumentException.class,
+                    () -> TaskEventPayload.normalizeAllowedJson(JsonUtil.toJson(Map.of(
+                            TaskEventPayload.Key.ARTIFACT_ID, padding + "artifact"))));
+        }
+    }
+
+    @Test
+    void rawNormalizationUsesTheSameUnicodeScalarAndCodePointContract() {
+        String supplementary = new String(Character.toChars(0x1f642));
+        String exact = "a" + supplementary.repeat(99);
+        String normalized = TaskEventPayload.normalizeAllowedJson(
+                JsonUtil.toJson(Map.of(TaskEventPayload.Key.AGENT_ID, exact)));
+        assertEquals(exact, JsonUtil.jsonToMap(normalized).get(TaskEventPayload.Key.AGENT_ID));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> TaskEventPayload.normalizeAllowedJson(JsonUtil.toJson(Map.of(
+                        TaskEventPayload.Key.AGENT_ID, "a" + supplementary.repeat(100)))));
+        assertThrows(IllegalArgumentException.class,
+                () -> TaskEventPayload.normalizeAllowedJson(
+                        "{\"agentId\":\"agent-\ud800\"}"));
+    }
+
+    @Test
     void builderRejectsSensitiveUnknownAndUnboundedValues() {
         assertThrows(IllegalArgumentException.class,
                 () -> TaskEventPayload.builder().put("leaseToken", "raw-token"));

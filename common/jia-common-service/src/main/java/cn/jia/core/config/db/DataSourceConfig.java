@@ -4,6 +4,7 @@ import cn.jia.core.config.SpringContextHolder;
 import cn.jia.core.datasource.DruidSource;
 import cn.jia.core.util.BeanUtil;
 import cn.jia.core.util.StringUtil;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -57,7 +58,8 @@ public class DataSourceConfig {
 
     //配置@Transactional注解事物
     @Bean
-    public PlatformTransactionManager transactionManager(DruidSource druidSource) {
-        return new DataSourceTransactionManager(dynamicDataSource(druidSource));
+    public PlatformTransactionManager transactionManager(
+            @Qualifier("dataSource") DataSource dataSource) {
+        return new DataSourceTransactionManager(dataSource);
     }
 }
