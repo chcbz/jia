@@ -2,7 +2,6 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskWorkspaceDao;
 import cn.jia.agent.dao.impl.AgentTaskWorkspaceDaoImpl;
-import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.ArtifactRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.EventRow;
@@ -12,7 +11,7 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.TaskRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.WorkItemRow;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.mapper.AgentTaskWorkspaceMapper;
-import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
@@ -188,10 +187,11 @@ class AgentTaskWorkspaceRepeatableReadTest {
 
     private AgentTaskWorkspaceServiceImpl service(
             AgentTaskWorkspaceDao dao, TransactionProof proof) {
-        AgentService identity = mock(AgentService.class);
-        when(identity.requireApiKeyOwnedAgent(CLIENT, TENANT, ACTOR)).thenAnswer(invocation -> {
+        AgentIdentityService identity = mock(AgentIdentityService.class);
+        when(identity.requireCanonicalAgentIdInScope(
+                TENANT, CLIENT, TENANT, ACTOR)).thenAnswer(invocation -> {
             proof.recordBoundConnection();
-            return new AgentRuntimeDTO();
+            return ACTOR;
         });
         return new AgentTaskWorkspaceServiceImpl(identity, dao);
     }

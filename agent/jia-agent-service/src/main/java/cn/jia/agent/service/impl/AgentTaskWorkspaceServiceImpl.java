@@ -12,7 +12,7 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.TaskRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.WorkItemRow;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.exception.AgentTaskWorkspaceException.Reason;
-import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskRequestStatus;
@@ -61,13 +61,14 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
     private static final ObjectMapper STRICT_EVENT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
 
-    private final AgentService agentService;
+    private final AgentIdentityService agentIdentityService;
     private final AgentTaskWorkspaceDao workspaceDao;
 
     @Inject
     public AgentTaskWorkspaceServiceImpl(
-            AgentService agentService, AgentTaskWorkspaceDao workspaceDao) {
-        this.agentService = Objects.requireNonNull(agentService, "agentService");
+            AgentIdentityService agentIdentityService, AgentTaskWorkspaceDao workspaceDao) {
+        this.agentIdentityService = Objects.requireNonNull(
+                agentIdentityService, "agentIdentityService");
         this.workspaceDao = Objects.requireNonNull(workspaceDao, "workspaceDao");
     }
 
@@ -82,7 +83,9 @@ public class AgentTaskWorkspaceServiceImpl implements AgentTaskWorkspaceService 
         requireId(actorAgentId, "actorAgentId", 100);
 
         try {
-            if (agentService.requireApiKeyOwnedAgent(clientId, tenantId, actorAgentId) == null) {
+            String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
+                    tenantId, clientId, tenantId, actorAgentId);
+            if (!actorAgentId.equals(canonicalAgentId)) {
                 throw notFound();
             }
         } catch (AgentServiceImpl.AgentBizException exception) {

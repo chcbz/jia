@@ -3,7 +3,6 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskWorkspaceDao;
-import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.ArtifactRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.EventRow;
@@ -12,7 +11,7 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.RequestRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.WorkItemRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.TaskRow;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
-import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,7 +46,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String OTHER = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    @Mock AgentService agentService;
+    @Mock AgentIdentityService agentIdentityService;
     @Mock AgentTaskWorkspaceDao dao;
 
     private AgentTaskWorkspaceServiceImpl service;
@@ -56,11 +55,11 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
 
     @BeforeEach
     void setUp() {
-        service = new AgentTaskWorkspaceServiceImpl(agentService, dao);
+        service = new AgentTaskWorkspaceServiceImpl(agentIdentityService, dao);
         task = task(0L);
         actor = member(ACTOR, "worker", "accepted", 0L);
-        when(agentService.requireApiKeyOwnedAgent(CLIENT, TENANT, ACTOR))
-                .thenReturn(new AgentRuntimeDTO());
+        when(agentIdentityService.requireCanonicalAgentIdInScope(
+                TENANT, CLIENT, TENANT, ACTOR)).thenReturn(ACTOR);
         when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(task);
         when(dao.findActorMember(TENANT, CLIENT, TASK, ACTOR)).thenReturn(actor);
         when(dao.findMembers(TENANT, CLIENT, TASK)).thenReturn(List.of(actor));
@@ -120,7 +119,8 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
 
     @Test
     void foreignInactiveOrAbsentOwnedIdentityUsesGenericNotFound() {
-        when(agentService.requireApiKeyOwnedAgent(CLIENT, TENANT, ACTOR)).thenThrow(
+        when(agentIdentityService.requireCanonicalAgentIdInScope(
+                TENANT, CLIENT, TENANT, ACTOR)).thenThrow(
                 new AgentServiceImpl.AgentBizException("AGENT_FORBIDDEN", "internal detail"));
         AgentTaskWorkspaceException error = assertThrows(AgentTaskWorkspaceException.class,
                 () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR));
@@ -361,8 +361,8 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
                 .put(TaskEventPayload.Key.MEMBER_COUNT, 1L)
                 .put(TaskEventPayload.Key.WORK_ITEM_COUNT, 0L).toJson());
 
-        when(agentService.requireApiKeyOwnedAgent(CLIENT, TENANT, ACTOR))
-                .thenReturn(new AgentRuntimeDTO());
+        when(agentIdentityService.requireCanonicalAgentIdInScope(
+                TENANT, CLIENT, TENANT, ACTOR)).thenReturn(ACTOR);
         when(dao.findTask(TENANT, CLIENT, supplementaryTask)).thenReturn(unicodeTask);
         when(dao.findActorMember(TENANT, CLIENT, supplementaryTask, ACTOR))
                 .thenReturn(unicodeActor);

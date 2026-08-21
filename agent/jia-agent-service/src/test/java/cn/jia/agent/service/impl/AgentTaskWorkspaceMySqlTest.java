@@ -1,19 +1,12 @@
 package cn.jia.agent.service.impl;
 
-import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.dao.AgentIdentityAliasDao;
 import cn.jia.agent.dao.AgentIdentityRegistryDao;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
-import cn.jia.agent.dao.AgentRuntimeDao;
-import cn.jia.agent.dao.AgentTaskMemberDao;
-import cn.jia.agent.dao.AgentTaskMetaDao;
-import cn.jia.agent.dao.AgentTaskNoteDao;
 import cn.jia.agent.dao.AgentTaskWorkspaceDao;
-import cn.jia.agent.dao.DialogueTemplateDao;
 import cn.jia.agent.dao.impl.AgentIdentityAliasDaoImpl;
 import cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl;
 import cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl;
-import cn.jia.agent.dao.impl.AgentRuntimeDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkspaceDaoImpl;
 import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.ArtifactRow;
@@ -26,18 +19,10 @@ import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.mapper.AgentIdentityAliasMapper;
 import cn.jia.agent.mapper.AgentIdentityRegistryMapper;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
-import cn.jia.agent.mapper.AgentRuntimeMapper;
 import cn.jia.agent.mapper.AgentTaskWorkspaceMapper;
 import cn.jia.agent.service.AgentIdentityService;
-import cn.jia.agent.service.AgentSceneService;
-import cn.jia.agent.service.AgentService;
-import cn.jia.agent.service.AgentTaskEventWriter;
-import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
-import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.core.config.db.DataSourceConfig;
-import cn.jia.oauth.service.ApiKeyService;
-import cn.jia.task.service.TaskService;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
@@ -58,7 +43,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.aop.framework.ProxyFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -95,8 +79,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 /** Isolated MySQL 8.0.21 gate for C04 exact SQL and cross-query snapshot isolation. */
 @EnabledIfEnvironmentVariable(named = "C04_MYSQL_URL", matches = ".+")
@@ -113,12 +95,8 @@ class AgentTaskWorkspaceMySqlTest {
     private DataSourceTransactionManager transactionManager;
     private AgentTaskWorkspaceMapper workspaceMapper;
     private AgentTaskWorkspaceDao workspaceDao;
-    private AgentService realAgentService;
+    private AgentIdentityService realIdentityService;
     private SqlConnectionEvidence connectionEvidence;
-    private ObjectProvider<AgentEventPublisher> eventPublisherProvider;
-    private ObjectProvider<TaskService> taskServiceProvider;
-    private ObjectProvider<ApiKeyService> apiKeyServiceProvider;
-    private ObjectProvider<AgentSceneService> sceneServiceProvider;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -167,23 +145,8 @@ class AgentTaskWorkspaceMySqlTest {
                 template.getMapper(AgentIdentityAliasMapper.class));
         AgentPersonaBindingDao bindingDao = wire(new AgentPersonaBindingDaoImpl(),
                 template.getMapper(AgentPersonaBindingMapper.class));
-        AgentRuntimeDao runtimeDao = wire(new AgentRuntimeDaoImpl(),
-                template.getMapper(AgentRuntimeMapper.class));
-        AgentIdentityService identityService = new AgentIdentityServiceImpl(
+        realIdentityService = new AgentIdentityServiceImpl(
                 registryDao, aliasDao, bindingDao);
-
-        eventPublisherProvider = provider();
-        taskServiceProvider = provider();
-        apiKeyServiceProvider = provider();
-        sceneServiceProvider = provider();
-        realAgentService = new AgentServiceImpl(
-                runtimeDao, identityService, mock(cn.jia.agent.dao.AgentPersonaDao.class),
-                bindingDao, mock(AgentTaskMetaDao.class), mock(AgentTaskMemberDao.class),
-                mock(AgentLegacyTaskCompatibilityService.class),
-                mock(AgentTaskNoteDao.class), mock(DialogueTemplateDao.class),
-                eventPublisherProvider, taskServiceProvider, apiKeyServiceProvider,
-                sceneServiceProvider, new AgentSceneFeatureFlags(false, false),
-                mock(AgentTaskMutationTransaction.class), mock(AgentTaskEventWriter.class));
 
         transactionManager = new DataSourceTransactionManager(dataSource);
         PlatformTransactionManager configured = new DataSourceConfig()
@@ -275,7 +238,36 @@ class AgentTaskWorkspaceMySqlTest {
     }
 
     @Test
-    void realIdentityPathAcceptsUnicodeCodePointBoundariesAndRejectsInvalidScalars() {
+    void fullPathAclUsesCanonicalIdentityBindingWithoutRuntimeProjection() {
+        insertTask(TENANT, CLIENT, TASK, 0L);
+        insertMember(TENANT, CLIENT, TASK, ACTOR, "worker", "accepted", 0L);
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_runtime WHERE agent_id=?", Integer.class, ACTOR));
+
+        connectionEvidence.beginCapture();
+        AgentTaskWorkspaceDTO exact = transactional(workspaceDao)
+                .snapshot(TENANT, CLIENT, TASK, ACTOR);
+        assertEquals(TASK, exact.getTask().getTaskId());
+        assertEquals(ACTOR, exact.getMembers().get(0).getAgentId());
+        connectionEvidence.assertSingleTransactionalConnection(
+                "REPEATABLE-READ", true);
+        assertReadOnlyMapperCoverage();
+        connectionEvidence.assertStatementAbsent("AgentRuntimeMapper");
+
+        AgentTaskWorkspaceService service = transactional(workspaceDao);
+        assertNotFound(() -> service.snapshot("foreign-owner", CLIENT, TASK, ACTOR));
+        assertNotFound(() -> service.snapshot(TENANT, "foreign-client", TASK, ACTOR));
+        assertNotFound(() -> service.snapshot(TENANT, CLIENT, TASK, "foreign-agent"));
+        assertNotFound(() -> service.snapshot(
+                TENANT.toUpperCase(Locale.ROOT), CLIENT, TASK, ACTOR));
+        assertNotFound(() -> service.snapshot(
+                TENANT, CLIENT.toUpperCase(Locale.ROOT), TASK, ACTOR));
+        assertNotFound(() -> service.snapshot(
+                TENANT, CLIENT, TASK, ACTOR.toUpperCase(Locale.ROOT)));
+    }
+
+    @Test
+    void fullPathAcceptsUnicodeCodePointBoundariesAndRejectsInvalidScalars() {
         String supplementary = new String(Character.toChars(0x1f642));
         String tenant = "t" + supplementary.repeat(49);
         String client = "c" + supplementary.repeat(49);
@@ -284,25 +276,30 @@ class AgentTaskWorkspaceMySqlTest {
         seedIdentity(tenant, client, actor, 2L, "LEGACY_CANONICAL");
         insertTask(tenant, client, task, 0L);
         insertMember(tenant, client, task, actor, "worker", "accepted", 0L);
-        connectionEvidence.beginCapture();
 
-        AgentTaskWorkspaceDTO snapshot = transactional(workspaceDao)
-                .snapshot(tenant, client, task, actor);
-
+        AgentTaskWorkspaceService service = transactional(workspaceDao);
+        AgentTaskWorkspaceDTO snapshot = service.snapshot(tenant, client, task, actor);
         assertEquals(task, snapshot.getTask().getTaskId());
         assertEquals(actor, snapshot.getMembers().get(0).getAgentId());
-        connectionEvidence.assertSingleTransactionalConnection(
-                "REPEATABLE-READ", true);
-        assertReadOnlyMapperCoverage();
-        assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> realAgentService.requireApiKeyOwnedAgent(
-                        client, "t" + supplementary.repeat(50), actor));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> realAgentService.requireApiKeyOwnedAgent(
-                        client, tenant, "a" + supplementary.repeat(100)));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> realAgentService.requireApiKeyOwnedAgent(
-                        client, tenant, "agent-\ud800"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot("t" + supplementary.repeat(50), client, task, actor));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(tenant, "c" + supplementary.repeat(50), task, actor));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(tenant, client,
+                        "t" + supplementary.repeat(100), actor));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(tenant, client, task,
+                        "a" + supplementary.repeat(100)));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot("tenant-\ud800", client, task, actor));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(tenant, "client-\udc00", task, actor));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(tenant, client, "task-\ud800", actor));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.snapshot(tenant, client, task, "agent-\ud800"));
     }
 
     @Test
@@ -439,13 +436,12 @@ class AgentTaskWorkspaceMySqlTest {
     }
 
     private AgentTaskWorkspaceServiceImpl target(AgentTaskWorkspaceDao dao) {
-        return new AgentTaskWorkspaceServiceImpl(realAgentService, dao);
+        return new AgentTaskWorkspaceServiceImpl(realIdentityService, dao);
     }
 
     private void assertReadOnlyMapperCoverage() {
         connectionEvidence.assertStatementSeen("AgentIdentityRegistryMapper.selectList");
         connectionEvidence.assertStatementSeen("AgentPersonaBindingMapper.selectById");
-        connectionEvidence.assertStatementSeen("AgentRuntimeMapper.findExactByAgentId");
         connectionEvidence.assertStatementSeen("AgentTaskWorkspaceMapper.findTask");
         connectionEvidence.assertStatementSeen("AgentTaskWorkspaceMapper.findActorMember");
         connectionEvidence.assertStatementSeen("AgentTaskWorkspaceMapper.findMembers");
@@ -455,8 +451,6 @@ class AgentTaskWorkspaceMySqlTest {
         connectionEvidence.assertStatementSeen("AgentTaskWorkspaceMapper.findLatestEvents");
         assertTrue(connectionEvidence.onlySelectsWithoutLocks(),
                 "snapshot must issue only non-locking SELECT statements");
-        verifyNoInteractions(eventPublisherProvider, taskServiceProvider,
-                apiKeyServiceProvider, sceneServiceProvider);
     }
 
     private static void assertBefore(AgentTaskWorkspaceDTO snapshot) {
@@ -527,12 +521,6 @@ class AgentTaskWorkspaceMySqlTest {
                      tenant_id,client_id,create_time,update_time)
                 VALUES (?,?,?,'ACTIVE',?,?,1,1,'c04-r3',?,?,1,1)
                 """, id, actor, canonicalType, tenant, id, tenant, client);
-        jdbc.update("""
-                INSERT INTO agent_runtime
-                    (id,agent_id,name,owner_jiacn,persona_code,persona_name,binding_id,
-                     abilities,status,last_seen_at,tenant_id,client_id,create_time,update_time)
-                VALUES (?,?,'Agent',?,'wuyong','Wu Yong',?,'[]','online',1,?,?,1,1)
-                """, id, actor, tenant, id, tenant, client);
     }
 
     private void insertTask(String tenant, String client, String taskId, long currentVersion) {
@@ -718,7 +706,6 @@ class AgentTaskWorkspaceMySqlTest {
         configuration.addMapper(AgentIdentityRegistryMapper.class);
         configuration.addMapper(AgentIdentityAliasMapper.class);
         configuration.addMapper(AgentPersonaBindingMapper.class);
-        configuration.addMapper(AgentRuntimeMapper.class);
         configuration.addMapper(AgentTaskWorkspaceMapper.class);
         configuration.addInterceptor(evidence);
         GlobalConfig globalConfig = new GlobalConfig();
@@ -758,6 +745,13 @@ class AgentTaskWorkspaceMySqlTest {
         return value;
     }
 
+    private static void assertNotFound(org.junit.jupiter.api.function.Executable executable) {
+        AgentTaskWorkspaceException exception = assertThrows(
+                AgentTaskWorkspaceException.class, executable);
+        assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                exception.getReason());
+    }
+
     private static <T> T wire(T dao, Object mapper) throws Exception {
         Class<?> type = dao.getClass();
         while (type != null) {
@@ -771,11 +765,6 @@ class AgentTaskWorkspaceMySqlTest {
             }
         }
         throw new NoSuchFieldException("baseMapper");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T> ObjectProvider<T> provider() {
-        return mock(ObjectProvider.class);
     }
 
     /** Releases the writer after the first task row has established the snapshot. */
@@ -895,6 +884,12 @@ class AgentTaskWorkspaceMySqlTest {
         private synchronized void assertStatementSeen(String suffix) {
             assertTrue(observations.stream().anyMatch(row -> row.statementId().endsWith(suffix)),
                     "missing mapper statement " + suffix + " from " + observations);
+        }
+
+        private synchronized void assertStatementAbsent(String fragment) {
+            assertTrue(observations.stream()
+                            .noneMatch(row -> row.statementId().contains(fragment)),
+                    "unexpected mapper statement " + fragment + " in " + observations);
         }
 
         private synchronized boolean onlySelectsWithoutLocks() {
