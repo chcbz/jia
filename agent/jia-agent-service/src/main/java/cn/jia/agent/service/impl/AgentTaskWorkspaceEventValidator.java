@@ -2,14 +2,12 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
-import cn.jia.agent.entity.AgentTaskWorkspaceRows.EventRow;
-
 import java.math.BigInteger;
 import java.util.Map;
 import java.util.Set;
 
-/** Fail-closed semantic validation for events projected by the C04 workspace endpoint. */
-final class AgentTaskWorkspaceEventValidator {
+/** Fail-closed semantic validation shared by C04 snapshots and C05 streams. */
+public final class AgentTaskWorkspaceEventValidator {
     private static final Set<String> TASK_TRANSITIONS = Set.of(
             TaskEventType.TASK_ASSIGNED, TaskEventType.TASK_STARTED,
             TaskEventType.TASK_BLOCKED, TaskEventType.TASK_ARCHIVED,
@@ -45,8 +43,16 @@ final class AgentTaskWorkspaceEventValidator {
     private AgentTaskWorkspaceEventValidator() {
     }
 
-    static ArtifactClaim validate(EventRow row, Map<String, Object> payload, String taskId) {
-        String eventType = row.getEventType();
+    public static ArtifactClaim validate(
+            String eventType,
+            String actorType,
+            String actorId,
+            String aggregateType,
+            String aggregateId,
+            Map<String, Object> payload,
+            String taskId) {
+        EventView row = new EventView(
+                eventType, actorType, actorId, aggregateType, aggregateId);
         if (TaskEventType.TASK_CREATED.equals(eventType)) {
             requireAggregate(row, TaskEventType.Aggregate.TASK, taskId);
             requireSystemActor(row, false);
@@ -139,6 +145,9 @@ final class AgentTaskWorkspaceEventValidator {
                 throw invalid();
             }
             String visibility = requireString(payload, TaskEventPayload.Key.VISIBILITY);
+            if (!Set.of("task_members", "reviewer", "private").contains(visibility)) {
+                throw invalid();
+            }
             String workItemId = payload.containsKey(TaskEventPayload.Key.WORK_ITEM_ID)
                     ? requireId(payload, TaskEventPayload.Key.WORK_ITEM_ID) : null;
             requireDigest(payload);
@@ -245,7 +254,7 @@ final class AgentTaskWorkspaceEventValidator {
         }
     }
 
-    private static void requireWorkItemActor(EventRow row, String eventType) {
+    private static void requireWorkItemActor(EventView row, String eventType) {
         if (AGENT_WORK_ITEM_EVENTS.contains(eventType)) {
             requireAgentActor(row);
             return;
@@ -267,27 +276,27 @@ final class AgentTaskWorkspaceEventValidator {
         throw invalid();
     }
 
-    private static void requireAggregate(EventRow row, String type, String id) {
+    private static void requireAggregate(EventView row, String type, String id) {
         requireAggregateType(row, type);
         if (!id.equals(row.getAggregateId())) {
             throw invalid();
         }
     }
 
-    private static void requireAggregateType(EventRow row, String type) {
+    private static void requireAggregateType(EventView row, String type) {
         if (!type.equals(row.getAggregateType())) {
             throw invalid();
         }
     }
 
-    private static void requireAgentActor(EventRow row) {
+    private static void requireAgentActor(EventView row) {
         if (!TaskEventType.ActorType.AGENT.equals(row.getActorType())) {
             throw invalid();
         }
         requireActorId(row);
     }
 
-    private static void requireSystemActor(EventRow row, boolean allowId) {
+    private static void requireSystemActor(EventView row, boolean allowId) {
         if (!TaskEventType.ActorType.SYSTEM.equals(row.getActorType())
                 || !allowId && row.getActorId() != null) {
             throw invalid();
@@ -297,7 +306,7 @@ final class AgentTaskWorkspaceEventValidator {
         }
     }
 
-    private static void requireActorId(EventRow row) {
+    private static void requireActorId(EventView row) {
         requireIdValue(row.getActorId());
     }
 
@@ -393,7 +402,34 @@ final class AgentTaskWorkspaceEventValidator {
         return new IllegalArgumentException("Persisted task event violates the canonical contract");
     }
 
-    record ArtifactClaim(String artifactId, int artifactVersion, String artifactType,
+    public record ArtifactClaim(String artifactId, int artifactVersion, String artifactType,
             String visibility, String workItemId, String producerAgentId) {
+    }
+
+    private record EventView(
+            String eventType,
+            String actorType,
+            String actorId,
+            String aggregateType,
+            String aggregateId) {
+        private String getEventType() {
+            return eventType;
+        }
+
+        private String getActorType() {
+            return actorType;
+        }
+
+        private String getActorId() {
+            return actorId;
+        }
+
+        private String getAggregateType() {
+            return aggregateType;
+        }
+
+        private String getAggregateId() {
+            return aggregateId;
+        }
     }
 }

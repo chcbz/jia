@@ -12,7 +12,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
-/** Adds no-store before the resource-server chain can emit a 401/403 response. */
+/** Adds no-store before the resource-server chain can emit workspace/SSE 401/403. */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class AgentTaskWorkspaceCacheControlFilter extends OncePerRequestFilter {
@@ -23,7 +23,8 @@ public class AgentTaskWorkspaceCacheControlFilter extends OncePerRequestFilter {
         if (context != null && !context.isEmpty() && path.startsWith(context)) {
             path = path.substring(context.length());
         }
-        return !(path.startsWith("/agent/tasks/") && path.endsWith("/workspace"));
+        return !(path.startsWith("/agent/tasks/")
+                && (path.endsWith("/workspace") || path.endsWith("/events")));
     }
 
     @Override
