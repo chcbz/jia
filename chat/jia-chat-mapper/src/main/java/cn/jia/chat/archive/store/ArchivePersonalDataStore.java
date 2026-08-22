@@ -22,13 +22,13 @@ public interface ArchivePersonalDataStore {
     BookmarkRecord findBookmark(ArchiveOwnerScope owner, String bookmarkId, boolean lock);
     void insertBookmark(ArchiveOwnerScope owner, BookmarkRecord row);
     int updateBookmark(ArchiveOwnerScope owner, BookmarkRecord row, long expectedVersion);
-    List<BookmarkRecord> listBookmarks(ArchiveOwnerScope owner, String editionId, long beforeRowId, int limit);
+    List<BookmarkRecord> listBookmarks(ArchiveOwnerScope owner, String editionId, Long beforeRowId, int limit);
 
     NoteRecord findNote(ArchiveOwnerScope owner, String noteId, boolean lock);
     void insertNote(ArchiveOwnerScope owner, NoteRecord row);
     int updateNote(ArchiveOwnerScope owner, NoteRecord row, long expectedVersion);
     List<NoteRecord> listNotes(ArchiveOwnerScope owner, String editionId, String blockId,
-                               long beforeRowId, int limit);
+                               Long beforeRowId, int limit);
 
     record ActiveEdition(String editionId, String manifestSha256) { }
     record ContentPoint(String editionId, String manifestSha256, String blockType, String blockId,

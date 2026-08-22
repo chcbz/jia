@@ -88,7 +88,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
     @Override
     public ArchivePageDTO<ArchiveBookmarkDTO> bookmarks(ArchiveOwnerScope owner, String editionId,
                                                          String cursor, int limit) {
-        long before = ArchiveWire.cursor(cursor);
+        Long before = ArchiveWire.cursor(cursor);
         List<BookmarkRecord> rows = store.listBookmarks(owner, editionId, before, limit + 1);
         boolean more = rows.size() > limit;
         List<BookmarkRecord> visible = more ? rows.subList(0, limit) : rows;
@@ -135,7 +135,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
                                                 String expectedVersion, String path, String key) {
         require(ArchiveWire.lowercaseUuid(bookmarkId), 404, "ARCHIVE_RESOURCE_NOT_FOUND", "Resource unavailable");
         long expected = ArchiveWire.decimal(expectedVersion, "INVALID_VERSION");
-        return mutate(owner, "DELETE", path, key, "{}".getBytes(StandardCharsets.UTF_8), () -> {
+        return mutate(owner, "DELETE", path, key, deletePrecondition(expectedVersion), () -> {
             BookmarkRecord current = store.findBookmark(owner, bookmarkId, true);
             if (current == null || !"ACTIVE".equals(current.state())) notFound();
             conflictUnless(current.version() == expected, current.version());
@@ -152,7 +152,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
     @Override
     public ArchivePageDTO<ArchiveNoteDTO> notes(ArchiveOwnerScope owner, String editionId, String blockId,
                                                 String cursor, int limit) {
-        long before = ArchiveWire.cursor(cursor);
+        Long before = ArchiveWire.cursor(cursor);
         List<NoteRecord> rows = store.listNotes(owner, editionId, blockId, before, limit + 1);
         boolean more = rows.size() > limit;
         List<NoteRecord> visible = more ? rows.subList(0, limit) : rows;
@@ -205,7 +205,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
                                             String expectedVersion, String path, String key) {
         require(ArchiveWire.lowercaseUuid(noteId), 404, "ARCHIVE_RESOURCE_NOT_FOUND", "Resource unavailable");
         long expected = ArchiveWire.decimal(expectedVersion, "INVALID_VERSION");
-        return mutate(owner, "DELETE", path, key, "{}".getBytes(StandardCharsets.UTF_8), () -> {
+        return mutate(owner, "DELETE", path, key, deletePrecondition(expectedVersion), () -> {
             NoteRecord current = store.findNote(owner, noteId, true);
             if (current == null || !"ACTIVE".equals(current.state())) notFound();
             conflictUnless(current.version() == expected, current.version());
@@ -216,6 +216,11 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
                     "VERSION_CONFLICT", "Note CAS failed");
             return noteDto(deleted);
         });
+    }
+
+    private byte[] deletePrecondition(String expectedVersion) {
+        return ("{\"expectedVersion\":\"" + expectedVersion + "\"}")
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     private ArchiveMutationResult mutate(ArchiveOwnerScope owner, String method, String path, String key,

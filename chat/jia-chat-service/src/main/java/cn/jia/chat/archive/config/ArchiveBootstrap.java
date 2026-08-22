@@ -35,8 +35,8 @@ public class ArchiveBootstrap implements ApplicationRunner {
             return;
         }
         schemaInitializer.initialize();
+        readerDataSchemaInitializer.initialize();
         ArchiveManifestBundle bundle = manifestLoader.load();
         importer.importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
-        readerDataSchemaInitializer.initialize();
     }
 }

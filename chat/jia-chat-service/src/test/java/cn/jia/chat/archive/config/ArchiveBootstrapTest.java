@@ -9,6 +9,8 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -16,7 +18,7 @@ import static org.mockito.Mockito.verify;
 
 class ArchiveBootstrapTest {
     @Test
-    void enabledBootstrapKeepsH02SchemaAndImportBeforeSeparateAdditiveH03Initializer() {
+    void enabledBootstrapCreatesBothSchemasBeforeContentImportSideEffects() {
         ArchiveSchemaInitializer h02 = mock(ArchiveSchemaInitializer.class);
         ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
         ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
@@ -24,10 +26,26 @@ class ArchiveBootstrapTest {
 
         bootstrap.run(mock(ApplicationArguments.class));
 
-        InOrder order = inOrder(h02, importer, h03);
+        InOrder order = inOrder(h02, h03, importer);
         order.verify(h02).initialize();
-        order.verify(importer).importAndActivate(any(), anyString());
         order.verify(h03).initialize();
+        order.verify(importer).importAndActivate(any(), anyString());
+    }
+
+    @Test
+    void h03SchemaFailurePreventsImportAndActivationSideEffects() {
+        ArchiveSchemaInitializer h02 = mock(ArchiveSchemaInitializer.class);
+        ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
+        ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
+        doThrow(new IllegalStateException("h03 drift")).when(h03).initialize();
+        ArchiveBootstrap bootstrap = new ArchiveBootstrap(enabledPolicy(), h02, h03, importer);
+
+        assertThrows(IllegalStateException.class,
+                () -> bootstrap.run(mock(ApplicationArguments.class)));
+
+        verify(h02).initialize();
+        verify(h03).initialize();
+        verify(importer, never()).importAndActivate(any(), anyString());
     }
 
     @Test

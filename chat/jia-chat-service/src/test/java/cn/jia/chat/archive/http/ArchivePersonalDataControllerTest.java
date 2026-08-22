@@ -93,6 +93,26 @@ class ArchivePersonalDataControllerTest {
     }
 
     @Test
+    void uuidSyntaxAcceptsVersion8AndFutureHexButRejectsUppercase() {
+        ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy());
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
+        when(service.putBookmark(any(), any(), any(), any(), any()))
+                .thenReturn(new ArchiveMutationResult(200, "application/json;charset=UTF-8", new byte[]{'{', '}'}, false));
+
+        for (String id : List.of("123e4567-e89b-82d3-a456-426614174000",
+                "123e4567-e89b-f2d3-a456-426614174000")) {
+            assertEquals(HttpStatus.OK,
+                    controller.putBookmark(id, "key-" + id.charAt(14), new byte[]{'{', '}'}, request, valid)
+                            .getStatusCode());
+        }
+        assertEquals(HttpStatus.NOT_FOUND,
+                controller.putBookmark("123E4567-e89b-82d3-a456-426614174000", "key", new byte[]{'{', '}'},
+                        request, valid).getStatusCode());
+    }
+
+    @Test
     void listSyntaxIsCanonicalAndCheckedBeforeDisabledGate() {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
         ArchivePersonalDataController controller = new ArchivePersonalDataController(service, disabledPolicy());

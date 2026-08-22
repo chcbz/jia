@@ -235,12 +235,17 @@ public class JdbcArchivePersonalDataStore implements ArchivePersonalDataStore {
 
     @Override
     public List<BookmarkRecord> listBookmarks(ArchiveOwnerScope owner, String editionId,
-                                               long beforeRowId, int limit) {
+                                               Long beforeRowId, int limit) {
+        String cursorPredicate = beforeRowId == null ? "" : " AND row_id<?";
+        Object[] args = beforeRowId == null
+                ? concat(scopeArgs(owner), editionId, editionId, editionId, limit)
+                : concat(scopeArgs(owner), editionId, editionId, editionId, beforeRowId, limit);
         return jdbc.query("SELECT * FROM archive_bookmark WHERE " + EXACT_SCOPE + """
                   AND edition_id=? AND CAST(edition_id AS BINARY)=CAST(? AS BINARY)
-                  AND OCTET_LENGTH(edition_id)=OCTET_LENGTH(?) AND state='ACTIVE' AND row_id<?
+                  AND OCTET_LENGTH(edition_id)=OCTET_LENGTH(?) AND state='ACTIVE'
+                """ + cursorPredicate + """
                 ORDER BY row_id DESC LIMIT ?
-                """, BOOKMARK, concat(scopeArgs(owner), editionId, editionId, editionId, beforeRowId, limit));
+                """, BOOKMARK, args);
     }
 
     @Override
@@ -280,21 +285,30 @@ public class JdbcArchivePersonalDataStore implements ArchivePersonalDataStore {
 
     @Override
     public List<NoteRecord> listNotes(ArchiveOwnerScope owner, String editionId, String blockId,
-                                      long beforeRowId, int limit) {
+                                      Long beforeRowId, int limit) {
         String block = blockId == null ? "" : """
                   AND block_id=? AND CAST(block_id AS BINARY)=CAST(? AS BINARY)
                   AND OCTET_LENGTH(block_id)=OCTET_LENGTH(?)
                 """;
-        Object[] args = blockId == null
-                ? concat(scopeArgs(owner), editionId, editionId, editionId, beforeRowId, limit)
-                : concat(scopeArgs(owner), editionId, editionId, editionId,
-                        blockId, blockId, blockId, beforeRowId, limit);
+        String cursorPredicate = beforeRowId == null ? "" : " AND row_id<?";
+        Object[] args;
+        if (blockId == null && beforeRowId == null) {
+            args = concat(scopeArgs(owner), editionId, editionId, editionId, limit);
+        } else if (blockId == null) {
+            args = concat(scopeArgs(owner), editionId, editionId, editionId, beforeRowId, limit);
+        } else if (beforeRowId == null) {
+            args = concat(scopeArgs(owner), editionId, editionId, editionId,
+                    blockId, blockId, blockId, limit);
+        } else {
+            args = concat(scopeArgs(owner), editionId, editionId, editionId,
+                    blockId, blockId, blockId, beforeRowId, limit);
+        }
         return jdbc.query("SELECT * FROM archive_note WHERE " + EXACT_SCOPE + """
                   AND edition_id=? AND CAST(edition_id AS BINARY)=CAST(? AS BINARY)
                   AND OCTET_LENGTH(edition_id)=OCTET_LENGTH(?)
                 """ + block + """
-                  AND state='ACTIVE' AND row_id<? ORDER BY row_id DESC LIMIT ?
-                """, NOTE, args);
+                  AND state='ACTIVE'
+                """ + cursorPredicate + " ORDER BY row_id DESC LIMIT ?", NOTE, args);
     }
 
     private static RowMapper<ContentPoint> pointMapper() {

@@ -55,13 +55,13 @@ class ArchiveReaderDataMySqlIntegrationTest {
         jdbc = new JdbcTemplate(dataSource);
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
+        readerDataSchema = new ArchiveReaderDataSchemaInitializer(jdbc);
+        readerDataSchema.initialize();
+        readerDataSchema.initialize();
         ArchiveManifestBundle bundle = new ArchiveManifestLoader().load();
         new ArchiveContentImporter(new JdbcArchiveContentStore(jdbc),
                 new SpringArchiveTransactions(new DataSourceTransactionManager(dataSource)), 100)
                 .importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
-        readerDataSchema = new ArchiveReaderDataSchemaInitializer(jdbc);
-        readerDataSchema.initialize();
-        readerDataSchema.initialize();
         service = new ArchivePersonalDataServiceImpl(new JdbcArchivePersonalDataStore(jdbc),
                 new SpringArchiveTransactions(new DataSourceTransactionManager(dataSource)));
         manifest = bundle.manifest();
@@ -70,60 +70,117 @@ class ArchiveReaderDataMySqlIntegrationTest {
     @AfterEach void tearDown() { if (jdbc != null) clean(); }
 
     @Test
-    void realMysqlExactScopeReplayCasRollbackTombstonesAndDriftFailClosed() throws Exception {
-        ArchiveManifest.Block block = manifest.chapters().getFirst();
-        ArchiveManifest.Paragraph paragraph = block.paragraphs().getFirst();
+    void realMysqlExactScopeReplayCasRollbackTombstonesCompletionAndDriftFailClosed() throws Exception {
+        ArchiveManifest.Block firstBlock = manifest.chapters().getFirst();
+        ArchiveManifest.Paragraph firstParagraph = firstBlock.paragraphs().getFirst();
+        ArchiveManifest.Block finalBlock = manifest.chapters().getLast();
+        ArchiveManifest.Paragraph finalParagraph = finalBlock.paragraphs().getLast();
         String bookmarkId = "123e4567-e89b-42d3-a456-426614174000";
+        String noteId = "223e4567-e89b-82d3-a456-426614174000";
         List<ArchiveOwnerScope> owners = List.of(
                 new ArchiveOwnerScope("owner-a", "client-a", "owner-a"),
                 new ArchiveOwnerScope("owner-a", "client-b", "owner-a"),
                 new ArchiveOwnerScope("owner-b", "client-a", "owner-b"),
                 new ArchiveOwnerScope("owner-b", "client-b", "owner-b"));
-        byte[] bookmarkBody = bookmarkBody(block, paragraph, "0");
+        byte[] bookmarkBody = bookmarkBody(firstBlock, firstParagraph, "0");
+        byte[] progressBody = progressBody(firstBlock, firstParagraph, "0", false, 0);
+        byte[] noteBody = noteBody("0", "private-水滸");
         for (ArchiveOwnerScope owner : owners) {
             ArchiveMutationResult first = service.putBookmark(owner, bookmarkId,
-                    "/archive/v1/me/bookmarks/" + bookmarkId, "same-key", bookmarkBody);
+                    "/archive/v1/me/bookmarks/" + bookmarkId, "bookmark-key", bookmarkBody);
             ArchiveMutationResult replay = service.putBookmark(owner, bookmarkId,
-                    "/archive/v1/me/bookmarks/" + bookmarkId, "same-key", bookmarkBody);
+                    "/archive/v1/me/bookmarks/" + bookmarkId, "bookmark-key", bookmarkBody);
             assertArrayEquals(first.body(), replay.body());
             assertTrue(replay.replayed());
+            service.putProgress(owner, manifest.editionId(),
+                    "/archive/v1/me/progress/" + manifest.editionId(), "progress-key", progressBody);
+            service.putNote(owner, noteId, "/archive/v1/me/notes/" + noteId, "note-key", noteBody);
         }
-        assertEquals(4, jdbc.queryForObject("SELECT COUNT(*) FROM archive_bookmark", Integer.class));
-        assertEquals(4, jdbc.queryForObject("SELECT COUNT(*) FROM archive_idempotency", Integer.class));
+        assertEquals(4, count("archive_bookmark"));
+        assertEquals(4, count("archive_reader_progress"));
+        assertEquals(4, count("archive_note"));
+        assertEquals(4, jdbc.queryForObject("SELECT COUNT(DISTINCT tenant_id,client_id,owner_jiacn) "
+                + "FROM archive_reader_progress", Integer.class));
+        assertEquals(4, jdbc.queryForObject("SELECT COUNT(DISTINCT tenant_id,client_id,owner_jiacn) "
+                + "FROM archive_note", Integer.class));
 
-        ArchiveMutationResult deleted = service.deleteBookmark(owners.getFirst(), bookmarkId, "1",
-                "/archive/v1/me/bookmarks/" + bookmarkId, "delete-key");
-        assertEquals(200, deleted.status());
+        int beforeMismatch = count("archive_idempotency");
+        ArchivePersonalDataException differentHash = assertThrows(ArchivePersonalDataException.class,
+                () -> service.putBookmark(owners.getFirst(), bookmarkId,
+                        "/archive/v1/me/bookmarks/" + bookmarkId, "bookmark-key",
+                        bookmarkBody(firstBlock, firstParagraph, "1")));
+        assertEquals("IDEMPOTENCY_KEY_REUSED", differentHash.code());
+        assertEquals(beforeMismatch, count("archive_idempotency"));
+
+        String bookmarkPath = "/archive/v1/me/bookmarks/" + bookmarkId;
+        ArchiveMutationResult deleted = service.deleteBookmark(
+                owners.getFirst(), bookmarkId, "1", bookmarkPath, "delete-key");
+        ArchiveMutationResult deleteReplay = service.deleteBookmark(
+                owners.getFirst(), bookmarkId, "1", bookmarkPath, "delete-key");
+        assertArrayEquals(deleted.body(), deleteReplay.body());
+        assertTrue(deleteReplay.replayed());
+        assertEquals("IDEMPOTENCY_KEY_REUSED", assertThrows(ArchivePersonalDataException.class,
+                () -> service.deleteBookmark(owners.getFirst(), bookmarkId, "2", bookmarkPath, "delete-key")).code());
         assertEquals("DELETED", jdbc.queryForObject("SELECT state FROM archive_bookmark WHERE tenant_id='owner-a' "
                 + "AND client_id='client-a' AND bookmark_id=?", String.class, bookmarkId));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_bookmark WHERE tenant_id='owner-a' "
                 + "AND client_id='client-a' AND (paragraph_id IS NOT NULL OR paragraph_sha256 IS NOT NULL)", Integer.class));
         assertEquals(404, assertThrows(ArchivePersonalDataException.class,
-                () -> service.putBookmark(owners.getFirst(), bookmarkId,
-                        "/archive/v1/me/bookmarks/" + bookmarkId, "resurrect-key",
-                        bookmarkBody(block, paragraph, "2"))).status());
+                () -> service.putBookmark(owners.getFirst(), bookmarkId, bookmarkPath, "resurrect-key",
+                        bookmarkBody(firstBlock, firstParagraph, "2"))).status());
 
-        int before = jdbc.queryForObject("SELECT COUNT(*) FROM archive_idempotency", Integer.class);
+        String notePath = "/archive/v1/me/notes/" + noteId;
+        ArchiveMutationResult noteDeleted = service.deleteNote(owners.get(1), noteId, "1", notePath, "note-delete");
+        assertArrayEquals(noteDeleted.body(), service.deleteNote(
+                owners.get(1), noteId, "1", notePath, "note-delete").body());
+        assertEquals("IDEMPOTENCY_KEY_REUSED", assertThrows(ArchivePersonalDataException.class,
+                () -> service.deleteNote(owners.get(1), noteId, "2", notePath, "note-delete")).code());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_note WHERE tenant_id='owner-a' "
+                + "AND client_id='client-b' AND (text IS NOT NULL OR anchor_json IS NOT NULL)", Integer.class));
+
+        byte[] completion = progressBody(finalBlock, finalParagraph, "1", true,
+                finalParagraph.utf8ByteLength());
+        service.putProgress(owners.get(3), manifest.editionId(),
+                "/archive/v1/me/progress/" + manifest.editionId(), "complete-key", completion);
+        assertEquals("COMPLETED", jdbc.queryForObject("SELECT state FROM archive_reader_progress "
+                + "WHERE tenant_id='owner-b' AND client_id='client-b'", String.class));
+        assertEquals(finalParagraph.utf8ByteLength(), jdbc.queryForObject(
+                "SELECT byte_offset FROM archive_reader_progress WHERE tenant_id='owner-b' AND client_id='client-b'",
+                Long.class));
+        assertEquals(finalParagraph.paragraphId(), jdbc.queryForObject(
+                "SELECT paragraph_id FROM archive_reader_progress WHERE tenant_id='owner-b' AND client_id='client-b'",
+                String.class));
+
+        int beforeZeroWrite = count("archive_idempotency");
         byte[] wrongHash = new String(bookmarkBody, StandardCharsets.UTF_8)
-                .replace(paragraph.sha256(), "b".repeat(64)).getBytes(StandardCharsets.UTF_8);
+                .replace(firstParagraph.sha256(), "b".repeat(64)).getBytes(StandardCharsets.UTF_8);
         assertEquals("CONTENT_HASH_MISMATCH", assertThrows(ArchivePersonalDataException.class,
-                () -> service.putBookmark(owners.get(1),
-                        "223e4567-e89b-42d3-a456-426614174000",
-                        "/archive/v1/me/bookmarks/223e4567-e89b-42d3-a456-426614174000",
+                () -> service.putBookmark(owners.get(1), "323e4567-e89b-f2d3-a456-426614174000",
+                        "/archive/v1/me/bookmarks/323e4567-e89b-f2d3-a456-426614174000",
                         "rollback-key", wrongHash)).code());
-        assertEquals(before, jdbc.queryForObject("SELECT COUNT(*) FROM archive_idempotency", Integer.class));
+        assertEquals("INVALID_REQUEST_JSON", assertThrows(ArchivePersonalDataException.class,
+                () -> service.putProgress(owners.getFirst(), manifest.editionId(),
+                        "/archive/v1/me/progress/" + manifest.editionId(), "scalar-key",
+                        new String(progressBody, StandardCharsets.UTF_8)
+                                .replace("\"expectedVersion\":\"0\"", "\"expectedVersion\":0")
+                                .getBytes(StandardCharsets.UTF_8))).code());
+        assertEquals("VERSION_CONFLICT", assertThrows(ArchivePersonalDataException.class,
+                () -> service.putNote(owners.get(2), noteId, notePath, "note-conflict", noteBody("9", "changed"))).code());
+        assertEquals(beforeZeroWrite, count("archive_idempotency"));
+        assertEquals(4, count("archive_bookmark"));
+        assertEquals(4, count("archive_note"));
 
         var pool = Executors.newFixedThreadPool(2);
         CountDownLatch start = new CountDownLatch(1);
         List<Object> outcomes = java.util.Collections.synchronizedList(new ArrayList<>());
-        byte[] progress = progressBody(block, paragraph, "0");
+        byte[] raceProgress = progressBody(firstBlock, firstParagraph, "1", false, 0);
         for (int i = 0; i < 2; i++) {
             String key = "race-" + i;
             pool.submit(() -> {
                 try {
                     start.await();
                     outcomes.add(service.putProgress(owners.get(2), manifest.editionId(),
-                            "/archive/v1/me/progress/" + manifest.editionId(), key, progress));
+                            "/archive/v1/me/progress/" + manifest.editionId(), key, raceProgress));
                 } catch (Throwable failure) { outcomes.add(failure); }
             });
         }
@@ -141,16 +198,27 @@ class ArchiveReaderDataMySqlIntegrationTest {
 
     private byte[] bookmarkBody(ArchiveManifest.Block block, ArchiveManifest.Paragraph paragraph, String version) {
         return ("{\"expectedVersion\":\"" + version + "\",\"editionId\":\"" + manifest.editionId()
-                + "\",\"location\":" + location(block, paragraph) + "}").getBytes(StandardCharsets.UTF_8);
+                + "\",\"location\":" + location(block, paragraph, 0) + "}").getBytes(StandardCharsets.UTF_8);
     }
-    private byte[] progressBody(ArchiveManifest.Block block, ArchiveManifest.Paragraph paragraph, String version) {
-        return ("{\"expectedVersion\":\"" + version + "\",\"location\":" + location(block, paragraph)
-                + ",\"markCompleted\":false}").getBytes(StandardCharsets.UTF_8);
+    private byte[] progressBody(ArchiveManifest.Block block, ArchiveManifest.Paragraph paragraph,
+                                String version, boolean completed, long offset) {
+        return ("{\"expectedVersion\":\"" + version + "\",\"location\":"
+                + location(block, paragraph, offset) + ",\"markCompleted\":" + completed + "}")
+                .getBytes(StandardCharsets.UTF_8);
     }
-    private String location(ArchiveManifest.Block block, ArchiveManifest.Paragraph paragraph) {
-        return "{\"editionManifestSha256\":\"" + manifest.manifestSha256() + "\",\"blockType\":\"CHAPTER\","
-                + "\"blockId\":\"" + block.blockId() + "\",\"paragraphId\":\"" + paragraph.paragraphId()
-                + "\",\"byteOffset\":0,\"paragraphSha256\":\"" + paragraph.sha256() + "\"}";
+    private byte[] noteBody(String version, String text) {
+        return ("{\"expectedVersion\":\"" + version + "\",\"editionId\":\""
+                + manifest.editionId() + "\",\"text\":\"" + text + "\",\"anchor\":null}")
+                .getBytes(StandardCharsets.UTF_8);
+    }
+    private String location(ArchiveManifest.Block block, ArchiveManifest.Paragraph paragraph, long offset) {
+        return "{\"editionManifestSha256\":\"" + manifest.manifestSha256()
+                + "\",\"blockType\":\"CHAPTER\",\"blockId\":\"" + block.blockId()
+                + "\",\"paragraphId\":\"" + paragraph.paragraphId() + "\",\"byteOffset\":"
+                + offset + ",\"paragraphSha256\":\"" + paragraph.sha256() + "\"}";
+    }
+    private int count(String table) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
 
     private void clean() {

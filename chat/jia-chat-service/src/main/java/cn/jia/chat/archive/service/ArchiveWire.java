@@ -27,7 +27,7 @@ final class ArchiveWire {
     }
 
     static boolean lowercaseUuid(String value) {
-        if (value == null || !value.matches("[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) return false;
+        if (value == null || !value.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) return false;
         try { return UUID.fromString(value).toString().equals(value); }
         catch (IllegalArgumentException ignored) { return false; }
     }
@@ -40,8 +40,8 @@ final class ArchiveWire {
         return true;
     }
 
-    static long cursor(String value) {
-        return value == null ? Long.MAX_VALUE : decimal(value, "INVALID_CURSOR");
+    static Long cursor(String value) {
+        return value == null ? null : decimal(value, "INVALID_CURSOR");
     }
 
     private static void invalid(String code) {

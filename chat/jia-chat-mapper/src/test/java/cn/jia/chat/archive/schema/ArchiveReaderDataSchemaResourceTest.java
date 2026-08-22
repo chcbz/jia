@@ -25,6 +25,9 @@ class ArchiveReaderDataSchemaResourceTest {
         assertTrue(sql.contains("constraint fk_archive_note_block foreign key (edition_id, block_id) references archive_chapter (edition_id, block_id)"));
         assertTrue(sql.contains("constraint chk_archive_note_text_bytes check (text is null or octet_length(text) <= 20000)"));
         assertTrue(sql.contains("constraint chk_archive_idempotency_key check (idempotency_key regexp '^[!-~]{1,128}$')"));
+        assertTrue(sql.contains("bookmark_id regexp '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab]"));
+        assertTrue(sql.contains("note_id regexp '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab]"));
+        assertFalse(sql.contains("[1-5][0-9a-f]{3}"));
         assertTrue(sql.contains("state = 'deleted' and text is null and block_id is null and anchor_json is null"));
         assertFalse(sql.contains("drop table"));
         assertFalse(sql.contains("create table archive_work"));

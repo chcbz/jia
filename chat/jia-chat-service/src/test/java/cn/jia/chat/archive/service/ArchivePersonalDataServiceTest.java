@@ -77,6 +77,32 @@ class ArchivePersonalDataServiceTest {
     }
 
     @Test
+    void writeDtoScalarTypesAreExactAndNeverCoerced() {
+        List<byte[]> invalidProgress = List.of(
+                bytes(progressJson("0", 3, MANIFEST, paragraphHash).replace("\"expectedVersion\":\"0\"", "\"expectedVersion\":0")),
+                bytes(progressJson("0", 3, MANIFEST, paragraphHash).replace("\"byteOffset\":3", "\"byteOffset\":\"3\"")),
+                bytes(progressJson("0", 3, MANIFEST, paragraphHash).replace("\"markCompleted\":false", "\"markCompleted\":\"false\"")),
+                bytes(progressJson("0", 3, MANIFEST, paragraphHash).replace("\"markCompleted\":false", "\"markCompleted\":0")));
+        for (int i = 0; i < invalidProgress.size(); i++) {
+            byte[] candidate = invalidProgress.get(i);
+            ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
+                    () -> service.putProgress(OWNER, EDITION, "/archive/v1/me/progress/" + EDITION,
+                            "scalar-progress-" + java.util.Arrays.hashCode(candidate), candidate),
+                    "scalar progress case " + i + ": " + new String(candidate, StandardCharsets.UTF_8));
+            assertEquals("INVALID_REQUEST_JSON", failure.code());
+        }
+        for (String nonStringText : List.of("7", "true", "{}", "[]")) {
+            byte[] candidate = bytes("{\"expectedVersion\":\"0\",\"editionId\":\"" + EDITION
+                    + "\",\"text\":" + nonStringText + ",\"anchor\":null}");
+            ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
+                    () -> service.putNote(OWNER, NOTE, "/archive/v1/me/notes/" + NOTE,
+                            "scalar-note-" + nonStringText.charAt(0), candidate));
+            assertEquals("INVALID_REQUEST_JSON", failure.code());
+        }
+        assertEquals(0, store.idempotencyAttempts);
+    }
+
+    @Test
     void progressValidatesUtf8BoundaryHashesCasAndReplaysCanonicalEquivalentRequestByteExactly() {
         String path = "/archive/v1/me/progress/" + EDITION;
         String request = progressJson("0", 3, MANIFEST, paragraphHash);
@@ -129,9 +155,18 @@ class ArchivePersonalDataServiceTest {
         assertEquals(200, created.status());
         assertEquals("ACTIVE", store.bookmarks.get(BOOKMARK).state());
 
+        String deletePath = "/archive/v1/me/bookmarks/" + BOOKMARK;
         ArchiveMutationResult deleted = service.deleteBookmark(OWNER, BOOKMARK, "1",
-                "/archive/v1/me/bookmarks/" + BOOKMARK, "bookmark-delete");
+                deletePath, "bookmark-delete");
         assertEquals(200, deleted.status());
+        ArchiveMutationResult replay = service.deleteBookmark(OWNER, BOOKMARK, "1",
+                deletePath, "bookmark-delete");
+        assertTrue(replay.replayed());
+        assertArrayEquals(deleted.body(), replay.body());
+        ArchivePersonalDataException changedPrecondition = assertThrows(ArchivePersonalDataException.class,
+                () -> service.deleteBookmark(OWNER, BOOKMARK, "2", deletePath, "bookmark-delete"));
+        assertEquals(409, changedPrecondition.status());
+        assertEquals("IDEMPOTENCY_KEY_REUSED", changedPrecondition.code());
         var tombstone = store.bookmarks.get(BOOKMARK);
         assertEquals("DELETED", tombstone.state());
         assertEquals(2, tombstone.version());
@@ -145,6 +180,21 @@ class ArchivePersonalDataServiceTest {
         assertEquals(404, concealed.status());
         assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", concealed.code());
         assertEquals("DELETED", store.bookmarks.get(BOOKMARK).state());
+    }
+
+    @Test
+    void canonicalLowercaseUuidAcceptsVersion8AndFutureVersionNibbles() {
+        for (String id : List.of("123e4567-e89b-82d3-a456-426614174000",
+                "123e4567-e89b-f2d3-a456-426614174000")) {
+            ArchiveMutationResult result = service.putBookmark(OWNER, id,
+                    "/archive/v1/me/bookmarks/" + id, "uuid-" + id.charAt(14), bytes(bookmarkJson("0")));
+            assertEquals(200, result.status());
+            assertEquals("ACTIVE", store.bookmarks.get(id).state());
+        }
+        assertEquals(404, assertThrows(ArchivePersonalDataException.class,
+                () -> service.putBookmark(OWNER, "123E4567-e89b-82d3-a456-426614174000",
+                        "/archive/v1/me/bookmarks/uppercase", "uuid-uppercase", bytes(bookmarkJson("0"))))
+                .status());
     }
 
     @Test
@@ -178,16 +228,21 @@ class ArchivePersonalDataServiceTest {
 
     @Test
     void rowIdDescendingPaginationUsesExclusiveCursorAndOnlyActiveRows() {
+        store.bookmarks.put("max", bookmark(Long.MAX_VALUE, "max", "ACTIVE"));
         store.bookmarks.put("a", bookmark(12, "a", "ACTIVE"));
         store.bookmarks.put("b", bookmark(10, "b", "ACTIVE"));
         store.bookmarks.put("c", bookmark(8, "c", "ACTIVE"));
         store.bookmarks.put("d", bookmark(7, "d", "DELETED"));
 
         ArchivePageDTO<ArchiveBookmarkDTO> first = service.bookmarks(OWNER, EDITION, null, 2);
-        assertEquals(List.of("a", "b"), first.items().stream().map(ArchiveBookmarkDTO::bookmarkId).toList());
-        assertEquals("10", first.nextCursor());
+        assertEquals(List.of("max", "a"), first.items().stream().map(ArchiveBookmarkDTO::bookmarkId).toList());
+        assertEquals("12", first.nextCursor());
+        ArchivePageDTO<ArchiveBookmarkDTO> explicitMax = service.bookmarks(
+                OWNER, EDITION, Long.toString(Long.MAX_VALUE), 10);
+        assertEquals(List.of("a", "b", "c"), explicitMax.items().stream()
+                .map(ArchiveBookmarkDTO::bookmarkId).toList());
         ArchivePageDTO<ArchiveBookmarkDTO> second = service.bookmarks(OWNER, EDITION, first.nextCursor(), 2);
-        assertEquals(List.of("c"), second.items().stream().map(ArchiveBookmarkDTO::bookmarkId).toList());
+        assertEquals(List.of("b", "c"), second.items().stream().map(ArchiveBookmarkDTO::bookmarkId).toList());
         assertNull(second.nextCursor());
     }
 
@@ -283,9 +338,9 @@ class ArchivePersonalDataServiceTest {
             bookmarks.put(row.bookmarkId(), row); return 1;
         }
         @Override public List<BookmarkRecord> listBookmarks(ArchiveOwnerScope owner, String editionId,
-                long before, int limit) {
+                Long before, int limit) {
             return bookmarks.values().stream().filter(r -> r.editionId().equals(editionId))
-                    .filter(r -> "ACTIVE".equals(r.state()) && r.rowId() < before)
+                    .filter(r -> "ACTIVE".equals(r.state()) && (before == null || r.rowId() < before))
                     .sorted(java.util.Comparator.comparingLong(BookmarkRecord::rowId).reversed())
                     .limit(limit).toList();
         }
@@ -297,9 +352,9 @@ class ArchivePersonalDataServiceTest {
             notes.put(row.noteId(), row); return 1;
         }
         @Override public List<NoteRecord> listNotes(ArchiveOwnerScope owner, String editionId, String blockId,
-                long before, int limit) {
+                Long before, int limit) {
             return notes.values().stream().filter(r -> r.editionId().equals(editionId))
-                    .filter(r -> "ACTIVE".equals(r.state()) && r.rowId() < before)
+                    .filter(r -> "ACTIVE".equals(r.state()) && (before == null || r.rowId() < before))
                     .filter(r -> blockId == null || blockId.equals(r.blockId()))
                     .sorted(java.util.Comparator.comparingLong(NoteRecord::rowId).reversed())
                     .limit(limit).toList();
