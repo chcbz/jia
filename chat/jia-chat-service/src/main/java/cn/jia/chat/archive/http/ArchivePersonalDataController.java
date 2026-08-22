@@ -27,7 +27,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
 
@@ -236,9 +235,12 @@ public class ArchivePersonalDataController {
     }
 
     private boolean identifier(String value, int maxBytes) {
-        return value != null && !value.isBlank() && value.equals(value.strip())
-                && value.getBytes(StandardCharsets.UTF_8).length <= maxBytes
-                && value.chars().noneMatch(Character::isISOControl);
+        if (value == null || value.isEmpty() || value.length() > maxBytes) return false;
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (current < 0x21 || current > 0x7e) return false;
+        }
+        return true;
     }
 
     private boolean lowercaseUuid(String value) {

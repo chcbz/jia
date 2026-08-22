@@ -147,6 +147,17 @@ class ArchivePersonalDataServiceTest {
     }
 
     @Test
+    void nonAsciiCanonicalProgressPathIsConcealedBeforeIdempotencyReservation() {
+        ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
+                () -> service.putProgress(OWNER, "水", "/archive/v1/me/progress/水",
+                        "non-ascii-path", bytes(progressJson("0", 3, MANIFEST, paragraphHash))));
+        assertEquals(404, failure.status());
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", failure.code());
+        assertEquals(0, store.idempotencyAttempts);
+        assertNull(store.progress);
+    }
+
+    @Test
     void progressValidatesUtf8BoundaryHashesCasAndReplaysCanonicalEquivalentRequestByteExactly() {
         String path = "/archive/v1/me/progress/" + EDITION;
         String request = progressJson("0", 3, MANIFEST, paragraphHash);

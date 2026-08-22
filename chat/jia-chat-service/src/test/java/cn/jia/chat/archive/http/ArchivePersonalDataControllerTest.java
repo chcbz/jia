@@ -2,6 +2,7 @@ package cn.jia.chat.archive.http;
 
 import cn.jia.chat.archive.config.ArchiveReaderAccessPolicy;
 import cn.jia.chat.archive.config.ArchiveReaderProperties;
+import cn.jia.chat.archive.dto.ArchivePageDTO;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.service.ArchiveMutationResult;
 import cn.jia.chat.archive.service.ArchivePersonalDataService;
@@ -9,10 +10,13 @@ import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -20,12 +24,16 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class ArchivePersonalDataControllerTest {
     private static final String EDITION = "shuihuzhuan-zh-120-v1";
@@ -67,6 +75,46 @@ class ArchivePersonalDataControllerTest {
         var disabled = controller.putBookmark(ID, "key", new byte[]{'{', '}'}, request, valid);
         assertEquals(HttpStatus.NOT_FOUND, disabled.getStatusCode());
         verify(service, never()).putBookmark(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nonAsciiProgressIdentifierIsConcealedBeforeServiceAtControllerAndMvcLayers() throws Exception {
+        ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy());
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
+        when(service.putProgress(any(), org.mockito.ArgumentMatchers.eq("水"), any(), any(), any()))
+                .thenThrow(new DataIntegrityViolationException("non-ASCII path reached SQL"));
+        when(service.putProgress(any(), org.mockito.ArgumentMatchers.eq(EDITION),
+                org.mockito.ArgumentMatchers.eq("/archive/v1/me/progress/" + EDITION),
+                org.mockito.ArgumentMatchers.eq("valid-key"), any()))
+                .thenReturn(new ArchiveMutationResult(
+                        200, "application/json;charset=UTF-8", new byte[]{'{', '}'}, false));
+        when(service.notes(any(), org.mockito.ArgumentMatchers.eq(EDITION),
+                org.mockito.ArgumentMatchers.eq(EDITION + "-c001"), any(),
+                org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(new ArchivePageDTO<>(List.of(), null));
+
+        var direct = assertDoesNotThrow(() -> controller.putProgress(
+                "水", "unicode-key", new byte[]{'{', '}'}, request, valid));
+        assertEquals(HttpStatus.NOT_FOUND, direct.getStatusCode());
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", ((JsonResult<?>) direct.getBody()).getCode());
+        verify(service, never()).putProgress(any(), org.mockito.ArgumentMatchers.eq("水"), any(), any(), any());
+
+        assertEquals(HttpStatus.OK, controller.putProgress(
+                EDITION, "valid-key", new byte[]{'{', '}'}, request, valid).getStatusCode());
+        assertEquals(HttpStatus.OK,
+                controller.notes(EDITION, EDITION + "-c001", null, null, valid).getStatusCode());
+
+        MockMvcBuilders.standaloneSetup(controller).build()
+                .perform(put("/archive/v1/me/progress/{editionId}", "水")
+                        .principal(valid)
+                        .header("Idempotency-Key", "mvc-unicode-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ARCHIVE_RESOURCE_NOT_FOUND"));
+        verify(service, never()).putProgress(any(), org.mockito.ArgumentMatchers.eq("水"), any(), any(), any());
     }
 
     @Test

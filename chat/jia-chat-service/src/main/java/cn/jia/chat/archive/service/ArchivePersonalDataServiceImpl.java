@@ -228,6 +228,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
 
     private ArchiveMutationResult mutate(ArchiveOwnerScope owner, String method, String path, String key,
                                          byte[] canonicalJson, Supplier<Object> action) {
+        if (!ArchiveWire.visibleAsciiPath(path)) notFound();
         require(ArchiveWire.visibleAsciiKey(key), 422, "INVALID_IDEMPOTENCY_KEY",
                 "Idempotency-Key must be 1..128 visible ASCII bytes");
         String requestHash = json.sha256(method, path, canonicalJson);

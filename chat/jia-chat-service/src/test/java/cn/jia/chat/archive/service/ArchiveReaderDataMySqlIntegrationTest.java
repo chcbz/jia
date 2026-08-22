@@ -85,6 +85,14 @@ class ArchiveReaderDataMySqlIntegrationTest {
         byte[] bookmarkBody = bookmarkBody(firstBlock, firstParagraph, "0");
         byte[] progressBody = progressBody(firstBlock, firstParagraph, "0", false, 0);
         byte[] noteBody = noteBody("0", "private-水滸");
+        int beforeNonAsciiPath = count("archive_idempotency");
+        ArchivePersonalDataException nonAsciiPath = assertThrows(ArchivePersonalDataException.class,
+                () -> service.putProgress(owners.getFirst(), "水", "/archive/v1/me/progress/水",
+                        "non-ascii-progress", progressBody));
+        assertEquals(404, nonAsciiPath.status());
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", nonAsciiPath.code());
+        assertEquals(beforeNonAsciiPath, count("archive_idempotency"));
+
         for (ArchiveOwnerScope owner : owners) {
             ArchiveMutationResult first = service.putBookmark(owner, bookmarkId,
                     "/archive/v1/me/bookmarks/" + bookmarkId, "bookmark-key", bookmarkBody);

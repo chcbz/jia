@@ -32,6 +32,15 @@ final class ArchiveWire {
         catch (IllegalArgumentException ignored) { return false; }
     }
 
+    static boolean visibleAsciiPath(String value) {
+        if (value == null || value.isEmpty() || value.length() > 512) return false;
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (current < 0x21 || current > 0x7e) return false;
+        }
+        return true;
+    }
+
     static boolean visibleAsciiKey(String value) {
         if (value == null) return false;
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
