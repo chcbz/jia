@@ -32,9 +32,11 @@ public interface ArchiveQuestionStore {
     int updateOutbox(ArchiveOwnerScope owner, OutboxRecord outbox, long expectedFencingToken, String expectedState);
     int renewOutboxLease(ArchiveOwnerScope owner, String questionId, long fencingToken,
                          Instant leaseUntil, Instant updatedAt);
-    List<ClaimCandidate> listClaimCandidates(Instant now, int limit);
-    List<ClaimCandidate> listExhaustedCandidates(Instant now, int limit);
-    List<PublishCandidate> findPublishCandidates(int limit);
+    List<ClaimCandidate> listClaimCandidates(Instant now, Instant afterCandidateAt,
+                                               long afterRowId, int limit);
+    List<ClaimCandidate> listExhaustedCandidates(Instant now, Instant afterLeaseUntil,
+                                                 long afterRowId, int limit);
+    List<PublishCandidate> findPublishCandidates(long afterRowId, int limit);
     int advancePublishedSequence(ArchiveOwnerScope owner, String questionId, long expected, long delivered);
 
     record MutationRecord(long rowId, boolean inserted, String questionId, String requestSha256,
@@ -55,7 +57,8 @@ public interface ArchiveQuestionStore {
                         long fencingToken, long publishedSequence, Instant availableAt,
                         Instant leaseUntil, String lastErrorCode, Instant createdAt, Instant updatedAt) { }
 
-    record ClaimCandidate(ArchiveOwnerScope owner, String questionId) { }
-    record PublishCandidate(ArchiveOwnerScope owner, String questionId,
+    record ClaimCandidate(ArchiveOwnerScope owner, String questionId,
+                          Instant candidateAt, long rowId) { }
+    record PublishCandidate(ArchiveOwnerScope owner, String questionId, long rowId,
                             long publishedSequence, long currentSequence) { }
 }

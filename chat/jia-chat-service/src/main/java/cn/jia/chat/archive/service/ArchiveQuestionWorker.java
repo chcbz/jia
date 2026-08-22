@@ -89,26 +89,66 @@ public class ArchiveQuestionWorker {
         if (!accessPolicy.enabled()) return false;
         delivery.recoverOnce();
         Instant now = clock.instant();
-        for (ClaimCandidate candidate : store.listExhaustedCandidates(now, CANDIDATE_BATCH)) {
-            if (!allowed(candidate.owner())) continue;
-            try {
-                if (finalizeExpired(candidate)) return true;
-            } catch (Throwable ignored) {
-                // A poison/exhausted row cannot block a later exact-scoped candidate.
+        if (finalizeOneExpired(now)) return true;
+        return claimAndRunOne(now);
+    }
+
+    private boolean finalizeOneExpired(Instant now) {
+        Instant cursorAt = null;
+        long cursorRowId = 0;
+        while (true) {
+            List<ClaimCandidate> candidates = store.listExhaustedCandidates(
+                    now, cursorAt, cursorRowId, CANDIDATE_BATCH);
+            if (candidates.isEmpty()) return false;
+            boolean advanced = false;
+            for (ClaimCandidate candidate : candidates) {
+                if (!afterCursor(candidate, cursorAt, cursorRowId)) continue;
+                cursorAt = candidate.candidateAt();
+                cursorRowId = candidate.rowId();
+                advanced = true;
+                if (!allowed(candidate.owner())) continue;
+                try {
+                    if (finalizeExpired(candidate)) return true;
+                } catch (Throwable ignored) {
+                    // A permanently corrupt/exhausted row cannot hide a later keyset page.
+                }
             }
+            if (!advanced || candidates.size() < CANDIDATE_BATCH) return false;
         }
-        for (ClaimCandidate candidate : store.listClaimCandidates(now, CANDIDATE_BATCH)) {
-            if (!allowed(candidate.owner())) continue;
-            try {
-                Claimed claim = claim(candidate);
-                if (claim == null) continue;
-                executeProvider(claim);
-                return true;
-            } catch (Throwable ignored) {
-                // Isolate a corrupt/racing/exhausted candidate and continue through the bounded batch.
+    }
+
+    private boolean claimAndRunOne(Instant now) {
+        Instant cursorAt = null;
+        long cursorRowId = 0;
+        while (true) {
+            List<ClaimCandidate> candidates = store.listClaimCandidates(
+                    now, cursorAt, cursorRowId, CANDIDATE_BATCH);
+            if (candidates.isEmpty()) return false;
+            boolean advanced = false;
+            for (ClaimCandidate candidate : candidates) {
+                if (!afterCursor(candidate, cursorAt, cursorRowId)) continue;
+                cursorAt = candidate.candidateAt();
+                cursorRowId = candidate.rowId();
+                advanced = true;
+                if (!allowed(candidate.owner())) continue;
+                try {
+                    Claimed claim = claim(candidate);
+                    if (claim == null) continue;
+                    executeProvider(claim);
+                    return true;
+                } catch (Throwable ignored) {
+                    // Isolate a corrupt/racing candidate and continue into later keyset pages.
+                }
             }
+            if (!advanced || candidates.size() < CANDIDATE_BATCH) return false;
         }
-        return false;
+    }
+
+    private boolean afterCursor(ClaimCandidate candidate, Instant cursorAt, long cursorRowId) {
+        if (candidate == null || candidate.candidateAt() == null || candidate.rowId() <= 0) return false;
+        if (cursorAt == null) return true;
+        int timeOrder = candidate.candidateAt().compareTo(cursorAt);
+        return timeOrder > 0 || (timeOrder == 0 && candidate.rowId() > cursorRowId);
     }
 
     private void safeRun() {

@@ -244,42 +244,57 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
     }
 
     @Override
-    public List<ClaimCandidate> listClaimCandidates(Instant now, int limit) {
+    public List<ClaimCandidate> listClaimCandidates(Instant now, Instant afterCandidateAt,
+                                                    long afterRowId, int limit) {
+        Timestamp cursor = timestamp(afterCandidateAt);
         return jdbc.query("""
-                SELECT tenant_id,client_id,owner_jiacn,question_id FROM archive_outbox
-                WHERE attempt_count<3 AND available_at<=?
-                  AND (state='READY' OR (state='LEASED' AND lease_until<=?))
-                ORDER BY available_at,row_id LIMIT ?
+                SELECT tenant_id,client_id,owner_jiacn,question_id,row_id,
+                       CASE WHEN state='READY' THEN available_at ELSE lease_until END AS candidate_at
+                FROM archive_outbox
+                WHERE attempt_count<3
+                  AND ((state='READY' AND available_at<=?)
+                       OR (state='LEASED' AND lease_until<=?))
+                  AND (? IS NULL
+                       OR (CASE WHEN state='READY' THEN available_at ELSE lease_until END)>?
+                       OR ((CASE WHEN state='READY' THEN available_at ELSE lease_until END)=? AND row_id>?))
+                ORDER BY candidate_at,row_id LIMIT ?
                 """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
-                        rs.getString("question_id")), Timestamp.from(now), Timestamp.from(now), limit);
+                        rs.getString("question_id"), instant(rs.getTimestamp("candidate_at")),
+                        rs.getLong("row_id")), Timestamp.from(now), Timestamp.from(now), cursor, cursor,
+                cursor, afterRowId, limit);
     }
 
     @Override
-    public List<ClaimCandidate> listExhaustedCandidates(Instant now, int limit) {
+    public List<ClaimCandidate> listExhaustedCandidates(Instant now, Instant afterLeaseUntil,
+                                                        long afterRowId, int limit) {
+        Timestamp cursor = timestamp(afterLeaseUntil);
         return jdbc.query("""
-                SELECT tenant_id,client_id,owner_jiacn,question_id FROM archive_outbox
+                SELECT tenant_id,client_id,owner_jiacn,question_id,row_id,lease_until AS candidate_at
+                FROM archive_outbox
                 WHERE state='LEASED' AND attempt_count>=3 AND lease_until<=?
+                  AND (? IS NULL OR lease_until>? OR (lease_until=? AND row_id>?))
                 ORDER BY lease_until,row_id LIMIT ?
                 """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
-                        rs.getString("question_id")), Timestamp.from(now), limit);
+                        rs.getString("question_id"), instant(rs.getTimestamp("candidate_at")),
+                        rs.getLong("row_id")), Timestamp.from(now), cursor, cursor, cursor, afterRowId, limit);
     }
 
     @Override
-    public List<PublishCandidate> findPublishCandidates(int limit) {
+    public List<PublishCandidate> findPublishCandidates(long afterRowId, int limit) {
         return jdbc.query("""
-                SELECT o.tenant_id,o.client_id,o.owner_jiacn,o.question_id,
+                SELECT o.tenant_id,o.client_id,o.owner_jiacn,o.question_id,o.row_id,
                        o.published_sequence,q.current_sequence
                 FROM archive_outbox o JOIN archive_question q
                   ON q.tenant_id=o.tenant_id AND q.client_id=o.client_id
                  AND q.owner_jiacn=o.owner_jiacn AND q.question_id=o.question_id
-                WHERE o.published_sequence<q.current_sequence
+                WHERE o.published_sequence<q.current_sequence AND o.row_id>?
                 ORDER BY o.row_id LIMIT ?
                 """, (rs, ignored) -> new PublishCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
-                        rs.getString("question_id"), rs.getLong("published_sequence"),
-                        rs.getLong("current_sequence")), limit);
+                        rs.getString("question_id"), rs.getLong("row_id"),
+                        rs.getLong("published_sequence"), rs.getLong("current_sequence")), afterRowId, limit);
     }
 
     @Override

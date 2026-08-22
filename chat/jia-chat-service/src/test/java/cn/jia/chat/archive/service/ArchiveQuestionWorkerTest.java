@@ -10,6 +10,7 @@ import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.ArchivePersonalDataStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.QuestionRecord;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +20,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -38,6 +41,7 @@ class ArchiveQuestionWorkerTest {
     private ArchiveQuestionTestSupport.Store store;
     private ArchiveQuestionTestSupport.Content content;
     private ArchiveQuestionTestSupport.Transactions transactions;
+    private ArchiveQuestionEventBroker broker;
     private ArchiveQuestionEventDelivery delivery;
     private ArchiveQuestionServiceImpl service;
     private Clock clock;
@@ -48,7 +52,8 @@ class ArchiveQuestionWorkerTest {
         store = new ArchiveQuestionTestSupport.Store();
         content = new ArchiveQuestionTestSupport.Content();
         transactions = new ArchiveQuestionTestSupport.Transactions(store);
-        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker(), transactions);
+        broker = new ArchiveQuestionEventBroker();
+        delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
         clock = Clock.fixed(NOW, ZoneOffset.UTC);
         content.active = new ArchivePersonalDataStore.ActiveEdition(EDITION, MANIFEST);
         String text = "水泊忠义";
@@ -61,6 +66,11 @@ class ArchiveQuestionWorkerTest {
                 + "\",\"startByte\":0,\"endByte\":12,\"paragraphSha256\":\"" + paragraphHash
                 + "\"}],\"selectionSha256\":\"" + ArchiveEtags.sha256(bytes(text)) + "\"}";
         body = "{\"question\":\"何谓忠义？\",\"anchor\":" + anchor + "}";
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (delivery != null) delivery.stop();
     }
 
     @Test
@@ -76,6 +86,7 @@ class ArchiveQuestionWorkerTest {
         assertEquals("4", question.currentSequence());
         assertEquals(List.of("QUESTION_QUEUED", "QUESTION_RUNNING", "ANSWER_DELTA", "QUESTION_SUCCEEDED"),
                 store.allEvents(OWNER, ID).stream().map(event -> event.eventType()).toList());
+        assertTrue(delivery.awaitPublished(OWNER, ID, 4, Duration.ofSeconds(2)));
         assertEquals(4, store.findOutbox(OWNER, ID, false).publishedSequence());
         assertEquals("DONE", store.findOutbox(OWNER, ID, false).state());
     }
@@ -88,6 +99,7 @@ class ArchiveQuestionWorkerTest {
             return ArchiveQuestionProvider.Answer.complete("persisted-once");
         };
         create(provider);
+        assertTrue(delivery.awaitPublished(OWNER, ID, 1, Duration.ofSeconds(2)));
         store.failNextAdvancePublishedSequence = true;
         assertTrue(worker(provider).runOnce());
         assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
@@ -290,6 +302,110 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
+    void oneHundredOneUnauthorizedReadyRowsCannotHideLaterValidClaim() {
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("later-valid");
+        };
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        for (int index = 0; index < 101; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "poison-" + index);
+            store.setQuestion(poison, questionWith(base, ID, "QUEUED", 1));
+            store.setOutbox(poison, readyOutbox(baseOutbox, ID, 1));
+        }
+        store.setQuestion(OWNER, questionWith(base, ID, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, ID, 1));
+
+        assertTrue(worker(provider).runOnce());
+        assertEquals(1, calls.get());
+        assertEquals("SUCCEEDED", store.findQuestion(OWNER, ID, false).status());
+    }
+
+    @Test
+    void oneHundredOneUnauthorizedExpiredRowsCannotHideLaterValidFinalization() {
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        for (int index = 0; index < 101; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "expired-" + index);
+            store.setQuestion(poison, questionWith(base, ID, "RUNNING", 2));
+            store.setOutbox(poison, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(2)));
+        }
+        store.setQuestion(OWNER, questionWith(base, ID, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(1)));
+
+        assertTrue(worker(provider).runOnce());
+        assertEquals("FAILED_FINAL", store.findQuestion(OWNER, ID, false).status());
+        assertEquals("DONE", store.findOutbox(OWNER, ID, false).state());
+    }
+
+    @Test
+    void oneHundredOnePermanentSequenceExhaustionRowsCannotHideLaterFinalization() {
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        for (int index = 0; index < 101; index++) {
+            String poisonId = String.format("00000000-0000-4000-8000-%012d", index);
+            store.setQuestion(OWNER, questionWith(base, poisonId, "RUNNING", Long.MAX_VALUE));
+            store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, poisonId, Long.MAX_VALUE,
+                    NOW.minusSeconds(3)));
+        }
+        String healthyId = "323e4567-e89b-42d3-a456-426614174000";
+        store.setQuestion(OWNER, questionWith(base, healthyId, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, healthyId, 2, NOW.minusSeconds(1)));
+
+        assertTrue(worker(provider).runOnce());
+        assertEquals("FAILED_FINAL", store.findQuestion(OWNER, healthyId, false).status());
+        assertEquals("DONE", store.findOutbox(OWNER, healthyId, false).state());
+        assertEquals("RUNNING", store.findQuestion(OWNER,
+                "00000000-0000-4000-8000-000000000000", false).status());
+    }
+
+    @Test
+    void blockingQuestionSinkCannotDelayHttpProviderCompletionOrLeaseRenewal() throws Exception {
+        CountDownLatch sinkEntered = new CountDownLatch(1);
+        CountDownLatch releaseSink = new CountDownLatch(1);
+        broker.subscribe(OWNER, ID, ignored -> {
+            sinkEntered.countDown();
+            try {
+                releaseSink.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        ArchiveQuestionProvider provider = request -> {
+            Thread.sleep(350);
+            return ArchiveQuestionProvider.Answer.complete("persisted-while-sink-blocked");
+        };
+        long createStarted = System.nanoTime();
+        create(provider);
+        assertTrue(Duration.ofNanos(System.nanoTime() - createStarted).compareTo(Duration.ofSeconds(1)) < 0,
+                "HTTP mutation must not run the sink inline");
+        assertTrue(sinkEntered.await(2, TimeUnit.SECONDS));
+
+        ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions, provider, delivery,
+                enabledPolicy(), Clock.systemUTC(), Duration.ofMillis(150), Duration.ofMillis(25));
+        try {
+            assertTrue(worker.runOnce());
+            assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
+            assertEquals("persisted-while-sink-blocked", service.get(OWNER, ID).answer());
+            assertTrue(store.leaseRenewals.get() >= 2, "lease heartbeat must not share publisher threads");
+            assertEquals(1, store.findOutbox(OWNER, ID, false).attemptCount());
+        } finally {
+            releaseSink.countDown();
+            worker.stop();
+        }
+    }
+
+    @Test
     void healthyProviderCrossingInitialLeaseRenewsWithoutConsumingExtraAttempts() {
         ArchiveQuestionProvider provider = request -> {
             // Test-scaled equivalent of a provider call crossing the production 30-second lease.
@@ -384,6 +500,17 @@ class ArchiveQuestionWorkerTest {
                 row.responderName(), row.responderMode(), "", 2, null, 3, sequence, NOW, NOW, null);
     }
 
+    private OutboxRecord readyOutbox(OutboxRecord row, String id, long publishedSequence) {
+        return new OutboxRecord(row.rowId(), id, "READY", 0, 0, publishedSequence,
+                NOW.minusSeconds(10), null, null, NOW, NOW);
+    }
+
+    private OutboxRecord exhaustedOutbox(OutboxRecord row, String id, long publishedSequence,
+                                         Instant leaseUntil) {
+        return new OutboxRecord(row.rowId(), id, "LEASED", 3, 3, publishedSequence,
+                NOW.minusSeconds(10), leaseUntil, null, NOW, NOW);
+    }
+
     private OutboxRecord outboxWith(OutboxRecord row, String id, String status, int attempts, Instant leaseUntil) {
         return new OutboxRecord(row.rowId(), id, status, attempts, 3, row.publishedSequence(),
                 NOW.minusSeconds(10), leaseUntil, null, NOW, NOW);
@@ -402,9 +529,11 @@ class ArchiveQuestionWorkerTest {
                 bytes("{\"expectedVersion\":\"" + version + "\"}"));
     }
     private void resetWithNewIdNotNeeded() {
+        delivery.stop();
         store = new ArchiveQuestionTestSupport.Store();
         transactions = new ArchiveQuestionTestSupport.Transactions(store);
-        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker(), transactions);
+        broker = new ArchiveQuestionEventBroker();
+        delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
     }
     private ArchiveQuestionAccessPolicy enabledPolicy() {
         ArchiveQuestionProperties question = new ArchiveQuestionProperties();

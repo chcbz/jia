@@ -6,11 +6,13 @@ import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.ArchivePersonalDataStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.QuestionRecord;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -64,6 +66,11 @@ class ArchiveQuestionServiceTest {
         service = service(new ArchiveClerkFallbackProvider());
     }
 
+    @AfterEach
+    void tearDown() {
+        delivery.stop();
+    }
+
     @Test
     void createPersistsAuthoritativeMultilingualSelectionFixedResponderAndOneDispatch() {
         ArchiveMutationResult result = service.create(OWNER, ID, path(), "create-key", body("何谓忠义？"));
@@ -81,6 +88,7 @@ class ArchiveQuestionServiceTest {
         assertEquals(1, store.questionInserts);
         assertEquals(1, store.eventInserts);
         assertEquals(1, store.outboxInserts);
+        assertTrue(delivery.awaitPublished(OWNER, ID, 1, Duration.ofSeconds(2)));
         assertEquals(1, store.findOutbox(OWNER, ID, false).publishedSequence());
     }
 
@@ -109,7 +117,6 @@ class ArchiveQuestionServiceTest {
         List<String> invalid = List.of(
                 "{\"question\":\"x\",\"question\":\"x\",\"anchor\":" + anchor + "}",
                 "{\"question\":\"x\",\"anchor\":" + anchor + ",\"unknown\":1}",
-                "{\"question\":\"x\",\"anchor\":" + anchor + ",\"name\":\"ordinary-unknown\"}",
                 "{\"question\":\"x\",\"anchor\":" + anchor + "} {}",
                 "{\"question\":1,\"anchor\":" + anchor + "}",
                 "{\"question\":\"x\",\"anchor\":" + anchor.replace("\"startByte\":3", "\"startByte\":3.0") + "}",
@@ -131,7 +138,7 @@ class ArchiveQuestionServiceTest {
         assertEquals("INVALID_REQUEST_JSON", bom.code());
         for (String routing : List.of("targetAgentId", "agentId", "role", "roleName", "personaName",
                 "responderId", "selectedAgent", "targetName", "TARGET_NAME", "target-name",
-                "characterName", "CHARACTER_NAME", "character-name", "角色名", "吴用")) {
+                "characterName", "CHARACTER_NAME", "character-name", "name", "NAME", "角色名", "吴用")) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
                     () -> service.create(OWNER, ID, path(), "route-" + routing.hashCode(), bytes(
                             "{\"question\":\"x\",\"anchor\":" + anchor + ",\"" + routing + "\":\"吴用\"}")));
@@ -141,6 +148,7 @@ class ArchiveQuestionServiceTest {
         for (String nested : List.of(
                 "{\"meta\":{\"target_name\":\"吴用\"}}",
                 "{\"options\":[{\"Character-Name\":\"吴用\"}]}",
+                "{\"metadata\":{\"name\":\"吴用\"}}",
                 "{\"routing\":{\"name\":\"吴用\"}}")) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
                     () -> service.create(OWNER, ID, path(), "nested-route-" + nested.hashCode(), bytes(
@@ -273,6 +281,8 @@ class ArchiveQuestionServiceTest {
         for (String routed : List.of(
                 "{\"expectedVersion\":\"1\",\"targetAgentId\":\"wuyong\"}",
                 "{\"expectedVersion\":\"1\",\"TARGET_NAME\":\"wuyong\"}",
+                "{\"expectedVersion\":\"1\",\"name\":\"wuyong\"}",
+                "{\"expectedVersion\":\"1\",\"meta\":{\"name\":\"wuyong\"}}",
                 "{\"expectedVersion\":\"1\",\"meta\":{\"character-name\":\"wuyong\"}}")) {
             ArchivePersonalDataException routing = assertThrows(ArchivePersonalDataException.class,
                     () -> service.retry(OWNER, ID, path() + "/retry",

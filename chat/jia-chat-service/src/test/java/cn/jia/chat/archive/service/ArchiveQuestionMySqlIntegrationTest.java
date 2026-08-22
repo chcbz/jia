@@ -78,7 +78,10 @@ class ArchiveQuestionMySqlIntegrationTest {
                 new ArchiveClerkFallbackProvider(), delivery, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
-    @AfterEach void tearDown() { if (jdbc != null) clean(); }
+    @AfterEach void tearDown() {
+        if (delivery != null) delivery.stop();
+        if (jdbc != null) clean();
+    }
 
     @Test
     void realMysqlFourScopesReplayConcurrencyFencingExhaustionZeroWriteAndDriftFailClosed() throws Exception {

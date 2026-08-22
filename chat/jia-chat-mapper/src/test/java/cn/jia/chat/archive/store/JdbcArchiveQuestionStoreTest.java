@@ -73,12 +73,19 @@ class JdbcArchiveQuestionStoreTest {
         assertEquals(16, jdbc.args.length);
         assertEquals(7L, jdbc.args[14]);
 
-        store.listClaimCandidates(now, 100);
-        assertTrue(jdbc.sql.contains("ORDER BY available_at,row_id LIMIT ?"));
-        assertEquals(100, jdbc.args[2]);
-        store.listExhaustedCandidates(now, 50);
+        store.listClaimCandidates(now, null, 0, 100);
+        assertTrue(jdbc.sql.contains("ORDER BY candidate_at,row_id LIMIT ?"));
+        assertTrue(jdbc.sql.contains("row_id>?"));
+        assertEquals(100, jdbc.args[6]);
+        store.listExhaustedCandidates(now, null, 0, 50);
         assertTrue(jdbc.sql.contains("ORDER BY lease_until,row_id LIMIT ?"));
-        assertEquals(50, jdbc.args[1]);
+        assertTrue(jdbc.sql.contains("lease_until=? AND row_id>?"));
+        assertEquals(50, jdbc.args[5]);
+
+        store.findPublishCandidates(123, 25);
+        assertTrue(jdbc.sql.contains("o.row_id>?"));
+        assertTrue(jdbc.sql.contains("ORDER BY o.row_id LIMIT ?"));
+        assertArrayEquals(new Object[]{123L, 25}, jdbc.args);
     }
 
     @Test
@@ -87,12 +94,12 @@ class JdbcArchiveQuestionStoreTest {
                 "src/main/java/cn/jia/chat/archive/store/JdbcArchiveQuestionStore.java"));
         assertTrue(source.contains("attempt_count<3"));
         assertTrue(source.contains("state='LEASED' AND lease_until<=?"));
-        assertTrue(source.contains("ORDER BY available_at,row_id LIMIT ?"));
+        assertTrue(source.contains("ORDER BY candidate_at,row_id LIMIT ?"));
         assertTrue(source.contains("ORDER BY lease_until,row_id LIMIT ?"));
         assertTrue(source.contains("fencing_token=? AND state=?"));
         assertTrue(source.contains("SET lease_until=?,updated_at=?"));
         assertTrue(source.contains("fencing_token=? AND state='LEASED' AND lease_until>?"));
-        assertTrue(source.contains("published_sequence<q.current_sequence"));
+        assertTrue(source.contains("published_sequence<q.current_sequence AND o.row_id>?"));
         assertTrue(source.contains("AND published_sequence=?"));
         assertTrue(source.contains("FOR UPDATE"));
     }

@@ -4,71 +4,177 @@ import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.ArchiveQuestionStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.EventRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
+import jakarta.annotation.PreDestroy;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @ConditionalOnProperty(prefix = "archive.question", name = "enabled", havingValue = "true")
 @Component
 public class ArchiveQuestionEventDelivery {
     private static final int RECOVERY_BATCH = 100;
+    private static final int PUBLISH_THREADS = 4;
+    private static final int PUBLISH_QUEUE = 256;
     private final ArchiveQuestionStore store;
     private final ArchiveQuestionEventBroker broker;
     private final ArchiveTransactions transactions;
+    private final ExecutorService publisher;
+    private final Set<Key> inFlight = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicLong recoveryCursor = new AtomicLong();
 
     public ArchiveQuestionEventDelivery(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                                         ArchiveTransactions transactions) {
+        this(store, broker, transactions, publisherExecutor());
+    }
+
+    ArchiveQuestionEventDelivery(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
+                                 ArchiveTransactions transactions, ExecutorService publisher) {
         this.store = Objects.requireNonNull(store, "store");
         this.broker = Objects.requireNonNull(broker, "broker");
         this.transactions = Objects.requireNonNull(transactions, "transactions");
+        this.publisher = Objects.requireNonNull(publisher, "publisher");
     }
 
-    /** Best-effort commit wake-up. Durable recovery owns correctness; this method never throws. */
+    /** Commit callback: a bounded, no-throw enqueue only. Durable recovery owns correctness. */
     void afterCommit(ArchiveOwnerScope owner, EventRecord event) {
-        deliverBestEffort(owner, event);
+        try {
+            if (owner == null || event == null) return;
+            schedule(new Key(owner, event.questionId()));
+        } catch (Throwable ignored) {
+            // The HTTP mutation is already committed; the durable recovery cursor will retry.
+        }
     }
 
+    /** Bounded durable scan that only enqueues question-local publishers and never runs a sink inline. */
     public int recoverOnce() {
-        int delivered = 0;
         List<ArchiveQuestionStore.PublishCandidate> candidates;
+        long cursor = recoveryCursor.get();
         try {
-            candidates = store.findPublishCandidates(RECOVERY_BATCH);
+            candidates = store.findPublishCandidates(cursor, RECOVERY_BATCH);
         } catch (Throwable unavailable) {
             return 0;
         }
-        for (ArchiveQuestionStore.PublishCandidate candidate : candidates) {
-            try {
-                long cursor = candidate.publishedSequence();
-                List<EventRecord> events = store.listEvents(candidate.owner(), candidate.questionId(), cursor,
-                        candidate.currentSequence(), RECOVERY_BATCH);
-                for (EventRecord event : events) {
-                    if (event.sequence() != cursor + 1 || !deliverBestEffort(candidate.owner(), event)) break;
-                    cursor = event.sequence();
-                    delivered++;
-                }
-            } catch (Throwable ignored) {
-                // One corrupt/unavailable candidate must not starve recovery for the rest of the batch.
-            }
+        if (candidates.isEmpty()) {
+            if (cursor != 0) recoveryCursor.compareAndSet(cursor, 0);
+            return 0;
         }
-        return delivered;
+        int scheduled = 0;
+        long nextCursor = cursor;
+        for (ArchiveQuestionStore.PublishCandidate candidate : candidates) {
+            if (candidate == null || candidate.rowId() <= nextCursor) continue;
+            nextCursor = candidate.rowId();
+            if (candidate.owner() == null || candidate.questionId() == null) continue;
+            if (schedule(new Key(candidate.owner(), candidate.questionId()))) scheduled++;
+        }
+        recoveryCursor.set(nextCursor);
+        return scheduled;
     }
 
-    private boolean deliverBestEffort(ArchiveOwnerScope owner, EventRecord event) {
+    private boolean schedule(Key key) {
+        if (closed.get() || !inFlight.add(key)) return false;
         try {
-            return Boolean.TRUE.equals(transactions.requiresNew(() -> deliverExact(owner, event)));
-        } catch (Throwable ignored) {
+            publisher.execute(() -> drain(key));
+            return true;
+        } catch (RejectedExecutionException rejected) {
+            inFlight.remove(key);
+            return false;
+        } catch (Throwable failure) {
+            inFlight.remove(key);
             return false;
         }
     }
 
-    private boolean deliverExact(ArchiveOwnerScope owner, EventRecord event) {
-        OutboxRecord outbox = store.findOutbox(owner, event.questionId(), true);
-        if (outbox == null || outbox.publishedSequence() >= event.sequence()) return true;
-        if (outbox.publishedSequence() != event.sequence() - 1) return false;
-        broker.publish(owner, event);
-        return store.advancePublishedSequence(owner, event.questionId(),
-                event.sequence() - 1, event.sequence()) == 1;
+    private void drain(Key key) {
+        try {
+            while (!closed.get()) {
+                Delivery next = readNext(key);
+                if (next == null) return;
+                try {
+                    // Deliberately outside every JDBC transaction and row lock. A slow SseEmitter
+                    // consumes only one bounded publisher thread, never an HTTP/worker/lease thread.
+                    broker.publish(key.owner(), next.event());
+                } catch (Throwable sinkFailure) {
+                    return;
+                }
+                if (!advance(key, next.expectedSequence(), next.event().sequence())) return;
+            }
+        } finally {
+            inFlight.remove(key);
+        }
     }
+
+    private Delivery readNext(Key key) {
+        try {
+            return transactions.requiresNew(() -> {
+                OutboxRecord outbox = store.findOutbox(key.owner(), key.questionId(), false);
+                if (outbox == null || outbox.publishedSequence() == Long.MAX_VALUE) return null;
+                long expected = outbox.publishedSequence();
+                List<EventRecord> events = store.listEvents(key.owner(), key.questionId(), expected,
+                        Long.MAX_VALUE, 1);
+                if (events.size() != 1 || events.getFirst().sequence() != expected + 1) return null;
+                return new Delivery(expected, events.getFirst());
+            });
+        } catch (Throwable unavailable) {
+            return null;
+        }
+    }
+
+    private boolean advance(Key key, long expected, long delivered) {
+        try {
+            return Boolean.TRUE.equals(transactions.requiresNew(() ->
+                    store.advancePublishedSequence(key.owner(), key.questionId(), expected, delivered) == 1));
+        } catch (Throwable unavailable) {
+            return false;
+        }
+    }
+
+    boolean awaitPublished(ArchiveOwnerScope owner, String questionId, long sequence, Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        do {
+            OutboxRecord outbox = store.findOutbox(owner, questionId, false);
+            if (outbox != null && outbox.publishedSequence() >= sequence) return true;
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        } while (System.nanoTime() < deadline);
+        return false;
+    }
+
+    @PreDestroy
+    public void stop() {
+        if (!closed.compareAndSet(false, true)) return;
+        publisher.shutdownNow();
+        inFlight.clear();
+    }
+
+    private static ExecutorService publisherExecutor() {
+        AtomicInteger sequence = new AtomicInteger();
+        return new ThreadPoolExecutor(PUBLISH_THREADS, PUBLISH_THREADS, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(PUBLISH_QUEUE), runnable -> {
+                    Thread thread = new Thread(runnable,
+                            "archive-question-event-publisher-" + sequence.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private record Key(ArchiveOwnerScope owner, String questionId) { }
+    private record Delivery(long expectedSequence, EventRecord event) { }
 }

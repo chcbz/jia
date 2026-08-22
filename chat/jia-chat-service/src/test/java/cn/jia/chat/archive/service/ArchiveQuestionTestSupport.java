@@ -65,7 +65,7 @@ final class ArchiveQuestionTestSupport {
         int failEventInsertAt;
         final AtomicInteger leaseRenewals = new AtomicInteger();
 
-        @Override public MutationRecord insertOrLockMutation(ArchiveOwnerScope owner, String questionId, String method,
+        @Override public synchronized MutationRecord insertOrLockMutation(ArchiveOwnerScope owner, String questionId, String method,
                 String path, String key, String hash, Instant expiresAt) {
             mutationReservations++;
             String compound = mutationKey(owner, method, path, key);
@@ -78,7 +78,7 @@ final class ArchiveQuestionTestSupport {
             mutations.put(compound, created);
             return created;
         }
-        @Override public int completeMutation(ArchiveOwnerScope owner, long rowId, String hash, long questionRowId,
+        @Override public synchronized int completeMutation(ArchiveOwnerScope owner, long rowId, String hash, long questionRowId,
                 int status, String contentType, byte[] body) {
             for (var entry : mutations.entrySet()) {
                 MutationRecord row = entry.getValue();
@@ -90,14 +90,14 @@ final class ArchiveQuestionTestSupport {
             }
             return 0;
         }
-        @Override public long countRecentQuestions(ArchiveOwnerScope owner, Instant since) {
+        @Override public synchronized long countRecentQuestions(ArchiveOwnerScope owner, Instant since) {
             return questions.entrySet().stream().filter(entry -> entry.getKey().startsWith(scope(owner) + "\n"))
                     .map(Map.Entry::getValue).filter(row -> !row.createdAt().isBefore(since)).count();
         }
-        @Override public QuestionRecord findQuestion(ArchiveOwnerScope owner, String questionId, boolean lock) {
+        @Override public synchronized QuestionRecord findQuestion(ArchiveOwnerScope owner, String questionId, boolean lock) {
             return questions.get(questionKey(owner, questionId));
         }
-        @Override public long insertQuestion(ArchiveOwnerScope owner, QuestionRecord question) {
+        @Override public synchronized long insertQuestion(ArchiveOwnerScope owner, QuestionRecord question) {
             String key = questionKey(owner, question.questionId());
             if (questions.containsKey(key)) return 0;
             long rowId = ++rows;
@@ -105,7 +105,7 @@ final class ArchiveQuestionTestSupport {
             questionInserts++;
             return rowId;
         }
-        @Override public int updateQuestion(ArchiveOwnerScope owner, QuestionRecord row, long expectedVersion, long expectedSequence) {
+        @Override public synchronized int updateQuestion(ArchiveOwnerScope owner, QuestionRecord row, long expectedVersion, long expectedSequence) {
             if (failNextQuestionUpdate) { failNextQuestionUpdate = false; throw new IllegalStateException("injected question persistence failure"); }
             String key = questionKey(owner, row.questionId());
             QuestionRecord current = questions.get(key);
@@ -113,7 +113,7 @@ final class ArchiveQuestionTestSupport {
             questions.put(key, row);
             return 1;
         }
-        @Override public void insertEvent(ArchiveOwnerScope owner, EventRecord event) {
+        @Override public synchronized void insertEvent(ArchiveOwnerScope owner, EventRecord event) {
             if (failNextEventInsert) { failNextEventInsert = false; throw new IllegalStateException("injected event persistence failure"); }
             if (failEventInsertAt > 0 && eventInserts + 1 == failEventInsertAt) {
                 failEventInsertAt = 0;
@@ -126,26 +126,26 @@ final class ArchiveQuestionTestSupport {
             rowsForQuestion.sort(Comparator.comparingLong(EventRecord::sequence));
             eventInserts++;
         }
-        @Override public List<EventRecord> listEvents(ArchiveOwnerScope owner, String questionId, long after, long through, int limit) {
+        @Override public synchronized List<EventRecord> listEvents(ArchiveOwnerScope owner, String questionId, long after, long through, int limit) {
             return events.getOrDefault(questionKey(owner, questionId), List.of()).stream()
                     .filter(row -> row.sequence() > after && row.sequence() <= through)
                     .sorted(Comparator.comparingLong(EventRecord::sequence)).limit(limit).toList();
         }
-        @Override public Long earliestEventSequence(ArchiveOwnerScope owner, String questionId) {
+        @Override public synchronized Long earliestEventSequence(ArchiveOwnerScope owner, String questionId) {
             var minimum = events.getOrDefault(questionKey(owner, questionId), List.of()).stream()
                     .mapToLong(EventRecord::sequence).min();
             return minimum.isPresent() ? minimum.getAsLong() : null;
         }
-        @Override public void insertOutbox(ArchiveOwnerScope owner, OutboxRecord row) {
+        @Override public synchronized void insertOutbox(ArchiveOwnerScope owner, OutboxRecord row) {
             String key = questionKey(owner, row.questionId());
             if (outboxes.containsKey(key)) throw new IllegalStateException("duplicate outbox");
             outboxes.put(key, withRowId(row, ++rows));
             outboxInserts++;
         }
-        @Override public OutboxRecord findOutbox(ArchiveOwnerScope owner, String questionId, boolean lock) {
+        @Override public synchronized OutboxRecord findOutbox(ArchiveOwnerScope owner, String questionId, boolean lock) {
             return outboxes.get(questionKey(owner, questionId));
         }
-        @Override public int updateOutbox(ArchiveOwnerScope owner, OutboxRecord row, long expectedToken, String expectedState) {
+        @Override public synchronized int updateOutbox(ArchiveOwnerScope owner, OutboxRecord row, long expectedToken, String expectedState) {
             if (failNextOutboxUpdate) { failNextOutboxUpdate = false; throw new IllegalStateException("injected outbox persistence failure"); }
             String key = questionKey(owner, row.questionId());
             OutboxRecord current = outboxes.get(key);
@@ -153,7 +153,7 @@ final class ArchiveQuestionTestSupport {
             outboxes.put(key, row);
             return 1;
         }
-        @Override public int renewOutboxLease(ArchiveOwnerScope owner, String questionId, long token,
+        @Override public synchronized int renewOutboxLease(ArchiveOwnerScope owner, String questionId, long token,
                                                Instant leaseUntil, Instant updatedAt) {
             leaseRenewals.incrementAndGet();
             if (failNextLeaseRenewal) { failNextLeaseRenewal = false; return 0; }
@@ -166,35 +166,43 @@ final class ArchiveQuestionTestSupport {
                     row.createdAt(), updatedAt));
             return 1;
         }
-        @Override public List<ClaimCandidate> listClaimCandidates(Instant now, int limit) {
+        @Override public synchronized List<ClaimCandidate> listClaimCandidates(Instant now, Instant afterCandidateAt,
+                                                                   long afterRowId, int limit) {
             return outboxes.entrySet().stream().filter(entry -> {
                 OutboxRecord row = entry.getValue();
-                return row.attemptCount() < 3 && !row.availableAt().isAfter(now)
-                        && ("READY".equals(row.state()) || ("LEASED".equals(row.state())
+                return row.attemptCount() < 3 && (("READY".equals(row.state())
+                        && !row.availableAt().isAfter(now)) || ("LEASED".equals(row.state())
                         && row.leaseUntil() != null && !row.leaseUntil().isAfter(now)));
-            }).sorted(Comparator.comparing((Map.Entry<String, OutboxRecord> entry) -> entry.getValue().availableAt())
-                    .thenComparingLong(entry -> entry.getValue().rowId()))
-                    .map(entry -> candidate(entry.getKey())).limit(limit).toList();
+            }).map(entry -> candidate(entry.getKey(), claimOrder(entry.getValue())))
+                    .filter(candidate -> after(candidate, afterCandidateAt, afterRowId))
+                    .sorted(Comparator.comparing(ClaimCandidate::candidateAt)
+                            .thenComparingLong(ClaimCandidate::rowId))
+                    .limit(limit).toList();
         }
-        @Override public List<ClaimCandidate> listExhaustedCandidates(Instant now, int limit) {
+        @Override public synchronized List<ClaimCandidate> listExhaustedCandidates(Instant now, Instant afterLeaseUntil,
+                                                                      long afterRowId, int limit) {
             return outboxes.entrySet().stream().filter(entry -> {
                 OutboxRecord row = entry.getValue();
                 return "LEASED".equals(row.state()) && row.attemptCount() >= 3
                         && row.leaseUntil() != null && !row.leaseUntil().isAfter(now);
-            }).sorted(Comparator.comparing((Map.Entry<String, OutboxRecord> entry) -> entry.getValue().leaseUntil())
-                    .thenComparingLong(entry -> entry.getValue().rowId()))
-                    .map(entry -> candidate(entry.getKey())).limit(limit).toList();
+            }).map(entry -> candidate(entry.getKey(), entry.getValue().leaseUntil()))
+                    .filter(candidate -> after(candidate, afterLeaseUntil, afterRowId))
+                    .sorted(Comparator.comparing(ClaimCandidate::candidateAt)
+                            .thenComparingLong(ClaimCandidate::rowId))
+                    .limit(limit).toList();
         }
-        @Override public List<PublishCandidate> findPublishCandidates(int limit) {
-            return outboxes.entrySet().stream().map(entry -> {
+        @Override public synchronized List<PublishCandidate> findPublishCandidates(long afterRowId, int limit) {
+            return outboxes.entrySet().stream().filter(entry -> entry.getValue().rowId() > afterRowId)
+                    .sorted(Comparator.comparingLong(entry -> entry.getValue().rowId())).map(entry -> {
                 QuestionRecord question = questions.get(entry.getKey());
                 OutboxRecord outbox = entry.getValue();
                 if (question == null || outbox.publishedSequence() >= question.currentSequence()) return null;
-                ClaimCandidate parsed = candidate(entry.getKey());
-                return new PublishCandidate(parsed.owner(), parsed.questionId(), outbox.publishedSequence(), question.currentSequence());
+                ClaimCandidate parsed = candidate(entry.getKey(), outbox.availableAt());
+                return new PublishCandidate(parsed.owner(), parsed.questionId(), outbox.rowId(),
+                        outbox.publishedSequence(), question.currentSequence());
             }).filter(java.util.Objects::nonNull).limit(limit).toList();
         }
-        @Override public int advancePublishedSequence(ArchiveOwnerScope owner, String questionId, long expected, long delivered) {
+        @Override public synchronized int advancePublishedSequence(ArchiveOwnerScope owner, String questionId, long expected, long delivered) {
             if (failNextAdvancePublishedSequence) {
                 failNextAdvancePublishedSequence = false;
                 throw new IllegalStateException("injected watermark persistence failure");
@@ -208,23 +216,35 @@ final class ArchiveQuestionTestSupport {
             return 1;
         }
 
-        void deleteEvent(ArchiveOwnerScope owner, String questionId, long sequence) {
+        synchronized void deleteEvent(ArchiveOwnerScope owner, String questionId, long sequence) {
             List<EventRecord> rowsForQuestion = events.get(questionKey(owner, questionId));
             if (rowsForQuestion != null) rowsForQuestion.removeIf(row -> row.sequence() == sequence);
         }
-        void setQuestion(ArchiveOwnerScope owner, QuestionRecord row) { questions.put(questionKey(owner, row.questionId()), row); }
-        void setOutbox(ArchiveOwnerScope owner, OutboxRecord row) { outboxes.put(questionKey(owner, row.questionId()), row); }
-        void removeQuestionAndOutbox(ArchiveOwnerScope owner, String questionId) {
+        synchronized void setQuestion(ArchiveOwnerScope owner, QuestionRecord row) {
+            questions.put(questionKey(owner, row.questionId()), row);
+        }
+        synchronized void setOutbox(ArchiveOwnerScope owner, OutboxRecord row) {
+            String key = questionKey(owner, row.questionId());
+            boolean duplicateRowId = outboxes.entrySet().stream()
+                    .anyMatch(entry -> !entry.getKey().equals(key) && entry.getValue().rowId() == row.rowId());
+            if (row.rowId() <= 0 || duplicateRowId) {
+                outboxes.put(key, withRowId(row, ++rows));
+            } else {
+                rows = Math.max(rows, row.rowId());
+                outboxes.put(key, row);
+            }
+        }
+        synchronized void removeQuestionAndOutbox(ArchiveOwnerScope owner, String questionId) {
             questions.remove(questionKey(owner, questionId));
             outboxes.remove(questionKey(owner, questionId));
         }
-        List<EventRecord> allEvents(ArchiveOwnerScope owner, String id) { return List.copyOf(events.getOrDefault(questionKey(owner, id), List.of())); }
+        synchronized List<EventRecord> allEvents(ArchiveOwnerScope owner, String id) { return List.copyOf(events.getOrDefault(questionKey(owner, id), List.of())); }
 
-        Snapshot snapshot() {
+        synchronized Snapshot snapshot() {
             return new Snapshot(new LinkedHashMap<>(mutations), new LinkedHashMap<>(questions), copyEvents(events),
                     new LinkedHashMap<>(outboxes), rows, mutationReservations, questionInserts, eventInserts, outboxInserts);
         }
-        void restore(Snapshot snapshot) {
+        synchronized void restore(Snapshot snapshot) {
             mutations.clear(); mutations.putAll(snapshot.mutations());
             questions.clear(); questions.putAll(snapshot.questions());
             events.clear(); events.putAll(copyEvents(snapshot.events()));
@@ -239,9 +259,19 @@ final class ArchiveQuestionTestSupport {
         }
         private QuestionRecord withRowId(QuestionRecord row, long id) { return new QuestionRecord(id, row.questionId(), row.editionId(), row.manifestSha256(), row.blockType(), row.blockId(), row.anchorJson(), row.selectedText(), row.questionText(), row.status(), row.responderId(), row.responderName(), row.responderMode(), row.answer(), row.retryCount(), row.lastErrorCode(), row.version(), row.currentSequence(), row.createdAt(), row.updatedAt(), row.completedAt()); }
         private OutboxRecord withRowId(OutboxRecord row, long id) { return new OutboxRecord(id, row.questionId(), row.state(), row.attemptCount(), row.fencingToken(), row.publishedSequence(), row.availableAt(), row.leaseUntil(), row.lastErrorCode(), row.createdAt(), row.updatedAt()); }
-        private ClaimCandidate candidate(String key) {
+        private ClaimCandidate candidate(String key, Instant candidateAt) {
             String[] parts = key.split("\\n", 4);
-            return new ClaimCandidate(new ArchiveOwnerScope(parts[0], parts[1], parts[2]), parts[3]);
+            OutboxRecord outbox = outboxes.get(key);
+            return new ClaimCandidate(new ArchiveOwnerScope(parts[0], parts[1], parts[2]), parts[3],
+                    candidateAt, outbox.rowId());
+        }
+        private Instant claimOrder(OutboxRecord row) {
+            return "READY".equals(row.state()) ? row.availableAt() : row.leaseUntil();
+        }
+        private boolean after(ClaimCandidate candidate, Instant cursorAt, long cursorRowId) {
+            if (cursorAt == null) return true;
+            int timeOrder = candidate.candidateAt().compareTo(cursorAt);
+            return timeOrder > 0 || (timeOrder == 0 && candidate.rowId() > cursorRowId);
         }
         private String mutationKey(ArchiveOwnerScope owner, String method, String path, String key) { return scope(owner) + "\n" + method + "\n" + path + "\n" + key; }
         private String questionKey(ArchiveOwnerScope owner, String id) { return scope(owner) + "\n" + id; }
@@ -264,7 +294,7 @@ final class ArchiveQuestionTestSupport {
         @Override public <T> T requiresNew(Supplier<T> action) {
             return run(action, false);
         }
-        private <T> T run(Supplier<T> action, boolean injectResponseLoss) {
+        private synchronized <T> T run(Supplier<T> action, boolean injectResponseLoss) {
             Store.Snapshot snapshot = store.snapshot();
             List<Runnable> prior = callbacks.get();
             List<Runnable> current = new ArrayList<>();
