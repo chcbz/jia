@@ -9,8 +9,10 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
@@ -169,6 +171,60 @@ class ArchiveQuestionEventDeliveryTest {
                     "blocked sink must not hold an outbox row lock or advance before send returns");
         } finally {
             release.countDown();
+            delivery.stop();
+        }
+    }
+
+    @Test
+    void capacityRejectedRecoveryCandidateStaysReachableWhileNewRowsKeepArriving() throws Exception {
+        ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
+        ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
+        ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
+        CountDownLatch publisherOccupied = new CountDownLatch(1);
+        CountDownLatch releasePublisher = new CountDownLatch(1);
+        ThreadPoolExecutor publisher = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1), runnable -> {
+                    Thread thread = new Thread(runnable, "archive-question-capacity-test");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+        publisher.execute(() -> {
+            publisherOccupied.countDown();
+            try {
+                releasePublisher.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertTrue(publisherOccupied.await(2, TimeUnit.SECONDS));
+        publisher.execute(() -> { }); // Fill the sole queue slot so scheduling the durable row is rejected.
+
+        seedQuestionAndOutbox(store, OWNER, ID, 1, 0);
+        store.insertEvent(OWNER, new EventRecord(0, ID, 1, "QUESTION_QUEUED", "{}", NOW));
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(
+                store, broker, transactions, publisher);
+        List<Long> observed = new CopyOnWriteArrayList<>();
+        broker.subscribe(OWNER, ID, event -> observed.add(event.sequence()));
+        try {
+            assertEquals(0, delivery.recoverOnce());
+            for (int index = 0; index < 20; index++) {
+                String newerId = String.format("%08x-0000-4000-8000-000000000000", index + 16);
+                seedQuestionAndOutbox(store, OWNER, newerId, 1, 0);
+                store.insertEvent(OWNER, new EventRecord(
+                        0, newerId, 1, "QUESTION_QUEUED", "{}", NOW));
+                assertEquals(0, delivery.recoverOnce(),
+                        "a full executor must keep retrying the oldest rejected keyset row");
+            }
+
+            releasePublisher.countDown();
+            assertTrue(waitUntil(() -> {
+                delivery.recoverOnce();
+                return store.findOutbox(OWNER, ID, false).publishedSequence() == 1;
+            }, Duration.ofSeconds(2)));
+            assertEquals(List.of(1L), observed,
+                    "the old exact-next event must publish even while newer durable rows exist");
+        } finally {
+            releasePublisher.countDown();
             delivery.stop();
         }
     }

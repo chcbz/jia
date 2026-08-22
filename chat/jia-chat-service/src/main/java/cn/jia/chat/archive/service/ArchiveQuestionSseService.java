@@ -20,22 +20,29 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 @ConditionalOnProperty(prefix = "archive.question", name = "enabled", havingValue = "true")
 @Component
 public class ArchiveQuestionSseService {
     static final int BUFFER_LIMIT = 256;
+    static final int OUTBOUND_LIMIT = 64;
     static final int REPLAY_BATCH = 100;
     static final long SSE_TIMEOUT_MILLIS = Duration.ofMinutes(2).toMillis();
     static final long HEARTBEAT_SECONDS = 15;
+    private static final AtomicInteger WRITER_SEQUENCE = new AtomicInteger();
 
     private final ArchiveQuestionStore store;
     private final ArchiveQuestionEventBroker broker;
@@ -43,6 +50,7 @@ public class ArchiveQuestionSseService {
     private final ArchiveWriteJson json = new ArchiveWriteJson();
     private final ExecutorService replayExecutor;
     private final ScheduledExecutorService heartbeatExecutor;
+    private final OutboundFactory outboundFactory;
     private final Set<Session> sessions = ConcurrentHashMap.newKeySet();
 
     public ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
@@ -50,17 +58,26 @@ public class ArchiveQuestionSseService {
         this(store, broker, accessPolicy,
                 Executors.newFixedThreadPool(4, runnable -> daemon(runnable, "archive-question-replay")),
                 Executors.newSingleThreadScheduledExecutor(
-                        runnable -> daemon(runnable, "archive-question-heartbeat")));
+                        runnable -> daemon(runnable, "archive-question-heartbeat")),
+                ignored -> new SerialOutbound());
     }
 
     ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                               ArchiveQuestionAccessPolicy accessPolicy, ExecutorService replayExecutor,
                               ScheduledExecutorService heartbeatExecutor) {
+        this(store, broker, accessPolicy, replayExecutor, heartbeatExecutor,
+                ignored -> new SerialOutbound());
+    }
+
+    ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
+                              ArchiveQuestionAccessPolicy accessPolicy, ExecutorService replayExecutor,
+                              ScheduledExecutorService heartbeatExecutor, OutboundFactory outboundFactory) {
         this.store = Objects.requireNonNull(store, "store");
         this.broker = Objects.requireNonNull(broker, "broker");
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
         this.replayExecutor = Objects.requireNonNull(replayExecutor, "replayExecutor");
         this.heartbeatExecutor = Objects.requireNonNull(heartbeatExecutor, "heartbeatExecutor");
+        this.outboundFactory = Objects.requireNonNull(outboundFactory, "outboundFactory");
     }
 
     public SseEmitter open(ArchiveOwnerScope owner, String questionId, long cursor) {
@@ -76,7 +93,7 @@ public class ArchiveQuestionSseService {
         if (!accessPolicy.allows(owner.tenantId(), owner.clientId())) notFound();
         QuestionRecord visible = store.findQuestion(owner, questionId, false);
         if (visible == null) notFound();
-        Session session = new Session(owner, questionId, cursor, sink);
+        Session session = new Session(owner, questionId, cursor, sink, outboundFactory.create(questionId));
         session.start();
         return session;
     }
@@ -89,6 +106,7 @@ public class ArchiveQuestionSseService {
         boolean resync(String questionId);
         boolean heartbeat();
         void complete();
+        void cancel();
         boolean closed();
     }
 
@@ -97,11 +115,40 @@ public class ArchiveQuestionSseService {
         @Override void close();
     }
 
+    @FunctionalInterface
+    interface OutboundFactory {
+        Outbound create(String questionId);
+    }
+
+    interface Outbound {
+        boolean submit(Runnable action);
+        boolean terminal(Runnable action);
+        void cancel();
+    }
+
+    static Outbound directOutbound() {
+        return new Outbound() {
+            private final AtomicBoolean cancelled = new AtomicBoolean();
+            @Override public boolean submit(Runnable action) {
+                if (cancelled.get()) return false;
+                action.run();
+                return !cancelled.get();
+            }
+            @Override public boolean terminal(Runnable action) {
+                if (!cancelled.compareAndSet(false, true)) return false;
+                action.run();
+                return true;
+            }
+            @Override public void cancel() { cancelled.set(true); }
+        };
+    }
+
     private final class Session implements StreamHandle {
         private final ArchiveOwnerScope owner;
         private final String questionId;
         private final long cursor;
         private final Sink sink;
+        private final Outbound outbound;
         private final Object lock = new Object();
         private final TreeMap<Long, EventRecord> buffer = new TreeMap<>();
         private final AtomicBoolean closed = new AtomicBoolean();
@@ -111,31 +158,33 @@ public class ArchiveQuestionSseService {
         private long delivered;
         private boolean direct;
 
-        private Session(ArchiveOwnerScope owner, String questionId, long cursor, Sink sink) {
+        private Session(ArchiveOwnerScope owner, String questionId, long cursor, Sink sink, Outbound outbound) {
             this.owner = owner;
             this.questionId = questionId;
             this.cursor = cursor;
             this.sink = Objects.requireNonNull(sink, "sink");
+            this.outbound = Objects.requireNonNull(outbound, "outbound");
             this.delivered = cursor;
         }
 
         private void start() {
             sessions.add(this);
             try {
-                sink.onClose(this::close);
+                sink.onClose(this::abort);
                 synchronized (lock) {
-                    if (closed.get() || sink.closed()) { close(); return; }
+                    if (closed.get() || sink.closed()) { abort(); return; }
                     live = broker.subscribe(owner, questionId, this::observe);
                     heartbeat = heartbeatExecutor.scheduleWithFixedDelay(
                             this::heartbeat, HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS);
                     replay = replayExecutor.submit(this::initializeReplay);
                 }
             } catch (Throwable failure) {
-                close();
+                abort();
                 throw failure;
             }
         }
 
+        /** Broker callback: state/buffer work only; network writes are per-session outbound tasks. */
         private void observe(EventRecord event) {
             synchronized (lock) {
                 if (closed.get() || sink.closed() || event == null || !questionId.equals(event.questionId())) return;
@@ -146,8 +195,7 @@ public class ArchiveQuestionSseService {
                     return;
                 }
                 if (event.sequence() != delivered + 1) { resyncLocked(); return; }
-                if (sendPersistedLocked(event)) delivered = event.sequence();
-                else close();
+                if (enqueuePersistedLocked(event)) delivered = event.sequence();
             }
         }
 
@@ -155,7 +203,7 @@ public class ArchiveQuestionSseService {
             try {
                 if (closed.get() || sink.closed()) return;
                 QuestionRecord snapshot = store.findQuestion(owner, questionId, false);
-                if (snapshot == null) { close(); return; }
+                if (snapshot == null) { abort(); return; }
                 long watermark = snapshot.currentSequence();
                 if (cursor > watermark || truncated(cursor, watermark)) { resync(); return; }
                 long after = cursor;
@@ -168,7 +216,7 @@ public class ArchiveQuestionSseService {
                             if (event.sequence() != delivered + 1 || event.sequence() > watermark) {
                                 resyncLocked(); return;
                             }
-                            if (!sendPersistedLocked(event)) { close(); return; }
+                            if (!enqueuePersistedLocked(event)) return;
                             delivered = event.sequence();
                             buffer.remove(event.sequence());
                             after = delivered;
@@ -183,7 +231,7 @@ public class ArchiveQuestionSseService {
                         Map.Entry<Long, EventRecord> next = buffer.firstEntry();
                         if (next.getKey() != delivered + 1) { resyncLocked(); return; }
                         buffer.pollFirstEntry();
-                        if (!sendPersistedLocked(next.getValue())) { close(); return; }
+                        if (!enqueuePersistedLocked(next.getValue())) return;
                         delivered = next.getKey();
                     }
                     direct = true;
@@ -200,51 +248,131 @@ public class ArchiveQuestionSseService {
         }
 
         @SuppressWarnings("unchecked")
-        private boolean sendPersistedLocked(EventRecord event) {
+        private boolean enqueuePersistedLocked(EventRecord event) {
             Map<String, Object> payload = json.readValue(event.payloadJson(), Map.class);
             ArchiveQuestionEventCatalog.validate(event.eventType(), payload);
             ArchiveQuestionEventDTO dto = new ArchiveQuestionEventDTO(1, questionId,
                     Long.toString(event.sequence()), event.eventType(), event.occurredAt().toString(), payload);
-            return sink.persisted(dto);
+            if (outbound.submit(() -> {
+                try {
+                    if (!sink.closed() && !sink.persisted(dto)) abort();
+                } catch (Throwable failure) {
+                    abort();
+                }
+            })) return true;
+            resyncLocked();
+            return false;
         }
 
         private void heartbeat() {
             synchronized (lock) {
                 if (closed.get() || sink.closed()) return;
                 if (!accessPolicy.allows(owner.tenantId(), owner.clientId())) {
-                    sink.complete();
+                    completeLocked();
                     return;
                 }
-                if (!sink.heartbeat()) close();
+                if (!outbound.submit(() -> {
+                    try {
+                        if (!sink.closed() && !sink.heartbeat()) abort();
+                    } catch (Throwable failure) {
+                        abort();
+                    }
+                })) resyncLocked();
             }
         }
 
         private void resync() { synchronized (lock) { resyncLocked(); } }
+
         private void resyncLocked() {
-            if (closed.get() || sink.closed()) return;
-            sink.resync(questionId);
-            sink.complete();
+            if (!beginCloseLocked()) return;
+            boolean accepted = outbound.terminal(() -> {
+                try {
+                    if (!sink.closed()) sink.resync(questionId);
+                } finally {
+                    sink.complete();
+                }
+            });
+            if (!accepted) sink.cancel();
         }
 
-        @Override public void close() {
-            if (!closed.compareAndSet(false, true)) return;
-            synchronized (lock) {
-                direct = false;
-                buffer.clear();
-                ArchiveQuestionEventBroker.Subscription currentLive = live;
-                live = null;
-                if (currentLive != null) currentLive.close();
-                Future<?> currentReplay = replay;
-                replay = null;
-                if (currentReplay != null) currentReplay.cancel(true);
-                ScheduledFuture<?> currentHeartbeat = heartbeat;
-                heartbeat = null;
-                if (currentHeartbeat != null) currentHeartbeat.cancel(true);
-            }
-            sessions.remove(this);
-            sink.complete();
+        private void completeLocked() {
+            if (!beginCloseLocked()) return;
+            if (!outbound.terminal(sink::complete)) sink.cancel();
         }
+
+        private boolean beginCloseLocked() {
+            if (!closed.compareAndSet(false, true)) return false;
+            direct = false;
+            buffer.clear();
+            ArchiveQuestionEventBroker.Subscription currentLive = live;
+            live = null;
+            if (currentLive != null) currentLive.close();
+            Future<?> currentReplay = replay;
+            replay = null;
+            if (currentReplay != null) currentReplay.cancel(true);
+            ScheduledFuture<?> currentHeartbeat = heartbeat;
+            heartbeat = null;
+            if (currentHeartbeat != null) currentHeartbeat.cancel(true);
+            sessions.remove(this);
+            return true;
+        }
+
+        private void abort() {
+            synchronized (lock) {
+                beginCloseLocked();
+            }
+            // Explicit disconnect/timeout/stop overrides a queued graceful terminal and never waits
+            // for an in-flight network send. Both operations are idempotent and bounded.
+            outbound.cancel();
+            sink.cancel();
+        }
+
+        @Override public void close() { abort(); }
         @Override public boolean closed() { return closed.get(); }
+    }
+
+    private static final class SerialOutbound implements Outbound {
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private final AtomicBoolean terminal = new AtomicBoolean();
+        private final ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(OUTBOUND_LIMIT), runnable -> daemon(runnable,
+                "archive-question-outbound-" + WRITER_SEQUENCE.incrementAndGet()),
+                new ThreadPoolExecutor.AbortPolicy());
+
+        @Override public synchronized boolean submit(Runnable action) {
+            if (cancelled.get() || terminal.get()) return false;
+            try {
+                executor.execute(() -> {
+                    if (cancelled.get()) return;
+                    try { action.run(); }
+                    catch (Throwable ignored) { /* Session task owns cleanup; never kill the writer. */ }
+                });
+                return true;
+            } catch (RejectedExecutionException rejected) {
+                return false;
+            }
+        }
+
+        @Override public synchronized boolean terminal(Runnable action) {
+            if (cancelled.get() || !terminal.compareAndSet(false, true)) return false;
+            executor.getQueue().clear();
+            try {
+                executor.execute(() -> {
+                    if (cancelled.get()) return;
+                    try { action.run(); }
+                    finally { executor.shutdown(); }
+                });
+                return true;
+            } catch (RejectedExecutionException rejected) {
+                return false;
+            }
+        }
+
+        @Override public synchronized void cancel() {
+            if (!cancelled.compareAndSet(false, true)) return;
+            executor.getQueue().clear();
+            executor.shutdownNow();
+        }
     }
 
     private static final class EmitterSink implements Sink {
@@ -252,9 +380,9 @@ public class ArchiveQuestionSseService {
         private EmitterSink(ManagedSseEmitter emitter) { this.emitter = emitter; }
         @Override public void onClose(Runnable cleanup) {
             emitter.setCleanup(cleanup);
-            emitter.onCompletion(emitter::closeFromContainer);
-            emitter.onTimeout(emitter::complete);
-            emitter.onError(ignored -> emitter.closeFromContainer());
+            emitter.onCompletion(emitter::cancelFromContainer);
+            emitter.onTimeout(emitter::cancelFromContainer);
+            emitter.onError(ignored -> emitter.cancelFromContainer());
         }
         @Override public boolean persisted(ArchiveQuestionEventDTO dto) {
             return emitter.sendIfOpen(SseEmitter.event().id(dto.sequence()).name(dto.type())
@@ -272,52 +400,46 @@ public class ArchiveQuestionSseService {
             return emitter.sendIfOpen(SseEmitter.event().comment("heartbeat"));
         }
         @Override public void complete() { emitter.complete(); }
+        @Override public void cancel() { emitter.cancel(); }
         @Override public boolean closed() { return emitter.closed(); }
     }
 
     static class ManagedSseEmitter extends SseEmitter {
         private final AtomicBoolean finished = new AtomicBoolean();
-        private Runnable cleanup = () -> { };
+        private final AtomicReference<Runnable> cleanup = new AtomicReference<>(() -> { });
         ManagedSseEmitter(long timeout) { super(timeout); }
-        private synchronized void setCleanup(Runnable cleanup) { this.cleanup = cleanup; }
+        private void setCleanup(Runnable cleanup) { this.cleanup.set(Objects.requireNonNull(cleanup)); }
         private boolean sendIfOpen(SseEventBuilder event) {
-            Throwable failure = null;
-            synchronized (this) {
-                if (finished.get()) return false;
-                try {
-                    send(event);
-                    return true;
-                } catch (IOException | RuntimeException caught) {
-                    if (finished.compareAndSet(false, true)) failure = caught;
+            if (finished.get()) return false;
+            try {
+                send(event);
+                return !finished.get();
+            } catch (IOException | RuntimeException failure) {
+                if (finished.compareAndSet(false, true)) {
+                    runCleanup();
+                    super.completeWithError(failure);
                 }
+                return false;
             }
-            if (failure != null) {
-                runCleanup();
-                super.completeWithError(failure);
-            }
-            return false;
         }
         @Override public void complete() {
-            if (!markFinished()) return;
+            if (!finished.compareAndSet(false, true)) return;
             runCleanup();
             super.complete();
         }
         @Override public void completeWithError(Throwable error) {
-            if (!markFinished()) return;
+            if (!finished.compareAndSet(false, true)) return;
             runCleanup();
             super.completeWithError(error);
         }
-        private void closeFromContainer() {
-            if (!markFinished()) return;
+        private void cancelFromContainer() { cancel(); }
+        private void cancel() {
+            if (!finished.compareAndSet(false, true)) return;
             runCleanup();
         }
-        private synchronized boolean markFinished() {
-            return finished.compareAndSet(false, true);
-        }
         private void runCleanup() {
-            Runnable action;
-            synchronized (this) { action = cleanup; }
-            action.run();
+            try { cleanup.get().run(); }
+            catch (Throwable ignored) { /* Container lifecycle must remain no-throw. */ }
         }
         boolean closed() { return finished.get(); }
     }
@@ -332,7 +454,7 @@ public class ArchiveQuestionSseService {
                 "Archive resource is not available");
     }
     @PreDestroy public void stop() {
-        for (Session session : List.copyOf(sessions)) session.close();
+        for (Session session : List.copyOf(sessions)) session.abort();
         replayExecutor.shutdownNow();
         heartbeatExecutor.shutdownNow();
     }

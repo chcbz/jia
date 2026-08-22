@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ArchiveQuestionWorker {
     private static final Duration DEFAULT_LEASE = Duration.ofSeconds(30);
     private static final Duration DEFAULT_RENEW_INTERVAL = Duration.ofSeconds(10);
-    private static final int CANDIDATE_BATCH = 100;
+    static final int CANDIDATE_BATCH = 32;
     private static final int MAX_DELTA_UTF8_BYTES = 4096;
     private final ArchiveQuestionStore store;
     private final ArchiveTransactions transactions;
@@ -46,6 +46,9 @@ public class ArchiveQuestionWorker {
     private final Object executorLock = new Object();
     private ScheduledExecutorService executor;
     private ScheduledExecutorService leaseExecutor;
+    private ScanCursor claimCursor = ScanCursor.START;
+    private ScanCursor exhaustedCursor = ScanCursor.START;
+    private boolean exhaustedFirst = true;
 
     public ArchiveQuestionWorker(ArchiveQuestionStore store, ArchiveTransactions transactions,
                                  ArchiveQuestionProvider provider, ArchiveQuestionEventDelivery delivery,
@@ -85,63 +88,87 @@ public class ArchiveQuestionWorker {
         }
     }
 
-    public boolean runOnce() {
+    public synchronized boolean runOnce() {
         if (!accessPolicy.enabled()) return false;
         delivery.recoverOnce();
         Instant now = clock.instant();
-        if (finalizeOneExpired(now)) return true;
-        return claimAndRunOne(now);
-    }
-
-    private boolean finalizeOneExpired(Instant now) {
-        Instant cursorAt = null;
-        long cursorRowId = 0;
-        while (true) {
-            List<ClaimCandidate> candidates = store.listExhaustedCandidates(
-                    now, cursorAt, cursorRowId, CANDIDATE_BATCH);
-            if (candidates.isEmpty()) return false;
-            boolean advanced = false;
-            for (ClaimCandidate candidate : candidates) {
-                if (!afterCursor(candidate, cursorAt, cursorRowId)) continue;
-                cursorAt = candidate.candidateAt();
-                cursorRowId = candidate.rowId();
-                advanced = true;
-                if (!allowed(candidate.owner())) continue;
-                try {
-                    if (finalizeExpired(candidate)) return true;
-                } catch (Throwable ignored) {
-                    // A permanently corrupt/exhausted row cannot hide a later keyset page.
-                }
-            }
-            if (!advanced || candidates.size() < CANDIDATE_BATCH) return false;
+        boolean expiredFirstThisRun = exhaustedFirst;
+        exhaustedFirst = !exhaustedFirst;
+        if (expiredFirstThisRun) {
+            if (scanExpiredPage(now)) return true;
+            return scanClaimPage(now);
         }
+        if (scanClaimPage(now)) return true;
+        return scanExpiredPage(now);
     }
 
-    private boolean claimAndRunOne(Instant now) {
-        Instant cursorAt = null;
-        long cursorRowId = 0;
-        while (true) {
-            List<ClaimCandidate> candidates = store.listClaimCandidates(
-                    now, cursorAt, cursorRowId, CANDIDATE_BATCH);
-            if (candidates.isEmpty()) return false;
-            boolean advanced = false;
-            for (ClaimCandidate candidate : candidates) {
-                if (!afterCursor(candidate, cursorAt, cursorRowId)) continue;
-                cursorAt = candidate.candidateAt();
-                cursorRowId = candidate.rowId();
-                advanced = true;
-                if (!allowed(candidate.owner())) continue;
-                try {
-                    Claimed claim = claim(candidate);
-                    if (claim == null) continue;
-                    executeProvider(claim);
+    /** At most one bounded keyset page is inspected for this queue in one worker invocation. */
+    private boolean scanExpiredPage(Instant now) {
+        ScanCursor start = exhaustedCursor;
+        List<ClaimCandidate> candidates;
+        try {
+            candidates = store.listExhaustedCandidates(now, start.candidateAt(), start.rowId(), CANDIDATE_BATCH);
+        } catch (Throwable unavailable) {
+            return false;
+        }
+        if (candidates.isEmpty()) {
+            exhaustedCursor = ScanCursor.START;
+            return false;
+        }
+        boolean advanced = false;
+        int inspected = 0;
+        for (ClaimCandidate candidate : candidates) {
+            if (inspected++ >= CANDIDATE_BATCH) break;
+            if (!afterCursor(candidate, exhaustedCursor.candidateAt(), exhaustedCursor.rowId())) continue;
+            exhaustedCursor = new ScanCursor(candidate.candidateAt(), candidate.rowId());
+            advanced = true;
+            if (!allowed(candidate.owner())) continue;
+            try {
+                if (finalizeExpired(candidate)) {
+                    exhaustedCursor = ScanCursor.START;
                     return true;
-                } catch (Throwable ignored) {
-                    // Isolate a corrupt/racing candidate and continue into later keyset pages.
                 }
+            } catch (Throwable ignored) {
+                // Advance across a permanently corrupt row, then yield at the fixed page boundary.
             }
-            if (!advanced || candidates.size() < CANDIDATE_BATCH) return false;
         }
+        if (!advanced || candidates.size() < CANDIDATE_BATCH) exhaustedCursor = ScanCursor.START;
+        return false;
+    }
+
+    /** At most one bounded keyset page is inspected for this queue in one worker invocation. */
+    private boolean scanClaimPage(Instant now) {
+        ScanCursor start = claimCursor;
+        List<ClaimCandidate> candidates;
+        try {
+            candidates = store.listClaimCandidates(now, start.candidateAt(), start.rowId(), CANDIDATE_BATCH);
+        } catch (Throwable unavailable) {
+            return false;
+        }
+        if (candidates.isEmpty()) {
+            claimCursor = ScanCursor.START;
+            return false;
+        }
+        boolean advanced = false;
+        int inspected = 0;
+        for (ClaimCandidate candidate : candidates) {
+            if (inspected++ >= CANDIDATE_BATCH) break;
+            if (!afterCursor(candidate, claimCursor.candidateAt(), claimCursor.rowId())) continue;
+            claimCursor = new ScanCursor(candidate.candidateAt(), candidate.rowId());
+            advanced = true;
+            if (!allowed(candidate.owner())) continue;
+            try {
+                Claimed claim = claim(candidate);
+                if (claim == null) continue;
+                executeProvider(claim);
+                claimCursor = ScanCursor.START;
+                return true;
+            } catch (Throwable ignored) {
+                // Advance across a permanently corrupt row, then yield at the fixed page boundary.
+            }
+        }
+        if (!advanced || candidates.size() < CANDIDATE_BATCH) claimCursor = ScanCursor.START;
+        return false;
     }
 
     private boolean afterCursor(ClaimCandidate candidate, Instant cursorAt, long cursorRowId) {
@@ -510,6 +537,10 @@ public class ArchiveQuestionWorker {
             future = null;
             if (scheduled != null) scheduled.cancel(true);
         }
+    }
+
+    private record ScanCursor(Instant candidateAt, long rowId) {
+        private static final ScanCursor START = new ScanCursor(null, 0);
     }
 
     record Claimed(ArchiveOwnerScope owner, String questionId, long fencingToken, int attempt,

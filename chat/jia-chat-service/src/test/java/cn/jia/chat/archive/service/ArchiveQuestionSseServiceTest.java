@@ -17,10 +17,13 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Queue;
+import java.time.Duration;
 import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,7 +48,8 @@ class ArchiveQuestionSseServiceTest {
         broker = new ArchiveQuestionEventBroker();
         replay = new ManualExecutor();
         heartbeat = new CapturingScheduler();
-        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat);
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat,
+                ignored -> ArchiveQuestionSseService.directOutbound());
     }
 
     @AfterEach
@@ -218,6 +222,94 @@ class ArchiveQuestionSseServiceTest {
     }
 
     @Test
+    void fourBlockedConnectionWritersDoNotDelayFifthQuestion() throws Exception {
+        service.stop();
+        replay = new ManualExecutor();
+        heartbeat = new CapturingScheduler();
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat);
+        CountDownLatch fourEntered = new CountDownLatch(4);
+        CountDownLatch release = new CountDownLatch(1);
+        List<String> ids = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(index -> String.format("%08d-0000-4000-8000-000000000000", index + 1)).toList();
+        try {
+            for (int index = 0; index < 4; index++) {
+                question(ids.get(index), 1);
+                event(ids.get(index), 1, "QUESTION_QUEUED");
+                service.subscribe(OWNER, ids.get(index), 0, new BlockingSink(fourEntered, release));
+            }
+            question(ids.get(4), 1);
+            event(ids.get(4), 1, "QUESTION_QUEUED");
+            RecordingSink fifth = new RecordingSink();
+            service.subscribe(OWNER, ids.get(4), 0, fifth);
+            replay.runAll();
+            assertTrue(fourEntered.await(2, TimeUnit.SECONDS));
+            assertTrue(await(() -> fifth.events.size() == 1, Duration.ofSeconds(2)));
+
+            question(ids.get(4), 2);
+            EventRecord second = event(ids.get(4), 2, "QUESTION_RUNNING");
+            long started = System.nanoTime();
+            broker.publish(OWNER, second);
+            assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
+                    "broker/durable publisher thread must only enqueue per-connection output");
+            assertTrue(await(() -> fifth.events.size() == 2, Duration.ofSeconds(2)));
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void disconnectAndTimeoutCancelBlockedWriterWithoutLateWrites() throws Exception {
+        for (boolean timeout : List.of(false, true)) {
+            setUpSerialFresh();
+            question(1);
+            event(1, "QUESTION_QUEUED");
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            BlockingSink sink = new BlockingSink(entered, release);
+            ArchiveQuestionSseService.StreamHandle handle = service.subscribe(OWNER, ID, 0, sink);
+            replay.runAll();
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            question(2);
+            broker.publish(OWNER, event(2, "QUESTION_RUNNING"));
+
+            long started = System.nanoTime();
+            if (timeout) sink.triggerContainerClose(); else handle.close();
+            assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
+                    "cleanup must not wait for a blocked send/emitter lock");
+            assertTrue(handle.closed());
+            assertEquals(0, service.activeSubscriptions());
+            release.countDown();
+            assertTrue(await(() -> sink.closed, Duration.ofSeconds(1)));
+            Thread.sleep(50);
+            assertEquals(1, sink.persistedCalls.get(), "queued callbacks must not write after close");
+        }
+    }
+
+    @Test
+    void outboundOverflowQueuesResyncAndClosesWithoutPersistentSequence() throws Exception {
+        service.stop();
+        replay = new ManualExecutor();
+        heartbeat = new CapturingScheduler();
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat);
+        question(1);
+        event(1, "QUESTION_QUEUED");
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        BlockingSink sink = new BlockingSink(entered, release);
+        ArchiveQuestionSseService.StreamHandle handle = service.subscribe(OWNER, ID, 0, sink);
+        replay.runAll();
+        assertTrue(entered.await(2, TimeUnit.SECONDS));
+        for (long sequence = 2; sequence <= ArchiveQuestionSseService.OUTBOUND_LIMIT + 3L; sequence++) {
+            broker.publish(OWNER, new EventRecord(0, ID, sequence, "ANSWER_DELTA", "{\"delta\":\"x\"}", NOW));
+        }
+        assertTrue(handle.closed());
+        assertEquals(0, service.activeSubscriptions());
+        release.countDown();
+        assertTrue(await(() -> sink.resyncs.get() == 1 && sink.closed, Duration.ofSeconds(2)));
+        assertEquals(1, store.findQuestion(OWNER, ID, false).currentSequence());
+    }
+
+    @Test
     void exactScopeAndFeatureGateConcealBeforeSubscription() {
         question(1);
         event(1, "QUESTION_QUEUED");
@@ -227,11 +319,31 @@ class ArchiveQuestionSseServiceTest {
         assertEquals(0, service.activeSubscriptions());
 
         ArchiveQuestionSseService disabled = new ArchiveQuestionSseService(
-                store, broker, disabledPolicy(), new ManualExecutor(), new CapturingScheduler());
+                store, broker, disabledPolicy(), new ManualExecutor(), new CapturingScheduler(),
+                ignored -> ArchiveQuestionSseService.directOutbound());
         try {
             assertEquals(404, assertThrows(ArchivePersonalDataException.class,
                     () -> disabled.subscribe(OWNER, ID, 0, new RecordingSink())).status());
         } finally { disabled.stop(); }
+    }
+
+    private void setUpSerialFresh() {
+        service.stop();
+        store = new ArchiveQuestionTestSupport.Store();
+        broker = new ArchiveQuestionEventBroker();
+        replay = new ManualExecutor();
+        heartbeat = new CapturingScheduler();
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat);
+    }
+
+    private boolean await(java.util.function.BooleanSupplier condition, Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        do {
+            if (condition.getAsBoolean()) return true;
+            try { Thread.sleep(5); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return false; }
+        } while (System.nanoTime() < deadline);
+        return condition.getAsBoolean();
     }
 
     private void setUpFresh() {
@@ -240,17 +352,21 @@ class ArchiveQuestionSseServiceTest {
         broker = new ArchiveQuestionEventBroker();
         replay = new ManualExecutor();
         heartbeat = new CapturingScheduler();
-        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat);
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat,
+                ignored -> ArchiveQuestionSseService.directOutbound());
     }
-    private void question(long sequence) {
-        store.setQuestion(OWNER, new QuestionRecord(1, ID, "edition", "a".repeat(64), "CHAPTER", "block",
+    private void question(long sequence) { question(ID, sequence); }
+    private void question(String questionId, long sequence) {
+        store.setQuestion(OWNER, new QuestionRecord(1, questionId, "edition", "a".repeat(64), "CHAPTER", "block",
                 "{}", "selected", "question", "QUEUED", "archive-clerk-v1", "案卷书吏", "fallback",
                 "", 0, null, Math.max(1, sequence), sequence, NOW, NOW, null));
     }
-    private EventRecord event(long sequence, String type) {
-        EventRecord event = new EventRecord(0, ID, sequence, type, payload(type), NOW);
+    private EventRecord event(long sequence, String type) { return event(ID, sequence, type); }
+    private EventRecord event(String questionId, long sequence, String type) {
+        EventRecord event = new EventRecord(0, questionId, sequence, type, payload(type), NOW);
         store.insertEvent(OWNER, event);
-        return store.allEvents(OWNER, ID).stream().filter(row -> row.sequence() == sequence).findFirst().orElseThrow();
+        return store.allEvents(OWNER, questionId).stream()
+                .filter(row -> row.sequence() == sequence).findFirst().orElseThrow();
     }
     private String payload(String type) {
         return switch (type) {
@@ -306,7 +422,39 @@ class ArchiveQuestionSseServiceTest {
             if (closed) return;
             closed = true; cleanup.run();
         }
+        @Override public void cancel() { closed = true; }
         @Override public boolean closed() { return closed; }
+    }
+
+    private static final class BlockingSink implements ArchiveQuestionSseService.Sink {
+        private final CountDownLatch entered;
+        private final CountDownLatch release;
+        private final AtomicInteger persistedCalls = new AtomicInteger();
+        private final AtomicInteger resyncs = new AtomicInteger();
+        private volatile Runnable cleanup = () -> { };
+        private volatile boolean closed;
+        private BlockingSink(CountDownLatch entered, CountDownLatch release) {
+            this.entered = entered;
+            this.release = release;
+        }
+        @Override public void onClose(Runnable cleanup) { this.cleanup = cleanup; }
+        @Override public boolean persisted(ArchiveQuestionEventDTO event) {
+            persistedCalls.incrementAndGet();
+            entered.countDown();
+            try { release.await(5, TimeUnit.SECONDS); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            return !closed;
+        }
+        @Override public boolean resync(String questionId) {
+            if (closed) return false;
+            resyncs.incrementAndGet();
+            return true;
+        }
+        @Override public boolean heartbeat() { return !closed; }
+        @Override public void complete() { closed = true; }
+        @Override public void cancel() { closed = true; }
+        @Override public boolean closed() { return closed; }
+        void triggerContainerClose() { cleanup.run(); }
     }
 
     private static final class ManualExecutor extends AbstractExecutorService {

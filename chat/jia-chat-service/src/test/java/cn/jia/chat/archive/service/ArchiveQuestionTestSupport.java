@@ -57,6 +57,10 @@ final class ArchiveQuestionTestSupport {
         int questionInserts;
         int eventInserts;
         int outboxInserts;
+        int claimCandidateQueries;
+        int exhaustedCandidateQueries;
+        int claimCandidatesReturned;
+        int exhaustedCandidatesReturned;
         boolean failNextQuestionUpdate;
         boolean failNextOutboxUpdate;
         boolean failNextEventInsert;
@@ -168,7 +172,8 @@ final class ArchiveQuestionTestSupport {
         }
         @Override public synchronized List<ClaimCandidate> listClaimCandidates(Instant now, Instant afterCandidateAt,
                                                                    long afterRowId, int limit) {
-            return outboxes.entrySet().stream().filter(entry -> {
+            claimCandidateQueries++;
+            List<ClaimCandidate> result = outboxes.entrySet().stream().filter(entry -> {
                 OutboxRecord row = entry.getValue();
                 return row.attemptCount() < 3 && (("READY".equals(row.state())
                         && !row.availableAt().isAfter(now)) || ("LEASED".equals(row.state())
@@ -178,10 +183,13 @@ final class ArchiveQuestionTestSupport {
                     .sorted(Comparator.comparing(ClaimCandidate::candidateAt)
                             .thenComparingLong(ClaimCandidate::rowId))
                     .limit(limit).toList();
+            claimCandidatesReturned += result.size();
+            return result;
         }
         @Override public synchronized List<ClaimCandidate> listExhaustedCandidates(Instant now, Instant afterLeaseUntil,
                                                                       long afterRowId, int limit) {
-            return outboxes.entrySet().stream().filter(entry -> {
+            exhaustedCandidateQueries++;
+            List<ClaimCandidate> result = outboxes.entrySet().stream().filter(entry -> {
                 OutboxRecord row = entry.getValue();
                 return "LEASED".equals(row.state()) && row.attemptCount() >= 3
                         && row.leaseUntil() != null && !row.leaseUntil().isAfter(now);
@@ -190,6 +198,8 @@ final class ArchiveQuestionTestSupport {
                     .sorted(Comparator.comparing(ClaimCandidate::candidateAt)
                             .thenComparingLong(ClaimCandidate::rowId))
                     .limit(limit).toList();
+            exhaustedCandidatesReturned += result.size();
+            return result;
         }
         @Override public synchronized List<PublishCandidate> findPublishCandidates(long afterRowId, int limit) {
             return outboxes.entrySet().stream().filter(entry -> entry.getValue().rowId() > afterRowId)

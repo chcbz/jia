@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -320,7 +321,9 @@ class ArchiveQuestionWorkerTest {
         store.setQuestion(OWNER, questionWith(base, ID, "QUEUED", 1));
         store.setOutbox(OWNER, readyOutbox(baseOutbox, ID, 1));
 
-        assertTrue(worker(provider).runOnce());
+        ArchiveQuestionWorker worker = worker(provider);
+        assertTrue(runUntil(worker, () -> "SUCCEEDED".equals(
+                store.findQuestion(OWNER, ID, false).status()), 8));
         assertEquals(1, calls.get());
         assertEquals("SUCCEEDED", store.findQuestion(OWNER, ID, false).status());
     }
@@ -340,7 +343,9 @@ class ArchiveQuestionWorkerTest {
         store.setQuestion(OWNER, questionWith(base, ID, "RUNNING", 2));
         store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(1)));
 
-        assertTrue(worker(provider).runOnce());
+        ArchiveQuestionWorker worker = worker(provider);
+        assertTrue(runUntil(worker, () -> "FAILED_FINAL".equals(
+                store.findQuestion(OWNER, ID, false).status()), 8));
         assertEquals("FAILED_FINAL", store.findQuestion(OWNER, ID, false).status());
         assertEquals("DONE", store.findOutbox(OWNER, ID, false).state());
     }
@@ -362,11 +367,64 @@ class ArchiveQuestionWorkerTest {
         store.setQuestion(OWNER, questionWith(base, healthyId, "RUNNING", 2));
         store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, healthyId, 2, NOW.minusSeconds(1)));
 
-        assertTrue(worker(provider).runOnce());
+        ArchiveQuestionWorker worker = worker(provider);
+        assertTrue(runUntil(worker, () -> "FAILED_FINAL".equals(
+                store.findQuestion(OWNER, healthyId, false).status()), 8));
         assertEquals("FAILED_FINAL", store.findQuestion(OWNER, healthyId, false).status());
         assertEquals("DONE", store.findOutbox(OWNER, healthyId, false).state());
         assertEquals("RUNNING", store.findQuestion(OWNER,
                 "00000000-0000-4000-8000-000000000000", false).status());
+    }
+
+    @Test
+    void eachInvocationHasFixedDualQueueBudgetAndAlternationEventuallyProcessesBothQueues() {
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("bounded-ready-answer");
+        };
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        String expiredPoisonId = "523e4567-e89b-42d3-a456-426614174000";
+        String readyPoisonId = "623e4567-e89b-42d3-a456-426614174000";
+        for (int index = 0; index < 40; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "bounded-poison-" + index);
+            store.setQuestion(poison, questionWith(base, expiredPoisonId, "RUNNING", 2));
+            store.setOutbox(poison, exhaustedOutbox(
+                    baseOutbox, expiredPoisonId, 2, NOW.minusSeconds(2)));
+            store.setQuestion(poison, questionWith(base, readyPoisonId, "QUEUED", 1));
+            store.setOutbox(poison, readyOutbox(baseOutbox, readyPoisonId, 1));
+        }
+        String healthyExpiredId = "723e4567-e89b-42d3-a456-426614174000";
+        String healthyReadyId = "823e4567-e89b-42d3-a456-426614174000";
+        store.setQuestion(OWNER, questionWith(base, healthyExpiredId, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(
+                baseOutbox, healthyExpiredId, 2, NOW.minusSeconds(1)));
+        store.setQuestion(OWNER, questionWith(base, healthyReadyId, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, healthyReadyId, 1));
+
+        ArchiveQuestionWorker worker = worker(provider);
+        int claimQueries = store.claimCandidateQueries;
+        int expiredQueries = store.exhaustedCandidateQueries;
+        int claimRows = store.claimCandidatesReturned;
+        int expiredRows = store.exhaustedCandidatesReturned;
+        assertFalse(worker.runOnce(), "the first bounded pages contain only poison rows");
+        assertEquals(1, store.claimCandidateQueries - claimQueries);
+        assertEquals(1, store.exhaustedCandidateQueries - expiredQueries);
+        assertTrue(store.claimCandidatesReturned - claimRows <= ArchiveQuestionWorker.CANDIDATE_BATCH);
+        assertTrue(store.exhaustedCandidatesReturned - expiredRows <= ArchiveQuestionWorker.CANDIDATE_BATCH);
+
+        assertTrue(runUntil(worker, () -> "SUCCEEDED".equals(
+                store.findQuestion(OWNER, healthyReadyId, false).status()), 6),
+                "READY must get alternating first priority instead of starving behind expired work");
+        assertTrue(runUntil(worker, () -> "FAILED_FINAL".equals(
+                store.findQuestion(OWNER, healthyExpiredId, false).status()), 6));
+        assertEquals(1, calls.get());
+        assertEquals("DONE", store.findOutbox(OWNER, healthyReadyId, false).state());
+        assertEquals("DONE", store.findOutbox(OWNER, healthyExpiredId, false).state());
     }
 
     @Test
@@ -492,6 +550,11 @@ class ArchiveQuestionWorkerTest {
         assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
         assertEquals(answer, service.get(OWNER, ID).answer());
         assertTrue(store.allEvents(OWNER, ID).stream().filter(event -> "ANSWER_DELTA".equals(event.eventType())).count() > 1);
+    }
+
+    private boolean runUntil(ArchiveQuestionWorker worker, BooleanSupplier condition, int maxRuns) {
+        for (int attempt = 0; attempt < maxRuns && !condition.getAsBoolean(); attempt++) worker.runOnce();
+        return condition.getAsBoolean();
     }
 
     private QuestionRecord questionWith(QuestionRecord row, String id, String status, long sequence) {

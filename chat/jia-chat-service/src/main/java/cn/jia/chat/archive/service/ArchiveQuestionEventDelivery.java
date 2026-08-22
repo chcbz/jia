@@ -60,7 +60,7 @@ public class ArchiveQuestionEventDelivery {
     }
 
     /** Bounded durable scan that only enqueues question-local publishers and never runs a sink inline. */
-    public int recoverOnce() {
+    public synchronized int recoverOnce() {
         List<ArchiveQuestionStore.PublishCandidate> candidates;
         long cursor = recoveryCursor.get();
         try {
@@ -76,25 +76,38 @@ public class ArchiveQuestionEventDelivery {
         long nextCursor = cursor;
         for (ArchiveQuestionStore.PublishCandidate candidate : candidates) {
             if (candidate == null || candidate.rowId() <= nextCursor) continue;
-            nextCursor = candidate.rowId();
-            if (candidate.owner() == null || candidate.questionId() == null) continue;
-            if (schedule(new Key(candidate.owner(), candidate.questionId()))) scheduled++;
+            long candidateRowId = candidate.rowId();
+            if (candidate.owner() == null || candidate.questionId() == null) {
+                nextCursor = candidateRowId;
+                continue;
+            }
+            ScheduleResult result = schedule(new Key(candidate.owner(), candidate.questionId()));
+            if (result == ScheduleResult.CAPACITY_REJECTED) {
+                // The rejected durable row remains the next keyset candidate. Never advance across it:
+                // a continuously growing table must not make an old publication gap unreachable.
+                recoveryCursor.set(nextCursor);
+                return scheduled;
+            }
+            if (result == ScheduleResult.CLOSED) return scheduled;
+            nextCursor = candidateRowId;
+            if (result == ScheduleResult.SCHEDULED) scheduled++;
         }
         recoveryCursor.set(nextCursor);
         return scheduled;
     }
 
-    private boolean schedule(Key key) {
-        if (closed.get() || !inFlight.add(key)) return false;
+    private ScheduleResult schedule(Key key) {
+        if (closed.get()) return ScheduleResult.CLOSED;
+        if (!inFlight.add(key)) return ScheduleResult.ALREADY_IN_FLIGHT;
         try {
             publisher.execute(() -> drain(key));
-            return true;
+            return ScheduleResult.SCHEDULED;
         } catch (RejectedExecutionException rejected) {
             inFlight.remove(key);
-            return false;
+            return closed.get() ? ScheduleResult.CLOSED : ScheduleResult.CAPACITY_REJECTED;
         } catch (Throwable failure) {
             inFlight.remove(key);
-            return false;
+            return closed.get() ? ScheduleResult.CLOSED : ScheduleResult.CAPACITY_REJECTED;
         }
     }
 
@@ -175,6 +188,7 @@ public class ArchiveQuestionEventDelivery {
                 }, new ThreadPoolExecutor.AbortPolicy());
     }
 
+    private enum ScheduleResult { SCHEDULED, ALREADY_IN_FLIGHT, CAPACITY_REJECTED, CLOSED }
     private record Key(ArchiveOwnerScope owner, String questionId) { }
     private record Delivery(long expectedSequence, EventRecord event) { }
 }
