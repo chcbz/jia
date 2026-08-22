@@ -103,6 +103,50 @@ class ArchivePersonalDataServiceTest {
     }
 
     @Test
+    void requiredPrimitiveWriteMembersRejectMissingOrNullBeforeAnyWrite() {
+        String progress = progressJson("0", 3, MANIFEST, paragraphHash);
+        List<byte[]> invalidProgress = List.of(
+                bytes(progress.replace(",\"byteOffset\":3", "")),
+                bytes(progress.replace("\"byteOffset\":3", "\"byteOffset\":null")),
+                bytes(progress.replace(",\"markCompleted\":false", "")),
+                bytes(progress.replace("\"markCompleted\":false", "\"markCompleted\":null")));
+        for (int i = 0; i < invalidProgress.size(); i++) {
+            byte[] candidate = invalidProgress.get(i);
+            ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
+                    () -> service.putProgress(OWNER, EDITION, "/archive/v1/me/progress/" + EDITION,
+                            "required-progress-" + java.util.Arrays.hashCode(candidate), candidate),
+                    "required progress case " + i + ": " + new String(candidate, StandardCharsets.UTF_8));
+            assertEquals(422, failure.status());
+            assertEquals("INVALID_REQUEST_JSON", failure.code());
+        }
+
+        String anchor = "{\"editionManifestSha256\":\"" + MANIFEST + "\",\"blockType\":\"CHAPTER\","
+                + "\"blockId\":\"" + BLOCK + "\",\"segments\":[{\"paragraphId\":\"" + PARAGRAPH
+                + "\",\"startByte\":0,\"endByte\":3,\"paragraphSha256\":\"" + paragraphHash
+                + "\"}],\"selectionSha256\":\""
+                + ArchiveEtags.sha256("水".getBytes(StandardCharsets.UTF_8)) + "\"}";
+        List<String> invalidAnchors = List.of(
+                anchor.replace(",\"startByte\":0", ""),
+                anchor.replace("\"startByte\":0", "\"startByte\":null"),
+                anchor.replace(",\"endByte\":3", ""),
+                anchor.replace("\"endByte\":3", "\"endByte\":null"));
+        for (int i = 0; i < invalidAnchors.size(); i++) {
+            String body = "{\"expectedVersion\":\"0\",\"editionId\":\"" + EDITION
+                    + "\",\"text\":\"x\",\"anchor\":" + invalidAnchors.get(i) + "}";
+            ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
+                    () -> service.putNote(OWNER, NOTE, "/archive/v1/me/notes/" + NOTE,
+                            "required-anchor-" + java.util.Arrays.hashCode(bytes(body)), bytes(body)),
+                    "required anchor case " + i + ": " + body);
+            assertEquals(422, failure.status());
+            assertEquals("INVALID_REQUEST_JSON", failure.code());
+        }
+
+        assertEquals(0, store.idempotencyAttempts);
+        assertNull(store.progress);
+        assertTrue(store.notes.isEmpty());
+    }
+
+    @Test
     void progressValidatesUtf8BoundaryHashesCasAndReplaysCanonicalEquivalentRequestByteExactly() {
         String path = "/archive/v1/me/progress/" + EDITION;
         String request = progressJson("0", 3, MANIFEST, paragraphHash);

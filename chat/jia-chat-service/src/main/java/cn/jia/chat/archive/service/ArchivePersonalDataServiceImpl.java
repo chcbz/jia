@@ -53,6 +53,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
         ArchiveProgressPutRequest request = parsed.value(ArchiveProgressPutRequest.class);
         require(request.expectedVersion() != null && request.location() != null && request.markCompleted() != null,
                 422, "INVALID_REQUEST_JSON", "Progress request is incomplete");
+        requirePointShape(request.location());
         long expected = ArchiveWire.decimal(request.expectedVersion(), "INVALID_VERSION");
         return mutate(owner, "PUT", canonicalPath, key, parsed.canonicalJson(), () -> {
             ContentPoint point = validatePoint(editionId, request.location());
@@ -104,6 +105,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
         ArchiveBookmarkPutRequest request = parsed.value(ArchiveBookmarkPutRequest.class);
         require(request.expectedVersion() != null && request.editionId() != null && request.location() != null,
                 422, "INVALID_REQUEST_JSON", "Bookmark request is incomplete");
+        requirePointShape(request.location());
         long expected = ArchiveWire.decimal(request.expectedVersion(), "INVALID_VERSION");
         return mutate(owner, "PUT", path, key, parsed.canonicalJson(), () -> {
             ContentPoint point = validatePoint(request.editionId(), request.location());
@@ -168,6 +170,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
         ArchiveNotePutRequest request = parsed.value(ArchiveNotePutRequest.class);
         require(request.expectedVersion() != null && request.editionId() != null && request.text() != null,
                 422, "INVALID_REQUEST_JSON", "Note request is incomplete");
+        if (request.anchor() != null) requireAnchorShape(request.anchor());
         require(request.text().getBytes(StandardCharsets.UTF_8).length <= 20_000,
                 422, "INVALID_TEXT_ANCHOR", "Note text exceeds 20000 UTF-8 bytes");
         long expected = ArchiveWire.decimal(request.expectedVersion(), "INVALID_VERSION");
@@ -246,6 +249,25 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
                     409, "IDEMPOTENCY_KEY_REUSED", "Idempotency finalization failed");
             return new ArchiveMutationResult(200, JSON, response, false);
         });
+    }
+
+    private void requirePointShape(ArchivePointLocationDTO location) {
+        require(location.editionManifestSha256() != null && location.blockType() != null
+                        && location.blockId() != null && location.paragraphId() != null
+                        && location.byteOffset() != null && location.paragraphSha256() != null,
+                422, "INVALID_REQUEST_JSON", "Point location is incomplete");
+    }
+
+    private void requireAnchorShape(ArchiveTextAnchorDTO anchor) {
+        require(anchor.editionManifestSha256() != null && anchor.blockType() != null
+                        && anchor.blockId() != null && anchor.segments() != null
+                        && anchor.selectionSha256() != null,
+                422, "INVALID_REQUEST_JSON", "Text anchor is incomplete");
+        for (ArchiveAnchorSegmentDTO segment : anchor.segments()) {
+            require(segment != null && segment.paragraphId() != null && segment.startByte() != null
+                            && segment.endByte() != null && segment.paragraphSha256() != null,
+                    422, "INVALID_REQUEST_JSON", "Text anchor segment is incomplete");
+        }
     }
 
     private ContentPoint validatePoint(String editionId, ArchivePointLocationDTO location) {
