@@ -81,6 +81,7 @@ CREATE TABLE archive_note (
     UNIQUE KEY uk_archive_note_owner_id (tenant_id, client_id, owner_jiacn, note_id),
     KEY idx_archive_note_owner_list (tenant_id, client_id, owner_jiacn, edition_id, state, row_id),
     KEY idx_archive_note_owner_block_list (tenant_id, client_id, owner_jiacn, edition_id, block_id, state, row_id),
+    KEY idx_archive_note_block (edition_id, block_id),
     CONSTRAINT chk_archive_note_id CHECK (note_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
     CONSTRAINT chk_archive_note_state CHECK (state IN ('ACTIVE', 'DELETED')),
     CONSTRAINT chk_archive_note_version CHECK (version >= 1),

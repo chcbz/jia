@@ -22,6 +22,7 @@ class ArchiveReaderDataSchemaResourceTest {
         assertTrue(sql.contains("unique key uk_archive_bookmark_owner_id (tenant_id, client_id, owner_jiacn, bookmark_id)"));
         assertTrue(sql.contains("unique key uk_archive_note_owner_id (tenant_id, client_id, owner_jiacn, note_id)"));
         assertTrue(sql.contains("unique key uk_archive_idempotency_scope (tenant_id, client_id, owner_jiacn, http_method, canonical_path, idempotency_key)"));
+        assertTrue(sql.contains("key idx_archive_note_block (edition_id, block_id)"));
         assertTrue(sql.contains("constraint fk_archive_note_block foreign key (edition_id, block_id) references archive_chapter (edition_id, block_id)"));
         assertTrue(sql.contains("constraint chk_archive_note_text_bytes check (text is null or octet_length(text) <= 20000)"));
         assertTrue(sql.contains("constraint chk_archive_idempotency_key check (idempotency_key regexp '^[!-~]{1,128}$')"));

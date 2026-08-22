@@ -94,7 +94,8 @@ public final class ArchiveReaderDataSchemaCatalog {
                         idx("idx_archive_note_owner_list", false,
                                 "tenant_id", "client_id", "owner_jiacn", "edition_id", "state", "row_id"),
                         idx("idx_archive_note_owner_block_list", false,
-                                "tenant_id", "client_id", "owner_jiacn", "edition_id", "block_id", "state", "row_id")),
+                                "tenant_id", "client_id", "owner_jiacn", "edition_id", "block_id", "state", "row_id"),
+                        idx("idx_archive_note_block", false, "edition_id", "block_id")),
                 foreignKeys(
                         fk("fk_archive_note_edition", List.of("edition_id"),
                                 "archive_edition", List.of("edition_id")),

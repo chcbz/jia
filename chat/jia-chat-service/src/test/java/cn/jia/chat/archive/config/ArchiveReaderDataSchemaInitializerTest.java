@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -53,6 +54,34 @@ class ArchiveReaderDataSchemaInitializerTest {
         tables.put("archive_note", table.withChecks(checks));
         assertThrows(IllegalStateException.class,
                 () -> ArchiveReaderDataSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
+    }
+
+    @Test
+    void everyH03ForeignKeyHasAnExplicitDeterministicLeftPrefixIndex() {
+        ArchiveReaderDataSchemaCatalog.expectedSnapshot().tables().forEach((tableName, table) ->
+                table.foreignKeys().forEach((foreignKeyName, foreignKey) -> assertTrue(
+                        table.indexes().values().stream().anyMatch(index ->
+                                hasLeftPrefix(index.columns(), foreignKey.columns())),
+                        tableName + "." + foreignKeyName)));
+    }
+
+    @Test
+    void noteBlockSupportIndexAndUnexpectedMysqlAutoIndexDriftFailClosed() {
+        ArchiveSchemaSnapshot expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
+        var note = expected.tables().get("archive_note");
+        assertEquals(new ArchiveSchemaSnapshot.IndexSnapshot(
+                        false, List.of("edition_id", "block_id")),
+                note.indexes().get("idx_archive_note_block"));
+
+        var indexes = new LinkedHashMap<>(note.indexes());
+        indexes.put("idx_archive_note_block", new ArchiveSchemaSnapshot.IndexSnapshot(
+                false, List.of("block_id", "edition_id")));
+        assertIndexDrift(expected, note, indexes, "idx_archive_note_block");
+
+        indexes = new LinkedHashMap<>(note.indexes());
+        indexes.put("fk_archive_note_block", new ArchiveSchemaSnapshot.IndexSnapshot(
+                false, List.of("edition_id", "block_id")));
+        assertIndexDrift(expected, note, indexes, "archive_note.indexes");
     }
 
     @Test
@@ -109,6 +138,22 @@ class ArchiveReaderDataSchemaInitializerTest {
         assertTrue(failure.getMessage().contains("partial"));
         assertDoesNotThrow(() -> ArchiveSchemaInitializer.requireAllOrNoneTables(
                 Set.copyOf(ArchiveSchemaCatalog.TABLE_ORDER)));
+    }
+
+    private boolean hasLeftPrefix(List<String> indexColumns, List<String> foreignKeyColumns) {
+        return indexColumns.size() >= foreignKeyColumns.size()
+                && indexColumns.subList(0, foreignKeyColumns.size()).equals(foreignKeyColumns);
+    }
+
+    private void assertIndexDrift(ArchiveSchemaSnapshot expected,
+                                  ArchiveSchemaSnapshot.TableSnapshot table,
+                                  LinkedHashMap<String, ArchiveSchemaSnapshot.IndexSnapshot> indexes,
+                                  String messagePart) {
+        var tables = new LinkedHashMap<>(expected.tables());
+        tables.put("archive_note", table.withIndexes(indexes));
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> ArchiveReaderDataSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
+        assertTrue(failure.getMessage().contains(messagePart));
     }
 
     private ArchiveSchemaSnapshot withCheckClause(ArchiveSchemaSnapshot snapshot,
