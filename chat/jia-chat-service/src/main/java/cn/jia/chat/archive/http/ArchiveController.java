@@ -37,9 +37,9 @@ public class ArchiveController {
             Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
-        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         ResponseEntity<JsonResult<?>> conditionalError = validateConditional(ifNoneMatch);
         if (conditionalError != null) return conditionalError;
+        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         try {
             return render(ifNoneMatch, readerService.catalog());
         } catch (ArchiveResourceNotFoundException unavailable) {
@@ -54,10 +54,10 @@ public class ArchiveController {
             Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
-        if (!validIdentifier(editionId, 96)) return notFound();
-        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         ResponseEntity<JsonResult<?>> conditionalError = validateConditional(ifNoneMatch);
         if (conditionalError != null) return conditionalError;
+        if (!validIdentifier(editionId, 96)) return notFound();
+        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         try {
             return render(ifNoneMatch, readerService.preface(editionId));
         } catch (ArchiveResourceNotFoundException unavailable) {
@@ -73,10 +73,10 @@ public class ArchiveController {
             Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
-        if (!validIdentifier(editionId, 96) || !validIdentifier(chapterId, 128)) return notFound();
-        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         ResponseEntity<JsonResult<?>> conditionalError = validateConditional(ifNoneMatch);
         if (conditionalError != null) return conditionalError;
+        if (!validIdentifier(editionId, 96) || !validIdentifier(chapterId, 128)) return notFound();
+        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         try {
             return render(ifNoneMatch, readerService.chapter(editionId, chapterId));
         } catch (ArchiveResourceNotFoundException unavailable) {

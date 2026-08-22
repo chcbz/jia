@@ -1,5 +1,6 @@
 package cn.jia.chat.archive.config;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,8 +20,9 @@ public final class ArchiveSchemaCatalog {
                         col("work_id", "varchar", "varchar(64)", false, "utf8mb4_0900_bin"),
                         col("title", "varchar", "varchar(255)", false, "utf8mb4_0900_bin"),
                         col("active_edition_id", "varchar", "varchar(96)", true, "utf8mb4_0900_bin"),
-                        col("created_at", "timestamp", "timestamp(6)", false, null),
-                        col("updated_at", "timestamp", "timestamp(6)", false, null)),
+                        timestamp("created_at", false, "current_timestamp(6)", "default_generated"),
+                        timestamp("updated_at", false, "current_timestamp(6)",
+                                "default_generated on update current_timestamp(6)")),
                 indexes(
                         idx("PRIMARY", true, "work_id"),
                         idx("idx_archive_work_active", false, "work_id", "active_edition_id")),
@@ -44,9 +46,9 @@ public final class ArchiveSchemaCatalog {
                         col("preface_utf8_byte_length", "bigint", "bigint", false, null),
                         col("chapter_utf8_byte_length", "bigint", "bigint", false, null),
                         col("reader_utf8_byte_length", "bigint", "bigint", false, null),
-                        col("import_started_at", "timestamp", "timestamp(6)", false, null),
-                        col("ready_at", "timestamp", "timestamp(6)", true, null),
-                        col("activated_at", "timestamp", "timestamp(6)", true, null)),
+                        timestamp("import_started_at", false, "current_timestamp(6)", "default_generated"),
+                        timestamp("ready_at", true, null, ""),
+                        timestamp("activated_at", true, null, "")),
                 indexes(
                         idx("PRIMARY", true, "edition_id"),
                         idx("uk_archive_edition_work", true, "work_id", "edition_id"),
@@ -54,7 +56,7 @@ public final class ArchiveSchemaCatalog {
                 foreignKeys(fk("fk_archive_edition_work", List.of("work_id"),
                         "archive_work", List.of("work_id"))),
                 checks(
-                        "chk_archive_edition_state", "import_state in ('staging','ready')",
+                        "chk_archive_edition_state", "import_state in ('STAGING','READY')",
                         "chk_archive_edition_counts", "chapter_count=120 and preface_paragraph_count>=1 and chapter_paragraph_count>=1 and reader_paragraph_count=preface_paragraph_count+chapter_paragraph_count and source_utf8_byte_length>0 and preface_utf8_byte_length>0 and chapter_utf8_byte_length>0 and reader_utf8_byte_length=preface_utf8_byte_length+chapter_utf8_byte_length")));
         tables.put("archive_chapter", table(
                 columns(
@@ -67,7 +69,7 @@ public final class ArchiveSchemaCatalog {
                         col("paragraph_count", "int", "int", false, null),
                         col("utf8_byte_length", "bigint", "bigint", false, null),
                         col("block_content_sha256", "char", "char(64)", false, "ascii_bin"),
-                        col("created_at", "timestamp", "timestamp(6)", false, null)),
+                        timestamp("created_at", false, "current_timestamp(6)", "default_generated")),
                 indexes(
                         idx("PRIMARY", true, "edition_id", "block_id"),
                         idx("uk_archive_chapter_ordinal", true, "edition_id", "reader_ordinal"),
@@ -75,7 +77,7 @@ public final class ArchiveSchemaCatalog {
                 foreignKeys(fk("fk_archive_chapter_edition", List.of("edition_id"),
                         "archive_edition", List.of("edition_id"))),
                 checks(
-                        "chk_archive_chapter_shape", "((block_type='preface' and reader_ordinal=0 and chapter_number is null) or (block_type='chapter' and reader_ordinal between 1 and 120 and chapter_number=reader_ordinal))",
+                        "chk_archive_chapter_shape", "((block_type='PREFACE' and reader_ordinal=0 and chapter_number is null) or (block_type='CHAPTER' and reader_ordinal between 1 and 120 and chapter_number=reader_ordinal))",
                         "chk_archive_chapter_metrics", "paragraph_count>0 and utf8_byte_length>0")));
         tables.put("archive_paragraph", table(
                 columns(
@@ -86,7 +88,7 @@ public final class ArchiveSchemaCatalog {
                         col("text", "longtext", "longtext", false, "utf8mb4_0900_bin"),
                         col("utf8_byte_length", "bigint", "bigint", false, null),
                         col("sha256", "char", "char(64)", false, "ascii_bin"),
-                        col("created_at", "timestamp", "timestamp(6)", false, null)),
+                        timestamp("created_at", false, "current_timestamp(6)", "default_generated")),
                 indexes(
                         idx("PRIMARY", true, "edition_id", "block_id", "paragraph_id"),
                         idx("uk_archive_paragraph_ordinal", true, "edition_id", "block_id", "ordinal")),
@@ -98,45 +100,79 @@ public final class ArchiveSchemaCatalog {
 
     public static void validate(ArchiveSchemaSnapshot actual) {
         ArchiveSchemaSnapshot expected = expectedSnapshot();
-        if (!expected.tables().keySet().equals(actual.tables().keySet())) {
-            throw drift("tables", expected.tables().keySet(), actual.tables().keySet());
-        }
+        compareOrderedKeys("tables", expected.tables(), actual.tables());
         for (String tableName : TABLE_ORDER) {
             ArchiveSchemaSnapshot.TableSnapshot wanted = expected.tables().get(tableName);
             ArchiveSchemaSnapshot.TableSnapshot found = actual.tables().get(tableName);
             compare(tableName + ".engine", wanted.engine(), found.engine());
             compare(tableName + ".collation", wanted.collation(), found.collation());
-            compareMapKeys(tableName + ".columns", wanted.columns(), found.columns());
+            compareOrderedKeys(tableName + ".columns", wanted.columns(), found.columns());
             wanted.columns().forEach((name, value) -> compare(tableName + "." + name, value, found.columns().get(name)));
             compareMapKeys(tableName + ".indexes", wanted.indexes(), found.indexes());
             wanted.indexes().forEach((name, value) -> compare(tableName + "." + name, value, found.indexes().get(name)));
             compareMapKeys(tableName + ".foreignKeys", wanted.foreignKeys(), found.foreignKeys());
             wanted.foreignKeys().forEach((name, value) -> compare(tableName + "." + name, value, found.foreignKeys().get(name)));
             compareMapKeys(tableName + ".checks", wanted.checks(), found.checks());
-            wanted.checks().forEach((name, value) -> compare(tableName + "." + name,
-                    normalizeCheck(value), normalizeCheck(found.checks().get(name))));
+            wanted.checks().forEach((name, value) -> {
+                ArchiveSchemaSnapshot.CheckSnapshot actualCheck = found.checks().get(name);
+                compare(tableName + "." + name + ".clause",
+                        normalizeCheck(value.clause()), normalizeCheck(actualCheck.clause()));
+                compare(tableName + "." + name + ".enforced", value.enforced(), actualCheck.enforced());
+            });
         }
     }
 
     static String normalizeCheck(String value) {
         if (value == null) return null;
-        String normalized = value.toLowerCase(java.util.Locale.ROOT)
-                .replace("`", "")
-                .replace("_utf8mb4", "")
-                .replace("_ascii", "")
-                .replaceAll("\\s+", "")
-                .replace("\\'", "'");
-        while (normalized.startsWith("(") && normalized.endsWith(")")
-                && balancedOuterParentheses(normalized)) {
-            normalized = normalized.substring(1, normalized.length() - 1);
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (quoted) {
+                normalized.append(current);
+                if (current == '\\' && index + 1 < value.length()) {
+                    normalized.append(value.charAt(++index));
+                } else if (current == '\'' && index + 1 < value.length()
+                        && value.charAt(index + 1) == '\'') {
+                    normalized.append(value.charAt(++index));
+                } else if (current == '\'') {
+                    quoted = false;
+                }
+                continue;
+            }
+            if (current == '\'') {
+                quoted = true;
+                normalized.append(current);
+            } else if (current == '`' || Character.isWhitespace(current)) {
+                continue;
+            } else if (charsetIntroducerAt(value, index, "_utf8mb4")
+                    || charsetIntroducerAt(value, index, "_ascii")) {
+                index += value.regionMatches(true, index, "_utf8mb4", 0, 8) ? 7 : 5;
+            } else {
+                normalized.append(Character.toLowerCase(current));
+            }
         }
-        return normalized;
+        String result = normalized.toString();
+        while (result.startsWith("(") && result.endsWith(")")
+                && balancedOuterParentheses(result)) {
+            result = result.substring(1, result.length() - 1);
+        }
+        return result;
+    }
+
+    private static boolean charsetIntroducerAt(String value, int index, String introducer) {
+        int after = index + introducer.length();
+        return after < value.length() && value.charAt(after) == '\''
+                && value.regionMatches(true, index, introducer, 0, introducer.length());
     }
 
     private static boolean balancedOuterParentheses(String value) {
         int depth = 0;
+        boolean quoted = false;
         for (int index = 0; index < value.length(); index++) {
             char current = value.charAt(index);
+            if (current == '\'' && (index == 0 || value.charAt(index - 1) != '\\')) quoted = !quoted;
+            if (quoted) continue;
             if (current == '(') depth++;
             if (current == ')') depth--;
             if (depth == 0 && index < value.length() - 1) return false;
@@ -148,23 +184,37 @@ public final class ArchiveSchemaCatalog {
             Map<String, ArchiveSchemaSnapshot.ColumnSnapshot> columns,
             Map<String, ArchiveSchemaSnapshot.IndexSnapshot> indexes,
             Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> foreignKeys,
-            Map<String, String> checks) {
+            Map<String, ArchiveSchemaSnapshot.CheckSnapshot> checks) {
         return new ArchiveSchemaSnapshot.TableSnapshot("InnoDB", "utf8mb4_0900_bin",
                 columns, indexes, foreignKeys, checks);
     }
 
     @SafeVarargs
-    private static Map<String, ArchiveSchemaSnapshot.ColumnSnapshot> columns(Map.Entry<String, ArchiveSchemaSnapshot.ColumnSnapshot>... entries) {
-        return linked(entries);
+    private static Map<String, ArchiveSchemaSnapshot.ColumnSnapshot> columns(
+            Map.Entry<String, ArchiveSchemaSnapshot.ColumnSnapshot>... entries) {
+        LinkedHashMap<String, ArchiveSchemaSnapshot.ColumnSnapshot> values = new LinkedHashMap<>();
+        for (int index = 0; index < entries.length; index++) {
+            ArchiveSchemaSnapshot.ColumnSnapshot column = entries[index].getValue().withOrdinal(index + 1);
+            values.put(entries[index].getKey(), column);
+        }
+        return values;
     }
 
     private static Map.Entry<String, ArchiveSchemaSnapshot.ColumnSnapshot> col(
             String name, String dataType, String columnType, boolean nullable, String collation) {
-        return Map.entry(name, new ArchiveSchemaSnapshot.ColumnSnapshot(dataType, columnType, nullable, collation));
+        return Map.entry(name, new ArchiveSchemaSnapshot.ColumnSnapshot(
+                0, dataType, columnType, nullable, collation, null, "", ""));
+    }
+
+    private static Map.Entry<String, ArchiveSchemaSnapshot.ColumnSnapshot> timestamp(
+            String name, boolean nullable, String defaultValue, String extra) {
+        return Map.entry(name, new ArchiveSchemaSnapshot.ColumnSnapshot(
+                0, "timestamp", "timestamp(6)", nullable, null, defaultValue, extra, ""));
     }
 
     @SafeVarargs
-    private static Map<String, ArchiveSchemaSnapshot.IndexSnapshot> indexes(Map.Entry<String, ArchiveSchemaSnapshot.IndexSnapshot>... entries) {
+    private static Map<String, ArchiveSchemaSnapshot.IndexSnapshot> indexes(
+            Map.Entry<String, ArchiveSchemaSnapshot.IndexSnapshot>... entries) {
         return linked(entries);
     }
 
@@ -174,7 +224,8 @@ public final class ArchiveSchemaCatalog {
     }
 
     @SafeVarargs
-    private static Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> foreignKeys(Map.Entry<String, ArchiveSchemaSnapshot.ForeignKeySnapshot>... entries) {
+    private static Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot> foreignKeys(
+            Map.Entry<String, ArchiveSchemaSnapshot.ForeignKeySnapshot>... entries) {
         return linked(entries);
     }
 
@@ -184,10 +235,11 @@ public final class ArchiveSchemaCatalog {
                 columns, referencedTable, referencedColumns, "RESTRICT", "RESTRICT"));
     }
 
-    private static Map<String, String> checks(String... namesAndClauses) {
-        LinkedHashMap<String, String> values = new LinkedHashMap<>();
+    private static Map<String, ArchiveSchemaSnapshot.CheckSnapshot> checks(String... namesAndClauses) {
+        LinkedHashMap<String, ArchiveSchemaSnapshot.CheckSnapshot> values = new LinkedHashMap<>();
         for (int index = 0; index < namesAndClauses.length; index += 2) {
-            values.put(namesAndClauses[index], namesAndClauses[index + 1]);
+            values.put(namesAndClauses[index],
+                    new ArchiveSchemaSnapshot.CheckSnapshot(namesAndClauses[index + 1], true));
         }
         return values;
     }
@@ -199,8 +251,16 @@ public final class ArchiveSchemaCatalog {
         return values;
     }
 
+    private static void compareOrderedKeys(String item, Map<?, ?> expected, Map<?, ?> actual) {
+        List<?> expectedKeys = new ArrayList<>(expected.keySet());
+        List<?> actualKeys = new ArrayList<>(actual.keySet());
+        if (!expectedKeys.equals(actualKeys)) throw drift(item, expectedKeys, actualKeys);
+    }
+
     private static void compareMapKeys(String item, Map<?, ?> expected, Map<?, ?> actual) {
-        if (!expected.keySet().equals(actual.keySet())) throw drift(item, expected.keySet(), actual.keySet());
+        if (!expected.keySet().equals(actual.keySet())) {
+            throw drift(item, expected.keySet(), actual.keySet());
+        }
     }
 
     private static void compare(String item, Object expected, Object actual) {

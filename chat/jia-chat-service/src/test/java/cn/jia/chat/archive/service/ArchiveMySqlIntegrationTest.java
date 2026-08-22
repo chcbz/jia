@@ -23,8 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * Isolated MySQL evidence. It performs DDL/DML only when the runner explicitly supplies
- * CYF_H02_MYSQL_ISOLATED=true and a disposable CYF_H02_MYSQL_URL database.
+ * Isolated MySQL evidence. It performs destructive DDL/DML only when all of these are supplied:
+ * CYF_H02_MYSQL_ISOLATED=true, an IP-literal loopback CYF_H02_MYSQL_URL with an explicit
+ * non-3306/non-33060 port and a cyf_h02_ database, plus CYF_H02_MYSQL_DATABASE_CONFIRM exactly
+ * equal to that database name. URL query parameters, embedded credentials and remote hosts are rejected
+ * before JdbcTemplate is created and before any DROP statement can run.
  */
 class ArchiveMySqlIntegrationTest {
     private JdbcTemplate jdbc;
@@ -36,11 +39,10 @@ class ArchiveMySqlIntegrationTest {
     void setUp() {
         assumeTrue("true".equals(System.getenv("CYF_H02_MYSQL_ISOLATED")),
                 "requires explicit isolated-MySQL acknowledgement");
-        String url = System.getenv("CYF_H02_MYSQL_URL");
-        assumeTrue(url != null && !url.isBlank(), "CYF_H02_MYSQL_URL is required");
+        ArchiveMySqlTestGuard.Target target = ArchiveMySqlTestGuard.requireDisposable(System.getenv());
         DriverManagerDataSource dataSource = new DriverManagerDataSource();
         dataSource.setDriverClassName("com.mysql.cj.jdbc.Driver");
-        dataSource.setUrl(url);
+        dataSource.setUrl(target.url());
         dataSource.setUsername(System.getenv().getOrDefault("CYF_H02_MYSQL_USER", "root"));
         dataSource.setPassword(System.getenv().getOrDefault("CYF_H02_MYSQL_PASSWORD", ""));
         jdbc = new JdbcTemplate(dataSource);

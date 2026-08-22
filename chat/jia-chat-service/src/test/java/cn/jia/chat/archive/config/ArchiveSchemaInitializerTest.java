@@ -2,9 +2,9 @@ package cn.jia.chat.archive.config;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -30,7 +30,7 @@ class ArchiveSchemaInitializerTest {
     }
 
     @Test
-    void exactCatalogSnapshotPassesAndAnyBinaryCollationOrIndexOrderDriftFails() {
+    void exactCatalogSnapshotPassesAndBinaryCollationOrIndexOrderDriftFails() {
         ArchiveSchemaSnapshot expected = ArchiveSchemaCatalog.expectedSnapshot();
         assertDoesNotThrow(() -> ArchiveSchemaCatalog.validate(expected));
 
@@ -40,22 +40,49 @@ class ArchiveSchemaInitializerTest {
         ArchiveSchemaSnapshot.ColumnSnapshot text = columns.get("text");
         columns.put("text", text.withCollation("utf8mb4_0900_ai_ci"));
         tables.put("archive_paragraph", paragraph.withColumns(columns));
-        ArchiveSchemaSnapshot collationDrift = new ArchiveSchemaSnapshot(tables);
-        IllegalStateException collation = assertThrows(IllegalStateException.class,
-                () -> ArchiveSchemaCatalog.validate(collationDrift));
-        assertTrue(collation.getMessage().contains("archive_paragraph.text"), collation.getMessage());
+        assertDrift(new ArchiveSchemaSnapshot(tables), "archive_paragraph.text");
 
         tables = new LinkedHashMap<>(expected.tables());
         ArchiveSchemaSnapshot.TableSnapshot chapters = tables.get("archive_chapter");
         var indexes = new LinkedHashMap<>(chapters.indexes());
-        ArchiveSchemaSnapshot.IndexSnapshot ordinal = indexes.get("uk_archive_chapter_ordinal");
         indexes.put("uk_archive_chapter_ordinal",
                 new ArchiveSchemaSnapshot.IndexSnapshot(true, List.of("reader_ordinal", "edition_id")));
         tables.put("archive_chapter", chapters.withIndexes(indexes));
-        ArchiveSchemaSnapshot indexDrift = new ArchiveSchemaSnapshot(tables);
-        IllegalStateException index = assertThrows(IllegalStateException.class,
-                () -> ArchiveSchemaCatalog.validate(indexDrift));
-        assertTrue(index.getMessage().contains("uk_archive_chapter_ordinal"), index.getMessage());
+        assertDrift(new ArchiveSchemaSnapshot(tables), "uk_archive_chapter_ordinal");
+    }
+
+    @Test
+    void columnOrdinalDefaultExtraAndGenerationDriftAllFailClosed() {
+        ArchiveSchemaSnapshot expected = ArchiveSchemaCatalog.expectedSnapshot();
+        ArchiveSchemaSnapshot.TableSnapshot work = expected.tables().get("archive_work");
+
+        assertColumnDrift(expected, work, "updated_at",
+                work.columns().get("updated_at").withOrdinal(4), "updated_at");
+        assertColumnDrift(expected, work, "created_at",
+                work.columns().get("created_at").withDefaultValue(null), "created_at");
+        assertColumnDrift(expected, work, "updated_at",
+                work.columns().get("updated_at").withExtra("default_generated"), "updated_at");
+        assertColumnDrift(expected, work, "title",
+                work.columns().get("title").withGenerationExpression("lower(`work_id`)"), "title");
+    }
+
+    @Test
+    void disabledCheckAndBinaryLiteralCaseDriftFailClosed() {
+        ArchiveSchemaSnapshot expected = ArchiveSchemaCatalog.expectedSnapshot();
+        ArchiveSchemaSnapshot.TableSnapshot edition = expected.tables().get("archive_edition");
+        var checks = new LinkedHashMap<>(edition.checks());
+        ArchiveSchemaSnapshot.CheckSnapshot state = checks.get("chk_archive_edition_state");
+        checks.put("chk_archive_edition_state", state.withEnforced(false));
+        var tables = new LinkedHashMap<>(expected.tables());
+        tables.put("archive_edition", edition.withChecks(checks));
+        assertDrift(new ArchiveSchemaSnapshot(tables), "chk_archive_edition_state");
+
+        checks = new LinkedHashMap<>(edition.checks());
+        checks.put("chk_archive_edition_state", new ArchiveSchemaSnapshot.CheckSnapshot(
+                "import_state in ('staging','ready')", true));
+        tables = new LinkedHashMap<>(expected.tables());
+        tables.put("archive_edition", edition.withChecks(checks));
+        assertDrift(new ArchiveSchemaSnapshot(tables), "chk_archive_edition_state");
     }
 
     @Test
@@ -64,5 +91,23 @@ class ArchiveSchemaInitializerTest {
                 () -> ArchiveSchemaInitializer.requireAllOrNoneTables(
                         java.util.Set.of("archive_work", "archive_edition")));
         assertTrue(failure.getMessage().contains("partial"), failure.getMessage());
+    }
+
+    private void assertColumnDrift(ArchiveSchemaSnapshot expected,
+                                   ArchiveSchemaSnapshot.TableSnapshot table,
+                                   String columnName,
+                                   ArchiveSchemaSnapshot.ColumnSnapshot replacement,
+                                   String expectedMessage) {
+        var columns = new LinkedHashMap<>(table.columns());
+        columns.put(columnName, replacement);
+        var tables = new LinkedHashMap<>(expected.tables());
+        tables.put("archive_work", table.withColumns(columns));
+        assertDrift(new ArchiveSchemaSnapshot(tables), expectedMessage);
+    }
+
+    private void assertDrift(ArchiveSchemaSnapshot snapshot, String expectedMessage) {
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> ArchiveSchemaCatalog.validate(snapshot));
+        assertTrue(failure.getMessage().contains(expectedMessage), failure.getMessage());
     }
 }

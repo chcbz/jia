@@ -46,6 +46,30 @@ class ArchiveControllerTest {
     }
 
     @Test
+    void conditionalSyntaxIsValidatedAfterClaimsButBeforeDisabledGate() {
+        ArchiveReaderService service = mock(ArchiveReaderService.class);
+        ArchiveController controller = new ArchiveController(service, disabledPolicy());
+        JwtAuthenticationToken validClaims = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
+
+        var missingClaims = controller.catalog("W/\"bad tag\"", jwt(Map.of("sub", "tenant-a")));
+        assertEquals(HttpStatus.UNAUTHORIZED, missingClaims.getStatusCode());
+
+        var catalog = controller.catalog("W/\"bad tag\"", validClaims);
+        assertEquals(HttpStatus.BAD_REQUEST, catalog.getStatusCode());
+        assertEquals("INVALID_CONDITIONAL_HEADER", catalog.getBody().getCode());
+
+        var preface = controller.preface("shuihuzhuan-zh-120-v1", "W/\"bad tag\"", validClaims);
+        assertEquals(HttpStatus.BAD_REQUEST, preface.getStatusCode());
+
+        var chapter = controller.chapter("bad edition ", "bad chapter ", "W/\"bad tag\"", validClaims);
+        assertEquals(HttpStatus.BAD_REQUEST, chapter.getStatusCode());
+        verify(service, never()).catalog();
+        verify(service, never()).preface(org.mockito.ArgumentMatchers.anyString());
+        verify(service, never()).chapter(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
     void catalogUsesFrozenWeakValidatorAndReturnsBodyless304() {
         ArchiveReaderService service = mock(ArchiveReaderService.class);
         ArchiveCatalogDTO data = mock(ArchiveCatalogDTO.class);

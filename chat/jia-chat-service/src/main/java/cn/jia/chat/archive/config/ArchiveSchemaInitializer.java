@@ -53,7 +53,7 @@ public class ArchiveSchemaInitializer {
         Map<String, Map<String, ArchiveSchemaSnapshot.ColumnSnapshot>> columns = inspectColumns();
         Map<String, Map<String, ArchiveSchemaSnapshot.IndexSnapshot>> indexes = inspectIndexes();
         Map<String, Map<String, ArchiveSchemaSnapshot.ForeignKeySnapshot>> foreignKeys = inspectForeignKeys();
-        Map<String, Map<String, String>> checks = inspectChecks();
+        Map<String, Map<String, ArchiveSchemaSnapshot.CheckSnapshot>> checks = inspectChecks();
         List<Map<String, Object>> tableRows = jdbc.queryForList("""
                 SELECT table_name, engine, table_collation
                 FROM information_schema.tables
@@ -77,7 +77,8 @@ public class ArchiveSchemaInitializer {
 
     private Map<String, Map<String, ArchiveSchemaSnapshot.ColumnSnapshot>> inspectColumns() {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT table_name, column_name, data_type, column_type, is_nullable, collation_name
+                SELECT table_name, column_name, ordinal_position, data_type, column_type,
+                       is_nullable, collation_name, column_default, extra, generation_expression
                 FROM information_schema.columns
                 WHERE table_schema = DATABASE()
                   AND table_name IN ('archive_work','archive_edition','archive_chapter','archive_paragraph')
@@ -88,9 +89,13 @@ public class ArchiveSchemaInitializer {
             String table = string(row, "table_name");
             values.computeIfAbsent(table, ignored -> new LinkedHashMap<>()).put(
                     string(row, "column_name"), new ArchiveSchemaSnapshot.ColumnSnapshot(
+                            Math.toIntExact(number(row, "ordinal_position")),
                             lower(row, "data_type"), lower(row, "column_type"),
                             "YES".equalsIgnoreCase(string(row, "is_nullable")),
-                            nullableLower(row, "collation_name")));
+                            nullableLower(row, "collation_name"),
+                            normalizeDefault(value(row, "column_default")),
+                            normalizeMetadata(string(row, "extra")),
+                            normalizeGeneration(string(row, "generation_expression"))));
         }
         return values;
     }
@@ -169,9 +174,9 @@ public class ArchiveSchemaInitializer {
         return result;
     }
 
-    private Map<String, Map<String, String>> inspectChecks() {
+    private Map<String, Map<String, ArchiveSchemaSnapshot.CheckSnapshot>> inspectChecks() {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT tc.table_name, tc.constraint_name, cc.check_clause
+                SELECT tc.table_name, tc.constraint_name, tc.enforced, cc.check_clause
                 FROM information_schema.table_constraints tc
                 JOIN information_schema.check_constraints cc
                   ON cc.constraint_schema = tc.constraint_schema
@@ -181,13 +186,27 @@ public class ArchiveSchemaInitializer {
                   AND tc.table_name IN ('archive_work','archive_edition','archive_chapter','archive_paragraph')
                 ORDER BY tc.table_name, tc.constraint_name
                 """);
-        Map<String, Map<String, String>> values = new LinkedHashMap<>();
+        Map<String, Map<String, ArchiveSchemaSnapshot.CheckSnapshot>> values = new LinkedHashMap<>();
         for (Map<String, Object> row : rows) {
             values.computeIfAbsent(string(row, "table_name"), ignored -> new LinkedHashMap<>())
-                    .put(string(row, "constraint_name"),
-                            ArchiveSchemaCatalog.normalizeCheck(string(row, "check_clause")));
+                    .put(string(row, "constraint_name"), new ArchiveSchemaSnapshot.CheckSnapshot(
+                            ArchiveSchemaCatalog.normalizeCheck(string(row, "check_clause")),
+                            "YES".equalsIgnoreCase(string(row, "enforced"))));
         }
         return values;
+    }
+
+
+    private String normalizeDefault(Object value) {
+        return value == null ? null : normalizeMetadata(String.valueOf(value));
+    }
+
+    private String normalizeMetadata(String value) {
+        return value == null ? "" : value.strip().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+    }
+
+    private String normalizeGeneration(String value) {
+        return value == null ? "" : value.strip();
     }
 
     private Set<String> existingArchiveTables() {
