@@ -1,6 +1,7 @@
 dependencies {
     api project(':chat:jia-chat-api')
     api project(':common:jia-common-mapper')
+    implementation libs.spring.jdbc
     testImplementation project(':common:jia-common-test')
     testImplementation libs.mybatis.plus.generator
     testImplementation libs.spring.boot.starter.freemarker
