@@ -14,6 +14,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,8 +24,6 @@ import java.util.TreeMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -40,9 +39,18 @@ public class ArchiveQuestionSseService {
     static final int BUFFER_LIMIT = 256;
     static final int OUTBOUND_LIMIT = 64;
     static final int REPLAY_BATCH = 100;
+    static final int MAX_ACTIVE_SESSIONS = 32;
+    static final int MAX_OWNER_ACTIVE_SESSIONS = 8;
+    static final int MAX_PENDING_REPLAYS = 16;
+    static final int MAX_OWNER_PENDING_REPLAYS = 8;
+    static final int MAX_OUTBOUND_WRITERS = 32;
+    static final int MAX_OWNER_OUTBOUND_WRITERS = 8;
     static final long SSE_TIMEOUT_MILLIS = Duration.ofMinutes(2).toMillis();
     static final long HEARTBEAT_SECONDS = 15;
+    private static final int REPLAY_THREADS = 4;
+    private static final int REPLAY_QUEUE = MAX_PENDING_REPLAYS - REPLAY_THREADS;
     private static final AtomicInteger WRITER_SEQUENCE = new AtomicInteger();
+    private static final AtomicInteger COMPLETION_SEQUENCE = new AtomicInteger();
 
     private final ArchiveQuestionStore store;
     private final ArchiveQuestionEventBroker broker;
@@ -51,54 +59,86 @@ public class ArchiveQuestionSseService {
     private final ExecutorService replayExecutor;
     private final ScheduledExecutorService heartbeatExecutor;
     private final OutboundFactory outboundFactory;
+    private final Admission admission;
     private final Set<Session> sessions = ConcurrentHashMap.newKeySet();
 
     public ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                                      ArchiveQuestionAccessPolicy accessPolicy) {
-        this(store, broker, accessPolicy,
-                Executors.newFixedThreadPool(4, runnable -> daemon(runnable, "archive-question-replay")),
-                Executors.newSingleThreadScheduledExecutor(
+        this(store, broker, accessPolicy, replayExecutor(),
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
                         runnable -> daemon(runnable, "archive-question-heartbeat")),
-                ignored -> new SerialOutbound());
+                (ignored, terminated) -> new SerialOutbound(terminated), AdmissionLimits.production());
     }
 
     ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                               ArchiveQuestionAccessPolicy accessPolicy, ExecutorService replayExecutor,
                               ScheduledExecutorService heartbeatExecutor) {
         this(store, broker, accessPolicy, replayExecutor, heartbeatExecutor,
-                ignored -> new SerialOutbound());
+                (ignored, terminated) -> new SerialOutbound(terminated), AdmissionLimits.production());
     }
 
     ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                               ArchiveQuestionAccessPolicy accessPolicy, ExecutorService replayExecutor,
                               ScheduledExecutorService heartbeatExecutor, OutboundFactory outboundFactory) {
+        this(store, broker, accessPolicy, replayExecutor, heartbeatExecutor,
+                outboundFactory, AdmissionLimits.production());
+    }
+
+    ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
+                              ArchiveQuestionAccessPolicy accessPolicy, ExecutorService replayExecutor,
+                              ScheduledExecutorService heartbeatExecutor, OutboundFactory outboundFactory,
+                              AdmissionLimits limits) {
         this.store = Objects.requireNonNull(store, "store");
         this.broker = Objects.requireNonNull(broker, "broker");
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
         this.replayExecutor = Objects.requireNonNull(replayExecutor, "replayExecutor");
         this.heartbeatExecutor = Objects.requireNonNull(heartbeatExecutor, "heartbeatExecutor");
         this.outboundFactory = Objects.requireNonNull(outboundFactory, "outboundFactory");
+        this.admission = new Admission(Objects.requireNonNull(limits, "limits"));
     }
 
     public SseEmitter open(ArchiveOwnerScope owner, String questionId, long cursor) {
         ManagedSseEmitter emitter = new ManagedSseEmitter(SSE_TIMEOUT_MILLIS);
-        subscribe(owner, questionId, cursor, new EmitterSink(emitter));
-        return emitter;
+        try {
+            subscribe(owner, questionId, cursor, new EmitterSink(emitter));
+            return emitter;
+        } catch (Throwable failure) {
+            emitter.cancel();
+            throw failure;
+        }
     }
 
     StreamHandle subscribe(ArchiveOwnerScope owner, String questionId, long cursor, Sink sink) {
         if (!ArchiveWire.lowercaseUuid(questionId)) notFound();
         if (cursor < 0) throw new ArchivePersonalDataException(400, "INVALID_EVENT_CURSOR",
                 "Last-Event-ID must be a canonical nonnegative decimal");
-        if (!accessPolicy.allows(owner.tenantId(), owner.clientId())) notFound();
+        if (owner == null || !accessPolicy.allows(owner.tenantId(), owner.clientId())) notFound();
+        Objects.requireNonNull(sink, "sink");
         QuestionRecord visible = store.findQuestion(owner, questionId, false);
         if (visible == null) notFound();
-        Session session = new Session(owner, questionId, cursor, sink, outboundFactory.create(questionId));
-        session.start();
-        return session;
+        AdmissionLease lease = admission.acquire(owner);
+        if (lease == null) throw rateLimited();
+        Outbound outbound;
+        try {
+            outbound = Objects.requireNonNull(
+                    outboundFactory.create(questionId, lease::releaseOutbound), "outbound");
+        } catch (Throwable failure) {
+            lease.releaseAll();
+            throw failure;
+        }
+        Session session = new Session(owner, questionId, cursor, sink, outbound, lease);
+        try {
+            session.start();
+            return session;
+        } catch (RejectedExecutionException rejected) {
+            throw rateLimited();
+        }
     }
 
     int activeSubscriptions() { return broker.activeSubscriptions(); }
+    int admittedSessions() { return admission.active(); }
+    int pendingReplays() { return admission.replays(); }
+    int admittedOutboundWriters() { return admission.outbounds(); }
 
     interface Sink {
         void onClose(Runnable cleanup);
@@ -117,7 +157,7 @@ public class ArchiveQuestionSseService {
 
     @FunctionalInterface
     interface OutboundFactory {
-        Outbound create(String questionId);
+        Outbound create(String questionId, Runnable onTerminated);
     }
 
     interface Outbound {
@@ -126,9 +166,18 @@ public class ArchiveQuestionSseService {
         void cancel();
     }
 
-    static Outbound directOutbound() {
+    static Outbound serialOutbound(Runnable onTerminated) {
+        return new SerialOutbound(onTerminated);
+    }
+
+    static Outbound directOutbound(Runnable onTerminated) {
+        Objects.requireNonNull(onTerminated, "onTerminated");
         return new Outbound() {
             private final AtomicBoolean cancelled = new AtomicBoolean();
+            private final AtomicBoolean terminated = new AtomicBoolean();
+            private void terminate() {
+                if (terminated.compareAndSet(false, true)) onTerminated.run();
+            }
             @Override public boolean submit(Runnable action) {
                 if (cancelled.get()) return false;
                 action.run();
@@ -136,10 +185,14 @@ public class ArchiveQuestionSseService {
             }
             @Override public boolean terminal(Runnable action) {
                 if (!cancelled.compareAndSet(false, true)) return false;
-                action.run();
+                try { action.run(); }
+                finally { terminate(); }
                 return true;
             }
-            @Override public void cancel() { cancelled.set(true); }
+            @Override public void cancel() {
+                cancelled.set(true);
+                terminate();
+            }
         };
     }
 
@@ -149,21 +202,24 @@ public class ArchiveQuestionSseService {
         private final long cursor;
         private final Sink sink;
         private final Outbound outbound;
+        private final AdmissionLease admissionLease;
         private final Object lock = new Object();
         private final TreeMap<Long, EventRecord> buffer = new TreeMap<>();
         private final AtomicBoolean closed = new AtomicBoolean();
         private ArchiveQuestionEventBroker.Subscription live;
-        private Future<?> replay;
+        private ReplayWork replay;
         private ScheduledFuture<?> heartbeat;
         private long delivered;
         private boolean direct;
 
-        private Session(ArchiveOwnerScope owner, String questionId, long cursor, Sink sink, Outbound outbound) {
+        private Session(ArchiveOwnerScope owner, String questionId, long cursor, Sink sink,
+                        Outbound outbound, AdmissionLease admissionLease) {
             this.owner = owner;
             this.questionId = questionId;
             this.cursor = cursor;
             this.sink = Objects.requireNonNull(sink, "sink");
             this.outbound = Objects.requireNonNull(outbound, "outbound");
+            this.admissionLease = Objects.requireNonNull(admissionLease, "admissionLease");
             this.delivered = cursor;
         }
 
@@ -176,7 +232,9 @@ public class ArchiveQuestionSseService {
                     live = broker.subscribe(owner, questionId, this::observe);
                     heartbeat = heartbeatExecutor.scheduleWithFixedDelay(
                             this::heartbeat, HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS);
-                    replay = replayExecutor.submit(this::initializeReplay);
+                    ReplayWork work = new ReplayWork(this::initializeReplay, admissionLease::releaseReplay);
+                    replay = work;
+                    replayExecutor.execute(work);
                 }
             } catch (Throwable failure) {
                 abort();
@@ -307,13 +365,17 @@ public class ArchiveQuestionSseService {
             ArchiveQuestionEventBroker.Subscription currentLive = live;
             live = null;
             if (currentLive != null) currentLive.close();
-            Future<?> currentReplay = replay;
+            ReplayWork currentReplay = replay;
             replay = null;
-            if (currentReplay != null) currentReplay.cancel(true);
+            if (currentReplay != null) {
+                currentReplay.cancel();
+                if (replayExecutor instanceof ThreadPoolExecutor pool) pool.remove(currentReplay);
+            } else admissionLease.releaseReplay();
             ScheduledFuture<?> currentHeartbeat = heartbeat;
             heartbeat = null;
             if (currentHeartbeat != null) currentHeartbeat.cancel(true);
             sessions.remove(this);
+            admissionLease.releaseActive();
             return true;
         }
 
@@ -321,8 +383,7 @@ public class ArchiveQuestionSseService {
             synchronized (lock) {
                 beginCloseLocked();
             }
-            // Explicit disconnect/timeout/stop overrides a queued graceful terminal and never waits
-            // for an in-flight network send. Both operations are idempotent and bounded.
+            // Explicit disconnect/timeout/stop overrides queued output and never waits for a blocked send.
             outbound.cancel();
             sink.cancel();
         }
@@ -331,13 +392,60 @@ public class ArchiveQuestionSseService {
         @Override public boolean closed() { return closed.get(); }
     }
 
+    private static final class ReplayWork implements Runnable {
+        private static final int PENDING = 0;
+        private static final int RUNNING = 1;
+        private static final int RELEASED = 2;
+        private final Runnable action;
+        private final Runnable onReleased;
+        private final AtomicInteger state = new AtomicInteger(PENDING);
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private volatile Thread runner;
+
+        private ReplayWork(Runnable action, Runnable onReleased) {
+            this.action = Objects.requireNonNull(action, "action");
+            this.onReleased = Objects.requireNonNull(onReleased, "onReleased");
+        }
+
+        @Override public void run() {
+            if (!state.compareAndSet(PENDING, RUNNING)) return;
+            runner = Thread.currentThread();
+            try {
+                if (!cancelled.get()) action.run();
+            } finally {
+                runner = null;
+                if (state.compareAndSet(RUNNING, RELEASED)) onReleased.run();
+            }
+        }
+
+        private void cancel() {
+            cancelled.set(true);
+            if (state.compareAndSet(PENDING, RELEASED)) {
+                onReleased.run();
+                return;
+            }
+            Thread current = runner;
+            if (current != null && current != Thread.currentThread()) current.interrupt();
+        }
+    }
+
     private static final class SerialOutbound implements Outbound {
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicBoolean terminal = new AtomicBoolean();
-        private final ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(OUTBOUND_LIMIT), runnable -> daemon(runnable,
-                "archive-question-outbound-" + WRITER_SEQUENCE.incrementAndGet()),
-                new ThreadPoolExecutor.AbortPolicy());
+        private final ThreadPoolExecutor executor;
+
+        private SerialOutbound(Runnable onTerminated) {
+            Objects.requireNonNull(onTerminated, "onTerminated");
+            executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(OUTBOUND_LIMIT), runnable -> daemon(runnable,
+                    "archive-question-outbound-" + WRITER_SEQUENCE.incrementAndGet()),
+                    new ThreadPoolExecutor.AbortPolicy()) {
+                @Override protected void terminated() {
+                    try { onTerminated.run(); }
+                    finally { super.terminated(); }
+                }
+            };
+        }
 
         @Override public synchronized boolean submit(Runnable action) {
             if (cancelled.get() || terminal.get()) return false;
@@ -364,6 +472,7 @@ public class ArchiveQuestionSseService {
                 });
                 return true;
             } catch (RejectedExecutionException rejected) {
+                executor.shutdownNow();
                 return false;
             }
         }
@@ -375,9 +484,9 @@ public class ArchiveQuestionSseService {
         }
     }
 
-    private static final class EmitterSink implements Sink {
+    static final class EmitterSink implements Sink {
         private final ManagedSseEmitter emitter;
-        private EmitterSink(ManagedSseEmitter emitter) { this.emitter = emitter; }
+        EmitterSink(ManagedSseEmitter emitter) { this.emitter = emitter; }
         @Override public void onClose(Runnable cleanup) {
             emitter.setCleanup(cleanup);
             emitter.onCompletion(emitter::cancelFromContainer);
@@ -406,42 +515,172 @@ public class ArchiveQuestionSseService {
 
     static class ManagedSseEmitter extends SseEmitter {
         private final AtomicBoolean finished = new AtomicBoolean();
+        private final AtomicBoolean transportCompletionStarted = new AtomicBoolean();
         private final AtomicReference<Runnable> cleanup = new AtomicReference<>(() -> { });
+
         ManagedSseEmitter(long timeout) { super(timeout); }
-        private void setCleanup(Runnable cleanup) { this.cleanup.set(Objects.requireNonNull(cleanup)); }
-        private boolean sendIfOpen(SseEventBuilder event) {
+
+        void setCleanup(Runnable cleanup) { this.cleanup.set(Objects.requireNonNull(cleanup)); }
+
+        boolean sendIfOpen(SseEventBuilder event) {
             if (finished.get()) return false;
             try {
                 send(event);
                 return !finished.get();
             } catch (IOException | RuntimeException failure) {
-                if (finished.compareAndSet(false, true)) {
-                    runCleanup();
-                    super.completeWithError(failure);
-                }
+                finish(failure, true);
                 return false;
             }
         }
-        @Override public void complete() {
-            if (!finished.compareAndSet(false, true)) return;
-            runCleanup();
-            super.complete();
-        }
+
+        @Override public void complete() { finish(null, true); }
+
         @Override public void completeWithError(Throwable error) {
+            finish(Objects.requireNonNull(error, "error"), true);
+        }
+
+        void cancelFromContainer() { finish(null, false); }
+
+        void cancel() {
+            finish(new IOException("Archive question event stream cancelled"), true);
+        }
+
+        private void finish(Throwable error, boolean completeTransport) {
             if (!finished.compareAndSet(false, true)) return;
             runCleanup();
-            super.completeWithError(error);
+            if (completeTransport) scheduleTransportCompletion(error);
         }
-        private void cancelFromContainer() { cancel(); }
-        private void cancel() {
-            if (!finished.compareAndSet(false, true)) return;
-            runCleanup();
+
+        private void scheduleTransportCompletion(Throwable error) {
+            if (!transportCompletionStarted.compareAndSet(false, true)) return;
+            Thread.ofVirtual().name("archive-question-sse-complete-"
+                    + COMPLETION_SEQUENCE.incrementAndGet()).start(() -> {
+                try { completeTransport(error); }
+                catch (Throwable ignored) { /* Logical cleanup already completed; transport is best effort. */ }
+            });
         }
+
+        void completeTransport(Throwable error) {
+            if (error == null) super.complete();
+            else super.completeWithError(error);
+        }
+
         private void runCleanup() {
             try { cleanup.get().run(); }
             catch (Throwable ignored) { /* Container lifecycle must remain no-throw. */ }
         }
+
         boolean closed() { return finished.get(); }
+    }
+
+    record AdmissionLimits(int activeGlobal, int activeOwner, int replayGlobal, int replayOwner,
+                           int outboundGlobal, int outboundOwner) {
+        AdmissionLimits {
+            if (activeGlobal < 1 || activeOwner < 1 || replayGlobal < 1 || replayOwner < 1
+                    || outboundGlobal < 1 || outboundOwner < 1
+                    || activeOwner > activeGlobal || replayOwner > replayGlobal
+                    || outboundOwner > outboundGlobal) {
+                throw new IllegalArgumentException("SSE admission limits must be positive owner/global bounds");
+            }
+        }
+        static AdmissionLimits production() {
+            return new AdmissionLimits(MAX_ACTIVE_SESSIONS, MAX_OWNER_ACTIVE_SESSIONS,
+                    MAX_PENDING_REPLAYS, MAX_OWNER_PENDING_REPLAYS,
+                    MAX_OUTBOUND_WRITERS, MAX_OWNER_OUTBOUND_WRITERS);
+        }
+    }
+
+    private static final class Admission {
+        private final AdmissionLimits limits;
+        private final Map<ArchiveOwnerScope, Counts> owners = new HashMap<>();
+        private int active;
+        private int replays;
+        private int outbounds;
+
+        private Admission(AdmissionLimits limits) { this.limits = limits; }
+
+        private synchronized AdmissionLease acquire(ArchiveOwnerScope owner) {
+            Counts counts = owners.computeIfAbsent(owner, ignored -> new Counts());
+            if (active >= limits.activeGlobal() || counts.active >= limits.activeOwner()
+                    || replays >= limits.replayGlobal() || counts.replays >= limits.replayOwner()
+                    || outbounds >= limits.outboundGlobal() || counts.outbounds >= limits.outboundOwner()) {
+                removeIfEmpty(owner, counts);
+                return null;
+            }
+            active++;
+            replays++;
+            outbounds++;
+            counts.active++;
+            counts.replays++;
+            counts.outbounds++;
+            return new AdmissionLease(this, owner);
+        }
+
+        private synchronized void release(ArchiveOwnerScope owner, Resource resource) {
+            Counts counts = owners.get(owner);
+            if (counts == null) return;
+            switch (resource) {
+                case ACTIVE -> { if (counts.active > 0) { counts.active--; active--; } }
+                case REPLAY -> { if (counts.replays > 0) { counts.replays--; replays--; } }
+                case OUTBOUND -> { if (counts.outbounds > 0) { counts.outbounds--; outbounds--; } }
+            }
+            removeIfEmpty(owner, counts);
+        }
+
+        private void removeIfEmpty(ArchiveOwnerScope owner, Counts counts) {
+            if (counts.active == 0 && counts.replays == 0 && counts.outbounds == 0) owners.remove(owner);
+        }
+
+        private synchronized int active() { return active; }
+        private synchronized int replays() { return replays; }
+        private synchronized int outbounds() { return outbounds; }
+    }
+
+    private static final class AdmissionLease {
+        private final Admission admission;
+        private final ArchiveOwnerScope owner;
+        private final AtomicBoolean active = new AtomicBoolean(true);
+        private final AtomicBoolean replay = new AtomicBoolean(true);
+        private final AtomicBoolean outbound = new AtomicBoolean(true);
+
+        private AdmissionLease(Admission admission, ArchiveOwnerScope owner) {
+            this.admission = admission;
+            this.owner = owner;
+        }
+
+        private void releaseActive() {
+            if (active.compareAndSet(true, false)) admission.release(owner, Resource.ACTIVE);
+        }
+
+        private void releaseReplay() {
+            if (replay.compareAndSet(true, false)) admission.release(owner, Resource.REPLAY);
+        }
+
+        private void releaseOutbound() {
+            if (outbound.compareAndSet(true, false)) admission.release(owner, Resource.OUTBOUND);
+        }
+
+        private void releaseAll() {
+            releaseActive();
+            releaseReplay();
+            releaseOutbound();
+        }
+    }
+
+    private static final class Counts {
+        private int active;
+        private int replays;
+        private int outbounds;
+    }
+
+    private enum Resource { ACTIVE, REPLAY, OUTBOUND }
+
+    private static ExecutorService replayExecutor() {
+        AtomicInteger sequence = new AtomicInteger();
+        return new ThreadPoolExecutor(REPLAY_THREADS, REPLAY_THREADS, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(REPLAY_QUEUE), runnable -> daemon(runnable,
+                "archive-question-replay-" + sequence.incrementAndGet()),
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     private static Thread daemon(Runnable runnable, String name) {
@@ -449,10 +688,17 @@ public class ArchiveQuestionSseService {
         thread.setDaemon(true);
         return thread;
     }
+
     private void notFound() {
         throw new ArchivePersonalDataException(404, "ARCHIVE_RESOURCE_NOT_FOUND",
                 "Archive resource is not available");
     }
+
+    private ArchivePersonalDataException rateLimited() {
+        return new ArchivePersonalDataException(429, "QUESTION_RATE_LIMITED",
+                "Archive question event stream limit exceeded");
+    }
+
     @PreDestroy public void stop() {
         for (Session session : List.copyOf(sessions)) session.abort();
         replayExecutor.shutdownNow();

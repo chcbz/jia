@@ -428,6 +428,117 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
+    void transientOldReadyFailureIsRetriedBySweepDespiteContinuousTail() {
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("revisited-ready");
+        };
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        store.setQuestion(OWNER, questionWith(base, ID, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, ID, 1));
+        for (int index = 0; index < ArchiveQuestionWorker.CANDIDATE_BATCH - 1; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "ready-head-" + index);
+            String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 256);
+            store.setQuestion(poison, questionWith(base, poisonId, "QUEUED", 1));
+            store.setOutbox(poison, readyOutbox(baseOutbox, poisonId, 1));
+        }
+        store.failNextQuestionUpdate = true;
+        ArchiveQuestionWorker worker = worker(provider);
+        int beforeQueries = store.claimCandidateQueries;
+        assertFalse(worker.runOnce());
+        assertTrue(store.claimCandidateQueries - beforeQueries <= 1);
+        assertEquals("QUEUED", store.findQuestion(OWNER, ID, false).status());
+
+        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "ready-tail");
+        String tailId = "923e4567-e89b-42d3-a456-426614174000";
+        store.setQuestion(tail, questionWith(base, tailId, "QUEUED", 1));
+        store.setOutbox(tail, readyOutbox(baseOutbox, tailId, 1));
+        beforeQueries = store.claimCandidateQueries;
+        assertTrue(worker.runOnce(), "the retry sweep must revisit the old row without waiting for table end");
+        assertTrue(store.claimCandidateQueries - beforeQueries <= 1);
+        assertEquals("SUCCEEDED", store.findQuestion(OWNER, ID, false).status());
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void laterHealthyClaimDoesNotEraseEarlierFailedRowRetryResponsibility() {
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("healthy-" + calls.get());
+        };
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        store.setQuestion(OWNER, questionWith(base, ID, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, ID, 1));
+        String healthyId = "b23e4567-e89b-42d3-a456-426614174000";
+        store.setQuestion(OWNER, questionWith(base, healthyId, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, healthyId, 1));
+        for (int index = 0; index < ArchiveQuestionWorker.CANDIDATE_BATCH - 2; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "later-ready-" + index);
+            String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 768);
+            store.setQuestion(poison, questionWith(base, poisonId, "QUEUED", 1));
+            store.setOutbox(poison, readyOutbox(baseOutbox, poisonId, 1));
+        }
+        store.failNextQuestionUpdate = true;
+        ArchiveQuestionWorker worker = worker(provider);
+        assertTrue(worker.runOnce(), "a later healthy row in the same page should still make progress");
+        assertEquals("QUEUED", store.findQuestion(OWNER, ID, false).status());
+        assertEquals("SUCCEEDED", store.findQuestion(OWNER, healthyId, false).status());
+
+        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "later-tail");
+        String tailId = "c23e4567-e89b-42d3-a456-426614174000";
+        store.setQuestion(tail, questionWith(base, tailId, "QUEUED", 1));
+        store.setOutbox(tail, readyOutbox(baseOutbox, tailId, 1));
+        assertTrue(worker.runOnce(), "the prior failure must retain reliable retry responsibility");
+        assertEquals("SUCCEEDED", store.findQuestion(OWNER, ID, false).status());
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    void transientOldExpiredFailureIsRetriedBySweepDespiteContinuousTail() {
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        store.setQuestion(OWNER, questionWith(base, ID, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(20)));
+        for (int index = 0; index < ArchiveQuestionWorker.CANDIDATE_BATCH - 1; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "expired-head-" + index);
+            String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 512);
+            store.setQuestion(poison, questionWith(base, poisonId, "RUNNING", 2));
+            store.setOutbox(poison, exhaustedOutbox(
+                    baseOutbox, poisonId, 2, NOW.minusSeconds(19).plusMillis(index)));
+        }
+        store.failNextQuestionUpdate = true;
+        ArchiveQuestionWorker worker = worker(provider);
+        int beforeQueries = store.exhaustedCandidateQueries;
+        assertFalse(worker.runOnce());
+        assertTrue(store.exhaustedCandidateQueries - beforeQueries <= 1);
+        assertEquals("RUNNING", store.findQuestion(OWNER, ID, false).status());
+
+        ArchiveOwnerScope tail = new ArchiveOwnerScope(OWNER.tenantId(), OWNER.clientId(), "expired-tail");
+        String tailId = "a23e4567-e89b-42d3-a456-426614174000";
+        store.setQuestion(tail, questionWith(base, tailId, "RUNNING", 2));
+        store.setOutbox(tail, exhaustedOutbox(baseOutbox, tailId, 2, NOW.minusSeconds(1)));
+        beforeQueries = store.exhaustedCandidateQueries;
+        assertTrue(worker.runOnce(), "the expired retry sweep must revisit the old row under a growing tail");
+        assertTrue(store.exhaustedCandidateQueries - beforeQueries <= 1);
+        assertEquals("FAILED_FINAL", store.findQuestion(OWNER, ID, false).status());
+        assertEquals("DONE", store.findOutbox(OWNER, ID, false).state());
+    }
+
+    @Test
     void blockingQuestionSinkCannotDelayHttpProviderCompletionOrLeaseRenewal() throws Exception {
         CountDownLatch sinkEntered = new CountDownLatch(1);
         CountDownLatch releaseSink = new CountDownLatch(1);

@@ -47,7 +47,7 @@ final class ArchiveQuestionTestSupport {
         @Override public List<NoteRecord> listNotes(ArchiveOwnerScope owner, String editionId, String blockId, Long beforeRowId, int limit) { throw new UnsupportedOperationException(); }
     }
 
-    static final class Store implements ArchiveQuestionStore {
+    static class Store implements ArchiveQuestionStore {
         private final Map<String, MutationRecord> mutations = new LinkedHashMap<>();
         private final Map<String, QuestionRecord> questions = new LinkedHashMap<>();
         private final Map<String, List<EventRecord>> events = new LinkedHashMap<>();

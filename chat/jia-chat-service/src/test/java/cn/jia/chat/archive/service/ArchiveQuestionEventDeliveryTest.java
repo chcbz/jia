@@ -14,7 +14,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -176,6 +178,51 @@ class ArchiveQuestionEventDeliveryTest {
     }
 
     @Test
+    void alreadyInFlightReadFailureKeepsDurableCandidateReachableUnderContinuousTail() throws Exception {
+        ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
+        FailingFirstReadTransactions transactions = new FailingFirstReadTransactions();
+        ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
+        seedQuestionAndOutbox(store, OWNER, ID, 1, 0);
+        EventRecord first = new EventRecord(0, ID, 1, "QUESTION_QUEUED", "{}", NOW);
+        store.insertEvent(OWNER, first);
+        List<Long> observed = new CopyOnWriteArrayList<>();
+        broker.subscribe(OWNER, ID, event -> observed.add(event.sequence()));
+        try {
+            delivery.afterCommit(OWNER, first);
+            assertTrue(transactions.readEntered.await(2, TimeUnit.SECONDS));
+            assertEquals(0, delivery.recoverOnce(),
+                    "an in-flight task is not durable progress and must remain at the cursor head");
+            for (int index = 0; index < 20; index++) {
+                String newerId = String.format("%08x-0000-4000-8000-000000000000", index + 64);
+                seedQuestionAndOutbox(store, OWNER, newerId, 1, 0);
+                store.insertEvent(OWNER, new EventRecord(
+                        0, newerId, 1, "QUESTION_QUEUED", "{}", NOW));
+                assertEquals(0, delivery.recoverOnce());
+            }
+
+            transactions.releaseFailedRead.countDown();
+            int tail = 512;
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (store.findOutbox(OWNER, ID, false).publishedSequence() == 0
+                    && System.nanoTime() < deadline) {
+                String newerId = String.format("%08x-0000-4000-8000-000000000000", tail++);
+                seedQuestionAndOutbox(store, OWNER, newerId, 1, 0);
+                store.insertEvent(OWNER, new EventRecord(
+                        0, newerId, 1, "QUESTION_QUEUED", "{}", NOW));
+                delivery.recoverOnce();
+                Thread.sleep(5);
+            }
+            assertEquals(1, store.findOutbox(OWNER, ID, false).publishedSequence());
+            assertEquals(List.of(1L), observed,
+                    "A must be selected again after its failed in-flight read despite a growing tail");
+        } finally {
+            transactions.releaseFailedRead.countDown();
+            delivery.stop();
+        }
+    }
+
+    @Test
     void capacityRejectedRecoveryCandidateStaysReachableWhileNewRowsKeepArriving() throws Exception {
         ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
         ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
@@ -269,6 +316,26 @@ class ArchiveQuestionEventDeliveryTest {
                 "", 0, null, 1, sequence, NOW, NOW, null));
         store.setOutbox(owner, new OutboxRecord(2, questionId, "READY", 0, 0, published,
                 NOW, null, null, NOW, NOW));
+    }
+
+    private static final class FailingFirstReadTransactions implements ArchiveTransactions {
+        private final AtomicBoolean failFirstRead = new AtomicBoolean(true);
+        private final CountDownLatch readEntered = new CountDownLatch(1);
+        private final CountDownLatch releaseFailedRead = new CountDownLatch(1);
+        @Override public <T> T required(Supplier<T> action) { return action.get(); }
+        @Override public <T> T requiresNew(Supplier<T> action) {
+            if (failFirstRead.compareAndSet(true, false)) {
+                readEntered.countDown();
+                try {
+                    releaseFailedRead.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new IllegalStateException("injected in-flight durable read failure");
+            }
+            return action.get();
+        }
+        @Override public void afterCommit(Runnable action) { action.run(); }
     }
 
     private boolean waitUntil(BooleanSupplier condition, Duration timeout) {

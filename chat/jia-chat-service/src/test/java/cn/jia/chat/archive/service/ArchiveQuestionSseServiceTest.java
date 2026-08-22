@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -19,10 +20,13 @@ import java.util.List;
 import java.util.Queue;
 import java.time.Duration;
 import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -33,6 +37,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ArchiveQuestionSseServiceTest {
     private static final String ID = "123e4567-e89b-42d3-a456-426614174000";
     private static final ArchiveOwnerScope OWNER = new ArchiveOwnerScope("owner-a", "client-a", "owner-a");
+    private static final ArchiveOwnerScope OWNER_B = new ArchiveOwnerScope("owner-b", "client-b", "owner-b");
+    private static final ArchiveOwnerScope OWNER_C = new ArchiveOwnerScope("owner-c", "client-c", "owner-c");
     private static final ArchiveOwnerScope FOREIGN = new ArchiveOwnerScope("owner-a", "client-b", "owner-a");
     private static final Instant NOW = Instant.parse("2026-08-22T12:00:00Z");
 
@@ -49,7 +55,7 @@ class ArchiveQuestionSseServiceTest {
         replay = new ManualExecutor();
         heartbeat = new CapturingScheduler();
         service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat,
-                ignored -> ArchiveQuestionSseService.directOutbound());
+                (ignored, terminated) -> ArchiveQuestionSseService.directOutbound(terminated));
     }
 
     @AfterEach
@@ -177,7 +183,7 @@ class ArchiveQuestionSseServiceTest {
         handle.close();
         assertTrue(handle.closed());
         assertEquals(0, service.activeSubscriptions());
-        assertTrue(replay.cancelledTasks() >= 1);
+        assertEquals(0, service.pendingReplays());
         replay.runAll();
         broker.publish(OWNER, new EventRecord(0, ID, 2, "QUESTION_RUNNING", payload("QUESTION_RUNNING"), NOW));
         assertTrue(sink.events.isEmpty());
@@ -310,6 +316,148 @@ class ArchiveQuestionSseServiceTest {
     }
 
     @Test
+    void ownerAndGlobalAdmissionBoundsRejectWithoutLeakingAndRecoverAfterRelease() {
+        service.stop();
+        replay = new ManualExecutor();
+        heartbeat = new CapturingScheduler();
+        ArchiveQuestionSseService.AdmissionLimits limits = new ArchiveQuestionSseService.AdmissionLimits(
+                3, 2, 2, 1, 3, 2);
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(OWNER, OWNER_B, OWNER_C),
+                replay, heartbeat,
+                (ignored, terminated) -> ArchiveQuestionSseService.directOutbound(terminated), limits);
+        String a1 = "10000001-0000-4000-8000-000000000000";
+        String a2 = "10000002-0000-4000-8000-000000000000";
+        String b1 = "20000001-0000-4000-8000-000000000000";
+        String c1 = "30000001-0000-4000-8000-000000000000";
+        question(OWNER, a1, 0);
+        question(OWNER, a2, 0);
+        question(OWNER_B, b1, 0);
+        question(OWNER_C, c1, 0);
+
+        ArchiveQuestionSseService.StreamHandle first = service.subscribe(OWNER, a1, 0, new RecordingSink());
+        ArchivePersonalDataException ownerReplay = assertThrows(ArchivePersonalDataException.class,
+                () -> service.subscribe(OWNER, a2, 0, new RecordingSink()));
+        assertEquals(429, ownerReplay.status());
+        ArchiveQuestionSseService.StreamHandle second = service.subscribe(
+                OWNER_B, b1, 0, new RecordingSink());
+        ArchivePersonalDataException globalReplay = assertThrows(ArchivePersonalDataException.class,
+                () -> service.subscribe(OWNER_C, c1, 0, new RecordingSink()));
+        assertEquals(429, globalReplay.status());
+        assertEquals(2, service.admittedSessions());
+        assertEquals(2, service.pendingReplays());
+        assertEquals(2, service.admittedOutboundWriters());
+
+        replay.runAll();
+        ArchiveQuestionSseService.StreamHandle third = service.subscribe(OWNER, a2, 0, new RecordingSink());
+        ArchivePersonalDataException globalActive = assertThrows(ArchivePersonalDataException.class,
+                () -> service.subscribe(OWNER_C, c1, 0, new RecordingSink()));
+        assertEquals(429, globalActive.status());
+        second.close();
+        replay.runAll();
+        ArchiveQuestionSseService.StreamHandle fourth = service.subscribe(OWNER_C, c1, 0, new RecordingSink());
+
+        first.close();
+        third.close();
+        fourth.close();
+        replay.runAll();
+        assertEquals(0, service.admittedSessions());
+        assertEquals(0, service.pendingReplays());
+        assertEquals(0, service.admittedOutboundWriters());
+    }
+
+    @Test
+    void slowReplayAndUninterruptibleConnectionRemainStrictlyAdmittedAndCleanupIsBounded() throws Exception {
+        service.stop();
+        BlockingReplayStore blockingStore = new BlockingReplayStore();
+        store = blockingStore;
+        broker = new ArchiveQuestionEventBroker();
+        heartbeat = new CapturingScheduler();
+        ThreadPoolExecutor boundedReplay = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1), runnable -> {
+                    Thread thread = new Thread(runnable, "archive-question-replay-test");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+        ArchiveQuestionSseService.AdmissionLimits limits = new ArchiveQuestionSseService.AdmissionLimits(
+                2, 2, 2, 2, 2, 2);
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), boundedReplay, heartbeat,
+                (ignored, terminated) -> ArchiveQuestionSseService.serialOutbound(terminated), limits);
+        String slowConnectionId = "40000001-0000-4000-8000-000000000000";
+        String slowReplayId = "40000002-0000-4000-8000-000000000000";
+        String rejectedId = "40000003-0000-4000-8000-000000000000";
+        question(slowConnectionId, 1);
+        event(slowConnectionId, 1, "QUESTION_QUEUED");
+        CountDownLatch sendEntered = new CountDownLatch(1);
+        CountDownLatch releaseSend = new CountDownLatch(1);
+        UninterruptibleBlockingSink slowSink = new UninterruptibleBlockingSink(sendEntered, releaseSend);
+        ArchiveQuestionSseService.StreamHandle slowConnection = service.subscribe(
+                OWNER, slowConnectionId, 0, slowSink);
+        assertTrue(sendEntered.await(2, TimeUnit.SECONDS));
+
+        question(slowReplayId, 0);
+        blockingStore.blockReplay.set(true);
+        ArchiveQuestionSseService.StreamHandle slowReplay = service.subscribe(
+                OWNER, slowReplayId, 0, new RecordingSink());
+        assertTrue(blockingStore.replayEntered.await(2, TimeUnit.SECONDS));
+        question(rejectedId, 0);
+        long started = System.nanoTime();
+        ArchivePersonalDataException rejected = assertThrows(ArchivePersonalDataException.class,
+                () -> service.subscribe(OWNER, rejectedId, 0, new RecordingSink()));
+        assertEquals(429, rejected.status());
+        assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0);
+
+        started = System.nanoTime();
+        slowConnection.close();
+        slowReplay.close();
+        assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
+                "logical cleanup must not wait for blocked DB or network work");
+        assertEquals(0, service.admittedSessions());
+        assertEquals(1, service.admittedOutboundWriters(),
+                "a genuinely blocked writer retains its bounded permit until termination");
+        blockingStore.releaseReplay.countDown();
+        assertTrue(await(() -> service.pendingReplays() == 0, Duration.ofSeconds(2)));
+        releaseSend.countDown();
+        assertTrue(await(() -> service.admittedOutboundWriters() == 0, Duration.ofSeconds(2)));
+        assertEquals(0, service.activeSubscriptions());
+    }
+
+    @Test
+    void managedEmitterStopCompletesRealTransportExactlyOnceWithoutWaitingForBlockedSend() throws Exception {
+        service.stop();
+        replay = new ManualExecutor();
+        heartbeat = new CapturingScheduler();
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat);
+        question(1);
+        event(1, "QUESTION_QUEUED");
+        CountDownLatch sendEntered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        BlockingManagedEmitter emitter = new BlockingManagedEmitter(sendEntered, release);
+        service.subscribe(OWNER, ID, 0, new ArchiveQuestionSseService.EmitterSink(emitter));
+        replay.runAll();
+        assertTrue(sendEntered.await(2, TimeUnit.SECONDS));
+
+        long started = System.nanoTime();
+        service.stop();
+        assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
+                "stop must only perform logical cancellation");
+        assertTrue(emitter.closed());
+        assertTrue(emitter.transportEntered.await(2, TimeUnit.SECONDS));
+        assertEquals(1, emitter.cleanupCalls.get());
+        emitter.cancel();
+        emitter.complete();
+        assertEquals(1, emitter.transportCalls.get());
+        assertFalse(emitter.sendIfOpen(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                .comment("late")));
+        assertEquals(1, emitter.sendCalls.get());
+
+        release.countDown();
+        assertTrue(emitter.transportDone.await(2, TimeUnit.SECONDS));
+        Thread.sleep(50);
+        assertEquals(1, emitter.transportCalls.get());
+        assertEquals(1, emitter.sendCalls.get(), "closed emitters reject every late callback");
+    }
+
+    @Test
     void exactScopeAndFeatureGateConcealBeforeSubscription() {
         question(1);
         event(1, "QUESTION_QUEUED");
@@ -320,7 +468,7 @@ class ArchiveQuestionSseServiceTest {
 
         ArchiveQuestionSseService disabled = new ArchiveQuestionSseService(
                 store, broker, disabledPolicy(), new ManualExecutor(), new CapturingScheduler(),
-                ignored -> ArchiveQuestionSseService.directOutbound());
+                (ignored, terminated) -> ArchiveQuestionSseService.directOutbound(terminated));
         try {
             assertEquals(404, assertThrows(ArchivePersonalDataException.class,
                     () -> disabled.subscribe(OWNER, ID, 0, new RecordingSink())).status());
@@ -353,11 +501,12 @@ class ArchiveQuestionSseServiceTest {
         replay = new ManualExecutor();
         heartbeat = new CapturingScheduler();
         service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat,
-                ignored -> ArchiveQuestionSseService.directOutbound());
+                (ignored, terminated) -> ArchiveQuestionSseService.directOutbound(terminated));
     }
-    private void question(long sequence) { question(ID, sequence); }
-    private void question(String questionId, long sequence) {
-        store.setQuestion(OWNER, new QuestionRecord(1, questionId, "edition", "a".repeat(64), "CHAPTER", "block",
+    private void question(long sequence) { question(OWNER, ID, sequence); }
+    private void question(String questionId, long sequence) { question(OWNER, questionId, sequence); }
+    private void question(ArchiveOwnerScope owner, String questionId, long sequence) {
+        store.setQuestion(owner, new QuestionRecord(1, questionId, "edition", "a".repeat(64), "CHAPTER", "block",
                 "{}", "selected", "question", "QUEUED", "archive-clerk-v1", "案卷书吏", "fallback",
                 "", 0, null, Math.max(1, sequence), sequence, NOW, NOW, null));
     }
@@ -383,12 +532,18 @@ class ArchiveQuestionSseServiceTest {
         assertEquals(1, sink.resyncs);
         assertTrue(sink.closed);
     }
-    private ArchiveQuestionAccessPolicy enabledPolicy() {
+    private ArchiveQuestionAccessPolicy enabledPolicy() { return enabledPolicy(OWNER); }
+    private ArchiveQuestionAccessPolicy enabledPolicy(ArchiveOwnerScope... owners) {
         ArchiveReaderProperties properties = new ArchiveReaderProperties();
         properties.setEnabled(true);
-        ArchiveReaderProperties.AllowedScope scope = new ArchiveReaderProperties.AllowedScope();
-        scope.setTenantId(OWNER.tenantId()); scope.setClientId(OWNER.clientId());
-        properties.setAllowedScopes(new java.util.ArrayList<>(List.of(scope)));
+        List<ArchiveReaderProperties.AllowedScope> scopes = new ArrayList<>();
+        for (ArchiveOwnerScope owner : owners) {
+            ArchiveReaderProperties.AllowedScope scope = new ArchiveReaderProperties.AllowedScope();
+            scope.setTenantId(owner.tenantId());
+            scope.setClientId(owner.clientId());
+            scopes.add(scope);
+        }
+        properties.setAllowedScopes(scopes);
         ArchiveQuestionProperties question = new ArchiveQuestionProperties();
         question.setEnabled(true);
         return ArchiveQuestionAccessPolicy.from(question, ArchiveReaderAccessPolicy.from(properties));
@@ -455,6 +610,96 @@ class ArchiveQuestionSseServiceTest {
         @Override public void cancel() { closed = true; }
         @Override public boolean closed() { return closed; }
         void triggerContainerClose() { cleanup.run(); }
+    }
+
+    private static final class UninterruptibleBlockingSink implements ArchiveQuestionSseService.Sink {
+        private final CountDownLatch entered;
+        private final CountDownLatch release;
+        private volatile Runnable cleanup = () -> { };
+        private volatile boolean closed;
+        private UninterruptibleBlockingSink(CountDownLatch entered, CountDownLatch release) {
+            this.entered = entered;
+            this.release = release;
+        }
+        @Override public void onClose(Runnable cleanup) { this.cleanup = cleanup; }
+        @Override public boolean persisted(ArchiveQuestionEventDTO event) {
+            entered.countDown();
+            boolean interrupted = false;
+            while (release.getCount() != 0) {
+                try { release.await(); }
+                catch (InterruptedException ignored) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+            return !closed;
+        }
+        @Override public boolean resync(String questionId) { return !closed; }
+        @Override public boolean heartbeat() { return !closed; }
+        @Override public void complete() { closed = true; cleanup.run(); }
+        @Override public void cancel() { closed = true; }
+        @Override public boolean closed() { return closed; }
+    }
+
+    private static final class BlockingReplayStore extends ArchiveQuestionTestSupport.Store {
+        private final AtomicBoolean blockReplay = new AtomicBoolean();
+        private final CountDownLatch replayEntered = new CountDownLatch(1);
+        private final CountDownLatch releaseReplay = new CountDownLatch(1);
+        @Override public QuestionRecord findQuestion(ArchiveOwnerScope owner, String questionId, boolean lock) {
+            if (blockReplay.get() && Thread.currentThread().getName().startsWith("archive-question-replay")) {
+                replayEntered.countDown();
+                boolean interrupted = false;
+                while (releaseReplay.getCount() != 0) {
+                    try { releaseReplay.await(); }
+                    catch (InterruptedException ignored) { interrupted = true; }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+            return super.findQuestion(owner, questionId, lock);
+        }
+    }
+
+    private static final class BlockingManagedEmitter extends ArchiveQuestionSseService.ManagedSseEmitter {
+        private final CountDownLatch sendEntered;
+        private final CountDownLatch release;
+        private final CountDownLatch transportEntered = new CountDownLatch(1);
+        private final CountDownLatch transportDone = new CountDownLatch(1);
+        private final AtomicInteger sendCalls = new AtomicInteger();
+        private final AtomicInteger cleanupCalls = new AtomicInteger();
+        private final AtomicInteger transportCalls = new AtomicInteger();
+
+        private BlockingManagedEmitter(CountDownLatch sendEntered, CountDownLatch release) {
+            super(ArchiveQuestionSseService.SSE_TIMEOUT_MILLIS);
+            this.sendEntered = sendEntered;
+            this.release = release;
+        }
+
+        @Override void setCleanup(Runnable cleanup) {
+            super.setCleanup(() -> {
+                cleanupCalls.incrementAndGet();
+                cleanup.run();
+            });
+        }
+
+        @Override public void send(SseEventBuilder builder) throws IOException {
+            sendCalls.incrementAndGet();
+            sendEntered.countDown();
+            awaitRelease();
+        }
+
+        @Override void completeTransport(Throwable error) {
+            transportCalls.incrementAndGet();
+            transportEntered.countDown();
+            awaitRelease();
+            transportDone.countDown();
+        }
+
+        private void awaitRelease() {
+            boolean interrupted = false;
+            while (release.getCount() != 0) {
+                try { release.await(); }
+                catch (InterruptedException ignored) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+        }
     }
 
     private static final class ManualExecutor extends AbstractExecutorService {

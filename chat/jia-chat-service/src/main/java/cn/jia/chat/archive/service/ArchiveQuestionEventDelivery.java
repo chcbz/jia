@@ -82,9 +82,10 @@ public class ArchiveQuestionEventDelivery {
                 continue;
             }
             ScheduleResult result = schedule(new Key(candidate.owner(), candidate.questionId()));
-            if (result == ScheduleResult.CAPACITY_REJECTED) {
-                // The rejected durable row remains the next keyset candidate. Never advance across it:
-                // a continuously growing table must not make an old publication gap unreachable.
+            if (result == ScheduleResult.CAPACITY_REJECTED
+                    || result == ScheduleResult.ALREADY_IN_FLIGHT) {
+                // Neither executor admission nor in-memory ownership proves durable progress. Keep the
+                // row as the next keyset candidate until its watermark advances and removes it from the scan.
                 recoveryCursor.set(nextCursor);
                 return scheduled;
             }
