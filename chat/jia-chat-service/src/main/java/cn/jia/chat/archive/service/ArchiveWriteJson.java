@@ -47,6 +47,14 @@ final class ArchiveWriteJson {
     }
 
     Parsed parse(byte[] bytes, Class<?> type) {
+        return parse(bytes, type, false);
+    }
+
+    Parsed parseQuestion(byte[] bytes, Class<?> type) {
+        return parse(bytes, type, true);
+    }
+
+    private Parsed parse(byte[] bytes, Class<?> type, boolean rejectRouting) {
         if (bytes == null || bytes.length == 0 || bytes.length > MAX_REQUEST_BYTES
                 || startsWithBom(bytes)) invalidJson();
         try {
@@ -55,6 +63,10 @@ final class ArchiveWriteJson {
             JsonNode node = mapper.readTree(bytes);
             if (node == null || !node.isObject()) invalidJson();
             validateNode(node);
+            if (rejectRouting && containsRoutingField(node)) {
+                throw new ArchivePersonalDataException(422, "ROUTING_NOT_SUPPORTED",
+                        "Archive questions do not accept Agent routing fields");
+            }
             Object value = mapper.treeToValue(node, type);
             return new Parsed(value, canonical(node));
         } catch (CharacterCodingException failure) {
@@ -63,6 +75,31 @@ final class ArchiveWriteJson {
             if (failure instanceof ArchivePersonalDataException personal) throw personal;
             throw invalidJsonException();
         }
+    }
+
+    private boolean containsRoutingField(JsonNode node) {
+        if (node.isObject()) {
+            var names = node.fieldNames();
+            while (names.hasNext()) {
+                String name = names.next();
+                String normalized = name.toLowerCase(java.util.Locale.ROOT)
+                        .replace("_", "").replace("-", "");
+                if (normalized.equals("name") || normalized.equals("target")
+                        || normalized.contains("agent") || normalized.contains("role")
+                        || normalized.contains("persona") || normalized.contains("responder")
+                        || normalized.contains("routing") || normalized.contains("route")
+                        || normalized.contains("assignee") || name.contains("角色")
+                        || name.contains("吴用") || name.contains("案卷书吏")) {
+                    return true;
+                }
+                if (containsRoutingField(node.get(name))) return true;
+            }
+            return false;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) if (containsRoutingField(child)) return true;
+        }
+        return false;
     }
 
     byte[] canonicalNode(JsonNode node) {

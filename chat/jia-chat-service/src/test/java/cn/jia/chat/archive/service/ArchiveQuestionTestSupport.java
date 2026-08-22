@@ -1,0 +1,257 @@
+package cn.jia.chat.archive.service;
+
+import cn.jia.chat.archive.model.ArchiveOwnerScope;
+import cn.jia.chat.archive.store.ArchivePersonalDataStore;
+import cn.jia.chat.archive.store.ArchiveQuestionStore;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
+
+final class ArchiveQuestionTestSupport {
+    private ArchiveQuestionTestSupport() { }
+
+    static final class Content implements ArchivePersonalDataStore {
+        ActiveEdition active;
+        final Map<String, ContentPoint> points = new LinkedHashMap<>();
+        @Override public ActiveEdition lockActiveEdition(String editionId) {
+            return active != null && active.editionId().equals(editionId) ? active : null;
+        }
+        @Override public ContentPoint lockContentPoint(String editionId, String blockId, String paragraphId) {
+            ContentPoint point = points.get(paragraphId);
+            return point != null && point.editionId().equals(editionId) && point.blockId().equals(blockId) ? point : null;
+        }
+        @Override public List<ContentPoint> lockBlockParagraphs(String editionId, String blockId, List<String> ids) {
+            return ids.stream().distinct().map(points::get).filter(java.util.Objects::nonNull)
+                    .filter(point -> point.editionId().equals(editionId) && point.blockId().equals(blockId))
+                    .sorted(Comparator.comparingInt(ContentPoint::paragraphOrdinal)).toList();
+        }
+        @Override public IdempotencyRecord insertOrLockIdempotency(ArchiveOwnerScope owner, String method, String path, String key, String hash, Instant expiresAt) { throw new UnsupportedOperationException(); }
+        @Override public int completeIdempotency(ArchiveOwnerScope owner, long rowId, String hash, int status, String contentType, byte[] body) { throw new UnsupportedOperationException(); }
+        @Override public ProgressRecord findProgress(ArchiveOwnerScope owner, String editionId, boolean lock) { throw new UnsupportedOperationException(); }
+        @Override public void insertProgress(ArchiveOwnerScope owner, ProgressRecord row) { throw new UnsupportedOperationException(); }
+        @Override public int updateProgress(ArchiveOwnerScope owner, ProgressRecord row, long expectedVersion) { throw new UnsupportedOperationException(); }
+        @Override public BookmarkRecord findBookmark(ArchiveOwnerScope owner, String bookmarkId, boolean lock) { throw new UnsupportedOperationException(); }
+        @Override public void insertBookmark(ArchiveOwnerScope owner, BookmarkRecord row) { throw new UnsupportedOperationException(); }
+        @Override public int updateBookmark(ArchiveOwnerScope owner, BookmarkRecord row, long expectedVersion) { throw new UnsupportedOperationException(); }
+        @Override public List<BookmarkRecord> listBookmarks(ArchiveOwnerScope owner, String editionId, Long beforeRowId, int limit) { throw new UnsupportedOperationException(); }
+        @Override public NoteRecord findNote(ArchiveOwnerScope owner, String noteId, boolean lock) { throw new UnsupportedOperationException(); }
+        @Override public void insertNote(ArchiveOwnerScope owner, NoteRecord row) { throw new UnsupportedOperationException(); }
+        @Override public int updateNote(ArchiveOwnerScope owner, NoteRecord row, long expectedVersion) { throw new UnsupportedOperationException(); }
+        @Override public List<NoteRecord> listNotes(ArchiveOwnerScope owner, String editionId, String blockId, Long beforeRowId, int limit) { throw new UnsupportedOperationException(); }
+    }
+
+    static final class Store implements ArchiveQuestionStore {
+        private final Map<String, MutationRecord> mutations = new LinkedHashMap<>();
+        private final Map<String, QuestionRecord> questions = new LinkedHashMap<>();
+        private final Map<String, List<EventRecord>> events = new LinkedHashMap<>();
+        private final Map<String, OutboxRecord> outboxes = new LinkedHashMap<>();
+        private long rows;
+        int mutationReservations;
+        int questionInserts;
+        int eventInserts;
+        int outboxInserts;
+        boolean failNextQuestionUpdate;
+        boolean failNextEventInsert;
+
+        @Override public MutationRecord insertOrLockMutation(ArchiveOwnerScope owner, String questionId, String method,
+                String path, String key, String hash, Instant expiresAt) {
+            mutationReservations++;
+            String compound = mutationKey(owner, method, path, key);
+            MutationRecord existing = mutations.get(compound);
+            if (existing != null) return new MutationRecord(existing.rowId(), false, existing.questionId(),
+                    existing.requestSha256(), existing.state(), existing.questionRowId(), existing.responseStatus(),
+                    existing.responseContentType(), clone(existing.responseBody()));
+            MutationRecord created = new MutationRecord(++rows, true, questionId, hash, "PENDING",
+                    null, null, null, null);
+            mutations.put(compound, created);
+            return created;
+        }
+        @Override public int completeMutation(ArchiveOwnerScope owner, long rowId, String hash, long questionRowId,
+                int status, String contentType, byte[] body) {
+            for (var entry : mutations.entrySet()) {
+                MutationRecord row = entry.getValue();
+                if (row.rowId() == rowId && row.requestSha256().equals(hash) && "PENDING".equals(row.state())) {
+                    entry.setValue(new MutationRecord(rowId, false, row.questionId(), hash, "COMPLETED",
+                            questionRowId, status, contentType, clone(body)));
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        @Override public long countRecentQuestions(ArchiveOwnerScope owner, Instant since) {
+            return questions.entrySet().stream().filter(entry -> entry.getKey().startsWith(scope(owner) + "\n"))
+                    .map(Map.Entry::getValue).filter(row -> !row.createdAt().isBefore(since)).count();
+        }
+        @Override public QuestionRecord findQuestion(ArchiveOwnerScope owner, String questionId, boolean lock) {
+            return questions.get(questionKey(owner, questionId));
+        }
+        @Override public long insertQuestion(ArchiveOwnerScope owner, QuestionRecord question) {
+            String key = questionKey(owner, question.questionId());
+            if (questions.containsKey(key)) return 0;
+            long rowId = ++rows;
+            questions.put(key, withRowId(question, rowId));
+            questionInserts++;
+            return rowId;
+        }
+        @Override public int updateQuestion(ArchiveOwnerScope owner, QuestionRecord row, long expectedVersion, long expectedSequence) {
+            if (failNextQuestionUpdate) { failNextQuestionUpdate = false; throw new IllegalStateException("injected question persistence failure"); }
+            String key = questionKey(owner, row.questionId());
+            QuestionRecord current = questions.get(key);
+            if (current == null || current.version() != expectedVersion || current.currentSequence() != expectedSequence) return 0;
+            questions.put(key, row);
+            return 1;
+        }
+        @Override public void insertEvent(ArchiveOwnerScope owner, EventRecord event) {
+            if (failNextEventInsert) { failNextEventInsert = false; throw new IllegalStateException("injected event persistence failure"); }
+            String key = questionKey(owner, event.questionId());
+            List<EventRecord> rowsForQuestion = events.computeIfAbsent(key, ignored -> new ArrayList<>());
+            if (rowsForQuestion.stream().anyMatch(row -> row.sequence() == event.sequence())) throw new IllegalStateException("duplicate sequence");
+            rowsForQuestion.add(new EventRecord(++rows, event.questionId(), event.sequence(), event.eventType(), event.payloadJson(), event.occurredAt()));
+            rowsForQuestion.sort(Comparator.comparingLong(EventRecord::sequence));
+            eventInserts++;
+        }
+        @Override public List<EventRecord> listEvents(ArchiveOwnerScope owner, String questionId, long after, long through, int limit) {
+            return events.getOrDefault(questionKey(owner, questionId), List.of()).stream()
+                    .filter(row -> row.sequence() > after && row.sequence() <= through)
+                    .sorted(Comparator.comparingLong(EventRecord::sequence)).limit(limit).toList();
+        }
+        @Override public Long earliestEventSequence(ArchiveOwnerScope owner, String questionId) {
+            var minimum = events.getOrDefault(questionKey(owner, questionId), List.of()).stream()
+                    .mapToLong(EventRecord::sequence).min();
+            return minimum.isPresent() ? minimum.getAsLong() : null;
+        }
+        @Override public void insertOutbox(ArchiveOwnerScope owner, OutboxRecord row) {
+            String key = questionKey(owner, row.questionId());
+            if (outboxes.containsKey(key)) throw new IllegalStateException("duplicate outbox");
+            outboxes.put(key, withRowId(row, ++rows));
+            outboxInserts++;
+        }
+        @Override public OutboxRecord findOutbox(ArchiveOwnerScope owner, String questionId, boolean lock) {
+            return outboxes.get(questionKey(owner, questionId));
+        }
+        @Override public int updateOutbox(ArchiveOwnerScope owner, OutboxRecord row, long expectedToken, String expectedState) {
+            String key = questionKey(owner, row.questionId());
+            OutboxRecord current = outboxes.get(key);
+            if (current == null || current.fencingToken() != expectedToken || !current.state().equals(expectedState)) return 0;
+            outboxes.put(key, row);
+            return 1;
+        }
+        @Override public ClaimCandidate findClaimCandidate(Instant now) {
+            return outboxes.entrySet().stream().filter(entry -> {
+                OutboxRecord row = entry.getValue();
+                return row.attemptCount() < 3 && !row.availableAt().isAfter(now)
+                        && ("READY".equals(row.state()) || ("LEASED".equals(row.state())
+                        && row.leaseUntil() != null && !row.leaseUntil().isAfter(now)));
+            }).sorted(Comparator.comparing((Map.Entry<String, OutboxRecord> entry) -> entry.getValue().availableAt())
+                    .thenComparingLong(entry -> entry.getValue().rowId()))
+                    .map(entry -> candidate(entry.getKey())).findFirst().orElse(null);
+        }
+        @Override public ClaimCandidate findExhaustedCandidate(Instant now) {
+            return outboxes.entrySet().stream().filter(entry -> {
+                OutboxRecord row = entry.getValue();
+                return "LEASED".equals(row.state()) && row.attemptCount() >= 3
+                        && row.leaseUntil() != null && !row.leaseUntil().isAfter(now);
+            }).map(entry -> candidate(entry.getKey())).findFirst().orElse(null);
+        }
+        @Override public List<PublishCandidate> findPublishCandidates(int limit) {
+            return outboxes.entrySet().stream().map(entry -> {
+                QuestionRecord question = questions.get(entry.getKey());
+                OutboxRecord outbox = entry.getValue();
+                if (question == null || outbox.publishedSequence() >= question.currentSequence()) return null;
+                ClaimCandidate parsed = candidate(entry.getKey());
+                return new PublishCandidate(parsed.owner(), parsed.questionId(), outbox.publishedSequence(), question.currentSequence());
+            }).filter(java.util.Objects::nonNull).limit(limit).toList();
+        }
+        @Override public int advancePublishedSequence(ArchiveOwnerScope owner, String questionId, long expected, long delivered) {
+            String key = questionKey(owner, questionId);
+            OutboxRecord row = outboxes.get(key);
+            if (row == null || row.publishedSequence() != expected) return 0;
+            outboxes.put(key, new OutboxRecord(row.rowId(), row.questionId(), row.state(), row.attemptCount(),
+                    row.fencingToken(), delivered, row.availableAt(), row.leaseUntil(), row.lastErrorCode(),
+                    row.createdAt(), row.updatedAt()));
+            return 1;
+        }
+
+        void deleteEvent(ArchiveOwnerScope owner, String questionId, long sequence) {
+            List<EventRecord> rowsForQuestion = events.get(questionKey(owner, questionId));
+            if (rowsForQuestion != null) rowsForQuestion.removeIf(row -> row.sequence() == sequence);
+        }
+        void setQuestion(ArchiveOwnerScope owner, QuestionRecord row) { questions.put(questionKey(owner, row.questionId()), row); }
+        void setOutbox(ArchiveOwnerScope owner, OutboxRecord row) { outboxes.put(questionKey(owner, row.questionId()), row); }
+        void removeQuestionAndOutbox(ArchiveOwnerScope owner, String questionId) {
+            questions.remove(questionKey(owner, questionId));
+            outboxes.remove(questionKey(owner, questionId));
+        }
+        List<EventRecord> allEvents(ArchiveOwnerScope owner, String id) { return List.copyOf(events.getOrDefault(questionKey(owner, id), List.of())); }
+
+        Snapshot snapshot() {
+            return new Snapshot(new LinkedHashMap<>(mutations), new LinkedHashMap<>(questions), copyEvents(events),
+                    new LinkedHashMap<>(outboxes), rows, mutationReservations, questionInserts, eventInserts, outboxInserts);
+        }
+        void restore(Snapshot snapshot) {
+            mutations.clear(); mutations.putAll(snapshot.mutations());
+            questions.clear(); questions.putAll(snapshot.questions());
+            events.clear(); events.putAll(copyEvents(snapshot.events()));
+            outboxes.clear(); outboxes.putAll(snapshot.outboxes());
+            rows = snapshot.rows(); mutationReservations = snapshot.mutationReservations();
+            questionInserts = snapshot.questionInserts(); eventInserts = snapshot.eventInserts(); outboxInserts = snapshot.outboxInserts();
+        }
+        private static Map<String, List<EventRecord>> copyEvents(Map<String, List<EventRecord>> source) {
+            Map<String, List<EventRecord>> copy = new LinkedHashMap<>();
+            source.forEach((key, value) -> copy.put(key, new ArrayList<>(value)));
+            return copy;
+        }
+        private QuestionRecord withRowId(QuestionRecord row, long id) { return new QuestionRecord(id, row.questionId(), row.editionId(), row.manifestSha256(), row.blockType(), row.blockId(), row.anchorJson(), row.selectedText(), row.questionText(), row.status(), row.responderId(), row.responderName(), row.responderMode(), row.answer(), row.retryCount(), row.lastErrorCode(), row.version(), row.currentSequence(), row.createdAt(), row.updatedAt(), row.completedAt()); }
+        private OutboxRecord withRowId(OutboxRecord row, long id) { return new OutboxRecord(id, row.questionId(), row.state(), row.attemptCount(), row.fencingToken(), row.publishedSequence(), row.availableAt(), row.leaseUntil(), row.lastErrorCode(), row.createdAt(), row.updatedAt()); }
+        private ClaimCandidate candidate(String key) {
+            String[] parts = key.split("\\n", 4);
+            return new ClaimCandidate(new ArchiveOwnerScope(parts[0], parts[1], parts[2]), parts[3]);
+        }
+        private String mutationKey(ArchiveOwnerScope owner, String method, String path, String key) { return scope(owner) + "\n" + method + "\n" + path + "\n" + key; }
+        private String questionKey(ArchiveOwnerScope owner, String id) { return scope(owner) + "\n" + id; }
+        private String scope(ArchiveOwnerScope owner) { return owner.tenantId() + "\n" + owner.clientId() + "\n" + owner.ownerJiacn(); }
+        private byte[] clone(byte[] value) { return value == null ? null : value.clone(); }
+
+        record Snapshot(Map<String, MutationRecord> mutations, Map<String, QuestionRecord> questions,
+                        Map<String, List<EventRecord>> events, Map<String, OutboxRecord> outboxes,
+                        long rows, int mutationReservations, int questionInserts, int eventInserts, int outboxInserts) { }
+    }
+
+    static final class Transactions implements ArchiveTransactions {
+        private final Store store;
+        private final ThreadLocal<List<Runnable>> callbacks = new ThreadLocal<>();
+        boolean failAfterCommitOnce;
+        Transactions(Store store) { this.store = store; }
+        @Override public <T> T required(Supplier<T> action) {
+            Store.Snapshot snapshot = store.snapshot();
+            List<Runnable> prior = callbacks.get();
+            List<Runnable> current = new ArrayList<>();
+            callbacks.set(current);
+            T result;
+            try { result = action.get(); }
+            catch (Throwable failure) {
+                store.restore(snapshot);
+                callbacks.set(prior);
+                throw failure;
+            }
+            callbacks.set(prior);
+            for (Runnable callback : current) callback.run();
+            if (failAfterCommitOnce) {
+                failAfterCommitOnce = false;
+                throw new IllegalStateException("injected response loss after commit");
+            }
+            return result;
+        }
+        @Override public void afterCommit(Runnable action) {
+            List<Runnable> current = callbacks.get();
+            if (current == null) throw new IllegalStateException("afterCommit outside transaction");
+            current.add(action);
+        }
+    }
+}
