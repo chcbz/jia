@@ -10,6 +10,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ArchiveMySqlTestGuardTest {
     @Test
+    void mysqlConnectorDriverIsAvailableToIsolatedTestRuntime() throws Exception {
+        assertEquals("com.mysql.cj.jdbc.Driver",
+                Class.forName("com.mysql.cj.jdbc.Driver").getName());
+    }
+
+    @Test
     void acceptsOnlyExactAcknowledgedDisposableLoopbackDatabase() {
         Map<String, String> environment = validEnvironment();
         ArchiveMySqlTestGuard.Target target = ArchiveMySqlTestGuard.requireDisposable(environment);
