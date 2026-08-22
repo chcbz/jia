@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -67,6 +68,54 @@ class ArchiveSchemaInitializerTest {
     }
 
     @Test
+    void mysql8021CharsetIntroducersNormalizeWithoutChangingQuotedLiteralCase() {
+        String rendered = "(`import_state` in (_utf8mb4\\'STAGING\\',_utf8mb4\\'READY\\'))";
+
+        assertEquals("import_statein('STAGING','READY')",
+                ArchiveSchemaCatalog.normalizeCheck(rendered));
+        assertEquals("import_statein('staging','ready')",
+                ArchiveSchemaCatalog.normalizeCheck(
+                        "(`import_state` in (_utf8mb4\\'staging\\',_utf8mb4\\'ready\\'))"));
+    }
+
+    @Test
+    void mysql8021CheckClauseNormalizationIsIdempotent() {
+        String rendered = "(`import_state` in (_utf8mb4\\'STAGING\\',_utf8mb4\\'READY\\'))";
+        String normalized = ArchiveSchemaCatalog.normalizeCheck(rendered);
+
+        assertEquals(normalized, ArchiveSchemaCatalog.normalizeCheck(normalized));
+    }
+
+    @Test
+    void mysql8021RenderedChecksValidateAgainstCatalog() {
+        ArchiveSchemaSnapshot expected = ArchiveSchemaCatalog.expectedSnapshot();
+        var tables = new LinkedHashMap<>(expected.tables());
+        tables.put("archive_edition", withChecks(expected.tables().get("archive_edition"),
+                "chk_archive_edition_counts",
+                "((`chapter_count` = 120) and (`preface_paragraph_count` >= 1) and "
+                        + "(`chapter_paragraph_count` >= 1) and (`reader_paragraph_count` = "
+                        + "(`preface_paragraph_count` + `chapter_paragraph_count`)) and "
+                        + "(`source_utf8_byte_length` > 0) and (`preface_utf8_byte_length` > 0) and "
+                        + "(`chapter_utf8_byte_length` > 0) and (`reader_utf8_byte_length` = "
+                        + "(`preface_utf8_byte_length` + `chapter_utf8_byte_length`)))",
+                "chk_archive_edition_state",
+                "(`import_state` in (_utf8mb4\\'STAGING\\',_utf8mb4\\'READY\\'))"));
+        tables.put("archive_chapter", withChecks(expected.tables().get("archive_chapter"),
+                "chk_archive_chapter_metrics",
+                "((`paragraph_count` > 0) and (`utf8_byte_length` > 0))",
+                "chk_archive_chapter_shape",
+                "(((`block_type` = _utf8mb4\\'PREFACE\\') and (`reader_ordinal` = 0) and "
+                        + "(`chapter_number` is null)) or ((`block_type` = _utf8mb4\\'CHAPTER\\') and "
+                        + "(`reader_ordinal` between 1 and 120) and "
+                        + "(`chapter_number` = `reader_ordinal`)))"));
+        tables.put("archive_paragraph", withChecks(expected.tables().get("archive_paragraph"),
+                "chk_archive_paragraph_metrics",
+                "((`ordinal` >= 1) and (`utf8_byte_length` > 0))"));
+
+        assertDoesNotThrow(() -> ArchiveSchemaCatalog.validate(new ArchiveSchemaSnapshot(tables)));
+    }
+
+    @Test
     void disabledCheckAndBinaryLiteralCaseDriftFailClosed() {
         ArchiveSchemaSnapshot expected = ArchiveSchemaCatalog.expectedSnapshot();
         ArchiveSchemaSnapshot.TableSnapshot edition = expected.tables().get("archive_edition");
@@ -91,6 +140,16 @@ class ArchiveSchemaInitializerTest {
                 () -> ArchiveSchemaInitializer.requireAllOrNoneTables(
                         java.util.Set.of("archive_work", "archive_edition")));
         assertTrue(failure.getMessage().contains("partial"), failure.getMessage());
+    }
+
+    private ArchiveSchemaSnapshot.TableSnapshot withChecks(
+            ArchiveSchemaSnapshot.TableSnapshot table, String... namesAndClauses) {
+        var checks = new LinkedHashMap<String, ArchiveSchemaSnapshot.CheckSnapshot>();
+        for (int index = 0; index < namesAndClauses.length; index += 2) {
+            checks.put(namesAndClauses[index],
+                    new ArchiveSchemaSnapshot.CheckSnapshot(namesAndClauses[index + 1], true));
+        }
+        return table.withChecks(checks);
     }
 
     private void assertColumnDrift(ArchiveSchemaSnapshot expected,

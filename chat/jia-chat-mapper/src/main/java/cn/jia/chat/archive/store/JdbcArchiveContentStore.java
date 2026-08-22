@@ -25,9 +25,10 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
             rs.getLong("reader_utf8_byte_length"));
     private static final RowMapper<ArchiveBlockRecord> BLOCK_MAPPER = (rs, rowNum) -> {
         int number = rs.getInt("chapter_number");
+        Integer chapterNumber = rs.wasNull() ? null : number;
         return new ArchiveBlockRecord(rs.getString("edition_id"), rs.getString("block_id"),
                 rs.getString("block_type"), rs.getInt("reader_ordinal"),
-                rs.wasNull() ? null : number, rs.getString("title"), rs.getInt("paragraph_count"),
+                chapterNumber, rs.getString("title"), rs.getInt("paragraph_count"),
                 rs.getLong("utf8_byte_length"), rs.getString("block_content_sha256"));
     };
     private static final RowMapper<ArchiveParagraphRecord> PARAGRAPH_MAPPER = (rs, rowNum) ->

@@ -7,10 +7,12 @@ import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -102,14 +104,19 @@ class ArchiveMySqlIntegrationTest {
     }
 
     private void clean() {
-        jdbc.execute("SET FOREIGN_KEY_CHECKS=0");
-        try {
-            jdbc.execute("DROP TABLE IF EXISTS archive_paragraph");
-            jdbc.execute("DROP TABLE IF EXISTS archive_chapter");
-            jdbc.execute("DROP TABLE IF EXISTS archive_edition");
-            jdbc.execute("DROP TABLE IF EXISTS archive_work");
-        } finally {
-            jdbc.execute("SET FOREIGN_KEY_CHECKS=1");
-        }
+        jdbc.execute((ConnectionCallback<Void>) connection -> {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("SET FOREIGN_KEY_CHECKS=0");
+                try {
+                    statement.execute("DROP TABLE IF EXISTS archive_paragraph");
+                    statement.execute("DROP TABLE IF EXISTS archive_chapter");
+                    statement.execute("DROP TABLE IF EXISTS archive_edition");
+                    statement.execute("DROP TABLE IF EXISTS archive_work");
+                } finally {
+                    statement.execute("SET FOREIGN_KEY_CHECKS=1");
+                }
+            }
+            return null;
+        });
     }
 }

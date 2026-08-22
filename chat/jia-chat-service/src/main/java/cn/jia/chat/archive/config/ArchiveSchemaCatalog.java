@@ -57,7 +57,7 @@ public final class ArchiveSchemaCatalog {
                         "archive_work", List.of("work_id"))),
                 checks(
                         "chk_archive_edition_state", "import_state in ('STAGING','READY')",
-                        "chk_archive_edition_counts", "chapter_count=120 and preface_paragraph_count>=1 and chapter_paragraph_count>=1 and reader_paragraph_count=preface_paragraph_count+chapter_paragraph_count and source_utf8_byte_length>0 and preface_utf8_byte_length>0 and chapter_utf8_byte_length>0 and reader_utf8_byte_length=preface_utf8_byte_length+chapter_utf8_byte_length")));
+                        "chk_archive_edition_counts", "(chapter_count=120) and (preface_paragraph_count>=1) and (chapter_paragraph_count>=1) and (reader_paragraph_count=(preface_paragraph_count+chapter_paragraph_count)) and (source_utf8_byte_length>0) and (preface_utf8_byte_length>0) and (chapter_utf8_byte_length>0) and (reader_utf8_byte_length=(preface_utf8_byte_length+chapter_utf8_byte_length))")));
         tables.put("archive_chapter", table(
                 columns(
                         col("edition_id", "varchar", "varchar(96)", false, "utf8mb4_0900_bin"),
@@ -77,8 +77,8 @@ public final class ArchiveSchemaCatalog {
                 foreignKeys(fk("fk_archive_chapter_edition", List.of("edition_id"),
                         "archive_edition", List.of("edition_id"))),
                 checks(
-                        "chk_archive_chapter_shape", "((block_type='PREFACE' and reader_ordinal=0 and chapter_number is null) or (block_type='CHAPTER' and reader_ordinal between 1 and 120 and chapter_number=reader_ordinal))",
-                        "chk_archive_chapter_metrics", "paragraph_count>0 and utf8_byte_length>0")));
+                        "chk_archive_chapter_shape", "(((block_type='PREFACE') and (reader_ordinal=0) and (chapter_number is null)) or ((block_type='CHAPTER') and (reader_ordinal between 1 and 120) and (chapter_number=reader_ordinal)))",
+                        "chk_archive_chapter_metrics", "(paragraph_count>0) and (utf8_byte_length>0)")));
         tables.put("archive_paragraph", table(
                 columns(
                         col("edition_id", "varchar", "varchar(96)", false, "utf8mb4_0900_bin"),
@@ -94,7 +94,7 @@ public final class ArchiveSchemaCatalog {
                         idx("uk_archive_paragraph_ordinal", true, "edition_id", "block_id", "ordinal")),
                 foreignKeys(fk("fk_archive_paragraph_block", List.of("edition_id", "block_id"),
                         "archive_chapter", List.of("edition_id", "block_id"))),
-                checks("chk_archive_paragraph_metrics", "ordinal>=1 and utf8_byte_length>0")));
+                checks("chk_archive_paragraph_metrics", "(ordinal>=1) and (utf8_byte_length>0)")));
         return new ArchiveSchemaSnapshot(tables);
     }
 
@@ -126,28 +126,42 @@ public final class ArchiveSchemaCatalog {
         if (value == null) return null;
         StringBuilder normalized = new StringBuilder(value.length());
         boolean quoted = false;
+        boolean metadataEscapedQuotes = false;
         for (int index = 0; index < value.length(); index++) {
             char current = value.charAt(index);
             if (quoted) {
-                normalized.append(current);
-                if (current == '\\' && index + 1 < value.length()) {
-                    normalized.append(value.charAt(++index));
-                } else if (current == '\'' && index + 1 < value.length()
+                if (metadataEscapedQuotes && current == '\\' && index + 1 < value.length()
                         && value.charAt(index + 1) == '\'') {
                     normalized.append(value.charAt(++index));
-                } else if (current == '\'') {
                     quoted = false;
+                    metadataEscapedQuotes = false;
+                } else {
+                    normalized.append(current);
+                    if (current == '\\' && index + 1 < value.length()) {
+                        normalized.append(value.charAt(++index));
+                    } else if (current == '\'' && index + 1 < value.length()
+                            && value.charAt(index + 1) == '\'') {
+                        normalized.append(value.charAt(++index));
+                    } else if (current == '\'') {
+                        quoted = false;
+                    }
                 }
                 continue;
             }
+            int introducerLength = charsetIntroducerLengthAt(value, index);
             if (current == '\'') {
                 quoted = true;
+                metadataEscapedQuotes = false;
                 normalized.append(current);
             } else if (current == '`' || Character.isWhitespace(current)) {
                 continue;
-            } else if (charsetIntroducerAt(value, index, "_utf8mb4")
-                    || charsetIntroducerAt(value, index, "_ascii")) {
-                index += value.regionMatches(true, index, "_utf8mb4", 0, 8) ? 7 : 5;
+            } else if (introducerLength < 0) {
+                quoted = true;
+                metadataEscapedQuotes = true;
+                normalized.append('\'');
+                index += -introducerLength;
+            } else if (introducerLength > 0) {
+                index += introducerLength - 1;
             } else {
                 normalized.append(Character.toLowerCase(current));
             }
@@ -160,10 +174,22 @@ public final class ArchiveSchemaCatalog {
         return result;
     }
 
-    private static boolean charsetIntroducerAt(String value, int index, String introducer) {
+    private static int charsetIntroducerLengthAt(String value, int index) {
+        int utf8mb4Length = charsetIntroducerLengthAt(value, index, "_utf8mb4");
+        return utf8mb4Length != 0
+                ? utf8mb4Length
+                : charsetIntroducerLengthAt(value, index, "_ascii");
+    }
+
+    private static int charsetIntroducerLengthAt(String value, int index, String introducer) {
+        if (!value.regionMatches(true, index, introducer, 0, introducer.length())) return 0;
         int after = index + introducer.length();
-        return after < value.length() && value.charAt(after) == '\''
-                && value.regionMatches(true, index, introducer, 0, introducer.length());
+        if (after < value.length() && value.charAt(after) == '\'') return introducer.length();
+        if (after + 1 < value.length() && value.charAt(after) == '\\'
+                && value.charAt(after + 1) == '\'') {
+            return -(introducer.length() + 1);
+        }
+        return 0;
     }
 
     private static boolean balancedOuterParentheses(String value) {
