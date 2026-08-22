@@ -71,7 +71,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_bookmark_paragraph", List.of("edition_id", "block_id", "paragraph_id"),
                                 "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id"))),
                 checks(
-                        "chk_archive_bookmark_id", "bookmark_id regexp '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'",
+                        "chk_archive_bookmark_id", "regexp_like(bookmark_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_bookmark_state", "state in ('ACTIVE','DELETED')",
                         "chk_archive_bookmark_version", "version>=1",
                         "chk_archive_bookmark_offset", "(byte_offset is null) or (byte_offset>=0)",
@@ -101,7 +101,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_note_block", List.of("edition_id", "block_id"),
                                 "archive_chapter", List.of("edition_id", "block_id"))),
                 checks(
-                        "chk_archive_note_id", "note_id regexp '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'",
+                        "chk_archive_note_id", "regexp_like(note_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_note_state", "state in ('ACTIVE','DELETED')",
                         "chk_archive_note_version", "version>=1",
                         "chk_archive_note_text_bytes", "(text is null) or (octet_length(text)<=20000)",
@@ -127,7 +127,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                 checks(
                         "chk_archive_idempotency_method", "http_method in ('PUT','DELETE')",
                         "chk_archive_idempotency_state", "state in ('PENDING','COMPLETED')",
-                        "chk_archive_idempotency_key", "idempotency_key regexp '^[!-~]{1,128}$'",
+                        "chk_archive_idempotency_key", "regexp_like(idempotency_key,'^[!-~]{1,128}$')",
                         "chk_archive_idempotency_response", "((state='PENDING') and (response_status is null) and (response_content_type is null) and (response_body is null)) or ((state='COMPLETED') and (response_status between 200 and 299) and (response_content_type is not null) and (response_body is not null))",
                         "chk_archive_idempotency_expiry", "expires_at>=created_at")));
         return new ArchiveSchemaSnapshot(tables);

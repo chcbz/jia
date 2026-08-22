@@ -7,11 +7,15 @@ import java.util.LinkedHashMap;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiveReaderDataSchemaInitializerTest {
+    private static final String UUID_PATTERN =
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+
     @Test
     void h03CatalogIsSeparateFromH02AllOrNoneSetAndMatchesResource() throws Exception {
         assertTrue(ArchiveSchemaCatalog.TABLE_ORDER.stream().noneMatch(
@@ -52,6 +56,52 @@ class ArchiveReaderDataSchemaInitializerTest {
     }
 
     @Test
+    void mysql8021RegexpLikeMetadataForUuidChecksValidatesAndNormalizesIdempotently() {
+        ArchiveSchemaSnapshot rendered = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
+        rendered = withCheckClause(rendered, "archive_bookmark", "chk_archive_bookmark_id",
+                "regexp_like(bookmark_id,'" + UUID_PATTERN + "')");
+        rendered = withCheckClause(rendered, "archive_note", "chk_archive_note_id",
+                "regexp_like(`note_id`,_utf8mb4\\'" + UUID_PATTERN + "\\')");
+        rendered = withCheckClause(rendered, "archive_idempotency", "chk_archive_idempotency_key",
+                "regexp_like(idempotency_key,'^[!-~]{1,128}$')");
+
+        ArchiveSchemaSnapshot actual = rendered;
+        assertDoesNotThrow(() -> ArchiveReaderDataSchemaCatalog.validate(actual));
+        for (String clause : actual.tables().get("archive_bookmark").checks().values().stream()
+                .map(ArchiveSchemaSnapshot.CheckSnapshot::clause).toList()) {
+            String normalized = ArchiveSchemaCatalog.normalizeCheck(clause);
+            assertEquals(normalized, ArchiveSchemaCatalog.normalizeCheck(normalized));
+        }
+        for (String clause : actual.tables().get("archive_note").checks().values().stream()
+                .map(ArchiveSchemaSnapshot.CheckSnapshot::clause).toList()) {
+            String normalized = ArchiveSchemaCatalog.normalizeCheck(clause);
+            assertEquals(normalized, ArchiveSchemaCatalog.normalizeCheck(normalized));
+        }
+    }
+
+    @Test
+    void regexpLikeUuidOperandPatternFlagsAndQuotedCaseDriftFailClosed() {
+        ArchiveSchemaSnapshot expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
+        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
+                "regexp_like(note_id,'" + UUID_PATTERN + "')");
+        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
+                "regexp_like(bookmark_id,'" + UUID_PATTERN.replace("{12}", "{11}") + "')");
+        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
+                "regexp_like(bookmark_id,'" + UUID_PATTERN + "','i')");
+        assertCheckDrift(expected, "archive_bookmark", "chk_archive_bookmark_id",
+                "regexp_like(bookmark_id,'" + UUID_PATTERN.replace("[89ab]", "[89AB]") + "')");
+
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
+                "regexp_like(bookmark_id,'" + UUID_PATTERN + "')");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
+                "regexp_like(note_id,'" + UUID_PATTERN.replace("{8}", "{7}") + "')");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
+                "regexp_like(note_id,'" + UUID_PATTERN + "','c')");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_id",
+                "regexp_like(note_id,'" + UUID_PATTERN.replace("[0-9a-f]", "[0-9A-F]") + "')");
+    }
+
+    @Test
     void partialH03SchemaIsRejectedWithoutAffectingH02Set() {
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> ArchiveReaderDataSchemaInitializer.requireAllOrNoneTables(
@@ -59,6 +109,28 @@ class ArchiveReaderDataSchemaInitializerTest {
         assertTrue(failure.getMessage().contains("partial"));
         assertDoesNotThrow(() -> ArchiveSchemaInitializer.requireAllOrNoneTables(
                 Set.copyOf(ArchiveSchemaCatalog.TABLE_ORDER)));
+    }
+
+    private ArchiveSchemaSnapshot withCheckClause(ArchiveSchemaSnapshot snapshot,
+                                                  String tableName,
+                                                  String checkName,
+                                                  String clause) {
+        var tables = new LinkedHashMap<>(snapshot.tables());
+        var table = tables.get(tableName);
+        var checks = new LinkedHashMap<>(table.checks());
+        checks.put(checkName, new ArchiveSchemaSnapshot.CheckSnapshot(clause, true));
+        tables.put(tableName, table.withChecks(checks));
+        return new ArchiveSchemaSnapshot(tables);
+    }
+
+    private void assertCheckDrift(ArchiveSchemaSnapshot expected,
+                                  String tableName,
+                                  String checkName,
+                                  String clause) {
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> ArchiveReaderDataSchemaCatalog.validate(
+                        withCheckClause(expected, tableName, checkName, clause)));
+        assertTrue(failure.getMessage().contains(tableName + "." + checkName + ".clause"));
     }
 
     private void assertColumnDrift(ArchiveSchemaSnapshot expected,
