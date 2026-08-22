@@ -152,11 +152,46 @@ public final class ArchiveReaderDataSchemaCatalog {
             wanted.checks().forEach((name, value) -> {
                 ArchiveSchemaSnapshot.CheckSnapshot foundCheck = found.checks().get(name);
                 compare(tableName + "." + name + ".clause",
-                        ArchiveSchemaCatalog.normalizeCheck(value.clause()),
-                        ArchiveSchemaCatalog.normalizeCheck(foundCheck.clause()));
+                        normalizeCheck(value.clause()), normalizeCheck(foundCheck.clause()));
                 compare(tableName + "." + name + ".enforced", value.enforced(), foundCheck.enforced());
             });
         }
+    }
+
+    static String normalizeCheck(String value) {
+        String normalized = ArchiveSchemaCatalog.normalizeCheck(value);
+        if (normalized == null) return null;
+        String alias = "octet_length(";
+        StringBuilder out = new StringBuilder(normalized.length());
+        boolean quoted = false;
+        for (int index = 0; index < normalized.length(); index++) {
+            char current = normalized.charAt(index);
+            if (quoted) {
+                out.append(current);
+                if (current == '\\' && index + 1 < normalized.length()) {
+                    out.append(normalized.charAt(++index));
+                } else if (current == '\'' && index + 1 < normalized.length()
+                        && normalized.charAt(index + 1) == '\'') {
+                    out.append(normalized.charAt(++index));
+                } else if (current == '\'') {
+                    quoted = false;
+                }
+            } else if (current == '\'') {
+                quoted = true;
+                out.append(current);
+            } else if (normalized.startsWith(alias, index)
+                    && (index == 0 || !identifierPart(normalized.charAt(index - 1)))) {
+                out.append("length(");
+                index += alias.length() - 1;
+            } else {
+                out.append(current);
+            }
+        }
+        return out.toString();
+    }
+
+    private static boolean identifierPart(char value) {
+        return Character.isLetterOrDigit(value) || value == '_' || value == '$';
     }
 
     private static ArchiveSchemaSnapshot.TableSnapshot table(

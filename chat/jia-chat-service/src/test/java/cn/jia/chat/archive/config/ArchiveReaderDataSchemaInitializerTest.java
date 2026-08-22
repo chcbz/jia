@@ -85,6 +85,34 @@ class ArchiveReaderDataSchemaInitializerTest {
     }
 
     @Test
+    void mysql8021LengthAliasForOctetLengthIsNarrowAndFailClosed() {
+        ArchiveSchemaSnapshot expected = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
+        ArchiveSchemaSnapshot rendered = withCheckClause(expected, "archive_note",
+                "chk_archive_note_text_bytes", "(`text` is null) or (length(`text`) <= 20000)");
+        assertDoesNotThrow(() -> ArchiveReaderDataSchemaCatalog.validate(rendered));
+        assertEquals("length(text)", ArchiveReaderDataSchemaCatalog.normalizeCheck("OCTET_LENGTH(`text`)"));
+        assertEquals("length(text)", ArchiveReaderDataSchemaCatalog.normalizeCheck("LENGTH(`text`)"));
+        String normalized = ArchiveReaderDataSchemaCatalog.normalizeCheck("OCTET_LENGTH(`text`)");
+        assertEquals(normalized, ArchiveReaderDataSchemaCatalog.normalizeCheck(normalized));
+        assertEquals("regexp_like(note_id,'OCTET_LENGTH(text)')",
+                ArchiveReaderDataSchemaCatalog.normalizeCheck(
+                        "REGEXP_LIKE(`note_id`,'OCTET_LENGTH(text)')"));
+
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
+                "(text is null) or (length(anchor_json)<=20000)");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
+                "(text is null) or (length(text)<=19999)");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
+                "(text is null) or (length(text)<20000)");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
+                "(text is null) or (char_length(text)<=20000)");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
+                "(text is null) or (length(trim(text))<=20000)");
+        assertCheckDrift(expected, "archive_note", "chk_archive_note_text_bytes",
+                "(text is null) or (coalesce(length(text),0)<=20000)");
+    }
+
+    @Test
     void mysql8021RegexpLikeMetadataForUuidChecksValidatesAndNormalizesIdempotently() {
         ArchiveSchemaSnapshot rendered = ArchiveReaderDataSchemaCatalog.expectedSnapshot();
         rendered = withCheckClause(rendered, "archive_bookmark", "chk_archive_bookmark_id",
