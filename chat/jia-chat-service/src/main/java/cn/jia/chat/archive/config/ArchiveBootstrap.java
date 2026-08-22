@@ -14,14 +14,17 @@ import org.springframework.stereotype.Component;
 public class ArchiveBootstrap implements ApplicationRunner {
     private final ArchiveReaderAccessPolicy accessPolicy;
     private final ArchiveSchemaInitializer schemaInitializer;
+    private final ArchiveReaderDataSchemaInitializer readerDataSchemaInitializer;
     private final ArchiveManifestLoader manifestLoader;
     private final ArchiveContentImporter importer;
 
     public ArchiveBootstrap(ArchiveReaderAccessPolicy accessPolicy,
                             ArchiveSchemaInitializer schemaInitializer,
+                            ArchiveReaderDataSchemaInitializer readerDataSchemaInitializer,
                             ArchiveContentImporter importer) {
         this.accessPolicy = accessPolicy;
         this.schemaInitializer = schemaInitializer;
+        this.readerDataSchemaInitializer = readerDataSchemaInitializer;
         this.manifestLoader = new ArchiveManifestLoader();
         this.importer = importer;
     }
@@ -34,5 +37,6 @@ public class ArchiveBootstrap implements ApplicationRunner {
         schemaInitializer.initialize();
         ArchiveManifestBundle bundle = manifestLoader.load();
         importer.importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
+        readerDataSchemaInitializer.initialize();
     }
 }
