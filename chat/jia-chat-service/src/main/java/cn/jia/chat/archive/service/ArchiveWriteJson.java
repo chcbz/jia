@@ -84,7 +84,8 @@ final class ArchiveWriteJson {
                 String name = names.next();
                 String normalized = name.toLowerCase(java.util.Locale.ROOT)
                         .replace("_", "").replace("-", "");
-                if (normalized.equals("name") || normalized.equals("target")
+                if (normalized.equals("target") || normalized.equals("targetname")
+                        || normalized.equals("character") || normalized.equals("charactername")
                         || normalized.contains("agent") || normalized.contains("role")
                         || normalized.contains("persona") || normalized.contains("responder")
                         || normalized.contains("routing") || normalized.contains("route")

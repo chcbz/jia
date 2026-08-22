@@ -73,7 +73,7 @@ class ArchiveQuestionMySqlIntegrationTest {
         manifest = bundle.manifest();
         body = questionBody(manifest.chapters().getFirst(), "何谓忠义？");
         store = new JdbcArchiveQuestionStore(jdbc);
-        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker());
+        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker(), transactions);
         service = new ArchiveQuestionServiceImpl(store, new JdbcArchivePersonalDataStore(jdbc), transactions,
                 new ArchiveClerkFallbackProvider(), delivery, Clock.fixed(NOW, ZoneOffset.UTC));
     }
@@ -216,7 +216,7 @@ class ArchiveQuestionMySqlIntegrationTest {
                 java.sql.Timestamp.from(NOW.plusSeconds(30)), owners.getFirst().tenantId(), owners.getFirst().clientId(),
                 owners.getFirst().ownerJiacn(), staleId);
         var staleQuestion = store.findQuestion(owners.getFirst(), staleId, false);
-        assertFalse(worker.persistDelta(new ArchiveQuestionWorker.Claimed(owners.getFirst(), staleId, 1, 1,
+        assertFalse(worker.persistAnswerAndComplete(new ArchiveQuestionWorker.Claimed(owners.getFirst(), staleId, 1, 1,
                 staleQuestion.questionText(), staleQuestion.selectedText()), "must-not-persist"));
         assertEquals("", service.get(owners.getFirst(), staleId).answer());
 
@@ -248,7 +248,7 @@ class ArchiveQuestionMySqlIntegrationTest {
         ArchivePersonalDataException sequence = assertThrows(ArchivePersonalDataException.class,
                 () -> service.retry(owners.getFirst(), sequenceId, path(sequenceId) + "/retry", "sequence-retry",
                         "{\"expectedVersion\":\"10\"}".getBytes(StandardCharsets.UTF_8)));
-        assertEquals("SEQUENCE_EXHAUSTED", sequence.code());
+        assertEquals("VERSION_EXHAUSTED", sequence.code());
         assertEquals(beforeSequenceMutations, count("archive_question_mutation"));
         assertEquals(beforeSequenceEvents, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question_event WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND question_id=?",
                 Integer.class, owners.getFirst().tenantId(), owners.getFirst().clientId(),

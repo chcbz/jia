@@ -3,6 +3,9 @@ package cn.jia.chat.archive.service;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,8 +47,32 @@ class ArchiveTransactionsTest {
     }
 
     @Test
+    void realTransactionManagerCommitResultIsNotReplacedByThrowingAfterCommitCallback() {
+        CountingTransactionManager manager = new CountingTransactionManager();
+        SpringArchiveTransactions transactions = new SpringArchiveTransactions(manager);
+        int result = transactions.required(() -> {
+            transactions.afterCommit(() -> transactions.requiresNew(() -> {
+                throw new IllegalStateException("watermark transaction failed after commit");
+            }));
+            return 202;
+        });
+        assertEquals(202, result);
+        assertEquals(1, manager.commits.get());
+        assertEquals(1, manager.rollbacks.get());
+    }
+
+    @Test
     void afterCommitOutsideSynchronizedTransactionFailsClosed() {
         SpringArchiveTransactions transactions = new SpringArchiveTransactions(mock(PlatformTransactionManager.class));
         assertThrows(IllegalStateException.class, () -> transactions.afterCommit(() -> { }));
+    }
+
+    private static final class CountingTransactionManager extends AbstractPlatformTransactionManager {
+        final AtomicInteger commits = new AtomicInteger();
+        final AtomicInteger rollbacks = new AtomicInteger();
+        @Override protected Object doGetTransaction() { return new Object(); }
+        @Override protected void doBegin(Object transaction, TransactionDefinition definition) { }
+        @Override protected void doCommit(DefaultTransactionStatus status) { commits.incrementAndGet(); }
+        @Override protected void doRollback(DefaultTransactionStatus status) { rollbacks.incrementAndGet(); }
     }
 }

@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -47,7 +48,7 @@ class ArchiveQuestionWorkerTest {
         store = new ArchiveQuestionTestSupport.Store();
         content = new ArchiveQuestionTestSupport.Content();
         transactions = new ArchiveQuestionTestSupport.Transactions(store);
-        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker());
+        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker(), transactions);
         clock = Clock.fixed(NOW, ZoneOffset.UTC);
         content.active = new ArchivePersonalDataStore.ActiveEdition(EDITION, MANIFEST);
         String text = "水泊忠义";
@@ -77,6 +78,22 @@ class ArchiveQuestionWorkerTest {
                 store.allEvents(OWNER, ID).stream().map(event -> event.eventType()).toList());
         assertEquals(4, store.findOutbox(OWNER, ID, false).publishedSequence());
         assertEquals("DONE", store.findOutbox(OWNER, ID, false).state());
+    }
+
+    @Test
+    void runningEventWatermarkFailureDoesNotBlockProviderOrConsumeAnotherAttempt() {
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("persisted-once");
+        };
+        create(provider);
+        store.failNextAdvancePublishedSequence = true;
+        assertTrue(worker(provider).runOnce());
+        assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
+        assertEquals("persisted-once", service.get(OWNER, ID).answer());
+        assertEquals(1, calls.get());
+        assertEquals(1, store.findOutbox(OWNER, ID, false).attemptCount());
     }
 
     @Test
@@ -127,10 +144,10 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
-    void providerReturnThenDeltaPersistenceFailureRollsBackUnpersistedAnswerAndRecordsRetryableFailure() {
+    void providerReturnThenSecondChunkPersistenceFailureLeavesSnapshotAndSseWithZeroAnswerOutput() {
         ArchiveQuestionProvider provider = request -> {
-            store.failNextEventInsert = true;
-            return ArchiveQuestionProvider.Answer.complete("provider-only-output");
+            store.failEventInsertAt = store.eventInserts + 2;
+            return ArchiveQuestionProvider.Answer.complete("x".repeat(5000));
         };
         create(provider);
         worker(provider).runOnce();
@@ -138,11 +155,42 @@ class ArchiveQuestionWorkerTest {
         assertEquals("FAILED_RETRYABLE", snapshot.status());
         assertEquals("", snapshot.answer());
         assertEquals("QUESTION_PROVIDER_UNAVAILABLE", snapshot.lastErrorCode());
-        assertTrue(store.allEvents(OWNER, ID).stream().noneMatch(event -> "ANSWER_DELTA".equals(event.eventType())));
+        assertTrue(store.allEvents(OWNER, ID).stream().noneMatch(event ->
+                "ANSWER_DELTA".equals(event.eventType()) || "QUESTION_SUCCEEDED".equals(event.eventType())));
     }
 
     @Test
-    void staleFencingTokenCannotPersistDeltaCompleteOrFailure() {
+    void successTerminalEventPersistenceFailureRollsBackPriorDeltaAndCompleteAnswer() {
+        ArchiveQuestionProvider provider = request -> {
+            store.failEventInsertAt = store.eventInserts + 2;
+            return ArchiveQuestionProvider.Answer.complete("one-private-chunk");
+        };
+        create(provider);
+        worker(provider).runOnce();
+        var snapshot = service.get(OWNER, ID);
+        assertEquals("FAILED_RETRYABLE", snapshot.status());
+        assertEquals("", snapshot.answer());
+        assertTrue(store.allEvents(OWNER, ID).stream().noneMatch(event ->
+                "ANSWER_DELTA".equals(event.eventType()) || "QUESTION_SUCCEEDED".equals(event.eventType())));
+    }
+
+    @Test
+    void terminalOutboxPersistenceFailureRollsBackCompleteAnswerAndAllSuccessEvents() {
+        ArchiveQuestionProvider provider = request -> {
+            store.failNextOutboxUpdate = true;
+            return ArchiveQuestionProvider.Answer.complete("must-remain-private");
+        };
+        create(provider);
+        worker(provider).runOnce();
+        var snapshot = service.get(OWNER, ID);
+        assertEquals("FAILED_RETRYABLE", snapshot.status());
+        assertEquals("", snapshot.answer());
+        assertTrue(store.allEvents(OWNER, ID).stream().noneMatch(event ->
+                "ANSWER_DELTA".equals(event.eventType()) || "QUESTION_SUCCEEDED".equals(event.eventType())));
+    }
+
+    @Test
+    void staleFencingTokenCannotPersistAnswerCompleteFailureOrRenewal() {
         ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
         create(provider);
         QuestionRecord queued = store.findQuestion(OWNER, ID, false);
@@ -155,9 +203,9 @@ class ArchiveQuestionWorkerTest {
         ArchiveQuestionWorker worker = worker(provider);
         ArchiveQuestionWorker.Claimed stale = new ArchiveQuestionWorker.Claimed(
                 OWNER, ID, 1, 1, running.questionText(), running.selectedText());
-        assertFalse(worker.persistDelta(stale, "unpersisted"));
-        assertFalse(worker.complete(stale));
+        assertFalse(worker.persistAnswerAndComplete(stale, "unpersisted"));
         assertFalse(worker.fail(stale, "QUESTION_PROVIDER_UNAVAILABLE", true));
+        assertFalse(worker.renewLease(stale));
         assertEquals("", service.get(OWNER, ID).answer());
         assertEquals("RUNNING", service.get(OWNER, ID).status());
         assertEquals(2, store.findOutbox(OWNER, ID, false).fencingToken());
@@ -178,9 +226,9 @@ class ArchiveQuestionWorkerTest {
         ArchiveQuestionWorker worker = worker(provider);
         int events = store.eventInserts;
         ArchivePersonalDataException sequence = assertThrows(ArchivePersonalDataException.class,
-                () -> worker.persistDelta(new ArchiveQuestionWorker.Claimed(
+                () -> worker.persistAnswerAndComplete(new ArchiveQuestionWorker.Claimed(
                         OWNER, ID, 7, 1, running.questionText(), running.selectedText()), "x"));
-        assertEquals("SEQUENCE_EXHAUSTED", sequence.code());
+        assertEquals("VERSION_EXHAUSTED", sequence.code());
         assertEquals(events, store.eventInserts);
         assertEquals("", service.get(OWNER, ID).answer());
 
@@ -188,8 +236,7 @@ class ArchiveQuestionWorkerTest {
                 null, 2, 2, NOW, null));
         store.setOutbox(OWNER, new OutboxRecord(outbox.rowId(), ID, "READY", 1, Long.MAX_VALUE,
                 outbox.publishedSequence(), NOW, null, null, outbox.createdAt(), NOW));
-        ArchivePersonalDataException fencing = assertThrows(ArchivePersonalDataException.class, worker::runOnce);
-        assertEquals("FENCING_TOKEN_EXHAUSTED", fencing.code());
+        assertFalse(worker.runOnce());
         assertEquals(events, store.eventInserts);
         assertEquals(Long.MAX_VALUE, store.findOutbox(OWNER, ID, false).fencingToken());
     }
@@ -232,10 +279,92 @@ class ArchiveQuestionWorkerTest {
         store.setOutbox(malformedOwner, new OutboxRecord(outbox.rowId(), outbox.questionId(), outbox.state(),
                 outbox.attemptCount(), outbox.fencingToken(), outbox.publishedSequence(), outbox.availableAt(),
                 outbox.leaseUntil(), outbox.lastErrorCode(), outbox.createdAt(), outbox.updatedAt()));
-        // Remove the valid candidate so the malformed exact owner is selected first.
+        // Reinsert the valid row after the malformed row so the poison candidate is globally first.
         store.removeQuestionAndOutbox(OWNER, ID);
-        assertFalse(worker(provider).runOnce());
-        assertEquals(0, calls.get());
+        store.setQuestion(OWNER, queued);
+        store.setOutbox(OWNER, outbox);
+        assertTrue(worker(provider).runOnce());
+        assertEquals(1, calls.get());
+        assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
+        assertEquals("QUEUED", store.findQuestion(malformedOwner, ID, false).status());
+    }
+
+    @Test
+    void healthyProviderCrossingInitialLeaseRenewsWithoutConsumingExtraAttempts() {
+        ArchiveQuestionProvider provider = request -> {
+            // Test-scaled equivalent of a provider call crossing the production 30-second lease.
+            Thread.sleep(800);
+            assertTrue(store.leaseRenewals.get() >= 5, "provider must stay fenced through repeated renewals");
+            return ArchiveQuestionProvider.Answer.complete("slow-but-healthy");
+        };
+        create(provider);
+        ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions, provider, delivery,
+                enabledPolicy(), Clock.systemUTC(), Duration.ofMillis(300), Duration.ofMillis(50));
+        try {
+            assertTrue(worker.runOnce());
+            assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
+            assertEquals(1, store.findOutbox(OWNER, ID, false).attemptCount());
+            assertEquals(1, store.findOutbox(OWNER, ID, false).fencingToken());
+        } finally { worker.stop(); }
+    }
+
+    @Test
+    void leaseRenewalCasLossDiscardsProviderResultWithZeroAnswerEvents() {
+        store.failNextLeaseRenewal = true;
+        ArchiveQuestionProvider provider = request -> {
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (store.leaseRenewals.get() == 0 && System.nanoTime() < deadline) Thread.sleep(5);
+            return ArchiveQuestionProvider.Answer.complete("stale-private-output");
+        };
+        create(provider);
+        ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions, provider, delivery,
+                enabledPolicy(), Clock.systemUTC(), Duration.ofMillis(300), Duration.ofMillis(50));
+        try {
+            assertTrue(worker.runOnce());
+            assertEquals("RUNNING", service.get(OWNER, ID).status());
+            assertEquals("", service.get(OWNER, ID).answer());
+            assertTrue(store.allEvents(OWNER, ID).stream().noneMatch(event ->
+                    "ANSWER_DELTA".equals(event.eventType()) || "QUESTION_SUCCEEDED".equals(event.eventType())));
+            assertEquals(1, store.findOutbox(OWNER, ID, false).attemptCount());
+        } finally { worker.stop(); }
+    }
+
+    @Test
+    void unauthorizedExpiredHeadDoesNotBlockAuthorizedExpiredFinalization() {
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        ArchiveOwnerScope malformed = new ArchiveOwnerScope("owner-a", "client-a", "different-owner");
+        store.removeQuestionAndOutbox(OWNER, ID);
+        store.setQuestion(malformed, questionWith(base, ID, "RUNNING", 2));
+        store.setOutbox(malformed, outboxWith(baseOutbox, ID, "LEASED", 3, NOW.minusSeconds(2)));
+        store.setQuestion(OWNER, questionWith(base, ID, "RUNNING", 2));
+        store.setOutbox(OWNER, outboxWith(baseOutbox, ID, "LEASED", 3, NOW.minusSeconds(1)));
+
+        assertTrue(worker(provider).runOnce());
+        assertEquals("RUNNING", store.findQuestion(malformed, ID, false).status());
+        assertEquals("FAILED_FINAL", store.findQuestion(OWNER, ID, false).status());
+    }
+
+    @Test
+    void poisonExpiredAndExhaustionFailureRowsDoNotBlockLaterFinalization() {
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        String poisonId = "223e4567-e89b-42d3-a456-426614174000";
+        String healthyId = "323e4567-e89b-42d3-a456-426614174000";
+        store.removeQuestionAndOutbox(OWNER, ID);
+        store.setQuestion(OWNER, questionWith(base, poisonId, "RUNNING", Long.MAX_VALUE));
+        store.setOutbox(OWNER, outboxWith(baseOutbox, poisonId, "LEASED", 3, NOW.minusSeconds(2)));
+        store.setQuestion(OWNER, questionWith(base, healthyId, "RUNNING", 2));
+        store.setOutbox(OWNER, outboxWith(baseOutbox, healthyId, "LEASED", 3, NOW.minusSeconds(1)));
+
+        assertTrue(worker(provider).runOnce());
+        assertEquals("RUNNING", store.findQuestion(OWNER, poisonId, false).status());
+        assertEquals("FAILED_FINAL", store.findQuestion(OWNER, healthyId, false).status());
+        assertEquals("DONE", store.findOutbox(OWNER, healthyId, false).state());
     }
 
     @Test
@@ -247,6 +376,17 @@ class ArchiveQuestionWorkerTest {
         assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
         assertEquals(answer, service.get(OWNER, ID).answer());
         assertTrue(store.allEvents(OWNER, ID).stream().filter(event -> "ANSWER_DELTA".equals(event.eventType())).count() > 1);
+    }
+
+    private QuestionRecord questionWith(QuestionRecord row, String id, String status, long sequence) {
+        return new QuestionRecord(row.rowId(), id, row.editionId(), row.manifestSha256(), row.blockType(),
+                row.blockId(), row.anchorJson(), row.selectedText(), row.questionText(), status, row.responderId(),
+                row.responderName(), row.responderMode(), "", 2, null, 3, sequence, NOW, NOW, null);
+    }
+
+    private OutboxRecord outboxWith(OutboxRecord row, String id, String status, int attempts, Instant leaseUntil) {
+        return new OutboxRecord(row.rowId(), id, status, attempts, 3, row.publishedSequence(),
+                NOW.minusSeconds(10), leaseUntil, null, NOW, NOW);
     }
 
     private void create(ArchiveQuestionProvider provider) {
@@ -264,7 +404,7 @@ class ArchiveQuestionWorkerTest {
     private void resetWithNewIdNotNeeded() {
         store = new ArchiveQuestionTestSupport.Store();
         transactions = new ArchiveQuestionTestSupport.Transactions(store);
-        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker());
+        delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker(), transactions);
     }
     private ArchiveQuestionAccessPolicy enabledPolicy() {
         ArchiveQuestionProperties question = new ArchiveQuestionProperties();

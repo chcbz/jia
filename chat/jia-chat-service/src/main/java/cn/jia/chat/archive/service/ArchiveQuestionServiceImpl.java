@@ -131,8 +131,8 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
             OutboxRecord outbox = store.findOutbox(owner, questionId, true);
             require(outbox != null && "WAITING_RETRY".equals(outbox.state()) && outbox.attemptCount() < 3,
                     409, "VERSION_CONFLICT", "Question is not retryable");
-            long nextVersion = nextVersion(current.version());
-            long nextSequence = nextSequence(current.currentSequence());
+            long nextVersion = ArchiveWire.increment(current.version());
+            long nextSequence = ArchiveWire.increment(current.currentSequence());
             Instant now = clock.instant();
             QuestionRecord queued = change(current, "QUEUED", "", current.retryCount(), null,
                     nextVersion, nextSequence, now, null);
@@ -230,14 +230,6 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
         if (!ArchiveWire.visibleAsciiPath(path) || !expectedPath.equals(path)) notFound();
         require(ArchiveWire.visibleAsciiKey(key), 422, "INVALID_IDEMPOTENCY_KEY",
                 "Idempotency-Key must be 1..128 visible ASCII bytes");
-    }
-    private long nextVersion(long current) { return Long.parseLong(ArchiveWire.next(current)); }
-    private long nextSequence(long current) {
-        if (current == Long.MAX_VALUE) {
-            throw new ArchivePersonalDataException(409, "SEQUENCE_EXHAUSTED",
-                    "Question event sequence is exhausted", Long.toString(current));
-        }
-        return current + 1;
     }
     private void conflict(long current) {
         throw new ArchivePersonalDataException(409, "VERSION_CONFLICT",

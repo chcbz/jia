@@ -30,8 +30,10 @@ public interface ArchiveQuestionStore {
     void insertOutbox(ArchiveOwnerScope owner, OutboxRecord outbox);
     OutboxRecord findOutbox(ArchiveOwnerScope owner, String questionId, boolean lock);
     int updateOutbox(ArchiveOwnerScope owner, OutboxRecord outbox, long expectedFencingToken, String expectedState);
-    ClaimCandidate findClaimCandidate(Instant now);
-    ClaimCandidate findExhaustedCandidate(Instant now);
+    int renewOutboxLease(ArchiveOwnerScope owner, String questionId, long fencingToken,
+                         Instant leaseUntil, Instant updatedAt);
+    List<ClaimCandidate> listClaimCandidates(Instant now, int limit);
+    List<ClaimCandidate> listExhaustedCandidates(Instant now, int limit);
     List<PublishCandidate> findPublishCandidates(int limit);
     int advancePublishedSequence(ArchiveOwnerScope owner, String questionId, long expected, long delivered);
 

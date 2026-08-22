@@ -233,26 +233,37 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
     }
 
     @Override
-    public ClaimCandidate findClaimCandidate(Instant now) {
-        return first(jdbc.query("""
-                SELECT tenant_id,client_id,owner_jiacn,question_id FROM archive_outbox
-                WHERE attempt_count<3 AND available_at<=?
-                  AND (state='READY' OR (state='LEASED' AND lease_until<=?))
-                ORDER BY available_at,row_id LIMIT 1
-                """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
-                        rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
-                        rs.getString("question_id")), Timestamp.from(now), Timestamp.from(now)));
+    public int renewOutboxLease(ArchiveOwnerScope owner, String questionId, long fencingToken,
+                                Instant leaseUntil, Instant updatedAt) {
+        return jdbc.update("UPDATE archive_outbox SET lease_until=?,updated_at=? WHERE " + EXACT_SCOPE + """
+                  AND question_id=? AND CAST(question_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(question_id)=OCTET_LENGTH(?)
+                  AND fencing_token=? AND state='LEASED' AND lease_until>?
+                """, concat(new Object[]{Timestamp.from(leaseUntil), Timestamp.from(updatedAt)}, scopeArgs(owner),
+                questionId, questionId, questionId, fencingToken, Timestamp.from(updatedAt)));
     }
 
     @Override
-    public ClaimCandidate findExhaustedCandidate(Instant now) {
-        return first(jdbc.query("""
+    public List<ClaimCandidate> listClaimCandidates(Instant now, int limit) {
+        return jdbc.query("""
                 SELECT tenant_id,client_id,owner_jiacn,question_id FROM archive_outbox
-                WHERE state='LEASED' AND attempt_count>=3 AND lease_until<=?
-                ORDER BY lease_until,row_id LIMIT 1
+                WHERE attempt_count<3 AND available_at<=?
+                  AND (state='READY' OR (state='LEASED' AND lease_until<=?))
+                ORDER BY available_at,row_id LIMIT ?
                 """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
-                        rs.getString("question_id")), Timestamp.from(now)));
+                        rs.getString("question_id")), Timestamp.from(now), Timestamp.from(now), limit);
+    }
+
+    @Override
+    public List<ClaimCandidate> listExhaustedCandidates(Instant now, int limit) {
+        return jdbc.query("""
+                SELECT tenant_id,client_id,owner_jiacn,question_id FROM archive_outbox
+                WHERE state='LEASED' AND attempt_count>=3 AND lease_until<=?
+                ORDER BY lease_until,row_id LIMIT ?
+                """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
+                        rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
+                        rs.getString("question_id")), Timestamp.from(now), limit);
     }
 
     @Override

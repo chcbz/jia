@@ -47,7 +47,7 @@ class ArchiveQuestionServiceTest {
         content = new ArchiveQuestionTestSupport.Content();
         transactions = new ArchiveQuestionTestSupport.Transactions(store);
         broker = new ArchiveQuestionEventBroker();
-        delivery = new ArchiveQuestionEventDelivery(store, broker);
+        delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
         content.active = new ArchivePersonalDataStore.ActiveEdition(EDITION, MANIFEST);
         String first = "甲水泊";
         String second = "忠义😊";
@@ -109,6 +109,7 @@ class ArchiveQuestionServiceTest {
         List<String> invalid = List.of(
                 "{\"question\":\"x\",\"question\":\"x\",\"anchor\":" + anchor + "}",
                 "{\"question\":\"x\",\"anchor\":" + anchor + ",\"unknown\":1}",
+                "{\"question\":\"x\",\"anchor\":" + anchor + ",\"name\":\"ordinary-unknown\"}",
                 "{\"question\":\"x\",\"anchor\":" + anchor + "} {}",
                 "{\"question\":1,\"anchor\":" + anchor + "}",
                 "{\"question\":\"x\",\"anchor\":" + anchor.replace("\"startByte\":3", "\"startByte\":3.0") + "}",
@@ -129,11 +130,21 @@ class ArchiveQuestionServiceTest {
                 () -> service.create(OWNER, ID, path(), "bom", new byte[]{(byte) 0xef, (byte) 0xbb, (byte) 0xbf, '{', '}'}));
         assertEquals("INVALID_REQUEST_JSON", bom.code());
         for (String routing : List.of("targetAgentId", "agentId", "role", "roleName", "personaName",
-                "responderId", "selectedAgent", "角色名", "吴用")) {
+                "responderId", "selectedAgent", "targetName", "TARGET_NAME", "target-name",
+                "characterName", "CHARACTER_NAME", "character-name", "角色名", "吴用")) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
                     () -> service.create(OWNER, ID, path(), "route-" + routing.hashCode(), bytes(
                             "{\"question\":\"x\",\"anchor\":" + anchor + ",\"" + routing + "\":\"吴用\"}")));
             assertEquals(422, failure.status());
+            assertEquals("ROUTING_NOT_SUPPORTED", failure.code());
+        }
+        for (String nested : List.of(
+                "{\"meta\":{\"target_name\":\"吴用\"}}",
+                "{\"options\":[{\"Character-Name\":\"吴用\"}]}",
+                "{\"routing\":{\"name\":\"吴用\"}}")) {
+            ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
+                    () -> service.create(OWNER, ID, path(), "nested-route-" + nested.hashCode(), bytes(
+                            "{\"question\":\"x\",\"anchor\":" + anchor + ",\"extension\":" + nested + "}")));
             assertEquals("ROUTING_NOT_SUPPORTED", failure.code());
         }
         assertEquals(0, store.mutationReservations);
@@ -141,16 +152,40 @@ class ArchiveQuestionServiceTest {
 
     @Test
     void anchorHashBoundaryContiguityAndQuestionUtf8LimitFailClosed() {
-        for (String invalidAnchor : List.of(
+        for (String hashMismatch : List.of(
                 anchor.replace(hash("水泊\n\n忠义"), "b".repeat(64)),
+                anchor.replace(hash("甲水泊"), "c".repeat(64)))) {
+            ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
+                    () -> service.create(OWNER, ID, path(), "hash-" + hashMismatch.hashCode(), bytes(
+                            "{\"question\":\"x\",\"anchor\":" + hashMismatch + "}")));
+            assertEquals("CONTENT_HASH_MISMATCH", failure.code());
+        }
+        for (String invalidAnchor : List.of(
                 anchor.replace("\"startByte\":3", "\"startByte\":4"),
                 anchor.replace("\"paragraphId\":\"" + P2 + "\"", "\"paragraphId\":\"missing\""),
                 anchor.replace("\"blockType\":\"CHAPTER\"", "\"blockType\":\"PREFACE\""))) {
             ArchivePersonalDataException failure = assertThrows(ArchivePersonalDataException.class,
-                    () -> service.create(OWNER, ID, path(), "anchor-" + invalidAnchor.hashCode(), bytes(
+                    () -> service.create(OWNER, ID, path(), "shape-" + invalidAnchor.hashCode(), bytes(
                             "{\"question\":\"x\",\"anchor\":" + invalidAnchor + "}")));
-            assertTrue(failure.code().equals("INVALID_TEXT_ANCHOR") || failure.code().equals("CONTENT_HASH_MISMATCH"));
+            assertEquals("INVALID_TEXT_ANCHOR", failure.code());
         }
+        ArchivePersonalDataStore.ContentPoint original = content.points.get(P1);
+        content.points.put(P1, new ArchivePersonalDataStore.ContentPoint(original.editionId(),
+                original.manifestSha256(), original.blockType(), original.blockId(), original.blockOrdinal(),
+                original.paragraphId(), original.paragraphOrdinal(), original.text(),
+                original.utf8ByteLength() + 1, original.paragraphSha256()));
+        ArchivePersonalDataException authoritative = assertThrows(ArchivePersonalDataException.class,
+                () -> service.create(OWNER, ID, path(), "authoritative-length", body("x")));
+        assertEquals("CONTENT_HASH_MISMATCH", authoritative.code());
+        content.points.put(P1, new ArchivePersonalDataStore.ContentPoint(original.editionId(),
+                original.manifestSha256(), original.blockType(), original.blockId(), original.blockOrdinal(),
+                original.paragraphId(), original.paragraphOrdinal(), "乙水泊",
+                original.utf8ByteLength(), original.paragraphSha256()));
+        ArchivePersonalDataException authoritativeHash = assertThrows(ArchivePersonalDataException.class,
+                () -> service.create(OWNER, ID, path(), "authoritative-hash", body("x")));
+        assertEquals("CONTENT_HASH_MISMATCH", authoritativeHash.code());
+        content.points.put(P1, original);
+
         ArchivePersonalDataException large = assertThrows(ArchivePersonalDataException.class,
                 () -> service.create(OWNER, ID, path(), "large", body("水".repeat(2731))));
         assertEquals("INVALID_REQUEST_JSON", large.code());
@@ -235,11 +270,16 @@ class ArchiveQuestionServiceTest {
             assertEquals(422, failure.status());
             assertEquals("INVALID_REQUEST_JSON", failure.code());
         }
-        ArchivePersonalDataException routing = assertThrows(ArchivePersonalDataException.class,
-                () -> service.retry(OWNER, ID, path() + "/retry", "retry-routing",
-                        bytes("{\"expectedVersion\":\"1\",\"targetAgentId\":\"wuyong\"}")));
-        assertEquals(422, routing.status());
-        assertEquals("ROUTING_NOT_SUPPORTED", routing.code());
+        for (String routed : List.of(
+                "{\"expectedVersion\":\"1\",\"targetAgentId\":\"wuyong\"}",
+                "{\"expectedVersion\":\"1\",\"TARGET_NAME\":\"wuyong\"}",
+                "{\"expectedVersion\":\"1\",\"meta\":{\"character-name\":\"wuyong\"}}")) {
+            ArchivePersonalDataException routing = assertThrows(ArchivePersonalDataException.class,
+                    () -> service.retry(OWNER, ID, path() + "/retry",
+                            "retry-routing-" + routed.hashCode(), bytes(routed)));
+            assertEquals(422, routing.status());
+            assertEquals("ROUTING_NOT_SUPPORTED", routing.code());
+        }
         assertEquals(0, store.mutationReservations);
     }
 
@@ -353,7 +393,7 @@ class ArchiveQuestionServiceTest {
                 () -> service.retry(OWNER, ID, path() + "/retry", "sequence-exhaust",
                         bytes("{\"expectedVersion\":\"10\"}")));
         assertEquals(409, sequenceExhausted.status());
-        assertEquals("SEQUENCE_EXHAUSTED", sequenceExhausted.code());
+        assertEquals("VERSION_EXHAUSTED", sequenceExhausted.code());
         assertEquals(beforeSequenceEvents, store.eventInserts);
         assertEquals(beforeSequenceReservations, store.mutationReservations);
         assertEquals(Long.MAX_VALUE, store.findQuestion(OWNER, ID, false).currentSequence());

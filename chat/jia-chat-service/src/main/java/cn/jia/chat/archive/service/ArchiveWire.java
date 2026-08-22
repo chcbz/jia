@@ -19,11 +19,19 @@ final class ArchiveWire {
     }
 
     static String next(long current) {
-        if (current == MAX_VERSION) {
+        return Long.toString(increment(current));
+    }
+
+    static long increment(long current) {
+        return increment(current, 1);
+    }
+
+    static long increment(long current, long amount) {
+        if (current < 0 || amount < 1 || current > MAX_VERSION - amount) {
             throw new ArchivePersonalDataException(409, "VERSION_EXHAUSTED",
-                    "Resource version is exhausted", Long.toString(current));
+                    "Resource version or sequence is exhausted", Long.toString(current));
         }
-        return Long.toString(current + 1);
+        return current + amount;
     }
 
     static boolean lowercaseUuid(String value) {

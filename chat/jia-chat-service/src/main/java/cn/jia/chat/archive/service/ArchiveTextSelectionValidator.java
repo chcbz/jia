@@ -47,12 +47,14 @@ final class ArchiveTextSelectionValidator {
             ArchiveAnchorSegmentDTO segment = anchor.segments().get(index);
             ContentPoint point = byId.get(segment.paragraphId());
             require(point != null && point.editionId().equals(editionId)
-                            && point.manifestSha256().equals(active.manifestSha256())
                             && point.blockId().equals(anchor.blockId())
                             && point.blockType().equals(anchor.blockType())
-                            && point.paragraphSha256().equals(segment.paragraphSha256())
                             && (previousOrdinal < 0 || point.paragraphOrdinal() == previousOrdinal + 1),
                     422, "INVALID_TEXT_ANCHOR", "Text anchor paragraph sequence is invalid");
+            require(point.manifestSha256().equals(active.manifestSha256()),
+                    422, "CONTENT_HASH_MISMATCH", "Authoritative paragraph manifest hash mismatch");
+            require(point.paragraphSha256().equals(segment.paragraphSha256()),
+                    422, "CONTENT_HASH_MISMATCH", "Paragraph hash mismatch");
             byte[] authoritative = point.text().getBytes(StandardCharsets.UTF_8);
             require(authoritative.length == point.utf8ByteLength()
                             && ArchiveEtags.sha256(authoritative).equals(point.paragraphSha256()),

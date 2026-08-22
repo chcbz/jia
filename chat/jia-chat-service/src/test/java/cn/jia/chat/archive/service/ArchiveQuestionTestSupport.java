@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 final class ArchiveQuestionTestSupport {
@@ -57,7 +58,12 @@ final class ArchiveQuestionTestSupport {
         int eventInserts;
         int outboxInserts;
         boolean failNextQuestionUpdate;
+        boolean failNextOutboxUpdate;
         boolean failNextEventInsert;
+        boolean failNextLeaseRenewal;
+        boolean failNextAdvancePublishedSequence;
+        int failEventInsertAt;
+        final AtomicInteger leaseRenewals = new AtomicInteger();
 
         @Override public MutationRecord insertOrLockMutation(ArchiveOwnerScope owner, String questionId, String method,
                 String path, String key, String hash, Instant expiresAt) {
@@ -109,6 +115,10 @@ final class ArchiveQuestionTestSupport {
         }
         @Override public void insertEvent(ArchiveOwnerScope owner, EventRecord event) {
             if (failNextEventInsert) { failNextEventInsert = false; throw new IllegalStateException("injected event persistence failure"); }
+            if (failEventInsertAt > 0 && eventInserts + 1 == failEventInsertAt) {
+                failEventInsertAt = 0;
+                throw new IllegalStateException("injected later event persistence failure");
+            }
             String key = questionKey(owner, event.questionId());
             List<EventRecord> rowsForQuestion = events.computeIfAbsent(key, ignored -> new ArrayList<>());
             if (rowsForQuestion.stream().anyMatch(row -> row.sequence() == event.sequence())) throw new IllegalStateException("duplicate sequence");
@@ -136,13 +146,27 @@ final class ArchiveQuestionTestSupport {
             return outboxes.get(questionKey(owner, questionId));
         }
         @Override public int updateOutbox(ArchiveOwnerScope owner, OutboxRecord row, long expectedToken, String expectedState) {
+            if (failNextOutboxUpdate) { failNextOutboxUpdate = false; throw new IllegalStateException("injected outbox persistence failure"); }
             String key = questionKey(owner, row.questionId());
             OutboxRecord current = outboxes.get(key);
             if (current == null || current.fencingToken() != expectedToken || !current.state().equals(expectedState)) return 0;
             outboxes.put(key, row);
             return 1;
         }
-        @Override public ClaimCandidate findClaimCandidate(Instant now) {
+        @Override public int renewOutboxLease(ArchiveOwnerScope owner, String questionId, long token,
+                                               Instant leaseUntil, Instant updatedAt) {
+            leaseRenewals.incrementAndGet();
+            if (failNextLeaseRenewal) { failNextLeaseRenewal = false; return 0; }
+            String key = questionKey(owner, questionId);
+            OutboxRecord row = outboxes.get(key);
+            if (row == null || !"LEASED".equals(row.state()) || row.fencingToken() != token
+                    || row.leaseUntil() == null || !row.leaseUntil().isAfter(updatedAt)) return 0;
+            outboxes.put(key, new OutboxRecord(row.rowId(), row.questionId(), row.state(), row.attemptCount(),
+                    row.fencingToken(), row.publishedSequence(), row.availableAt(), leaseUntil, row.lastErrorCode(),
+                    row.createdAt(), updatedAt));
+            return 1;
+        }
+        @Override public List<ClaimCandidate> listClaimCandidates(Instant now, int limit) {
             return outboxes.entrySet().stream().filter(entry -> {
                 OutboxRecord row = entry.getValue();
                 return row.attemptCount() < 3 && !row.availableAt().isAfter(now)
@@ -150,14 +174,16 @@ final class ArchiveQuestionTestSupport {
                         && row.leaseUntil() != null && !row.leaseUntil().isAfter(now)));
             }).sorted(Comparator.comparing((Map.Entry<String, OutboxRecord> entry) -> entry.getValue().availableAt())
                     .thenComparingLong(entry -> entry.getValue().rowId()))
-                    .map(entry -> candidate(entry.getKey())).findFirst().orElse(null);
+                    .map(entry -> candidate(entry.getKey())).limit(limit).toList();
         }
-        @Override public ClaimCandidate findExhaustedCandidate(Instant now) {
+        @Override public List<ClaimCandidate> listExhaustedCandidates(Instant now, int limit) {
             return outboxes.entrySet().stream().filter(entry -> {
                 OutboxRecord row = entry.getValue();
                 return "LEASED".equals(row.state()) && row.attemptCount() >= 3
                         && row.leaseUntil() != null && !row.leaseUntil().isAfter(now);
-            }).map(entry -> candidate(entry.getKey())).findFirst().orElse(null);
+            }).sorted(Comparator.comparing((Map.Entry<String, OutboxRecord> entry) -> entry.getValue().leaseUntil())
+                    .thenComparingLong(entry -> entry.getValue().rowId()))
+                    .map(entry -> candidate(entry.getKey())).limit(limit).toList();
         }
         @Override public List<PublishCandidate> findPublishCandidates(int limit) {
             return outboxes.entrySet().stream().map(entry -> {
@@ -169,6 +195,10 @@ final class ArchiveQuestionTestSupport {
             }).filter(java.util.Objects::nonNull).limit(limit).toList();
         }
         @Override public int advancePublishedSequence(ArchiveOwnerScope owner, String questionId, long expected, long delivered) {
+            if (failNextAdvancePublishedSequence) {
+                failNextAdvancePublishedSequence = false;
+                throw new IllegalStateException("injected watermark persistence failure");
+            }
             String key = questionKey(owner, questionId);
             OutboxRecord row = outboxes.get(key);
             if (row == null || row.publishedSequence() != expected) return 0;
@@ -229,6 +259,12 @@ final class ArchiveQuestionTestSupport {
         boolean failAfterCommitOnce;
         Transactions(Store store) { this.store = store; }
         @Override public <T> T required(Supplier<T> action) {
+            return run(action, true);
+        }
+        @Override public <T> T requiresNew(Supplier<T> action) {
+            return run(action, false);
+        }
+        private <T> T run(Supplier<T> action, boolean injectResponseLoss) {
             Store.Snapshot snapshot = store.snapshot();
             List<Runnable> prior = callbacks.get();
             List<Runnable> current = new ArrayList<>();
@@ -242,7 +278,7 @@ final class ArchiveQuestionTestSupport {
             }
             callbacks.set(prior);
             for (Runnable callback : current) callback.run();
-            if (failAfterCommitOnce) {
+            if (injectResponseLoss && failAfterCommitOnce) {
                 failAfterCommitOnce = false;
                 throw new IllegalStateException("injected response loss after commit");
             }

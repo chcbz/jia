@@ -24,7 +24,7 @@ class ArchiveQuestionEventDeliveryTest {
         ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
         ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
         ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
-        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker);
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
         List<EventRecord> observed = new ArrayList<>();
         broker.subscribe(OWNER, ID, event -> {
             assertNotNull(store.listEvents(OWNER, ID, 0, 1, 10).stream()
@@ -49,7 +49,7 @@ class ArchiveQuestionEventDeliveryTest {
         ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
         ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
         ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
-        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker);
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
         List<EventRecord> observed = new ArrayList<>();
         broker.subscribe(OWNER, ID, observed::add);
 
@@ -67,14 +67,40 @@ class ArchiveQuestionEventDeliveryTest {
     }
 
     @Test
+    void committedMutationResultSurvivesWatermarkFailureAndRecoveryClosesDurableGap() {
+        ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
+        ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
+        ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
+        List<Long> observed = new ArrayList<>();
+        broker.subscribe(OWNER, ID, event -> observed.add(event.sequence()));
+        store.failNextAdvancePublishedSequence = true;
+
+        int response = transactions.required(() -> {
+            seedQuestionAndOutbox(store, 1, 0);
+            EventRecord event = new EventRecord(0, ID, 1, "QUESTION_QUEUED", "{}", NOW);
+            store.insertEvent(OWNER, event);
+            transactions.afterCommit(() -> delivery.afterCommit(OWNER, event));
+            return 202;
+        });
+
+        assertEquals(202, response);
+        assertEquals(0, store.findOutbox(OWNER, ID, false).publishedSequence());
+        assertEquals(1, delivery.recoverOnce());
+        assertEquals(1, store.findOutbox(OWNER, ID, false).publishedSequence());
+        assertEquals(List.of(1L, 1L), observed);
+    }
+
+    @Test
     void recoveryScanRepublishesCommittedCrashWindowInExactSequenceWithoutUpdatingEventRows() {
         ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
         seedQuestionAndOutbox(store, 3, 1);
         store.insertEvent(OWNER, new EventRecord(0, ID, 2, "QUESTION_RUNNING", "{}", NOW));
         store.insertEvent(OWNER, new EventRecord(0, ID, 3, "QUESTION_SUCCEEDED", "{}", NOW));
         int inserted = store.eventInserts;
+        ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
         ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
-        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker);
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
         List<Long> observed = new ArrayList<>();
         broker.subscribe(OWNER, ID, event -> observed.add(event.sequence()));
 
@@ -92,7 +118,7 @@ class ArchiveQuestionEventDeliveryTest {
         ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
         ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
         ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
-        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker);
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
         broker.subscribe(OWNER, ID, ignored -> { throw new IllegalStateException("broken client"); });
         List<Long> healthy = new ArrayList<>();
         broker.subscribe(OWNER, ID, event -> healthy.add(event.sequence()));
