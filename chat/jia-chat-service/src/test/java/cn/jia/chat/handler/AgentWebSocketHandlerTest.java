@@ -8,6 +8,8 @@ import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
+import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
@@ -125,6 +127,157 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"status\":\"running\""));
         verify(agentService).reportTask(any(String.class), any(AgentTaskReportDTO.class));
         assertSafeServerDownlinks(messageCaptor.getAllValues());
+    }
+
+    @Test
+    void registerAbilitiesDistinguishMissingEmptyAndNull() throws Exception {
+        stubAgentSession("session-register-abilities", "agent-001", "runtime-1");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO(
+                        "agent-001", "token", AgentConstants.STATUS_ONLINE));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "abilities":[]}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "abilities":null}
+                """));
+
+        ArgumentCaptor<AgentRegisterDTO> captor = ArgumentCaptor.forClass(AgentRegisterDTO.class);
+        verify(agentService, org.mockito.Mockito.times(2)).register(captor.capture());
+        assertEquals(null, captor.getAllValues().get(0).getAbilities());
+        assertTrue(captor.getAllValues().get(1).getAbilities().isEmpty());
+        ArgumentCaptor<TextMessage> messages = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messages.capture());
+        assertTrue(messages.getAllValues().stream()
+                .map(TextMessage::getPayload)
+                .anyMatch(payload -> payload.contains("abilities must be an array")));
+    }
+
+    @Test
+    void presenceAbilitiesDistinguishMissingEmptyAndNull() throws Exception {
+        stubAgentSession("session-presence-abilities", "agent-001", "runtime-1");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        AgentRuntimeDTO updated = new AgentRuntimeDTO();
+        updated.setAgentId("agent-001");
+        updated.setStatus(AgentConstants.STATUS_ONLINE);
+        when(agentService.updateStatus(any(String.class), any(AgentStatusDTO.class)))
+                .thenReturn(updated);
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "status":"online"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "status":"online","abilities":[]}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "status":"online","abilities":null}
+                """));
+
+        ArgumentCaptor<AgentStatusDTO> captor = ArgumentCaptor.forClass(AgentStatusDTO.class);
+        verify(agentService, org.mockito.Mockito.times(2))
+                .updateStatus(org.mockito.Mockito.eq("agent-001"), captor.capture());
+        assertEquals(null, captor.getAllValues().get(0).getAbilities());
+        assertTrue(captor.getAllValues().get(1).getAbilities().isEmpty());
+        ArgumentCaptor<TextMessage> messages = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messages.capture());
+        assertTrue(messages.getAllValues().stream()
+                .map(TextMessage::getPayload)
+                .anyMatch(payload -> payload.contains("abilities must be an array")));
+    }
+
+    @Test
+    void presenceForwardsClientAbilitiesForRuntimeRefresh() throws Exception {
+        stubAgentSession("session-001", "agent-001", "runtime-1");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        AgentRuntimeDTO updated = new AgentRuntimeDTO();
+        updated.setAgentId("agent-001");
+        updated.setStatus(AgentConstants.STATUS_ONLINE);
+        updated.setAbilities(List.of("code-edit", "review"));
+        when(agentService.updateStatus(any(String.class), any(AgentStatusDTO.class))).thenReturn(updated);
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.presence","schemaVersion":1,"messageId":"presence-1",
+                 "agentId":"agent-001","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "status":"online",
+                 "abilities":["code-edit","review"]}
+                """));
+
+        ArgumentCaptor<AgentStatusDTO> captor = ArgumentCaptor.forClass(AgentStatusDTO.class);
+        verify(agentService).updateStatus(org.mockito.Mockito.eq("agent-001"), captor.capture());
+        assertEquals(List.of("code-edit", "review"), captor.getValue().getAbilities());
+    }
+
+    @Test
+    void abilitiesMustBeAnArrayOfNonBlankStrings() throws Exception {
+        stubAgentSession("session-invalid-abilities", "agent-001", "runtime-1");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "abilities":{"planning":true}}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
+                 "status":"online","abilities":["planning",null]}
+                """));
+
+        verify(agentService, never()).register(any(AgentRegisterDTO.class));
+        verify(agentService, never()).updateStatus(any(), any(AgentStatusDTO.class));
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.times(2)).sendMessage(messageCaptor.capture());
+        String messages = messageCaptor.getAllValues().stream()
+                .map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("abilities must be an array"));
+        assertTrue(messages.contains("abilities must contain non-blank strings"));
+    }
+
+    @Test
+    void scopedStatusAndCapabilityBroadcastsDoNotCrossTenantOrClient() throws Exception {
+        WebSocketSession matching = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossTenant = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession crossClient = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(matching, "session-matching", "agent-a", "tenant-a", "client-a", null);
+        stubAgentSession(crossTenant, "session-cross-tenant", "agent-b", "tenant-b", "client-a", null);
+        stubAgentSession(crossClient, "session-cross-client", "agent-c", "tenant-a", "client-b", null);
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(matching);
+        handler.afterConnectionEstablished(crossTenant);
+        handler.afterConnectionEstablished(crossClient);
+        org.mockito.Mockito.clearInvocations(matching, crossTenant, crossClient);
+
+        AgentRuntimeDTO runtime = new AgentRuntimeDTO();
+        runtime.setAgentId("agent-a");
+        runtime.setStatus(AgentConstants.STATUS_ONLINE);
+        AgentCapabilityDTO capability = new AgentCapabilityDTO();
+        capability.setAgentId("agent-a");
+        capability.setAbilities(List.of("planning"));
+
+        handler.publishAgentStatus("client-a", "tenant-a", runtime);
+        handler.publishCapabilityIndex("client-a", "tenant-a", List.of(capability));
+
+        verify(matching, org.mockito.Mockito.times(2)).sendMessage(any(TextMessage.class));
+        verify(crossTenant, never()).sendMessage(any(TextMessage.class));
+        verify(crossClient, never()).sendMessage(any(TextMessage.class));
     }
 
     @Test

@@ -4,6 +4,7 @@ import lombok.Data;
 
 import java.io.Serial;
 import java.io.Serializable;
+import java.util.List;
 
 @Data
 public class AgentStatusDTO implements Serializable {
@@ -14,4 +15,5 @@ public class AgentStatusDTO implements Serializable {
     private String currentTaskId;
     private String currentTaskTitle;
     private String errorMessage;
+    private List<String> abilities;
 }

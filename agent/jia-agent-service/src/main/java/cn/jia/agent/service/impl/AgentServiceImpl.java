@@ -99,6 +99,8 @@ public class AgentServiceImpl implements AgentService {
     private static final long SCENE_EXPECTED_ARRIVAL_MILLIS = 20_000L;
     private static final long SCENE_STATE_EXPIRY_MILLIS = 300_000L;
     private static final int TASK_MEMBERSHIP_SNAPSHOT_LIMIT = 500;
+    private static final int MAX_RUNTIME_ABILITIES = 128;
+    private static final int MAX_RUNTIME_ABILITY_LENGTH = 100;
 
     private final AgentRuntimeDao agentRuntimeDao;
     private final AgentIdentityService agentIdentityService;
@@ -146,9 +148,7 @@ public class AgentServiceImpl implements AgentService {
         entity.setOwnerJiacn(jiacn);
         entity.setBindingId(binding.getId());
         entity.setClientId(clientId);
-        entity.setAbilities(StringUtil.isBlank(persona.getAbilities())
-                ? JsonUtil.toJson(Optional.ofNullable(request.getAbilities()).orElseGet(Collections::emptyList))
-                : persona.getAbilities());
+        entity.setAbilities(resolveRuntimeAbilities(request.getAbilities(), entity.getAbilities(), persona.getAbilities()));
         entity.setEndpoint(request.getEndpoint());
         entity.setTokenHash(token);
         entity.setStatus(AgentConstants.STATUS_ONLINE);
@@ -160,7 +160,7 @@ public class AgentServiceImpl implements AgentService {
         } else {
             agentRuntimeDao.updateById(entity);
         }
-        publishAgentStatus(toRuntimeDTO(entity));
+        publishAgentSnapshotAfterCommit("agent-register", clientId, jiacn, toRuntimeDTO(entity));
         return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());
     }
 
@@ -196,8 +196,12 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<AgentCapabilityDTO> listCapabilities() {
+        return listCapabilities(resolveCurrentClientId(), resolveCurrentJiacn());
+    }
+
+    private List<AgentCapabilityDTO> listCapabilities(String clientId, String ownerJiacn) {
         List<AgentRuntimeEntity> roster = Optional.ofNullable(agentRuntimeDao
-                .findRosterByOwner(resolveCurrentClientId(), resolveCurrentJiacn(), null, null))
+                .findRosterByOwner(clientId, ownerJiacn, null, null))
                 .orElseGet(Collections::emptyList);
         List<AgentCapabilityDTO> capabilities = new ArrayList<>(roster
                 .stream()
@@ -297,7 +301,7 @@ public class AgentServiceImpl implements AgentService {
             runtime.setStatus(AgentConstants.STATUS_OFFLINE);
             runtime.setLastSeenAt(System.currentTimeMillis());
             agentRuntimeDao.updateById(runtime);
-            publishAgentStatus(toRuntimeDTO(runtime));
+            publishAgentSnapshotAfterCommit("agent-unbind", clientId, jiacn, toRuntimeDTO(runtime));
         }
     }
 
@@ -323,16 +327,12 @@ public class AgentServiceImpl implements AgentService {
         }
 
         if (forUpdate) {
-            agentIdentityService.lockActiveCanonicalAgentIdsInScope(
-                    jiacn, clientId, jiacn, List.of(agentId));
-        } else {
-            agentIdentityService.requireCanonicalAgentIdInScope(
-                    jiacn, clientId, jiacn, agentId);
+            return toRuntimeDTO(requireOwnedAgentForUpdate(clientId, jiacn, agentId));
         }
+        agentIdentityService.requireCanonicalAgentIdInScope(
+                jiacn, clientId, jiacn, agentId);
 
-        AgentRuntimeEntity agent = forUpdate
-                ? agentRuntimeDao.findByAgentIdForUpdate(agentId)
-                : agentRuntimeDao.findByAgentId(agentId);
+        AgentRuntimeEntity agent = agentRuntimeDao.findByAgentId(agentId);
         if (agent == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Agent runtime is missing or outside the authenticated scope");
@@ -341,6 +341,32 @@ public class AgentServiceImpl implements AgentService {
                 jiacn, clientId, jiacn, requireBindingId(agent), agentId);
         requireExactRuntime(agent, agentId, clientId, jiacn, identity.getBindingId());
         return toRuntimeDTO(agent);
+    }
+
+    private AgentRuntimeEntity requireOwnedAgentForUpdate(
+            String clientId, String jiacn, String agentId) {
+        requireCanonicalIdentityInput(clientId, "clientId");
+        requireCanonicalIdentityInput(jiacn, "jiacn");
+        requireCanonicalIdentityInput(agentId, "agentId");
+        if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agentId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "System agent cannot be updated by external clients");
+        }
+        List<String> lockedAgentIds = agentIdentityService.lockActiveCanonicalAgentIdsInScope(
+                jiacn, clientId, jiacn, List.of(agentId));
+        if (!List.of(agentId).equals(lockedAgentIds)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Agent identity lock did not match the requested Agent");
+        }
+        AgentRuntimeEntity agent = agentRuntimeDao.findByAgentIdForUpdate(agentId);
+        if (agent == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Agent runtime is missing or outside the authenticated scope");
+        }
+        AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
+                jiacn, clientId, jiacn, requireBindingId(agent), agentId);
+        agentIdentityService.requireActiveBinding(identity, null);
+        return requireExactRuntime(agent, agentId, clientId, jiacn, identity.getBindingId());
     }
 
     private void requireCanonicalIdentityInput(String value, String field) {
@@ -363,8 +389,9 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeDTO updateStatus(String agentId, AgentStatusDTO request) {
-        AgentRuntimeEntity entity = requireAgent(agentId);
-        requireOwnedAgent(entity);
+        String clientId = resolveCurrentClientId();
+        String jiacn = resolveCurrentJiacn();
+        AgentRuntimeEntity entity = requireOwnedAgentForUpdate(clientId, jiacn, agentId);
         if (!StringUtil.isBlank(request.getStatus())) {
             validateAgentStatus(request.getStatus());
             entity.setStatus(request.getStatus());
@@ -372,10 +399,13 @@ public class AgentServiceImpl implements AgentService {
         entity.setCurrentTaskId(request.getCurrentTaskId());
         entity.setCurrentTaskTitle(request.getCurrentTaskTitle());
         entity.setErrorMessage(request.getErrorMessage());
+        if (request.getAbilities() != null) {
+            entity.setAbilities(JsonUtil.toJson(normalizeRuntimeAbilities(request.getAbilities())));
+        }
         entity.setLastSeenAt(System.currentTimeMillis());
-        agentRuntimeDao.updateById(entity);
+        require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
         AgentRuntimeDTO dto = toRuntimeDTO(entity);
-        publishAgentStatus(dto);
+        publishAgentSnapshotAfterCommit("agent-presence", clientId, jiacn, dto);
         return dto;
     }
 
@@ -614,10 +644,6 @@ public class AgentServiceImpl implements AgentService {
         String clientId = resolveCurrentClientId();
         List<String> agentIds = legacyTaskCompatibilityService.resolveAgentIds(
                 tenantId, clientId, tenantId, requestedAgentIds);
-        List<AgentRuntimeEntity> assignedAgents = agentIds.stream()
-                .map(this::requireAgent)
-                .toList();
-        assignedAgents.forEach(this::requireOwnedAgent);
         boolean allowQueue = Boolean.TRUE.equals(request.getAllowQueue());
 
         AgentTaskMetaEntity meta = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
@@ -630,27 +656,26 @@ public class AgentServiceImpl implements AgentService {
         }
         require(taskId.equals(meta.getTaskId()), "taskId does not match current scope");
         validateLegacyAssignableTask(meta);
-        boolean mayBeIdempotent = meta.getId() != null
-                && AgentConstants.TASK_STATUS_ASSIGNED.equals(meta.getRewardStatus());
-        if (!mayBeIdempotent) {
-            for (AgentRuntimeEntity agent : assignedAgents) {
-                validateAssignableAgent(agent, allowQueue);
-                validateAbility(agent, meta);
-            }
-        }
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
                         tenantId, clientId, taskId, agentIds, automatic);
-        if (outcome.changed() && mayBeIdempotent) {
-            for (AgentRuntimeEntity agent : assignedAgents) {
-                validateAssignableAgent(agent, allowQueue);
-                validateAbility(agent, meta);
-            }
-        }
         AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
                 agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
         requireScopedTaskProjection(assignedMeta, tenantId, clientId, taskId);
+        List<AgentRuntimeEntity> assignedAgents = List.of();
+        if (outcome.changed()) {
+            assignedAgents = outcome.agentIds().stream()
+                    .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
+                    .toList();
+            for (AgentRuntimeEntity agent : assignedAgents) {
+                validateAssignableAgent(agent, allowQueue);
+                validateAbility(agent, assignedMeta);
+            }
+            if (automatic) {
+                validateCompleteAbilityCoverage(assignedAgents, assignedMeta);
+            }
+        }
         applyAssignmentProjection(assignedMeta, outcome.agentIds());
         AgentTaskDTO task = toTaskDTO(assignedMeta);
         applyTaskAssignees(task, outcome.agentIds());
@@ -856,6 +881,68 @@ public class AgentServiceImpl implements AgentService {
                 && value.chars().noneMatch(Character::isISOControl);
     }
 
+    private String resolveRuntimeAbilities(List<String> reportedAbilities, String existingAbilities,
+            String personaAbilities) {
+        if (reportedAbilities != null) {
+            return JsonUtil.toJson(normalizeRuntimeAbilities(reportedAbilities));
+        }
+        if (!StringUtil.isBlank(existingAbilities)) {
+            return existingAbilities;
+        }
+        return StringUtil.isBlank(personaAbilities) ? "[]" : personaAbilities;
+    }
+
+    private List<String> normalizeRuntimeAbilities(List<String> abilities) {
+        require(abilities.size() <= MAX_RUNTIME_ABILITIES,
+                "abilities must contain at most " + MAX_RUNTIME_ABILITIES + " items");
+        LinkedHashMap<String, String> normalized = new LinkedHashMap<>();
+        for (String rawAbility : abilities) {
+            require(rawAbility != null, "ability must not be null");
+            String ability = rawAbility.strip();
+            require(!ability.isEmpty(), "ability must not be blank");
+            require(ability.length() <= MAX_RUNTIME_ABILITY_LENGTH,
+                    "ability must contain at most " + MAX_RUNTIME_ABILITY_LENGTH + " characters");
+            require(ability.chars().noneMatch(Character::isISOControl),
+                    "ability must not contain control characters");
+            normalized.putIfAbsent(ability.toLowerCase(Locale.ROOT), ability);
+        }
+        return new ArrayList<>(normalized.values());
+    }
+
+    private void validateCompleteAbilityCoverage(
+            List<AgentRuntimeEntity> agents, AgentTaskMetaEntity meta) {
+        Set<String> required = parseList(meta.getRequiredAbilities()).stream()
+                .map(ability -> ability.toLowerCase(Locale.ROOT))
+                .collect(LinkedHashSet::new, Set::add, Set::addAll);
+        if (required.isEmpty()) {
+            return;
+        }
+        Set<String> available = agents.stream()
+                .flatMap(agent -> parseList(agent.getAbilities()).stream())
+                .map(ability -> ability.toLowerCase(Locale.ROOT))
+                .collect(LinkedHashSet::new, Set::add, Set::addAll);
+        if (!available.containsAll(required)) {
+            Set<String> missing = new LinkedHashSet<>(required);
+            missing.removeAll(available);
+            log.warn("Automatic assignment lost required ability coverage: taskId={}, missingAbilities={}",
+                    meta.getTaskId(), missing);
+            throw new AgentBizException(AgentErrorConstants.AGENT_ABILITY_MISMATCH,
+                    "Automatic assignment does not cover all required abilities");
+        }
+    }
+
+    private AgentRuntimeEntity lockAssignedRuntime(
+            String agentId, String tenantId, String clientId) {
+        AgentRuntimeEntity agent = agentRuntimeDao.findByAgentIdForUpdate(agentId);
+        if (agent == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent not found");
+        }
+        AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
+                tenantId, clientId, tenantId, requireBindingId(agent), agentId);
+        agentIdentityService.requireActiveBinding(identity, null);
+        return requireExactRuntime(agent, agentId, clientId, tenantId, identity.getBindingId());
+    }
+
     private void validateAssignableAgent(AgentRuntimeEntity agent, boolean allowQueue) {
         if (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus()) && !allowQueue) {
             throw new AgentBizException(AgentErrorConstants.AGENT_OFFLINE, "Agent is offline");
@@ -873,8 +960,12 @@ public class AgentServiceImpl implements AgentService {
         if (required.isEmpty()) {
             return;
         }
-        List<String> abilities = parseList(agent.getAbilities());
-        boolean matched = required.stream().anyMatch(abilities::contains);
+        Set<String> abilities = parseList(agent.getAbilities()).stream()
+                .map(ability -> ability.toLowerCase(Locale.ROOT))
+                .collect(LinkedHashSet::new, Set::add, Set::addAll);
+        boolean matched = required.stream()
+                .map(ability -> ability.toLowerCase(Locale.ROOT))
+                .anyMatch(abilities::contains);
         if (!matched) {
             log.warn("Agent ability mismatch: taskId={}, requiredAbilities={}, agentId={}, agentAbilities={}",
                     meta.getTaskId(), required, agent.getAgentId(), abilities);
@@ -1262,7 +1353,8 @@ codexTimeoutMs=900000
         dto.setRankNo(persona.getRankNo());
         dto.setVisualConfig(persona.getVisualConfig());
         dto.setSystemAgent(Boolean.TRUE.equals(persona.getSystemAgent()));
-        dto.setAbilities(parseList(persona.getAbilities()));
+        dto.setAbilities(parseList(runtime != null && !StringUtil.isBlank(runtime.getAbilities())
+                ? runtime.getAbilities() : persona.getAbilities()));
         dto.setStatus(runtime == null ? AgentConstants.STATUS_OFFLINE : runtime.getStatus());
         dto.setOwnerJiacn(binding == null ? null : binding.getJiacn());
         dto.setBound(binding != null || Boolean.TRUE.equals(persona.getSystemAgent()));
@@ -1424,32 +1516,28 @@ codexTimeoutMs=900000
                     .orElseGet(List::of);
         }
 
-        Set<String> remaining = required.stream().map(String::toLowerCase).collect(LinkedHashSet::new, Set::add, Set::addAll);
+        Set<String> remaining = required.stream().map(value -> value.toLowerCase(Locale.ROOT)).collect(LinkedHashSet::new, Set::add, Set::addAll);
         List<String> selected = new ArrayList<>();
         for (AgentTaskRecommendationDTO recommendation : recommendations) {
             if (!isOnlineRecommendation(recommendation)) {
                 continue;
             }
             boolean contributes = recommendation.getMatchedAbilities().stream()
-                    .map(String::toLowerCase)
+                    .map(value -> value.toLowerCase(Locale.ROOT))
                     .anyMatch(remaining::contains);
             if (!contributes && !selected.isEmpty()) {
                 continue;
             }
             selected.add(recommendation.getAgent().getAgentId());
             recommendation.getMatchedAbilities().stream()
-                    .map(String::toLowerCase)
+                    .map(value -> value.toLowerCase(Locale.ROOT))
                     .forEach(remaining::remove);
             if (remaining.isEmpty() || selected.size() >= 3) {
                 break;
             }
         }
-        if (selected.isEmpty()) {
-            return recommendations.stream()
-                    .filter(this::isOnlineRecommendation)
-                    .findFirst()
-                    .map(recommendation -> List.of(recommendation.getAgent().getAgentId()))
-                    .orElseGet(List::of);
+        if (!remaining.isEmpty()) {
+            return List.of();
         }
         return selected;
     }
@@ -1465,10 +1553,10 @@ codexTimeoutMs=900000
         }
         Set<String> agentAbilitySet = Optional.ofNullable(agentAbilities).orElseGet(Collections::emptyList)
                 .stream()
-                .map(String::toLowerCase)
+                .map(value -> value.toLowerCase(Locale.ROOT))
                 .collect(LinkedHashSet::new, Set::add, Set::addAll);
         return requiredAbilities.stream()
-                .filter(ability -> agentAbilitySet.contains(String.valueOf(ability).toLowerCase()))
+                .filter(ability -> agentAbilitySet.contains(String.valueOf(ability).toLowerCase(Locale.ROOT)))
                 .toList();
     }
 
@@ -1518,7 +1606,7 @@ codexTimeoutMs=900000
         Set<String> roles = new LinkedHashSet<>();
         Set<String> abilities = Optional.ofNullable(agent.getAbilities()).orElseGet(Collections::emptyList)
                 .stream()
-                .map(String::toLowerCase)
+                .map(value -> value.toLowerCase(Locale.ROOT))
                 .collect(LinkedHashSet::new, Set::add, Set::addAll);
         if (hasAny(abilities, "planning", "analysis", "dispatch", "coordination", "briefing")) {
             roles.add("planner");
@@ -1768,8 +1856,11 @@ codexTimeoutMs=900000
     private void publishLegacyReportSideEffectsAfterCommit(
             String eventType, AgentTaskDTO task, List<AgentRuntimeDTO> updatedAgents) {
         List<AgentRuntimeDTO> agents = List.copyOf(updatedAgents);
+        String clientId = task.getClientId();
+        String ownerJiacn = task.getTenantId();
         publishOptionalAfterCommit("legacy-task-report", () -> {
-            agents.forEach(this::publishAgentStatus);
+            publishAgentSnapshots(clientId, ownerJiacn, agents,
+                    listCapabilities(clientId, ownerJiacn));
             publishTaskEvent(eventType, task);
         });
     }
@@ -1940,10 +2031,18 @@ codexTimeoutMs=900000
         isolatedPublication.run();
     }
 
-    private void publishAgentStatus(AgentRuntimeDTO agent) {
+    private void publishAgentSnapshotAfterCommit(
+            String operation, String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
+        publishOptionalAfterCommit(operation, () -> publishAgentSnapshots(
+                clientId, ownerJiacn, List.of(agent), listCapabilities(clientId, ownerJiacn)));
+    }
+
+    private void publishAgentSnapshots(
+            String clientId, String ownerJiacn, List<AgentRuntimeDTO> agents,
+            List<AgentCapabilityDTO> capabilities) {
         Optional.ofNullable(eventPublisherProvider.getIfAvailable()).ifPresent(publisher -> {
-            publisher.publishAgentStatus(agent);
-            publisher.publishCapabilityIndex(listCapabilities());
+            agents.forEach(agent -> publisher.publishAgentStatus(clientId, ownerJiacn, agent));
+            publisher.publishCapabilityIndex(clientId, ownerJiacn, capabilities);
         });
     }
 

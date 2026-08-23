@@ -334,7 +334,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             request.setPersonaName(asString(payload.get("personaName")));
             request.setPersonaCode(asString(payload.get("personaCode")));
             request.setEndpoint(asString(payload.get("endpoint")));
-            request.setAbilities(asStringList(payload.get("abilities")));
+            if (payload.containsKey("abilities")) {
+                request.setAbilities(asStringList(payload.get("abilities")));
+            }
             AgentRegisterResultDTO result = withSessionContext(session, () -> agentService.register(request));
             rememberSessionAgent(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
@@ -380,6 +382,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             request.setCurrentTaskId(asString(payload.get("currentTaskId")));
             request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
             request.setErrorMessage(asString(payload.get("errorMessage")));
+            if (payload.containsKey("abilities")) {
+                request.setAbilities(asStringList(payload.get("abilities")));
+            }
             AgentRuntimeDTO agent = withSessionContext(session, () -> agentService.updateStatus(agentId, request));
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
@@ -664,8 +669,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     }
 
     @Override
-    public void publishAgentStatus(AgentRuntimeDTO agent) {
+    public void publishAgentStatus(String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
         Map<String, Object> payload = new HashMap<>();
+        payload.put("clientId", clientId);
+        payload.put("tenantId", ownerJiacn);
         payload.put("agentId", agent.getAgentId());
         payload.put("status", agent.getStatus());
         payload.put("errorMessage", agent.getErrorMessage());
@@ -678,7 +685,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         if (hallAnnouncementService != null) {
             hallAnnouncementService.recordAgentStatus(payload);
         }
-        broadcastEvent("agent_status", payload);
+        broadcastEventToScope(clientId, ownerJiacn, "agent_status", payload);
     }
 
     @Override
@@ -717,11 +724,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     }
 
     @Override
-    public void publishCapabilityIndex(List<AgentCapabilityDTO> capabilities) {
+    public void publishCapabilityIndex(String clientId, String ownerJiacn,
+            List<AgentCapabilityDTO> capabilities) {
         Map<String, Object> payload = new HashMap<>();
+        payload.put("clientId", clientId);
+        payload.put("tenantId", ownerJiacn);
         payload.put("agents", Optional.ofNullable(capabilities).orElseGet(List::of));
         payload.put("updatedAt", System.currentTimeMillis());
-        broadcastEvent("agent_capability_index", payload);
+        broadcastEventToScope(clientId, ownerJiacn, "agent_capability_index", payload);
     }
 
     @Override
@@ -815,6 +825,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
 
     private void broadcastEvent(String type, Map<String, ?> payload) {
         sessions.values().forEach(session -> sendEvent(session, type, payload));
+    }
+
+    private void broadcastEventToScope(String clientId, String ownerJiacn,
+            String type, Map<String, ?> payload) {
+        if (isBlank(clientId) || isBlank(ownerJiacn)) {
+            log.warn("Refusing Agent broadcast without explicit scope, type={}", type);
+            return;
+        }
+        sessions.values().stream()
+                .filter(session -> clientId.equals(sessionClientId(session))
+                        && ownerJiacn.equals(sessionJiacn(session)))
+                .forEach(session -> sendEvent(session, type, payload));
     }
 
     public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
@@ -1216,18 +1238,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         }
     }
 
-    @SuppressWarnings("unchecked")
     private java.util.List<String> asStringList(Object value) {
-        if (value == null) {
-            return java.util.Collections.emptyList();
+        if (!(value instanceof java.util.List<?> list)) {
+            throw new IllegalArgumentException("abilities must be an array");
         }
-        if (value instanceof java.util.List<?> list) {
-            return list.stream().map(String::valueOf).toList();
+        java.util.List<String> abilities = new java.util.ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof String ability) || ability.isBlank()) {
+                throw new IllegalArgumentException("abilities must contain non-blank strings");
+            }
+            abilities.add(ability);
         }
-        return java.util.Arrays.stream(String.valueOf(value).split(","))
-                .map(String::trim)
-                .filter(item -> !item.isEmpty())
-                .toList();
+        return java.util.List.copyOf(abilities);
     }
 
     private record TaskDeliveryScope(String tenantId, String clientId, String taskId) {

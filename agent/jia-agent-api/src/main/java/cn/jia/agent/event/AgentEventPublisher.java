@@ -10,13 +10,14 @@ import java.util.List;
 import java.util.Set;
 
 public interface AgentEventPublisher {
-    default void publishAgentStatus(AgentRuntimeDTO agent) {
+    default void publishAgentStatus(String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
     }
 
     default void publishTaskEvent(String eventType, AgentTaskDTO task) {
     }
 
-    default void publishCapabilityIndex(List<AgentCapabilityDTO> capabilities) {
+    default void publishCapabilityIndex(String clientId, String ownerJiacn,
+            List<AgentCapabilityDTO> capabilities) {
     }
 
     default Set<String> connectedAgentIds() {

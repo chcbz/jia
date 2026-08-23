@@ -11,7 +11,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -22,66 +21,57 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class AgentStatusMonitor {
     private final AgentRuntimeDao agentRuntimeDao;
+    private final AgentStatusTransitionWorker transitionWorker;
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
 
     @Value("${jia.agent.status.heartbeat-timeout-seconds:60}")
     private long heartbeatTimeoutSeconds;
 
     @Scheduled(fixedDelayString = "${jia.agent.status.offline-scan-interval-seconds:10}000")
-    @Transactional(rollbackFor = Exception.class)
     public void markHeartbeatTimedOutAgentsOffline() {
         Set<String> connectedAgentIds = connectedAgentIds();
         syncWebSocketAgentStatuses(connectedAgentIds);
 
         long cutoffTime = System.currentTimeMillis() - heartbeatTimeoutSeconds * 1000;
-        for (AgentRuntimeEntity agent : agentRuntimeDao.findHeartbeatTimedOut(cutoffTime)) {
-            // A live local WebSocket is stronger evidence than an asynchronously persisted
-            // heartbeat. Never turn a socket-owning agent offline from a stale DB snapshot.
-            if (connectedAgentIds.contains(agent.getAgentId())) {
+        for (AgentRuntimeEntity candidate : agentRuntimeDao.findHeartbeatTimedOut(cutoffTime)) {
+            if (connectedAgentIds.contains(candidate.getAgentId())
+                    || AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(candidate.getAgentId())) {
                 continue;
             }
-            if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId())) {
-                continue;
+            try {
+                AgentStatusTransitionWorker.Transition transition =
+                        transitionWorker.markHeartbeatTimedOutOffline(candidate, cutoffTime);
+                if (transition != null && transition.statusChanged()) {
+                    log.debug("Marked heartbeat timed out agent offline: {}",
+                            transition.runtime().getAgentId());
+                    publishAgentStatus(transition.runtime());
+                }
+            } catch (RuntimeException failure) {
+                log.warn("Skipping failed heartbeat timeout transition: agentId={}, failureType={}",
+                        candidate.getAgentId(), failure.getClass().getSimpleName());
             }
-            log.debug("Marking heartbeat timed out agent offline: {}", agent.getAgentId());
-            agent.setStatus(AgentConstants.STATUS_OFFLINE);
-            agent.setCurrentTaskId(null);
-            agent.setCurrentTaskTitle(null);
-            agent.setErrorMessage(null);
-            agentRuntimeDao.updateById(agent);
-            publishAgentStatus(agent);
         }
     }
 
     private void syncWebSocketAgentStatuses(Set<String> connectedAgentIds) {
         long now = System.currentTimeMillis();
-        List<AgentRuntimeEntity> agents = agentRuntimeDao.findByStatusAndAbility(null, null);
-        for (AgentRuntimeEntity agent : agents) {
-            if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId())) {
+        List<AgentRuntimeEntity> candidates = agentRuntimeDao.findByStatusAndAbility(null, null);
+        for (AgentRuntimeEntity candidate : candidates) {
+            if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(candidate.getAgentId())
+                    || !connectedAgentIds.contains(candidate.getAgentId())) {
                 continue;
             }
-
-            // The WebSocket registry is local to this JVM.  Absence from this instance
-            // must not be interpreted as a disconnect in a multi-instance deployment:
-            // another instance may own the socket and refresh lastSeenAt instead.
-            if (!connectedAgentIds.contains(agent.getAgentId())) {
-                continue;
-            }
-
-            String previousStatus = agent.getStatus();
-            String nextStatus = resolveConnectedStatus(agent);
-            boolean statusChanged = !nextStatus.equals(previousStatus);
-
-            agent.setLastSeenAt(now);
-            if (statusChanged) {
-                log.debug("Refreshing locally connected agent status: agentId={}, {} -> {}",
-                        agent.getAgentId(), previousStatus, nextStatus);
-                agent.setStatus(nextStatus);
-            }
-
-            agentRuntimeDao.updateById(agent);
-            if (statusChanged) {
-                publishAgentStatus(agent);
+            try {
+                AgentStatusTransitionWorker.Transition transition =
+                        transitionWorker.refreshConnected(candidate, now);
+                if (transition != null && transition.statusChanged()) {
+                    log.debug("Refreshed locally connected agent status: agentId={}, status={}",
+                            transition.runtime().getAgentId(), transition.runtime().getStatus());
+                    publishAgentStatus(transition.runtime());
+                }
+            } catch (RuntimeException failure) {
+                log.warn("Skipping failed connected Agent refresh: agentId={}, failureType={}",
+                        candidate.getAgentId(), failure.getClass().getSimpleName());
             }
         }
     }
@@ -94,17 +84,6 @@ public class AgentStatusMonitor {
         return Optional.ofNullable(publisher.connectedAgentIds()).orElseGet(Set::of);
     }
 
-    private String resolveConnectedStatus(AgentRuntimeEntity agent) {
-        if (hasText(agent.getCurrentTaskId())) {
-            return AgentConstants.STATUS_BUSY;
-        }
-        return AgentConstants.STATUS_ONLINE;
-    }
-
-    private boolean hasText(String value) {
-        return value != null && !value.isBlank();
-    }
-
     private void publishAgentStatus(AgentRuntimeEntity entity) {
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(entity.getAgentId());
@@ -112,10 +91,19 @@ public class AgentStatusMonitor {
         dto.setAvatar(entity.getAvatar());
         dto.setPersonaName(entity.getPersonaName());
         dto.setStatus(entity.getStatus());
+        dto.setCurrentTaskId(entity.getCurrentTaskId());
+        dto.setCurrentTaskTitle(entity.getCurrentTaskTitle());
         dto.setEndpoint(entity.getEndpoint());
         dto.setLastSeenAt(entity.getLastSeenAt());
         dto.setErrorMessage(entity.getErrorMessage());
-        Optional.ofNullable(eventPublisherProvider.getIfAvailable())
-                .ifPresent(publisher -> publisher.publishAgentStatus(dto));
+        String clientId = entity.getClientId();
+        String ownerJiacn = entity.getOwnerJiacn();
+        try {
+            Optional.ofNullable(eventPublisherProvider.getIfAvailable())
+                    .ifPresent(publisher -> publisher.publishAgentStatus(clientId, ownerJiacn, dto));
+        } catch (RuntimeException failure) {
+            log.warn("Agent status publication failed after persistence: failureType={}",
+                    failure.getClass().getSimpleName());
+        }
     }
 }
