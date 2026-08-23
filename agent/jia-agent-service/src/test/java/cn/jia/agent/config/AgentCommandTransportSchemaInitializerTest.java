@@ -1,6 +1,8 @@
 package cn.jia.agent.config;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -24,7 +26,9 @@ import static org.mockito.Mockito.when;
 
 class AgentCommandTransportSchemaInitializerTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
-            .withUserConfiguration(AgentCommandTransportSchemaConfiguration.class);
+            .withUserConfiguration(
+                    AgentRabbitSafetyConfiguration.class,
+                    AgentCommandTransportSchemaConfiguration.class);
 
     @Test
     void absentFlagRegistersNoInitializerAndRequiresNoJdbcBean() {
@@ -63,17 +67,51 @@ class AgentCommandTransportSchemaInitializerTest {
                 });
     }
 
-    @Test
-    void enabledFlagRegistersInitializerAndPartialSchemaFailsBeforeAnyDdl() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"true", "on", "yes", "1"})
+    void binderTrueSpellingsRegisterInitializerAndReachD01Validation(String spelling)
+            throws Exception {
         RecordingCatalogJdbcTemplate partial = partialCatalog("agent_command_delivery");
         RUNNER.withBean(JdbcTemplate.class, () -> partial)
-                .withPropertyValues("agent.command-outbox.enabled=true")
+                .withPropertyValues("agent.command-outbox.enabled=" + spelling)
+                .run(context -> {
+                    Throwable failure = context.getStartupFailure();
+                    assertNotNull(failure, spelling);
+                    assertTrue(failureChain(failure).contains("exact 0/3 or 3/3"),
+                            spelling + ": " + failureChain(failure));
+                    assertEquals(List.of(), partial.executedSql, spelling);
+                });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"false", "off", "no", "0"})
+    void binderFalseSpellingsRegisterNoInitializerAndPerformNoDatabaseAccess(String spelling) {
+        AtomicInteger accesses = new AtomicInteger();
+        JdbcTemplate poison = poisonJdbcTemplate(accesses);
+        RUNNER.withBean(JdbcTemplate.class, () -> poison)
+                .withPropertyValues("agent.command-outbox.enabled=" + spelling)
+                .run(context -> {
+                    assertNull(context.getStartupFailure(), spelling);
+                    assertFalse(context.getBean(AgentRabbitSafetyGate.class)
+                            .commandOutboxEnabled(), spelling);
+                    assertTrue(context.getBeansOfType(
+                            AgentCommandTransportSchemaInitializer.class).isEmpty(), spelling);
+                    assertEquals(0, accesses.get(), spelling);
+                });
+    }
+
+    @Test
+    void malformedBooleanFailsBindingBeforeAnyDatabaseAccess() {
+        AtomicInteger accesses = new AtomicInteger();
+        JdbcTemplate poison = poisonJdbcTemplate(accesses);
+        RUNNER.withBean(JdbcTemplate.class, () -> poison)
+                .withPropertyValues("agent.command-outbox.enabled=not-a-boolean")
                 .run(context -> {
                     Throwable failure = context.getStartupFailure();
                     assertNotNull(failure);
-                    assertTrue(failureChain(failure).contains("exact 0/3 or 3/3"),
+                    assertTrue(failureChain(failure).contains("agent.command-outbox"),
                             failureChain(failure));
-                    assertEquals(List.of(), partial.executedSql);
+                    assertEquals(0, accesses.get());
                 });
     }
 
@@ -131,6 +169,19 @@ class AgentCommandTransportSchemaInitializerTest {
 
     private RecordingCatalogJdbcTemplate partialCatalog(String... tables) throws Exception {
         return new RecordingCatalogJdbcTemplate(mysqlDataSource(), List.of(tables));
+    }
+
+    private JdbcTemplate poisonJdbcTemplate(AtomicInteger accesses) {
+        DataSource source = mock(DataSource.class);
+        try {
+            when(source.getConnection()).thenAnswer(invocation -> {
+                accesses.incrementAndGet();
+                throw new AssertionError("D01 must not access the database for this flag value");
+            });
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+        return new JdbcTemplate(source);
     }
 
     private DataSource mysqlDataSource() throws Exception {

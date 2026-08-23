@@ -185,6 +185,34 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
     }
 
     @Test
+    void externalInboundForeignKeyFailsClosedAndIsNotRepaired() {
+        JdbcTemplate jdbc = newDatabase("inbound_fk_drift");
+        new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
+        jdbc.execute("""
+                CREATE TABLE external_transport_ref (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    delivery_id BIGINT NOT NULL,
+                    PRIMARY KEY (id),
+                    CONSTRAINT fk_external_transport_delivery FOREIGN KEY (delivery_id)
+                        REFERENCES agent_command_delivery(id)
+                ) ENGINE=InnoDB
+                """);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
+        assertTrue(failure.getMessage().contains("agent_command_delivery"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("foreign keys"), failure.getMessage());
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.referential_constraints
+                WHERE constraint_schema=DATABASE()
+                  AND table_name='external_transport_ref'
+                  AND referenced_table_name='agent_command_delivery'
+                  AND constraint_name='fk_external_transport_delivery'
+                """, Integer.class));
+        assertTrue(tableExists(jdbc, "external_transport_ref"));
+    }
+
+    @Test
     void missingRetryIndexAndForeignKeyDriftBothFailClosedWithoutRepair() {
         JdbcTemplate missingIndex = newDatabase("index_drift");
         new AgentCommandTransportSchemaInitializer(missingIndex).afterPropertiesSet();

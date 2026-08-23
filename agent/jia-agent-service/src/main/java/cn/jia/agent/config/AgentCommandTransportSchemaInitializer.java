@@ -136,11 +136,12 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
         Integer foreignKeys = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
                 FROM information_schema.referential_constraints
-                WHERE constraint_schema = DATABASE() AND table_name = ?
-                """, Integer.class, expected.name());
+                WHERE constraint_schema = DATABASE()
+                  AND (table_name = ? OR referenced_table_name = ?)
+                """, Integer.class, expected.name(), expected.name());
         if (foreignKeys == null || foreignKeys != 0) {
             throw new IllegalStateException("D01 transport table " + expected.name()
-                    + " must not declare database foreign keys");
+                    + " must not participate in database foreign keys");
         }
     }
 
