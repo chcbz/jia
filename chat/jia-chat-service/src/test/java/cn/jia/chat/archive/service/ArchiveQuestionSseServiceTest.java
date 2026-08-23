@@ -28,6 +28,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -422,7 +423,8 @@ class ArchiveQuestionSseServiceTest {
     }
 
     @Test
-    void permanentlyBlockedTransportCompletionsAreBoundedAndAdmissionRecoversAfterRelease() throws Exception {
+    void transportCompletionResponsibilityIsReservedBeforeSubscribeAndEveryAcceptedEmitterCompletesOnce()
+            throws Exception {
         service.stop();
         replay = new ManualExecutor();
         heartbeat = new CapturingScheduler();
@@ -433,45 +435,55 @@ class ArchiveQuestionSseServiceTest {
                     return thread;
                 }, new ThreadPoolExecutor.AbortPolicy());
         ArchiveQuestionSseService.AdmissionLimits limits = new ArchiveQuestionSseService.AdmissionLimits(
-                4, 4, 4, 4, 4, 4, 2, 2);
+                3, 3, 3, 3, 3, 3, 2, 2);
         service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat,
                 (ignored, terminated) -> ArchiveQuestionSseService.directOutbound(terminated),
                 limits, completions);
         CountDownLatch twoEntered = new CountDownLatch(2);
         CountDownLatch release = new CountDownLatch(1);
-        List<CompletionBlockingEmitter> emitters = new ArrayList<>();
-        List<ArchiveQuestionSseService.StreamHandle> handles = new ArrayList<>();
-        for (int index = 0; index < 4; index++) {
-            String id = String.format("5000000%d-0000-4000-8000-000000000000", index + 1);
-            question(id, 0);
-            CompletionBlockingEmitter emitter = new CompletionBlockingEmitter(twoEntered, release);
-            emitters.add(emitter);
-            handles.add(service.subscribe(OWNER, id, 0,
-                    new ArchiveQuestionSseService.EmitterSink(emitter)));
-        }
-        replay.runAll();
+        String firstId = "50000001-0000-4000-8000-000000000000";
+        String secondId = "50000002-0000-4000-8000-000000000000";
+        String thirdId = "50000003-0000-4000-8000-000000000000";
+        question(firstId, 0);
+        question(secondId, 0);
+        question(thirdId, 0);
+        CompletionBlockingEmitter firstEmitter = new CompletionBlockingEmitter(twoEntered, release);
+        CompletionBlockingEmitter secondEmitter = new CompletionBlockingEmitter(twoEntered, release);
+        CompletionBlockingEmitter thirdEmitter = new CompletionBlockingEmitter(new CountDownLatch(1), release);
+        ArchiveQuestionSseService.StreamHandle first = service.subscribe(OWNER, firstId, 0,
+                new ArchiveQuestionSseService.EmitterSink(firstEmitter));
+        ArchiveQuestionSseService.StreamHandle second = service.subscribe(OWNER, secondId, 0,
+                new ArchiveQuestionSseService.EmitterSink(secondEmitter));
+        assertEquals(2, service.pendingCompletions(),
+                "completion permits are bound to accepted stream lifecycles, not close-time races");
+        ArchivePersonalDataException rejected = assertThrows(ArchivePersonalDataException.class,
+                () -> service.subscribe(OWNER, thirdId, 0,
+                        new ArchiveQuestionSseService.EmitterSink(thirdEmitter)));
+        assertEquals(429, rejected.status());
+        assertEquals(0, thirdEmitter.transportCalls.get(),
+                "capacity rejection occurs before a transport is accepted");
 
-        handles.get(0).close();
-        handles.get(1).close();
+        first.close();
+        second.close();
         assertTrue(twoEntered.await(2, TimeUnit.SECONDS));
         assertEquals(2, service.pendingCompletions());
-
-        long started = System.nanoTime();
-        handles.get(2).close();
-        assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0);
-        emitters.get(2).cancel();
-        emitters.get(2).complete();
-        Thread.sleep(50);
-        assertEquals(0, emitters.get(2).transportCalls.get(),
-                "N+1 completion is coalesced/rejected without another thread, emitter or response hold");
-        assertEquals(2, service.pendingCompletions());
-
         release.countDown();
         assertTrue(await(() -> service.pendingCompletions() == 0, Duration.ofSeconds(2)));
-        handles.get(3).close();
-        assertTrue(await(() -> emitters.get(3).transportCalls.get() == 1, Duration.ofSeconds(2)),
-                "completion admission must recover after blocked transports return");
+        assertEquals(1, firstEmitter.transportCalls.get());
+        assertEquals(1, secondEmitter.transportCalls.get());
+
+        ArchiveQuestionSseService.StreamHandle third = service.subscribe(OWNER, thirdId, 0,
+                new ArchiveQuestionSseService.EmitterSink(thirdEmitter));
+        assertEquals(1, service.pendingCompletions());
+        third.close();
+        assertTrue(await(() -> thirdEmitter.transportCalls.get() == 1, Duration.ofSeconds(2)));
         assertTrue(await(() -> service.pendingCompletions() == 0, Duration.ofSeconds(2)));
+        firstEmitter.complete();
+        secondEmitter.cancel();
+        thirdEmitter.complete();
+        assertEquals(1, firstEmitter.transportCalls.get());
+        assertEquals(1, secondEmitter.transportCalls.get());
+        assertEquals(1, thirdEmitter.transportCalls.get());
     }
 
     @Test
@@ -508,6 +520,58 @@ class ArchiveQuestionSseServiceTest {
         Thread.sleep(50);
         assertEquals(1, emitter.transportCalls.get());
         assertEquals(1, emitter.sendCalls.get(), "closed emitters reject every late callback");
+    }
+
+    @Test
+    void stopAndSubscribeHaveAtomicLifecycleBoundaryWithNoLeakedAdmissionOrLateSend() throws Exception {
+        service.stop();
+        replay = new ManualExecutor();
+        heartbeat = new CapturingScheduler();
+        CountDownLatch factoryEntered = new CountDownLatch(1);
+        CountDownLatch releaseFactory = new CountDownLatch(1);
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat,
+                (ignored, terminated) -> {
+                    factoryEntered.countDown();
+                    try { releaseFactory.await(5, TimeUnit.SECONDS); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                    return ArchiveQuestionSseService.directOutbound(terminated);
+                });
+        question(0);
+        CompletionBlockingEmitter emitter = new CompletionBlockingEmitter(
+                new CountDownLatch(1), new CountDownLatch(0));
+        ArchiveQuestionSseService.EmitterSink sink = new ArchiveQuestionSseService.EmitterSink(emitter);
+        AtomicReference<ArchiveQuestionSseService.StreamHandle> accepted = new AtomicReference<>();
+        AtomicReference<Throwable> subscribeFailure = new AtomicReference<>();
+        Thread subscriber = new Thread(() -> {
+            try { accepted.set(service.subscribe(OWNER, ID, 0, sink)); }
+            catch (Throwable failure) { subscribeFailure.set(failure); }
+        }, "archive-question-subscribe-barrier");
+        Thread stopper = new Thread(service::stop, "archive-question-stop-barrier");
+        subscriber.start();
+        assertTrue(factoryEntered.await(2, TimeUnit.SECONDS));
+        stopper.start();
+        Thread.sleep(50);
+        assertTrue(stopper.isAlive(), "stop waits for the short subscribe registration boundary");
+        releaseFactory.countDown();
+        subscriber.join(2000);
+        stopper.join(2000);
+        assertFalse(subscriber.isAlive());
+        assertFalse(stopper.isAlive());
+        assertEquals(null, subscribeFailure.get());
+        assertTrue(accepted.get() != null && accepted.get().closed());
+        assertEquals(0, service.activeSubscriptions());
+        assertEquals(0, service.admittedSessions());
+        assertEquals(0, service.pendingReplays());
+        assertEquals(0, service.admittedOutboundWriters());
+        assertTrue(await(() -> service.pendingCompletions() == 0, Duration.ofSeconds(2)));
+        assertEquals(1, emitter.transportCalls.get(),
+                "the emitter accepted before stop owns exactly one real transport completion");
+
+        broker.publish(OWNER, new EventRecord(0, ID, 1, "QUESTION_QUEUED", payload("QUESTION_QUEUED"), NOW));
+        replay.runAll();
+        assertFalse(emitter.sendIfOpen(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                .comment("late")), "callbacks after stop cannot write to the closed emitter");
+        assertEquals(1, emitter.transportCalls.get());
     }
 
     @Test

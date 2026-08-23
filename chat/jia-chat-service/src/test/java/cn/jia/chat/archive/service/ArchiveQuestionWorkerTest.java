@@ -624,6 +624,124 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
+    void fullExactRetryRegistryKeepsDurableBlockedRangeWhileHealthyRowsAndTailAdvance() {
+        delivery.stop();
+        SelectiveFailureStore selective = new SelectiveFailureStore();
+        store = selective;
+        transactions = new ArchiveQuestionTestSupport.Transactions(store);
+        broker = new ArchiveQuestionEventBroker();
+        delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("bounded-overflow-" + calls.get());
+        };
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        for (int index = 0; index < ArchiveQuestionWorker.RETRY_CAPACITY; index++) {
+            String poisonId = String.format("%08x-0000-4000-8000-000000000000", 24000 + index);
+            selective.fail(poisonId);
+            store.setQuestion(OWNER, questionWith(base, poisonId, "QUEUED", 1));
+            store.setOutbox(OWNER, readyOutbox(baseOutbox, poisonId, 1));
+        }
+        String overflowId = "f23e4567-e89b-42d3-a456-426614174000";
+        String healthyId = "f33e4567-e89b-42d3-a456-426614174000";
+        selective.fail(overflowId);
+        store.setQuestion(OWNER, questionWith(base, overflowId, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, overflowId, 1));
+        store.setQuestion(OWNER, questionWith(base, healthyId, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, healthyId, 1));
+
+        ArchiveQuestionWorker worker = worker(provider);
+        assertFalse(worker.runOnce());
+        assertFalse(worker.runOnce());
+        assertEquals(ArchiveQuestionWorker.RETRY_CAPACITY, worker.retryResponsibilities());
+        assertTrue(worker.runOnce(), "forward pagination must still process a healthy row after overflow");
+        assertEquals("SUCCEEDED", store.findQuestion(OWNER, healthyId, false).status());
+        assertEquals("QUEUED", store.findQuestion(OWNER, overflowId, false).status());
+        assertEquals(ArchiveQuestionWorker.RETRY_CAPACITY, worker.retryResponsibilities());
+
+        selective.allow(overflowId);
+        boolean overflowDone = false;
+        for (int run = 0; run < 12 && !overflowDone; run++) {
+            ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "bounded-overflow-tail-" + run);
+            String tailId = String.format("%08x-0000-4000-8000-000000000000", 25000 + run);
+            store.setQuestion(tailOwner, questionWith(base, tailId, "QUEUED", 1));
+            store.setOutbox(tailOwner, readyOutbox(baseOutbox, tailId, 1));
+            int claimQueries = store.claimCandidateQueries;
+            worker.runOnce();
+            assertTrue(store.claimCandidateQueries - claimQueries <= 1);
+            assertEquals(ArchiveQuestionWorker.RETRY_CAPACITY, worker.retryResponsibilities(),
+                    "permanent transient poisons remain bounded while one blocked range owns overflow revisit");
+            overflowDone = "SUCCEEDED".equals(store.findQuestion(OWNER, overflowId, false).status());
+        }
+        assertTrue(overflowDone,
+                "capacity overflow retains durable revisit responsibility independent of forward cursor/tail");
+        assertEquals(2, calls.get());
+    }
+
+    @Test
+    void moreThanRetryCapacityPermanentFailuresStayBoundedAndContinuousTailCannotBlockHealthyRows() {
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("healthy-after-permanent-poison");
+        };
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        int poisonCount = ArchiveQuestionWorker.RETRY_CAPACITY + 17;
+        for (int index = 0; index < poisonCount; index++) {
+            String readyId = String.format("%08x-0000-4000-8000-000000000000", index + 12288);
+            store.setQuestion(OWNER, questionWith(base, readyId, "QUEUED", 1));
+            OutboxRecord ready = readyOutbox(baseOutbox, readyId, 1);
+            store.setOutbox(OWNER, new OutboxRecord(ready.rowId(), ready.questionId(), ready.state(),
+                    ready.attemptCount(), Long.MAX_VALUE, ready.publishedSequence(), ready.availableAt(),
+                    ready.leaseUntil(), ready.lastErrorCode(), ready.createdAt(), ready.updatedAt()));
+
+            String expiredId = String.format("%08x-0000-4000-8000-000000000000", index + 16384);
+            store.setQuestion(OWNER, questionWith(base, expiredId, "RUNNING", Long.MAX_VALUE));
+            store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, expiredId, Long.MAX_VALUE,
+                    NOW.minusSeconds(30)));
+        }
+        String healthyReady = "d23e4567-e89b-42d3-a456-426614174000";
+        String healthyExpired = "e23e4567-e89b-42d3-a456-426614174000";
+        store.setQuestion(OWNER, questionWith(base, healthyReady, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, healthyReady, 1));
+        store.setQuestion(OWNER, questionWith(base, healthyExpired, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, healthyExpired, 2, NOW.minusSeconds(20)));
+
+        ArchiveQuestionWorker worker = worker(provider);
+        boolean readyDone = false;
+        boolean expiredDone = false;
+        for (int run = 0; run < 24 && (!readyDone || !expiredDone); run++) {
+            ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "permanent-tail-" + run);
+            String tailId = String.format("%08x-0000-4000-8000-000000000000", 20000 + run);
+            store.setQuestion(tailOwner, questionWith(base, tailId, "QUEUED", 1));
+            store.setOutbox(tailOwner, readyOutbox(baseOutbox, tailId, 1));
+            int claimQueries = store.claimCandidateQueries;
+            int expiredQueries = store.exhaustedCandidateQueries;
+            worker.runOnce();
+            assertTrue(store.claimCandidateQueries - claimQueries <= 1);
+            assertTrue(store.exhaustedCandidateQueries - expiredQueries <= 1);
+            assertTrue(worker.retryResponsibilities() <= ArchiveQuestionWorker.RETRY_CAPACITY,
+                    "READY and expired exact retries share one global bounded registry");
+            readyDone = "SUCCEEDED".equals(store.findQuestion(OWNER, healthyReady, false).status());
+            expiredDone = "FAILED_FINAL".equals(store.findQuestion(OWNER, healthyExpired, false).status());
+        }
+        assertTrue(readyDone, "permanent READY poison cannot block a later healthy claim");
+        assertTrue(expiredDone, "permanent expired poison cannot block a later healthy finalization");
+        assertEquals(0, worker.retryResponsibilities(),
+                "permanent exhaustion/contract failures never retain exact retry memory");
+        assertEquals(1, calls.get());
+    }
+
+    @Test
     void blockingQuestionSinkCannotDelayHttpProviderCompletionOrLeaseRenewal() throws Exception {
         CountDownLatch sinkEntered = new CountDownLatch(1);
         CountDownLatch releaseSink = new CountDownLatch(1);
@@ -746,6 +864,19 @@ class ArchiveQuestionWorkerTest {
         assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
         assertEquals(answer, service.get(OWNER, ID).answer());
         assertTrue(store.allEvents(OWNER, ID).stream().filter(event -> "ANSWER_DELTA".equals(event.eventType())).count() > 1);
+    }
+
+    private static final class SelectiveFailureStore extends ArchiveQuestionTestSupport.Store {
+        private final java.util.Set<String> failing = new java.util.HashSet<>();
+        synchronized void fail(String questionId) { failing.add(questionId); }
+        synchronized void allow(String questionId) { failing.remove(questionId); }
+        @Override public synchronized int updateQuestion(ArchiveOwnerScope owner, QuestionRecord row,
+                                                          long expectedVersion, long expectedSequence) {
+            if (failing.contains(row.questionId())) {
+                throw new IllegalStateException("injected durable candidate transient failure");
+            }
+            return super.updateQuestion(owner, row, expectedVersion, expectedSequence);
+        }
     }
 
     private boolean runUntil(ArchiveQuestionWorker worker, BooleanSupplier condition, int maxRuns) {

@@ -8,7 +8,10 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -229,6 +232,66 @@ class ArchiveQuestionEventDeliveryTest {
         }
     }
 
+
+    @Test
+    void concurrentZeroToZeroRewindEpochPreventsOldRecoveryScanFromSkippingLowRow() throws Exception {
+        BlockingPublishCandidateStore store = new BlockingPublishCandidateStore();
+        ArchiveQuestionTestSupport.Transactions transactions = new ArchiveQuestionTestSupport.Transactions(store);
+        ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
+        HoldingExecutor publisher = new HoldingExecutor();
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(
+                store, broker, transactions, publisher);
+        seedQuestionAndOutbox(store, OWNER, ID, 1, 1);
+        String oldTailId = "323e4567-e89b-42d3-a456-426614174000";
+        seedQuestionAndOutbox(store, OTHER, oldTailId, 1, 0);
+        store.insertEvent(OTHER, new EventRecord(0, oldTailId, 1, "QUESTION_QUEUED", "{}", NOW));
+        try {
+            for (int index = 0; index < ArchiveQuestionEventDelivery.RETRY_CAPACITY; index++) {
+                String synthetic = String.format("%08x-0000-4000-8000-000000000000", index + 4096);
+                delivery.afterCommit(OWNER,
+                        new EventRecord(0, synthetic, 1, "QUESTION_QUEUED", "{}", NOW));
+            }
+            assertEquals(ArchiveQuestionEventDelivery.RETRY_CAPACITY, delivery.retryResponsibilities());
+            assertEquals(ArchiveQuestionEventDelivery.RETRY_CAPACITY, publisher.pending());
+
+            Thread oldRecovery = new Thread(delivery::recoverOnce, "archive-question-old-recovery-scan");
+            store.blockNextPublishQuery.set(true);
+            oldRecovery.start();
+            assertTrue(store.publishQueryCaptured.await(2, TimeUnit.SECONDS));
+
+            QuestionRecord low = store.findQuestion(OWNER, ID, false);
+            store.setQuestion(OWNER, new QuestionRecord(low.rowId(), low.questionId(), low.editionId(),
+                    low.manifestSha256(), low.blockType(), low.blockId(), low.anchorJson(), low.selectedText(),
+                    low.questionText(), low.status(), low.responderId(), low.responderName(), low.responderMode(),
+                    low.answer(), low.retryCount(), low.lastErrorCode(), low.version(), 2, low.createdAt(), NOW, null));
+            store.insertEvent(OWNER, new EventRecord(0, ID, 2, "QUESTION_RUNNING", "{}", NOW));
+            long beforeEpoch = delivery.rewindEpoch();
+            delivery.afterCommit(OWNER,
+                    new EventRecord(0, ID, 2, "QUESTION_RUNNING", "{}", NOW));
+            assertEquals(beforeEpoch + 1, delivery.rewindEpoch(),
+                    "a 0->0 rewind must still be observable to the blocked scan");
+
+            store.releasePublishQuery.countDown();
+            oldRecovery.join(2000);
+            assertFalse(oldRecovery.isAlive());
+            publisher.runAll();
+            assertEquals(0, delivery.retryResponsibilities());
+
+            java.util.concurrent.atomic.AtomicInteger tail = new java.util.concurrent.atomic.AtomicInteger(8192);
+            assertTrue(waitUntil(() -> {
+                String id = String.format("%08x-0000-4000-8000-000000000000", tail.getAndIncrement());
+                seedQuestionAndOutbox(store, OTHER, id, 1, 0);
+                store.insertEvent(OTHER, new EventRecord(0, id, 1, "QUESTION_QUEUED", "{}", NOW));
+                delivery.recoverOnce();
+                publisher.runAll();
+                return store.findOutbox(OWNER, ID, false).publishedSequence() == 2;
+            }, Duration.ofSeconds(3)), "the rewound low row must remain reachable under continuous tail growth");
+        } finally {
+            store.releasePublishQuery.countDown();
+            delivery.stop();
+        }
+    }
+
     @Test
     void capacityRejectedRecoveryCandidateStaysReachableWhileNewRowsKeepArriving() throws Exception {
         ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
@@ -323,6 +386,52 @@ class ArchiveQuestionEventDeliveryTest {
                 "", 0, null, 1, sequence, NOW, NOW, null));
         store.setOutbox(owner, new OutboxRecord(2, questionId, "READY", 0, 0, published,
                 NOW, null, null, NOW, NOW));
+    }
+
+
+    private static final class BlockingPublishCandidateStore extends ArchiveQuestionTestSupport.Store {
+        private final AtomicBoolean blockNextPublishQuery = new AtomicBoolean();
+        private final CountDownLatch publishQueryCaptured = new CountDownLatch(1);
+        private final CountDownLatch releasePublishQuery = new CountDownLatch(1);
+        @Override public List<cn.jia.chat.archive.store.ArchiveQuestionStore.PublishCandidate>
+        findPublishCandidates(long afterRowId, int limit) {
+            List<cn.jia.chat.archive.store.ArchiveQuestionStore.PublishCandidate> captured =
+                    super.findPublishCandidates(afterRowId, limit);
+            if (blockNextPublishQuery.compareAndSet(true, false)) {
+                publishQueryCaptured.countDown();
+                try { releasePublishQuery.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            }
+            return captured;
+        }
+    }
+
+    private static final class HoldingExecutor extends AbstractExecutorService {
+        private final Queue<Runnable> tasks = new ArrayDeque<>();
+        private boolean shutdown;
+        @Override public synchronized void shutdown() { shutdown = true; }
+        @Override public synchronized List<Runnable> shutdownNow() {
+            shutdown = true;
+            List<Runnable> remaining = List.copyOf(tasks);
+            tasks.clear();
+            return remaining;
+        }
+        @Override public synchronized boolean isShutdown() { return shutdown; }
+        @Override public synchronized boolean isTerminated() { return shutdown && tasks.isEmpty(); }
+        @Override public boolean awaitTermination(long timeout, TimeUnit unit) { return isTerminated(); }
+        @Override public synchronized void execute(Runnable command) {
+            if (shutdown) throw new java.util.concurrent.RejectedExecutionException();
+            tasks.add(command);
+        }
+        synchronized int pending() { return tasks.size(); }
+        void runAll() {
+            while (true) {
+                Runnable task;
+                synchronized (this) { task = tasks.poll(); }
+                if (task == null) return;
+                task.run();
+            }
+        }
     }
 
     private static final class FailingFirstReadTransactions implements ArchiveTransactions {

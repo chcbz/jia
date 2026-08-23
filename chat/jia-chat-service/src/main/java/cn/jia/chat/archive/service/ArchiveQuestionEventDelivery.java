@@ -31,7 +31,7 @@ public class ArchiveQuestionEventDelivery {
     private static final int RECOVERY_BATCH = 100;
     private static final int PUBLISH_THREADS = 4;
     private static final int PUBLISH_QUEUE = 256;
-    private static final int RETRY_CAPACITY = PUBLISH_QUEUE + PUBLISH_THREADS;
+    static final int RETRY_CAPACITY = PUBLISH_QUEUE + PUBLISH_THREADS;
     private final ArchiveQuestionStore store;
     private final ArchiveQuestionEventBroker broker;
     private final ArchiveTransactions transactions;
@@ -41,7 +41,9 @@ public class ArchiveQuestionEventDelivery {
     private final Map<Key, RetryState> retries = new HashMap<>();
     private final ArrayDeque<Key> retryQueue = new ArrayDeque<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final Object cursorLock = new Object();
     private final AtomicLong recoveryCursor = new AtomicLong();
+    private final AtomicLong rewindEpoch = new AtomicLong();
 
     public ArchiveQuestionEventDelivery(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                                         ArchiveTransactions transactions) {
@@ -64,31 +66,31 @@ public class ArchiveQuestionEventDelivery {
             if (!registerRetry(key)) {
                 // A bounded registry must never silently lose an older-row mutation. Rewind the durable
                 // keyset scan; forward recovery will stop at any row it cannot independently register.
-                recoveryCursor.set(0);
+                requestRewind();
                 return;
             }
             scheduleRetries(1);
         } catch (Throwable ignored) {
             // The HTTP mutation is already committed; the durable recovery scan will retry.
-            recoveryCursor.set(0);
+            requestRewind();
         }
     }
 
     /** Bounded durable scan. Crossing a row requires a durable watermark or independent retry ownership. */
     public synchronized int recoverOnce() {
         int scheduled = scheduleRetries(RECOVERY_BATCH);
+        CursorSnapshot snapshot = cursorSnapshot();
         List<ArchiveQuestionStore.PublishCandidate> candidates;
-        long cursor = recoveryCursor.get();
         try {
-            candidates = store.findPublishCandidates(cursor, RECOVERY_BATCH);
+            candidates = store.findPublishCandidates(snapshot.cursor(), RECOVERY_BATCH);
         } catch (Throwable unavailable) {
             return scheduled;
         }
         if (candidates.isEmpty()) {
-            if (cursor != 0) recoveryCursor.compareAndSet(cursor, 0);
+            commitCursor(snapshot.epoch(), 0);
             return scheduled;
         }
-        long nextCursor = cursor;
+        long nextCursor = snapshot.cursor();
         for (ArchiveQuestionStore.PublishCandidate candidate : candidates) {
             if (candidate == null || candidate.rowId() <= nextCursor) continue;
             long candidateRowId = candidate.rowId();
@@ -99,16 +101,43 @@ public class ArchiveQuestionEventDelivery {
             Key key = new Key(candidate.owner(), candidate.questionId());
             if (!registerRetry(key)) {
                 // Registry capacity is the backpressure boundary. Do not cross this durable row until
-                // another responsibility completes and frees a slot.
-                recoveryCursor.set(nextCursor);
+                // another responsibility completes and frees a slot. A concurrent rewind always wins.
+                commitCursor(snapshot.epoch(), nextCursor);
                 return scheduled;
             }
             nextCursor = candidateRowId;
             // ALREADY_IN_FLIGHT is safe here: the retry generation is independent of the forward cursor.
             scheduled += scheduleRetries(1);
         }
-        recoveryCursor.set(nextCursor);
+        commitCursor(snapshot.epoch(), nextCursor);
         return scheduled;
+    }
+
+    private CursorSnapshot cursorSnapshot() {
+        synchronized (cursorLock) {
+            return new CursorSnapshot(rewindEpoch.get(), recoveryCursor.get());
+        }
+    }
+
+    private boolean commitCursor(long expectedEpoch, long cursor) {
+        synchronized (cursorLock) {
+            if (rewindEpoch.get() != expectedEpoch) return false;
+            recoveryCursor.set(cursor);
+            return true;
+        }
+    }
+
+    private void requestRewind() {
+        synchronized (cursorLock) {
+            rewindEpoch.incrementAndGet();
+            recoveryCursor.set(0);
+        }
+    }
+
+    long rewindEpoch() { return rewindEpoch.get(); }
+
+    int retryResponsibilities() {
+        synchronized (retryLock) { return retries.size(); }
     }
 
     private boolean registerRetry(Key key) {
@@ -292,6 +321,7 @@ public class ArchiveQuestionEventDelivery {
         private long generation;
         private boolean enqueued;
     }
+    private record CursorSnapshot(long epoch, long cursor) { }
     private record Key(ArchiveOwnerScope owner, String questionId) { }
     private record RetryTask(Key key, RetryState state, long generation) { }
     private record Delivery(long expectedSequence, EventRecord event) { }

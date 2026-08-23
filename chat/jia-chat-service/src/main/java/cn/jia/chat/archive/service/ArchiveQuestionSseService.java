@@ -67,6 +67,9 @@ public class ArchiveQuestionSseService {
     private final Admission admission;
     private final Set<Session> sessions = ConcurrentHashMap.newKeySet();
     private final Set<CompletionWork> completionWorks = ConcurrentHashMap.newKeySet();
+    private final Object lifecycleLock = new Object();
+    private final Object completionLock = new Object();
+    private final java.util.ArrayDeque<CompletionWork> completionQueue = new java.util.ArrayDeque<>();
     private final AtomicBoolean stopped = new AtomicBoolean();
 
     public ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
@@ -134,26 +137,47 @@ public class ArchiveQuestionSseService {
         Objects.requireNonNull(sink, "sink");
         QuestionRecord visible = store.findQuestion(owner, questionId, false);
         if (visible == null) notFound();
-        if (stopped.get()) throw rateLimited();
-        AdmissionLease lease = admission.acquire(owner);
-        if (lease == null) throw rateLimited();
-        Outbound outbound;
-        try {
-            outbound = Objects.requireNonNull(
-                    outboundFactory.create(questionId, lease::releaseOutbound), "outbound");
-        } catch (Throwable failure) {
-            lease.releaseAll();
-            throw failure;
-        }
-        if (sink instanceof EmitterSink emitterSink) {
-            emitterSink.setCompletionScheduler(action -> scheduleCompletion(owner, action));
-        }
-        Session session = new Session(owner, questionId, cursor, sink, outbound, lease);
-        try {
-            session.start();
-            return session;
-        } catch (RejectedExecutionException rejected) {
-            throw rateLimited();
+        synchronized (lifecycleLock) {
+            if (stopped.get()) throw rateLimited();
+            boolean transportCompletionRequired = sink instanceof EmitterSink;
+            AdmissionLease lease = admission.acquire(owner, transportCompletionRequired);
+            if (lease == null) throw rateLimited();
+            Outbound outbound;
+            try {
+                outbound = Objects.requireNonNull(
+                        outboundFactory.create(questionId, lease::releaseOutbound), "outbound");
+            } catch (Throwable failure) {
+                lease.releaseAll();
+                throw failure;
+            }
+            if (sink instanceof EmitterSink emitterSink) {
+                emitterSink.setCompletionReservation(new CompletionReservation() {
+                    @Override public boolean submit(Runnable action) {
+                        return scheduleCompletion(lease, action);
+                    }
+                    @Override public void release() {
+                        lease.releaseCompletion();
+                        completionPermitReleased();
+                    }
+                });
+            }
+            if (stopped.get()) {
+                outbound.cancel();
+                lease.releaseAll();
+                completionPermitReleased();
+                throw rateLimited();
+            }
+            Session session = new Session(owner, questionId, cursor, sink, outbound, lease);
+            try {
+                session.start();
+                return session;
+            } catch (RejectedExecutionException rejected) {
+                session.abort();
+                throw rateLimited();
+            } catch (Throwable failure) {
+                session.abort();
+                throw failure;
+            }
         }
     }
 
@@ -510,8 +534,8 @@ public class ArchiveQuestionSseService {
     static final class EmitterSink implements Sink {
         private final ManagedSseEmitter emitter;
         EmitterSink(ManagedSseEmitter emitter) { this.emitter = emitter; }
-        void setCompletionScheduler(CompletionScheduler scheduler) {
-            emitter.setCompletionScheduler(scheduler);
+        void setCompletionReservation(CompletionReservation reservation) {
+            emitter.setCompletionReservation(reservation);
         }
         @Override public void onClose(Runnable cleanup) {
             emitter.setCleanup(cleanup);
@@ -543,15 +567,15 @@ public class ArchiveQuestionSseService {
         private final AtomicBoolean finished = new AtomicBoolean();
         private final AtomicBoolean transportCompletionStarted = new AtomicBoolean();
         private final AtomicReference<Runnable> cleanup = new AtomicReference<>(() -> { });
-        private final AtomicReference<CompletionScheduler> completionScheduler =
-                new AtomicReference<>(ignored -> false);
+        private final AtomicReference<CompletionReservation> completionReservation =
+                new AtomicReference<>(CompletionReservation.NONE);
 
         ManagedSseEmitter(long timeout) { super(timeout); }
 
         void setCleanup(Runnable cleanup) { this.cleanup.set(Objects.requireNonNull(cleanup)); }
 
-        void setCompletionScheduler(CompletionScheduler scheduler) {
-            completionScheduler.set(Objects.requireNonNull(scheduler, "scheduler"));
+        void setCompletionReservation(CompletionReservation reservation) {
+            completionReservation.set(Objects.requireNonNull(reservation, "reservation"));
         }
 
         boolean sendIfOpen(SseEventBuilder event) {
@@ -571,7 +595,7 @@ public class ArchiveQuestionSseService {
             finish(Objects.requireNonNull(error, "error"), true);
         }
 
-        void cancelFromContainer() { finish(null, false); }
+        void cancelFromContainer() { finish(null, true); }
 
         void cancel() {
             finish(new IOException("Archive question event stream cancelled"), true);
@@ -581,17 +605,17 @@ public class ArchiveQuestionSseService {
             if (!finished.compareAndSet(false, true)) return;
             runCleanup();
             if (completeTransport) scheduleTransportCompletion(error);
+            else completionReservation.get().release();
         }
 
         private void scheduleTransportCompletion(Throwable error) {
             if (!transportCompletionStarted.compareAndSet(false, true)) return;
             try {
-                completionScheduler.get().submit(() -> {
-                    try { completeTransport(error); }
-                    catch (Throwable ignored) { /* Logical cleanup already completed; transport is best effort. */ }
-                });
+                if (!completionReservation.get().submit(() -> completeTransport(error))) {
+                    throw new IllegalStateException("Accepted SSE transport completion was not scheduled");
+                }
             } catch (Throwable ignored) {
-                // Logical cleanup is authoritative; executor/admission failures never escape close callbacks.
+                // The lifecycle-bound reservation remains owned by the bounded completion queue.
             }
         }
 
@@ -638,11 +662,13 @@ public class ArchiveQuestionSseService {
 
         private Admission(AdmissionLimits limits) { this.limits = limits; }
 
-        private synchronized AdmissionLease acquire(ArchiveOwnerScope owner) {
+        private synchronized AdmissionLease acquire(ArchiveOwnerScope owner, boolean completionRequired) {
             Counts counts = owners.computeIfAbsent(owner, ignored -> new Counts());
             if (active >= limits.activeGlobal() || counts.active >= limits.activeOwner()
                     || replays >= limits.replayGlobal() || counts.replays >= limits.replayOwner()
-                    || outbounds >= limits.outboundGlobal() || counts.outbounds >= limits.outboundOwner()) {
+                    || outbounds >= limits.outboundGlobal() || counts.outbounds >= limits.outboundOwner()
+                    || (completionRequired && (completions >= limits.completionGlobal()
+                    || counts.completions >= limits.completionOwner()))) {
                 removeIfEmpty(owner, counts);
                 return null;
             }
@@ -652,7 +678,11 @@ public class ArchiveQuestionSseService {
             counts.active++;
             counts.replays++;
             counts.outbounds++;
-            return new AdmissionLease(this, owner);
+            if (completionRequired) {
+                completions++;
+                counts.completions++;
+            }
+            return new AdmissionLease(this, owner, completionRequired);
         }
 
         private synchronized void release(ArchiveOwnerScope owner, Resource resource) {
@@ -674,18 +704,6 @@ public class ArchiveQuestionSseService {
 
         private synchronized int active() { return active; }
         private synchronized int replays() { return replays; }
-        private synchronized CompletionPermit acquireCompletion(ArchiveOwnerScope owner) {
-            Counts counts = owners.computeIfAbsent(owner, ignored -> new Counts());
-            if (completions >= limits.completionGlobal()
-                    || counts.completions >= limits.completionOwner()) {
-                removeIfEmpty(owner, counts);
-                return null;
-            }
-            completions++;
-            counts.completions++;
-            return new CompletionPermit(this, owner);
-        }
-
         private synchronized int outbounds() { return outbounds; }
         private synchronized int completions() { return completions; }
     }
@@ -696,10 +714,12 @@ public class ArchiveQuestionSseService {
         private final AtomicBoolean active = new AtomicBoolean(true);
         private final AtomicBoolean replay = new AtomicBoolean(true);
         private final AtomicBoolean outbound = new AtomicBoolean(true);
+        private final AtomicBoolean completion;
 
-        private AdmissionLease(Admission admission, ArchiveOwnerScope owner) {
+        private AdmissionLease(Admission admission, ArchiveOwnerScope owner, boolean completionRequired) {
             this.admission = admission;
             this.owner = owner;
+            this.completion = new AtomicBoolean(completionRequired);
         }
 
         private void releaseActive() {
@@ -714,23 +734,17 @@ public class ArchiveQuestionSseService {
             if (outbound.compareAndSet(true, false)) admission.release(owner, Resource.OUTBOUND);
         }
 
+        private void releaseCompletion() {
+            if (completion.compareAndSet(true, false)) admission.release(owner, Resource.COMPLETION);
+        }
+
+        private boolean hasCompletion() { return completion.get(); }
+
         private void releaseAll() {
             releaseActive();
             releaseReplay();
             releaseOutbound();
-        }
-    }
-
-    private static final class CompletionPermit {
-        private final Admission admission;
-        private final ArchiveOwnerScope owner;
-        private final AtomicBoolean held = new AtomicBoolean(true);
-        private CompletionPermit(Admission admission, ArchiveOwnerScope owner) {
-            this.admission = admission;
-            this.owner = owner;
-        }
-        private void release() {
-            if (held.compareAndSet(true, false)) admission.release(owner, Resource.COMPLETION);
+            releaseCompletion();
         }
     }
 
@@ -758,64 +772,76 @@ public class ArchiveQuestionSseService {
                 new ThreadPoolExecutor.AbortPolicy());
     }
 
-    @FunctionalInterface
-    interface CompletionScheduler {
+    interface CompletionReservation {
+        CompletionReservation NONE = new CompletionReservation() {
+            @Override public boolean submit(Runnable action) { return false; }
+            @Override public void release() { }
+        };
         boolean submit(Runnable action);
+        void release();
     }
 
-    private boolean scheduleCompletion(ArchiveOwnerScope owner, Runnable action) {
-        CompletionPermit permit = admission.acquireCompletion(owner);
-        if (permit == null) return false;
-        CompletionWork work = new CompletionWork(action, permit);
-        completionWorks.add(work);
-        try {
-            completionExecutor.execute(work);
-            return true;
-        } catch (RejectedExecutionException rejected) {
-            work.cancel();
-            return false;
-        } catch (Throwable failure) {
-            work.cancel();
-            return false;
+    private boolean scheduleCompletion(AdmissionLease lease, Runnable action) {
+        if (!lease.hasCompletion()) return false;
+        CompletionWork work = new CompletionWork(action, lease);
+        synchronized (completionLock) {
+            completionWorks.add(work);
+            completionQueue.addLast(work);
+            drainCompletionsLocked();
+        }
+        return true;
+    }
+
+    private void drainCompletionsLocked() {
+        while (!completionQueue.isEmpty()) {
+            CompletionWork work = completionQueue.pollFirst();
+            try {
+                completionExecutor.execute(work);
+            } catch (RejectedExecutionException rejected) {
+                completionQueue.addFirst(work);
+                break;
+            } catch (Throwable failure) {
+                completionQueue.addFirst(work);
+                break;
+            }
+        }
+        shutdownCompletionExecutorIfDrainedLocked();
+    }
+
+    private void shutdownCompletionExecutorIfDrainedLocked() {
+        if (stopped.get() && completionWorks.isEmpty() && admission.completions() == 0) {
+            completionExecutor.shutdown();
+        }
+    }
+
+    private void completionPermitReleased() {
+        synchronized (completionLock) {
+            drainCompletionsLocked();
+            shutdownCompletionExecutorIfDrainedLocked();
         }
     }
 
     private final class CompletionWork implements Runnable {
-        private static final int PENDING = 0;
-        private static final int RUNNING = 1;
-        private static final int RELEASED = 2;
         private final Runnable action;
-        private final CompletionPermit permit;
-        private final AtomicInteger state = new AtomicInteger(PENDING);
-        private volatile Thread runner;
+        private final AdmissionLease lease;
+        private final AtomicBoolean started = new AtomicBoolean();
 
-        private CompletionWork(Runnable action, CompletionPermit permit) {
+        private CompletionWork(Runnable action, AdmissionLease lease) {
             this.action = Objects.requireNonNull(action, "action");
-            this.permit = Objects.requireNonNull(permit, "permit");
+            this.lease = Objects.requireNonNull(lease, "lease");
         }
 
         @Override public void run() {
-            if (!state.compareAndSet(PENDING, RUNNING)) return;
-            runner = Thread.currentThread();
+            if (!started.compareAndSet(false, true)) return;
             try { action.run(); }
+            catch (Throwable ignored) { /* Logical close already won; transport completion is no-throw. */ }
             finally {
-                runner = null;
-                if (state.compareAndSet(RUNNING, RELEASED)) release();
+                synchronized (completionLock) {
+                    completionWorks.remove(this);
+                    lease.releaseCompletion();
+                    drainCompletionsLocked();
+                }
             }
-        }
-
-        private void cancel() {
-            if (state.compareAndSet(PENDING, RELEASED)) {
-                release();
-                return;
-            }
-            Thread current = runner;
-            if (current != null && current != Thread.currentThread()) current.interrupt();
-        }
-
-        private void release() {
-            completionWorks.remove(this);
-            permit.release();
         }
     }
 
@@ -836,12 +862,17 @@ public class ArchiveQuestionSseService {
     }
 
     @PreDestroy public void stop() {
-        if (!stopped.compareAndSet(false, true)) return;
-        for (Session session : List.copyOf(sessions)) session.abort();
+        List<Session> accepted;
+        synchronized (lifecycleLock) {
+            if (!stopped.compareAndSet(false, true)) return;
+            accepted = List.copyOf(sessions);
+        }
+        for (Session session : accepted) session.abort();
         replayExecutor.shutdownNow();
         heartbeatExecutor.shutdownNow();
-        // Close admission immediately but let the already-bounded completion set drive accepted
-        // servlet responses exactly once. No caller waits for these best-effort daemon tasks.
-        completionExecutor.shutdown();
+        synchronized (completionLock) {
+            drainCompletionsLocked();
+            shutdownCompletionExecutorIfDrainedLocked();
+        }
     }
 }
