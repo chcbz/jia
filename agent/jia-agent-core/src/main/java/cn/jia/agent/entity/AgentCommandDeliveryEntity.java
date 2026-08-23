@@ -35,4 +35,8 @@ public class AgentCommandDeliveryEntity extends BaseEntity {
     private Long expiresAt;
     private String lastError;
     private Long version;
+    private String replayParentMessageId;
+    private String replayRequesterId;
+    private String replayApproverId;
+    private String replayReason;
 }

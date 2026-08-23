@@ -8,6 +8,7 @@ dependencies {
     compileOnly 'org.springframework.security:spring-security-oauth2-jose'
     implementation project(':common:jia-common-service')
     implementation libs.spring.rabbit
+    implementation libs.jackson.databind
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')

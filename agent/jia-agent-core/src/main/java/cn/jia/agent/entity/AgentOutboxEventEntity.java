@@ -36,7 +36,17 @@ public class AgentOutboxEventEntity extends BaseEntity {
     private Integer activeAttempt;
     private Long expiresAt;
     private String publisherConfirmStatus;
+    private Long confirmedAt;
+    private String confirmError;
     private String mandatoryReturnStatus;
+    private Long returnedAt;
+    private Integer returnReplyCode;
+    private String returnReplyText;
+    private Long publishedAt;
     private String lastError;
     private Long version;
+    private String replayParentMessageId;
+    private String replayRequesterId;
+    private String replayApproverId;
+    private String replayReason;
 }

@@ -1,10 +1,12 @@
 package cn.jia.agent.config;
 
+import cn.jia.agent.dao.AgentOutboxRelayDao;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
@@ -18,9 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class AgentRabbitSafetyConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
+            .withBean(AgentOutboxRelayDao.class, () -> mock(AgentOutboxRelayDao.class))
+            .withBean(PlatformTransactionManager.class,
+                    () -> mock(PlatformTransactionManager.class))
             .withUserConfiguration(AgentRabbitSafetyConfiguration.class);
 
     @Test

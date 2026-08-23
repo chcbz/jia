@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
+import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
@@ -22,8 +23,9 @@ import java.util.function.Supplier;
 /** Fail-closed REQUIRED writer. No Rabbit client or publish path is present here. */
 public final class AgentCommandTransportWriterImpl implements AgentCommandTransportWriter {
     public static final String DB_SHADOW_MARKER = "DB_SHADOW_CAPTURE_ONLY";
-    public static final String DESTINATION = "jia.agent.command";
-    public static final String ROUTING_KEY = "agent.command.general";
+    public static final String MQ_SHADOW_MARKER = "MQ_SHADOW_CAPTURE_ONLY";
+    public static final String DISPATCH_ELIGIBLE_MARKER = "DISPATCH_ELIGIBLE_V1";
+    public static final String DISPATCH_SCOPE_MARKER = "DISPATCH_SCOPE_CAPTURE_ONLY";
 
     private final AgentCommandTransportDao dao;
     private final AgentRabbitSafetyGate gate;
@@ -69,9 +71,11 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         String eventId = nextUuid("eventId");
         byte[] wireBytes = AgentCommandCanonicalCodec.wireBytes(draft, messageId);
         byte[] wireHash = AgentCommandCanonicalCodec.sha256(wireBytes);
-        boolean captureOnly = gate.state() == AgentRabbitActivationState.DB_SHADOW;
-        String status = captureOnly ? "DEAD" : "PENDING";
-        String marker = captureOnly ? DB_SHADOW_MARKER : null;
+        Admission admission = admission(draft.tenantId(), draft.clientId());
+        String status = admission.dispatchEligible() ? "PENDING" : "DEAD";
+        String marker = admission.marker();
+        AgentRabbitTopologyManifest.PublishRoute route =
+                AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
 
         AgentCommandDeliveryEntity delivery = new AgentCommandDeliveryEntity()
                 .setCommandId(draft.commandId())
@@ -112,8 +116,8 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
                 .setDeliveryId(delivery.getId())
                 .setAggregateType("task")
                 .setAggregateId(draft.taskId())
-                .setDestination(DESTINATION)
-                .setRoutingKey(ROUTING_KEY)
+                .setDestination(route.destination())
+                .setRoutingKey(route.routingKey())
                 .setWirePayload(wireBytes)
                 .setWirePayloadHash(wireHash)
                 .setStatus(status)
@@ -131,6 +135,18 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         requireOne(dao.insertOutbox(outbox), "outbox insert");
         return new AgentCommandTransportWriteResult(
                 delivery.getId(), draft.commandId(), messageId, eventId, false);
+    }
+
+    private Admission admission(String tenantId, String clientId) {
+        return switch (gate.state()) {
+            case OFF -> throw new IllegalStateException(
+                    "Agent command transport writer called while command outbox is disabled");
+            case DB_SHADOW -> new Admission(false, DB_SHADOW_MARKER);
+            case MQ_SHADOW -> new Admission(false, MQ_SHADOW_MARKER);
+            case DISPATCH_CANARY, DISPATCH_SCOPED -> gate.allowsDispatch(tenantId, clientId)
+                    ? new Admission(true, DISPATCH_ELIGIBLE_MARKER)
+                    : new Admission(false, DISPATCH_SCOPE_MARKER);
+        };
     }
 
     private AgentCommandTransportWriteResult duplicateOrConflict(
@@ -162,6 +178,9 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         UUID value = uuidSupplier.get();
         if (value == null) throw new IllegalStateException(field + " UUID supplier returned null");
         return value.toString();
+    }
+
+    private record Admission(boolean dispatchEligible, String marker) {
     }
 
     private static void requireOne(int rows, String operation) {

@@ -93,6 +93,37 @@ public final class AgentRabbitTopologyManifest {
         return sha256;
     }
 
+    /** Exact business-publish routes derived from the canonical dispatch bindings. */
+    public List<PublishRoute> commandPublishRoutes() {
+        return bindings.stream()
+                .filter(binding -> DISPATCH_QUEUE.equals(binding.queue()))
+                .map(binding -> new PublishRoute(binding.exchange(), binding.routingKey()))
+                .toList();
+    }
+
+    /** D02's initial command route; ordering is part of the canonical manifest digest. */
+    public PublishRoute defaultCommandPublishRoute() {
+        List<PublishRoute> routes = commandPublishRoutes();
+        if (routes.isEmpty()) {
+            throw new IllegalStateException("D04 canonical manifest has no command publish route");
+        }
+        return routes.getFirst();
+    }
+
+    public boolean allowsCommandPublish(String destination, String routingKey) {
+        return destination != null && routingKey != null
+                && commandPublishRoutes().contains(new PublishRoute(destination, routingKey));
+    }
+
+    /** Exact exchange/routing pairs declared by D04, including future D05 retry/DLQ routes. */
+    public boolean allowsPublish(String destination, String routingKey) {
+        if (destination == null || routingKey == null) return false;
+        PublishRoute requested = new PublishRoute(destination, routingKey);
+        return bindings.stream()
+                .map(binding -> new PublishRoute(binding.exchange(), binding.routingKey()))
+                .anyMatch(requested::equals);
+    }
+
     List<Exchange> exchangeDeclarations() {
         List<Exchange> declarations = new ArrayList<>(exchanges.size());
         for (ExchangeSpec spec : exchanges) {
@@ -282,6 +313,13 @@ public final class AgentRabbitTopologyManifest {
             queue = requireToken(queue, "binding queue");
             routingKey = requireToken(routingKey, "binding routing key");
             arguments = immutableArguments(arguments);
+        }
+    }
+
+    public record PublishRoute(String destination, String routingKey) {
+        public PublishRoute {
+            destination = requireToken(destination, "publish destination");
+            routingKey = requireToken(routingKey, "publish routing key");
         }
     }
 

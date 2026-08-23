@@ -1,6 +1,8 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentProtocolConstants;
+import cn.jia.agent.config.AgentRabbitActivationState;
+import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.dao.AgentCommandTransportDao;
@@ -14,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,7 +47,7 @@ class AgentCommandTransportWriterImplTest {
     void dbShadowCreatesTerminalDeliveryAndOutboxWithIndependentTransportIds() {
         AtomicInteger sequence = new AtomicInteger();
         AgentCommandTransportWriterImpl writer = new AgentCommandTransportWriterImpl(
-                dao, gate(true, false), transactions,
+                dao, gate(AgentRabbitActivationState.DB_SHADOW, false), transactions,
                 () -> new UUID(0, sequence.incrementAndGet()));
         when(dao.insertDelivery(any())).thenAnswer(invocation -> {
             invocation.<AgentCommandDeliveryEntity>getArgument(0).setId(41L);
@@ -72,6 +75,10 @@ class AgentCommandTransportWriterImplTest {
         assertEquals(41L, outbox.getValue().getDeliveryId());
         assertEquals(1, delivery.getValue().getActiveAttempt());
         assertEquals(0, outbox.getValue().getAttemptCount());
+        String wire = new String(outbox.getValue().getWirePayload(), StandardCharsets.UTF_8);
+        assertTrue(wire.contains("\"messageId\":\"" + result.messageId() + "\""));
+        assertFalse(wire.contains("\"eventId\""));
+        assertFalse(wire.contains("\"deliveryId\""));
     }
 
     @Test
@@ -106,27 +113,67 @@ class AgentCommandTransportWriterImplTest {
     }
 
     @Test
-    void nonDbShadowReservesPendingWithoutCaptureMarker() {
+    void mqShadowCreatesTerminalCaptureOnlyRowsAndNoDispatchBacklog() {
+        assertAdmission(gate(AgentRabbitActivationState.MQ_SHADOW, false),
+                "DEAD", AgentCommandTransportWriterImpl.MQ_SHADOW_MARKER);
+    }
+
+    @Test
+    void dispatchExactAllowedScopeCreatesMarkedPendingRows() {
+        assertAdmission(gate(AgentRabbitActivationState.DISPATCH_CANARY, true),
+                "PENDING", AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER);
+    }
+
+    @Test
+    void dispatchOutsideExactScopeCreatesTerminalCaptureOnlyRows() {
+        assertAdmission(gate(AgentRabbitActivationState.DISPATCH_CANARY, false),
+                "DEAD", AgentCommandTransportWriterImpl.DISPATCH_SCOPE_MARKER);
+    }
+
+    @Test
+    void offFailsBeforeAnyDatabaseAccess() {
+        AgentCommandTransportWriterImpl writer = new AgentCommandTransportWriterImpl(
+                dao, gate(AgentRabbitActivationState.OFF, false), transactions,
+                () -> new UUID(0, 1));
+
+        assertThrows(IllegalStateException.class, () -> writer.write(draft("Task One")));
+        verify(dao, never()).lockDelivery(any(), any(), any());
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+    }
+
+    private AgentCommandTransportWriterImpl writer() {
+        return new AgentCommandTransportWriterImpl(
+                dao, gate(AgentRabbitActivationState.DB_SHADOW, false),
+                transactions, () -> new UUID(0, 1));
+    }
+
+    private void assertAdmission(
+            AgentRabbitSafetyGate gate, String status, String marker) {
         when(dao.insertDelivery(any())).thenAnswer(invocation -> {
             invocation.<AgentCommandDeliveryEntity>getArgument(0).setId(9L);
             return 1;
         });
         when(dao.insertOutbox(any())).thenReturn(1);
         AgentCommandTransportWriterImpl writer = new AgentCommandTransportWriterImpl(
-                dao, gate(true, true), transactions, () -> new UUID(0, 1));
+                dao, gate, transactions, () -> new UUID(0, 1));
 
         writer.write(draft("Task One"));
 
         ArgumentCaptor<AgentCommandDeliveryEntity> delivery =
                 ArgumentCaptor.forClass(AgentCommandDeliveryEntity.class);
+        ArgumentCaptor<AgentOutboxEventEntity> outbox =
+                ArgumentCaptor.forClass(AgentOutboxEventEntity.class);
         verify(dao).insertDelivery(delivery.capture());
-        assertEquals("PENDING", delivery.getValue().getStatus());
-        assertNull(delivery.getValue().getLastError());
-    }
-
-    private AgentCommandTransportWriterImpl writer() {
-        return new AgentCommandTransportWriterImpl(
-                dao, gate(true, false), transactions, () -> new UUID(0, 1));
+        verify(dao).insertOutbox(outbox.capture());
+        assertEquals(status, delivery.getValue().getStatus());
+        assertEquals(marker, delivery.getValue().getLastError());
+        assertEquals(status, outbox.getValue().getStatus());
+        assertEquals(marker, outbox.getValue().getLastError());
+        var route = cn.jia.agent.config.AgentRabbitTopologyManifest.canonical()
+                .defaultCommandPublishRoute();
+        assertEquals(route.destination(), outbox.getValue().getDestination());
+        assertEquals(route.routingKey(), outbox.getValue().getRoutingKey());
     }
 
     private AgentCommandDeliveryEntity existing(AgentCommandDraft draft, byte[] bytes) {
@@ -156,16 +203,29 @@ class AgentCommandTransportWriterImplTest {
                         "juyiting"));
     }
 
-    private AgentRabbitSafetyGate gate(boolean outbox, boolean topology) {
+    private AgentRabbitSafetyGate gate(
+            AgentRabbitActivationState state, boolean draftScopeAllowed) {
+        boolean outbox = state != AgentRabbitActivationState.OFF;
+        boolean topology = state == AgentRabbitActivationState.MQ_SHADOW
+                || state == AgentRabbitActivationState.DISPATCH_CANARY
+                || state == AgentRabbitActivationState.DISPATCH_SCOPED;
+        boolean dispatch = state == AgentRabbitActivationState.DISPATCH_CANARY
+                || state == AgentRabbitActivationState.DISPATCH_SCOPED;
         AgentRabbitSafetyProperties.RabbitBroker broker = topology
                 ? new AgentRabbitSafetyProperties.RabbitBroker(
                         "isolated.invalid", 5673, "user", "secret", "/isolated")
                 : null;
-        return new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(
+        AgentRabbitSafetyProperties properties = new AgentRabbitSafetyProperties(
                 new AgentRabbitSafetyProperties.CommandOutbox(outbox),
                 new AgentRabbitSafetyProperties.RabbitTopology(topology),
-                new AgentRabbitSafetyProperties.RabbitPublish(false),
-                new AgentRabbitSafetyProperties.RabbitConsume(false),
-                new AgentRabbitSafetyProperties.RabbitDispatch(false), broker));
+                new AgentRabbitSafetyProperties.RabbitPublish(dispatch),
+                new AgentRabbitSafetyProperties.RabbitConsume(dispatch),
+                new AgentRabbitSafetyProperties.RabbitDispatch(dispatch), broker);
+        AgentRabbitDispatchScopeProperties scopes = dispatch
+                ? new AgentRabbitDispatchScopeProperties(List.of(
+                        new AgentRabbitDispatchScopeProperties.AllowedScope(
+                                draftScopeAllowed ? "tenant-a" : "tenant-other", "client-a")))
+                : null;
+        return new AgentRabbitSafetyGate(properties, scopes);
     }
 }

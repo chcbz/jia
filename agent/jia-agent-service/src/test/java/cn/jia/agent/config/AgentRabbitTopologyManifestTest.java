@@ -109,6 +109,27 @@ class AgentRabbitTopologyManifestTest {
         }
     }
 
+
+    @Test
+    void publishAllowlistsAreDerivedOnlyFromCanonicalBindings() {
+        assertEquals(4, manifest.commandPublishRoutes().size());
+        assertEquals(new AgentRabbitTopologyManifest.PublishRoute(
+                        AgentRabbitTopologyManifest.MAIN_EXCHANGE,
+                        AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY),
+                manifest.defaultCommandPublishRoute());
+        assertTrue(manifest.allowsCommandPublish(
+                AgentRabbitTopologyManifest.MAIN_EXCHANGE,
+                AgentRabbitTopologyManifest.CODING_ROUTING_KEY));
+        assertFalse(manifest.allowsCommandPublish(
+                AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
+                AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY));
+        assertTrue(manifest.allowsPublish(
+                AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
+                AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY));
+        assertFalse(manifest.allowsPublish(
+                AgentRabbitTopologyManifest.MAIN_EXCHANGE, "agent.command.*"));
+    }
+
     @Test
     void declarationsPreserveCanonicalOrderAndIdentity() {
         List<Binding> bindings = manifest.bindingDeclarations();
