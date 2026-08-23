@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
@@ -14,6 +16,8 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
@@ -56,6 +60,8 @@ public class AgentLegacyTaskCompatibilityService {
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskAggregationService aggregationService;
     private final AgentIdentityService identityService;
+    private final AgentTaskMutationTransaction mutationTransaction;
+    private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
 
     @Inject
@@ -64,9 +70,11 @@ public class AgentLegacyTaskCompatibilityService {
             AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao,
             AgentTaskAggregationService aggregationService,
-            AgentIdentityService identityService) {
-        this(taskMetaDao, memberDao, workItemDao, aggregationService,
-                identityService, System::currentTimeMillis);
+            AgentIdentityService identityService,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter) {
+        this(taskMetaDao, memberDao, workItemDao, aggregationService, identityService,
+                mutationTransaction, eventWriter, System::currentTimeMillis);
     }
 
     AgentLegacyTaskCompatibilityService(
@@ -76,11 +84,26 @@ public class AgentLegacyTaskCompatibilityService {
             AgentTaskAggregationService aggregationService,
             AgentIdentityService identityService,
             LongSupplier clock) {
+        this(taskMetaDao, memberDao, workItemDao, aggregationService, identityService,
+                directTransaction(taskMetaDao), command -> null, clock);
+    }
+
+    AgentLegacyTaskCompatibilityService(
+            AgentTaskMetaDao taskMetaDao,
+            AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao,
+            AgentTaskAggregationService aggregationService,
+            AgentIdentityService identityService,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter,
+            LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.aggregationService = Objects.requireNonNull(aggregationService, "aggregationService");
         this.identityService = Objects.requireNonNull(identityService, "identityService");
+        this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
+        this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -130,12 +153,17 @@ public class AgentLegacyTaskCompatibilityService {
         requireExactText(taskId, "taskId", 100);
         List<String> agentIds = requireResolvedAgentIds(canonicalAgentIds);
         long reservedAt = now();
-        int reserved = taskMetaDao.reserveOpenTaskRoot(
-                tenantId, clientId, taskId, reservedAt);
-        if (reserved < 0 || reserved > 1) {
-            throw invalidPersisted("Scoped task root reservation affected an unexpected row count");
-        }
-        AgentTaskMetaEntity task = lockTask(tenantId, clientId, taskId);
+        return mutationTransaction.executeAfterTaskRootReservation(
+                tenantId, clientId, taskId,
+                () -> taskMetaDao.reserveOpenTaskRoot(tenantId, clientId, taskId, reservedAt),
+                (task, rootCreated) -> assignResolvedLocked(
+                        tenantId, clientId, taskId, agentIds, automatic, reservedAt, task));
+    }
+
+    private AssignOutcome assignResolvedLocked(
+            String tenantId, String clientId, String taskId, List<String> agentIds,
+            boolean automatic, long changedAt, AgentTaskMetaEntity task) {
+        validateLockedTask(task, tenantId, clientId, taskId);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, agentIds);
         if (!agentIds.equals(lockedAgentIds)) {
@@ -162,7 +190,7 @@ public class AgentLegacyTaskCompatibilityService {
             return new AssignOutcome(persistedAgentIds, false);
         }
 
-        long changedAt = reservedAt;
+        String fromStatus = taskStatus.value();
         applyAssignmentMeta(task, agentIds, changedAt);
         requireSingleMutation(taskMetaDao.updateById(task), "task assignment metadata");
 
@@ -173,6 +201,8 @@ public class AgentLegacyTaskCompatibilityService {
                     index == 0 ? MEMBER_ROLE_COORDINATOR : MEMBER_ROLE_WORKER);
             insertDefaultWorkItem(tenantId, clientId, taskId, agentId);
         }
+        appendAssignmentEvents(tenantId, clientId, taskId, task, agentIds,
+                source, fromStatus, changedAt);
         return new AssignOutcome(agentIds, true);
     }
 
@@ -192,7 +222,16 @@ public class AgentLegacyTaskCompatibilityService {
         requireExactText(taskId, "taskId", 100);
         requireExactText(agentId, "agentId", 100);
         AgentTaskStatus reportStatus = requireReportStatus(requestedStatus);
-        AgentTaskMetaEntity task = lockTask(tenantId, clientId, taskId);
+        return mutationTransaction.executeWithLockedTaskRoot(
+                tenantId, clientId, taskId, task -> reportResolvedLocked(
+                        tenantId, clientId, taskId, agentId, reportStatus,
+                        failureReason, task));
+    }
+
+    private ReportOutcome reportResolvedLocked(
+            String tenantId, String clientId, String taskId, String agentId,
+            AgentTaskStatus reportStatus, String failureReason, AgentTaskMetaEntity task) {
+        validateLockedTask(task, tenantId, clientId, taskId);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, List.of(agentId));
         if (!List.of(agentId).equals(lockedAgentIds)) {
@@ -220,9 +259,17 @@ public class AgentLegacyTaskCompatibilityService {
         boolean memberChanged = updateMemberForReport(
                 tenantId, clientId, taskId, agentId,
                 member, reportStatus, failureReason, changedAt);
+        if (memberChanged) {
+            appendMemberReportEvent(tenantId, clientId, taskId, agentId,
+                    member, reportStatus, changedAt);
+        }
         boolean itemChanged = updateWorkItemForReport(
                 tenantId, clientId, taskId, agentId,
                 item, reportStatus, changedAt);
+        if (itemChanged) {
+            appendWorkItemReportEvent(tenantId, clientId, taskId, agentId,
+                    item, reportStatus, changedAt);
+        }
 
         AgentTaskAggregationCommandDTO command = new AgentTaskAggregationCommandDTO();
         command.setExpectedVersion(task.getTaskVersion());
@@ -243,8 +290,8 @@ public class AgentLegacyTaskCompatibilityService {
                 terminalTransition, agentId, memberAgentIds);
     }
 
-    private AgentTaskMetaEntity lockTask(String tenantId, String clientId, String taskId) {
-        AgentTaskMetaEntity task = taskMetaDao.findByTaskIdForUpdate(tenantId, clientId, taskId);
+    private void validateLockedTask(
+            AgentTaskMetaEntity task, String tenantId, String clientId, String taskId) {
         if (task == null) {
             throw notFound();
         }
@@ -253,7 +300,6 @@ public class AgentLegacyTaskCompatibilityService {
             throw invalidPersisted("Scoped task identity is non-canonical or mismatched");
         }
         requireTaskVersion(task.getTaskVersion());
-        return task;
     }
 
     private void applyAssignmentMeta(
@@ -343,6 +389,121 @@ public class AgentLegacyTaskCompatibilityService {
                 .filter(agentId -> !finalPrimary.equals(agentId))
                 .forEachOrdered(ordered::add);
         return List.copyOf(ordered);
+    }
+
+    private void appendAssignmentEvents(
+            String tenantId, String clientId, String taskId, AgentTaskMetaEntity task,
+            List<String> agentIds, String source, String fromStatus, long occurredAt) {
+        long taskVersion = task.getTaskVersion();
+        TaskEventPayload.Builder taskPayload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.TASK_ID, taskId)
+                .put(TaskEventPayload.Key.FROM_STATUS, fromStatus)
+                .put(TaskEventPayload.Key.TO_STATUS, AgentTaskStatus.ASSIGNED.value())
+                .put(TaskEventPayload.Key.SOURCE, source)
+                .put(TaskEventPayload.Key.MEMBER_COUNT, agentIds.size())
+                .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
+                .put(TaskEventPayload.Key.ASSIGNED_AT, occurredAt);
+        eventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, taskId, TaskEventType.TASK_ASSIGNED,
+                TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK, taskId,
+                taskPayload, occurredAt, taskVersion));
+
+        agentIds.stream().sorted(AgentLegacyTaskCompatibilityService::compareUtf8Unsigned)
+                .forEach(agentId -> {
+                    String role = agentId.equals(agentIds.getFirst())
+                            ? MEMBER_ROLE_COORDINATOR : MEMBER_ROLE_WORKER;
+                    TaskEventPayload.Builder memberPayload = TaskEventPayload.builder()
+                            .put(TaskEventPayload.Key.AGENT_ID, agentId)
+                            .put(TaskEventPayload.Key.MEMBER_ID, agentId)
+                            .put(TaskEventPayload.Key.ROLE, role)
+                            .put(TaskEventPayload.Key.SOURCE, source)
+                            .put(TaskEventPayload.Key.TO_STATUS,
+                                    AgentTaskMemberStatus.ACCEPTED.value())
+                            .put(TaskEventPayload.Key.RESULT_VERSION, 0L)
+                            .put(TaskEventPayload.Key.ASSIGNED_AT, occurredAt);
+                    eventWriter.append(AgentTaskMutationEventSupport.command(
+                            tenantId, clientId, taskId, TaskEventType.MEMBER_ACCEPTED,
+                            TaskEventType.ActorType.SYSTEM, null,
+                            TaskEventType.Aggregate.MEMBER, agentId,
+                            memberPayload, occurredAt, 0L));
+                });
+
+        agentIds.stream()
+                .map(agentId -> new AssignedWorkItem(agentId, defaultWorkItemId(taskId, agentId)))
+                .sorted((left, right) -> compareUtf8Unsigned(
+                        left.workItemId(), right.workItemId()))
+                .forEach(assigned -> {
+                    TaskEventPayload.Builder itemPayload = TaskEventPayload.builder()
+                            .put(TaskEventPayload.Key.WORK_ITEM_ID, assigned.workItemId())
+                            .put(TaskEventPayload.Key.ASSIGNEE_AGENT_ID, assigned.agentId())
+                            .put(TaskEventPayload.Key.TO_STATUS,
+                                    AgentTaskWorkItemStatus.READY.value())
+                            .put(TaskEventPayload.Key.ATTEMPT_COUNT, 0L)
+                            .put(TaskEventPayload.Key.MAX_ATTEMPTS, 3L)
+                            .put(TaskEventPayload.Key.RESULT_VERSION, 0L);
+                    eventWriter.append(AgentTaskMutationEventSupport.command(
+                            tenantId, clientId, taskId, TaskEventType.WORK_ITEM_READY,
+                            TaskEventType.ActorType.SYSTEM, null,
+                            TaskEventType.Aggregate.WORK_ITEM, assigned.workItemId(),
+                            itemPayload, occurredAt, 0L));
+                });
+    }
+
+    private void appendMemberReportEvent(
+            String tenantId, String clientId, String taskId, String agentId,
+            AgentTaskMemberEntity member, AgentTaskStatus reportStatus, long occurredAt) {
+        String targetStatus = switch (reportStatus) {
+            case RUNNING -> AgentTaskMemberStatus.WORKING.value();
+            case COMPLETED -> AgentTaskMemberStatus.DONE.value();
+            case FAILED -> AgentTaskMemberStatus.FAILED.value();
+            default -> throw invalid("Unsupported legacy report status");
+        };
+        long resultVersion = member.getVersion() + 1;
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.AGENT_ID, agentId)
+                .put(TaskEventPayload.Key.MEMBER_ID, agentId)
+                .put(TaskEventPayload.Key.ROLE, member.getMemberRole())
+                .put(TaskEventPayload.Key.FROM_STATUS, member.getMemberStatus())
+                .put(TaskEventPayload.Key.TO_STATUS, targetStatus)
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, member.getVersion())
+                .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion)
+                .put(TaskEventPayload.Key.UPDATED_AT, occurredAt);
+        eventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, taskId,
+                AgentTaskMutationEventSupport.memberEvent(targetStatus),
+                TaskEventType.ActorType.SYSTEM, null,
+                TaskEventType.Aggregate.MEMBER, agentId,
+                payload, occurredAt, resultVersion));
+    }
+
+    private void appendWorkItemReportEvent(
+            String tenantId, String clientId, String taskId, String agentId,
+            AgentTaskWorkItemEntity item, AgentTaskStatus reportStatus, long occurredAt) {
+        String targetStatus = switch (reportStatus) {
+            case RUNNING -> AgentTaskWorkItemStatus.RUNNING.value();
+            case COMPLETED -> AgentTaskWorkItemStatus.COMPLETED.value();
+            case FAILED -> AgentTaskWorkItemStatus.FAILED.value();
+            default -> throw invalid("Unsupported legacy report status");
+        };
+        long resultVersion = item.getVersion() + 1;
+        long attemptCount = reportStatus == AgentTaskStatus.FAILED
+                ? item.getMaxAttempts() : item.getAttemptCount();
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.WORK_ITEM_ID, item.getWorkItemId())
+                .put(TaskEventPayload.Key.ASSIGNEE_AGENT_ID, agentId)
+                .put(TaskEventPayload.Key.FROM_STATUS, item.getStatus())
+                .put(TaskEventPayload.Key.TO_STATUS, targetStatus)
+                .put(TaskEventPayload.Key.ATTEMPT_COUNT, attemptCount)
+                .put(TaskEventPayload.Key.MAX_ATTEMPTS, item.getMaxAttempts())
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, item.getVersion())
+                .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion)
+                .put(TaskEventPayload.Key.UPDATED_AT, occurredAt);
+        eventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, taskId,
+                AgentTaskMutationEventSupport.workItemEvent(targetStatus),
+                TaskEventType.ActorType.SYSTEM, null,
+                TaskEventType.Aggregate.WORK_ITEM, item.getWorkItemId(),
+                payload, occurredAt, resultVersion));
     }
 
     private void insertMember(String tenantId, String clientId, String taskId,
@@ -903,6 +1064,54 @@ public class AgentLegacyTaskCompatibilityService {
         }
     }
 
+    private static int compareUtf8Unsigned(String left, String right) {
+        byte[] leftBytes = left.getBytes(StandardCharsets.UTF_8);
+        byte[] rightBytes = right.getBytes(StandardCharsets.UTF_8);
+        int length = Math.min(leftBytes.length, rightBytes.length);
+        for (int index = 0; index < length; index++) {
+            int compared = Integer.compare(
+                    Byte.toUnsignedInt(leftBytes[index]), Byte.toUnsignedInt(rightBytes[index]));
+            if (compared != 0) {
+                return compared;
+            }
+        }
+        return Integer.compare(leftBytes.length, rightBytes.length);
+    }
+
+    private static AgentTaskMutationTransaction directTransaction(AgentTaskMetaDao taskMetaDao) {
+        Objects.requireNonNull(taskMetaDao, "taskMetaDao");
+        return new AgentTaskMutationTransaction() {
+            @Override
+            public <T> T executeWithLockedTaskRoot(
+                    String tenantId, String clientId, String taskId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdate(
+                        tenantId, clientId, taskId));
+            }
+
+            @Override
+            public <T> T executeWithLockedTaskRootForWorkItem(
+                    String tenantId, String clientId, String workItemId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByWorkItemIdForUpdate(
+                        tenantId, clientId, workItemId));
+            }
+
+            @Override
+            public <T> T executeAfterTaskRootReservation(
+                    String tenantId, String clientId, String taskId,
+                    TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+                int reserved = reservation.reserve();
+                if (reserved != 0 && reserved != 1) {
+                    throw new IllegalStateException(
+                            "Task root reservation returned an unexpected row count");
+                }
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdate(
+                        tenantId, clientId, taskId), reserved == 1);
+            }
+        };
+    }
+
     private long now() {
         long value = clock.getAsLong();
         if (value <= 0) {
@@ -941,6 +1150,9 @@ public class AgentLegacyTaskCompatibilityService {
         return new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL, message);
     }
 
+
+    private record AssignedWorkItem(String agentId, String workItemId) {
+    }
 
     private record LegacyReportState(
             AgentTaskMemberStatus memberStatus, AgentTaskWorkItemStatus workItemStatus) {

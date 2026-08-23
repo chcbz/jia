@@ -20,6 +20,8 @@ public class AgentTaskArtifactPublishDTO implements Serializable {
     private String storageUri;
     /** Lowercase SHA-256 hex of inline content or externally stored bytes. */
     private String contentHash;
+    /** Exact byte length of externally stored bytes; inline content is measured as UTF-8. */
+    private Long contentByteLength;
     /** Must equal expectedPreviousVersion + 1. */
     private Integer artifactVersion;
     /** Zero creates a new logical artifact; otherwise the exact latest version expected by the caller. */

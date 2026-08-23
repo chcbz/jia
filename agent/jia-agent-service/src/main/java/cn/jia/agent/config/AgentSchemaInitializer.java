@@ -29,6 +29,8 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureTaskCollaborationSchema();
         ensureTaskNoteTable();
         ensureSceneTables();
+        ensureTaskEventSchema();
+        ensureHistoricalEventBaselineAuditSchema();
         seedWaterMarginPersonas();
     }
 
@@ -1542,6 +1544,477 @@ public class AgentSchemaInitializer implements InitializingBean {
                         """)));
     }
 
+
+    void ensureHistoricalEventBaselineAuditSchema() {
+        boolean batchExists = tableExists("agent_task_historical_event_manifest_batch");
+        boolean manifestExists = tableExists("agent_task_historical_event_manifest");
+        boolean runExists = tableExists("agent_task_historical_event_run");
+        boolean anyExists = batchExists || manifestExists || runExists;
+        boolean bootstrapTriggers = false;
+        if (anyExists && !(batchExists && manifestExists && runExists)) {
+            throw new IllegalStateException(
+                    "C01H audit schema is partial; install the exact three-table schema");
+        }
+        if (anyExists && !isH2Database()) {
+            validateHistoricalEventAuditSchema();
+            bootstrapTriggers = historicalEventTriggerCount() == 0 && tablesAreEmpty(
+                    "agent_task_historical_event_manifest_batch",
+                    "agent_task_historical_event_manifest",
+                    "agent_task_historical_event_run");
+            if (!bootstrapTriggers) {
+                validateHistoricalEventAuditTriggers();
+            }
+        }
+
+        jdbcTemplate.execute("""
+CREATE TABLE IF NOT EXISTS agent_task_historical_event_manifest_batch (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    report_sha256 CHAR(64) NOT NULL COMMENT 'Ordered canonical C01H manifest digest',
+    b09_report_sha256 CHAR(64) NOT NULL COMMENT 'Explicit SEALED B09 report digest',
+    b09_run_id CHAR(36) NOT NULL COMMENT 'Explicit matching SUCCEEDED B09 run UUID',
+    b09_operator VARCHAR(100) NOT NULL COMMENT 'B09 approved/apply operator',
+    b09_completed_at BIGINT NOT NULL COMMENT 'B09 successful run completion epoch millis',
+    manifest_row_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Exact sealed task rows',
+    insert_required_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Reviewed INSERT_REQUIRED rows',
+    exact_noop_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Reviewed EXACT_NOOP rows',
+    blocked_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Must remain zero for SEALED',
+    seal_status VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED',
+    approved_operator VARCHAR(100) NOT NULL COMMENT 'Independent C01H approver/ticket',
+    approved_at BIGINT NOT NULL COMMENT 'Approval epoch millis',
+    sealed_at BIGINT DEFAULT NULL COMMENT 'Seal epoch millis',
+    create_time BIGINT DEFAULT NULL COMMENT 'Create epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_historical_event_batch_report (report_sha256),
+    KEY idx_historical_event_batch_b09 (b09_report_sha256, b09_run_id, seal_status),
+    KEY idx_historical_event_batch_status (seal_status, approved_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='C01H sealed historical task event baseline batch'
+                """);
+        jdbcTemplate.execute("""
+CREATE TABLE IF NOT EXISTS agent_task_historical_event_manifest (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    report_sha256 CHAR(64) NOT NULL COMMENT 'Owning canonical C01H manifest digest',
+    manifest_row_key CHAR(64) NOT NULL COMMENT 'Length-prefixed byte-exact task row key',
+    manifest_row_sha256 CHAR(64) NOT NULL COMMENT 'Canonical reviewed row digest',
+    b09_report_sha256 CHAR(64) NOT NULL COMMENT 'Explicit SEALED B09 report digest',
+    b09_run_id CHAR(36) NOT NULL COMMENT 'Explicit matching SUCCEEDED B09 run UUID',
+    b09_operator VARCHAR(100) NOT NULL COMMENT 'Exact B09 operator',
+    b09_completed_at BIGINT NOT NULL COMMENT 'Exact B09 completed_at used as occurred_at',
+    meta_id BIGINT NOT NULL COMMENT 'Exact task root primary key',
+    tenant_id VARCHAR(50) NOT NULL COMMENT 'Byte-exact tenant scope',
+    client_id VARCHAR(50) NOT NULL COMMENT 'Byte-exact client scope',
+    task_id VARCHAR(100) NOT NULL COMMENT 'Byte-exact task ID',
+    event_id VARCHAR(100) NOT NULL COMMENT 'c01h- plus length-prefixed scope SHA-256',
+    decision_status VARCHAR(20) NOT NULL COMMENT 'INSERT_REQUIRED/EXACT_NOOP',
+    expected_event_version BIGINT NOT NULL COMMENT 'Next or existing baseline event version',
+    content_sha256 CHAR(64) NOT NULL COMMENT 'Canonical task/member/work-item snapshot digest',
+    member_count BIGINT NOT NULL COMMENT 'Exact member snapshot count',
+    work_item_count BIGINT NOT NULL COMMENT 'Exact work-item snapshot count',
+    task_version_snapshot BIGINT NOT NULL COMMENT 'Must remain unchanged',
+    current_event_version_snapshot BIGINT NOT NULL COMMENT 'Reviewed pre-apply event cursor',
+    event_chain_count BIGINT NOT NULL COMMENT 'Reviewed complete event count',
+    event_chain_min_version BIGINT DEFAULT NULL COMMENT 'NULL for empty chain, otherwise one',
+    event_chain_max_version BIGINT DEFAULT NULL COMMENT 'NULL for empty chain, otherwise current version',
+    baseline_event_version BIGINT DEFAULT NULL COMMENT 'Existing exact baseline version for EXACT_NOOP',
+    approved_operator VARCHAR(100) NOT NULL COMMENT 'Independent C01H approver/ticket',
+    approved_at BIGINT NOT NULL COMMENT 'Approval epoch millis',
+    create_time BIGINT DEFAULT NULL COMMENT 'Create epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_historical_event_manifest_row (report_sha256, manifest_row_key),
+    UNIQUE KEY uk_historical_event_manifest_scope (report_sha256, tenant_id, client_id, task_id),
+    KEY idx_historical_event_manifest_event (event_id, content_sha256),
+    KEY idx_historical_event_manifest_b09 (b09_report_sha256, b09_run_id, decision_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable C01H reviewed task baseline rows'
+                """);
+        jdbcTemplate.execute("""
+CREATE TABLE IF NOT EXISTS agent_task_historical_event_run (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    run_id CHAR(36) NOT NULL COMMENT 'C01H apply UUID',
+    report_sha256 CHAR(64) NOT NULL COMMENT 'Consumed SEALED C01H report',
+    b09_report_sha256 CHAR(64) NOT NULL COMMENT 'Bound SEALED B09 report',
+    b09_run_id CHAR(36) NOT NULL COMMENT 'Bound SUCCEEDED B09 run',
+    operator VARCHAR(100) NOT NULL COMMENT 'Byte-exact approved C01H operator',
+    manifest_row_count BIGINT NOT NULL COMMENT 'Exact sealed task rows',
+    event_insert_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Events appended by this run',
+    version_update_count BIGINT NOT NULL DEFAULT 0 COMMENT 'current_event_version CAS updates',
+    exact_noop_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Rows proved exact no-op',
+    started_at BIGINT NOT NULL COMMENT 'Run start epoch millis',
+    completed_at BIGINT NOT NULL COMMENT 'Run commit epoch millis',
+    run_status VARCHAR(20) NOT NULL COMMENT 'SUCCEEDED only, failures roll back',
+    create_time BIGINT DEFAULT NULL COMMENT 'Create epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_historical_event_run_id (run_id),
+    KEY idx_historical_event_run_report (report_sha256, completed_at, id),
+    KEY idx_historical_event_run_b09 (b09_report_sha256, b09_run_id, completed_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable successful C01H baseline apply runs'
+                """);
+
+        if (!isH2Database()) {
+            if (!anyExists || bootstrapTriggers) {
+                createHistoricalEventAuditTriggers();
+            }
+            validateHistoricalEventAuditSchema();
+            validateHistoricalEventAuditTriggers();
+        }
+    }
+
+    private int historicalEventTriggerCount() {
+        return namedTriggerCount(List.of(
+                "trg_historical_event_batch_insert_guard",
+                "trg_historical_event_batch_update_guard",
+                "trg_historical_event_batch_no_delete",
+                "trg_historical_event_manifest_insert_guard",
+                "trg_historical_event_manifest_no_update",
+                "trg_historical_event_manifest_no_delete",
+                "trg_historical_event_run_insert_guard",
+                "trg_historical_event_run_no_update",
+                "trg_historical_event_run_no_delete"));
+    }
+
+    void validateHistoricalEventAuditSchema() {
+        for (String table : List.of(
+                "agent_task_historical_event_manifest_batch",
+                "agent_task_historical_event_manifest",
+                "agent_task_historical_event_run")) {
+            String engine = jdbcTemplate.queryForObject("""
+                    SELECT ENGINE FROM information_schema.tables
+                    WHERE table_schema = DATABASE() AND table_name = ?
+                    """, String.class, table);
+            if (!"InnoDB".equalsIgnoreCase(engine)) {
+                throw new IllegalStateException("C01H audit table " + table
+                        + " must use InnoDB but was " + engine);
+            }
+            String collation = jdbcTemplate.queryForObject("""
+                    SELECT TABLE_COLLATION FROM information_schema.tables
+                    WHERE table_schema = DATABASE() AND table_name = ?
+                    """, String.class, table);
+            if (!"utf8mb4_0900_bin".equalsIgnoreCase(collation)) {
+                throw new IllegalStateException("C01H audit table " + table
+                        + " must use utf8mb4_0900_bin but was " + collation);
+            }
+            validateHistoricalPrimaryKey(table);
+        }
+        List<BackfillColumnExpectation> expected = List.of(
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "b09_report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "b09_run_id", "char", "char(36)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "b09_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "b09_completed_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "manifest_row_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "insert_required_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "exact_noop_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "blocked_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "seal_status", "varchar", "varchar(16)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "approved_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "approved_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "sealed_at", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest_batch", "create_time", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "manifest_row_key", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "manifest_row_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "b09_report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "b09_run_id", "char", "char(36)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "b09_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "b09_completed_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "meta_id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "tenant_id", "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "client_id", "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "task_id", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "event_id", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "decision_status", "varchar", "varchar(20)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "expected_event_version", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "content_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "member_count", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "work_item_count", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "task_version_snapshot", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "current_event_version_snapshot", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "event_chain_count", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "event_chain_min_version", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "event_chain_max_version", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "baseline_event_version", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "approved_operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "approved_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_manifest", "create_time", "bigint", "bigint", true, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "id", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "run_id", "char", "char(36)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "b09_report_sha256", "char", "char(64)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "b09_run_id", "char", "char(36)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "operator", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "manifest_row_count", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "event_insert_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "version_update_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "exact_noop_count", "bigint", "bigint", false, "0", null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "started_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "completed_at", "bigint", "bigint", false, null, null),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "run_status", "varchar", "varchar(20)", false, null, "utf8mb4_0900_bin"),
+                new BackfillColumnExpectation("agent_task_historical_event_run", "create_time", "bigint", "bigint", true, null, null));
+        for (BackfillColumnExpectation column : expected) {
+            validateHistoricalColumn(column);
+        }
+        validateHistoricalIndex("agent_task_historical_event_manifest_batch",
+                "uk_historical_event_batch_report", true, List.of("report_sha256"));
+        validateHistoricalIndex("agent_task_historical_event_manifest_batch",
+                "idx_historical_event_batch_b09", false,
+                List.of("b09_report_sha256", "b09_run_id", "seal_status"));
+        validateHistoricalIndex("agent_task_historical_event_manifest_batch",
+                "idx_historical_event_batch_status", false,
+                List.of("seal_status", "approved_at", "id"));
+        validateHistoricalIndex("agent_task_historical_event_manifest",
+                "uk_historical_event_manifest_row", true,
+                List.of("report_sha256", "manifest_row_key"));
+        validateHistoricalIndex("agent_task_historical_event_manifest",
+                "uk_historical_event_manifest_scope", true,
+                List.of("report_sha256", "tenant_id", "client_id", "task_id"));
+        validateHistoricalIndex("agent_task_historical_event_manifest",
+                "idx_historical_event_manifest_event", false,
+                List.of("event_id", "content_sha256"));
+        validateHistoricalIndex("agent_task_historical_event_manifest",
+                "idx_historical_event_manifest_b09", false,
+                List.of("b09_report_sha256", "b09_run_id", "decision_status"));
+        validateHistoricalIndex("agent_task_historical_event_run",
+                "uk_historical_event_run_id", true, List.of("run_id"));
+        validateHistoricalIndex("agent_task_historical_event_run",
+                "idx_historical_event_run_report", false,
+                List.of("report_sha256", "completed_at", "id"));
+        validateHistoricalIndex("agent_task_historical_event_run",
+                "idx_historical_event_run_b09", false,
+                List.of("b09_report_sha256", "b09_run_id", "completed_at"));
+        validateHistoricalUniqueIndexSet("agent_task_historical_event_manifest_batch",
+                List.of("PRIMARY", "uk_historical_event_batch_report"));
+        validateHistoricalUniqueIndexSet("agent_task_historical_event_manifest",
+                List.of("PRIMARY", "uk_historical_event_manifest_row",
+                        "uk_historical_event_manifest_scope"));
+        validateHistoricalUniqueIndexSet("agent_task_historical_event_run",
+                List.of("PRIMARY", "uk_historical_event_run_id"));
+    }
+
+    private void validateHistoricalPrimaryKey(String table) {
+        List<IndexColumn> primary = inspectRequiredIndex(table, "PRIMARY");
+        if (primary == null || primary.size() != 1 || primary.get(0).nonUnique() != 0
+                || primary.get(0).sequence() != 1 || primary.get(0).subPart() != null
+                || !"id".equalsIgnoreCase(primary.get(0).columnName())) {
+            throw new IllegalStateException("C01H audit table " + table
+                    + " must have exact PRIMARY KEY (id)");
+        }
+    }
+
+    private void validateHistoricalColumn(BackfillColumnExpectation expected) {
+        List<BackfillColumnDefinition> actual = jdbcTemplate.query("""
+                SELECT DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+                       COLLATION_NAME, EXTRA
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+                """, (rs, rowNum) -> new BackfillColumnDefinition(
+                rs.getString("DATA_TYPE"), rs.getString("COLUMN_TYPE"),
+                "YES".equalsIgnoreCase(rs.getString("IS_NULLABLE")),
+                rs.getString("COLUMN_DEFAULT"), rs.getString("COLLATION_NAME"),
+                rs.getString("EXTRA")), expected.table(), expected.column());
+        if (actual.size() != 1) {
+            throw new IllegalStateException("C01H audit column " + expected.table() + "."
+                    + expected.column() + " is missing or duplicated");
+        }
+        BackfillColumnDefinition column = actual.get(0);
+        boolean matches = expected.dataType().equalsIgnoreCase(column.dataType())
+                && normalizeSql(expected.columnType()).equals(normalizeSql(column.columnType()))
+                && expected.nullable() == column.nullable()
+                && java.util.Objects.equals(expected.defaultValue(), column.defaultValue())
+                && (expected.collation() == null ? column.collation() == null
+                    : expected.collation().equalsIgnoreCase(column.collation()))
+                && (!"id".equals(expected.column())
+                    || "auto_increment".equalsIgnoreCase(column.extra()));
+        if (!matches) {
+            throw new IllegalStateException("C01H audit column " + expected.table() + "."
+                    + expected.column() + " has incompatible structure: " + column);
+        }
+    }
+
+    private void validateHistoricalIndex(
+            String table, String index, boolean unique, List<String> columns) {
+        ensureRequiredIndex(table, index, unique, columns, "");
+    }
+
+    private void validateHistoricalUniqueIndexSet(String table, List<String> expected) {
+        List<String> actual = jdbcTemplate.queryForList("""
+                SELECT DISTINCT index_name FROM information_schema.statistics
+                WHERE table_schema = DATABASE() AND table_name = ? AND non_unique = 0
+                ORDER BY index_name
+                """, String.class, table);
+        List<String> sortedExpected = expected.stream().sorted().toList();
+        if (!actual.equals(sortedExpected)) {
+            throw new IllegalStateException("C01H audit table " + table
+                    + " has incompatible UNIQUE indexes: " + actual);
+        }
+    }
+
+    void validateHistoricalEventAuditTriggers() {
+        java.util.Map<String, TriggerDefinition> expected = expectedHistoricalEventAuditTriggers();
+        List<TriggerDefinition> actual = jdbcTemplate.query("""
+                SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING,
+                       EVENT_MANIPULATION, ACTION_STATEMENT
+                FROM information_schema.triggers
+                WHERE trigger_schema = DATABASE()
+                  AND event_object_table IN (
+                      'agent_task_historical_event_manifest_batch',
+                      'agent_task_historical_event_manifest',
+                      'agent_task_historical_event_run')
+                """, (rs, rowNum) -> new TriggerDefinition(
+                rs.getString("TRIGGER_NAME"), rs.getString("EVENT_OBJECT_TABLE"),
+                rs.getString("ACTION_TIMING"), rs.getString("EVENT_MANIPULATION"),
+                rs.getString("ACTION_STATEMENT")));
+        if (actual.size() != expected.size()) {
+            throw new IllegalStateException("C01H requires nine exact tamper-evident audit triggers");
+        }
+        for (TriggerDefinition trigger : actual) {
+            TriggerDefinition required = expected.get(trigger.name());
+            if (required == null || !required.table().equalsIgnoreCase(trigger.table())
+                    || !required.timing().equalsIgnoreCase(trigger.timing())
+                    || !required.event().equalsIgnoreCase(trigger.event())
+                    || !normalizeSql(required.statement()).equals(normalizeSql(trigger.statement()))) {
+                throw new IllegalStateException("C01H audit trigger " + trigger.name()
+                        + " has an incompatible table or definition");
+            }
+        }
+    }
+
+    private void createHistoricalEventAuditTriggers() {
+        for (TriggerDefinition trigger : expectedHistoricalEventAuditTriggers().values()) {
+            jdbcTemplate.execute("CREATE TRIGGER " + trigger.name() + " " + trigger.timing()
+                    + " " + trigger.event() + " ON " + trigger.table()
+                    + " FOR EACH ROW " + trigger.statement());
+        }
+    }
+
+    private java.util.Map<String, TriggerDefinition> expectedHistoricalEventAuditTriggers() {
+        return java.util.Map.ofEntries(
+                java.util.Map.entry("trg_historical_event_batch_insert_guard", new TriggerDefinition(
+                        "trg_historical_event_batch_insert_guard", "agent_task_historical_event_manifest_batch", "BEFORE", "INSERT", """
+BEGIN
+    IF NEW.report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.b09_report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.b09_run_id IS NULL OR CHAR_LENGTH(NEW.b09_run_id) <> 36
+       OR NEW.b09_completed_at <= 0 OR NEW.manifest_row_count <> 0
+       OR NEW.insert_required_count <> 0 OR NEW.exact_noop_count <> 0
+       OR NEW.blocked_count <> 0 OR BINARY NEW.seal_status <> BINARY 'LOADING'
+       OR NEW.sealed_at IS NOT NULL OR NEW.approved_at <= 0
+       OR NEW.create_time <> NEW.approved_at
+       OR NEW.approved_operator IS NULL OR CHAR_LENGTH(NEW.approved_operator) NOT BETWEEN 1 AND 100
+       OR BINARY NEW.approved_operator <> BINARY TRIM(NEW.approved_operator)
+       OR REGEXP_LIKE(NEW.approved_operator, '[[:cntrl:]]', 'c') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H batch insert requires exact procedure-owned LOADING state';
+    END IF;
+END
+                        """)),
+                java.util.Map.entry("trg_historical_event_batch_update_guard", new TriggerDefinition(
+                        "trg_historical_event_batch_update_guard", "agent_task_historical_event_manifest_batch", "BEFORE", "UPDATE", """
+BEGIN
+    IF NOT (BINARY OLD.seal_status = BINARY 'LOADING'
+        AND BINARY NEW.seal_status = BINARY 'SEALED'
+        AND OLD.manifest_row_count = 0 AND OLD.insert_required_count = 0
+        AND OLD.exact_noop_count = 0 AND OLD.blocked_count = 0
+        AND NEW.manifest_row_count > 0 AND NEW.blocked_count = 0
+        AND NEW.insert_required_count + NEW.exact_noop_count = NEW.manifest_row_count
+        AND NEW.sealed_at IS NOT NULL AND NEW.sealed_at >= NEW.approved_at
+        AND BINARY NEW.report_sha256 = BINARY OLD.report_sha256
+        AND BINARY NEW.b09_report_sha256 = BINARY OLD.b09_report_sha256
+        AND BINARY NEW.b09_run_id = BINARY OLD.b09_run_id
+        AND BINARY NEW.b09_operator = BINARY OLD.b09_operator
+        AND NEW.b09_completed_at = OLD.b09_completed_at
+        AND BINARY NEW.approved_operator = BINARY OLD.approved_operator
+        AND NEW.approved_at = OLD.approved_at AND NEW.create_time <=> OLD.create_time
+        AND (SELECT COUNT(*) FROM agent_task_historical_event_manifest m
+             WHERE BINARY m.report_sha256 = BINARY NEW.report_sha256
+               AND BINARY m.approved_operator = BINARY NEW.approved_operator
+               AND m.approved_at = NEW.approved_at) = NEW.manifest_row_count
+        AND (SELECT COUNT(*) FROM agent_task_historical_event_manifest m
+             WHERE BINARY m.report_sha256 = BINARY NEW.report_sha256
+               AND BINARY m.decision_status = BINARY 'INSERT_REQUIRED') = NEW.insert_required_count
+        AND (SELECT COUNT(*) FROM agent_task_historical_event_manifest m
+             WHERE BINARY m.report_sha256 = BINARY NEW.report_sha256
+               AND BINARY m.decision_status = BINARY 'EXACT_NOOP') = NEW.exact_noop_count) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H batch permits only complete zero-blocked LOADING to SEALED';
+    END IF;
+END
+                        """)),
+                java.util.Map.entry("trg_historical_event_batch_no_delete", new TriggerDefinition(
+                        "trg_historical_event_batch_no_delete", "agent_task_historical_event_manifest_batch", "BEFORE", "DELETE", """
+BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H sealed batch cannot be deleted'; END
+                        """)),
+                java.util.Map.entry("trg_historical_event_manifest_insert_guard", new TriggerDefinition(
+                        "trg_historical_event_manifest_insert_guard", "agent_task_historical_event_manifest", "BEFORE", "INSERT", """
+BEGIN
+    IF NEW.manifest_row_key NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.manifest_row_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.content_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.event_id NOT REGEXP BINARY '^c01h-[0-9a-f]{64}$'
+       OR BINARY NEW.decision_status NOT IN (BINARY 'INSERT_REQUIRED', BINARY 'EXACT_NOOP')
+       OR NEW.member_count <= 0 OR NEW.work_item_count <= 0
+       OR NEW.expected_event_version <= 0 OR NEW.task_version_snapshot < 0
+       OR NEW.current_event_version_snapshot < 0 OR NEW.event_chain_count < 0
+       OR (BINARY NEW.decision_status = BINARY 'INSERT_REQUIRED'
+           AND (NEW.baseline_event_version IS NOT NULL
+                OR NEW.expected_event_version <> NEW.current_event_version_snapshot + 1))
+       OR (BINARY NEW.decision_status = BINARY 'EXACT_NOOP'
+           AND (NEW.baseline_event_version IS NULL
+                OR NEW.expected_event_version <> NEW.baseline_event_version))
+       OR (SELECT COUNT(*) FROM agent_task_historical_event_manifest_batch b
+           WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
+             AND BINARY b.seal_status = BINARY 'LOADING'
+             AND b.manifest_row_count = 0 AND b.blocked_count = 0
+             AND BINARY b.b09_report_sha256 = BINARY NEW.b09_report_sha256
+             AND BINARY b.b09_run_id = BINARY NEW.b09_run_id
+             AND BINARY b.b09_operator = BINARY NEW.b09_operator
+             AND b.b09_completed_at = NEW.b09_completed_at
+             AND BINARY b.approved_operator = BINARY NEW.approved_operator
+             AND b.approved_at = NEW.approved_at) <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H manifest row requires matching procedure-owned LOADING batch';
+    END IF;
+END
+                        """)),
+                java.util.Map.entry("trg_historical_event_manifest_no_update", new TriggerDefinition(
+                        "trg_historical_event_manifest_no_update", "agent_task_historical_event_manifest", "BEFORE", "UPDATE", """
+BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H sealed manifest is immutable'; END
+                        """)),
+                java.util.Map.entry("trg_historical_event_manifest_no_delete", new TriggerDefinition(
+                        "trg_historical_event_manifest_no_delete", "agent_task_historical_event_manifest", "BEFORE", "DELETE", """
+BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H sealed manifest cannot be deleted'; END
+                        """)),
+                java.util.Map.entry("trg_historical_event_run_insert_guard", new TriggerDefinition(
+                        "trg_historical_event_run_insert_guard", "agent_task_historical_event_run", "BEFORE", "INSERT", """
+BEGIN
+    IF NEW.run_id IS NULL OR CHAR_LENGTH(NEW.run_id) <> 36
+       OR NEW.report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR NEW.b09_report_sha256 NOT REGEXP BINARY '^[0-9a-f]{64}$'
+       OR BINARY NEW.run_status <> BINARY 'SUCCEEDED'
+       OR NEW.manifest_row_count <= 0 OR NEW.event_insert_count < 0
+       OR NEW.version_update_count < 0 OR NEW.exact_noop_count < 0
+       OR NEW.event_insert_count <> NEW.version_update_count
+       OR NEW.event_insert_count + NEW.exact_noop_count <> NEW.manifest_row_count
+       OR NEW.completed_at < NEW.started_at OR NEW.create_time <> NEW.completed_at
+       OR (SELECT COUNT(*) FROM agent_task_historical_event_manifest_batch b
+           WHERE BINARY b.report_sha256 = BINARY NEW.report_sha256
+             AND BINARY b.seal_status = BINARY 'SEALED'
+             AND BINARY b.b09_report_sha256 = BINARY NEW.b09_report_sha256
+             AND BINARY b.b09_run_id = BINARY NEW.b09_run_id
+             AND BINARY b.approved_operator = BINARY NEW.operator
+             AND b.manifest_row_count = NEW.manifest_row_count) <> 1
+       OR (SELECT COUNT(*) FROM agent_task_historical_event_manifest m
+           WHERE BINARY m.report_sha256 = BINARY NEW.report_sha256) <> NEW.manifest_row_count THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H run insert requires one complete sealed manifest and exact counts';
+    END IF;
+END
+                        """)),
+                java.util.Map.entry("trg_historical_event_run_no_update", new TriggerDefinition(
+                        "trg_historical_event_run_no_update", "agent_task_historical_event_run", "BEFORE", "UPDATE", """
+BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run is immutable'; END
+                        """)),
+                java.util.Map.entry("trg_historical_event_run_no_delete", new TriggerDefinition(
+                        "trg_historical_event_run_no_delete", "agent_task_historical_event_run", "BEFORE", "DELETE", """
+BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be deleted'; END
+                        """)));
+    }
+
     private boolean isH2Database() {
         if (h2Database != null) {
             return h2Database;
@@ -1686,6 +2159,182 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureRequiredIndex("agent_scene_version", "PRIMARY", true,
                 List.of("tenant_id", "client_id", "scene_id"),
                 "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, scene_id)");
+    }
+
+    void ensureTaskEventSchema() {
+        if (!tableExists("agent_task_event")) {
+            jdbcTemplate.execute("""
+                    CREATE TABLE IF NOT EXISTS agent_task_event (
+                        id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+                        task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                        event_version   BIGINT NOT NULL COMMENT 'Monotonic event version',
+                        event_id        VARCHAR(100) NOT NULL COMMENT 'Deterministic stable event identifier',
+                        event_type      VARCHAR(64) NOT NULL COMMENT 'Event type',
+                        actor_type      VARCHAR(20) NOT NULL COMMENT 'Actor classification',
+                        actor_id        VARCHAR(100) DEFAULT NULL COMMENT 'Actor identity',
+                        aggregate_type  VARCHAR(30) NOT NULL COMMENT 'Aggregate type',
+                        aggregate_id    VARCHAR(100) NOT NULL COMMENT 'Aggregate instance ID',
+                        event_json      MEDIUMTEXT NOT NULL COMMENT 'Event payload JSON',
+                        occurred_at     BIGINT NOT NULL COMMENT 'Event occurrence timestamp',
+                        tenant_id       VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+                        client_id       VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+                        create_time     BIGINT DEFAULT NULL COMMENT 'Create time',
+                        update_time     BIGINT DEFAULT NULL COMMENT 'Update time',
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+                        UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
+                        KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
+                        KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
+                        KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task event journal'
+                    """);
+        }
+        validateTaskEventSchema();
+    }
+
+    private void validateTaskEventSchema() {
+        if (!tableExists("agent_task_event")) {
+            throw new IllegalStateException(
+                    "agent_task_event is missing after CREATE TABLE IF NOT EXISTS");
+        }
+        if (isH2Database()) {
+            return;
+        }
+        if (!tableExists("agent_task_meta")) {
+            throw new IllegalStateException(
+                    "agent_task_meta is required for task event version allocation");
+        }
+        validateInnoDbTable("agent_task_meta");
+        validateInnoDbTable("agent_task_event");
+        validateTableCollation("agent_task_event", "utf8mb4_0900_bin");
+
+        validateIdentityColumn("agent_task_event", "id",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "task_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_version",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "event_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_type",
+                "varchar", "varchar(64)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "actor_type",
+                "varchar", "varchar(20)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "actor_id",
+                "varchar", "varchar(100)", true, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "aggregate_type",
+                "varchar", "varchar(30)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "aggregate_id",
+                "varchar", "varchar(100)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "event_json",
+                "mediumtext", "mediumtext", false, null, null);
+        validateIdentityColumn("agent_task_event", "occurred_at",
+                "bigint", "bigint", false, null, null);
+        validateIdentityColumn("agent_task_event", "tenant_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "client_id",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "create_time",
+                "bigint", "bigint", true, null, null);
+        validateIdentityColumn("agent_task_event", "update_time",
+                "bigint", "bigint", true, null, null);
+
+        ensureRequiredIndex("agent_task_event", "PRIMARY", true,
+                List.of("id"),
+                "ALTER TABLE agent_task_event ADD PRIMARY KEY (id)");
+        ensureRequiredIndex("agent_task_event", "uk_task_event_version", true,
+                List.of("tenant_id", "client_id", "task_id", "event_version"),
+                "CREATE UNIQUE INDEX uk_task_event_version ON agent_task_event "
+                        + "(tenant_id, client_id, task_id, event_version)");
+        ensureRequiredIndex("agent_task_event", "uk_task_event_id", true,
+                List.of("tenant_id", "client_id", "event_id"),
+                "CREATE UNIQUE INDEX uk_task_event_id ON agent_task_event "
+                        + "(tenant_id, client_id, event_id)");
+        ensureRequiredIndex("agent_task_event", "idx_task_event_occurred", false,
+                List.of("tenant_id", "client_id", "task_id", "occurred_at"),
+                "CREATE INDEX idx_task_event_occurred ON agent_task_event "
+                        + "(tenant_id, client_id, task_id, occurred_at)");
+        ensureRequiredIndex("agent_task_event", "idx_event_actor_time", false,
+                List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at"),
+                "CREATE INDEX idx_event_actor_time ON agent_task_event "
+                        + "(tenant_id, client_id, actor_type, actor_id, occurred_at)");
+        ensureRequiredIndex("agent_task_event", "idx_event_type_time", false,
+                List.of("tenant_id", "client_id", "event_type", "occurred_at"),
+                "CREATE INDEX idx_event_type_time ON agent_task_event "
+                        + "(tenant_id, client_id, event_type, occurred_at)");
+
+        validateTaskEventAutoIncrement();
+        validateTaskEventUniqueIndexes();
+    }
+
+    void validateInnoDbTable(String table) {
+        String engine = jdbcTemplate.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = ?
+                """, String.class, table);
+        if (!"InnoDB".equalsIgnoreCase(engine)) {
+            throw new IllegalStateException(
+                    table + " must use InnoDB for transactional task event writes but was " + engine);
+        }
+    }
+
+    /**
+     * Enforce the minimal safe uniqueness policy for the task event journal.
+     * Required scoped UNIQUE indexes and PRIMARY must be exact; additional
+     * ordinary NON_UNIQUE indexes remain allowed for query optimization.
+     */
+    void validateTaskEventUniqueIndexes() {
+        List<TaskEventIndexColumn> rows = jdbcTemplate.query("""
+                SELECT INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, SUB_PART
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'agent_task_event'
+                  AND NON_UNIQUE = 0
+                ORDER BY INDEX_NAME, SEQ_IN_INDEX
+                """, (rs, rowNum) -> new TaskEventIndexColumn(
+                rs.getString("INDEX_NAME"),
+                rs.getString("COLUMN_NAME"),
+                rs.getInt("SEQ_IN_INDEX"),
+                rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART")));
+
+        java.util.Map<String, List<String>> expected = java.util.Map.of(
+                "PRIMARY", List.of("id"),
+                "uk_task_event_id", List.of("tenant_id", "client_id", "event_id"),
+                "uk_task_event_version",
+                List.of("tenant_id", "client_id", "task_id", "event_version"));
+        java.util.Map<String, java.util.ArrayList<String>> actual = new java.util.LinkedHashMap<>();
+        for (TaskEventIndexColumn row : rows) {
+            if (row.indexName() == null || row.columnName() == null
+                    || row.sequence() <= 0 || row.subPart() != null) {
+                throw new IllegalStateException(
+                        "agent_task_event has an incompatible UNIQUE index component: " + row);
+            }
+            java.util.ArrayList<String> columns = actual.computeIfAbsent(
+                    row.indexName(), ignored -> new java.util.ArrayList<>());
+            if (row.sequence() != columns.size() + 1) {
+                throw new IllegalStateException(
+                        "agent_task_event UNIQUE index has invalid ordered columns: " + row.indexName());
+            }
+            columns.add(row.columnName().toLowerCase(Locale.ROOT));
+        }
+        if (!expected.equals(actual)) {
+            throw new IllegalStateException(
+                    "agent_task_event UNIQUE indexes must be exactly " + expected
+                    + "; dangerous scoped-uniqueness drift found: " + actual);
+        }
+    }
+
+    private void validateTaskEventAutoIncrement() {
+        String extra = jdbcTemplate.queryForObject("""
+                SELECT EXTRA FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'agent_task_event'
+                  AND column_name = 'id'
+                """, String.class);
+        if (extra == null || !extra.toLowerCase(Locale.ROOT).contains("auto_increment")) {
+            throw new IllegalStateException(
+                    "agent_task_event.id must be AUTO_INCREMENT but EXTRA=" + extra);
+        }
     }
 
     private void seedWaterMarginPersonas() {
@@ -1864,6 +2513,8 @@ public class AgentSchemaInitializer implements InitializingBean {
                     rs.getObject("SUB_PART") == null ? null : rs.getInt("SUB_PART"));
 
     static record IndexColumn(int nonUnique, String columnName, int sequence, Integer subPart) {}
+    static record TaskEventIndexColumn(
+            String indexName, String columnName, int sequence, Integer subPart) {}
 
     private String visualConfig(int rankNo) {
         int x = (rankNo - 1) % 6;

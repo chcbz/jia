@@ -3,6 +3,7 @@ package cn.jia.core.config;
 import cn.jia.core.datasource.DruidSource;
 import com.alibaba.druid.pool.DruidDataSource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,6 +21,8 @@ public class DruidDataSourceConfig {
 	}
 
 	@Bean // 声明其为Bean实例
+	@ConditionalOnProperty(name = "dynamic.datasource.enable", havingValue = "false",
+			matchIfMissing = true)
 	public DataSource dataSource(DruidSource config) throws SQLException {
 		DruidDataSource datasource = new DruidDataSource();
 

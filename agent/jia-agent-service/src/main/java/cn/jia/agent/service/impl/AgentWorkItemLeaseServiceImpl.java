@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
@@ -8,8 +10,11 @@ import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
@@ -34,6 +39,8 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
 
     private final AgentTaskMemberDao memberDao;
     private final AgentTaskWorkItemDao workItemDao;
+    private final AgentTaskMutationTransaction mutationTransaction;
+    private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
     private final Supplier<String> tokenGenerator;
     private final long maxLeaseDurationMillis;
@@ -42,27 +49,46 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     public AgentWorkItemLeaseServiceImpl(
             AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter,
             @Value("${jia.agent.work-item-lease.max-duration-ms:900000}")
             long maxLeaseDurationMillis) {
-        this(memberDao, workItemDao, System::currentTimeMillis,
-                AgentWorkItemLeaseServiceImpl::secureLeaseToken,
+        this(memberDao, workItemDao, mutationTransaction, eventWriter,
+                System::currentTimeMillis, AgentWorkItemLeaseServiceImpl::secureLeaseToken,
                 maxLeaseDurationMillis);
     }
 
     AgentWorkItemLeaseServiceImpl(
             AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter,
             LongSupplier clock,
             Supplier<String> tokenGenerator,
             long maxLeaseDurationMillis) {
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
+        this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
+        this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.tokenGenerator = Objects.requireNonNull(tokenGenerator, "tokenGenerator");
         if (maxLeaseDurationMillis <= 0) {
             throw new IllegalArgumentException("maxLeaseDurationMillis must be positive");
         }
         this.maxLeaseDurationMillis = maxLeaseDurationMillis;
+    }
+
+    private <T> T withLockedTaskRoot(String tenantId, String clientId, String taskId,
+            AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
+        try {
+            return mutationTransaction.executeWithLockedTaskRoot(
+                    tenantId, clientId, taskId, mutation);
+        } catch (AgentTaskCollaborationException e) {
+            if (e.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
+                throw notFound();
+            }
+            throw invalidPersisted("Locked task root failed validation");
+        }
     }
 
     @Override
@@ -73,32 +99,33 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         requireScopeAndIds(tenantId, clientId, taskId, workItemId);
         RequiredCommand required = requireCommand(command, true, false);
         requireCanonicalAgentId(required.agentId());
-        long now = now();
         long duration = requireDuration(required.leaseDurationMillis());
-        AgentTaskMemberEntity member = requireActiveMember(
-                tenantId, clientId, taskId, required.agentId());
-        AgentTaskWorkItemEntity current = requireWorkItem(
-                tenantId, clientId, taskId, workItemId);
-        requireCompleteSnapshot(current);
-        requireVersion(current.getVersion(), required.expectedVersion());
-        requireStatus(current, AgentTaskWorkItemStatus.READY);
-        requireReadyLeaseState(current);
-        requireClaimableAttempts(current);
-        requireAssigneePermitsClaim(current.getAssigneeAgentId(), required.agentId());
-
-        String leaseToken = generatedToken();
-        long leaseUntil = addPositive(now, duration, "lease duration overflow");
-        AgentTaskWorkItemDTO update = copyWorkItem(current);
-        update.setAssigneeAgentId(required.agentId());
-        update.setStatus(AgentTaskWorkItemStatus.CLAIMED.value());
-        update.setLeaseToken(leaseToken);
-        update.setLeaseUntil(leaseUntil);
-
-        int updated = workItemDao.claimReadyByVersion(
-                tenantId, clientId, taskId, workItemId,
-                nullIfBlank(current.getAssigneeAgentId()), required.expectedVersion(), update);
-        requireSingleCasUpdate(updated);
-        return result(update, required.expectedVersion() + 1, now, required.agentId());
+        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+            long now = now();
+            requireActiveMember(tenantId, clientId, taskId, required.agentId());
+            AgentTaskWorkItemEntity current = requireWorkItem(tenantId, clientId, taskId, workItemId);
+            requireCompleteSnapshot(current);
+            requireVersion(current.getVersion(), required.expectedVersion());
+            requireStatus(current, AgentTaskWorkItemStatus.READY);
+            requireReadyLeaseState(current);
+            requireClaimableAttempts(current);
+            requireAssigneePermitsClaim(current.getAssigneeAgentId(), required.agentId());
+            String leaseToken = generatedToken();
+            long leaseUntil = addPositive(now, duration, "lease duration overflow");
+            AgentTaskWorkItemDTO update = copyWorkItem(current);
+            update.setAssigneeAgentId(required.agentId());
+            update.setStatus(AgentTaskWorkItemStatus.CLAIMED.value());
+            update.setLeaseToken(leaseToken);
+            update.setLeaseUntil(leaseUntil);
+            requireSingleCasUpdate(workItemDao.claimReadyByVersion(
+                    tenantId, clientId, taskId, workItemId,
+                    nullIfBlank(current.getAssigneeAgentId()), required.expectedVersion(), update));
+            AgentWorkItemLeaseDTO result = result(
+                    update, required.expectedVersion() + 1, now, required.agentId());
+            appendLeaseEvent(tenantId, clientId, taskId, current, result,
+                    TaskEventType.WORK_ITEM_CLAIMED, required.agentId(), null);
+            return result;
+        });
     }
 
     @Override
@@ -106,12 +133,13 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     public AgentWorkItemLeaseDTO start(
             String tenantId, String clientId, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        LeaseContext context = requireActiveLease(
-                tenantId, clientId, taskId, workItemId, command,
-                List.of(AgentTaskWorkItemStatus.CLAIMED), false);
-        AgentTaskWorkItemDTO update = copyWorkItem(context.current());
-        update.setStatus(AgentTaskWorkItemStatus.RUNNING.value());
-        return updateActiveLease(context, update);
+        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+                List.of(AgentTaskWorkItemStatus.CLAIMED), false,
+                context -> {
+                    AgentTaskWorkItemDTO update = copyWorkItem(context.current());
+                    update.setStatus(AgentTaskWorkItemStatus.RUNNING.value());
+                    return new LeaseMutation(update, TaskEventType.WORK_ITEM_STARTED, null);
+                });
     }
 
     @Override
@@ -119,23 +147,27 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     public AgentWorkItemLeaseDTO heartbeat(
             String tenantId, String clientId, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        LeaseContext context = requireActiveLease(
-                tenantId, clientId, taskId, workItemId, command,
-                List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), true);
-        long duration = requireDuration(context.required().leaseDurationMillis());
-        long maxUntil = addPositive(context.now(), maxLeaseDurationMillis,
-                "lease duration limit overflow");
-        if (context.current().getLeaseUntil() > maxUntil) {
-            throw invalidPersisted("Persisted lease exceeds the configured lease horizon");
-        }
-        long requestedUntil = addPositive(context.now(), duration, "lease duration overflow");
-        long renewedUntil = Math.max(context.current().getLeaseUntil(), requestedUntil);
-        if (renewedUntil > maxUntil) {
-            throw invalidRequest("Heartbeat lease extension exceeds the configured limit");
-        }
-        AgentTaskWorkItemDTO update = copyWorkItem(context.current());
-        update.setLeaseUntil(renewedUntil);
-        return updateActiveLease(context, update);
+        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+                List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), true,
+                context -> {
+                    long duration = requireDuration(context.required().leaseDurationMillis());
+                    long maxUntil = addPositive(context.now(), maxLeaseDurationMillis,
+                            "lease duration limit overflow");
+                    if (context.current().getLeaseUntil() > maxUntil) {
+                        throw invalidPersisted("Persisted lease exceeds the configured lease horizon");
+                    }
+                    long requestedUntil = addPositive(context.now(), duration, "lease duration overflow");
+                    long renewedUntil = Math.max(context.current().getLeaseUntil(), requestedUntil);
+                    if (renewedUntil > maxUntil) {
+                        throw invalidRequest("Heartbeat lease extension exceeds the configured limit");
+                    }
+                    if (renewedUntil == context.current().getLeaseUntil()) {
+                        return new LeaseMutation(null, null, null);
+                    }
+                    AgentTaskWorkItemDTO update = copyWorkItem(context.current());
+                    update.setLeaseUntil(renewedUntil);
+                    return new LeaseMutation(update, TaskEventType.WORK_ITEM_LEASE_RENEWED, null);
+                });
     }
 
     @Override
@@ -143,17 +175,18 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     public AgentWorkItemLeaseDTO release(
             String tenantId, String clientId, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        LeaseContext context = requireActiveLease(
-                tenantId, clientId, taskId, workItemId, command,
-                List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), false);
-        int nextAttempt = incrementAttempt(context.current());
-        AgentTaskWorkItemDTO update = copyWorkItem(context.current());
-        update.setAttemptCount(nextAttempt);
-        update.setStatus(nextAttempt >= context.current().getMaxAttempts()
-                ? AgentTaskWorkItemStatus.FAILED.value()
-                : AgentTaskWorkItemStatus.READY.value());
-        clearLease(update);
-        return updateActiveLease(context, update);
+        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+                List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), false,
+                context -> {
+                    int nextAttempt = incrementAttempt(context.current());
+                    AgentTaskWorkItemDTO update = copyWorkItem(context.current());
+                    update.setAttemptCount(nextAttempt);
+                    update.setStatus(nextAttempt >= context.current().getMaxAttempts()
+                            ? AgentTaskWorkItemStatus.FAILED.value()
+                            : AgentTaskWorkItemStatus.READY.value());
+                    clearLease(update);
+                    return new LeaseMutation(update, TaskEventType.WORK_ITEM_LEASE_RELEASED, null);
+                });
     }
 
     @Override
@@ -161,13 +194,34 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     public AgentWorkItemLeaseDTO cancel(
             String tenantId, String clientId, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        LeaseContext context = requireActiveLease(
-                tenantId, clientId, taskId, workItemId, command,
-                List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), false);
-        AgentTaskWorkItemDTO update = copyWorkItem(context.current());
-        update.setStatus(AgentTaskWorkItemStatus.CANCELLED.value());
-        clearLease(update);
-        return updateActiveLease(context, update);
+        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+                List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), false,
+                context -> {
+                    AgentTaskWorkItemDTO update = copyWorkItem(context.current());
+                    update.setStatus(AgentTaskWorkItemStatus.CANCELLED.value());
+                    clearLease(update);
+                    return new LeaseMutation(update, TaskEventType.WORK_ITEM_CANCELLED, null);
+                });
+    }
+
+    private AgentWorkItemLeaseDTO mutateActiveLease(
+            String tenantId, String clientId, String taskId, String workItemId,
+            AgentWorkItemLeaseCommandDTO command, List<AgentTaskWorkItemStatus> statuses,
+            boolean requireDuration, java.util.function.Function<LeaseContext, LeaseMutation> mutation) {
+        requireScopeAndIds(tenantId, clientId, taskId, workItemId);
+        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+            LeaseContext context = requireActiveLease(
+                    tenantId, clientId, taskId, workItemId, command, statuses, requireDuration);
+            LeaseMutation requested = mutation.apply(context);
+            if (requested.update() == null) {
+                return result(copyWorkItem(context.current()), context.current().getVersion(),
+                        context.now(), context.required().agentId());
+            }
+            AgentWorkItemLeaseDTO result = updateActiveLease(context, requested.update());
+            appendLeaseEvent(tenantId, clientId, taskId, context.current(), result,
+                    requested.eventType(), context.required().agentId(), requested.reasonCode());
+            return result;
+        });
     }
 
     @Override
@@ -186,56 +240,90 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemLeaseScanDTO expireLeases(String tenantId, String clientId, int limit) {
         requireScope(tenantId, clientId);
-        if (limit <= 0) {
-            throw invalidRequest("limit must be positive");
-        }
+        if (limit <= 0) throw invalidRequest("limit must be positive");
         long now = now();
         List<AgentTaskWorkItemEntity> candidates = workItemDao.listExpiredLeases(
                 tenantId, clientId, now, limit);
         AgentWorkItemLeaseScanDTO scan = new AgentWorkItemLeaseScanDTO();
         scan.setScannedCount(candidates.size());
-
-        for (AgentTaskWorkItemEntity current : candidates) {
-            requireCompleteSnapshot(current);
-            AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
-            if (status != AgentTaskWorkItemStatus.CLAIMED
-                    && status != AgentTaskWorkItemStatus.RUNNING) {
-                throw invalidPersisted("Expiry scan returned a non-leased status");
-            }
-            requireLeaseIdentity(current);
-            if (current.getLeaseUntil() > now) {
-                continue;
-            }
-            int nextAttempt = incrementAttempt(current);
-            AgentTaskWorkItemDTO update = copyWorkItem(current);
-            update.setAttemptCount(nextAttempt);
-            boolean failed = nextAttempt >= current.getMaxAttempts();
-            update.setStatus(failed
-                    ? AgentTaskWorkItemStatus.FAILED.value()
-                    : AgentTaskWorkItemStatus.READY.value());
-            clearLease(update);
-
-            int updated = workItemDao.expireLeaseByVersion(
-                    tenantId, clientId, current.getTaskId(), current.getWorkItemId(),
-                    current.getAssigneeAgentId(), current.getLeaseToken(), current.getStatus(),
-                    current.getLeaseUntil(), current.getVersion(), now, update);
-            if (updated == 0) {
+        for (AgentTaskWorkItemEntity candidate : candidates) {
+            ExpiryOutcome outcome = withLockedTaskRoot(
+                    tenantId, clientId, candidate.getTaskId(), root ->
+                            expireCandidate(tenantId, clientId, candidate, now));
+            if (outcome.conflict()) {
                 scan.setConflictCount(scan.getConflictCount() + 1);
                 continue;
             }
-            if (updated != 1) {
-                throw invalidPersisted("Scoped expiry CAS updated an unexpected row count");
-            }
             scan.setExpiredCount(scan.getExpiredCount() + 1);
-            if (failed) {
-                scan.setFailedCount(scan.getFailedCount() + 1);
-            } else {
-                scan.setRequeuedCount(scan.getRequeuedCount() + 1);
-            }
-            scan.getTransitions().add(result(
-                    update, current.getVersion() + 1, now, current.getAssigneeAgentId()));
+            if (outcome.failed()) scan.setFailedCount(scan.getFailedCount() + 1);
+            else scan.setRequeuedCount(scan.getRequeuedCount() + 1);
+            scan.getTransitions().add(outcome.result());
         }
         return scan;
+    }
+
+    private ExpiryOutcome expireCandidate(String tenantId, String clientId,
+            AgentTaskWorkItemEntity candidate, long now) {
+        AgentTaskWorkItemEntity current = workItemDao.findByTaskAndWorkItemId(
+                tenantId, clientId, candidate.getTaskId(), candidate.getWorkItemId());
+        if (current == null || !Objects.equals(current.getVersion(), candidate.getVersion())
+                || !Objects.equals(current.getLeaseToken(), candidate.getLeaseToken())
+                || !Objects.equals(current.getLeaseUntil(), candidate.getLeaseUntil())
+                || !Objects.equals(current.getStatus(), candidate.getStatus())) {
+            return ExpiryOutcome.casConflict();
+        }
+        requireCompleteSnapshot(current);
+        AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
+        if (status != AgentTaskWorkItemStatus.CLAIMED && status != AgentTaskWorkItemStatus.RUNNING) {
+            throw invalidPersisted("Expiry scan returned a non-leased status");
+        }
+        requireLeaseIdentity(current);
+        if (current.getLeaseUntil() > now) return ExpiryOutcome.casConflict();
+        int nextAttempt = incrementAttempt(current);
+        AgentTaskWorkItemDTO update = copyWorkItem(current);
+        update.setAttemptCount(nextAttempt);
+        boolean failed = nextAttempt >= current.getMaxAttempts();
+        update.setStatus(failed ? AgentTaskWorkItemStatus.FAILED.value()
+                : AgentTaskWorkItemStatus.READY.value());
+        clearLease(update);
+        int updated = workItemDao.expireLeaseByVersion(
+                tenantId, clientId, current.getTaskId(), current.getWorkItemId(),
+                current.getAssigneeAgentId(), current.getLeaseToken(), current.getStatus(),
+                current.getLeaseUntil(), current.getVersion(), now, update);
+        if (updated == 0) return ExpiryOutcome.casConflict();
+        if (updated != 1) throw invalidPersisted("Scoped expiry CAS updated an unexpected row count");
+        AgentWorkItemLeaseDTO result = result(
+                update, current.getVersion() + 1, now, current.getAssigneeAgentId());
+        appendLeaseEvent(tenantId, clientId, current.getTaskId(), current, result,
+                failed ? TaskEventType.WORK_ITEM_FAILED : TaskEventType.WORK_ITEM_REQUEUED,
+                null, "lease_expired");
+        return new ExpiryOutcome(false, failed, result);
+    }
+
+    private void appendLeaseEvent(String tenantId, String clientId, String taskId,
+            AgentTaskWorkItemEntity current, AgentWorkItemLeaseDTO result,
+            String eventType, String actorId, String reasonCode) {
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.WORK_ITEM_ID, current.getWorkItemId())
+                .put(TaskEventPayload.Key.FROM_STATUS, current.getStatus())
+                .put(TaskEventPayload.Key.TO_STATUS, result.getStatus())
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, current.getVersion())
+                .put(TaskEventPayload.Key.RESULT_VERSION, result.getVersion())
+                .put(TaskEventPayload.Key.ATTEMPT_COUNT, result.getAttemptCount().longValue())
+                .put(TaskEventPayload.Key.MAX_ATTEMPTS, result.getMaxAttempts().longValue());
+        if (actorId != null) payload.put(TaskEventPayload.Key.ASSIGNEE_AGENT_ID, actorId);
+        if (current.getLeaseUntil() != null) {
+            payload.put(TaskEventPayload.Key.PREVIOUS_LEASE_EXPIRES_AT, current.getLeaseUntil());
+        }
+        if (result.getLeaseUntil() != null) {
+            payload.put(TaskEventPayload.Key.LEASE_EXPIRES_AT, result.getLeaseUntil());
+        }
+        if (reasonCode != null) payload.put(TaskEventPayload.Key.REASON_CODE, reasonCode);
+        eventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, taskId, eventType,
+                actorId == null ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.AGENT,
+                actorId, TaskEventType.Aggregate.WORK_ITEM, current.getWorkItemId(),
+                payload, result.getChangedAt(), result.getVersion()));
     }
 
     private AgentWorkItemLeaseDTO updateActiveLease(
@@ -596,6 +684,13 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     private record RequiredCommand(
             String agentId, String leaseToken,
             long expectedVersion, Long leaseDurationMillis) {
+    }
+
+    private record LeaseMutation(AgentTaskWorkItemDTO update, String eventType, String reasonCode) {
+    }
+
+    private record ExpiryOutcome(boolean conflict, boolean failed, AgentWorkItemLeaseDTO result) {
+        static ExpiryOutcome casConflict() { return new ExpiryOutcome(true, false, null); }
     }
 
     private record LeaseContext(

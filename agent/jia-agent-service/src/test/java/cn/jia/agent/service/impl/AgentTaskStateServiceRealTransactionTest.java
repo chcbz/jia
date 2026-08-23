@@ -106,6 +106,8 @@ class AgentTaskStateServiceRealTransactionTest {
 
         // 5. Real DataSourceTransactionManager
         PlatformTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        AgentTaskMutationTransactionImpl mutationTransaction =
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
 
         // 6. Real TransactionInterceptor matching service @Transactional annotation
         TransactionInterceptor interceptor = new TransactionInterceptor();
@@ -123,11 +125,13 @@ class AgentTaskStateServiceRealTransactionTest {
 
         // 7. Wrap service in Spring proxy — this is the production code path
         AgentTaskStateServiceImpl rawService = new AgentTaskStateServiceImpl(
-                taskMetaDao, memberDao, workItemDao);
+                taskMetaDao, memberDao, workItemDao, mutationTransaction,
+                command -> new cn.jia.agent.entity.AgentTaskEventWriteResult());
         ProxyFactory proxyFactory = new ProxyFactory(rawService);
         proxyFactory.setInterfaces(AgentTaskStateService.class);
         proxyFactory.addAdvice(interceptor);
         transactionalService = (AgentTaskStateService) proxyFactory.getProxy();
+        insertTaskRoot();
     }
 
     @AfterEach
@@ -205,6 +209,42 @@ class AgentTaskStateServiceRealTransactionTest {
         AgentTaskWorkItemEntity wiAfter = readWorkItem();
         assertEquals("submitted", wiAfter.getStatus());
         assertEquals(7L, wiAfter.getVersion());
+    }
+
+    @Test
+    void directWorkItemTransitionLocksRootByWorkItemBeforeUpdatingChild() {
+        insertWorkItem("running", 6L, AGENT_ID);
+
+        transactionalService.transitionWorkItem(
+                TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null));
+
+        AgentTaskWorkItemEntity after = readWorkItem();
+        assertEquals("submitted", after.getStatus());
+        assertEquals(7L, after.getVersion());
+    }
+
+    @Test
+    void eventAppendFailureRollsBackBusinessMutationWithRealTransactionManager() {
+        insertMember("working", 3L);
+        PlatformTransactionManager txManager = new DataSourceTransactionManager(dataSource);
+        AgentTaskStateServiceImpl raw = new AgentTaskStateServiceImpl(
+                taskMetaDao, memberDao, workItemDao,
+                new AgentTaskMutationTransactionImpl(taskMetaDao, txManager),
+                command -> { throw new IllegalStateException("event append failed"); });
+        TransactionInterceptor interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(txManager);
+        interceptor.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        ProxyFactory factory = new ProxyFactory(raw);
+        factory.setInterfaces(AgentTaskStateService.class);
+        factory.addAdvice(interceptor);
+        AgentTaskStateService service = (AgentTaskStateService) factory.getProxy();
+
+        assertThrows(IllegalStateException.class, () -> service.transitionMember(
+                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null)));
+
+        AgentTaskMemberEntity memberAfter = readMember();
+        assertEquals("working", memberAfter.getMemberStatus());
+        assertEquals(3L, memberAfter.getVersion());
     }
 
     // ── helpers ──
@@ -305,6 +345,16 @@ class AgentTaskStateServiceRealTransactionTest {
         factoryBean.setGlobalConfig(globalConfig);
 
         return factoryBean.getObject();
+    }
+
+    private void insertTaskRoot() {
+        jdbc.update("""
+                INSERT INTO agent_task_meta
+                (task_id, reward_status, collaboration_mode, risk_level, max_agents,
+                 review_required, task_version, current_event_version,
+                 tenant_id, client_id, create_time, update_time)
+                VALUES (?, 'running', 'single', 'low', 1, 0, 0, 0, ?, ?, 1, 1)
+                """, TASK_ID, TENANT, CLIENT);
     }
 
     private void insertMember(String status, long version) {
