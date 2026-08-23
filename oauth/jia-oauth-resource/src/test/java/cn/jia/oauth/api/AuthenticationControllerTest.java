@@ -43,24 +43,47 @@ class AuthenticationControllerTest {
     void acceptsMachineIdentityWithoutOptionalUserClaims() {
         OAuthResourceIdentityDTO identity = controller.resource(authenticated(jwt(Map.of(
                 "sub", "machine-client",
-                "client_id", "machine-client",
-                "scope", "task.read agent.execute"))));
+                "client_id", "machine-client"))));
 
         assertEquals("machine-client", identity.subject());
         assertEquals("machine-client", identity.clientId());
         assertNull(identity.username());
         assertNull(identity.jiacn());
-        assertEquals(List.of("agent.execute", "task.read"), identity.scopes());
+        assertEquals(List.of(), identity.scopes());
+    }
+
+    @Test
+    void preservesNonblankIdentityClaimsByteForByte() {
+        OAuthResourceIdentityDTO identity = controller.resource(authenticated(jwt(Map.of(
+                "sub", "  user-17  ",
+                "client_id", " public-web ",
+                "username", " alice ",
+                "jiacn", " jia-17 "))));
+
+        assertEquals("  user-17  ", identity.subject());
+        assertEquals(" public-web ", identity.clientId());
+        assertEquals(" alice ", identity.username());
+        assertEquals(" jia-17 ", identity.jiacn());
+        assertEquals(List.of(), identity.scopes());
     }
 
     @Test
     void rejectsMissingOrMalformedRequiredClaims() {
         assertUnauthorized(jwt(Map.of("client_id", "client", "scope", "openid")));
         assertUnauthorized(jwt(Map.of("sub", "subject", "scope", "openid")));
-        assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client")));
+        assertUnauthorized(jwt(Map.of("sub", " ", "client_id", "client")));
+        assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "\t")));
         assertUnauthorized(jwt(Map.of("sub", 17, "client_id", "client", "scope", "openid")));
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", List.of("client"), "scope", "openid")));
+    }
+
+    @Test
+    void rejectsBlankOrMalformedOptionalClaimsAndMalformedPresentScope() {
+        assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "username", " ")));
+        assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "jiacn", List.of("jia"))));
+        assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "scope", "\t")));
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "scope", List.of("openid", 17))));
+        assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "scope", List.of("openid", " "))));
     }
 
     private void assertUnauthorized(Jwt jwt) {

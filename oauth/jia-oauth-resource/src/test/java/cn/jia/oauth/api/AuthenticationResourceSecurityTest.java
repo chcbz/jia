@@ -91,15 +91,34 @@ class AuthenticationResourceSecurityTest {
                 .andExpect(jsonPath("$.clientId").value("machine-client"))
                 .andExpect(jsonPath("$.username").doesNotExist())
                 .andExpect(jsonPath("$.jiacn").doesNotExist())
-                .andExpect(jsonPath("$.scopes", contains("agent.execute", "task.read")))
+                .andExpect(jsonPath("$.scopes", hasSize(0)))
                 .andExpect(jsonPath("$.*", hasSize(3)));
     }
 
     @Test
-    void rejectsMalformedJwtAndValidJwtMissingIdentityClaims() throws Exception {
+    void preservesExactIdentityClaimsIncludingSurroundingWhitespace() throws Exception {
+        mockMvc.perform(get("/resource").header("Authorization", "Bearer exact-identity-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.subject").value(" user-17 "))
+                .andExpect(jsonPath("$.clientId").value(" public-web "))
+                .andExpect(jsonPath("$.username").value(" alice "))
+                .andExpect(jsonPath("$.jiacn").value(" jia-17 "))
+                .andExpect(jsonPath("$.scopes", hasSize(0)));
+    }
+
+    @Test
+    void rejectsMalformedJwtAndBlankOrMalformedIdentityClaims() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer malformed-token"))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get("/resource").header("Authorization", "Bearer missing-claims-token"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/resource").header("Authorization", "Bearer blank-required-token"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/resource").header("Authorization", "Bearer blank-optional-token"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/resource").header("Authorization", "Bearer malformed-optional-token"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/resource").header("Authorization", "Bearer malformed-scope-token"))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -134,9 +153,28 @@ class AuthenticationResourceSecurityTest {
                         "arbitrary_claim", "must-not-leak"));
                 case "machine-token" -> jwt(token, Map.of(
                         "sub", "machine-client",
-                        "client_id", "machine-client",
-                        "scope", "task.read agent.execute"));
+                        "client_id", "machine-client"));
+                case "exact-identity-token" -> jwt(token, Map.of(
+                        "sub", " user-17 ",
+                        "client_id", " public-web ",
+                        "username", " alice ",
+                        "jiacn", " jia-17 "));
                 case "missing-claims-token" -> jwt(token, Map.of("scope", "openid"));
+                case "blank-required-token" -> jwt(token, Map.of(
+                        "sub", " ",
+                        "client_id", "public-web"));
+                case "blank-optional-token" -> jwt(token, Map.of(
+                        "sub", "user-17",
+                        "client_id", "public-web",
+                        "username", "\t"));
+                case "malformed-optional-token" -> jwt(token, Map.of(
+                        "sub", "user-17",
+                        "client_id", "public-web",
+                        "jiacn", List.of("jia-17")));
+                case "malformed-scope-token" -> jwt(token, Map.of(
+                        "sub", "user-17",
+                        "client_id", "public-web",
+                        "scope", List.of("openid", " ")));
                 default -> throw new BadJwtException("Malformed token");
             };
         }

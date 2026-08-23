@@ -40,39 +40,36 @@ public class AuthenticationController {
     }
 
     private static String optionalString(Jwt jwt, String claimName) {
-        Object claim = jwt.getClaims().get(claimName);
-        if (claim == null) {
+        if (!jwt.getClaims().containsKey(claimName)) {
             return null;
         }
-        if (!(claim instanceof String value)) {
+        Object claim = jwt.getClaims().get(claimName);
+        if (!(claim instanceof String value) || value.isBlank()) {
             throw invalidTokenClaims();
         }
-        String normalized = value.trim();
-        return normalized.isEmpty() ? null : normalized;
+        return value;
     }
 
     private static List<String> scopes(Jwt jwt) {
         if (!jwt.getClaims().containsKey("scope")) {
-            throw invalidTokenClaims();
+            return List.of();
         }
 
         Object claim = jwt.getClaims().get("scope");
         TreeSet<String> scopes = new TreeSet<>();
         if (claim instanceof String value) {
+            if (value.isBlank()) {
+                throw invalidTokenClaims();
+            }
             for (String scope : value.trim().split("\\s+")) {
-                if (!scope.isBlank()) {
-                    scopes.add(scope);
-                }
+                scopes.add(scope);
             }
         } else if (claim instanceof Collection<?> values) {
             for (Object value : values) {
-                if (!(value instanceof String scope)) {
+                if (!(value instanceof String scope) || scope.isBlank()) {
                     throw invalidTokenClaims();
                 }
-                String normalized = scope.trim();
-                if (!normalized.isEmpty()) {
-                    scopes.add(normalized);
-                }
+                scopes.add(scope.trim());
             }
         } else {
             throw invalidTokenClaims();
