@@ -24,6 +24,7 @@ import cn.jia.chat.dao.impl.ChatMessageDaoImpl;
 import cn.jia.chat.entity.AgentTaskThreadDTO;
 import cn.jia.chat.entity.AgentTaskThreadEntity;
 import cn.jia.chat.entity.AgentTaskThreadMessageCreateDTO;
+import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.chat.mapper.AgentTaskThreadMapper;
 import cn.jia.chat.mapper.ChatConversationMapper;
@@ -253,6 +254,32 @@ class AgentTaskThreadRealDatabaseTest {
     }
 
     @Test
+    void listTeamMessagesExcludesTenantZeroAndCiScopeCollisions() {
+        AgentTaskThreadDTO thread = service.getOrCreateTeamThread(
+                TENANT, CLIENT, TASK, AGENT_A, null);
+        AgentTaskThreadMessageCreateDTO exact = new AgentTaskThreadMessageCreateDTO();
+        exact.setActorAgentId(AGENT_A);
+        exact.setContent("exact-message");
+        service.appendTeamMessage(TENANT, CLIENT, TASK, exact);
+
+        insertRawMessage("0", CLIENT, thread.getConversationId(), "tenant-zero-leak");
+        insertRawMessage(TENANT.toUpperCase(), CLIENT,
+                thread.getConversationId(), "tenant-case-leak");
+        insertRawMessage(TENANT, CLIENT.toUpperCase(),
+                thread.getConversationId(), "client-case-leak");
+        insertRawMessage(TENANT, CLIENT,
+                thread.getConversationId() + " ", "conversation-space-leak");
+
+        assertEquals(List.of("exact-message"),
+                messageDao.findByConversationIdScoped(
+                                TENANT, CLIENT, thread.getConversationId(), 20)
+                        .stream().map(ChatMessageEntity::getContent).toList());
+        assertEquals(List.of("exact-message"),
+                service.listTeamMessages(TENANT, CLIENT, TASK, AGENT_B, 20)
+                        .stream().map(item -> item.getContent()).toList());
+    }
+
+    @Test
     void taskAndMemberLocksHoldConcurrentRevocationUntilMessageCommit() throws Exception {
         service.getOrCreateTeamThread(TENANT, CLIENT, TASK, AGENT_A, null);
         CountDownLatch ownershipLocked = new CountDownLatch(1);
@@ -364,6 +391,17 @@ class AgentTaskThreadRealDatabaseTest {
         assertEquals(List.of("two", "three"),
                 latest.stream().map(item -> item.getContent()).toList());
         assertTrue(latest.get(0).getMessageId() < latest.get(1).getMessageId());
+    }
+
+    private void insertRawMessage(
+            String tenantId, String clientId, String conversationId, String content) {
+        jdbc.update("""
+                INSERT INTO chat_message
+                (conversation_id, message_type, content, metadata, create_time, update_time,
+                 client_id, tenant_id, jiacn, sync_status, conversation_type, sender_type, sender_name)
+                VALUES (?, 'ASSISTANT', ?, '{}', 200, 200, ?, ?, ?,
+                        'PENDING', 'juyiting', 'agent', 'collision')
+                """, conversationId, content, clientId, tenantId, tenantId);
     }
 
     private AgentRuntimeDTO runtime(String agentId) {
@@ -509,7 +547,7 @@ class AgentTaskThreadRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE chat_message (
                     id BIGINT NOT NULL AUTO_INCREMENT,
-                    conversation_id VARCHAR(100) NOT NULL,
+                    conversation_id VARCHAR_IGNORECASE(100) NOT NULL,
                     message_type VARCHAR(20),
                     content TEXT,
                     metadata TEXT,
@@ -520,8 +558,8 @@ class AgentTaskThreadRealDatabaseTest {
                     sender_name VARCHAR(100),
                     create_time BIGINT,
                     update_time BIGINT,
-                    tenant_id VARCHAR(50),
-                    client_id VARCHAR(50),
+                    tenant_id VARCHAR_IGNORECASE(50),
+                    client_id VARCHAR_IGNORECASE(50),
                     PRIMARY KEY (id)
                 )""");
         jdbc.execute("""

@@ -43,9 +43,10 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
             String tenantId, String clientId, String workItemId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
-        return baseMapper.selectOne(scope(tenantId, clientId)
-                .eq(AgentTaskWorkItemEntity::getWorkItemId, workItemId)
-                .last("limit 1"));
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+                .eq(AgentTaskWorkItemEntity::getWorkItemId, workItemId);
+        TaskCollaborationDaoSupport.exact(wrapper, "work_item_id", workItemId);
+        return baseMapper.selectOne(wrapper.last("limit 1"));
     }
 
     @Override
@@ -54,10 +55,12 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
-        return baseMapper.selectOne(scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
-                .eq(AgentTaskWorkItemEntity::getWorkItemId, workItemId)
-                .last("limit 1"));
+                .eq(AgentTaskWorkItemEntity::getWorkItemId, workItemId);
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "work_item_id", workItemId);
+        return baseMapper.selectOne(wrapper.last("limit 1"));
     }
 
     @Override
@@ -67,6 +70,7 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
         appendStatus(wrapper, status);
         return ordered(wrapper, limit);
     }
@@ -78,6 +82,7 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
         LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId);
+        TaskCollaborationDaoSupport.exact(wrapper, "assignee_agent_id", assigneeAgentId);
         appendStatus(wrapper, status);
         return ordered(wrapper, limit);
     }
@@ -88,9 +93,12 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
-        return ordered(scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
-                .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId), limit);
+                .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId);
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "assignee_agent_id", assigneeAgentId);
+        return ordered(wrapper, limit);
     }
 
     @Override
@@ -101,10 +109,14 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
         TaskCollaborationDaoSupport.requireId(workType, "workType");
-        return ordered(scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
                 .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId)
-                .eq(AgentTaskWorkItemEntity::getWorkType, workType), limit);
+                .eq(AgentTaskWorkItemEntity::getWorkType, workType);
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "assignee_agent_id", assigneeAgentId);
+        TaskCollaborationDaoSupport.exact(wrapper, "work_type", workType);
+        return ordered(wrapper, limit);
     }
 
     @Override
@@ -112,8 +124,10 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
             String tenantId, String clientId, long expiredAtOrBefore, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         requireNonnegativeTime(expiredAtOrBefore, "expiredAtOrBefore");
-        return baseMapper.selectList(scope(tenantId, clientId)
-                .in(AgentTaskWorkItemEntity::getStatus, LEASED_STATUSES)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+                .in(AgentTaskWorkItemEntity::getStatus, LEASED_STATUSES);
+        TaskCollaborationDaoSupport.exactAny(wrapper, "status", LEASED_STATUSES);
+        return baseMapper.selectList(wrapper
                 .isNotNull(AgentTaskWorkItemEntity::getLeaseUntil)
                 .le(AgentTaskWorkItemEntity::getLeaseUntil, expiredAtOrBefore)
                 .orderByAsc(AgentTaskWorkItemEntity::getLeaseUntil)
@@ -217,14 +231,19 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
 
     private void appendStatus(LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper, String status) {
         if (!StringUtil.isBlank(status)) {
+            TaskCollaborationDaoSupport.requireId(status, "status");
             wrapper.eq(AgentTaskWorkItemEntity::getStatus, status);
+            TaskCollaborationDaoSupport.exact(wrapper, "status", status);
         }
     }
 
     private LambdaQueryWrapper<AgentTaskWorkItemEntity> scope(String tenantId, String clientId) {
-        return new LambdaQueryWrapper<AgentTaskWorkItemEntity>()
-                .eq(AgentTaskWorkItemEntity::getTenantId, tenantId)
-                .eq(AgentTaskWorkItemEntity::getClientId, clientId);
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper =
+                new LambdaQueryWrapper<AgentTaskWorkItemEntity>()
+                        .eq(AgentTaskWorkItemEntity::getTenantId, tenantId)
+                        .eq(AgentTaskWorkItemEntity::getClientId, clientId);
+        TaskCollaborationDaoSupport.exact(wrapper, "tenant_id", tenantId);
+        return TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
     }
 
     private void requireItem(AgentTaskWorkItemDTO item, boolean requireIdentity) {

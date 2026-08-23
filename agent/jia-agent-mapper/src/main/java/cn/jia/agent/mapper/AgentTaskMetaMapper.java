@@ -199,6 +199,12 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             UNION ALL
             SELECT 'work_item' AS row_type, tenant_id, client_id, task_id,
                    work_item_id AS entity_id, NULL AS role, status, required_item,
@@ -208,6 +214,12 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             ORDER BY row_type, entity_id
             """)
     List<AgentTaskAggregationSnapshotRow> selectAggregationSnapshot(
@@ -226,6 +238,12 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND task_version = #{expectedVersion}
             """)
     int updateStatusByVersion(

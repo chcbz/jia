@@ -44,6 +44,18 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
         requireLimit(limit);
         List<ChatMessageEntity> result = baseMapper.findExactByConversationScope(
                 tenantId, clientId, conversationId, limit);
+        if (result == null) {
+            throw new IllegalStateException("Task-thread message query returned null");
+        }
+        for (ChatMessageEntity message : result) {
+            if (message == null
+                    || !tenantId.equals(message.getTenantId())
+                    || !clientId.equals(message.getClientId())
+                    || !conversationId.equals(message.getConversationId())) {
+                throw new IllegalStateException(
+                        "Task-thread message identity does not match its exact scope");
+            }
+        }
         Collections.reverse(result);
         return result;
     }

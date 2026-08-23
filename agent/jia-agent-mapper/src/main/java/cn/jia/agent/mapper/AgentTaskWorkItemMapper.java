@@ -79,6 +79,12 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND work_item_id = #{workItemId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
               AND version = #{expectedVersion}
             """)
     int updateByVersion(
@@ -104,7 +110,17 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
               AND status = 'ready'
+              AND CAST(status AS BINARY) = CAST('ready' AS BINARY)
+              AND OCTET_LENGTH(status) = OCTET_LENGTH('ready')
               AND assignee_agent_id IS NULL
               AND lease_token IS NULL
               AND lease_until IS NULL
@@ -134,8 +150,20 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
               AND status = 'ready'
+              AND CAST(status AS BINARY) = CAST('ready' AS BINARY)
+              AND OCTET_LENGTH(status) = OCTET_LENGTH('ready')
               AND assignee_agent_id = #{expectedAssigneeAgentId}
+              AND CAST(assignee_agent_id AS BINARY) = CAST(#{expectedAssigneeAgentId} AS BINARY)
+              AND OCTET_LENGTH(assignee_agent_id) = OCTET_LENGTH(#{expectedAssigneeAgentId})
               AND lease_token IS NULL
               AND lease_until IS NULL
               AND version = #{expectedVersion}
@@ -165,9 +193,23 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
               AND assignee_agent_id = #{assigneeAgentId}
+              AND CAST(assignee_agent_id AS BINARY) = CAST(#{assigneeAgentId} AS BINARY)
+              AND OCTET_LENGTH(assignee_agent_id) = OCTET_LENGTH(#{assigneeAgentId})
               AND lease_token = #{leaseToken}
+              AND CAST(lease_token AS BINARY) = CAST(#{leaseToken} AS BINARY)
+              AND OCTET_LENGTH(lease_token) = OCTET_LENGTH(#{leaseToken})
               AND status = #{expectedStatus}
+              AND CAST(status AS BINARY) = CAST(#{expectedStatus} AS BINARY)
+              AND OCTET_LENGTH(status) = OCTET_LENGTH(#{expectedStatus})
               AND lease_until = #{expectedLeaseUntil}
               AND lease_until > #{operationTime}
               AND version = #{expectedVersion}
@@ -201,9 +243,23 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
               AND assignee_agent_id = #{assigneeAgentId}
+              AND CAST(assignee_agent_id AS BINARY) = CAST(#{assigneeAgentId} AS BINARY)
+              AND OCTET_LENGTH(assignee_agent_id) = OCTET_LENGTH(#{assigneeAgentId})
               AND lease_token = #{leaseToken}
+              AND CAST(lease_token AS BINARY) = CAST(#{leaseToken} AS BINARY)
+              AND OCTET_LENGTH(lease_token) = OCTET_LENGTH(#{leaseToken})
               AND status = #{expectedStatus}
+              AND CAST(status AS BINARY) = CAST(#{expectedStatus} AS BINARY)
+              AND OCTET_LENGTH(status) = OCTET_LENGTH(#{expectedStatus})
               AND lease_until = #{expectedLeaseUntil}
               AND lease_until <= #{expiredAtOrBefore}
               AND version = #{expectedVersion}

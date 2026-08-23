@@ -8,13 +8,13 @@
 -- =========================================================
 -- Phase 1: Backfill all NULL tenant_id values to '0'
 -- Collaboration-owned agent_task_meta is intentionally excluded; B09/C01H owns its audited migration.
+-- Shared chat facts are excluded from historical NULL-to-'0' rewrites because this script cannot
+-- distinguish task-thread rows; any data normalization requires a separate audited migration.
 -- =========================================================
 
 UPDATE `agent_persona`        SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `agent_runtime`        SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `agent_task_note`      SET tenant_id = '0' WHERE tenant_id IS NULL;
-UPDATE `chat_conversation`    SET tenant_id = '0' WHERE tenant_id IS NULL;
-UPDATE `chat_message`         SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `core_dict`            SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `core_log`             SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `core_notice`          SET tenant_id = '0' WHERE tenant_id IS NULL;
@@ -72,6 +72,7 @@ UPDATE `wx_pay_order`         SET tenant_id = '0' WHERE tenant_id IS NULL;
 -- =========================================================
 -- Phase 2: ALTER DEFAULT NULL → DEFAULT '0'
 -- Collaboration-owned agent_task_meta keeps its nullable legacy default until audited B09/C01H handling.
+-- Shared chat DEFAULT '0' remains for future generic chat writes; no historical chat facts are rewritten here.
 -- =========================================================
 
 ALTER TABLE `agent_persona`        MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';

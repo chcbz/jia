@@ -13,6 +13,14 @@ public interface AgentTaskArtifactMapper extends BaseMapper<AgentTaskArtifactEnt
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND artifact_id = #{artifactId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(artifact_id AS BINARY) = CAST(#{artifactId} AS BINARY)
+              AND OCTET_LENGTH(artifact_id) = OCTET_LENGTH(#{artifactId})
             ORDER BY artifact_version DESC, id DESC
             LIMIT 1
             FOR UPDATE

@@ -100,8 +100,10 @@ class AgentTaskCollaborationDaoTest {
             assertScoped(wrapper, "tenant-a", "client-a");
         }
         String taskSql = normalize(lists.getAllValues().get(0).getSqlSegment());
+        assertByteExactColumns(taskSql, "tenant_id", "client_id", "task_id");
         assertTrue(taskSql.contains("order by member_role asc,agent_id asc,id asc"), taskSql);
         String agentSql = normalize(lists.getAllValues().get(1).getSqlSegment());
+        assertByteExactColumns(agentSql, "tenant_id", "client_id", "agent_id", "member_status");
         assertTrue(agentSql.contains("order by update_time desc,task_id asc,id asc"), agentSql);
         assertTrue(agentSql.endsWith("limit 50"), agentSql);
     }
@@ -117,6 +119,7 @@ class AgentTaskCollaborationDaoTest {
         assertScoped(work.getValue(), "tenant-a", "client-a");
         assertValues(work.getValue(), "task-1", "ready");
         String workSql = normalize(work.getValue().getSqlSegment());
+        assertByteExactColumns(workSql, "tenant_id", "client_id", "task_id", "status");
         assertTrue(workSql.contains("order by priority desc,create_time asc,work_item_id asc,id asc"), workSql);
         assertTrue(workSql.endsWith("limit 500"), workSql);
 
@@ -128,6 +131,8 @@ class AgentTaskCollaborationDaoTest {
         assertScoped(request.getValue(), "tenant-b", "client-b");
         assertValues(request.getValue(), "agent", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "open");
         String requestSql = normalize(request.getValue().getSqlSegment());
+        assertByteExactColumns(requestSql,
+                "tenant_id", "client_id", "task_id", "target_type", "target_id", "status");
         assertTrue(requestSql.contains(
                 "order by priority desc,due_at asc,create_time asc,request_id asc,id asc"), requestSql);
         assertTrue(requestSql.endsWith("limit 20"), requestSql);
@@ -146,6 +151,8 @@ class AgentTaskCollaborationDaoTest {
         assertScoped(wrapper, "tenant-a", "client-a");
         assertValues(wrapper, "task-1", "open", "work-501");
         String sql = normalize(wrapper.getSqlSegment());
+        assertByteExactColumns(sql,
+                "tenant_id", "client_id", "task_id", "status", "work_item_id");
         assertTrue(sql.contains("status"), sql);
         assertTrue(sql.contains("work_item_id"), sql);
         assertTrue(sql.contains("order by priority desc,create_time asc,request_id asc,id asc"), sql);
@@ -168,6 +175,8 @@ class AgentTaskCollaborationDaoTest {
         assertValues(wrapper, "task-1", "work-1", "task_members", "reviewer", "private",
                 "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         String sql = normalize(wrapper.getSqlSegment());
+        assertByteExactColumns(sql,
+                "tenant_id", "client_id", "task_id", "work_item_id", "producer_agent_id");
         assertTrue(sql.contains("visibility in"), sql);
         assertTrue(sql.contains("producer_agent_id"), sql);
         assertTrue(sql.contains("work_item_id"), sql);
@@ -240,6 +249,42 @@ class AgentTaskCollaborationDaoTest {
                 }
             }
         }
+    }
+
+    @Test
+    void collaborationMapperIdentityPredicatesAreByteExact() throws Exception {
+        assertMapperMethodExact(AgentTaskMemberMapper.class, "findExactByTaskAndAgent",
+                "tenant_id", "client_id", "task_id", "agent_id");
+        assertMapperMethodExact(AgentTaskMemberMapper.class, "findExactByTaskAndAgentForUpdate",
+                "tenant_id", "client_id", "task_id", "agent_id");
+        assertMapperMethodExact(AgentTaskMemberMapper.class, "updateByVersion",
+                "tenant_id", "client_id", "task_id", "agent_id");
+        for (String method : List.of(
+                "updateByVersion", "claimReadyUnassignedByVersion",
+                "claimReadyAssignedByVersion", "updateActiveLeaseByVersion",
+                "expireLeaseByVersion")) {
+            assertMapperMethodExact(AgentTaskWorkItemMapper.class, method,
+                    "tenant_id", "client_id", "work_item_id");
+        }
+        for (String method : List.of(
+                "claimReadyUnassignedByVersion", "claimReadyAssignedByVersion",
+                "updateActiveLeaseByVersion", "expireLeaseByVersion")) {
+            assertMapperMethodExact(AgentTaskWorkItemMapper.class, method, "task_id");
+        }
+        assertMapperMethodExact(AgentTaskWorkItemMapper.class, "claimReadyAssignedByVersion",
+                "assignee_agent_id");
+        for (String method : List.of("updateActiveLeaseByVersion", "expireLeaseByVersion")) {
+            assertMapperMethodExact(AgentTaskWorkItemMapper.class, method,
+                    "assignee_agent_id", "lease_token", "status");
+        }
+        assertMapperMethodExact(AgentTaskRequestMapper.class, "updateByVersion",
+                "tenant_id", "client_id", "task_id", "request_id");
+        assertMapperMethodExact(AgentTaskArtifactMapper.class, "selectLatestVersionForUpdate",
+                "tenant_id", "client_id", "task_id", "artifact_id");
+        assertMapperMethodExact(AgentTaskMetaMapper.class, "selectAggregationSnapshot",
+                "tenant_id", "client_id", "task_id");
+        assertMapperMethodExact(AgentTaskMetaMapper.class, "updateStatusByVersion",
+                "tenant_id", "client_id", "task_id");
     }
 
     @Test
@@ -351,6 +396,33 @@ class AgentTaskCollaborationDaoTest {
                 mapperType.getSimpleName() + "." + method.getName() + ": " + sql);
     }
 
+    private void assertMapperMethodExact(
+            Class<?> mapperType, String methodName, String... columns) throws Exception {
+        Method method = Arrays.stream(mapperType.getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals(methodName))
+                .findFirst().orElseThrow();
+        String[] statements;
+        if (method.isAnnotationPresent(Select.class)) {
+            statements = method.getAnnotation(Select.class).value();
+        } else if (method.isAnnotationPresent(Update.class)) {
+            statements = method.getAnnotation(Update.class).value();
+        } else if (method.isAnnotationPresent(Insert.class)) {
+            statements = method.getAnnotation(Insert.class).value();
+        } else if (method.isAnnotationPresent(Delete.class)) {
+            statements = method.getAnnotation(Delete.class).value();
+        } else {
+            throw new AssertionError(mapperType.getSimpleName() + "." + methodName);
+        }
+        assertByteExactColumns(normalize(String.join(" ", statements)), columns);
+    }
+
+    private void assertByteExactColumns(String sql, String... columns) {
+        for (String column : columns) {
+            assertTrue(sql.contains("cast(" + column + " as binary)"), column + ": " + sql);
+            assertTrue(sql.contains("octet_length(" + column + ")"), column + ": " + sql);
+        }
+    }
+
     private void assertCasSql(Class<?> mapperType, String... businessKeys) throws Exception {
         Method method = Arrays.stream(mapperType.getDeclaredMethods())
                 .filter(candidate -> candidate.getName().equals("updateByVersion"))
@@ -358,8 +430,10 @@ class AgentTaskCollaborationDaoTest {
         String sql = normalize(String.join(" ", method.getAnnotation(Update.class).value()));
         assertTrue(sql.contains("where tenant_id = #{tenantid}"), sql);
         assertTrue(sql.contains("and client_id = #{clientid}"), sql);
+        assertByteExactColumns(sql, "tenant_id", "client_id");
         for (String businessKey : businessKeys) {
             assertTrue(sql.contains("and " + businessKey), sql);
+            assertByteExactColumns(sql, businessKey.substring(0, businessKey.indexOf(' ')));
         }
         assertTrue(sql.contains("and version = #{expectedversion}"), sql);
         assertTrue(sql.contains("version = version + 1"), sql);
@@ -378,6 +452,7 @@ class AgentTaskCollaborationDaoTest {
         String sql = normalize(wrapper.getSqlSegment());
         assertTrue(sql.contains("tenant_id"), sql);
         assertTrue(sql.contains("client_id"), sql);
+        assertByteExactColumns(sql, "tenant_id", "client_id");
     }
 
     private void assertValues(Wrapper<?> wrapper, Object... values) {
