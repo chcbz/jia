@@ -90,6 +90,20 @@ class AgentTaskCollaborationSchemaTest {
     }
 
     @Test
+    void blanketTenantDefaultMigrationExcludesCollaborationOwnedTables() throws IOException {
+        String migration = readResource("db/migration-tenant-default-zero.sql");
+        for (String table : List.of(
+                "agent_task_meta", "agent_task_member", "agent_task_work_item",
+                "agent_task_request", "agent_task_artifact", "agent_task_event",
+                "agent_task_thread", "agent_task_backfill_issue",
+                "agent_task_backfill_manifest_batch", "agent_task_backfill_manifest",
+                "agent_task_backfill_run", "agent_task_historical_event_manifest",
+                "agent_task_historical_event_batch", "agent_task_historical_event_run")) {
+            assertFalse(migration.contains("`" + table + "`"), table);
+        }
+    }
+
+    @Test
     void b01ResourcesDoNotCreateOutOfScopeCollaborationOrIdentityTables() throws IOException {
         String b01Sql = readResource("db/task-collaboration-schema.sql");
         for (String forbiddenTable : List.of(

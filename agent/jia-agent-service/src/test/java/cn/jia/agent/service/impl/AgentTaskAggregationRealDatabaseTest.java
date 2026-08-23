@@ -54,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -66,6 +67,7 @@ class AgentTaskAggregationRealDatabaseTest {
     private static final String OTHER_TENANT = "tenant-b";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
+    private static final String TENANT_ZERO_TASK = "task-tenant-zero";
     private static final String AGENT_A = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String AGENT_B = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -191,6 +193,41 @@ class AgentTaskAggregationRealDatabaseTest {
                         OTHER_TENANT, CLIENT, TASK, command(0L)));
         assertEquals(Reason.NOT_FOUND, error.getReason());
         assertTask("planning", 0L);
+    }
+
+    @Test
+    void nonZeroScopeCannotReadLockUpdateOrAggregateTenantZeroTask() {
+        insertTask(TENANT_ZERO_TASK, "0", "running", 0L);
+        insertWork(TENANT_ZERO_TASK, "0", "zero-work", true,
+                "submitted", 0, 3, null, null);
+
+        assertNull(taskMetaDao.findByTaskId(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK));
+        assertNull(taskMetaDao.findByTaskIdForUpdate(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK));
+        assertEquals(List.of(), taskMetaDao.findAggregationSnapshot(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK));
+        assertEquals(0, taskMetaDao.updateStatusByVersion(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK, 0L,
+                "failed", null, null, "must-not-cross-scope"));
+
+        AgentTaskStateException hidden = assertThrows(AgentTaskStateException.class,
+                () -> aggregateService.aggregate(
+                        OTHER_TENANT, CLIENT, TENANT_ZERO_TASK, command(0L)));
+        assertEquals(Reason.NOT_FOUND, hidden.getReason());
+        Map<String, Object> zeroRow = jdbc.queryForMap(
+                "SELECT reward_status, task_version FROM agent_task_meta WHERE task_id=?",
+                TENANT_ZERO_TASK);
+        assertEquals("running", zeroRow.get("REWARD_STATUS"));
+        assertEquals(0L, ((Number) zeroRow.get("TASK_VERSION")).longValue());
+
+        insertTask(TASK, TENANT, "running", 0L);
+        insertWork(TASK, "exact-work", true, "submitted", 0, 3, null, null);
+        AgentTaskAggregationDTO exact = aggregateService.aggregate(
+                TENANT, CLIENT, TASK, command(0L));
+        assertEquals("reviewing", exact.getStatus());
+        assertTrue(exact.getChanged());
+        assertTask("reviewing", 1L);
     }
 
     @Test
@@ -535,6 +572,13 @@ class AgentTaskAggregationRealDatabaseTest {
     private void insertWork(
             String taskId, String workId, boolean required, String status,
             int attempts, int maxAttempts, String artifactId, Long completedAt) {
+        insertWork(taskId, TENANT, workId, required, status,
+                attempts, maxAttempts, artifactId, completedAt);
+    }
+
+    private void insertWork(
+            String taskId, String tenant, String workId, boolean required, String status,
+            int attempts, int maxAttempts, String artifactId, Long completedAt) {
         boolean activeLease = "claimed".equals(status) || "running".equals(status);
         jdbc.update("INSERT INTO agent_task_work_item "
                         + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
@@ -544,7 +588,7 @@ class AgentTaskAggregationRealDatabaseTest {
                 workId, taskId, workId, "implementation",
                 activeLease ? AGENT_A : null, status, required,
                 activeLease ? "lease-" + workId : null, activeLease ? 2_000L : null,
-                attempts, maxAttempts, artifactId, completedAt, 0L, TENANT, CLIENT);
+                attempts, maxAttempts, artifactId, completedAt, 0L, tenant, CLIENT);
     }
 
     private AgentTaskWorkItemDTO workItem(

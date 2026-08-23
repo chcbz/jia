@@ -62,6 +62,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -222,6 +224,32 @@ class AgentTaskThreadRealDatabaseTest {
         assertEquals(thread.getConversationId(), jdbc.queryForObject(
                 "SELECT conversation_id FROM agent_task_thread", String.class));
         assertEquals(1, count("chat_message"));
+    }
+
+    @Test
+    void nonZeroScopeCannotReadOrLockTenantZeroTaskThread() {
+        jdbc.update("""
+                INSERT INTO agent_task_thread
+                (task_id, thread_type, thread_key, conversation_id, created_by_agent_id,
+                 status, tenant_id, client_id, create_time, update_time)
+                VALUES ('tenant-zero-task', 'team', 'team', 'tenant-zero-conversation',
+                        ?, 'active', '0', ?, 1, 1)
+                """, AGENT_A, CLIENT);
+
+        assertNull(realThreadDao.findByTaskThread(
+                "tenant-b", CLIENT, "tenant-zero-task", "team", "team"));
+        assertNull(realThreadDao.findByTaskThreadForUpdate(
+                "tenant-b", CLIENT, "tenant-zero-task", "team", "team"));
+        assertNull(realThreadDao.findByConversationId(
+                "tenant-b", CLIENT, "tenant-zero-conversation"));
+        assertNotNull(realThreadDao.findByTaskThread(
+                "0", CLIENT, "tenant-zero-task", "team", "team"));
+
+        AgentTaskThreadDTO exact = service.getOrCreateTeamThread(
+                TENANT, CLIENT, TASK, AGENT_A, "Exact tenant thread");
+        assertNotNull(exact);
+        assertNotNull(realThreadDao.findByTaskThreadForUpdate(
+                TENANT, CLIENT, TASK, "team", "team"));
     }
 
     @Test

@@ -13,12 +13,14 @@ import cn.jia.common.dao.BaseDaoImpl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -58,6 +60,17 @@ class AgentTaskThreadDaoTest {
         verify(mapper).findExactByTaskThreadForUpdate("tenant-a", "client-a", "task-1", "team", "team");
         verify(mapper).findExactByConversationId("tenant-a", "client-a", "42");
         verify(mapper).findAnyExactByConversationId("42");
+    }
+
+    @Test
+    void taskThreadMapperSqlNeverUsesPublicTenantFallback() {
+        for (Method method : AgentTaskThreadMapper.class.getDeclaredMethods()) {
+            Select select = method.getAnnotation(Select.class);
+            if (select != null) {
+                String sql = normalize(String.join(" ", select.value()));
+                assertTrue(!sql.contains("tenant_id = '0'"), method.getName() + ": " + sql);
+            }
+        }
     }
 
     @Test

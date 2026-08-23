@@ -7,11 +7,11 @@
 
 -- =========================================================
 -- Phase 1: Backfill all NULL tenant_id values to '0'
+-- Collaboration-owned agent_task_meta is intentionally excluded; B09/C01H owns its audited migration.
 -- =========================================================
 
 UPDATE `agent_persona`        SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `agent_runtime`        SET tenant_id = '0' WHERE tenant_id IS NULL;
-UPDATE `agent_task_meta`      SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `agent_task_note`      SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `chat_conversation`    SET tenant_id = '0' WHERE tenant_id IS NULL;
 UPDATE `chat_message`         SET tenant_id = '0' WHERE tenant_id IS NULL;
@@ -71,11 +71,11 @@ UPDATE `wx_pay_order`         SET tenant_id = '0' WHERE tenant_id IS NULL;
 
 -- =========================================================
 -- Phase 2: ALTER DEFAULT NULL → DEFAULT '0'
+-- Collaboration-owned agent_task_meta keeps its nullable legacy default until audited B09/C01H handling.
 -- =========================================================
 
 ALTER TABLE `agent_persona`        MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `agent_runtime`        MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
-ALTER TABLE `agent_task_meta`      MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `agent_task_note`      MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `chat_conversation`    MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';
 ALTER TABLE `chat_message`         MODIFY COLUMN tenant_id varchar(50)  DEFAULT '0' COMMENT '租户ID';

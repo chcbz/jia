@@ -14,13 +14,19 @@ import cn.jia.agent.entity.AgentTaskRequestEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.mapper.AgentTaskArtifactMapper;
+import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
+import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskRequestMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
+import cn.jia.agent.mapper.AgentTaskWorkspaceMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.annotations.Delete;
+import org.apache.ibatis.annotations.Insert;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -209,6 +215,34 @@ class AgentTaskCollaborationDaoTest {
     }
 
     @Test
+    void collaborationMapperSqlCatalogNeverUsesPublicTenantFallback() {
+        for (Class<?> mapperType : List.of(
+                AgentTaskMetaMapper.class, AgentTaskMemberMapper.class,
+                AgentTaskWorkItemMapper.class, AgentTaskRequestMapper.class,
+                AgentTaskArtifactMapper.class, AgentTaskEventMapper.class,
+                AgentTaskWorkspaceMapper.class)) {
+            for (Method method : mapperType.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(Select.class)) {
+                    assertNoPublicTenantFallback(mapperType, method,
+                            method.getAnnotation(Select.class).value());
+                }
+                if (method.isAnnotationPresent(Insert.class)) {
+                    assertNoPublicTenantFallback(mapperType, method,
+                            method.getAnnotation(Insert.class).value());
+                }
+                if (method.isAnnotationPresent(Update.class)) {
+                    assertNoPublicTenantFallback(mapperType, method,
+                            method.getAnnotation(Update.class).value());
+                }
+                if (method.isAnnotationPresent(Delete.class)) {
+                    assertNoPublicTenantFallback(mapperType, method,
+                            method.getAnnotation(Delete.class).value());
+                }
+            }
+        }
+    }
+
+    @Test
     void versionedMapperUpdatesUseFullScopeAndAtomicCasIncrement() throws Exception {
         assertCasSql(AgentTaskMemberMapper.class, "task_id = #{taskid}", "agent_id = #{agentid}");
         assertCasSql(AgentTaskWorkItemMapper.class, "work_item_id = #{workitemid}");
@@ -308,6 +342,13 @@ class AgentTaskCollaborationDaoTest {
             assertFalse(fields.contains("runtimeInstanceId"), entity.getName());
             assertFalse(fields.contains("webSocketSessionId"), entity.getName());
         }
+    }
+
+    private void assertNoPublicTenantFallback(
+            Class<?> mapperType, Method method, String[] statements) {
+        String sql = normalize(String.join(" ", statements));
+        assertFalse(sql.contains("tenant_id = '0'"),
+                mapperType.getSimpleName() + "." + method.getName() + ": " + sql);
     }
 
     private void assertCasSql(Class<?> mapperType, String... businessKeys) throws Exception {
