@@ -334,7 +334,8 @@ class AgentCommandInboxServiceImplTest {
         List<java.util.function.Consumer<AgentConsumerInboxEntity>> corruptions = List.of(
                 inbox -> inbox.setProcessedAt(null),
                 inbox -> inbox.setLeaseOwner("ghost-owner").setLeaseUntil(NOW + LEASE),
-                inbox -> inbox.setNextRetryAt(NOW + 20_000));
+                inbox -> inbox.setNextRetryAt(NOW + 20_000),
+                inbox -> inbox.setLastError("CORRUPT_SENT"));
         for (var corrupt : corruptions) {
             RecordingDao dao = new RecordingDao();
             AgentCommandInboxServiceImpl service = service(dao, enabledGate());
@@ -347,6 +348,45 @@ class AgentCommandInboxServiceImplTest {
                     () -> service.claim(message(), "worker-b", NOW + 2, LEASE));
             assertEquals("SENT", dao.delivery.getStatus());
         }
+    }
+
+    @Test
+    void storedFailureExpiryAndRetryShapesFailClosed() {
+        RecordingDao expired = new RecordingDao();
+        AgentCommandInboxServiceImpl expiredService = service(expired, enabledGate());
+        AgentInboxClaimToken expiredToken = expiredService.claim(
+                message(), "worker-a", NOW, 60_000).token();
+        expiredService.complete(expiredToken, new AgentInboxDisposition(
+                AgentInboxDisposition.Type.EXPIRED, null, "MESSAGE_EXPIRED"), NOW + 60_000);
+        expired.inbox.setProcessedAt(NOW + 59_999);
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> expiredService.claim(message(), "worker-b", NOW + 60_001, LEASE));
+        assertEquals("EXPIRED", expired.delivery.getStatus());
+
+        RecordingDao failed = new RecordingDao();
+        AgentCommandInboxServiceImpl failedService = service(failed, enabledGate());
+        AgentInboxClaimToken failedToken = failedService.claim(
+                message(), "worker-a", NOW, LEASE).token();
+        failedService.complete(failedToken, new AgentInboxDisposition(
+                AgentInboxDisposition.Type.FAILED, null, "WS_FAILED"), NOW + 1);
+        failed.inbox.setLastError(null);
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> failedService.claim(message(), "worker-b", NOW + 2, LEASE));
+        failed.inbox.setLastError(" ");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> failedService.claim(message(), "worker-b", NOW + 3, LEASE));
+        assertEquals("FAILED", failed.delivery.getStatus());
+
+        RecordingDao retry = new RecordingDao();
+        AgentCommandInboxServiceImpl retryService = service(retry, enabledGate());
+        AgentInboxClaimToken retryToken = retryService.claim(
+                message(), "worker-a", NOW, LEASE).token();
+        retryService.complete(retryToken, new AgentInboxDisposition(
+                AgentInboxDisposition.Type.RETRY, NOW + 20_000, "WS_TRANSIENT"), NOW + 1);
+        retry.inbox.setNextRetryAt(retry.inbox.getProcessedAt());
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> retryService.claim(message(), "worker-b", NOW + 2, LEASE));
+        assertEquals("RETRY", retry.delivery.getStatus());
     }
 
     @Test

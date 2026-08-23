@@ -277,15 +277,39 @@ class AgentCommandInboxMySqlTest {
         service.complete(token, expired, NOW + 60_000);
         assertEquals("EXPIRED", string("SELECT status FROM agent_consumer_inbox"));
         assertEquals("EXPIRED", string("SELECT status FROM agent_command_delivery"));
+        jdbc.update("UPDATE agent_consumer_inbox SET processed_at=? WHERE message_id='msg-1'",
+                NOW + 59_999);
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service.claim(message(), "worker-b", NOW + 60_001, 10_000));
+        assertEquals("EXPIRED", string("SELECT status FROM agent_command_delivery"));
 
         resetPublishedSource();
         AgentInboxClaimToken sentToken = service.claim(
                 message(), "worker-a", NOW, 10_000).token();
         service.complete(sentToken, AgentInboxDisposition.sent(), NOW + 1);
+        jdbc.update("UPDATE agent_consumer_inbox SET last_error='CORRUPT_SENT' "
+                + "WHERE message_id='msg-1'");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service.claim(message(), "worker-b", NOW + 2, 10_000));
+        assertEquals("SENT", string("SELECT status FROM agent_command_delivery"));
+
+        resetPublishedSource();
+        sentToken = service.claim(message(), "worker-a", NOW, 10_000).token();
+        service.complete(sentToken, AgentInboxDisposition.sent(), NOW + 1);
         jdbc.update("UPDATE agent_consumer_inbox SET processed_at=NULL WHERE message_id='msg-1'");
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> service.claim(message(), "worker-b", NOW + 2, 10_000));
         assertEquals("SENT", string("SELECT status FROM agent_command_delivery"));
+
+        resetPublishedSource();
+        AgentInboxClaimToken failedToken = service.claim(
+                message(), "worker-a", NOW, 10_000).token();
+        service.complete(failedToken, new AgentInboxDisposition(
+                AgentInboxDisposition.Type.FAILED, null, "WS_FAILED"), NOW + 1);
+        jdbc.update("UPDATE agent_consumer_inbox SET last_error=NULL WHERE message_id='msg-1'");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service.claim(message(), "worker-b", NOW + 2, 10_000));
+        assertEquals("FAILED", string("SELECT status FROM agent_command_delivery"));
     }
 
     @Test

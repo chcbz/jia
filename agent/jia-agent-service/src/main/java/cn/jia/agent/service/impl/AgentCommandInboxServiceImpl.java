@@ -170,6 +170,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             String leaseOwner,
             long now,
             long leaseMillis) {
+        validateRetryShape(message, source, inbox);
         requireDeliveryStatus(message, source.delivery(), "RETRY");
         if (inbox.getNextRetryAt() == null) {
             throw conflict(message, "RETRY_TIME_MISSING");
@@ -454,15 +455,44 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 || inbox.getLeaseOwner() != null || inbox.getLeaseUntil() != null) {
             throw conflict(message, "TERMINAL_FENCE_SHAPE_CORRUPT");
         }
-        boolean waiting = "WAITING_AGENT".equals(inbox.getStatus());
-        if (waiting != (inbox.getNextRetryAt() != null)
-                || waiting && (inbox.getNextRetryAt() <= inbox.getProcessedAt()
-                || inbox.getNextRetryAt() >= inbox.getExpiresAt())) {
+        validateStoredDisposition(message, inbox, result);
+        if (inbox.getNextRetryAt() != null
+                && (inbox.getNextRetryAt() <= inbox.getProcessedAt()
+                || inbox.getNextRetryAt() >= source.expiresAt())) {
             throw conflict(message, "TERMINAL_RETRY_SHAPE_CORRUPT");
+        }
+        if ("EXPIRED".equals(inbox.getStatus())
+                && inbox.getProcessedAt() < source.expiresAt()) {
+            throw conflict(message, "TERMINAL_EXPIRY_SHAPE_CORRUPT");
         }
         if (STALE_MESSAGE_FENCE.equals(inbox.getLastError())
                 && !source.staleActiveFence()) {
             throw conflict(message, "STALE_MARKER_ACTIVE_SOURCE_CORRUPT");
+        }
+    }
+
+    private void validateRetryShape(
+            ValidatedMessage message, Source source, AgentConsumerInboxEntity inbox) {
+        if (!"RETRY".equals(inbox.getResultStatus())
+                || inbox.getProcessedAt() == null || inbox.getProcessedAt() <= 0
+                || inbox.getLeaseOwner() != null || inbox.getLeaseUntil() != null) {
+            throw conflict(message, "RETRY_FENCE_SHAPE_CORRUPT");
+        }
+        validateStoredDisposition(message, inbox, "RETRY");
+        if (inbox.getNextRetryAt() <= inbox.getProcessedAt()
+                || inbox.getNextRetryAt() >= source.expiresAt()) {
+            throw conflict(message, "RETRY_TIME_SHAPE_CORRUPT");
+        }
+    }
+
+    private void validateStoredDisposition(
+            ValidatedMessage message, AgentConsumerInboxEntity inbox, String resultStatus) {
+        try {
+            new AgentInboxDisposition(
+                    AgentInboxDisposition.Type.valueOf(resultStatus),
+                    inbox.getNextRetryAt(), inbox.getLastError());
+        } catch (IllegalArgumentException invalidShape) {
+            throw conflict(message, "STORED_DISPOSITION_SHAPE_CORRUPT");
         }
     }
 
