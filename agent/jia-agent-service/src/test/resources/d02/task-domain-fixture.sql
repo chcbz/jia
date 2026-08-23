@@ -1,0 +1,31 @@
+-- D02 minimal task-root fixture copied from the canonical agent_task_meta contract.
+-- Only the root table is loaded here; task-event-schema.sql supplies the exact event journal.
+CREATE TABLE agent_task_meta (
+    id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    task_id                 VARCHAR(100) NOT NULL COMMENT '关联Task ID',
+    reward_status           VARCHAR(20) NOT NULL DEFAULT 'open' COMMENT 'open/assigned/running/completed/failed',
+    assigned_agent_id       VARCHAR(100) DEFAULT NULL COMMENT '兼容期首要Agent ID；新多人关系以成员表为准',
+    required_abilities      TEXT COMMENT '所需能力(JSON数组)',
+    reward                  INT DEFAULT NULL COMMENT '奖励或权重',
+    assigned_at             BIGINT DEFAULT NULL COMMENT '分配时间',
+    started_at              BIGINT DEFAULT NULL COMMENT '开始时间',
+    completed_at            BIGINT DEFAULT NULL COMMENT '完成时间',
+    failure_reason          VARCHAR(1000) DEFAULT NULL COMMENT '失败原因',
+    collaboration_mode      VARCHAR(20) NOT NULL DEFAULT 'single' COMMENT 'single/team',
+    risk_level              VARCHAR(20) NOT NULL DEFAULT 'low' COMMENT 'low/medium/high',
+    max_agents              INT NOT NULL DEFAULT 1 COMMENT '最大协作Agent数量',
+    coordinator_agent_id    VARCHAR(100) DEFAULT NULL COMMENT 'Canonical coordinator agentId',
+    review_required         TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否需要独立验收',
+    task_version            BIGINT NOT NULL DEFAULT 0 COMMENT '任务聚合乐观锁版本',
+    current_event_version   BIGINT NOT NULL DEFAULT 0 COMMENT '任务持久事件最新版本',
+    create_time             BIGINT DEFAULT NULL COMMENT '创建时间',
+    update_time             BIGINT DEFAULT NULL COMMENT '更新时间',
+    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Owner jiacn scope；历史记录兼容可空',
+    client_id               VARCHAR(50) DEFAULT NULL COMMENT 'OAuth/API client；历史记录兼容可空',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_task_meta_scope (tenant_id, client_id, task_id),
+    KEY idx_agent_task_meta_status (reward_status),
+    KEY idx_agent_task_meta_agent_id (assigned_agent_id),
+    KEY idx_agent_task_meta_scope_status (tenant_id, client_id, reward_status, update_time, id),
+    KEY idx_agent_task_meta_scope_coordinator (tenant_id, client_id, coordinator_agent_id, reward_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent任务扩展元数据表';
