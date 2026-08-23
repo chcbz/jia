@@ -39,10 +39,12 @@ public class AgentStatusTransitionWorker {
         String nextStatus = hasText(current.getCurrentTaskId())
                 ? AgentConstants.STATUS_BUSY : AgentConstants.STATUS_ONLINE;
         boolean statusChanged = !nextStatus.equals(current.getStatus());
-        current.setLastSeenAt(observedAt);
+        Long currentLastSeenAt = current.getLastSeenAt();
+        current.setLastSeenAt(currentLastSeenAt == null
+                ? observedAt : Math.max(currentLastSeenAt, observedAt));
         current.setStatus(nextStatus);
         requireUpdated(runtimeDao.updateById(current), current.getAgentId());
-        return new Transition(current, statusChanged);
+        return Transition.from(current, statusChanged);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
@@ -64,7 +66,28 @@ public class AgentStatusTransitionWorker {
         current.setCurrentTaskTitle(null);
         current.setErrorMessage(null);
         requireUpdated(runtimeDao.updateById(current), current.getAgentId());
-        return new Transition(current, true);
+        return Transition.from(current, true);
+    }
+
+    /** Rechecks a committed transition before publication under the scope publication lock. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public AgentRuntimeEntity revalidateForPublication(Transition transition) {
+        if (transition == null || !transition.hasExactScope()) {
+            return null;
+        }
+        AgentRuntimeEntity current = lockCurrentRuntime(
+                transition.agentId(), transition.clientId(), transition.ownerJiacn(),
+                transition.bindingId());
+        if (current == null
+                || !Objects.equals(current.getId(), transition.runtimeId())
+                || !Objects.equals(current.getStatus(), transition.status())
+                || !Objects.equals(current.getLastSeenAt(), transition.lastSeenAt())
+                || !Objects.equals(current.getCurrentTaskId(), transition.currentTaskId())
+                || !Objects.equals(current.getCurrentTaskTitle(), transition.currentTaskTitle())
+                || !Objects.equals(current.getErrorMessage(), transition.errorMessage())) {
+            return null;
+        }
+        return current;
     }
 
     private AgentRuntimeEntity lockCurrentRuntime(AgentRuntimeEntity candidate) {
@@ -73,23 +96,31 @@ public class AgentStatusTransitionWorker {
                 || AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(candidate.getAgentId())) {
             return null;
         }
+        return lockCurrentRuntime(candidate.getAgentId(), candidate.getClientId(),
+                candidate.getOwnerJiacn(), candidate.getBindingId());
+    }
 
-        String tenantId = candidate.getOwnerJiacn();
-        String clientId = candidate.getClientId();
-        long bindingId = candidate.getBindingId();
+    private AgentRuntimeEntity lockCurrentRuntime(
+            String agentId, String clientId, String ownerJiacn, long bindingId) {
+        if (!hasExactText(agentId) || !hasExactText(clientId) || !hasExactText(ownerJiacn)
+                || bindingId <= 0
+                || AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agentId)) {
+            return null;
+        }
+
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
-        if (!isActiveBinding(binding, tenantId, clientId, bindingId)) {
+        if (!isActiveBinding(binding, ownerJiacn, clientId, bindingId)) {
             return null;
         }
 
         AgentIdentityRegistryEntity identity = identityRegistryDao.findExactByBindingInScopeForUpdate(
-                tenantId, clientId, tenantId, bindingId);
-        if (!isActiveIdentity(identity, tenantId, clientId, bindingId, candidate.getAgentId())) {
+                ownerJiacn, clientId, ownerJiacn, bindingId);
+        if (!isActiveIdentity(identity, ownerJiacn, clientId, bindingId, agentId)) {
             return null;
         }
 
-        AgentRuntimeEntity current = runtimeDao.findByAgentIdForUpdate(candidate.getAgentId());
-        if (!isExactCurrentRuntime(current, tenantId, clientId, bindingId, candidate.getAgentId())) {
+        AgentRuntimeEntity current = runtimeDao.findByAgentIdForUpdate(agentId);
+        if (!isExactCurrentRuntime(current, ownerJiacn, clientId, bindingId, agentId)) {
             return null;
         }
         return current;
@@ -164,6 +195,28 @@ public class AgentStatusTransitionWorker {
         }
     }
 
-    public record Transition(AgentRuntimeEntity runtime, boolean statusChanged) {
+    public record Transition(
+            Long runtimeId,
+            String agentId,
+            String clientId,
+            String ownerJiacn,
+            long bindingId,
+            String status,
+            Long lastSeenAt,
+            String currentTaskId,
+            String currentTaskTitle,
+            String errorMessage,
+            boolean statusChanged) {
+        private static Transition from(AgentRuntimeEntity runtime, boolean statusChanged) {
+            return new Transition(
+                    runtime.getId(), runtime.getAgentId(), runtime.getClientId(),
+                    runtime.getOwnerJiacn(), runtime.getBindingId(), runtime.getStatus(),
+                    runtime.getLastSeenAt(), runtime.getCurrentTaskId(),
+                    runtime.getCurrentTaskTitle(), runtime.getErrorMessage(), statusChanged);
+        }
+
+        private boolean hasExactScope() {
+            return bindingId > 0 && agentId != null && clientId != null && ownerJiacn != null;
+        }
     }
 }

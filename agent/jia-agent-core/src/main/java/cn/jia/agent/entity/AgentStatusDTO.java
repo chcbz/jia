@@ -1,5 +1,7 @@
 package cn.jia.agent.entity;
 
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 import lombok.Data;
 
 import java.io.Serial;
@@ -15,5 +17,6 @@ public class AgentStatusDTO implements Serializable {
     private String currentTaskId;
     private String currentTaskTitle;
     private String errorMessage;
+    @JsonSetter(nulls = Nulls.FAIL)
     private List<String> abilities;
 }

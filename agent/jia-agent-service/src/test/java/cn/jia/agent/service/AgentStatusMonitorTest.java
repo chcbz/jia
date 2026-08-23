@@ -47,7 +47,8 @@ class AgentStatusMonitorTest extends BaseMockTest {
     void setUpMonitor() {
         AgentStatusTransitionWorker worker = new AgentStatusTransitionWorker(
                 bindingDao, identityRegistryDao, agentRuntimeDao, eventPublisherProvider);
-        monitor = new AgentStatusMonitor(agentRuntimeDao, worker, eventPublisherProvider);
+        monitor = new AgentStatusMonitor(agentRuntimeDao, worker,
+                new AgentScopePublicationCoordinator(), eventPublisherProvider);
         ReflectionTestUtils.setField(monitor, "heartbeatTimeoutSeconds", 60L);
         org.mockito.Mockito.lenient().when(agentRuntimeDao.updateById(
                 org.mockito.ArgumentMatchers.any(AgentRuntimeEntity.class))).thenReturn(1);
@@ -166,6 +167,91 @@ class AgentStatusMonitorTest extends BaseMockTest {
         assertEquals(AgentConstants.STATUS_ONLINE, current.getStatus());
         assertEquals("[\"fresh\"]", current.getAbilities());
         verify(agentRuntimeDao, times(1)).updateById(current);
+    }
+
+    @Test
+    void refreshConnectedNeverMovesLastSeenBackward() {
+        AgentRuntimeEntity candidate = runtime(
+                "agent-monotonic", 13L, AgentConstants.STATUS_ONLINE, "[\"stale\"]");
+        long futureLastSeenAt = System.currentTimeMillis() + 60_000L;
+        AgentRuntimeEntity current = runtime(
+                "agent-monotonic", 13L, AgentConstants.STATUS_ONLINE, "[\"fresh\"]");
+        current.setLastSeenAt(futureLastSeenAt);
+        stubActiveLocks(current);
+
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-monotonic"));
+        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(candidate));
+        when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of());
+
+        monitor.markHeartbeatTimedOutAgentsOffline();
+
+        assertEquals(futureLastSeenAt, current.getLastSeenAt());
+        verify(agentRuntimeDao).updateById(current);
+    }
+
+    @Test
+    void monitorSkipsPublicationWhenIdentityWasSuspendedAfterTransitionCommit() {
+        AgentRuntimeEntity candidate = runtime(
+                "agent-raced-unbind", 14L, AgentConstants.STATUS_OFFLINE, "[\"stale\"]");
+        AgentRuntimeEntity transitioned = runtime(
+                "agent-raced-unbind", 14L, AgentConstants.STATUS_OFFLINE, "[\"fresh\"]");
+        transitioned.setLastSeenAt(1L);
+        AgentPersonaBindingEntity activeBinding = binding(transitioned);
+        AgentIdentityRegistryEntity activeIdentity = identity(
+                transitioned, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentIdentityRegistryEntity suspendedIdentity = identity(
+                transitioned, AgentConstants.IDENTITY_STATUS_SUSPENDED);
+        when(bindingDao.findByIdForUpdate(14L)).thenReturn(activeBinding, activeBinding);
+        when(identityRegistryDao.findExactByBindingInScopeForUpdate(
+                "juyiting", "jia_client", "juyiting", 14L))
+                .thenReturn(activeIdentity, suspendedIdentity);
+        when(agentRuntimeDao.findByAgentIdForUpdate("agent-raced-unbind"))
+                .thenReturn(transitioned);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-raced-unbind"));
+        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(candidate));
+        when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of());
+
+        monitor.markHeartbeatTimedOutAgentsOffline();
+
+        assertEquals(AgentConstants.STATUS_ONLINE, transitioned.getStatus());
+        verify(eventPublisher, never()).publishAgentStatus(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
+        verify(agentRuntimeDao, times(1)).findByAgentIdForUpdate("agent-raced-unbind");
+    }
+
+    @Test
+    void monitorSkipsPublicationWhenRuntimeChangedAfterTransitionCommit() {
+        AgentRuntimeEntity candidate = runtime(
+                "agent-raced-presence", 15L, AgentConstants.STATUS_OFFLINE, "[\"stale\"]");
+        AgentRuntimeEntity transitioned = runtime(
+                "agent-raced-presence", 15L, AgentConstants.STATUS_OFFLINE, "[\"fresh\"]");
+        transitioned.setLastSeenAt(1L);
+        AgentRuntimeEntity changed = runtime(
+                "agent-raced-presence", 15L, AgentConstants.STATUS_OFFLINE, "[\"newer\"]");
+        changed.setLastSeenAt(2L);
+        AgentPersonaBindingEntity activeBinding = binding(transitioned);
+        AgentIdentityRegistryEntity activeIdentity = identity(
+                transitioned, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        when(bindingDao.findByIdForUpdate(15L)).thenReturn(activeBinding);
+        when(identityRegistryDao.findExactByBindingInScopeForUpdate(
+                "juyiting", "jia_client", "juyiting", 15L)).thenReturn(activeIdentity);
+        when(agentRuntimeDao.findByAgentIdForUpdate("agent-raced-presence"))
+                .thenReturn(transitioned, changed);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-raced-presence"));
+        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(candidate));
+        when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of());
+
+        monitor.markHeartbeatTimedOutAgentsOffline();
+
+        assertEquals(AgentConstants.STATUS_ONLINE, transitioned.getStatus());
+        verify(eventPublisher, never()).publishAgentStatus(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
+        verify(agentRuntimeDao, times(2)).findByAgentIdForUpdate("agent-raced-presence");
     }
 
     @Test

@@ -42,6 +42,7 @@ import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
+import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.service.AgentService;
@@ -115,6 +116,7 @@ public class AgentServiceImpl implements AgentService {
     private final ObjectProvider<TaskService> taskServiceProvider;
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     private final ObjectProvider<AgentSceneService> sceneServiceProvider;
+    private final AgentScopePublicationCoordinator scopePublicationCoordinator;
     private final AgentSceneFeatureFlags sceneFeatureFlags;
 
     @Override
@@ -137,7 +139,7 @@ public class AgentServiceImpl implements AgentService {
         String canonicalAgentId = identity.getCanonicalAgentId();
 
         String token = UUID.randomUUID().toString().replace("-", "");
-        AgentRuntimeEntity entity = Optional.ofNullable(agentRuntimeDao.findByAgentId(canonicalAgentId))
+        AgentRuntimeEntity entity = Optional.ofNullable(agentRuntimeDao.findByAgentIdForUpdate(canonicalAgentId))
                 .map(existing -> requireExactRuntime(existing, canonicalAgentId, clientId, jiacn, binding.getId()))
                 .orElseGet(AgentRuntimeEntity::new);
         entity.setAgentId(canonicalAgentId);
@@ -296,11 +298,13 @@ public class AgentServiceImpl implements AgentService {
         agentPersonaBindingDao.updateById(binding);
         agentIdentityService.suspendForBinding(jiacn, clientId, jiacn, binding.getId());
         disableServerHostedProfile(persona);
-        AgentRuntimeEntity runtime = agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId());
+        AgentRuntimeEntity runtime = agentRuntimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
         if (runtime != null) {
+            runtime = requireExactRuntime(runtime, identity.getCanonicalAgentId(),
+                    clientId, jiacn, binding.getId());
             runtime.setStatus(AgentConstants.STATUS_OFFLINE);
             runtime.setLastSeenAt(System.currentTimeMillis());
-            agentRuntimeDao.updateById(runtime);
+            require(agentRuntimeDao.updateById(runtime) == 1, "Agent runtime update failed");
             publishAgentSnapshotAfterCommit("agent-unbind", clientId, jiacn, toRuntimeDTO(runtime));
         }
     }
@@ -1859,8 +1863,7 @@ codexTimeoutMs=900000
         String clientId = task.getClientId();
         String ownerJiacn = task.getTenantId();
         publishOptionalAfterCommit("legacy-task-report", () -> {
-            publishAgentSnapshots(clientId, ownerJiacn, agents,
-                    listCapabilities(clientId, ownerJiacn));
+            publishScopedAgentSnapshots(clientId, ownerJiacn, agents);
             publishTaskEvent(eventType, task);
         });
     }
@@ -2033,8 +2036,15 @@ codexTimeoutMs=900000
 
     private void publishAgentSnapshotAfterCommit(
             String operation, String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
-        publishOptionalAfterCommit(operation, () -> publishAgentSnapshots(
-                clientId, ownerJiacn, List.of(agent), listCapabilities(clientId, ownerJiacn)));
+        publishOptionalAfterCommit(operation,
+                () -> publishScopedAgentSnapshots(clientId, ownerJiacn, List.of(agent)));
+    }
+
+    private void publishScopedAgentSnapshots(
+            String clientId, String ownerJiacn, List<AgentRuntimeDTO> agents) {
+        scopePublicationCoordinator.execute(clientId, ownerJiacn,
+                () -> publishAgentSnapshots(clientId, ownerJiacn, agents,
+                        listCapabilities(clientId, ownerJiacn)));
     }
 
     private void publishAgentSnapshots(

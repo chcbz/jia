@@ -40,8 +40,10 @@ import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
+import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.util.JsonUtil;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
@@ -61,6 +63,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
@@ -107,11 +110,13 @@ class AgentServiceImplTest extends BaseMockTest {
     AgentEventPublisher eventPublisher;
     @Mock
     AgentSceneService sceneService;
+    AgentScopePublicationCoordinator scopePublicationCoordinator;
     AgentServiceImpl agentService;
 
     @BeforeEach
     void setUpAgentService() {
         EsContextHolder.setContext(new EsContext());
+        scopePublicationCoordinator = new AgentScopePublicationCoordinator();
         org.mockito.Mockito.lenient().when(agentPersonaBindingDao.insert(any(AgentPersonaBindingEntity.class)))
                 .thenAnswer(invocation -> {
                     AgentPersonaBindingEntity binding = invocation.getArgument(0);
@@ -126,7 +131,8 @@ class AgentServiceImplTest extends BaseMockTest {
                         AgentConstants.IDENTITY_STATUS_PROVISIONED));
         agentService = new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
-                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(true, true));
+                apiKeyServiceProvider, sceneServiceProvider, scopePublicationCoordinator,
+                new AgentSceneFeatureFlags(true, true));
         org.mockito.Mockito.lenient().when(legacyTaskCompatibilityService.resolveAgentIds(
                         any(), any(), any(), any()))
                 .thenAnswer(invocation -> List.copyOf(invocation.<List<String>>getArgument(3)));
@@ -310,32 +316,105 @@ class AgentServiceImplTest extends BaseMockTest {
         agentService.register(request);
 
         ArgumentCaptor<AgentRuntimeEntity> captor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
+        verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
         verify(agentRuntimeDao).insert(captor.capture());
         assertEquals("[\"planning\",\"research\"]", captor.getValue().getAbilities());
     }
 
     @Test
-    void registerWithoutAbilitiesPreservesExistingRuntimeSnapshot() {
+    void registerWithoutAbilitiesPreservesLockedCurrentRuntimeSnapshot() {
         AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
         AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
         AgentPersonaEntity persona = persona("wuyong", "吴用", "智多星");
-        AgentRuntimeEntity existing = ownedAgent(
-                "agent-001", "吴用", AgentConstants.STATUS_OFFLINE, "[\"client-skill\"]");
-        existing.setId(99L);
-        existing.setPersonaCode("wuyong");
+        AgentRuntimeEntity stale = ownedAgent(
+                "agent-001", "吴用", AgentConstants.STATUS_OFFLINE, "[\"stale-skill\"]");
+        stale.setId(98L);
+        stale.setPersonaCode("wuyong");
+        AgentRuntimeEntity lockedCurrent = ownedAgent(
+                "agent-001", "吴用", AgentConstants.STATUS_OFFLINE, "[\"current-skill\"]");
+        lockedCurrent.setId(99L);
+        lockedCurrent.setPersonaCode("wuyong");
         when(agentIdentityService.requireRegistrationIdentityInScope(
                 "juyiting", "jia_client", "juyiting", "agent-001")).thenReturn(identity);
         when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
         when(agentIdentityService.activateForFirstRegistration(identity)).thenReturn(identity);
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
-        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(existing);
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(stale);
+        when(agentRuntimeDao.findByAgentIdForUpdate("agent-001")).thenReturn(lockedCurrent);
 
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
         agentService.register(request);
 
-        assertEquals("[\"client-skill\"]", existing.getAbilities());
-        verify(agentRuntimeDao).updateById(existing);
+        assertEquals("[\"current-skill\"]", lockedCurrent.getAbilities());
+        assertEquals("[\"stale-skill\"]", stale.getAbilities());
+        verify(agentRuntimeDao, never()).findByAgentId("agent-001");
+        verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+        verify(agentRuntimeDao).updateById(lockedCurrent);
+        org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
+                agentIdentityService, agentRuntimeDao);
+        lockOrder.verify(agentIdentityService).activateForFirstRegistration(identity);
+        lockOrder.verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+    }
+
+    @Test
+    void unbindUpdatesOnlyLockedCurrentRuntimeAndPreservesAbilities() {
+        String personaCode = "review-unbind-lock-20260823";
+        AgentPersonaBindingEntity binding = binding("agent-001", personaCode);
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentPersonaEntity persona = persona(personaCode, "Review Agent", "Reviewer");
+        AgentRuntimeEntity stale = ownedAgent(
+                "agent-001", "Review Agent", AgentConstants.STATUS_ONLINE, "[\"stale-skill\"]");
+        AgentRuntimeEntity lockedCurrent = ownedAgent(
+                "agent-001", "Review Agent", AgentConstants.STATUS_ONLINE, "[\"fresh-skill\"]");
+        when(agentPersonaDao.findByCode(personaCode)).thenReturn(persona);
+        when(agentPersonaBindingDao.findActiveByClientJiacnAndPersona(
+                "jia_client", "juyiting", personaCode)).thenReturn(binding);
+        when(agentIdentityService.requireRegistrationIdentityInScope(
+                "juyiting", "jia_client", "juyiting", "agent-001")).thenReturn(identity);
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(stale);
+        when(agentRuntimeDao.findByAgentIdForUpdate("agent-001")).thenReturn(lockedCurrent);
+
+        agentService.unbindPersona(personaCode);
+
+        assertEquals(AgentConstants.STATUS_OFFLINE, lockedCurrent.getStatus());
+        assertEquals("[\"fresh-skill\"]", lockedCurrent.getAbilities());
+        assertEquals(AgentConstants.STATUS_ONLINE, stale.getStatus());
+        verify(agentIdentityService).suspendForBinding(
+                "juyiting", "jia_client", "juyiting", binding.getId());
+        verify(agentRuntimeDao, never()).findByAgentId("agent-001");
+        verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+        verify(agentRuntimeDao).updateById(lockedCurrent);
+        org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
+                agentIdentityService, agentRuntimeDao);
+        lockOrder.verify(agentIdentityService).suspendForBinding(
+                "juyiting", "jia_client", "juyiting", binding.getId());
+        lockOrder.verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+    }
+
+    @Test
+    void httpAbilityDtosDistinguishMissingEmptyAndExplicitNull() throws Exception {
+        AgentRegisterDTO missingRegister = JsonUtil.getMapper().readValue(
+                "{\"agentId\":\"agent-001\"}", AgentRegisterDTO.class);
+        AgentRegisterDTO emptyRegister = JsonUtil.getMapper().readValue(
+                "{\"agentId\":\"agent-001\",\"abilities\":[]}", AgentRegisterDTO.class);
+        AgentStatusDTO missingStatus = JsonUtil.getMapper().readValue(
+                "{\"status\":\"online\"}", AgentStatusDTO.class);
+        AgentStatusDTO emptyStatus = JsonUtil.getMapper().readValue(
+                "{\"status\":\"online\",\"abilities\":[]}", AgentStatusDTO.class);
+
+        assertNull(missingRegister.getAbilities());
+        assertTrue(emptyRegister.getAbilities().isEmpty());
+        assertNull(missingStatus.getAbilities());
+        assertTrue(emptyStatus.getAbilities().isEmpty());
+        assertThrows(Exception.class, () -> JsonUtil.getMapper().readValue(
+                "{\"agentId\":\"agent-001\",\"abilities\":null}", AgentRegisterDTO.class));
+        assertThrows(Exception.class, () -> JsonUtil.getMapper().readValue(
+                "{\"status\":\"online\",\"abilities\":null}", AgentStatusDTO.class));
+
+        AgentRegisterDTO programmatic = new AgentRegisterDTO();
+        programmatic.setAbilities(null);
+        assertNull(programmatic.getAbilities());
     }
 
     @Test
@@ -597,7 +676,8 @@ class AgentServiceImplTest extends BaseMockTest {
     void sceneStateDisabledPreservesTaskAssignmentWithoutSceneWrite() {
         agentService = new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
-                apiKeyServiceProvider, sceneServiceProvider, new AgentSceneFeatureFlags(false, true));
+                apiKeyServiceProvider, sceneServiceProvider, scopePublicationCoordinator,
+                new AgentSceneFeatureFlags(false, true));
         AgentRuntimeEntity agent = ownedAgent(
                 "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
         agent.setPersonaCode("wuyong");

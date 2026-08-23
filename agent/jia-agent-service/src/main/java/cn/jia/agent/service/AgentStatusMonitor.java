@@ -22,6 +22,7 @@ import java.util.Set;
 public class AgentStatusMonitor {
     private final AgentRuntimeDao agentRuntimeDao;
     private final AgentStatusTransitionWorker transitionWorker;
+    private final AgentScopePublicationCoordinator scopePublicationCoordinator;
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
 
     @Value("${jia.agent.status.heartbeat-timeout-seconds:60}")
@@ -43,8 +44,8 @@ public class AgentStatusMonitor {
                         transitionWorker.markHeartbeatTimedOutOffline(candidate, cutoffTime);
                 if (transition != null && transition.statusChanged()) {
                     log.debug("Marked heartbeat timed out agent offline: {}",
-                            transition.runtime().getAgentId());
-                    publishAgentStatus(transition.runtime());
+                            transition.agentId());
+                    publishAgentStatus(transition);
                 }
             } catch (RuntimeException failure) {
                 log.warn("Skipping failed heartbeat timeout transition: agentId={}, failureType={}",
@@ -66,8 +67,8 @@ public class AgentStatusMonitor {
                         transitionWorker.refreshConnected(candidate, now);
                 if (transition != null && transition.statusChanged()) {
                     log.debug("Refreshed locally connected agent status: agentId={}, status={}",
-                            transition.runtime().getAgentId(), transition.runtime().getStatus());
-                    publishAgentStatus(transition.runtime());
+                            transition.agentId(), transition.status());
+                    publishAgentStatus(transition);
                 }
             } catch (RuntimeException failure) {
                 log.warn("Skipping failed connected Agent refresh: agentId={}, failureType={}",
@@ -84,7 +85,26 @@ public class AgentStatusMonitor {
         return Optional.ofNullable(publisher.connectedAgentIds()).orElseGet(Set::of);
     }
 
-    private void publishAgentStatus(AgentRuntimeEntity entity) {
+    private void publishAgentStatus(AgentStatusTransitionWorker.Transition transition) {
+        scopePublicationCoordinator.execute(
+                transition.clientId(), transition.ownerJiacn(), () -> {
+                    AgentEventPublisher publisher = eventPublisherProvider.getIfAvailable();
+                    if (publisher == null) {
+                        return;
+                    }
+                    AgentRuntimeEntity current =
+                            transitionWorker.revalidateForPublication(transition);
+                    if (current == null) {
+                        log.debug("Skipping stale Agent monitor publication: agentId={}, status={}, lastSeenAt={}",
+                                transition.agentId(), transition.status(), transition.lastSeenAt());
+                        return;
+                    }
+                    publisher.publishAgentStatus(
+                            transition.clientId(), transition.ownerJiacn(), toRuntimeDTO(current));
+                });
+    }
+
+    private AgentRuntimeDTO toRuntimeDTO(AgentRuntimeEntity entity) {
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(entity.getAgentId());
         dto.setName(entity.getName());
@@ -96,14 +116,7 @@ public class AgentStatusMonitor {
         dto.setEndpoint(entity.getEndpoint());
         dto.setLastSeenAt(entity.getLastSeenAt());
         dto.setErrorMessage(entity.getErrorMessage());
-        String clientId = entity.getClientId();
-        String ownerJiacn = entity.getOwnerJiacn();
-        try {
-            Optional.ofNullable(eventPublisherProvider.getIfAvailable())
-                    .ifPresent(publisher -> publisher.publishAgentStatus(clientId, ownerJiacn, dto));
-        } catch (RuntimeException failure) {
-            log.warn("Agent status publication failed after persistence: failureType={}",
-                    failure.getClass().getSimpleName());
-        }
+        return dto;
     }
+
 }
