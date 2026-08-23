@@ -100,7 +100,14 @@ public interface AgentTaskWorkspaceMapper {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
-              AND status IN ('open', 'acknowledged')
+              AND (
+                    (status = 'open'
+                     AND CAST(status AS BINARY) = CAST('open' AS BINARY)
+                     AND OCTET_LENGTH(status) = OCTET_LENGTH('open'))
+                    OR (status = 'acknowledged'
+                        AND CAST(status AS BINARY) = CAST('acknowledged' AS BINARY)
+                        AND OCTET_LENGTH(status) = OCTET_LENGTH('acknowledged'))
+                  )
             """ + EXACT_TENANT + EXACT_CLIENT + EXACT_TASK + """
             ORDER BY priority DESC, create_time ASC, CAST(request_id AS BINARY) ASC,
                      OCTET_LENGTH(request_id) ASC, id ASC
@@ -117,14 +124,44 @@ public interface AgentTaskWorkspaceMapper {
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
-              AND visibility IN ('task_members', 'reviewer', 'private')
               AND (
-                    visibility = 'task_members'
+                    (visibility = 'task_members'
+                     AND CAST(visibility AS BINARY) = CAST('task_members' AS BINARY)
+                     AND OCTET_LENGTH(visibility) = OCTET_LENGTH('task_members'))
+                    OR (visibility = 'reviewer'
+                        AND CAST(visibility AS BINARY) = CAST('reviewer' AS BINARY)
+                        AND OCTET_LENGTH(visibility) = OCTET_LENGTH('reviewer'))
+                    OR (visibility = 'private'
+                        AND CAST(visibility AS BINARY) = CAST('private' AS BINARY)
+                        AND OCTET_LENGTH(visibility) = OCTET_LENGTH('private'))
+                  )
+              AND (
+                    (visibility = 'task_members'
+                     AND CAST(visibility AS BINARY) = CAST('task_members' AS BINARY)
+                     AND OCTET_LENGTH(visibility) = OCTET_LENGTH('task_members'))
                     OR (producer_agent_id = #{actorAgentId}
                         AND CAST(producer_agent_id AS BINARY) = CAST(#{actorAgentId} AS BINARY)
-                        AND OCTET_LENGTH(producer_agent_id) = OCTET_LENGTH(#{actorAgentId}))
-                    OR (#{reviewerAccess} = TRUE AND visibility = 'reviewer')
-                    OR (#{coordinatorAccess} = TRUE AND visibility IN ('reviewer', 'private'))
+                        AND OCTET_LENGTH(producer_agent_id) = OCTET_LENGTH(#{actorAgentId})
+                        AND ((visibility = 'task_members'
+                              AND CAST(visibility AS BINARY) = CAST('task_members' AS BINARY)
+                              AND OCTET_LENGTH(visibility) = OCTET_LENGTH('task_members'))
+                             OR (visibility = 'reviewer'
+                                 AND CAST(visibility AS BINARY) = CAST('reviewer' AS BINARY)
+                                 AND OCTET_LENGTH(visibility) = OCTET_LENGTH('reviewer'))
+                             OR (visibility = 'private'
+                                 AND CAST(visibility AS BINARY) = CAST('private' AS BINARY)
+                                 AND OCTET_LENGTH(visibility) = OCTET_LENGTH('private'))))
+                    OR (#{reviewerAccess} = TRUE
+                        AND visibility = 'reviewer'
+                        AND CAST(visibility AS BINARY) = CAST('reviewer' AS BINARY)
+                        AND OCTET_LENGTH(visibility) = OCTET_LENGTH('reviewer'))
+                    OR (#{coordinatorAccess} = TRUE
+                        AND ((visibility = 'reviewer'
+                              AND CAST(visibility AS BINARY) = CAST('reviewer' AS BINARY)
+                              AND OCTET_LENGTH(visibility) = OCTET_LENGTH('reviewer'))
+                             OR (visibility = 'private'
+                                 AND CAST(visibility AS BINARY) = CAST('private' AS BINARY)
+                                 AND OCTET_LENGTH(visibility) = OCTET_LENGTH('private'))))
                   )
             """ + EXACT_TENANT + EXACT_CLIENT + EXACT_TASK + """
             ORDER BY created_at DESC, CAST(artifact_id AS BINARY) ASC,

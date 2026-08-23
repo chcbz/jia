@@ -63,6 +63,8 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                   = CAST(SUBSTRING(#{reservedTaskId}, 51, 50) AS BINARY(200))
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{reservedTaskId})
               AND reward_status = 'open'
+              AND CAST(reward_status AS BINARY) = CAST('open' AS BINARY)
+              AND OCTET_LENGTH(reward_status) = OCTET_LENGTH('open')
               AND task_version = 0
               AND current_event_version = 0
             """)
@@ -88,6 +90,8 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                   = CAST(SUBSTRING(#{reservedTaskId}, 51, 50) AS BINARY(200))
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{reservedTaskId})
               AND reward_status = 'open'
+              AND CAST(reward_status AS BINARY) = CAST('open' AS BINARY)
+              AND OCTET_LENGTH(reward_status) = OCTET_LENGTH('open')
               AND task_version = 0
               AND current_event_version = 0
             """)

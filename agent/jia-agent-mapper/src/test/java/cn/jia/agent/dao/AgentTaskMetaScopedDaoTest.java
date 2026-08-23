@@ -47,7 +47,7 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(rekeySql.contains("substring(task_id, 1, 50)"), rekeySql);
         assertTrue(rekeySql.contains("substring(task_id, 51, 50)"), rekeySql);
         assertTrue(rekeySql.contains("octet_length(task_id) = octet_length(#{reservedtaskid})"), rekeySql);
-        assertTrue(rekeySql.contains("reward_status = 'open'"), rekeySql);
+        assertExactOpenGuard(rekeySql);
         assertTrue(rekeySql.contains("task_version = 0"), rekeySql);
         assertTrue(rekeySql.contains("current_event_version = 0"), rekeySql);
 
@@ -58,6 +58,7 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(deleteSql.contains("substring(task_id, 1, 50)"), deleteSql);
         assertTrue(deleteSql.contains("substring(task_id, 51, 50)"), deleteSql);
         assertTrue(deleteSql.contains("octet_length(task_id) = octet_length(#{reservedtaskid})"), deleteSql);
+        assertExactOpenGuard(deleteSql);
         assertTrue(deleteSql.contains("task_version = 0"), deleteSql);
         assertTrue(deleteSql.contains("current_event_version = 0"), deleteSql);
     }
@@ -151,6 +152,14 @@ class AgentTaskMetaScopedDaoTest {
                 "tenant-a", "client-a", "task-a", "42", 2L);
         dao.deleteReservedTaskRoot("tenant-a", "client-a", "task-a");
         verify(mapper).deleteReservedTaskRoot("tenant-a", "client-a", "task-a");
+    }
+
+    private void assertExactOpenGuard(String sql) {
+        assertTrue(sql.contains("reward_status = 'open'"), sql);
+        assertTrue(sql.contains(
+                "cast(reward_status as binary) = cast('open' as binary)"), sql);
+        assertTrue(sql.contains(
+                "octet_length(reward_status) = octet_length('open')"), sql);
     }
 
     private void assertExactScope(String sql) {

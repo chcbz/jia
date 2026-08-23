@@ -3,6 +3,7 @@ package cn.jia.agent.dao;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.ArtifactRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.EventRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.MemberRow;
+import cn.jia.agent.entity.AgentTaskWorkspaceRows.RequestRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceRows.TaskRow;
 import cn.jia.agent.dao.impl.AgentTaskWorkspaceDaoImpl;
 import cn.jia.agent.mapper.AgentTaskWorkspaceMapper;
@@ -133,6 +134,36 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
     }
 
     @Test
+    void openRequestAndArtifactAclConstantsAreByteExactUnderCiCollation() {
+        insertTask(TENANT, CLIENT, TASK, 0L);
+        insertRequest("exact-open", "open", 2, 100L);
+        insertRequest("exact-acknowledged", "acknowledged", 1, 101L);
+        insertRequest("case-open", "OPEN", 100, 1L);
+        insertRequest("space-open", "open ", 100, 2L);
+        insertRequest("case-acknowledged", "ACKNOWLEDGED", 100, 3L);
+        insertRequest("space-acknowledged", "acknowledged ", 100, 4L);
+
+        List<RequestRow> requests = mapper.findOpenRequests(TENANT, CLIENT, TASK);
+        assertEquals(List.of("exact-open", "exact-acknowledged"),
+                requests.stream().map(RequestRow::getRequestId).toList());
+
+        insertArtifact("exact-member", 1, "other", "task_members", 1_000L);
+        insertArtifact("exact-reviewer", 1, "other", "reviewer", 900L);
+        insertArtifact("exact-private", 1, "other", "private", 800L);
+        insertArtifact("case-member", 1, "other", "Task_Members", 2_000L);
+        insertArtifact("space-member", 1, "other", "task_members ", 1_999L);
+        insertArtifact("case-reviewer", 1, "other", "Reviewer", 1_998L);
+        insertArtifact("space-reviewer", 1, "other", "reviewer ", 1_997L);
+        insertArtifact("case-private", 1, "other", "Private", 1_996L);
+        insertArtifact("space-private", 1, "other", "private ", 1_995L);
+
+        assertEquals(List.of("exact-member"), artifactIds(false, false));
+        assertEquals(List.of("exact-member", "exact-reviewer"), artifactIds(true, false));
+        assertEquals(List.of("exact-member", "exact-reviewer", "exact-private"),
+                artifactIds(false, true));
+    }
+
+    @Test
     void artifactOrderingUsesCanonicalBytesWhenCollationTreatsIdsAsEqual() {
         insertTask(TENANT, CLIENT, TASK, 0L);
         insertArtifact("artifact-a", 1, "other", "task_members", 1000L);
@@ -179,6 +210,19 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
         assertEquals(101, events.size());
         assertEquals(105L, events.get(0).getEventVersion());
         assertEquals(5L, events.get(100).getEventVersion());
+    }
+
+    private List<String> artifactIds(boolean reviewerAccess, boolean coordinatorAccess) {
+        return mapper.findVisibleArtifacts(
+                        TENANT, CLIENT, TASK, ACTOR, reviewerAccess, coordinatorAccess)
+                .stream().map(ArtifactRow::getArtifactId).toList();
+    }
+
+    private void insertRequest(String requestId, String status, int priority, long createTime) {
+        jdbc.update("INSERT INTO agent_task_request "
+                        + "(request_id,task_id,status,priority,create_time,tenant_id,client_id) "
+                        + "VALUES (?,?,?,?,?,?,?)",
+                requestId, TASK, status, priority, createTime, TENANT, CLIENT);
     }
 
     private Object[] memberArgs(String agentId, String role, long version) {
@@ -230,14 +274,14 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
         jdbc.execute("CREATE TABLE agent_task_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "request_id VARCHAR(100),task_id VARCHAR_IGNORECASE(100),work_item_id VARCHAR(100),"
                 + "requester_agent_id VARCHAR(100),target_type VARCHAR(20),target_id VARCHAR(100),"
-                + "request_type VARCHAR(30),status VARCHAR(20),priority INT,title VARCHAR(255),"
+                + "request_type VARCHAR(30),status VARCHAR_IGNORECASE(20),priority INT,title VARCHAR(255),"
                 + "description CLOB,due_at BIGINT,acknowledged_at BIGINT,version BIGINT,"
                 + "create_time BIGINT,tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50))");
         jdbc.execute("CREATE TABLE agent_task_artifact (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "artifact_id VARCHAR_IGNORECASE(100),task_id VARCHAR_IGNORECASE(100),"
                 + "work_item_id VARCHAR(100),producer_agent_id VARCHAR_IGNORECASE(100),artifact_type VARCHAR(30),"
                 + "title VARCHAR(255),content_hash VARCHAR(128),artifact_version INT,"
-                + "visibility VARCHAR(20),created_at BIGINT,tenant_id VARCHAR_IGNORECASE(50),"
+                + "visibility VARCHAR_IGNORECASE(20),created_at BIGINT,tenant_id VARCHAR_IGNORECASE(50),"
                 + "client_id VARCHAR_IGNORECASE(50))");
         jdbc.execute("CREATE TABLE agent_task_event (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "task_id VARCHAR_IGNORECASE(100),event_version BIGINT,event_type VARCHAR(64),"
