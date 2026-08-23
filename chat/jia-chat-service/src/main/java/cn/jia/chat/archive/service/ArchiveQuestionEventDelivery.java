@@ -9,7 +9,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -28,11 +31,15 @@ public class ArchiveQuestionEventDelivery {
     private static final int RECOVERY_BATCH = 100;
     private static final int PUBLISH_THREADS = 4;
     private static final int PUBLISH_QUEUE = 256;
+    private static final int RETRY_CAPACITY = PUBLISH_QUEUE + PUBLISH_THREADS;
     private final ArchiveQuestionStore store;
     private final ArchiveQuestionEventBroker broker;
     private final ArchiveTransactions transactions;
     private final ExecutorService publisher;
     private final Set<Key> inFlight = ConcurrentHashMap.newKeySet();
+    private final Object retryLock = new Object();
+    private final Map<Key, RetryState> retries = new HashMap<>();
+    private final ArrayDeque<Key> retryQueue = new ArrayDeque<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicLong recoveryCursor = new AtomicLong();
 
@@ -49,30 +56,38 @@ public class ArchiveQuestionEventDelivery {
         this.publisher = Objects.requireNonNull(publisher, "publisher");
     }
 
-    /** Commit callback: a bounded, no-throw enqueue only. Durable recovery owns correctness. */
+    /** Commit callback: bounded no-throw registration/enqueue only. Durable state remains authoritative. */
     void afterCommit(ArchiveOwnerScope owner, EventRecord event) {
         try {
             if (owner == null || event == null) return;
-            schedule(new Key(owner, event.questionId()));
+            Key key = new Key(owner, event.questionId());
+            if (!registerRetry(key)) {
+                // A bounded registry must never silently lose an older-row mutation. Rewind the durable
+                // keyset scan; forward recovery will stop at any row it cannot independently register.
+                recoveryCursor.set(0);
+                return;
+            }
+            scheduleRetries(1);
         } catch (Throwable ignored) {
-            // The HTTP mutation is already committed; the durable recovery cursor will retry.
+            // The HTTP mutation is already committed; the durable recovery scan will retry.
+            recoveryCursor.set(0);
         }
     }
 
-    /** Bounded durable scan that only enqueues question-local publishers and never runs a sink inline. */
+    /** Bounded durable scan. Crossing a row requires a durable watermark or independent retry ownership. */
     public synchronized int recoverOnce() {
+        int scheduled = scheduleRetries(RECOVERY_BATCH);
         List<ArchiveQuestionStore.PublishCandidate> candidates;
         long cursor = recoveryCursor.get();
         try {
             candidates = store.findPublishCandidates(cursor, RECOVERY_BATCH);
         } catch (Throwable unavailable) {
-            return 0;
+            return scheduled;
         }
         if (candidates.isEmpty()) {
             if (cursor != 0) recoveryCursor.compareAndSet(cursor, 0);
-            return 0;
+            return scheduled;
         }
-        int scheduled = 0;
         long nextCursor = cursor;
         for (ArchiveQuestionStore.PublishCandidate candidate : candidates) {
             if (candidate == null || candidate.rowId() <= nextCursor) continue;
@@ -81,69 +96,146 @@ public class ArchiveQuestionEventDelivery {
                 nextCursor = candidateRowId;
                 continue;
             }
-            ScheduleResult result = schedule(new Key(candidate.owner(), candidate.questionId()));
-            if (result == ScheduleResult.CAPACITY_REJECTED
-                    || result == ScheduleResult.ALREADY_IN_FLIGHT) {
-                // Neither executor admission nor in-memory ownership proves durable progress. Keep the
-                // row as the next keyset candidate until its watermark advances and removes it from the scan.
+            Key key = new Key(candidate.owner(), candidate.questionId());
+            if (!registerRetry(key)) {
+                // Registry capacity is the backpressure boundary. Do not cross this durable row until
+                // another responsibility completes and frees a slot.
                 recoveryCursor.set(nextCursor);
                 return scheduled;
             }
-            if (result == ScheduleResult.CLOSED) return scheduled;
             nextCursor = candidateRowId;
-            if (result == ScheduleResult.SCHEDULED) scheduled++;
+            // ALREADY_IN_FLIGHT is safe here: the retry generation is independent of the forward cursor.
+            scheduled += scheduleRetries(1);
         }
         recoveryCursor.set(nextCursor);
         return scheduled;
     }
 
-    private ScheduleResult schedule(Key key) {
+    private boolean registerRetry(Key key) {
+        synchronized (retryLock) {
+            if (closed.get()) return false;
+            RetryState state = retries.get(key);
+            if (state == null) {
+                if (retries.size() >= RETRY_CAPACITY) return false;
+                state = new RetryState();
+                retries.put(key, state);
+            }
+            state.generation++;
+            enqueueLocked(key, state);
+            return true;
+        }
+    }
+
+    private int scheduleRetries(int budget) {
+        int scheduled = 0;
+        for (int inspected = 0; inspected < budget && !closed.get(); inspected++) {
+            RetryTask task;
+            synchronized (retryLock) {
+                Key key = retryQueue.pollFirst();
+                if (key == null) break;
+                RetryState state = retries.get(key);
+                if (state == null) continue;
+                state.enqueued = false;
+                if (inFlight.contains(key)) continue;
+                task = new RetryTask(key, state, state.generation);
+            }
+            ScheduleResult result = schedule(task);
+            if (result == ScheduleResult.SCHEDULED) {
+                scheduled++;
+            } else if (result == ScheduleResult.CAPACITY_REJECTED) {
+                synchronized (retryLock) {
+                    RetryState current = retries.get(task.key());
+                    if (current != null) enqueueLocked(task.key(), current);
+                }
+                break;
+            } else if (result == ScheduleResult.ALREADY_IN_FLIGHT) {
+                // The running generation owns the key. Its completion acknowledgement will either
+                // remove the responsibility or re-enqueue the newer generation.
+            } else {
+                break;
+            }
+        }
+        return scheduled;
+    }
+
+    private void enqueueLocked(Key key, RetryState state) {
+        if (state.enqueued || inFlight.contains(key)) return;
+        state.enqueued = true;
+        retryQueue.addLast(key);
+    }
+
+    private ScheduleResult schedule(RetryTask task) {
         if (closed.get()) return ScheduleResult.CLOSED;
-        if (!inFlight.add(key)) return ScheduleResult.ALREADY_IN_FLIGHT;
+        if (!inFlight.add(task.key())) return ScheduleResult.ALREADY_IN_FLIGHT;
         try {
-            publisher.execute(() -> drain(key));
+            publisher.execute(() -> drain(task));
             return ScheduleResult.SCHEDULED;
         } catch (RejectedExecutionException rejected) {
-            inFlight.remove(key);
+            inFlight.remove(task.key());
             return closed.get() ? ScheduleResult.CLOSED : ScheduleResult.CAPACITY_REJECTED;
         } catch (Throwable failure) {
-            inFlight.remove(key);
+            inFlight.remove(task.key());
             return closed.get() ? ScheduleResult.CLOSED : ScheduleResult.CAPACITY_REJECTED;
         }
     }
 
-    private void drain(Key key) {
+    private void drain(RetryTask task) {
+        DrainResult result = DrainResult.RETRY;
         try {
             while (!closed.get()) {
-                Delivery next = readNext(key);
-                if (next == null) return;
+                ReadResult read = readNext(task.key());
+                if (read.status() == ReadStatus.COMPLETE) {
+                    result = DrainResult.COMPLETE;
+                    return;
+                }
+                if (read.status() == ReadStatus.RETRY) return;
+                Delivery next = read.delivery();
                 try {
-                    // Deliberately outside every JDBC transaction and row lock. A slow SseEmitter
-                    // consumes only one bounded publisher thread, never an HTTP/worker/lease thread.
-                    broker.publish(key.owner(), next.event());
+                    // Deliberately outside every JDBC transaction and row lock.
+                    broker.publish(task.key().owner(), next.event());
                 } catch (Throwable sinkFailure) {
                     return;
                 }
-                if (!advance(key, next.expectedSequence(), next.event().sequence())) return;
+                if (!advance(task.key(), next.expectedSequence(), next.event().sequence())) return;
             }
         } finally {
-            inFlight.remove(key);
+            acknowledge(task, result);
         }
     }
 
-    private Delivery readNext(Key key) {
+    private void acknowledge(RetryTask task, DrainResult result) {
+        inFlight.remove(task.key());
+        synchronized (retryLock) {
+            RetryState state = retries.get(task.key());
+            if (state == null) return;
+            boolean sameGeneration = state == task.state() && state.generation == task.generation();
+            if (result == DrainResult.COMPLETE && sameGeneration) {
+                retries.remove(task.key(), state);
+                return;
+            }
+            enqueueLocked(task.key(), state);
+        }
+    }
+
+    private ReadResult readNext(Key key) {
         try {
             return transactions.requiresNew(() -> {
                 OutboxRecord outbox = store.findOutbox(key.owner(), key.questionId(), false);
-                if (outbox == null || outbox.publishedSequence() == Long.MAX_VALUE) return null;
+                ArchiveQuestionStore.QuestionRecord question =
+                        store.findQuestion(key.owner(), key.questionId(), false);
+                if (outbox == null || question == null || outbox.publishedSequence() == Long.MAX_VALUE
+                        || outbox.publishedSequence() >= question.currentSequence()) {
+                    return ReadResult.complete();
+                }
                 long expected = outbox.publishedSequence();
                 List<EventRecord> events = store.listEvents(key.owner(), key.questionId(), expected,
-                        Long.MAX_VALUE, 1);
-                if (events.size() != 1 || events.getFirst().sequence() != expected + 1) return null;
-                return new Delivery(expected, events.getFirst());
+                        question.currentSequence(), 1);
+                if (events.size() != 1 || expected == Long.MAX_VALUE
+                        || events.getFirst().sequence() != expected + 1) return ReadResult.retry();
+                return ReadResult.delivery(new Delivery(expected, events.getFirst()));
             });
         } catch (Throwable unavailable) {
-            return null;
+            return ReadResult.retry();
         }
     }
 
@@ -176,6 +268,10 @@ public class ArchiveQuestionEventDelivery {
         if (!closed.compareAndSet(false, true)) return;
         publisher.shutdownNow();
         inFlight.clear();
+        synchronized (retryLock) {
+            retries.clear();
+            retryQueue.clear();
+        }
     }
 
     private static ExecutorService publisherExecutor() {
@@ -190,6 +286,20 @@ public class ArchiveQuestionEventDelivery {
     }
 
     private enum ScheduleResult { SCHEDULED, ALREADY_IN_FLIGHT, CAPACITY_REJECTED, CLOSED }
+    private enum ReadStatus { DELIVERY, COMPLETE, RETRY }
+    private enum DrainResult { COMPLETE, RETRY }
+    private static final class RetryState {
+        private long generation;
+        private boolean enqueued;
+    }
     private record Key(ArchiveOwnerScope owner, String questionId) { }
+    private record RetryTask(Key key, RetryState state, long generation) { }
     private record Delivery(long expectedSequence, EventRecord event) { }
+    private record ReadResult(ReadStatus status, Delivery delivery) {
+        private static ReadResult delivery(Delivery delivery) {
+            return new ReadResult(ReadStatus.DELIVERY, delivery);
+        }
+        private static ReadResult complete() { return new ReadResult(ReadStatus.COMPLETE, null); }
+        private static ReadResult retry() { return new ReadResult(ReadStatus.RETRY, null); }
+    }
 }

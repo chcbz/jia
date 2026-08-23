@@ -321,7 +321,7 @@ class ArchiveQuestionSseServiceTest {
         replay = new ManualExecutor();
         heartbeat = new CapturingScheduler();
         ArchiveQuestionSseService.AdmissionLimits limits = new ArchiveQuestionSseService.AdmissionLimits(
-                3, 2, 2, 1, 3, 2);
+                3, 2, 2, 1, 3, 2, 3, 2);
         service = new ArchiveQuestionSseService(store, broker, enabledPolicy(OWNER, OWNER_B, OWNER_C),
                 replay, heartbeat,
                 (ignored, terminated) -> ArchiveQuestionSseService.directOutbound(terminated), limits);
@@ -379,7 +379,7 @@ class ArchiveQuestionSseServiceTest {
                     return thread;
                 }, new ThreadPoolExecutor.AbortPolicy());
         ArchiveQuestionSseService.AdmissionLimits limits = new ArchiveQuestionSseService.AdmissionLimits(
-                2, 2, 2, 2, 2, 2);
+                2, 2, 2, 2, 2, 2, 2, 2);
         service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), boundedReplay, heartbeat,
                 (ignored, terminated) -> ArchiveQuestionSseService.serialOutbound(terminated), limits);
         String slowConnectionId = "40000001-0000-4000-8000-000000000000";
@@ -419,6 +419,59 @@ class ArchiveQuestionSseServiceTest {
         releaseSend.countDown();
         assertTrue(await(() -> service.admittedOutboundWriters() == 0, Duration.ofSeconds(2)));
         assertEquals(0, service.activeSubscriptions());
+    }
+
+    @Test
+    void permanentlyBlockedTransportCompletionsAreBoundedAndAdmissionRecoversAfterRelease() throws Exception {
+        service.stop();
+        replay = new ManualExecutor();
+        heartbeat = new CapturingScheduler();
+        ThreadPoolExecutor completions = new ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1), runnable -> {
+                    Thread thread = new Thread(runnable, "archive-question-bounded-completion-test");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+        ArchiveQuestionSseService.AdmissionLimits limits = new ArchiveQuestionSseService.AdmissionLimits(
+                4, 4, 4, 4, 4, 4, 2, 2);
+        service = new ArchiveQuestionSseService(store, broker, enabledPolicy(), replay, heartbeat,
+                (ignored, terminated) -> ArchiveQuestionSseService.directOutbound(terminated),
+                limits, completions);
+        CountDownLatch twoEntered = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        List<CompletionBlockingEmitter> emitters = new ArrayList<>();
+        List<ArchiveQuestionSseService.StreamHandle> handles = new ArrayList<>();
+        for (int index = 0; index < 4; index++) {
+            String id = String.format("5000000%d-0000-4000-8000-000000000000", index + 1);
+            question(id, 0);
+            CompletionBlockingEmitter emitter = new CompletionBlockingEmitter(twoEntered, release);
+            emitters.add(emitter);
+            handles.add(service.subscribe(OWNER, id, 0,
+                    new ArchiveQuestionSseService.EmitterSink(emitter)));
+        }
+        replay.runAll();
+
+        handles.get(0).close();
+        handles.get(1).close();
+        assertTrue(twoEntered.await(2, TimeUnit.SECONDS));
+        assertEquals(2, service.pendingCompletions());
+
+        long started = System.nanoTime();
+        handles.get(2).close();
+        assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0);
+        emitters.get(2).cancel();
+        emitters.get(2).complete();
+        Thread.sleep(50);
+        assertEquals(0, emitters.get(2).transportCalls.get(),
+                "N+1 completion is coalesced/rejected without another thread, emitter or response hold");
+        assertEquals(2, service.pendingCompletions());
+
+        release.countDown();
+        assertTrue(await(() -> service.pendingCompletions() == 0, Duration.ofSeconds(2)));
+        handles.get(3).close();
+        assertTrue(await(() -> emitters.get(3).transportCalls.get() == 1, Duration.ofSeconds(2)),
+                "completion admission must recover after blocked transports return");
+        assertTrue(await(() -> service.pendingCompletions() == 0, Duration.ofSeconds(2)));
     }
 
     @Test
@@ -654,6 +707,29 @@ class ArchiveQuestionSseServiceTest {
                 if (interrupted) Thread.currentThread().interrupt();
             }
             return super.findQuestion(owner, questionId, lock);
+        }
+    }
+
+    private static final class CompletionBlockingEmitter extends ArchiveQuestionSseService.ManagedSseEmitter {
+        private final CountDownLatch entered;
+        private final CountDownLatch release;
+        private final AtomicInteger transportCalls = new AtomicInteger();
+
+        private CompletionBlockingEmitter(CountDownLatch entered, CountDownLatch release) {
+            super(ArchiveQuestionSseService.SSE_TIMEOUT_MILLIS);
+            this.entered = entered;
+            this.release = release;
+        }
+
+        @Override void completeTransport(Throwable error) {
+            transportCalls.incrementAndGet();
+            entered.countDown();
+            boolean interrupted = false;
+            while (release.getCount() != 0) {
+                try { release.await(); }
+                catch (InterruptedException ignored) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
         }
     }
 

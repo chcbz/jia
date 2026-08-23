@@ -15,11 +15,14 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -103,8 +106,22 @@ public class ArchiveQuestionWorker {
         return scanExpiredPage(now);
     }
 
-    /** At most one bounded keyset page is inspected for this queue in one worker invocation. */
+    /** One exact retry plus at most one bounded keyset page is inspected for this queue/invocation. */
     private boolean scanExpiredPage(Instant now) {
+        RetryAttempt retry = exhaustedScan.pollRetry();
+        RetryKey attempted = retry == null ? null : RetryKey.of(retry.candidate());
+        if (retry != null) {
+            try {
+                if (finalizeExpired(retry.candidate())) {
+                    exhaustedScan.retryResolved(retry);
+                    return true;
+                }
+                exhaustedScan.retryResolved(retry);
+            } catch (Throwable failure) {
+                exhaustedScan.retryFailed(retry);
+            }
+        }
+
         ScanPlan plan = exhaustedScan.begin();
         List<ClaimCandidate> candidates;
         try {
@@ -118,36 +135,49 @@ public class ArchiveQuestionWorker {
             return false;
         }
         boolean advanced = false;
-        boolean retryRegistered = false;
         int inspected = 0;
         ScanCursor current = plan.cursor();
         for (ClaimCandidate candidate : candidates) {
             if (inspected++ >= CANDIDATE_BATCH) break;
             if (!afterCursor(candidate, current.candidateAt(), current.rowId())) continue;
-            ScanCursor predecessor = current;
             current = new ScanCursor(candidate.candidateAt(), candidate.rowId());
             exhaustedScan.advance(plan, current);
             advanced = true;
-            if (!allowed(candidate.owner())) continue;
+            if (!allowed(candidate.owner()) || RetryKey.of(candidate).equals(attempted)) continue;
             try {
                 if (finalizeExpired(candidate)) {
                     exhaustedScan.processed(plan);
                     return true;
                 }
             } catch (Throwable ignored) {
-                if (!plan.sweep() && !retryRegistered) {
-                    exhaustedScan.retryFrom(predecessor);
-                    retryRegistered = true;
-                }
-                // A poison row never blocks this page; the retry sweep is separate from forward progress.
+                exhaustedScan.retryFailed(new RetryAttempt(candidate));
+                // Exact retry ownership rotates independently; poison never blocks forward/sweep pagination.
             }
         }
         exhaustedScan.finish(plan, !advanced || candidates.size() < CANDIDATE_BATCH);
         return false;
     }
 
-    /** At most one bounded keyset page is inspected for this queue in one worker invocation. */
+    /** One exact retry plus at most one bounded keyset page is inspected for this queue/invocation. */
     private boolean scanClaimPage(Instant now) {
+        RetryAttempt retry = claimScan.pollRetry();
+        RetryKey attempted = retry == null ? null : RetryKey.of(retry.candidate());
+        if (retry != null) {
+            try {
+                Claimed claim = claim(retry.candidate());
+                if (claim == null) {
+                    claimScan.retryResolved(retry);
+                } else {
+                    executeProvider(claim);
+                    claimScan.retryResolved(retry);
+                    claimScan.processedRetry();
+                    return true;
+                }
+            } catch (Throwable failure) {
+                claimScan.retryFailed(retry);
+            }
+        }
+
         ScanPlan plan = claimScan.begin();
         List<ClaimCandidate> candidates;
         try {
@@ -161,17 +191,15 @@ public class ArchiveQuestionWorker {
             return false;
         }
         boolean advanced = false;
-        boolean retryRegistered = false;
         int inspected = 0;
         ScanCursor current = plan.cursor();
         for (ClaimCandidate candidate : candidates) {
             if (inspected++ >= CANDIDATE_BATCH) break;
             if (!afterCursor(candidate, current.candidateAt(), current.rowId())) continue;
-            ScanCursor predecessor = current;
             current = new ScanCursor(candidate.candidateAt(), candidate.rowId());
             claimScan.advance(plan, current);
             advanced = true;
-            if (!allowed(candidate.owner())) continue;
+            if (!allowed(candidate.owner()) || RetryKey.of(candidate).equals(attempted)) continue;
             try {
                 Claimed claim = claim(candidate);
                 if (claim == null) continue;
@@ -179,11 +207,8 @@ public class ArchiveQuestionWorker {
                 claimScan.processed(plan);
                 return true;
             } catch (Throwable ignored) {
-                if (!plan.sweep() && !retryRegistered) {
-                    claimScan.retryFrom(predecessor);
-                    retryRegistered = true;
-                }
-                // Forward pagination continues; a fixed-cycle sweep retries the failed durable row.
+                claimScan.retryFailed(new RetryAttempt(candidate));
+                // Exact retry ownership persists across repeated transient failures and continuous tail growth.
             }
         }
         claimScan.finish(plan, !advanced || candidates.size() < CANDIDATE_BATCH);
@@ -562,14 +587,10 @@ public class ArchiveQuestionWorker {
         private ScanCursor forward = ScanCursor.START;
         private ScanCursor sweep = ScanCursor.START;
         private int forwardPages;
-        private int sweepPages;
-        private boolean retrySweep;
+        private final ArrayDeque<RetryAttempt> retries = new ArrayDeque<>();
+        private final Set<RetryKey> retryKeys = new HashSet<>();
 
         private ScanPlan begin() {
-            if (retrySweep) {
-                retrySweep = false;
-                return new ScanPlan(true, sweep);
-            }
             if (++forwardPages >= SWEEP_INTERVAL_PAGES) {
                 forwardPages = 0;
                 return new ScanPlan(true, sweep);
@@ -582,33 +603,49 @@ public class ArchiveQuestionWorker {
             else forward = cursor;
         }
 
-        private void retryFrom(ScanCursor predecessor) {
-            sweep = predecessor;
-            sweepPages = 0;
-            retrySweep = true;
+        private RetryAttempt pollRetry() {
+            RetryAttempt retry = retries.pollFirst();
+            if (retry != null) retryKeys.remove(RetryKey.of(retry.candidate()));
+            return retry;
+        }
+
+        private void retryFailed(RetryAttempt retry) {
+            RetryKey key = RetryKey.of(retry.candidate());
+            if (retryKeys.add(key)) retries.addLast(retry);
+        }
+
+        private void retryResolved(RetryAttempt retry) {
+            retryKeys.remove(RetryKey.of(retry.candidate()));
         }
 
         private void processed(ScanPlan plan) {
-            // A row can become eligible again (explicit retry / lease expiry), so restart forward lookup.
-            // Preserve an unrelated failed-row retry responsibility registered earlier in this page.
+            // A row can become eligible again (explicit retry / lease expiry), so restart normal lookup.
+            // The independent sweep cursor and every exact failed-row responsibility remain intact.
             forward = ScanCursor.START;
             forwardPages = 0;
-            if (plan.sweep()) {
-                sweep = ScanCursor.START;
-                sweepPages = 0;
-                retrySweep = false;
-            }
+        }
+
+        private void processedRetry() {
+            forward = ScanCursor.START;
+            forwardPages = 0;
         }
 
         private void finish(ScanPlan plan, boolean endReached) {
-            if (plan.sweep()) {
-                if (endReached || ++sweepPages >= SWEEP_INTERVAL_PAGES) {
-                    sweep = ScanCursor.START;
-                    sweepPages = 0;
-                }
-            } else if (endReached) {
-                forward = ScanCursor.START;
-            }
+            if (!endReached) return;
+            if (plan.sweep()) sweep = ScanCursor.START;
+            else forward = ScanCursor.START;
+        }
+    }
+
+    private record RetryAttempt(ClaimCandidate candidate) {
+        private RetryAttempt {
+            Objects.requireNonNull(candidate, "candidate");
+        }
+    }
+
+    private record RetryKey(ArchiveOwnerScope owner, String questionId) {
+        private static RetryKey of(ClaimCandidate candidate) {
+            return new RetryKey(candidate.owner(), candidate.questionId());
         }
     }
 

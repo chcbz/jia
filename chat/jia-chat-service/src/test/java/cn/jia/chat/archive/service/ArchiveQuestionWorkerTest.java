@@ -539,6 +539,91 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
+    void deepReadyFailureRetainsExactRetryAcrossTwoFailuresAndContinuousTail() {
+        AtomicInteger calls = new AtomicInteger();
+        ArchiveQuestionProvider provider = request -> {
+            calls.incrementAndGet();
+            return ArchiveQuestionProvider.Answer.complete("deep-ready-third-attempt");
+        };
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        for (int index = 0; index < 130; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "deep-ready-poison-" + index);
+            String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 2048);
+            store.setQuestion(poison, questionWith(base, poisonId, "QUEUED", 1));
+            store.setOutbox(poison, readyOutbox(baseOutbox, poisonId, 1));
+        }
+        store.setQuestion(OWNER, questionWith(base, ID, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, ID, 1));
+        assertTrue(store.findOutbox(OWNER, ID, false).rowId() > 129);
+        store.failQuestionUpdatesRemaining = 2;
+
+        ArchiveQuestionWorker worker = worker(provider);
+        int tail = 4096;
+        boolean succeeded = false;
+        for (int run = 0; run < 20 && !succeeded; run++) {
+            ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "deep-ready-tail-" + run);
+            String tailId = String.format("%08x-0000-4000-8000-000000000000", tail++);
+            store.setQuestion(tailOwner, questionWith(base, tailId, "QUEUED", 1));
+            store.setOutbox(tailOwner, readyOutbox(baseOutbox, tailId, 1));
+            int claims = store.claimCandidateQueries;
+            int expired = store.exhaustedCandidateQueries;
+            worker.runOnce();
+            assertTrue(store.claimCandidateQueries - claims <= 1, "READY query budget is fixed per run");
+            assertTrue(store.exhaustedCandidateQueries - expired <= 1, "expired query budget is fixed per run");
+            succeeded = "SUCCEEDED".equals(store.findQuestion(OWNER, ID, false).status());
+        }
+        assertTrue(succeeded, "deep READY row must survive two transient failures under continuous tail");
+        assertEquals(1, calls.get());
+        assertEquals("deep-ready-third-attempt", store.findQuestion(OWNER, ID, false).answer());
+    }
+
+    @Test
+    void deepExpiredFailureRetainsExactRetryAcrossTwoFailuresAndContinuousTail() {
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+        for (int index = 0; index < 130; index++) {
+            ArchiveOwnerScope poison = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "deep-expired-poison-" + index);
+            String poisonId = String.format("%08x-0000-4000-8000-000000000000", index + 6144);
+            store.setQuestion(poison, questionWith(base, poisonId, "RUNNING", 2));
+            store.setOutbox(poison, exhaustedOutbox(
+                    baseOutbox, poisonId, 2, NOW.minusSeconds(20)));
+        }
+        store.setQuestion(OWNER, questionWith(base, ID, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(19)));
+        assertTrue(store.findOutbox(OWNER, ID, false).rowId() > 129);
+        store.failQuestionUpdatesRemaining = 2;
+
+        ArchiveQuestionWorker worker = worker(provider);
+        int tail = 8192;
+        boolean finalized = false;
+        for (int run = 0; run < 20 && !finalized; run++) {
+            ArchiveOwnerScope tailOwner = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "deep-expired-tail-" + run);
+            String tailId = String.format("%08x-0000-4000-8000-000000000000", tail++);
+            store.setQuestion(tailOwner, questionWith(base, tailId, "RUNNING", 2));
+            store.setOutbox(tailOwner, exhaustedOutbox(
+                    baseOutbox, tailId, 2, NOW.minusSeconds(1)));
+            int claims = store.claimCandidateQueries;
+            int expired = store.exhaustedCandidateQueries;
+            worker.runOnce();
+            assertTrue(store.claimCandidateQueries - claims <= 1, "READY query budget is fixed per run");
+            assertTrue(store.exhaustedCandidateQueries - expired <= 1, "expired query budget is fixed per run");
+            finalized = "FAILED_FINAL".equals(store.findQuestion(OWNER, ID, false).status());
+        }
+        assertTrue(finalized, "deep expired row must survive two transient failures under continuous tail");
+        assertEquals("DONE", store.findOutbox(OWNER, ID, false).state());
+    }
+
+    @Test
     void blockingQuestionSinkCannotDelayHttpProviderCompletionOrLeaseRenewal() throws Exception {
         CountDownLatch sinkEntered = new CountDownLatch(1);
         CountDownLatch releaseSink = new CountDownLatch(1);

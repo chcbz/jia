@@ -62,6 +62,7 @@ final class ArchiveQuestionTestSupport {
         int claimCandidatesReturned;
         int exhaustedCandidatesReturned;
         boolean failNextQuestionUpdate;
+        int failQuestionUpdatesRemaining;
         boolean failNextOutboxUpdate;
         boolean failNextEventInsert;
         boolean failNextLeaseRenewal;
@@ -110,7 +111,14 @@ final class ArchiveQuestionTestSupport {
             return rowId;
         }
         @Override public synchronized int updateQuestion(ArchiveOwnerScope owner, QuestionRecord row, long expectedVersion, long expectedSequence) {
-            if (failNextQuestionUpdate) { failNextQuestionUpdate = false; throw new IllegalStateException("injected question persistence failure"); }
+            if (failNextQuestionUpdate) {
+                failNextQuestionUpdate = false;
+                throw new IllegalStateException("injected question persistence failure");
+            }
+            if (failQuestionUpdatesRemaining > 0) {
+                failQuestionUpdatesRemaining--;
+                throw new IllegalStateException("injected repeated question persistence failure");
+            }
             String key = questionKey(owner, row.questionId());
             QuestionRecord current = questions.get(key);
             if (current == null || current.version() != expectedVersion || current.currentSequence() != expectedSequence) return 0;

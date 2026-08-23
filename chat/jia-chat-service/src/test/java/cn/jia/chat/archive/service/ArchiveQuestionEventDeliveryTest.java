@@ -105,7 +105,7 @@ class ArchiveQuestionEventDeliveryTest {
             assertEquals(202, response);
             assertTrue(waitUntil(() -> observed.size() == 1, Duration.ofSeconds(2)));
             assertEquals(0, store.findOutbox(OWNER, ID, false).publishedSequence());
-            assertTrue(waitUntil(() -> delivery.recoverOnce() == 1, Duration.ofSeconds(2)));
+            assertTrue(waitUntil(() -> delivery.recoverOnce() > 0, Duration.ofSeconds(2)));
             assertTrue(delivery.awaitPublished(OWNER, ID, 1, Duration.ofSeconds(2)));
             assertEquals(List.of(1L, 1L), observed);
         } finally {
@@ -178,33 +178,36 @@ class ArchiveQuestionEventDeliveryTest {
     }
 
     @Test
-    void alreadyInFlightReadFailureKeepsDurableCandidateReachableUnderContinuousTail() throws Exception {
+    void recoverScheduledFailureRetainsIndependentRetryWhileLaterRowsAndTailKeepPublishing() throws Exception {
         ArchiveQuestionTestSupport.Store store = new ArchiveQuestionTestSupport.Store();
         FailingFirstReadTransactions transactions = new FailingFirstReadTransactions();
         ArchiveQuestionEventBroker broker = new ArchiveQuestionEventBroker();
-        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
+        ThreadPoolExecutor publisher = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(64), runnable -> {
+                    Thread thread = new Thread(runnable, "archive-question-completion-aware-recovery");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
+        ArchiveQuestionEventDelivery delivery = new ArchiveQuestionEventDelivery(
+                store, broker, transactions, publisher);
         seedQuestionAndOutbox(store, OWNER, ID, 1, 0);
-        EventRecord first = new EventRecord(0, ID, 1, "QUESTION_QUEUED", "{}", NOW);
-        store.insertEvent(OWNER, first);
-        List<Long> observed = new CopyOnWriteArrayList<>();
-        broker.subscribe(OWNER, ID, event -> observed.add(event.sequence()));
+        store.insertEvent(OWNER, new EventRecord(0, ID, 1, "QUESTION_QUEUED", "{}", NOW));
+        List<String> observed = new CopyOnWriteArrayList<>();
+        broker.subscribe(OWNER, ID, event -> observed.add("A:" + event.sequence()));
+        broker.subscribe(OTHER, OTHER_ID, event -> observed.add("B:" + event.sequence()));
         try {
-            delivery.afterCommit(OWNER, first);
+            assertEquals(1, delivery.recoverOnce(), "A must be scheduled by recovery itself");
             assertTrue(transactions.readEntered.await(2, TimeUnit.SECONDS));
-            assertEquals(0, delivery.recoverOnce(),
-                    "an in-flight task is not durable progress and must remain at the cursor head");
-            for (int index = 0; index < 20; index++) {
-                String newerId = String.format("%08x-0000-4000-8000-000000000000", index + 64);
-                seedQuestionAndOutbox(store, OWNER, newerId, 1, 0);
-                store.insertEvent(OWNER, new EventRecord(
-                        0, newerId, 1, "QUESTION_QUEUED", "{}", NOW));
-                assertEquals(0, delivery.recoverOnce());
-            }
 
+            seedQuestionAndOutbox(store, OTHER, OTHER_ID, 1, 0);
+            store.insertEvent(OTHER, new EventRecord(0, OTHER_ID, 1, "QUESTION_QUEUED", "{}", NOW));
+            delivery.recoverOnce();
             transactions.releaseFailedRead.countDown();
-            int tail = 512;
-            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (store.findOutbox(OWNER, ID, false).publishedSequence() == 0
+
+            int tail = 1024;
+            long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+            while ((store.findOutbox(OWNER, ID, false).publishedSequence() == 0
+                    || store.findOutbox(OTHER, OTHER_ID, false).publishedSequence() == 0)
                     && System.nanoTime() < deadline) {
                 String newerId = String.format("%08x-0000-4000-8000-000000000000", tail++);
                 seedQuestionAndOutbox(store, OWNER, newerId, 1, 0);
@@ -213,9 +216,13 @@ class ArchiveQuestionEventDeliveryTest {
                 delivery.recoverOnce();
                 Thread.sleep(5);
             }
-            assertEquals(1, store.findOutbox(OWNER, ID, false).publishedSequence());
-            assertEquals(List.of(1L), observed,
-                    "A must be selected again after its failed in-flight read despite a growing tail");
+
+            assertEquals(1, store.findOutbox(OWNER, ID, false).publishedSequence(),
+                    "A must retain retry ownership after its async task fails post-recover return");
+            assertEquals(1, store.findOutbox(OTHER, OTHER_ID, false).publishedSequence(),
+                    "A retry responsibility must not create global head-of-line blocking for B");
+            assertTrue(observed.contains("A:1"));
+            assertTrue(observed.contains("B:1"));
         } finally {
             transactions.releaseFailedRead.countDown();
             delivery.stop();
