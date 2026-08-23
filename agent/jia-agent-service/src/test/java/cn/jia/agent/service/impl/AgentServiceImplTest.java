@@ -340,7 +340,8 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentIdentityService.activateForFirstRegistration(identity)).thenReturn(identity);
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(stale);
-        when(agentRuntimeDao.findByAgentIdForUpdate("agent-001")).thenReturn(lockedCurrent);
+        org.mockito.Mockito.doReturn(lockedCurrent).when(agentRuntimeDao)
+                .findByAgentIdForUpdate("agent-001");
 
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
@@ -373,7 +374,8 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentIdentityService.requireRegistrationIdentityInScope(
                 "juyiting", "jia_client", "juyiting", "agent-001")).thenReturn(identity);
         when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(stale);
-        when(agentRuntimeDao.findByAgentIdForUpdate("agent-001")).thenReturn(lockedCurrent);
+        org.mockito.Mockito.doReturn(lockedCurrent).when(agentRuntimeDao)
+                .findByAgentIdForUpdate("agent-001");
 
         agentService.unbindPersona(personaCode);
 
