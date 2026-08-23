@@ -95,16 +95,45 @@ class AgentRabbitSafetyConfigurationTest {
                 new AgentRabbitSafetyProperties.RabbitTopology(true),
                 new AgentRabbitSafetyProperties.RabbitPublish(true),
                 new AgentRabbitSafetyProperties.RabbitConsume(true),
-                new AgentRabbitSafetyProperties.RabbitDispatch(true, List.of(
-                        new AgentRabbitSafetyProperties.AllowedScope(
-                                " tenant-a ", " client-a "))),
+                new AgentRabbitSafetyProperties.RabbitDispatch(true),
                 new AgentRabbitSafetyProperties.RabbitBroker(
                         "m3-rabbit.internal", 35672, "m3-user", "m3-pass", "/m3-test"));
+        AgentRabbitDispatchScopeProperties dispatchScopes =
+                new AgentRabbitDispatchScopeProperties(List.of(
+                        new AgentRabbitDispatchScopeProperties.AllowedScope(
+                                " tenant-a ", " client-a ")));
 
-        AgentRabbitSafetyGate gate = new AgentRabbitSafetyGate(properties);
+        AgentRabbitSafetyGate gate = new AgentRabbitSafetyGate(properties, dispatchScopes);
 
         assertTrue(gate.allowsDispatch(" tenant-a ", " client-a "));
         assertFalse(gate.allowsDispatch("tenant-a", "client-a"));
+    }
+
+    @Test
+    void scalarGarbageDispatchAllowlistIsNotBoundWhileDispatchIsDisabled() {
+        assertOffIgnoresMalformedAllowlist(
+                "agent.rabbit-dispatch.enabled=false",
+                "agent.rabbit-dispatch.allowed-scopes=garbage");
+    }
+
+    @Test
+    void sparseDispatchAllowlistIsNotBoundWhileDispatchIsDisabled() {
+        assertOffIgnoresMalformedAllowlist(
+                "agent.rabbit-dispatch.enabled=false",
+                "agent.rabbit-dispatch.allowed-scopes[1].tenant-id=stale-tenant",
+                "agent.rabbit-dispatch.allowed-scopes[1].client-id=stale-client");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedEnabledScopeShapes")
+    void malformedAllowlistShapeFailsStartupWhenDispatchIsEnabled(MalformedCase malformed) {
+        RUNNER.withPropertyValues(malformed.properties().toArray(String[]::new))
+                .run(context -> {
+                    Throwable failure = context.getStartupFailure();
+                    assertNotNull(failure, malformed.name());
+                    assertTrue(failureChain(failure).contains("agent.rabbit-dispatch"),
+                            malformed.name() + ": " + failureChain(failure));
+                });
     }
 
     @Test
@@ -173,6 +202,7 @@ class AgentRabbitSafetyConfigurationTest {
 
         for (Class<?> type : List.of(
                 AgentRabbitSafetyProperties.class,
+                AgentRabbitDispatchScopeProperties.class,
                 AgentRabbitSafetyGate.class,
                 AgentRabbitReadiness.class,
                 AgentRabbitBrokerSettings.class)) {
@@ -211,6 +241,23 @@ class AgentRabbitSafetyConfigurationTest {
                                 "agent.rabbit-dispatch.allowed-scopes[0].client-id=client-a",
                                 "agent.rabbit-dispatch.allowed-scopes[1].tenant-id=tenant-b",
                                 "agent.rabbit-dispatch.allowed-scopes[1].client-id=client-b")));
+    }
+
+    private static Stream<MalformedCase> malformedEnabledScopeShapes() {
+        return Stream.of(
+                malformedCase("dispatch scalar allowlist",
+                        concat(broker(), fullDispatch(),
+                                "agent.rabbit-dispatch.allowed-scopes=garbage")),
+                malformedCase("dispatch sparse first index",
+                        concat(broker(), fullDispatch(),
+                                "agent.rabbit-dispatch.allowed-scopes[1].tenant-id=tenant-b",
+                                "agent.rabbit-dispatch.allowed-scopes[1].client-id=client-b")),
+                malformedCase("dispatch null index hole",
+                        concat(broker(), fullDispatch(),
+                                "agent.rabbit-dispatch.allowed-scopes[0].tenant-id=tenant-a",
+                                "agent.rabbit-dispatch.allowed-scopes[0].client-id=client-a",
+                                "agent.rabbit-dispatch.allowed-scopes[2].tenant-id=tenant-c",
+                                "agent.rabbit-dispatch.allowed-scopes[2].client-id=client-c")));
     }
 
     private static Stream<InvalidCase> invalidConfigurations() {
@@ -291,6 +338,17 @@ class AgentRabbitSafetyConfigurationTest {
                                 "agent.rabbit-topology.enabled=true")));
     }
 
+    private static void assertOffIgnoresMalformedAllowlist(String... properties) {
+        RUNNER.withPropertyValues(properties).run(context -> {
+            assertNull(context.getStartupFailure());
+            AgentRabbitSafetyGate gate = context.getBean(AgentRabbitSafetyGate.class);
+            assertEquals(AgentRabbitActivationState.OFF, gate.state());
+            assertEquals(0, gate.dispatchScopeCount());
+            assertTrue(context.getBeansOfType(
+                    AgentRabbitDispatchScopeProperties.class).isEmpty());
+        });
+    }
+
     private static String[] allFlagsFalse() {
         return new String[] {
                 "agent.command-outbox.enabled=false",
@@ -336,6 +394,10 @@ class AgentRabbitSafetyConfigurationTest {
         return new LegalCase(name, state, brokerRequired, List.of(properties));
     }
 
+    private static MalformedCase malformedCase(String name, String... properties) {
+        return new MalformedCase(name, List.of(properties));
+    }
+
     private static InvalidCase invalid(String name, String expectedMessage,
             String... properties) {
         return new InvalidCase(name, expectedMessage, List.of(properties));
@@ -357,6 +419,13 @@ class AgentRabbitSafetyConfigurationTest {
 
     private record LegalCase(String name, AgentRabbitActivationState state,
                              boolean brokerRequired, List<String> properties) {
+        @Override
+        public String toString() {
+            return name;
+        }
+    }
+
+    private record MalformedCase(String name, List<String> properties) {
         @Override
         public String toString() {
             return name;

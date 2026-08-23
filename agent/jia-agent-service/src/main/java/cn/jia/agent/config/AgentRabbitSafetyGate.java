@@ -16,6 +16,12 @@ public final class AgentRabbitSafetyGate {
     private final Set<Scope> dispatchAllowedScopes;
 
     public AgentRabbitSafetyGate(AgentRabbitSafetyProperties properties) {
+        this(properties, null);
+    }
+
+    public AgentRabbitSafetyGate(
+            AgentRabbitSafetyProperties properties,
+            AgentRabbitDispatchScopeProperties dispatchScopes) {
         if (properties == null) {
             throw invalidConfiguration("properties are required");
         }
@@ -28,7 +34,8 @@ public final class AgentRabbitSafetyGate {
                 || rabbitConsumeEnabled || rabbitDispatchEnabled;
 
         dispatchAllowedScopes = rabbitDispatchEnabled
-                ? validateScopes(properties.rabbitDispatch().allowedScopes())
+                ? validateScopes(dispatchScopes == null
+                        ? null : dispatchScopes.allowedScopes())
                 : Set.of();
         validateDependencies();
         if (brokerRequired) {
@@ -104,9 +111,12 @@ public final class AgentRabbitSafetyGate {
     }
 
     private static Set<Scope> validateScopes(
-            Iterable<AgentRabbitSafetyProperties.AllowedScope> configuredScopes) {
+            Iterable<AgentRabbitDispatchScopeProperties.AllowedScope> configuredScopes) {
+        if (configuredScopes == null) {
+            return Set.of();
+        }
         LinkedHashSet<Scope> validated = new LinkedHashSet<>();
-        for (AgentRabbitSafetyProperties.AllowedScope configured : configuredScopes) {
+        for (AgentRabbitDispatchScopeProperties.AllowedScope configured : configuredScopes) {
             if (configured == null
                     || !nonBlankExact(configured.tenantId())
                     || !nonBlankExact(configured.clientId())) {

@@ -1,5 +1,7 @@
 package cn.jia.agent.config;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
@@ -11,8 +13,9 @@ import org.springframework.context.annotation.Configuration;
 public class AgentRabbitSafetyConfiguration {
     @Bean
     public AgentRabbitSafetyGate agentRabbitSafetyGate(
-            AgentRabbitSafetyProperties properties) {
-        return new AgentRabbitSafetyGate(properties);
+            AgentRabbitSafetyProperties properties,
+            ObjectProvider<AgentRabbitDispatchScopeProperties> dispatchScopes) {
+        return new AgentRabbitSafetyGate(properties, dispatchScopes.getIfAvailable());
     }
 
     @Bean
@@ -29,5 +32,13 @@ public class AgentRabbitSafetyConfiguration {
             throw new IllegalStateException("M3 Rabbit broker boundary activated without gate");
         }
         return new AgentRabbitBrokerSettings(properties.rabbitBroker());
+    }
+
+    /** The dispatch ACL binder does not exist while dispatch is disabled. */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "agent.rabbit-dispatch", name = "enabled",
+            havingValue = "true")
+    @EnableConfigurationProperties(AgentRabbitDispatchScopeProperties.class)
+    static class DispatchScopeConfiguration {
     }
 }

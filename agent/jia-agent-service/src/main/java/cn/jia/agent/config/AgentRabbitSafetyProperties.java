@@ -2,8 +2,6 @@ package cn.jia.agent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-import java.util.List;
-
 /** Immutable startup-only configuration for the M3 command transport safety boundary. */
 @ConfigurationProperties(prefix = "agent")
 public record AgentRabbitSafetyProperties(
@@ -20,7 +18,7 @@ public record AgentRabbitSafetyProperties(
         rabbitPublish = rabbitPublish == null ? new RabbitPublish(false) : rabbitPublish;
         rabbitConsume = rabbitConsume == null ? new RabbitConsume(false) : rabbitConsume;
         rabbitDispatch = rabbitDispatch == null
-                ? new RabbitDispatch(false, List.of()) : rabbitDispatch;
+                ? new RabbitDispatch(false) : rabbitDispatch;
     }
 
     public record CommandOutbox(boolean enabled) {
@@ -35,13 +33,7 @@ public record AgentRabbitSafetyProperties(
     public record RabbitConsume(boolean enabled) {
     }
 
-    public record RabbitDispatch(boolean enabled, List<AllowedScope> allowedScopes) {
-        public RabbitDispatch {
-            allowedScopes = allowedScopes == null ? List.of() : List.copyOf(allowedScopes);
-        }
-    }
-
-    public record AllowedScope(String tenantId, String clientId) {
+    public record RabbitDispatch(boolean enabled) {
     }
 
     /** Dedicated M3 broker boundary. It is intentionally unrelated to spring.rabbitmq. */
