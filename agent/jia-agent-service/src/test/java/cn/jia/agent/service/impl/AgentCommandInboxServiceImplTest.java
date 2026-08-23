@@ -87,6 +87,16 @@ class AgentCommandInboxServiceImplTest {
         assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, duplicate.kind());
         assertEquals("PROCESSED", duplicate.priorResult().status());
         assertEquals("SENT", duplicate.priorResult().resultStatus());
+
+        for (String advanced : List.of(
+                "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "EXPIRED", "DEAD")) {
+            dao.delivery.setStatus(advanced);
+            AgentInboxClaim advancedDuplicate = service.claim(
+                    message(), "worker-d", NOW + 4, LEASE);
+            assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, advancedDuplicate.kind(), advanced);
+            assertEquals("SENT", advancedDuplicate.priorResult().resultStatus(), advanced);
+            assertEquals(1, dao.inbox.getAttemptCount(), advanced);
+        }
     }
 
     @Test
@@ -173,7 +183,7 @@ class AgentCommandInboxServiceImplTest {
     @Test
     void staleOldMessagePersistsDeadInboxWithoutRegressingCurrentDelivery() {
         RecordingDao dao = new RecordingDao();
-        dao.delivery.setActiveMessageId("msg-new").setActiveAttempt(2);
+        dao.delivery.setActiveMessageId("msg-new");
         AgentCommandInboxServiceImpl service = service(dao, enabledGate());
 
         AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
@@ -187,24 +197,16 @@ class AgentCommandInboxServiceImplTest {
     }
 
     @Test
-    void nonHistoricalActiveFenceDriftConflictsWithoutSideEffects() {
-        RecordingDao sameAttemptDifferentMessage = new RecordingDao();
-        sameAttemptDifferentMessage.delivery.setActiveMessageId("msg-other");
-        AgentCommandInboxServiceImpl sameAttemptService = service(
-                sameAttemptDifferentMessage, enabledGate());
-        assertThrows(AgentInboxIdentityConflictException.class,
-                () -> sameAttemptService.claim(message(), "worker-a", NOW, LEASE));
-        assertEquals(null, sameAttemptDifferentMessage.inbox);
-        assertEquals("PUBLISHED", sameAttemptDifferentMessage.delivery.getStatus());
+    void outboxPublishAttemptIsIndependentFromDeliveryTransportFence() {
+        RecordingDao dao = new RecordingDao();
+        dao.outbox.setActiveAttempt(7);
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
 
-        RecordingDao futureOutboxAttempt = new RecordingDao();
-        futureOutboxAttempt.outbox.setActiveAttempt(2);
-        AgentCommandInboxServiceImpl futureAttemptService = service(
-                futureOutboxAttempt, enabledGate());
-        assertThrows(AgentInboxIdentityConflictException.class,
-                () -> futureAttemptService.claim(message(), "worker-a", NOW, LEASE));
-        assertEquals(null, futureOutboxAttempt.inbox);
-        assertEquals("PUBLISHED", futureOutboxAttempt.delivery.getStatus());
+        AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
+        assertEquals(1, claim.token().deliveryActiveAttempt());
+        assertEquals("CONSUMED", dao.delivery.getStatus());
     }
 
     @Test
@@ -255,8 +257,6 @@ class AgentCommandInboxServiceImplTest {
                         NOW + 20_000, "WS_TRANSIENT"),
                 new AgentInboxDisposition(AgentInboxDisposition.Type.FAILED,
                         null, "WS_FAILED"),
-                new AgentInboxDisposition(AgentInboxDisposition.Type.EXPIRED,
-                        null, "MESSAGE_EXPIRED"),
                 new AgentInboxDisposition(AgentInboxDisposition.Type.DEAD,
                         null, "INVALID_TARGET"));
         for (AgentInboxDisposition disposition : dispositions) {
@@ -276,7 +276,7 @@ class AgentCommandInboxServiceImplTest {
     }
 
     @Test
-    void completionRechecksAuthoritativeOutboxStatusAndAttempt() {
+    void completionRechecksOutboxStatusButNotIndependentPublishAttempt() {
         RecordingDao statusDrift = new RecordingDao();
         AgentCommandInboxServiceImpl statusService = service(statusDrift, enabledGate());
         AgentInboxClaimToken statusToken = statusService
@@ -288,16 +288,65 @@ class AgentCommandInboxServiceImplTest {
         assertEquals("CONSUMED", statusDrift.delivery.getStatus());
         assertEquals("PROCESSING", statusDrift.inbox.getStatus());
 
-        RecordingDao attemptDrift = new RecordingDao();
-        AgentCommandInboxServiceImpl attemptService = service(attemptDrift, enabledGate());
+        RecordingDao publishAttempt = new RecordingDao();
+        AgentCommandInboxServiceImpl attemptService = service(publishAttempt, enabledGate());
         AgentInboxClaimToken attemptToken = attemptService
                 .claim(message(), "worker-a", NOW, LEASE).token();
-        attemptDrift.outbox.setActiveAttempt(2);
+        publishAttempt.outbox.setActiveAttempt(7);
+        var completed = attemptService.complete(
+                attemptToken, AgentInboxDisposition.sent(), NOW + 1);
+        assertEquals("SENT", completed.resultStatus());
+        assertEquals("SENT", publishAttempt.delivery.getStatus());
+        assertEquals("PROCESSED", publishAttempt.inbox.getStatus());
+    }
+
+    @Test
+    void expiredCompletionRejectsEarlyAndCommitsAtAuthoritativeBoundary() {
+        RecordingDao dao = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+        AgentInboxClaimToken token = service.claim(
+                message(), "worker-a", NOW, 60_000).token();
+        AgentInboxDisposition expired = new AgentInboxDisposition(
+                AgentInboxDisposition.Type.EXPIRED, null, "MESSAGE_EXPIRED");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.complete(token, expired, NOW + 1));
+        assertEquals("PROCESSING", dao.inbox.getStatus());
+        assertEquals("CONSUMED", dao.delivery.getStatus());
+
+        var result = service.complete(token, expired, NOW + 60_000);
+        assertEquals("EXPIRED", result.status());
+        assertEquals("EXPIRED", dao.delivery.getStatus());
+    }
+
+    @Test
+    void staleMarkerAndTerminalShapeCorruptionFailClosed() {
+        RecordingDao stale = new RecordingDao();
+        stale.delivery.setActiveMessageId("msg-new");
+        AgentCommandInboxServiceImpl staleService = service(stale, enabledGate());
+        assertEquals("DEAD", staleService.claim(
+                message(), "worker-a", NOW, LEASE).priorResult().status());
+        stale.delivery.setActiveMessageId("msg-1");
         assertThrows(AgentInboxIdentityConflictException.class,
-                () -> attemptService.complete(
-                        attemptToken, AgentInboxDisposition.sent(), NOW + 1));
-        assertEquals("CONSUMED", attemptDrift.delivery.getStatus());
-        assertEquals("PROCESSING", attemptDrift.inbox.getStatus());
+                () -> staleService.claim(message(), "worker-b", NOW + 1, LEASE));
+        assertEquals("DEAD", stale.inbox.getStatus());
+
+        List<java.util.function.Consumer<AgentConsumerInboxEntity>> corruptions = List.of(
+                inbox -> inbox.setProcessedAt(null),
+                inbox -> inbox.setLeaseOwner("ghost-owner").setLeaseUntil(NOW + LEASE),
+                inbox -> inbox.setNextRetryAt(NOW + 20_000));
+        for (var corrupt : corruptions) {
+            RecordingDao dao = new RecordingDao();
+            AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+            AgentInboxClaimToken token = service.claim(
+                    message(), "worker-a", NOW, LEASE).token();
+            service.complete(token, AgentInboxDisposition.sent(), NOW + 1);
+            corrupt.accept(dao.inbox);
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service.claim(message(), "worker-b", NOW + 2, LEASE));
+            assertEquals("SENT", dao.delivery.getStatus());
+        }
     }
 
     @Test

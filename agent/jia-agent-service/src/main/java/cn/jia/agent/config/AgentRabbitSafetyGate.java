@@ -85,8 +85,8 @@ public final class AgentRabbitSafetyGate {
         if (rabbitPublishEnabled && (!commandOutboxEnabled || !rabbitTopologyEnabled)) {
             throw invalidConfiguration("rabbit publish requires command outbox and topology");
         }
-        if (rabbitConsumeEnabled && !rabbitTopologyEnabled) {
-            throw invalidConfiguration("rabbit consume requires topology");
+        if (rabbitConsumeEnabled && (!commandOutboxEnabled || !rabbitTopologyEnabled)) {
+            throw invalidConfiguration("rabbit consume requires command outbox and topology");
         }
         if (rabbitDispatchEnabled
                 && (!commandOutboxEnabled || !rabbitTopologyEnabled

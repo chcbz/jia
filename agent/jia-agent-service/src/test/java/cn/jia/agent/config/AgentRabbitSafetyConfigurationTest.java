@@ -55,18 +55,19 @@ class AgentRabbitSafetyConfigurationTest {
     }
 
     @Test
-    void consumeDependsOnTopologyButNotOnOutbox() {
+    void consumeRequiresBothCommandOutboxAndTopology() {
         RUNNER.withPropertyValues(concat(
                 broker(),
                 "agent.rabbit-topology.enabled=true",
                 "agent.rabbit-consume.enabled=true"))
-                .run(context -> {
-                    assertNull(context.getStartupFailure());
-                    AgentRabbitSafetyGate gate = context.getBean(AgentRabbitSafetyGate.class);
-                    assertEquals(AgentRabbitActivationState.MQ_SHADOW, gate.state());
-                    assertFalse(gate.commandOutboxEnabled());
-                    assertTrue(gate.rabbitConsumeEnabled());
-                });
+                .run(context -> assertStartupFailure(context.getStartupFailure(),
+                        "rabbit consume requires command outbox and topology"));
+        RUNNER.withPropertyValues(concat(
+                broker(),
+                "agent.command-outbox.enabled=true",
+                "agent.rabbit-consume.enabled=true"))
+                .run(context -> assertStartupFailure(context.getStartupFailure(),
+                        "rabbit consume requires command outbox and topology"));
     }
 
     @Test
@@ -271,8 +272,14 @@ class AgentRabbitSafetyConfigurationTest {
                         concat(broker(),
                                 "agent.command-outbox.enabled=true",
                                 "agent.rabbit-publish.enabled=true")),
-                invalid("consume missing topology", "rabbit consume requires",
-                        concat(broker(), "agent.rabbit-consume.enabled=true")),
+                invalid("consume missing outbox", "rabbit consume requires command outbox and topology",
+                        concat(broker(),
+                                "agent.rabbit-topology.enabled=true",
+                                "agent.rabbit-consume.enabled=true")),
+                invalid("consume missing topology", "rabbit consume requires command outbox and topology",
+                        concat(broker(),
+                                "agent.command-outbox.enabled=true",
+                                "agent.rabbit-consume.enabled=true")),
                 invalid("dispatch missing publish", "dispatch prerequisites",
                         concat(broker(),
                                 "agent.command-outbox.enabled=true",

@@ -281,8 +281,8 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 token.tenantId(), token.clientId(), token.eventId());
         AgentConsumerInboxEntity inbox = dao.lockInbox(
                 token.tenantId(), token.clientId(), token.consumerName(), token.messageId());
-        validateCompletionRows(token, delivery, outbox, inbox, now);
-        validateDispositionTiming(disposition, now, token.expiresAt());
+        validateCompletionRows(token, delivery, outbox, inbox);
+        validateDispositionTiming(disposition, token, delivery.getExpiresAt(), now);
 
         Completion completion = completion(disposition);
         ValidatedMessage identity = tokenIdentity(token, inbox.getWirePayload(), inbox.getWirePayloadHash());
@@ -334,15 +334,8 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             throw conflict(message, "OUTBOX_NOT_PUBLISHED");
         }
 
-        boolean activeFence = Objects.equals(delivery.getActiveMessageId(), outbox.getMessageId())
-                && Objects.equals(delivery.getActiveAttempt(), outbox.getActiveAttempt());
-        if (!activeFence) {
-            boolean historicalOutbox = delivery.getActiveAttempt() > outbox.getActiveAttempt()
-                    && !Objects.equals(delivery.getActiveMessageId(), outbox.getMessageId());
-            if (!historicalOutbox) {
-                throw conflict(message, "ACTIVE_MESSAGE_ATTEMPT_FENCE_DRIFT");
-            }
-        }
+        boolean activeFence = Objects.equals(
+                delivery.getActiveMessageId(), outbox.getMessageId());
         return new Source(delivery, outbox, !activeFence, false, delivery.getExpiresAt());
     }
 
@@ -420,15 +413,33 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 || inbox.getVersion() == null || inbox.getVersion() < 0) {
             throw conflict(message, "INBOX_FENCE_CORRUPT");
         }
+        if (STALE_MESSAGE_FENCE.equals(inbox.getLastError())
+                && (!"DEAD".equals(inbox.getStatus())
+                || !"DEAD".equals(inbox.getResultStatus()))) {
+            throw conflict(message, "STALE_MARKER_SHAPE_CORRUPT");
+        }
     }
 
     private void validateTerminalDeliveryConsistency(
             ValidatedMessage message, Source source, AgentConsumerInboxEntity inbox) {
-        if (STALE_MESSAGE_FENCE.equals(inbox.getLastError())
-                && "DEAD".equals(inbox.getStatus())
-                && "DEAD".equals(inbox.getResultStatus())) {
-            return;
-        }
+        validateTerminalShape(message, source, inbox);
+        if (STALE_MESSAGE_FENCE.equals(inbox.getLastError())) return;
+
+        String result = inbox.getResultStatus();
+        if (source.staleActiveFence()) return;
+        boolean deliveryMatches = switch (result) {
+            case "SENT" -> isOneOf(source.delivery().getStatus(),
+                    "SENT", "RECEIVED", "STARTED", "SUCCEEDED",
+                    "FAILED", "EXPIRED", "DEAD");
+            case "WAITING_AGENT", "FAILED", "EXPIRED", "DEAD" ->
+                    result.equals(source.delivery().getStatus());
+            default -> false;
+        };
+        if (!deliveryMatches) throw conflict(message, "TERMINAL_DELIVERY_DRIFT");
+    }
+
+    private void validateTerminalShape(
+            ValidatedMessage message, Source source, AgentConsumerInboxEntity inbox) {
         String result = inbox.getResultStatus();
         boolean resultMatches = switch (inbox.getStatus()) {
             case "PROCESSED" -> "SENT".equals(result);
@@ -439,23 +450,27 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             default -> false;
         };
         if (!resultMatches) throw conflict(message, "TERMINAL_RESULT_DRIFT");
-        if (source.staleActiveFence()) return;
-        boolean deliveryMatches = switch (result) {
-            case "SENT" -> isOneOf(source.delivery().getStatus(),
-                    "SENT", "RECEIVED", "STARTED", "SUCCEEDED");
-            case "WAITING_AGENT", "FAILED", "EXPIRED", "DEAD" ->
-                    result.equals(source.delivery().getStatus());
-            default -> false;
-        };
-        if (!deliveryMatches) throw conflict(message, "TERMINAL_DELIVERY_DRIFT");
+        if (inbox.getProcessedAt() == null || inbox.getProcessedAt() <= 0
+                || inbox.getLeaseOwner() != null || inbox.getLeaseUntil() != null) {
+            throw conflict(message, "TERMINAL_FENCE_SHAPE_CORRUPT");
+        }
+        boolean waiting = "WAITING_AGENT".equals(inbox.getStatus());
+        if (waiting != (inbox.getNextRetryAt() != null)
+                || waiting && (inbox.getNextRetryAt() <= inbox.getProcessedAt()
+                || inbox.getNextRetryAt() >= inbox.getExpiresAt())) {
+            throw conflict(message, "TERMINAL_RETRY_SHAPE_CORRUPT");
+        }
+        if (STALE_MESSAGE_FENCE.equals(inbox.getLastError())
+                && !source.staleActiveFence()) {
+            throw conflict(message, "STALE_MARKER_ACTIVE_SOURCE_CORRUPT");
+        }
     }
 
     private void validateCompletionRows(
             AgentInboxClaimToken token,
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
-            AgentConsumerInboxEntity inbox,
-            long now) {
+            AgentConsumerInboxEntity inbox) {
         if (delivery == null || outbox == null || inbox == null) {
             throw new AgentInboxFenceException("claim source row is missing");
         }
@@ -465,14 +480,8 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         if (!"PUBLISHED".equals(outbox.getStatus())) {
             throw tokenConflict(token, "OUTBOX_NOT_PUBLISHED");
         }
-        if (!Objects.equals(outbox.getActiveAttempt(), token.deliveryActiveAttempt())) {
-            throw tokenConflict(token, "OUTBOX_ACTIVE_ATTEMPT_DRIFT");
-        }
         validateInbox(identity, new Source(
                 delivery, outbox, false, false, delivery.getExpiresAt()), inbox);
-        if (now >= token.leaseUntil()) {
-            throw new AgentInboxFenceException("claim lease is no longer valid");
-        }
         if (!"CONSUMED".equals(delivery.getStatus())
                 || !Objects.equals(delivery.getActiveMessageId(), token.messageId())
                 || !Objects.equals(delivery.getActiveAttempt(), token.deliveryActiveAttempt())
@@ -578,9 +587,25 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     }
 
     private void validateDispositionTiming(
-            AgentInboxDisposition disposition, long now, long expiresAt) {
+            AgentInboxDisposition disposition,
+            AgentInboxClaimToken token,
+            long authoritativeExpiresAt,
+            long now) {
+        if (disposition.type() == AgentInboxDisposition.Type.EXPIRED) {
+            if (now < authoritativeExpiresAt) {
+                throw new IllegalArgumentException(
+                        "EXPIRED disposition requires now >= authoritative expiresAt");
+            }
+            if (token.leaseUntil() != authoritativeExpiresAt) {
+                throw new AgentInboxFenceException(
+                        "claim lease did not own the expiry boundary");
+            }
+        } else if (now >= token.leaseUntil()) {
+            throw new AgentInboxFenceException("claim lease is no longer valid");
+        }
         if (disposition.nextRetryAt() != null
-                && (disposition.nextRetryAt() <= now || disposition.nextRetryAt() >= expiresAt)) {
+                && (disposition.nextRetryAt() <= now
+                || disposition.nextRetryAt() >= authoritativeExpiresAt)) {
             throw new IllegalArgumentException("nextRetryAt must be after now and before expiresAt");
         }
     }

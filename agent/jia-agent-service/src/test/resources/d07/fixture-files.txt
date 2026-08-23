@@ -18,6 +18,7 @@ agent/jia-agent-service/build.gradle
 agent/jia-agent-service/src/main/java/cn/jia/agent/config/AgentCommandInboxConfiguration.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/config/AgentCommandTransportSchemaInitializer.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/config/AgentRabbitConsumeEnabledCondition.java
+agent/jia-agent-service/src/main/java/cn/jia/agent/config/AgentRabbitSafetyGate.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentCommandInboxServiceImpl.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentCommandInboxMySqlTest.java
 agent/jia-agent-service/src/test/resources/d07/compute-fixture-digest.sh

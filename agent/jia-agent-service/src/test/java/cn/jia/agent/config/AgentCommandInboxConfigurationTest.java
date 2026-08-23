@@ -41,6 +41,34 @@ class AgentCommandInboxConfigurationTest {
     }
 
     @Test
+    void consumeWithoutOutboxOrTopologyFailsBeforeInboxOrDaoRegistration() {
+        for (String[] invalid : new String[][] {
+                {
+                        "agent.rabbit-topology.enabled=true",
+                        "agent.rabbit-consume.enabled=true"
+                },
+                {
+                        "agent.command-outbox.enabled=true",
+                        "agent.rabbit-consume.enabled=true"
+                }
+        }) {
+            new ApplicationContextRunner()
+                    .withUserConfiguration(
+                            AgentRabbitSafetyConfiguration.class,
+                            AgentCommandInboxConfiguration.class)
+                    .withPropertyValues(concat(invalid, broker()))
+                    .run(context -> {
+                        Throwable failure = context.getStartupFailure();
+                        assertNotNull(failure);
+                        String messages = messages(failure);
+                        assertTrue(messages.contains(
+                                "rabbit consume requires command outbox and topology"), messages);
+                        assertFalse(messages.contains("AgentCommandInboxDao"), messages);
+                    });
+        }
+    }
+
+    @Test
     void enabledConsumeRegistersExactlyOneRealService() {
         new ApplicationContextRunner()
                 .withUserConfiguration(
@@ -83,6 +111,22 @@ class AgentCommandInboxConfigurationTest {
                     assertNull(context.getStartupFailure());
                     assertTrue(context.containsBean("agentCommandInboxService"));
                 });
+    }
+
+    private static String[] broker() {
+        return new String[] {
+                "agent.rabbit-broker.host=isolated.invalid",
+                "agent.rabbit-broker.port=35672",
+                "agent.rabbit-broker.username=d07-user",
+                "agent.rabbit-broker.password=d07-pass",
+                "agent.rabbit-broker.virtual-host=/d07"
+        };
+    }
+
+    private static String[] concat(String[] first, String[] second) {
+        String[] result = java.util.Arrays.copyOf(first, first.length + second.length);
+        System.arraycopy(second, 0, result, first.length, second.length);
+        return result;
     }
 
     private static String messages(Throwable failure) {

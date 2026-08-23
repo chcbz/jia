@@ -110,6 +110,7 @@ class AgentCommandInboxMySqlTest {
 
     @Test
     void successClaimUsesExactSchemaAndCommitsBothFacts() {
+        jdbc.update("UPDATE agent_outbox_event SET active_attempt=7 WHERE event_id='evt-1'");
         AgentInboxClaim claim = service(productionDao).claim(message(), "worker-a", NOW, 10_000);
 
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
@@ -123,6 +124,7 @@ class AgentCommandInboxMySqlTest {
     void completeCommitsFencedDispositionToBothTables() {
         AgentInboxClaimToken token = service(productionDao)
                 .claim(message(), "worker-a", NOW, 10_000).token();
+        jdbc.update("UPDATE agent_outbox_event SET active_attempt=9 WHERE event_id='evt-1'");
 
         service(productionDao).complete(token, AgentInboxDisposition.sent(), NOW + 1);
 
@@ -171,6 +173,7 @@ class AgentCommandInboxMySqlTest {
         AgentCommandInboxServiceImpl service = service(productionDao);
         AgentInboxClaimToken token = service.claim(message(), "worker-a", NOW, 10_000).token();
         service.complete(token, AgentInboxDisposition.sent(), NOW + 1);
+        jdbc.update("UPDATE agent_command_delivery SET status='FAILED' WHERE id=1");
 
         AgentInboxClaim duplicate = service.claim(message(), "worker-b", NOW + 2, 10_000);
 
@@ -179,6 +182,7 @@ class AgentCommandInboxMySqlTest {
         assertEquals(1, count("agent_consumer_inbox"));
         assertEquals(1L, jdbc.queryForObject(
                 "SELECT attempt_count FROM agent_command_delivery", Long.class));
+        assertEquals("FAILED", string("SELECT status FROM agent_command_delivery"));
     }
 
     @Test
@@ -252,12 +256,36 @@ class AgentCommandInboxMySqlTest {
         assertEquals("PUBLISHED", string("SELECT status FROM agent_command_delivery"));
         assertEquals("msg-new", string("SELECT active_message_id FROM agent_command_delivery"));
 
-        resetPublishedSource();
-        jdbc.update("UPDATE agent_command_delivery SET active_message_id='msg-other' WHERE id=1");
+        jdbc.update("UPDATE agent_command_delivery SET active_message_id='msg-1' WHERE id=1");
         assertThrows(AgentInboxIdentityConflictException.class,
-                () -> service(productionDao).claim(message(), "worker-a", NOW, 10_000));
-        assertEquals(0, count("agent_consumer_inbox"));
+                () -> service(productionDao).claim(message(), "worker-b", NOW + 1, 10_000));
+        assertEquals(1, count("agent_consumer_inbox"));
+        assertEquals("DEAD", string("SELECT status FROM agent_consumer_inbox"));
         assertEquals("PUBLISHED", string("SELECT status FROM agent_command_delivery"));
+    }
+
+    @Test
+    void expiredCompletionBoundaryAndTerminalShapeCorruptionFailClosed() {
+        AgentCommandInboxServiceImpl service = service(productionDao);
+        AgentInboxClaimToken token = service.claim(message(), "worker-a", NOW, 60_000).token();
+        AgentInboxDisposition expired = new AgentInboxDisposition(
+                AgentInboxDisposition.Type.EXPIRED, null, "MESSAGE_EXPIRED");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.complete(token, expired, NOW + 1));
+        assertProcessingConsumed();
+        service.complete(token, expired, NOW + 60_000);
+        assertEquals("EXPIRED", string("SELECT status FROM agent_consumer_inbox"));
+        assertEquals("EXPIRED", string("SELECT status FROM agent_command_delivery"));
+
+        resetPublishedSource();
+        AgentInboxClaimToken sentToken = service.claim(
+                message(), "worker-a", NOW, 10_000).token();
+        service.complete(sentToken, AgentInboxDisposition.sent(), NOW + 1);
+        jdbc.update("UPDATE agent_consumer_inbox SET processed_at=NULL WHERE message_id='msg-1'");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service.claim(message(), "worker-b", NOW + 2, 10_000));
+        assertEquals("SENT", string("SELECT status FROM agent_command_delivery"));
     }
 
     @Test
