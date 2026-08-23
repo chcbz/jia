@@ -1,0 +1,534 @@
+package cn.jia.agent.service.impl;
+
+import cn.jia.agent.config.AgentRabbitSafetyGate;
+import cn.jia.agent.config.AgentRabbitSafetyProperties;
+import cn.jia.agent.dao.AgentCommandInboxDao;
+import cn.jia.agent.entity.AgentCommandDeliveryEntity;
+import cn.jia.agent.entity.AgentConsumerInboxEntity;
+import cn.jia.agent.entity.AgentInboxClaim;
+import cn.jia.agent.entity.AgentInboxClaimToken;
+import cn.jia.agent.entity.AgentInboxConsumers;
+import cn.jia.agent.entity.AgentInboxDisposition;
+import cn.jia.agent.entity.AgentInboxFenceException;
+import cn.jia.agent.entity.AgentInboxIdentityConflictException;
+import cn.jia.agent.entity.AgentInboxMessage;
+import cn.jia.agent.entity.AgentOutboxEventEntity;
+import org.h2.jdbcx.JdbcDataSource;
+import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class AgentCommandInboxServiceImplTest {
+    private static final long NOW = 1_700_000_000_000L;
+    private static final long LEASE = 10_000L;
+
+    @Test
+    void offDbShadowAndConsumeDisabledReturnBeforeAnyDaoAccess() {
+        for (AgentRabbitSafetyGate gate : List.of(offGate(), dbShadowGate(), consumeDisabledGate())) {
+            RecordingDao dao = new RecordingDao();
+            AgentCommandInboxServiceImpl service = service(dao, gate);
+
+            AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+
+            assertEquals(AgentInboxClaim.Kind.DISABLED, claim.kind());
+            assertEquals(0, dao.accesses);
+        }
+    }
+
+    @Test
+    void firstClaimUsesFrozenLockOrderAndConsumesDeliveryAtomicallyAtApiBoundary() {
+        RecordingDao dao = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+
+        AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
+        assertEquals(List.of("delivery", "outbox", "inbox", "insertInbox", "updateDelivery"),
+                dao.operations);
+        assertEquals("PROCESSING", dao.inbox.getStatus());
+        assertEquals(1, dao.inbox.getAttemptCount());
+        assertEquals(1, dao.inbox.getActiveAttempt());
+        assertEquals(0L, dao.inbox.getVersion());
+        assertEquals("CONSUMED", dao.delivery.getStatus());
+        assertEquals(1L, dao.delivery.getVersion());
+        assertArrayEquals(message().rawWireBytes(), dao.inbox.getWirePayload());
+        assertArrayEquals(sha256(message().rawWireBytes()), dao.inbox.getWirePayloadHash());
+    }
+
+    @Test
+    void exactDuplicateIsInFlightThenReturnsPriorSchemaResultAfterSentCompletion() {
+        RecordingDao dao = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+        AgentInboxClaim first = service.claim(message(), "worker-a", NOW, LEASE);
+
+        AgentInboxClaim inFlight = service.claim(message(), "worker-b", NOW + 1, LEASE);
+        assertEquals(AgentInboxClaim.Kind.IN_FLIGHT, inFlight.kind());
+        assertEquals(LEASE - 1, inFlight.retryAfterMillis());
+
+        var completed = service.complete(
+                first.token(), AgentInboxDisposition.sent(), NOW + 2);
+        assertEquals("PROCESSED", completed.status());
+        assertEquals("SENT", completed.resultStatus());
+        assertEquals("SENT", dao.delivery.getStatus());
+
+        AgentInboxClaim duplicate = service.claim(message(), "worker-c", NOW + 3, LEASE);
+        assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, duplicate.kind());
+        assertEquals("PROCESSED", duplicate.priorResult().status());
+        assertEquals("SENT", duplicate.priorResult().resultStatus());
+    }
+
+    @Test
+    void callerBytesMetadataAndStoredCorruptionConflictWithoutOverwrite() {
+        RecordingDao changedBytes = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(changedBytes, enabledGate());
+        byte[] original = Arrays.copyOf(changedBytes.outbox.getWirePayload(),
+                changedBytes.outbox.getWirePayload().length);
+        AgentInboxMessage different = new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 1,
+                "different".getBytes());
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service.claim(different, "worker-a", NOW, LEASE));
+        assertArrayEquals(original, changedBytes.outbox.getWirePayload());
+        assertEquals(null, changedBytes.inbox);
+
+        RecordingDao metadata = new RecordingDao();
+        AgentCommandInboxServiceImpl metadataService = service(metadata, enabledGate());
+        AgentInboxMessage wrongEvent = new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", "msg-1", "evt-other", "cmd-1", 1,
+                message().rawWireBytes());
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> metadataService.claim(wrongEvent, "worker-a", NOW, LEASE));
+        for (AgentInboxMessage drift : List.of(
+                new AgentInboxMessage(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                        "tenant-a", "client-a", "msg-other", "evt-1", "cmd-1", 1,
+                        message().rawWireBytes()),
+                new AgentInboxMessage(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                        "tenant-a", "client-a", "msg-1", "evt-1", "cmd-other", 1,
+                        message().rawWireBytes()),
+                new AgentInboxMessage(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                        "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 2,
+                        message().rawWireBytes()),
+                new AgentInboxMessage(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                        "tenant-A", "client-a", "msg-1", "evt-1", "cmd-1", 1,
+                        message().rawWireBytes()))) {
+            RecordingDao driftDao = new RecordingDao();
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(driftDao, enabledGate())
+                            .claim(drift, "worker-a", NOW, LEASE));
+            assertEquals(null, driftDao.inbox);
+            assertEquals("PUBLISHED", driftDao.delivery.getStatus());
+        }
+        assertEquals(null, metadata.inbox);
+
+        RecordingDao corruption = new RecordingDao();
+        corruption.outbox.setWirePayloadHash(new byte[32]);
+        AgentCommandInboxServiceImpl corruptionService = service(corruption, enabledGate());
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> corruptionService.claim(message(), "worker-a", NOW, LEASE));
+        assertEquals(null, corruption.inbox);
+    }
+
+    @Test
+    void inboxStoredHashCorruptionFailsClosedForDuplicate() {
+        RecordingDao dao = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+        service.claim(message(), "worker-a", NOW, LEASE);
+        dao.inbox.setWirePayloadHash(new byte[32]);
+
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service.claim(message(), "worker-b", NOW + 1, LEASE));
+        assertEquals("PROCESSING", dao.inbox.getStatus());
+        assertEquals(1, dao.inbox.getAttemptCount());
+    }
+
+    @Test
+    void expiryBoundaryWritesExpiredInboxAndCurrentDeliveryOnly() {
+        RecordingDao dao = new RecordingDao();
+        dao.delivery.setExpiresAt(NOW);
+        dao.outbox.setExpiresAt(NOW);
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+
+        AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+
+        assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, claim.kind());
+        assertEquals("EXPIRED", claim.priorResult().status());
+        assertEquals("EXPIRED", dao.delivery.getStatus());
+        assertEquals(0, dao.inbox.getAttemptCount());
+    }
+
+    @Test
+    void staleOldMessagePersistsDeadInboxWithoutRegressingCurrentDelivery() {
+        RecordingDao dao = new RecordingDao();
+        dao.delivery.setActiveMessageId("msg-new").setActiveAttempt(2);
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+
+        AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+
+        assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, claim.kind());
+        assertEquals("DEAD", claim.priorResult().status());
+        assertEquals(AgentCommandInboxServiceImpl.STALE_MESSAGE_FENCE,
+                claim.priorResult().lastError());
+        assertEquals("PUBLISHED", dao.delivery.getStatus());
+        assertEquals("msg-new", dao.delivery.getActiveMessageId());
+    }
+
+    @Test
+    void nonHistoricalActiveFenceDriftConflictsWithoutSideEffects() {
+        RecordingDao sameAttemptDifferentMessage = new RecordingDao();
+        sameAttemptDifferentMessage.delivery.setActiveMessageId("msg-other");
+        AgentCommandInboxServiceImpl sameAttemptService = service(
+                sameAttemptDifferentMessage, enabledGate());
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> sameAttemptService.claim(message(), "worker-a", NOW, LEASE));
+        assertEquals(null, sameAttemptDifferentMessage.inbox);
+        assertEquals("PUBLISHED", sameAttemptDifferentMessage.delivery.getStatus());
+
+        RecordingDao futureOutboxAttempt = new RecordingDao();
+        futureOutboxAttempt.outbox.setActiveAttempt(2);
+        AgentCommandInboxServiceImpl futureAttemptService = service(
+                futureOutboxAttempt, enabledGate());
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> futureAttemptService.claim(message(), "worker-a", NOW, LEASE));
+        assertEquals(null, futureOutboxAttempt.inbox);
+        assertEquals("PUBLISHED", futureOutboxAttempt.delivery.getStatus());
+    }
+
+    @Test
+    void expiredLeaseReclaimHasOneWinnerAndFencesOldCompletion() {
+        RecordingDao dao = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+        AgentInboxClaim first = service.claim(message(), "worker-a", NOW, LEASE);
+
+        AgentInboxClaim reclaimed = service.claim(message(), "worker-b", NOW + LEASE, LEASE);
+        AgentInboxClaim loser = service.claim(message(), "worker-c", NOW + LEASE + 1, LEASE);
+
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, reclaimed.kind());
+        assertEquals(2, reclaimed.token().activeAttempt());
+        assertEquals(1L, reclaimed.token().inboxVersion());
+        assertEquals(AgentInboxClaim.Kind.IN_FLIGHT, loser.kind());
+        assertThrows(AgentInboxFenceException.class,
+                () -> service.complete(first.token(), AgentInboxDisposition.sent(), NOW + LEASE + 2));
+        assertEquals("PROCESSING", dao.inbox.getStatus());
+    }
+
+    @Test
+    void retryDispositionRequiresEligibilityAndReclaimsWithNewDeliveryFence() {
+        RecordingDao dao = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+        AgentInboxClaim first = service.claim(message(), "worker-a", NOW, LEASE);
+        long retryAt = NOW + 20_000;
+        service.complete(first.token(), new AgentInboxDisposition(
+                AgentInboxDisposition.Type.RETRY, retryAt, "WS_TRANSIENT"), NOW + 1);
+
+        AgentInboxClaim early = service.claim(message(), "worker-b", retryAt - 1, LEASE);
+        AgentInboxClaim eligible = service.claim(message(), "worker-b", retryAt, LEASE);
+
+        assertEquals(AgentInboxClaim.Kind.IN_FLIGHT, early.kind());
+        assertEquals(1L, early.retryAfterMillis());
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, eligible.kind());
+        assertEquals("CONSUMED", dao.delivery.getStatus());
+        assertEquals(3L, dao.delivery.getVersion());
+        assertEquals(2, dao.inbox.getAttemptCount());
+    }
+
+    @Test
+    void everyBoundedDispositionMapsBothTablesAndSentNeverMeansReceived() {
+        List<AgentInboxDisposition> dispositions = List.of(
+                AgentInboxDisposition.sent(),
+                new AgentInboxDisposition(AgentInboxDisposition.Type.WAITING_AGENT,
+                        NOW + 20_000, "AGENT_OFFLINE"),
+                new AgentInboxDisposition(AgentInboxDisposition.Type.RETRY,
+                        NOW + 20_000, "WS_TRANSIENT"),
+                new AgentInboxDisposition(AgentInboxDisposition.Type.FAILED,
+                        null, "WS_FAILED"),
+                new AgentInboxDisposition(AgentInboxDisposition.Type.EXPIRED,
+                        null, "MESSAGE_EXPIRED"),
+                new AgentInboxDisposition(AgentInboxDisposition.Type.DEAD,
+                        null, "INVALID_TARGET"));
+        for (AgentInboxDisposition disposition : dispositions) {
+            RecordingDao dao = new RecordingDao();
+            AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+            AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+
+            var result = service.complete(claim.token(), disposition, NOW + 1);
+
+            String expectedInbox = disposition.type() == AgentInboxDisposition.Type.SENT
+                    ? "PROCESSED" : disposition.type().name();
+            assertEquals(expectedInbox, result.status());
+            assertEquals(disposition.type().name(), result.resultStatus());
+            assertEquals(disposition.type().name(), dao.delivery.getStatus());
+            assertFalse("RECEIVED".equals(dao.delivery.getStatus()));
+        }
+    }
+
+    @Test
+    void completionRechecksAuthoritativeOutboxStatusAndAttempt() {
+        RecordingDao statusDrift = new RecordingDao();
+        AgentCommandInboxServiceImpl statusService = service(statusDrift, enabledGate());
+        AgentInboxClaimToken statusToken = statusService
+                .claim(message(), "worker-a", NOW, LEASE).token();
+        statusDrift.outbox.setStatus("RETRY");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> statusService.complete(
+                        statusToken, AgentInboxDisposition.sent(), NOW + 1));
+        assertEquals("CONSUMED", statusDrift.delivery.getStatus());
+        assertEquals("PROCESSING", statusDrift.inbox.getStatus());
+
+        RecordingDao attemptDrift = new RecordingDao();
+        AgentCommandInboxServiceImpl attemptService = service(attemptDrift, enabledGate());
+        AgentInboxClaimToken attemptToken = attemptService
+                .claim(message(), "worker-a", NOW, LEASE).token();
+        attemptDrift.outbox.setActiveAttempt(2);
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> attemptService.complete(
+                        attemptToken, AgentInboxDisposition.sent(), NOW + 1));
+        assertEquals("CONSUMED", attemptDrift.delivery.getStatus());
+        assertEquals("PROCESSING", attemptDrift.inbox.getStatus());
+    }
+
+    @Test
+    void historicalDbShadowRowsNeverCreateInboxOrPromoteDelivery() {
+        RecordingDao dao = new RecordingDao();
+        dao.delivery.setStatus("DEAD").setLastError(AgentCommandInboxServiceImpl.DB_SHADOW_MARKER);
+        dao.outbox.setStatus("DEAD").setLastError(AgentCommandInboxServiceImpl.DB_SHADOW_MARKER);
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+
+        AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+
+        assertEquals(AgentInboxClaim.Kind.DISABLED, claim.kind());
+        assertEquals(AgentInboxClaim.DisabledReason.DB_SHADOW_CAPTURE_ONLY,
+                claim.disabledReason());
+        assertEquals(null, dao.inbox);
+        assertEquals("DEAD", dao.delivery.getStatus());
+    }
+
+    @Test
+    void consumerNameMustBeFrozenStableAsciiLogicalName() {
+        RecordingDao dao = new RecordingDao();
+        AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+        for (String invalid : List.of(
+                "agent-command-dispatch-v1@host-1", "pid-1234", "session-abc",
+                "consumerTag-42", "agent-command-dispatch-v1 ",
+                "agent-command-dispatch-v１")) {
+            AgentInboxMessage message = new AgentInboxMessage(
+                    invalid, "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 1,
+                    "wire".getBytes());
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.claim(message, "worker-a", NOW, LEASE), invalid);
+        }
+        assertEquals(0, dao.accesses);
+    }
+
+    private AgentCommandInboxServiceImpl service(RecordingDao dao, AgentRabbitSafetyGate gate) {
+        JdbcDataSource source = new JdbcDataSource();
+        source.setURL("jdbc:h2:mem:d07_unit_" + System.nanoTime());
+        return new AgentCommandInboxServiceImpl(
+                dao, gate, new DataSourceTransactionManager(source));
+    }
+
+    private AgentInboxMessage message() {
+        return new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 1,
+                "wire".getBytes());
+    }
+
+    private AgentRabbitSafetyGate offGate() {
+        return gate(false, false, false);
+    }
+
+    private AgentRabbitSafetyGate dbShadowGate() {
+        return gate(true, false, false);
+    }
+
+    private AgentRabbitSafetyGate consumeDisabledGate() {
+        return gate(true, true, false);
+    }
+
+    private AgentRabbitSafetyGate enabledGate() {
+        return gate(true, true, true);
+    }
+
+    private AgentRabbitSafetyGate gate(boolean outbox, boolean topology, boolean consume) {
+        return new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(
+                new AgentRabbitSafetyProperties.CommandOutbox(outbox),
+                new AgentRabbitSafetyProperties.RabbitTopology(topology),
+                new AgentRabbitSafetyProperties.RabbitPublish(false),
+                new AgentRabbitSafetyProperties.RabbitConsume(consume),
+                new AgentRabbitSafetyProperties.RabbitDispatch(false),
+                topology ? new AgentRabbitSafetyProperties.RabbitBroker(
+                        "isolated.invalid", 35672, "d07-user", "d07-pass", "/d07") : null));
+    }
+
+    private static byte[] sha256(byte[] bytes) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(bytes);
+        } catch (Exception impossible) {
+            throw new AssertionError(impossible);
+        }
+    }
+
+    private static final class RecordingDao implements AgentCommandInboxDao {
+        private final List<String> operations = new ArrayList<>();
+        private AgentCommandDeliveryEntity delivery;
+        private AgentOutboxEventEntity outbox;
+        private AgentConsumerInboxEntity inbox;
+        private int accesses;
+
+        private RecordingDao() {
+            byte[] wire = "wire".getBytes();
+            delivery = new AgentCommandDeliveryEntity()
+                    .setId(1L).setCommandId("cmd-1")
+                    .setCommandPayload("business".getBytes())
+                    .setCommandPayloadHash(sha256("business".getBytes()))
+                    .setStatus("PUBLISHED").setAttemptCount(1)
+                    .setActiveMessageId("msg-1").setActiveAttempt(1)
+                    .setExpiresAt(NOW + 60_000).setVersion(0L);
+            delivery.setTenantId("tenant-a");
+            delivery.setClientId("client-a");
+            outbox = new AgentOutboxEventEntity()
+                    .setId(2L).setEventId("evt-1").setMessageId("msg-1")
+                    .setCommandId("cmd-1").setDeliveryId(1L)
+                    .setWirePayload(wire).setWirePayloadHash(sha256(wire))
+                    .setStatus("PUBLISHED").setActiveAttempt(1)
+                    .setExpiresAt(NOW + 60_000).setVersion(0L);
+            outbox.setTenantId("tenant-a");
+            outbox.setClientId("client-a");
+        }
+
+        @Override
+        public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId) {
+            accessed("delivery");
+            return exact(tenantId, clientId) && this.delivery.getId() == deliveryId
+                    ? this.delivery : null;
+        }
+
+        @Override
+        public AgentOutboxEventEntity lockOutbox(String tenantId, String clientId, String eventId) {
+            accessed("outbox");
+            return exact(tenantId, clientId) && Objects.equals(outbox.getEventId(), eventId)
+                    ? outbox : null;
+        }
+
+        @Override
+        public AgentConsumerInboxEntity lockInbox(
+                String tenantId, String clientId, String consumerName, String messageId) {
+            accessed("inbox");
+            if (inbox == null) return null;
+            return exact(tenantId, clientId)
+                    && Objects.equals(inbox.getConsumerName(), consumerName)
+                    && Objects.equals(inbox.getMessageId(), messageId) ? inbox : null;
+        }
+
+        @Override
+        public int insertInbox(AgentConsumerInboxEntity value) {
+            accessed("insertInbox");
+            if (inbox != null) return 0;
+            value.setId(3L);
+            inbox = value;
+            return 1;
+        }
+
+        @Override
+        public int updateDeliveryDisposition(
+                String tenantId, String clientId, long deliveryId,
+                String activeMessageId, int activeAttempt,
+                String expectedStatus, long expectedVersion,
+                String newStatus, Long nextRetryAt, String lastError, long now) {
+            accessed("updateDelivery");
+            if (!exact(tenantId, clientId) || delivery.getId() != deliveryId
+                    || !Objects.equals(delivery.getActiveMessageId(), activeMessageId)
+                    || !Objects.equals(delivery.getActiveAttempt(), activeAttempt)
+                    || !Objects.equals(delivery.getStatus(), expectedStatus)
+                    || !Objects.equals(delivery.getVersion(), expectedVersion)) return 0;
+            delivery.setStatus(newStatus).setNextRetryAt(nextRetryAt)
+                    .setLastError(lastError).setVersion(expectedVersion + 1);
+            return 1;
+        }
+
+        @Override
+        public int reclaimProcessingInbox(
+                AgentConsumerInboxEntity expected, String newLeaseOwner, long newLeaseUntil, long now) {
+            accessed("reclaimProcessing");
+            if (inbox != expected || !"PROCESSING".equals(inbox.getStatus())) return 0;
+            inbox.setAttemptCount(inbox.getAttemptCount() + 1)
+                    .setActiveAttempt(inbox.getActiveAttempt() + 1)
+                    .setVersion(inbox.getVersion() + 1)
+                    .setLeaseOwner(newLeaseOwner).setLeaseUntil(newLeaseUntil)
+                    .setNextRetryAt(null).setProcessedAt(null).setLastError(null);
+            return 1;
+        }
+
+        @Override
+        public int reclaimRetryInbox(
+                AgentConsumerInboxEntity expected, String newLeaseOwner, long newLeaseUntil, long now) {
+            accessed("reclaimRetry");
+            if (inbox != expected || !"RETRY".equals(inbox.getStatus())) return 0;
+            inbox.setStatus("PROCESSING").setResultStatus(null)
+                    .setAttemptCount(inbox.getAttemptCount() + 1)
+                    .setActiveAttempt(inbox.getActiveAttempt() + 1)
+                    .setVersion(inbox.getVersion() + 1)
+                    .setLeaseOwner(newLeaseOwner).setLeaseUntil(newLeaseUntil)
+                    .setNextRetryAt(null).setProcessedAt(null).setLastError(null);
+            return 1;
+        }
+
+        @Override
+        public int expireRetryInbox(
+                AgentConsumerInboxEntity expected, long processedAt, String lastError, long now) {
+            accessed("expireRetry");
+            if (inbox != expected || !"RETRY".equals(inbox.getStatus())) return 0;
+            inbox.setStatus("EXPIRED").setResultStatus("EXPIRED")
+                    .setNextRetryAt(null).setProcessedAt(processedAt)
+                    .setLastError(lastError).setVersion(inbox.getVersion() + 1);
+            return 1;
+        }
+
+        @Override
+        public int completeInbox(
+                long inboxId, String tenantId, String clientId,
+                String consumerName, String messageId,
+                String leaseOwner, long leaseUntil, int activeAttempt, long expectedVersion,
+                String newStatus, String resultStatus, Long nextRetryAt,
+                long processedAt, String lastError, long now) {
+            accessed("completeInbox");
+            if (inbox == null || inbox.getId() != inboxId || !exact(tenantId, clientId)
+                    || !Objects.equals(inbox.getConsumerName(), consumerName)
+                    || !Objects.equals(inbox.getMessageId(), messageId)
+                    || !Objects.equals(inbox.getLeaseOwner(), leaseOwner)
+                    || !Objects.equals(inbox.getLeaseUntil(), leaseUntil)
+                    || !Objects.equals(inbox.getActiveAttempt(), activeAttempt)
+                    || !Objects.equals(inbox.getVersion(), expectedVersion)
+                    || !"PROCESSING".equals(inbox.getStatus())) return 0;
+            inbox.setStatus(newStatus).setResultStatus(resultStatus)
+                    .setNextRetryAt(nextRetryAt).setLeaseOwner(null).setLeaseUntil(null)
+                    .setProcessedAt(processedAt).setLastError(lastError)
+                    .setVersion(expectedVersion + 1);
+            return 1;
+        }
+
+        private boolean exact(String tenantId, String clientId) {
+            return Objects.equals(delivery.getTenantId(), tenantId)
+                    && Objects.equals(delivery.getClientId(), clientId);
+        }
+
+        private void accessed(String operation) {
+            accesses++;
+            operations.add(operation);
+        }
+    }
+}
