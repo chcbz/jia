@@ -66,6 +66,7 @@ public final class AgentCommandCanonicalCodec {
         StringBuilder json = new StringBuilder(2048);
         json.append('{');
         number(json, "schemaVersion", draft.schemaVersion());
+        string(json, "messageType", AgentProtocolConstants.TYPE_COMMAND_DISPATCH);
         string(json, "messageId", messageId);
         string(json, "commandId", draft.commandId());
         string(json, "correlationId", draft.correlationId());

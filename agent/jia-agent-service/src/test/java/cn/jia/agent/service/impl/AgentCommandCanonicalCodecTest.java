@@ -28,12 +28,15 @@ class AgentCommandCanonicalCodecTest {
                 draft.commandId());
         assertEquals("9024792c9ec38a686c7b60781ea7d416524602d1c545b94f8e06ce5737a8d592",
                 HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(business)));
-        assertEquals("59bfca13eb485a5c4b16e1d81bf48ef8fb29c85ceba19175604cc24c96da1c1b",
+        assertEquals("387a112c3c0de1c7799bc5d38140915313d36f11b62aab1ef58369a2ada85089",
                 HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(wire)));
         assertTrue(businessJson.startsWith("{\"schemaVersion\":1,\"commandId\":"));
         assertFalse(businessJson.contains("messageId"));
+        assertFalse(businessJson.contains("messageType"));
         assertFalse(businessJson.contains("\"attempt\""));
-        assertTrue(wireJson.startsWith("{\"schemaVersion\":1,\"messageId\":"));
+        assertTrue(wireJson.startsWith(
+                "{\"schemaVersion\":1,\"messageType\":\"command.dispatch\",\"messageId\":"));
+        assertEquals(1, occurrences(wireJson, "\"messageType\":\"command.dispatch\""));
         assertTrue(wireJson.contains("\"workItemId\":null"));
         assertTrue(wireJson.indexOf("\"attempt\":1") < wireJson.indexOf("\"payload\":"));
         assertEquals(List.of("analysis", "planning"), draft.payload().requiredAbilities());
@@ -68,6 +71,16 @@ class AgentCommandCanonicalCodecTest {
                 title, abilities, "agent-1", collaborators, "coordinator",
                 "回报执行计划、风险和协助诉求；Protocol v1 使用 work.progress，完成后使用 work.result，旧客户端由兼容层处理。",
                 "juyiting");
+    }
+
+    private int occurrences(String value, String expected) {
+        int count = 0;
+        int offset = 0;
+        while ((offset = value.indexOf(expected, offset)) >= 0) {
+            count++;
+            offset += expected.length();
+        }
+        return count;
     }
 
     private String commandId() {
