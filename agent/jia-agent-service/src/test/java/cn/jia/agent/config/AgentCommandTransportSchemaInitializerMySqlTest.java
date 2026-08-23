@@ -213,6 +213,40 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
     }
 
     @Test
+    void crossSchemaInboundForeignKeyFailsClosedAndIsNotRepaired() {
+        JdbcTemplate jdbc = newDatabase("cross_schema_parent");
+        new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
+        String transportSchema = jdbc.queryForObject("SELECT DATABASE()", String.class);
+        String externalSchema = createDatabase("cross_schema_child");
+        admin.execute("""
+                CREATE TABLE `%s`.external_transport_ref (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    delivery_id BIGINT NOT NULL,
+                    PRIMARY KEY (id),
+                    CONSTRAINT fk_cross_schema_transport_delivery FOREIGN KEY (delivery_id)
+                        REFERENCES `%s`.agent_command_delivery(id)
+                ) ENGINE=InnoDB
+                """.formatted(externalSchema, transportSchema));
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
+        assertTrue(failure.getMessage().contains("agent_command_delivery"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("foreign keys"), failure.getMessage());
+        assertEquals(1, admin.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.referential_constraints
+                WHERE constraint_schema=?
+                  AND unique_constraint_schema=?
+                  AND table_name='external_transport_ref'
+                  AND referenced_table_name='agent_command_delivery'
+                  AND constraint_name='fk_cross_schema_transport_delivery'
+                """, Integer.class, externalSchema, transportSchema));
+        assertEquals(1, admin.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema=? AND table_name='external_transport_ref'
+                """, Integer.class, externalSchema));
+    }
+
+    @Test
     void missingRetryIndexAndForeignKeyDriftBothFailClosedWithoutRepair() {
         JdbcTemplate missingIndex = newDatabase("index_drift");
         new AgentCommandTransportSchemaInitializer(missingIndex).afterPropertiesSet();
@@ -240,11 +274,16 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
     }
 
     private JdbcTemplate newDatabase(String suffix) {
+        String database = createDatabase(suffix);
+        return new JdbcTemplate(dataSource(databaseUrl(baseUrl, database), username, password));
+    }
+
+    private String createDatabase(String suffix) {
         String database = "d01_" + suffix + "_" + Long.toUnsignedString(System.nanoTime());
         admin.execute("CREATE DATABASE `" + database
                 + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
         databases.add(database);
-        return new JdbcTemplate(dataSource(databaseUrl(baseUrl, database), username, password));
+        return database;
     }
 
     private List<String> catalogSnapshot(JdbcTemplate jdbc) {
