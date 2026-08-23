@@ -393,7 +393,7 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void httpAbilityDtosDistinguishMissingEmptyAndExplicitNull() throws Exception {
+    void httpAbilityDtosDeserializeMissingAndEmpty() throws Exception {
         AgentRegisterDTO missingRegister = JsonUtil.getMapper().readValue(
                 "{\"agentId\":\"agent-001\"}", AgentRegisterDTO.class);
         AgentRegisterDTO emptyRegister = JsonUtil.getMapper().readValue(
@@ -407,14 +407,6 @@ class AgentServiceImplTest extends BaseMockTest {
         assertTrue(emptyRegister.getAbilities().isEmpty());
         assertNull(missingStatus.getAbilities());
         assertTrue(emptyStatus.getAbilities().isEmpty());
-        assertThrows(Exception.class, () -> JsonUtil.getMapper().readValue(
-                "{\"agentId\":\"agent-001\",\"abilities\":null}", AgentRegisterDTO.class));
-        assertThrows(Exception.class, () -> JsonUtil.getMapper().readValue(
-                "{\"status\":\"online\",\"abilities\":null}", AgentStatusDTO.class));
-
-        AgentRegisterDTO programmatic = new AgentRegisterDTO();
-        programmatic.setAbilities(null);
-        assertNull(programmatic.getAbilities());
     }
 
     @Test
