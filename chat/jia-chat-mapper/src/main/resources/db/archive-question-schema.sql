@@ -31,7 +31,7 @@ CREATE TABLE archive_question (
     CONSTRAINT chk_archive_question_id CHECK (question_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'),
     CONSTRAINT chk_archive_question_status CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_FINAL')),
     CONSTRAINT chk_archive_question_content CHECK (edition_manifest_sha256 REGEXP '^[0-9a-f]{64}$' AND block_type IN ('PREFACE', 'CHAPTER') AND JSON_VALID(anchor_json)),
-    CONSTRAINT chk_archive_question_responder CHECK (responder_id = 'archive-clerk-v1' AND responder_name = '案卷书吏' AND responder_mode = 'fallback'),
+    CONSTRAINT chk_archive_question_responder CHECK (responder_id = 'archive-clerk-v1' AND responder_name = CONVERT(0xE6A188E58DB7E4B9A6E5908F USING utf8mb4) AND responder_mode = 'fallback'),
     CONSTRAINT chk_archive_question_lengths CHECK (OCTET_LENGTH(selected_text) BETWEEN 1 AND 8192 AND OCTET_LENGTH(question_text) BETWEEN 1 AND 8192 AND OCTET_LENGTH(answer) <= 131072),
     CONSTRAINT chk_archive_question_counters CHECK (retry_count BETWEEN 0 AND 2 AND version >= 1 AND current_sequence >= 1),
     CONSTRAINT chk_archive_question_terminal CHECK (((status IN ('SUCCEEDED', 'FAILED_FINAL')) AND completed_at IS NOT NULL) OR ((status IN ('QUEUED', 'RUNNING', 'FAILED_RETRYABLE')) AND completed_at IS NULL)),

@@ -24,7 +24,8 @@ class ArchiveQuestionSchemaResourceTest {
         assertTrue(sql.contains("fencing_token bigint not null"));
         assertTrue(sql.contains("published_sequence bigint not null"));
         assertTrue(sql.contains("responder_id = 'archive-clerk-v1'"));
-        assertTrue(sql.contains("responder_name = '案卷书吏'"));
+        assertTrue(sql.contains("responder_name = convert(0xe6a188e58db7e4b9a6e5908f using utf8mb4)"));
+        assertFalse(sql.contains("案卷书吏"));
         assertTrue(sql.contains("octet_length(selected_text) between 1 and 8192"));
         assertTrue(sql.contains("attempt_count between 0 and 3"));
         assertTrue(sql.contains("idx_archive_question_owner_created (tenant_id, client_id, owner_jiacn, created_at, row_id)"));

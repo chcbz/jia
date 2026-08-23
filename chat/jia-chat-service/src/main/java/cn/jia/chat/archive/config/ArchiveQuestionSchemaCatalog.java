@@ -54,7 +54,7 @@ public final class ArchiveQuestionSchemaCatalog {
                         "chk_archive_question_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_question_status", "status in ('QUEUED','RUNNING','SUCCEEDED','FAILED_RETRYABLE','FAILED_FINAL')",
                         "chk_archive_question_content", "regexp_like(edition_manifest_sha256,'^[0-9a-f]{64}$') and (block_type in ('PREFACE','CHAPTER')) and json_valid(anchor_json)",
-                        "chk_archive_question_responder", "(responder_id='archive-clerk-v1') and (responder_name='案卷书吏') and (responder_mode='fallback')",
+                        "chk_archive_question_responder", "(responder_id='archive-clerk-v1') and (responder_name=convert(0xe6a188e58db7e4b9a6e5908f using utf8mb4)) and (responder_mode='fallback')",
                         "chk_archive_question_lengths", "(octet_length(selected_text) between 1 and 8192) and (octet_length(question_text) between 1 and 8192) and (octet_length(answer)<=131072)",
                         "chk_archive_question_counters", "(retry_count between 0 and 2) and (version>=1) and (current_sequence>=1)",
                         "chk_archive_question_terminal", "((status in ('SUCCEEDED','FAILED_FINAL')) and (completed_at is not null)) or ((status in ('QUEUED','RUNNING','FAILED_RETRYABLE')) and (completed_at is null))",

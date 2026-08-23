@@ -26,7 +26,6 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -58,10 +57,6 @@ class ArchiveQuestionMySqlIntegrationTest {
         DriverManagerDataSource dataSource = new DriverManagerDataSource();
         dataSource.setDriverClassName("com.mysql.cj.jdbc.Driver");
         dataSource.setUrl(target.url());
-        Properties connectionProperties = new Properties();
-        connectionProperties.setProperty("useUnicode", "true");
-        connectionProperties.setProperty("characterEncoding", "UTF-8");
-        dataSource.setConnectionProperties(connectionProperties);
         dataSource.setUsername(System.getenv().getOrDefault("CYF_H05A_MYSQL_USER", "root"));
         dataSource.setPassword(System.getenv().getOrDefault("CYF_H05A_MYSQL_PASSWORD", ""));
         jdbc = new JdbcTemplate(dataSource);
@@ -107,6 +102,8 @@ class ArchiveQuestionMySqlIntegrationTest {
         assertEquals(4, count("archive_outbox"));
         assertEquals(4, count("archive_question_mutation"));
         assertEquals(4, jdbc.queryForObject("SELECT COUNT(DISTINCT tenant_id,client_id,owner_jiacn) FROM archive_question", Integer.class));
+        assertEquals("E6A188E58DB7E4B9A6E5908F",
+                jdbc.queryForObject("SELECT HEX(responder_name) FROM archive_question LIMIT 1", String.class));
         assertEquals(404, assertThrows(ArchivePersonalDataException.class,
                 () -> service.get(new ArchiveOwnerScope("owner-a", "client-c", "owner-a"), id)).status());
 
