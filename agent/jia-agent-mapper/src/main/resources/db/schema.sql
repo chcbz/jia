@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS agent_task_meta (
     current_event_version   BIGINT NOT NULL DEFAULT 0 COMMENT '任务持久事件最新版本',
     create_time             BIGINT DEFAULT NULL COMMENT '创建时间',
     update_time             BIGINT DEFAULT NULL COMMENT '更新时间',
-    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Owner jiacn scope；历史记录兼容可空',
+    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Owner jiacn scope；历史记录兼容可空',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'OAuth/API client；历史记录兼容可空',
     PRIMARY KEY (id),
     UNIQUE KEY uk_agent_task_meta_scope (tenant_id, client_id, task_id),
@@ -312,7 +312,7 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_issue (
     last_seen_at            BIGINT NOT NULL COMMENT 'Latest apply observation time',
     occurrence_count        BIGINT NOT NULL DEFAULT 1 COMMENT 'Number of approved apply observations',
     last_operator           VARCHAR(100) NOT NULL COMMENT 'Latest approved migration operator',
-    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Source owner jiacn scope, nullable only for audited bad history',
+    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source owner jiacn scope, nullable only for audited bad history',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Source OAuth/API client scope, nullable only for audited bad history',
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -343,7 +343,7 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_manifest (
     manifest_row_sha256     CHAR(64) NOT NULL COMMENT 'Database-recomputed source/scope/resolution digest',
     meta_id                 BIGINT NOT NULL COMMENT 'Approved source agent_task_meta primary key',
     task_id                 VARCHAR(100) NOT NULL COMMENT 'Approved source task ID',
-    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Approved tenant scope',
+    tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved tenant scope',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Approved client scope',
     source_hash             CHAR(64) NOT NULL COMMENT 'Approved original assignee SHA-256',
     source_format           VARCHAR(32) NOT NULL COMMENT 'Approved source format',
@@ -380,6 +380,84 @@ CREATE TABLE IF NOT EXISTS agent_task_backfill_run (
     KEY idx_task_backfill_run_report (report_sha256, completed_at, id),
     KEY idx_task_backfill_run_operator (operator, completed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable successful B09 apply run audit';
+
+CREATE TABLE IF NOT EXISTS agent_task_historical_event_manifest_batch (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    report_sha256 CHAR(64) NOT NULL COMMENT 'Ordered canonical C01H manifest digest',
+    b09_report_sha256 CHAR(64) NOT NULL COMMENT 'Explicit SEALED B09 report digest',
+    b09_run_id CHAR(36) NOT NULL COMMENT 'Explicit matching SUCCEEDED B09 run UUID',
+    b09_operator VARCHAR(100) NOT NULL COMMENT 'B09 approved/apply operator',
+    b09_completed_at BIGINT NOT NULL COMMENT 'B09 successful run completion epoch millis',
+    manifest_row_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Exact sealed task rows',
+    insert_required_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Reviewed INSERT_REQUIRED rows',
+    exact_noop_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Reviewed EXACT_NOOP rows',
+    blocked_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Must remain zero for SEALED',
+    seal_status VARCHAR(16) NOT NULL COMMENT 'LOADING/SEALED',
+    approved_operator VARCHAR(100) NOT NULL COMMENT 'Independent C01H approver/ticket',
+    approved_at BIGINT NOT NULL COMMENT 'Approval epoch millis',
+    sealed_at BIGINT DEFAULT NULL COMMENT 'Seal epoch millis',
+    create_time BIGINT DEFAULT NULL COMMENT 'Create epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_historical_event_batch_report (report_sha256),
+    KEY idx_historical_event_batch_b09 (b09_report_sha256, b09_run_id, seal_status),
+    KEY idx_historical_event_batch_status (seal_status, approved_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='C01H sealed historical task event baseline batch';
+
+CREATE TABLE IF NOT EXISTS agent_task_historical_event_manifest (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    report_sha256 CHAR(64) NOT NULL COMMENT 'Owning canonical C01H manifest digest',
+    manifest_row_key CHAR(64) NOT NULL COMMENT 'Length-prefixed byte-exact task row key',
+    manifest_row_sha256 CHAR(64) NOT NULL COMMENT 'Canonical reviewed row digest',
+    b09_report_sha256 CHAR(64) NOT NULL COMMENT 'Explicit SEALED B09 report digest',
+    b09_run_id CHAR(36) NOT NULL COMMENT 'Explicit matching SUCCEEDED B09 run UUID',
+    b09_operator VARCHAR(100) NOT NULL COMMENT 'Exact B09 operator',
+    b09_completed_at BIGINT NOT NULL COMMENT 'Exact B09 completed_at used as occurred_at',
+    meta_id BIGINT NOT NULL COMMENT 'Exact task root primary key',
+    tenant_id VARCHAR(50) NOT NULL COMMENT 'Byte-exact tenant scope',
+    client_id VARCHAR(50) NOT NULL COMMENT 'Byte-exact client scope',
+    task_id VARCHAR(100) NOT NULL COMMENT 'Byte-exact task ID',
+    event_id VARCHAR(100) NOT NULL COMMENT 'c01h- plus length-prefixed scope SHA-256',
+    decision_status VARCHAR(20) NOT NULL COMMENT 'INSERT_REQUIRED/EXACT_NOOP',
+    expected_event_version BIGINT NOT NULL COMMENT 'Next or existing baseline event version',
+    content_sha256 CHAR(64) NOT NULL COMMENT 'Canonical task/member/work-item snapshot digest',
+    member_count BIGINT NOT NULL COMMENT 'Exact member snapshot count',
+    work_item_count BIGINT NOT NULL COMMENT 'Exact work-item snapshot count',
+    task_version_snapshot BIGINT NOT NULL COMMENT 'Must remain unchanged',
+    current_event_version_snapshot BIGINT NOT NULL COMMENT 'Reviewed pre-apply event cursor',
+    event_chain_count BIGINT NOT NULL COMMENT 'Reviewed complete event count',
+    event_chain_min_version BIGINT DEFAULT NULL COMMENT 'NULL for empty chain, otherwise one',
+    event_chain_max_version BIGINT DEFAULT NULL COMMENT 'NULL for empty chain, otherwise current version',
+    baseline_event_version BIGINT DEFAULT NULL COMMENT 'Existing exact baseline version for EXACT_NOOP',
+    approved_operator VARCHAR(100) NOT NULL COMMENT 'Independent C01H approver/ticket',
+    approved_at BIGINT NOT NULL COMMENT 'Approval epoch millis',
+    create_time BIGINT DEFAULT NULL COMMENT 'Create epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_historical_event_manifest_row (report_sha256, manifest_row_key),
+    UNIQUE KEY uk_historical_event_manifest_scope (report_sha256, tenant_id, client_id, task_id),
+    KEY idx_historical_event_manifest_event (event_id, content_sha256),
+    KEY idx_historical_event_manifest_b09 (b09_report_sha256, b09_run_id, decision_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable C01H reviewed task baseline rows';
+
+CREATE TABLE IF NOT EXISTS agent_task_historical_event_run (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    run_id CHAR(36) NOT NULL COMMENT 'C01H apply UUID',
+    report_sha256 CHAR(64) NOT NULL COMMENT 'Consumed SEALED C01H report',
+    b09_report_sha256 CHAR(64) NOT NULL COMMENT 'Bound SEALED B09 report',
+    b09_run_id CHAR(36) NOT NULL COMMENT 'Bound SUCCEEDED B09 run',
+    operator VARCHAR(100) NOT NULL COMMENT 'Byte-exact approved C01H operator',
+    manifest_row_count BIGINT NOT NULL COMMENT 'Exact sealed task rows',
+    event_insert_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Events appended by this run',
+    version_update_count BIGINT NOT NULL DEFAULT 0 COMMENT 'current_event_version CAS updates',
+    exact_noop_count BIGINT NOT NULL DEFAULT 0 COMMENT 'Rows proved exact no-op',
+    started_at BIGINT NOT NULL COMMENT 'Run start epoch millis',
+    completed_at BIGINT NOT NULL COMMENT 'Run commit epoch millis',
+    run_status VARCHAR(20) NOT NULL COMMENT 'SUCCEEDED only, failures roll back',
+    create_time BIGINT DEFAULT NULL COMMENT 'Create epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_historical_event_run_id (run_id),
+    KEY idx_historical_event_run_report (report_sha256, completed_at, id),
+    KEY idx_historical_event_run_b09 (b09_report_sha256, b09_run_id, completed_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable successful C01H baseline apply runs';
 
 CREATE TABLE IF NOT EXISTS agent_task_request (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
@@ -523,3 +601,28 @@ CREATE TABLE IF NOT EXISTS agent_scene_phase_report (
     UNIQUE KEY uk_agent_scene_phase_report_scope_report (tenant_id, client_id, scene_id, report_id),
     KEY idx_agent_scene_phase_report_scope_agent_version (tenant_id, client_id, scene_id, agent_id, state_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped idempotent agent scene phase reports';
+
+-- C01 task event journal
+CREATE TABLE IF NOT EXISTS agent_task_event (
+    id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    event_version   BIGINT NOT NULL COMMENT 'Monotonic event version scoped to (tenant,client,task)',
+    event_id        VARCHAR(100) NOT NULL COMMENT 'Deterministic stable event identifier',
+    event_type      VARCHAR(64) NOT NULL COMMENT 'Event type (SCREAMING_SNAKE_CASE)',
+    actor_type      VARCHAR(20) NOT NULL COMMENT 'Actor classification: agent/role/system',
+    actor_id        VARCHAR(100) DEFAULT NULL COMMENT 'Actor identity (canonical agentId or role key)',
+    aggregate_type  VARCHAR(30) NOT NULL COMMENT 'Aggregate type: task/member/work_item/request/artifact/thread/message',
+    aggregate_id    VARCHAR(100) NOT NULL COMMENT 'Aggregate instance ID',
+    event_json      MEDIUMTEXT NOT NULL COMMENT 'Event payload JSON',
+    occurred_at     BIGINT NOT NULL COMMENT 'Event occurrence timestamp (epoch millis)',
+    tenant_id       VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+    client_id       VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+    create_time     BIGINT DEFAULT NULL COMMENT 'Create time',
+    update_time     BIGINT DEFAULT NULL COMMENT 'Update time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
+    KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
+    KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
+    KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task event journal for M2 collaboration replay and SSE';

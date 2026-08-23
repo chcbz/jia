@@ -330,6 +330,39 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void exactIdentityTextUsesUnicodeCodePointLimitsAndRejectsUnpairedSurrogates() {
+        String supplementary = new String(Character.toChars(0x1f642));
+        String tenant = "t" + supplementary.repeat(49);
+        String client = "c" + supplementary.repeat(49);
+        String canonical = "a" + supplementary.repeat(99);
+        AgentPersonaBindingEntity binding = binding(canonical);
+        binding.setTenantId(tenant);
+        binding.setClientId(client);
+        binding.setJiacn(tenant);
+        AgentIdentityRegistryEntity identity = registry(binding, canonical,
+                AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_ACTIVE);
+        identity.setTenantId(tenant);
+        identity.setClientId(client);
+        identity.setOwnerJiacn(tenant);
+        when(registryDao.findExactByCanonicalInScope(tenant, client, tenant, canonical))
+                .thenReturn(identity);
+        when(bindingDao.selectById(binding.getId())).thenReturn(binding);
+
+        assertEquals(canonical, service.requireCanonicalAgentIdInScope(
+                tenant, client, tenant, canonical));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requireCanonicalAgentIdInScope(
+                        "t" + supplementary.repeat(50), client, tenant, canonical));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requireCanonicalAgentIdInScope(
+                        tenant, client, tenant, "a" + supplementary.repeat(100)));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.requireCanonicalAgentIdInScope(
+                        tenant, client, tenant, "agent-\ud800"));
+    }
+
+    @Test
     void bindingMustMatchRegistryScopeAndApprovedAlias() {
         AgentPersonaBindingEntity wrongScope = binding("legacy-wuyong");
         wrongScope.setClientId("CLIENT-A");

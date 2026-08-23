@@ -55,8 +55,10 @@ public class AgentTaskMemberDaoImpl implements AgentTaskMemberDao {
     public List<AgentTaskMemberEntity> listByTask(String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        return baseMapper.selectList(scope(tenantId, clientId)
-                .eq(AgentTaskMemberEntity::getTaskId, taskId)
+        LambdaQueryWrapper<AgentTaskMemberEntity> wrapper = scope(tenantId, clientId)
+                .eq(AgentTaskMemberEntity::getTaskId, taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        return baseMapper.selectList(wrapper
                 .orderByAsc(AgentTaskMemberEntity::getMemberRole)
                 .orderByAsc(AgentTaskMemberEntity::getAgentId)
                 .orderByAsc(AgentTaskMemberEntity::getId));
@@ -69,8 +71,11 @@ public class AgentTaskMemberDaoImpl implements AgentTaskMemberDao {
         TaskCollaborationDaoSupport.requireId(agentId, "agentId");
         LambdaQueryWrapper<AgentTaskMemberEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskMemberEntity::getAgentId, agentId);
+        TaskCollaborationDaoSupport.exact(wrapper, "agent_id", agentId);
         if (!StringUtil.isBlank(memberStatus)) {
+            TaskCollaborationDaoSupport.requireId(memberStatus, "memberStatus");
             wrapper.eq(AgentTaskMemberEntity::getMemberStatus, memberStatus);
+            TaskCollaborationDaoSupport.exact(wrapper, "member_status", memberStatus);
         }
         return baseMapper.selectList(wrapper
                 .orderByDesc(AgentTaskMemberEntity::getUpdateTime)
@@ -92,9 +97,12 @@ public class AgentTaskMemberDaoImpl implements AgentTaskMemberDao {
     }
 
     private LambdaQueryWrapper<AgentTaskMemberEntity> scope(String tenantId, String clientId) {
-        return new LambdaQueryWrapper<AgentTaskMemberEntity>()
-                .eq(AgentTaskMemberEntity::getTenantId, tenantId)
-                .eq(AgentTaskMemberEntity::getClientId, clientId);
+        LambdaQueryWrapper<AgentTaskMemberEntity> wrapper =
+                new LambdaQueryWrapper<AgentTaskMemberEntity>()
+                        .eq(AgentTaskMemberEntity::getTenantId, tenantId)
+                        .eq(AgentTaskMemberEntity::getClientId, clientId);
+        TaskCollaborationDaoSupport.exact(wrapper, "tenant_id", tenantId);
+        return TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
     }
 
     private void requireMember(AgentTaskMemberDTO member) {

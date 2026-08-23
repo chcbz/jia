@@ -1,15 +1,20 @@
 package cn.jia.chat.service;
 
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.impl.AgentTaskCollaborationAccessServiceImpl;
+import cn.jia.agent.service.impl.AgentTaskMutationTransactionImpl;
 import cn.jia.chat.dao.AgentTaskThreadDao;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
@@ -19,6 +24,7 @@ import cn.jia.chat.dao.impl.ChatMessageDaoImpl;
 import cn.jia.chat.entity.AgentTaskThreadDTO;
 import cn.jia.chat.entity.AgentTaskThreadEntity;
 import cn.jia.chat.entity.AgentTaskThreadMessageCreateDTO;
+import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.chat.mapper.AgentTaskThreadMapper;
 import cn.jia.chat.mapper.ChatConversationMapper;
@@ -39,8 +45,10 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
@@ -55,9 +63,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -84,6 +95,9 @@ class AgentTaskThreadRealDatabaseTest {
     private ChatMessageDao messageDao;
     private AgentTaskCollaborationAccessService accessService;
     private AgentService agentService;
+    private AgentTaskMutationTransaction mutationTransaction;
+    private AgentTaskEventWriter eventWriter;
+    private PlatformTransactionManager transactionManager;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -115,6 +129,9 @@ class AgentTaskThreadRealDatabaseTest {
         realThreadDao = new AgentTaskThreadDaoImpl(
                 template.getMapper(AgentTaskThreadMapper.class));
 
+        transactionManager = new DataSourceTransactionManager(dataSource);
+        mutationTransaction = new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
+        eventWriter = mock(AgentTaskEventWriter.class);
         accessService = new AgentTaskCollaborationAccessServiceImpl(taskMetaDao, memberDao);
         agentService = mock(AgentService.class);
         when(agentService.requireApiKeyOwnedAgent(anyString(), anyString(), anyString()))
@@ -123,7 +140,8 @@ class AgentTaskThreadRealDatabaseTest {
                 .thenAnswer(invocation -> runtime(invocation.getArgument(2)));
         AgentTaskThreadCreationTransaction creation = transactionalCreation(
                 new AgentTaskThreadCreationTransaction(
-                        realThreadDao, conversationDao, messageDao, agentService, accessService));
+                        realThreadDao, conversationDao, messageDao, agentService, accessService,
+                        mutationTransaction, eventWriter));
         service = new AgentTaskThreadServiceImpl(
                 realThreadDao, conversationDao, messageDao, agentService, accessService, creation);
 
@@ -142,7 +160,8 @@ class AgentTaskThreadRealDatabaseTest {
         AgentTaskThreadDao barrierThreadDao = new FirstReadBarrierThreadDao(realThreadDao);
         AgentTaskThreadCreationTransaction creation = transactionalCreation(
                 new AgentTaskThreadCreationTransaction(
-                        barrierThreadDao, conversationDao, messageDao, agentService, accessService));
+                        barrierThreadDao, conversationDao, messageDao, agentService, accessService,
+                        mutationTransaction, eventWriter));
         AgentTaskThreadService concurrentService = new AgentTaskThreadServiceImpl(
                 barrierThreadDao, conversationDao, messageDao,
                 agentService, accessService, creation);
@@ -209,7 +228,59 @@ class AgentTaskThreadRealDatabaseTest {
     }
 
     @Test
-    void revocationBetweenOuterCheckAndTransactionalRevalidationBlocksLateWrite() throws Exception {
+    void nonZeroScopeCannotReadOrLockTenantZeroTaskThread() {
+        jdbc.update("""
+                INSERT INTO agent_task_thread
+                (task_id, thread_type, thread_key, conversation_id, created_by_agent_id,
+                 status, tenant_id, client_id, create_time, update_time)
+                VALUES ('tenant-zero-task', 'team', 'team', 'tenant-zero-conversation',
+                        ?, 'active', '0', ?, 1, 1)
+                """, AGENT_A, CLIENT);
+
+        assertNull(realThreadDao.findByTaskThread(
+                "tenant-b", CLIENT, "tenant-zero-task", "team", "team"));
+        assertNull(realThreadDao.findByTaskThreadForUpdate(
+                "tenant-b", CLIENT, "tenant-zero-task", "team", "team"));
+        assertNull(realThreadDao.findByConversationId(
+                "tenant-b", CLIENT, "tenant-zero-conversation"));
+        assertNotNull(realThreadDao.findByTaskThread(
+                "0", CLIENT, "tenant-zero-task", "team", "team"));
+
+        AgentTaskThreadDTO exact = service.getOrCreateTeamThread(
+                TENANT, CLIENT, TASK, AGENT_A, "Exact tenant thread");
+        assertNotNull(exact);
+        assertNotNull(realThreadDao.findByTaskThreadForUpdate(
+                TENANT, CLIENT, TASK, "team", "team"));
+    }
+
+    @Test
+    void listTeamMessagesExcludesTenantZeroAndCiScopeCollisions() {
+        AgentTaskThreadDTO thread = service.getOrCreateTeamThread(
+                TENANT, CLIENT, TASK, AGENT_A, null);
+        AgentTaskThreadMessageCreateDTO exact = new AgentTaskThreadMessageCreateDTO();
+        exact.setActorAgentId(AGENT_A);
+        exact.setContent("exact-message");
+        service.appendTeamMessage(TENANT, CLIENT, TASK, exact);
+
+        insertRawMessage("0", CLIENT, thread.getConversationId(), "tenant-zero-leak");
+        insertRawMessage(TENANT.toUpperCase(), CLIENT,
+                thread.getConversationId(), "tenant-case-leak");
+        insertRawMessage(TENANT, CLIENT.toUpperCase(),
+                thread.getConversationId(), "client-case-leak");
+        insertRawMessage(TENANT, CLIENT,
+                thread.getConversationId() + " ", "conversation-space-leak");
+
+        assertEquals(List.of("exact-message"),
+                messageDao.findByConversationIdScoped(
+                                TENANT, CLIENT, thread.getConversationId(), 20)
+                        .stream().map(ChatMessageEntity::getContent).toList());
+        assertEquals(List.of("exact-message"),
+                service.listTeamMessages(TENANT, CLIENT, TASK, AGENT_B, 20)
+                        .stream().map(item -> item.getContent()).toList());
+    }
+
+    @Test
+    void taskAndMemberLocksHoldConcurrentRevocationUntilMessageCommit() throws Exception {
         service.getOrCreateTeamThread(TENANT, CLIENT, TASK, AGENT_A, null);
         CountDownLatch ownershipLocked = new CountDownLatch(1);
         CountDownLatch continueWrite = new CountDownLatch(1);
@@ -222,27 +293,85 @@ class AgentTaskThreadRealDatabaseTest {
                     return runtime(AGENT_A);
                 });
 
-        AgentTaskThreadMessageCreateDTO late = new AgentTaskThreadMessageCreateDTO();
-        late.setActorAgentId(AGENT_A);
-        late.setContent("must not survive revocation race");
-        ExecutorService executor = Executors.newSingleThreadExecutor();
+        AgentTaskThreadMessageCreateDTO message = new AgentTaskThreadMessageCreateDTO();
+        message.setActorAgentId(AGENT_A);
+        message.setContent("commits before the waiting revocation");
+        ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<?> append = executor.submit(() ->
-                    service.appendTeamMessage(TENANT, CLIENT, TASK, late));
+                    service.appendTeamMessage(TENANT, CLIENT, TASK, message));
             assertTrue(ownershipLocked.await(10, TimeUnit.SECONDS));
-            jdbc.update("""
+            Future<Integer> revoke = executor.submit(() -> jdbc.update("""
                     UPDATE agent_task_member SET member_status = 'left'
                     WHERE tenant_id = ? AND client_id = ? AND task_id = ? AND agent_id = ?
-                    """, TENANT, CLIENT, TASK, AGENT_A);
+                    """, TENANT, CLIENT, TASK, AGENT_A));
+            Thread.sleep(150L);
+            assertTrue(!revoke.isDone(), "member revocation must wait for the root/member locks");
             continueWrite.countDown();
-            ExecutionException denied = assertThrows(ExecutionException.class,
-                    () -> append.get(20, TimeUnit.SECONDS));
-            assertTrue(denied.getCause() instanceof AgentTaskThreadException);
-            assertEquals(0, count("chat_message"));
+            append.get(20, TimeUnit.SECONDS);
+            assertEquals(1, revoke.get(20, TimeUnit.SECONDS));
+            assertEquals(1, count("chat_message"));
+            assertEquals("left", jdbc.queryForObject(
+                    "SELECT member_status FROM agent_task_member WHERE agent_id=?",
+                    String.class, AGENT_A));
         } finally {
             continueWrite.countDown();
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void threadEventAppendFailureRollsBackConversationAndBinding() {
+        doAnswer(invocation -> {
+            AgentTaskEventWriteCommand command = invocation.getArgument(0);
+            if (TaskEventType.THREAD_CREATED.equals(command.getEventType())) {
+                throw new IllegalStateException("forced thread event append failure");
+            }
+            return null;
+        }).when(eventWriter).append(org.mockito.ArgumentMatchers.any());
+
+        assertThrows(AgentTaskThreadException.class,
+                () -> service.getOrCreateTeamThread(TENANT, CLIENT, TASK, AGENT_A, null));
+
+        assertEquals(0, count("agent_task_thread"));
+        assertEquals(0, count("chat_conversation"));
+    }
+
+    @Test
+    void messageEventAppendFailureRollsBackImplicitThreadConversationAndMessage() {
+        doAnswer(invocation -> {
+            AgentTaskEventWriteCommand command = invocation.getArgument(0);
+            if (TaskEventType.MESSAGE_POSTED.equals(command.getEventType())) {
+                throw new IllegalStateException("forced event append failure");
+            }
+            return null;
+        }).when(eventWriter).append(org.mockito.ArgumentMatchers.any());
+
+        AgentTaskThreadMessageCreateDTO request = new AgentTaskThreadMessageCreateDTO();
+        request.setActorAgentId(AGENT_A);
+        request.setContent("must roll back with its event");
+        assertThrows(AgentTaskThreadException.class,
+                () -> service.appendTeamMessage(TENANT, CLIENT, TASK, request));
+
+        assertEquals(0, count("agent_task_thread"));
+        assertEquals(0, count("chat_conversation"));
+        assertEquals(0, count("chat_message"));
+    }
+
+    @Test
+    void outerRollbackRemovesImplicitThreadConversationAndMessage() {
+        TransactionTemplate outer = new TransactionTemplate(transactionManager);
+        outer.executeWithoutResult(status -> {
+            AgentTaskThreadMessageCreateDTO request = new AgentTaskThreadMessageCreateDTO();
+            request.setActorAgentId(AGENT_A);
+            request.setContent("outer rollback");
+            service.appendTeamMessage(TENANT, CLIENT, TASK, request);
+            status.setRollbackOnly();
+        });
+
+        assertEquals(0, count("agent_task_thread"));
+        assertEquals(0, count("chat_conversation"));
+        assertEquals(0, count("chat_message"));
     }
 
     @Test
@@ -264,6 +393,17 @@ class AgentTaskThreadRealDatabaseTest {
         assertTrue(latest.get(0).getMessageId() < latest.get(1).getMessageId());
     }
 
+    private void insertRawMessage(
+            String tenantId, String clientId, String conversationId, String content) {
+        jdbc.update("""
+                INSERT INTO chat_message
+                (conversation_id, message_type, content, metadata, create_time, update_time,
+                 client_id, tenant_id, jiacn, sync_status, conversation_type, sender_type, sender_name)
+                VALUES (?, 'ASSISTANT', ?, '{}', 200, 200, ?, ?, ?,
+                        'PENDING', 'juyiting', 'agent', 'collision')
+                """, conversationId, content, clientId, tenantId, tenantId);
+    }
+
     private AgentRuntimeDTO runtime(String agentId) {
         AgentRuntimeDTO runtime = new AgentRuntimeDTO();
         runtime.setAgentId(agentId);
@@ -283,7 +423,7 @@ class AgentTaskThreadRealDatabaseTest {
     private AgentTaskThreadCreationTransaction transactionalCreation(
             AgentTaskThreadCreationTransaction target) {
         TransactionInterceptor interceptor = new TransactionInterceptor();
-        interceptor.setTransactionManager(new DataSourceTransactionManager(dataSource));
+        interceptor.setTransactionManager(transactionManager);
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
         ProxyFactory factory = new ProxyFactory(target);
         factory.setProxyTargetClass(true);
@@ -407,7 +547,7 @@ class AgentTaskThreadRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE chat_message (
                     id BIGINT NOT NULL AUTO_INCREMENT,
-                    conversation_id VARCHAR(100) NOT NULL,
+                    conversation_id VARCHAR_IGNORECASE(100) NOT NULL,
                     message_type VARCHAR(20),
                     content TEXT,
                     metadata TEXT,
@@ -418,8 +558,8 @@ class AgentTaskThreadRealDatabaseTest {
                     sender_name VARCHAR(100),
                     create_time BIGINT,
                     update_time BIGINT,
-                    tenant_id VARCHAR(50),
-                    client_id VARCHAR(50),
+                    tenant_id VARCHAR_IGNORECASE(50),
+                    client_id VARCHAR_IGNORECASE(50),
                     PRIMARY KEY (id)
                 )""");
         jdbc.execute("""

@@ -170,13 +170,8 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
 
     @Test
     void messageWriteForcesScopedAgentIdentityAndReservedMetadata() {
-        AgentTaskThreadEntity thread = thread("303", AGENT);
         when(accessService.resolveMemberAccess(TENANT, CLIENT, TASK, AGENT))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-        when(taskThreadDao.findByTaskThread(TENANT, CLIENT, TASK, "team", "team"))
-                .thenReturn(thread);
-        when(conversationDao.findScopedById(TENANT, CLIENT, "303"))
-                .thenReturn(conversation(303L));
         when(creationTransaction.appendTeamMessage(
                 eq(TENANT), eq(CLIENT), eq(TASK), eq(AGENT), eq("Agent A"),
                 any(ChatMessageEntity.class)))

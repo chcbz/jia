@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,6 +24,7 @@ class AgentTaskThreadSchemaTest {
         assertTrue(compact(testDefinition).contains(
                 "unique key uk_task_thread_conversation (tenant_id, client_id, conversation_id)"));
         assertTrue(compact(testDefinition).contains("tenant_id varchar(50) not null"));
+        assertFalse(compact(testDefinition).contains("tenant_id varchar(50) not null default '0'"));
         assertTrue(compact(testDefinition).contains("client_id varchar(50) not null"));
     }
 

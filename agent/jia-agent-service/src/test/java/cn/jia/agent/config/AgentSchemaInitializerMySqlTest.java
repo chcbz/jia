@@ -106,6 +106,159 @@ class AgentSchemaInitializerMySqlTest {
     }
 
     @Test
+    void freshHistoricalEventAuditSchemaBootstrapsNineTriggersAndRepeatedInitializationIsStable() {
+        dropHistoricalEventAuditTables();
+
+        initializeTwice();
+
+        assertHistoricalEventAuditProtection();
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.routines
+                WHERE routine_schema=DATABASE() AND routine_name LIKE 'c01h_%'
+                """, Integer.class));
+    }
+
+    @Test
+    void partialHistoricalEventAuditSchemaFailsClosedBeforeCreateCanMaskIt() {
+        jdbc.execute("DROP TABLE agent_task_historical_event_run");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("C01H audit schema is partial"), error.getMessage());
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name='agent_task_historical_event_run'
+                """, Integer.class));
+    }
+
+    @Test
+    void historicalEventAuditWrongEngineFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_run ENGINE=MyISAM");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("agent_task_historical_event_run"),
+                error.getMessage());
+        assertTrue(error.getMessage().contains("MyISAM"), error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditWrongTableCollationFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "COLLATE=utf8mb4_0900_ai_ci");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("agent_task_historical_event_manifest_batch"),
+                error.getMessage());
+        assertTrue(error.getMessage().contains("utf8mb4_0900_ai_ci"), error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditWrongColumnCollationFailsClosed() {
+        jdbc.execute("""
+                ALTER TABLE agent_task_historical_event_manifest
+                MODIFY COLUMN tenant_id VARCHAR(50) CHARACTER SET utf8mb4
+                    COLLATE utf8mb4_0900_ai_ci NOT NULL
+                """);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains(
+                "agent_task_historical_event_manifest.tenant_id"), error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditMissingRequiredUniqueIndexFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "DROP INDEX uk_historical_event_batch_report");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("uk_historical_event_batch_report"),
+                error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditWrongRequiredUniqueIndexFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "DROP INDEX uk_historical_event_batch_report, "
+                + "ADD UNIQUE INDEX uk_historical_event_batch_report (b09_report_sha256)");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("uk_historical_event_batch_report"),
+                error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditExtraUniqueIndexFailsClosed() {
+        jdbc.execute("ALTER TABLE agent_task_historical_event_manifest_batch "
+                + "ADD UNIQUE INDEX uk_historical_event_extra (b09_run_id)");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("incompatible UNIQUE indexes"),
+                error.getMessage());
+    }
+
+    @Test
+    void historicalEventAuditMissingTriggerFailsClosed() {
+        initializeOnce();
+        jdbc.execute("DROP TRIGGER trg_historical_event_manifest_no_update");
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("nine exact"), error.getMessage());
+        assertEquals(8, namedTriggerCount("trg_historical_event_%"));
+    }
+
+    @Test
+    void historicalEventAuditWeakenedTriggerFailsClosed() {
+        initializeOnce();
+        jdbc.execute("DROP TRIGGER trg_historical_event_manifest_no_update");
+        jdbc.execute("""
+                CREATE TRIGGER trg_historical_event_manifest_no_update
+                BEFORE UPDATE ON agent_task_historical_event_manifest FOR EACH ROW
+                BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'weakened'; END
+                """);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains(
+                "trg_historical_event_manifest_no_update"), error.getMessage());
+    }
+
+    @Test
+    void nonEmptyHistoricalAuditWithoutTriggersFailsClosedWithoutBootstrap() {
+        jdbc.update("""
+                INSERT INTO agent_task_historical_event_manifest_batch(
+                    report_sha256,b09_report_sha256,b09_run_id,b09_operator,b09_completed_at,
+                    manifest_row_count,insert_required_count,exact_noop_count,blocked_count,
+                    seal_status,approved_operator,approved_at,sealed_at,create_time)
+                VALUES (REPEAT('a',64),REPEAT('b',64),'00000000-0000-0000-0000-000000000001',
+                        'b09-operator',1,0,0,0,0,'LOADING','c01h-approver',2,NULL,2)
+                """);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(error.getMessage().contains("nine exact"), error.getMessage());
+        assertEquals(0, namedTriggerCount("trg_historical_event_%"));
+        assertEquals(1L, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_historical_event_manifest_batch", Long.class));
+    }
+
+    @Test
     void incompatibleNamedScopedIndexFailsBeforeLegacyGlobalUniqueIsRemoved() {
         jdbc.execute("ALTER TABLE agent_task_meta DROP INDEX uk_agent_task_meta_scope, "
                 + "ADD UNIQUE INDEX uk_agent_task_meta_scope (task_id, tenant_id, client_id), "
@@ -128,6 +281,7 @@ class AgentSchemaInitializerMySqlTest {
     private void assertProtectionAndScopedRootIndexes() {
         assertEquals(4, namedTriggerCount("trg_identity_%"));
         assertEquals(12, namedTriggerCount("trg_task_backfill_%"));
+        assertEquals(9, namedTriggerCount("trg_historical_event_%"));
         assertEquals(List.of("tenant_id", "client_id", "task_id"), jdbc.queryForList("""
                 SELECT column_name FROM information_schema.statistics
                 WHERE table_schema=DATABASE() AND table_name='agent_task_meta'
@@ -143,6 +297,302 @@ class AgentSchemaInitializerMySqlTest {
                   HAVING COUNT(*)=1 AND LOWER(MAX(column_name))='task_id'
                 ) x
                 """, Integer.class));
+    }
+
+    private void dropHistoricalEventAuditTables() {
+        for (String trigger : historicalEventTriggerNames()) {
+            jdbc.execute("DROP TRIGGER IF EXISTS " + trigger);
+        }
+        jdbc.execute("DROP TABLE IF EXISTS agent_task_historical_event_run");
+        jdbc.execute("DROP TABLE IF EXISTS agent_task_historical_event_manifest");
+        jdbc.execute("DROP TABLE IF EXISTS agent_task_historical_event_manifest_batch");
+    }
+
+    private void assertHistoricalEventAuditProtection() {
+        assertEquals(9, namedTriggerCount("trg_historical_event_%"));
+        for (String table : List.of(
+                "agent_task_historical_event_manifest_batch",
+                "agent_task_historical_event_manifest",
+                "agent_task_historical_event_run")) {
+            assertEquals("InnoDB", jdbc.queryForObject("""
+                    SELECT ENGINE FROM information_schema.tables
+                    WHERE table_schema=DATABASE() AND table_name=?
+                    """, String.class, table), table);
+            assertEquals("utf8mb4_0900_bin", jdbc.queryForObject("""
+                    SELECT TABLE_COLLATION FROM information_schema.tables
+                    WHERE table_schema=DATABASE() AND table_name=?
+                    """, String.class, table), table);
+            assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class), table);
+        }
+        assertEquals(List.of("PRIMARY", "uk_historical_event_batch_report"),
+                uniqueIndexes("agent_task_historical_event_manifest_batch"));
+        assertEquals(List.of("PRIMARY", "uk_historical_event_manifest_row",
+                        "uk_historical_event_manifest_scope"),
+                uniqueIndexes("agent_task_historical_event_manifest"));
+        assertEquals(List.of("PRIMARY", "uk_historical_event_run_id"),
+                uniqueIndexes("agent_task_historical_event_run"));
+    }
+
+    private List<String> uniqueIndexes(String table) {
+        return jdbc.queryForList("""
+                SELECT DISTINCT index_name FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name=? AND non_unique=0
+                ORDER BY index_name
+                """, String.class, table);
+    }
+
+    private List<String> historicalEventTriggerNames() {
+        return List.of(
+                "trg_historical_event_batch_insert_guard",
+                "trg_historical_event_batch_update_guard",
+                "trg_historical_event_batch_no_delete",
+                "trg_historical_event_manifest_insert_guard",
+                "trg_historical_event_manifest_no_update",
+                "trg_historical_event_manifest_no_delete",
+                "trg_historical_event_run_insert_guard",
+                "trg_historical_event_run_no_update",
+                "trg_historical_event_run_no_delete");
+    }
+
+    // ── C01: task event schema ──
+
+    @Test
+    void freshTaskEventSchemaAndRepeatedInitializationIsStable() {
+        jdbc.execute("DROP TABLE agent_task_event");
+        initializeTwice();
+
+        assertEquals("InnoDB", jdbc.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name='agent_task_meta'
+                """, String.class));
+        assertEquals("InnoDB", jdbc.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                """, String.class));
+        assertEquals("utf8mb4_0900_bin",
+                jdbc.queryForObject("""
+                        SELECT TABLE_COLLATION FROM information_schema.tables
+                        WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                        """, String.class));
+
+        String extra = jdbc.queryForObject("""
+                SELECT EXTRA FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND column_name='id'
+                """, String.class);
+        assertTrue(extra != null && extra.toLowerCase().contains("auto_increment"),
+                "id must be AUTO_INCREMENT, got EXTRA=" + extra);
+
+        for (String col : List.of(
+                "id", "task_id", "event_version", "event_id", "event_type",
+                "actor_type", "actor_id", "aggregate_type", "aggregate_id",
+                "event_json", "occurred_at", "tenant_id", "client_id",
+                "create_time", "update_time")) {
+            assertEquals(1, jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.columns
+                    WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                      AND column_name=?
+                    """, Integer.class, col), col);
+        }
+
+        assertEquals(List.of("PRIMARY", "uk_task_event_id", "uk_task_event_version"),
+                jdbc.queryForList("""
+                        SELECT DISTINCT index_name
+                        FROM information_schema.statistics
+                        WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                          AND non_unique=0
+                        ORDER BY index_name
+                        """, String.class),
+                "only the exact required UNIQUE semantics may exist");
+        assertIndexDefinition("PRIMARY", 0, List.of("id"));
+        assertIndexDefinition("uk_task_event_version", 0,
+                List.of("tenant_id", "client_id", "task_id", "event_version"));
+        assertIndexDefinition("uk_task_event_id", 0,
+                List.of("tenant_id", "client_id", "event_id"));
+
+        assertIndexDefinition("idx_task_event_occurred", 1,
+                List.of("tenant_id", "client_id", "task_id", "occurred_at"));
+        assertIndexDefinition("idx_event_actor_time", 1,
+                List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at"));
+        assertIndexDefinition("idx_event_type_time", 1,
+                List.of("tenant_id", "client_id", "event_type", "occurred_at"));
+    }
+
+    @Test
+    void incompatibleEventColumnWidthTriggersDriftFailure() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event "
+                + "MODIFY COLUMN event_type VARCHAR(128) NOT NULL "
+                + "COMMENT 'Event type'");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void incompatibleEventCollationTriggersDriftFailure() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event "
+                + "MODIFY COLUMN tenant_id VARCHAR(50) NOT NULL "
+                + "COLLATE utf8mb4_unicode_ci COMMENT 'Owner jiacn scope'");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void missingAutoIncrementFailsClosed() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event MODIFY COLUMN id BIGINT NOT NULL");
+        String extra = jdbc.queryForObject("""
+                SELECT EXTRA FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND column_name='id'
+                """, String.class);
+        assertTrue(extra == null || !extra.toLowerCase().contains("auto_increment"),
+                "test precondition must remove AUTO_INCREMENT, got EXTRA=" + extra);
+
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void wrongEventTableCollationTriggersDriftFailure() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event "
+                + "COLLATE=utf8mb4_unicode_ci");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void compatiblePreexistingTaskEventTableIsStable() {
+        jdbc.execute("DROP TABLE agent_task_event");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id              BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id         VARCHAR(100) NOT NULL,
+                    event_version   BIGINT NOT NULL,
+                    event_id        VARCHAR(100) NOT NULL,
+                    event_type      VARCHAR(64) NOT NULL,
+                    actor_type      VARCHAR(20) NOT NULL,
+                    actor_id        VARCHAR(100) DEFAULT NULL,
+                    aggregate_type  VARCHAR(30) NOT NULL,
+                    aggregate_id    VARCHAR(100) NOT NULL,
+                    event_json      MEDIUMTEXT NOT NULL,
+                    occurred_at     BIGINT NOT NULL,
+                    tenant_id       VARCHAR(50) NOT NULL,
+                    client_id       VARCHAR(50) NOT NULL,
+                    create_time     BIGINT DEFAULT NULL,
+                    update_time     BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
+                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
+                    KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
+                    KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
+                    KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+
+        new AgentSchemaInitializer(jdbc).afterPropertiesSet();
+    }
+
+    @Test
+    void incompatiblePreexistingTaskEventTableFailsClosed() {
+        jdbc.execute("DROP TABLE agent_task_event");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id              BIGINT NOT NULL AUTO_INCREMENT,
+                    task_id         VARCHAR(100) NOT NULL,
+                    event_version   BIGINT NOT NULL,
+                    event_id        VARCHAR(100) NOT NULL,
+                    event_type      VARCHAR(128) NOT NULL,
+                    actor_type      VARCHAR(20) NOT NULL,
+                    actor_id        VARCHAR(100) DEFAULT NULL,
+                    aggregate_type  VARCHAR(30) NOT NULL,
+                    aggregate_id    VARCHAR(100) NOT NULL,
+                    event_json      MEDIUMTEXT NOT NULL,
+                    occurred_at     BIGINT NOT NULL,
+                    tenant_id       VARCHAR(50) NOT NULL,
+                    client_id       VARCHAR(50) NOT NULL,
+                    create_time     BIGINT DEFAULT NULL,
+                    update_time     BIGINT DEFAULT NULL,
+                    PRIMARY KEY (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """);
+
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+
+    @Test
+    void eventTableNonTransactionalEngineFailsClosed() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_event ENGINE=MyISAM");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void taskMetaNonTransactionalEngineFailsClosed() {
+        initializeOnce();
+        jdbc.execute("ALTER TABLE agent_task_meta ENGINE=MyISAM");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void globalEventIdUniqueIndexFailsClosed() {
+        initializeOnce();
+        jdbc.execute("CREATE UNIQUE INDEX uk_global_event_id ON agent_task_event(event_id)");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void unscopedTaskVersionUniqueIndexFailsClosed() {
+        initializeOnce();
+        jdbc.execute("CREATE UNIQUE INDEX uk_unscoped_task_version "
+                + "ON agent_task_event(task_id, event_version)");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(jdbc).afterPropertiesSet());
+    }
+
+    @Test
+    void harmlessOrdinaryTaskEventIndexIsAllowed() {
+        initializeOnce();
+        jdbc.execute("CREATE INDEX idx_task_event_aggregate "
+                + "ON agent_task_event(aggregate_type, aggregate_id)");
+        initializeTwice();
+    }
+
+
+
+    private void assertIndexDefinition(
+            String indexName, int expectedNonUnique, List<String> expectedColumns) {
+        assertEquals(List.of(expectedNonUnique), jdbc.queryForList("""
+                SELECT DISTINCT non_unique
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND index_name=?
+                ORDER BY non_unique
+                """, Integer.class, indexName), indexName + " uniqueness");
+        assertEquals(expectedColumns, jdbc.queryForList("""
+                SELECT column_name
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND index_name=? AND sub_part IS NULL
+                ORDER BY seq_in_index
+                """, String.class, indexName), indexName + " ordered columns");
+        assertEquals(expectedColumns.size(), jdbc.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='agent_task_event'
+                  AND index_name=?
+                """, Integer.class, indexName), indexName + " complete components");
+    }
+
+    private void initializeOnce() {
+        new AgentSchemaInitializer(jdbc).afterPropertiesSet();
     }
 
     private int namedTriggerCount(String pattern) {

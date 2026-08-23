@@ -545,10 +545,27 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     }
 
     private void requireExactText(String value, String name, int maxLength) {
-        if (value == null || value.isEmpty() || value.length() > maxLength
-                || !value.equals(value.strip()) || value.chars().anyMatch(Character::isISOControl)) {
+        if (value == null || value.isEmpty() || hasUnpairedSurrogate(value)
+                || value.codePointCount(0, value.length()) > maxLength
+                || !value.equals(value.strip())
+                || value.codePoints().anyMatch(Character::isISOControl)) {
             throw forbidden(name + " must be nonblank, unpadded, and free of control characters");
         }
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length()
+                        || !Character.isLowSurrogate(value.charAt(index))) {
+                    return true;
+                }
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void rejectSystem(String agentId) {

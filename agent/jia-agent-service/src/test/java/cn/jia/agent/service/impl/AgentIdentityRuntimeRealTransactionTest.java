@@ -29,6 +29,8 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -314,7 +316,8 @@ class AgentIdentityRuntimeRealTransactionTest {
                 mock(AgentTaskNoteDao.class), mock(DialogueTemplateDao.class),
                 provider(), provider(), provider(), provider(),
                 new AgentScopePublicationCoordinator(),
-                new AgentSceneFeatureFlags(false, false));
+                new AgentSceneFeatureFlags(false, false),
+                mock(AgentTaskMutationTransaction.class), mock(AgentTaskEventWriter.class));
         return transactionalProxy(raw, AgentService.class);
     }
 

@@ -1,8 +1,10 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.dao.impl.AgentTaskEventDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
@@ -13,11 +15,15 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
+import cn.jia.agent.service.AgentTaskEventWriter;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
@@ -48,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -60,6 +67,7 @@ class AgentTaskAggregationRealDatabaseTest {
     private static final String OTHER_TENANT = "tenant-b";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
+    private static final String TENANT_ZERO_TASK = "task-tenant-zero";
     private static final String AGENT_A = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String AGENT_B = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -69,6 +77,7 @@ class AgentTaskAggregationRealDatabaseTest {
     private AgentTaskMetaDao taskMetaDao;
     private AgentTaskMemberDao memberDao;
     private AgentTaskWorkItemDao workItemDao;
+    private AgentTaskEventWriter eventWriter;
     private AgentTaskAggregationService aggregateService;
 
     @BeforeEach
@@ -91,6 +100,11 @@ class AgentTaskAggregationRealDatabaseTest {
         memberDao = new AgentTaskMemberDaoImpl(template.getMapper(AgentTaskMemberMapper.class));
         workItemDao = new AgentTaskWorkItemDaoImpl(template.getMapper(AgentTaskWorkItemMapper.class));
         transactionManager = new DataSourceTransactionManager(dataSource);
+        AgentTaskEventDaoImpl eventDao = new AgentTaskEventDaoImpl();
+        setField(eventDao, "baseMapper", template.getMapper(AgentTaskEventMapper.class));
+        eventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager,
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), transactionManager));
         aggregateService = aggregateService(taskMetaDao);
     }
 
@@ -179,6 +193,72 @@ class AgentTaskAggregationRealDatabaseTest {
                         OTHER_TENANT, CLIENT, TASK, command(0L)));
         assertEquals(Reason.NOT_FOUND, error.getReason());
         assertTask("planning", 0L);
+    }
+
+    @Test
+    void nonZeroScopeCannotReadLockUpdateOrAggregateTenantZeroTask() {
+        insertTask(TENANT_ZERO_TASK, "0", "running", 0L);
+        insertWork(TENANT_ZERO_TASK, "0", "zero-work", true,
+                "submitted", 0, 3, null, null);
+
+        assertNull(taskMetaDao.findByTaskId(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK));
+        assertNull(taskMetaDao.findByTaskIdForUpdate(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK));
+        assertEquals(List.of(), taskMetaDao.findAggregationSnapshot(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK));
+        assertEquals(0, taskMetaDao.updateStatusByVersion(
+                OTHER_TENANT, CLIENT, TENANT_ZERO_TASK, 0L,
+                "failed", null, null, "must-not-cross-scope"));
+
+        AgentTaskStateException hidden = assertThrows(AgentTaskStateException.class,
+                () -> aggregateService.aggregate(
+                        OTHER_TENANT, CLIENT, TENANT_ZERO_TASK, command(0L)));
+        assertEquals(Reason.NOT_FOUND, hidden.getReason());
+        Map<String, Object> zeroRow = jdbc.queryForMap(
+                "SELECT reward_status, task_version FROM agent_task_meta WHERE task_id=?",
+                TENANT_ZERO_TASK);
+        assertEquals("running", zeroRow.get("REWARD_STATUS"));
+        assertEquals(0L, ((Number) zeroRow.get("TASK_VERSION")).longValue());
+
+        insertTask(TASK, TENANT, "running", 0L);
+        insertWork(TASK, "exact-work", true, "submitted", 0, 3, null, null);
+        AgentTaskAggregationDTO exact = aggregateService.aggregate(
+                TENANT, CLIENT, TASK, command(0L));
+        assertEquals("reviewing", exact.getStatus());
+        assertTrue(exact.getChanged());
+        assertTask("reviewing", 1L);
+    }
+
+    @Test
+    void ciCollationCaseAndSpaceCollisionsCannotReadUpdateOrAggregate() {
+        insertTask("Task-Collision", TENANT, "running", 0L);
+        assertNull(taskMetaDao.findByTaskId(TENANT, CLIENT, "task-collision"));
+        assertNull(taskMetaDao.findByTaskIdForUpdate(TENANT, CLIENT, "task-collision"));
+        assertEquals(0, taskMetaDao.updateStatusByVersion(
+                TENANT, CLIENT, "task-collision", 0L,
+                "failed", null, null, "case-collision"));
+
+        insertTask(TASK, TENANT, "running", 0L);
+        insertWork(TASK.toUpperCase(), TENANT, "case-work", true,
+                "submitted", 0, 3, null, null);
+        insertWork(TASK + " ", TENANT, "space-work", true,
+                "submitted", 0, 3, null, null);
+        assertEquals(List.of(), taskMetaDao.findAggregationSnapshot(TENANT, CLIENT, TASK));
+
+        AgentTaskAggregationDTO empty = aggregateService.aggregate(
+                TENANT, CLIENT, TASK, command(0L));
+        assertFalse(empty.getChanged());
+        assertEquals("running", empty.getStatus());
+        assertTask("running", 0L);
+
+        insertWork(TASK, TENANT, "exact-work", true,
+                "submitted", 0, 3, null, null);
+        AgentTaskAggregationDTO exact = aggregateService.aggregate(
+                TENANT, CLIENT, TASK, command(0L));
+        assertTrue(exact.getChanged());
+        assertEquals("reviewing", exact.getStatus());
+        assertTask("reviewing", 1L);
     }
 
     @Test
@@ -358,7 +438,53 @@ class AgentTaskAggregationRealDatabaseTest {
         }
     }
 
+    @Test
+    void changedAggregateAppendsCanonicalEventAndNoChangeAllocatesNothing() {
+        insertTask(TASK, TENANT, "running", 0L);
+        insertWork(TASK, "work-a", true, "submitted", 0, 3, null, null);
+
+        AgentTaskAggregationDTO changed = aggregateService.aggregate(
+                TENANT, CLIENT, TASK, command(0L));
+        assertEquals("reviewing", changed.getStatus());
+        assertEquals(List.of("TASK_REVIEWING"), jdbc.queryForList(
+                "SELECT event_type FROM agent_task_event ORDER BY event_version", String.class));
+        assertEquals(1L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
+                Long.class, TASK));
+
+        AgentTaskAggregationDTO unchanged = aggregateService.aggregate(
+                TENANT, CLIENT, TASK, command(1L));
+        assertFalse(unchanged.getChanged());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class));
+        assertEquals(1L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
+                Long.class, TASK));
+    }
+
+    @Test
+    void aggregateAppendFailureRollsBackTaskCasAndEventVersion() {
+        insertTask(TASK, TENANT, "running", 0L);
+        insertWork(TASK, "work-a", true, "submitted", 0, 3, null, null);
+        AgentTaskAggregationService failing = aggregateService(taskMetaDao, command -> {
+            throw new IllegalStateException("append failed");
+        });
+
+        assertThrows(IllegalStateException.class,
+                () -> failing.aggregate(TENANT, CLIENT, TASK, command(0L)));
+
+        assertTask("running", 0L);
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
+                Long.class, TASK));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class));
+    }
+
     private AgentTaskAggregationService aggregateService(AgentTaskMetaDao metaDao) {
+        return aggregateService(metaDao, eventWriter);
+    }
+
+    private AgentTaskAggregationService aggregateService(
+            AgentTaskMetaDao metaDao, AgentTaskEventWriter writer) {
         AgentIdentityService identityService = org.mockito.Mockito.mock(AgentIdentityService.class);
         org.mockito.Mockito.when(identityService.requirePersistedCanonicalAgentIdInScope(
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
@@ -371,7 +497,9 @@ class AgentTaskAggregationRealDatabaseTest {
                     throw new IllegalArgumentException("identity is not registered");
                 });
         return transactionalProxy(new AgentTaskAggregationServiceImpl(
-                metaDao, identityService, new AgentTaskAggregationCalculator(), () -> 1_000L),
+                metaDao, identityService, new AgentTaskMutationTransactionImpl(
+                        metaDao, transactionManager), writer,
+                new AgentTaskAggregationCalculator(), () -> 1_000L),
                 AgentTaskAggregationService.class);
     }
 
@@ -389,6 +517,7 @@ class AgentTaskAggregationRealDatabaseTest {
         MybatisConfiguration configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(AgentTaskMetaMapper.class);
+        configuration.addMapper(AgentTaskEventMapper.class);
         configuration.addMapper(AgentTaskMemberMapper.class);
         configuration.addMapper(AgentTaskWorkItemMapper.class);
         GlobalConfig globalConfig = new GlobalConfig();
@@ -404,21 +533,34 @@ class AgentTaskAggregationRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                    task_id VARCHAR(100) NOT NULL UNIQUE,
+                    task_id VARCHAR_IGNORECASE(100) NOT NULL UNIQUE,
                     reward_status VARCHAR(20) NOT NULL,
-                    assigned_agent_id VARCHAR(100), required_abilities TEXT, reward INT,
+                    assigned_agent_id VARCHAR_IGNORECASE(100), required_abilities TEXT, reward INT,
                     assigned_at BIGINT, started_at BIGINT, completed_at BIGINT,
                     failure_reason VARCHAR(1000), collaboration_mode VARCHAR(20) NOT NULL DEFAULT 'team',
                     risk_level VARCHAR(20) NOT NULL DEFAULT 'low', max_agents INT NOT NULL DEFAULT 2,
-                    coordinator_agent_id VARCHAR(100), review_required TINYINT NOT NULL DEFAULT 1,
+                    coordinator_agent_id VARCHAR_IGNORECASE(100), review_required TINYINT NOT NULL DEFAULT 1,
                     task_version BIGINT NOT NULL DEFAULT 0, current_event_version BIGINT NOT NULL DEFAULT 0,
                     create_time BIGINT, update_time BIGINT,
-                    tenant_id VARCHAR(50), client_id VARCHAR(50)
+                    tenant_id VARCHAR_IGNORECASE(50), client_id VARCHAR_IGNORECASE(50)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    task_id VARCHAR(100) NOT NULL, event_version BIGINT NOT NULL,
+                    event_id VARCHAR(100) NOT NULL, event_type VARCHAR(64) NOT NULL,
+                    actor_type VARCHAR(20) NOT NULL, actor_id VARCHAR(100),
+                    aggregate_type VARCHAR(30) NOT NULL, aggregate_id VARCHAR(100) NOT NULL,
+                    event_json CLOB NOT NULL, occurred_at BIGINT NOT NULL,
+                    tenant_id VARCHAR_IGNORECASE(50) NOT NULL, client_id VARCHAR_IGNORECASE(50) NOT NULL,
+                    create_time BIGINT, update_time BIGINT,
+                    UNIQUE (tenant_id, client_id, task_id, event_version),
+                    UNIQUE (tenant_id, client_id, event_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                    task_id VARCHAR(100) NOT NULL, agent_id VARCHAR(100) NOT NULL,
+                    task_id VARCHAR_IGNORECASE(100) NOT NULL, agent_id VARCHAR_IGNORECASE(100) NOT NULL,
                     member_role VARCHAR(20) NOT NULL, member_status VARCHAR(20) NOT NULL,
                     assignment_source VARCHAR(20) NOT NULL, joined_at BIGINT, accepted_at BIGINT,
                     started_at BIGINT, completed_at BIGINT, last_heartbeat_at BIGINT,
@@ -430,15 +572,15 @@ class AgentTaskAggregationRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_work_item (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                    work_item_id VARCHAR(100) NOT NULL, task_id VARCHAR(100) NOT NULL,
+                    work_item_id VARCHAR_IGNORECASE(100) NOT NULL, task_id VARCHAR_IGNORECASE(100) NOT NULL,
                     title VARCHAR(255) NOT NULL, description TEXT, work_type VARCHAR(30) NOT NULL,
-                    required_abilities TEXT, assignee_agent_id VARCHAR(100), status VARCHAR(20) NOT NULL,
+                    required_abilities TEXT, assignee_agent_id VARCHAR_IGNORECASE(100), status VARCHAR(20) NOT NULL,
                     priority INT NOT NULL DEFAULT 0, required_item TINYINT NOT NULL DEFAULT 1,
                     dependency_json TEXT, lease_token VARCHAR(100), lease_until BIGINT,
                     attempt_count INT NOT NULL DEFAULT 0, max_attempts INT NOT NULL DEFAULT 3,
-                    result_artifact_id VARCHAR(100), submitted_at BIGINT, completed_at BIGINT,
-                    version BIGINT NOT NULL DEFAULT 0, tenant_id VARCHAR(50) NOT NULL,
-                    client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
+                    result_artifact_id VARCHAR_IGNORECASE(100), submitted_at BIGINT, completed_at BIGINT,
+                    version BIGINT NOT NULL DEFAULT 0, tenant_id VARCHAR_IGNORECASE(50) NOT NULL,
+                    client_id VARCHAR_IGNORECASE(50) NOT NULL, create_time BIGINT, update_time BIGINT,
                     UNIQUE (tenant_id, client_id, work_item_id)
                 )""");
     }
@@ -461,6 +603,13 @@ class AgentTaskAggregationRealDatabaseTest {
     private void insertWork(
             String taskId, String workId, boolean required, String status,
             int attempts, int maxAttempts, String artifactId, Long completedAt) {
+        insertWork(taskId, TENANT, workId, required, status,
+                attempts, maxAttempts, artifactId, completedAt);
+    }
+
+    private void insertWork(
+            String taskId, String tenant, String workId, boolean required, String status,
+            int attempts, int maxAttempts, String artifactId, Long completedAt) {
         boolean activeLease = "claimed".equals(status) || "running".equals(status);
         jdbc.update("INSERT INTO agent_task_work_item "
                         + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
@@ -470,7 +619,7 @@ class AgentTaskAggregationRealDatabaseTest {
                 workId, taskId, workId, "implementation",
                 activeLease ? AGENT_A : null, status, required,
                 activeLease ? "lease-" + workId : null, activeLease ? 2_000L : null,
-                attempts, maxAttempts, artifactId, completedAt, 0L, TENANT, CLIENT);
+                attempts, maxAttempts, artifactId, completedAt, 0L, tenant, CLIENT);
     }
 
     private AgentTaskWorkItemDTO workItem(
