@@ -665,6 +665,9 @@ public class ArchiveQuestionWorker {
         private ScanCursor blockedThrough;
         private ScanCursor blockedCursor;
         private ScanCursor blockedCycleThrough;
+        // The active cycle freezes both its upper bound and generation across all of its pages.
+        private long blockedGeneration;
+        private long blockedCycleGeneration;
         private boolean blockedCycleFailed;
         private int planSequence;
         private final ArrayDeque<RetryAttempt> retries = new ArrayDeque<>();
@@ -675,14 +678,15 @@ public class ArchiveQuestionWorker {
         private ScanPlan begin() {
             int slot = Math.floorMod(planSequence++, SWEEP_INTERVAL_PAGES);
             if (slot == SWEEP_INTERVAL_PAGES - 1) {
-                return new ScanPlan(ScanKind.SWEEP, sweep, null);
+                return new ScanPlan(ScanKind.SWEEP, sweep, null, 0);
             }
             if (slot == SWEEP_INTERVAL_PAGES - 2 && blockedStart != null) {
                 if (blockedCursor == null) blockedCursor = blockedStart;
                 if (blockedCycleThrough == null) blockedCycleThrough = blockedThrough;
-                return new ScanPlan(ScanKind.BLOCKED, blockedCursor, blockedCycleThrough);
+                return new ScanPlan(ScanKind.BLOCKED, blockedCursor, blockedCycleThrough,
+                        blockedCycleGeneration);
             }
-            return new ScanPlan(ScanKind.FORWARD, forward, null);
+            return new ScanPlan(ScanKind.FORWARD, forward, null, 0);
         }
 
         private void advance(ScanPlan plan, ScanCursor cursor) {
@@ -715,12 +719,14 @@ public class ArchiveQuestionWorker {
         }
 
         private void rememberBlocked(ScanCursor predecessor, ScanCursor candidate) {
+            blockedGeneration++;
             boolean earlierStart = blockedStart == null || compare(predecessor, blockedStart) < 0;
             if (earlierStart) blockedStart = predecessor;
             if (blockedThrough == null || compare(candidate, blockedThrough) > 0) blockedThrough = candidate;
             if (blockedCursor == null || earlierStart) {
                 blockedCursor = blockedStart;
                 blockedCycleThrough = blockedThrough;
+                blockedCycleGeneration = blockedGeneration;
                 blockedCycleFailed = false;
             }
         }
@@ -749,15 +755,18 @@ public class ArchiveQuestionWorker {
                 case FORWARD -> forward = ScanCursor.START;
                 case SWEEP -> sweep = ScanCursor.START;
                 case BLOCKED -> {
-                    if (blockedCycleFailed) {
+                    // A clean frozen interval is not complete when later scans dirtied its responsibility.
+                    if (blockedCycleFailed || plan.generation() != blockedGeneration) {
                         blockedCursor = blockedStart;
                         blockedCycleThrough = blockedThrough;
+                        blockedCycleGeneration = blockedGeneration;
                         blockedCycleFailed = false;
                     } else {
                         blockedStart = null;
                         blockedThrough = null;
                         blockedCursor = null;
                         blockedCycleThrough = null;
+                        blockedCycleGeneration = blockedGeneration;
                     }
                 }
             }
@@ -778,7 +787,7 @@ public class ArchiveQuestionWorker {
 
     private enum ScanKind { FORWARD, SWEEP, BLOCKED }
 
-    private record ScanPlan(ScanKind kind, ScanCursor cursor, ScanCursor through) { }
+    private record ScanPlan(ScanKind kind, ScanCursor cursor, ScanCursor through, long generation) { }
 
     private record ScanCursor(Instant candidateAt, long rowId) {
         private static final ScanCursor START = new ScanCursor(null, 0);

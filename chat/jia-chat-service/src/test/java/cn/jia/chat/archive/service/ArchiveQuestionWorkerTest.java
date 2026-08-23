@@ -803,6 +803,217 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
+    void activeReadyBlockedCycleRetainsPostSnapshotExtensionAfterCleanOldIntervalFinish() {
+        delivery.stop();
+        SelectiveFailureStore selective = new SelectiveFailureStore();
+        store = selective;
+        transactions = new ArchiveQuestionTestSupport.Transactions(store);
+        broker = new ArchiveQuestionEventBroker();
+        delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
+        ArchiveQuestionProvider provider = request -> ArchiveQuestionProvider.Answer.complete("r9-ready-b");
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+
+        for (int index = 0; index < ArchiveQuestionWorker.RETRY_CAPACITY; index++) {
+            String id = String.format("%08x-0000-4000-8000-000000000000", 40000 + index);
+            selective.fail(id);
+            store.setQuestion(OWNER, questionWith(base, id, "QUEUED", 1));
+            store.setOutbox(OWNER, readyOutbox(baseOutbox, id, 1));
+        }
+        String oldA = "c0000001-0000-4000-8000-000000000000";
+        String oldThrough = "c0000002-0000-4000-8000-000000000000";
+        selective.fail(oldA);
+        selective.fail(oldThrough);
+        store.setQuestion(OWNER, questionWith(base, oldA, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, oldA, 1));
+        List<ArchiveOwnerScope> middleOwners = new java.util.ArrayList<>();
+        for (int index = 0; index < 80; index++) {
+            ArchiveOwnerScope middle = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-middle-" + index);
+            middleOwners.add(middle);
+            store.setQuestion(middle, questionWith(base, ID, "QUEUED", 1));
+            store.setOutbox(middle, readyOutbox(baseOutbox, ID, 1));
+        }
+        store.setQuestion(OWNER, questionWith(base, oldThrough, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, oldThrough, 1));
+        for (int index = 0; index < 14; index++) {
+            ArchiveOwnerScope after = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-after-old-" + index);
+            store.setQuestion(after, questionWith(base, ID, "QUEUED", 1));
+            store.setOutbox(after, readyOutbox(baseOutbox, ID, 1));
+        }
+
+        ArchiveQuestionWorker worker = worker(provider);
+        for (int run = 0; run < 7; run++) {
+            int before = store.claimCandidateQueries;
+            assertFalse(worker.runOnce());
+            assertTrue(store.claimCandidateQueries - before <= 1);
+        }
+        assertEquals(ArchiveQuestionWorker.RETRY_CAPACITY, worker.retryResponsibilities());
+        assertTrue(selective.attempts(oldA) >= 2,
+                "the first blocked pass must fail and freeze the expanded old interval");
+        assertEquals(1, selective.attempts(oldThrough));
+        store.removeQuestionAndOutbox(OWNER, oldA);
+        store.removeQuestionAndOutbox(OWNER, oldThrough);
+
+        String recoveredB = "c0000003-0000-4000-8000-000000000000";
+        selective.fail(recoveredB);
+        store.setQuestion(OWNER, questionWith(base, recoveredB, "QUEUED", 1));
+        store.setOutbox(OWNER, readyOutbox(baseOutbox, recoveredB, 1));
+        for (int index = 0; index < 256; index++) {
+            ArchiveOwnerScope after = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-after-b-" + index);
+            store.setQuestion(after, questionWith(base, ID, "QUEUED", 1));
+            store.setOutbox(after, readyOutbox(baseOutbox, ID, 1));
+        }
+
+        for (int run = 0; run < 4; run++) {
+            int before = store.claimCandidateQueries;
+            assertFalse(worker.runOnce());
+            assertTrue(store.claimCandidateQueries - before <= 1);
+        }
+        assertEquals(1, selective.attempts(recoveredB),
+                "forward must discover and pass B while the old blocked cycle is active");
+        for (int index = 0; index < 64; index++) {
+            store.removeQuestionAndOutbox(middleOwners.get(index), ID);
+        }
+
+        for (int run = 0; run < 4; run++) {
+            int before = store.claimCandidateQueries;
+            assertFalse(worker.runOnce());
+            assertTrue(store.claimCandidateQueries - before <= 1);
+        }
+        assertTrue(selective.attempts(recoveredB) >= 2,
+                "sweep must rediscover and pass B after the cycle snapshot");
+        selective.allow(recoveredB);
+
+        boolean recovered = false;
+        for (int run = 0; run < 6 && !recovered; run++) {
+            ArchiveOwnerScope tail = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-ready-tail-" + run);
+            String tailId = String.format("%08x-0000-4000-8000-000000000000", 41000 + run);
+            store.setQuestion(tail, questionWith(base, tailId, "QUEUED", 1));
+            store.setOutbox(tail, readyOutbox(baseOutbox, tailId, 1));
+            int before = store.claimCandidateQueries;
+            worker.runOnce();
+            assertTrue(store.claimCandidateQueries - before <= 1);
+            assertTrue(worker.retryResponsibilities() <= ArchiveQuestionWorker.RETRY_CAPACITY);
+            recovered = "SUCCEEDED".equals(store.findQuestion(OWNER, recoveredB, false).status());
+        }
+        assertTrue(recovered, "post-snapshot READY responsibility must survive the old clean finish and tail");
+        assertTrue(selective.attempts(recoveredB) >= 4);
+        assertEquals(ArchiveQuestionWorker.RETRY_CAPACITY, worker.retryResponsibilities());
+    }
+
+    @Test
+    void activeExpiredBlockedCycleRetainsPostSnapshotExtensionAfterCleanOldIntervalFinish() {
+        delivery.stop();
+        SelectiveFailureStore selective = new SelectiveFailureStore();
+        store = selective;
+        transactions = new ArchiveQuestionTestSupport.Transactions(store);
+        broker = new ArchiveQuestionEventBroker();
+        delivery = new ArchiveQuestionEventDelivery(store, broker, transactions);
+        ArchiveQuestionProvider provider = new ArchiveClerkFallbackProvider();
+        create(provider);
+        QuestionRecord base = store.findQuestion(OWNER, ID, false);
+        OutboxRecord baseOutbox = store.findOutbox(OWNER, ID, false);
+        store.removeQuestionAndOutbox(OWNER, ID);
+
+        for (int index = 0; index < ArchiveQuestionWorker.RETRY_CAPACITY; index++) {
+            String id = String.format("%08x-0000-4000-8000-000000000000", 42000 + index);
+            selective.fail(id);
+            store.setQuestion(OWNER, questionWith(base, id, "RUNNING", 2));
+            store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, id, 2, NOW.minusSeconds(30)));
+        }
+        String oldA = "d0000001-0000-4000-8000-000000000000";
+        String oldThrough = "d0000002-0000-4000-8000-000000000000";
+        selective.fail(oldA);
+        selective.fail(oldThrough);
+        store.setQuestion(OWNER, questionWith(base, oldA, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, oldA, 2, NOW.minusSeconds(20)));
+        List<ArchiveOwnerScope> middleOwners = new java.util.ArrayList<>();
+        for (int index = 0; index < 80; index++) {
+            ArchiveOwnerScope middle = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-middle-" + index);
+            middleOwners.add(middle);
+            store.setQuestion(middle, questionWith(base, ID, "RUNNING", 2));
+            store.setOutbox(middle, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(20)));
+        }
+        store.setQuestion(OWNER, questionWith(base, oldThrough, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, oldThrough, 2, NOW.minusSeconds(20)));
+        for (int index = 0; index < 14; index++) {
+            ArchiveOwnerScope after = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-after-old-" + index);
+            store.setQuestion(after, questionWith(base, ID, "RUNNING", 2));
+            store.setOutbox(after, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(20)));
+        }
+
+        ArchiveQuestionWorker worker = worker(provider);
+        for (int run = 0; run < 7; run++) {
+            int before = store.exhaustedCandidateQueries;
+            assertFalse(worker.runOnce());
+            assertTrue(store.exhaustedCandidateQueries - before <= 1);
+        }
+        assertEquals(ArchiveQuestionWorker.RETRY_CAPACITY, worker.retryResponsibilities());
+        assertTrue(selective.attempts(oldA) >= 2,
+                "the first expired blocked pass must freeze the expanded old interval");
+        assertEquals(1, selective.attempts(oldThrough));
+        store.removeQuestionAndOutbox(OWNER, oldA);
+        store.removeQuestionAndOutbox(OWNER, oldThrough);
+
+        String recoveredB = "d0000003-0000-4000-8000-000000000000";
+        selective.fail(recoveredB);
+        store.setQuestion(OWNER, questionWith(base, recoveredB, "RUNNING", 2));
+        store.setOutbox(OWNER, exhaustedOutbox(baseOutbox, recoveredB, 2, NOW.minusSeconds(10)));
+        for (int index = 0; index < 256; index++) {
+            ArchiveOwnerScope after = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-after-b-" + index);
+            store.setQuestion(after, questionWith(base, ID, "RUNNING", 2));
+            store.setOutbox(after, exhaustedOutbox(baseOutbox, ID, 2, NOW.minusSeconds(9)));
+        }
+
+        for (int run = 0; run < 4; run++) {
+            int before = store.exhaustedCandidateQueries;
+            assertFalse(worker.runOnce());
+            assertTrue(store.exhaustedCandidateQueries - before <= 1);
+        }
+        assertEquals(1, selective.attempts(recoveredB),
+                "expired forward must discover and pass B while the old cycle is active");
+        for (int index = 0; index < 64; index++) {
+            store.removeQuestionAndOutbox(middleOwners.get(index), ID);
+        }
+
+        for (int run = 0; run < 4; run++) {
+            int before = store.exhaustedCandidateQueries;
+            assertFalse(worker.runOnce());
+            assertTrue(store.exhaustedCandidateQueries - before <= 1);
+        }
+        assertTrue(selective.attempts(recoveredB) >= 2,
+                "expired sweep must rediscover and pass B after the cycle snapshot");
+        selective.allow(recoveredB);
+
+        boolean finalized = false;
+        for (int run = 0; run < 6 && !finalized; run++) {
+            ArchiveOwnerScope tail = new ArchiveOwnerScope(
+                    OWNER.tenantId(), OWNER.clientId(), "r9-expired-tail-" + run);
+            String tailId = String.format("%08x-0000-4000-8000-000000000000", 43000 + run);
+            store.setQuestion(tail, questionWith(base, tailId, "RUNNING", 2));
+            store.setOutbox(tail, exhaustedOutbox(baseOutbox, tailId, 2, NOW.minusSeconds(1)));
+            int before = store.exhaustedCandidateQueries;
+            worker.runOnce();
+            assertTrue(store.exhaustedCandidateQueries - before <= 1);
+            assertTrue(worker.retryResponsibilities() <= ArchiveQuestionWorker.RETRY_CAPACITY);
+            finalized = "FAILED_FINAL".equals(store.findQuestion(OWNER, recoveredB, false).status());
+        }
+        assertTrue(finalized, "post-snapshot expired responsibility must survive the old clean finish and tail");
+        assertTrue(selective.attempts(recoveredB) >= 3);
+        assertEquals("DONE", store.findOutbox(OWNER, recoveredB, false).state());
+        assertEquals(ArchiveQuestionWorker.RETRY_CAPACITY, worker.retryResponsibilities());
+    }
+
+    @Test
     void moreThanRetryCapacityPermanentFailuresStayBoundedAndContinuousTailCannotBlockHealthyRows() {
         AtomicInteger calls = new AtomicInteger();
         ArchiveQuestionProvider provider = request -> {
