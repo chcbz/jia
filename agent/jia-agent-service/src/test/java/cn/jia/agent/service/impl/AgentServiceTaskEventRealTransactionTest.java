@@ -15,6 +15,7 @@ import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskNoteMapper;
 import cn.jia.agent.service.AgentSceneService;
+import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
@@ -132,6 +133,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 taskNoteDao,
                 mock(cn.jia.agent.dao.DialogueTemplateDao.class),
                 provider(eventPublisher), provider(taskService), provider(), provider(),
+                new AgentScopePublicationCoordinator(),
                 new AgentSceneFeatureFlags(false, false),
                 mutationTransaction, eventWriter);
         service = transactionalProxy(raw);
