@@ -138,6 +138,7 @@ public class ArchiveQuestionWorker {
             return false;
         }
         boolean advanced = false;
+        boolean blockedBoundaryReached = false;
         int inspected = 0;
         ScanCursor current = plan.cursor();
         for (ClaimCandidate candidate : candidates) {
@@ -145,6 +146,11 @@ public class ArchiveQuestionWorker {
             if (!afterCursor(candidate, current.candidateAt(), current.rowId())) continue;
             ScanCursor predecessor = current;
             ScanCursor candidateCursor = new ScanCursor(candidate.candidateAt(), candidate.rowId());
+            if (plan.kind() == ScanKind.BLOCKED
+                    && compareCursor(candidateCursor, plan.through()) > 0) {
+                blockedBoundaryReached = true;
+                break;
+            }
             if (!allowed(candidate.owner()) || RetryKey.of(candidate).equals(attempted)) {
                 current = candidateCursor;
                 exhaustedScan.advance(plan, current);
@@ -160,15 +166,17 @@ public class ArchiveQuestionWorker {
             } catch (Throwable failure) {
                 if (!permanentCandidateFailure(failure)
                         && !exhaustedScan.registerRetry(new RetryAttempt(candidate))) {
-                    exhaustedScan.rememberBlocked(predecessor);
-                    if (plan.kind() == ScanKind.BLOCKED) return false;
+                    exhaustedScan.rememberBlocked(predecessor, candidateCursor);
+                    if (plan.kind() == ScanKind.BLOCKED) exhaustedScan.blockedFailureObserved();
                 }
             }
             current = candidateCursor;
             exhaustedScan.advance(plan, current);
             advanced = true;
         }
-        exhaustedScan.finish(plan, !advanced || candidates.size() < CANDIDATE_BATCH);
+        exhaustedScan.finish(plan, !advanced || candidates.size() < CANDIDATE_BATCH
+                || blockedBoundaryReached || (plan.kind() == ScanKind.BLOCKED
+                && compareCursor(current, plan.through()) >= 0));
         return false;
     }
 
@@ -206,6 +214,7 @@ public class ArchiveQuestionWorker {
             return false;
         }
         boolean advanced = false;
+        boolean blockedBoundaryReached = false;
         int inspected = 0;
         ScanCursor current = plan.cursor();
         for (ClaimCandidate candidate : candidates) {
@@ -213,6 +222,11 @@ public class ArchiveQuestionWorker {
             if (!afterCursor(candidate, current.candidateAt(), current.rowId())) continue;
             ScanCursor predecessor = current;
             ScanCursor candidateCursor = new ScanCursor(candidate.candidateAt(), candidate.rowId());
+            if (plan.kind() == ScanKind.BLOCKED
+                    && compareCursor(candidateCursor, plan.through()) > 0) {
+                blockedBoundaryReached = true;
+                break;
+            }
             if (!allowed(candidate.owner()) || RetryKey.of(candidate).equals(attempted)) {
                 current = candidateCursor;
                 claimScan.advance(plan, current);
@@ -230,15 +244,17 @@ public class ArchiveQuestionWorker {
             } catch (Throwable failure) {
                 if (!permanentCandidateFailure(failure)
                         && !claimScan.registerRetry(new RetryAttempt(candidate))) {
-                    claimScan.rememberBlocked(predecessor);
-                    if (plan.kind() == ScanKind.BLOCKED) return false;
+                    claimScan.rememberBlocked(predecessor, candidateCursor);
+                    if (plan.kind() == ScanKind.BLOCKED) claimScan.blockedFailureObserved();
                 }
             }
             current = candidateCursor;
             claimScan.advance(plan, current);
             advanced = true;
         }
-        claimScan.finish(plan, !advanced || candidates.size() < CANDIDATE_BATCH);
+        claimScan.finish(plan, !advanced || candidates.size() < CANDIDATE_BATCH
+                || blockedBoundaryReached || (plan.kind() == ScanKind.BLOCKED
+                && compareCursor(current, plan.through()) >= 0));
         return false;
     }
 
@@ -246,6 +262,15 @@ public class ArchiveQuestionWorker {
 
     private boolean permanentCandidateFailure(Throwable failure) {
         return failure instanceof ArchivePersonalDataException || failure instanceof IllegalArgumentException;
+    }
+
+    private int compareCursor(ScanCursor left, ScanCursor right) {
+        if (right == null) return -1;
+        if (left.candidateAt() == null) return right.candidateAt() == null
+                ? Long.compare(left.rowId(), right.rowId()) : -1;
+        if (right.candidateAt() == null) return 1;
+        int time = left.candidateAt().compareTo(right.candidateAt());
+        return time != 0 ? time : Long.compare(left.rowId(), right.rowId());
     }
 
     private boolean afterCursor(ClaimCandidate candidate, Instant cursorAt, long cursorRowId) {
@@ -636,7 +661,11 @@ public class ArchiveQuestionWorker {
         private final RetryBudget budget;
         private ScanCursor forward = ScanCursor.START;
         private ScanCursor sweep = ScanCursor.START;
-        private ScanCursor blocked;
+        private ScanCursor blockedStart;
+        private ScanCursor blockedThrough;
+        private ScanCursor blockedCursor;
+        private ScanCursor blockedCycleThrough;
+        private boolean blockedCycleFailed;
         private int planSequence;
         private final ArrayDeque<RetryAttempt> retries = new ArrayDeque<>();
         private final Set<RetryKey> retryKeys = new HashSet<>();
@@ -645,18 +674,22 @@ public class ArchiveQuestionWorker {
 
         private ScanPlan begin() {
             int slot = Math.floorMod(planSequence++, SWEEP_INTERVAL_PAGES);
-            if (slot == SWEEP_INTERVAL_PAGES - 1) return new ScanPlan(ScanKind.SWEEP, sweep);
-            if (slot == SWEEP_INTERVAL_PAGES - 2 && blocked != null) {
-                return new ScanPlan(ScanKind.BLOCKED, blocked);
+            if (slot == SWEEP_INTERVAL_PAGES - 1) {
+                return new ScanPlan(ScanKind.SWEEP, sweep, null);
             }
-            return new ScanPlan(ScanKind.FORWARD, forward);
+            if (slot == SWEEP_INTERVAL_PAGES - 2 && blockedStart != null) {
+                if (blockedCursor == null) blockedCursor = blockedStart;
+                if (blockedCycleThrough == null) blockedCycleThrough = blockedThrough;
+                return new ScanPlan(ScanKind.BLOCKED, blockedCursor, blockedCycleThrough);
+            }
+            return new ScanPlan(ScanKind.FORWARD, forward, null);
         }
 
         private void advance(ScanPlan plan, ScanCursor cursor) {
             switch (plan.kind()) {
                 case FORWARD -> forward = cursor;
                 case SWEEP -> sweep = cursor;
-                case BLOCKED -> blocked = cursor;
+                case BLOCKED -> blockedCursor = cursor;
             }
         }
 
@@ -681,9 +714,18 @@ public class ArchiveQuestionWorker {
             if (retryKeys.remove(RetryKey.of(retry.candidate()))) budget.release();
         }
 
-        private void rememberBlocked(ScanCursor predecessor) {
-            if (blocked == null || compare(predecessor, blocked) < 0) blocked = predecessor;
+        private void rememberBlocked(ScanCursor predecessor, ScanCursor candidate) {
+            boolean earlierStart = blockedStart == null || compare(predecessor, blockedStart) < 0;
+            if (earlierStart) blockedStart = predecessor;
+            if (blockedThrough == null || compare(candidate, blockedThrough) > 0) blockedThrough = candidate;
+            if (blockedCursor == null || earlierStart) {
+                blockedCursor = blockedStart;
+                blockedCycleThrough = blockedThrough;
+                blockedCycleFailed = false;
+            }
         }
+
+        private void blockedFailureObserved() { blockedCycleFailed = true; }
 
         private int compare(ScanCursor left, ScanCursor right) {
             if (left.candidateAt() == null) return right.candidateAt() == null
@@ -695,20 +737,29 @@ public class ArchiveQuestionWorker {
 
         private void processed(ScanPlan plan) {
             // A row can become eligible again (explicit retry / lease expiry), so restart normal lookup.
-            // Sweep, blocked range, and exact failed-row responsibilities remain independent.
+            // Sweep, bounded blocked interval, and exact failed-row responsibilities remain independent.
             forward = ScanCursor.START;
         }
 
-        private void processedRetry() {
-            forward = ScanCursor.START;
-        }
+        private void processedRetry() { forward = ScanCursor.START; }
 
         private void finish(ScanPlan plan, boolean endReached) {
             if (!endReached) return;
             switch (plan.kind()) {
                 case FORWARD -> forward = ScanCursor.START;
                 case SWEEP -> sweep = ScanCursor.START;
-                case BLOCKED -> blocked = null;
+                case BLOCKED -> {
+                    if (blockedCycleFailed) {
+                        blockedCursor = blockedStart;
+                        blockedCycleThrough = blockedThrough;
+                        blockedCycleFailed = false;
+                    } else {
+                        blockedStart = null;
+                        blockedThrough = null;
+                        blockedCursor = null;
+                        blockedCycleThrough = null;
+                    }
+                }
             }
         }
     }
@@ -727,7 +778,7 @@ public class ArchiveQuestionWorker {
 
     private enum ScanKind { FORWARD, SWEEP, BLOCKED }
 
-    private record ScanPlan(ScanKind kind, ScanCursor cursor) { }
+    private record ScanPlan(ScanKind kind, ScanCursor cursor, ScanCursor through) { }
 
     private record ScanCursor(Instant candidateAt, long rowId) {
         private static final ScanCursor START = new ScanCursor(null, 0);
