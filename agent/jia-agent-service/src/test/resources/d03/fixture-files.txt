@@ -35,3 +35,4 @@ agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentOutboxRelay
 agent/jia-agent-service/src/test/resources/d03/compute-fixture-digest.sh
 agent/jia-agent-service/src/test/resources/d03/fixture-files.txt
 agent/jia-agent-service/src/test/scripts/run-d03-isolated-mysql.sh
+agent/jia-agent-service/src/test/scripts/test-run-d03-isolated-mysql-contract.sh

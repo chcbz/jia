@@ -12,6 +12,7 @@ BASE=$(mktemp -d /tmp/cyf-d03-mysql-XXXXXXXX)
 DATA="$BASE/data"
 RUN="$BASE/run"
 TMP="$BASE/tmp"
+LOG_DIR="$BASE/log"
 SOCKET="$RUN/mysql.sock"
 PIDFILE="$RUN/mysqld.pid"
 GRADLE_INIT="$BASE/d03-gradle-init.gradle"
@@ -22,9 +23,9 @@ with socket.socket() as sock:
     print(sock.getsockname()[1])
 PY
 )}
-INIT_LOG="$EVIDENCE_DIR/mysql-initialize.log"
-SERVER_LOG="$EVIDENCE_DIR/mysql-server.log"
-GENERAL_LOG="$EVIDENCE_DIR/mysql-general.log"
+INIT_LOG="$LOG_DIR/mysql-initialize.log"
+SERVER_LOG="$LOG_DIR/mysql-server.log"
+GENERAL_LOG="$LOG_DIR/mysql-general.log"
 GRADLE_LOG="$EVIDENCE_DIR/gradle-d03-mysql.log"
 JDBC_USER=d03_isolated_test
 JDBC_PASSWORD=d03-isolated-only
@@ -32,7 +33,7 @@ PRODUCTION_LISTENER_BEFORE=$(ss -ltnp '( sport = :3306 )' 2>/dev/null || true)
 MYSQL_PID=''
 CLEANED=0
 
-mkdir -p "$EVIDENCE_DIR" "$DATA" "$RUN" "$TMP"
+mkdir -p "$EVIDENCE_DIR" "$DATA" "$RUN" "$TMP" "$LOG_DIR"
 printf '%s\n' \
   "beforeProject { project ->" \
   "    if (!project.rootProject.ext.has('repoUsername')) project.rootProject.ext.repoUsername = ''" \
@@ -75,6 +76,11 @@ cleanup() {
         done
       fi
     fi
+    for runtime_log in "$INIT_LOG" "$SERVER_LOG" "$GENERAL_LOG"; do
+      if [[ -f "$runtime_log" ]]; then
+        cp -f -- "$runtime_log" "$EVIDENCE_DIR/$(basename -- "$runtime_log")" || cleanup_status=1
+      fi
+    done
     rm -rf "$BASE"
     echo "base_exists_after_remove=$(if [[ -e $BASE ]]; then echo yes; else echo no; fi)"
     echo "isolated_port_listening_after_shutdown=$(if ss -ltnH "( sport = :$PORT )" | grep -q .; then echo yes; else echo no; fi)"
@@ -106,7 +112,7 @@ binary_version=$($MYSQLD --no-defaults --version)
 
 if [[ $(id -u) == 0 ]] && id mysql >/dev/null 2>&1; then
   MYSQL_OS_USER=mysql
-  chown -R mysql:mysql "$BASE" "$EVIDENCE_DIR"
+  chown -R mysql:mysql "$BASE"
   RUN_AS=(runuser -u mysql --)
 else
   MYSQL_OS_USER=$(id -un)
