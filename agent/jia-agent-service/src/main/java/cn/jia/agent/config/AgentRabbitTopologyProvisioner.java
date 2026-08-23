@@ -41,19 +41,20 @@ public final class AgentRabbitTopologyProvisioner {
                 for (Binding binding : manifest.bindingDeclarations()) {
                     admin.declareBinding(binding);
                 }
-                readiness.markReady(AgentRabbitTopologyReadiness.Operation.PROVISION);
+                readiness.markProvisioned();
                 return readiness.snapshot();
             } catch (RuntimeException failure) {
-                readiness.markFailed(AgentRabbitTopologyReadiness.Operation.PROVISION, failure);
-                throw failure;
+                readiness.markFailed(AgentRabbitTopologyReadiness.Source.PROVISION, failure);
+                throw AgentRabbitTopologyOperationException.provisionFailed(failure);
             }
         }
     }
 
     /**
      * Passively verifies that every canonical exchange and queue exists. Rabbit's AMQP protocol
-     * has no passive binding-inspection method; exact binding/argument equivalence is enforced by
-     * the explicit idempotent declarations in {@link #provision()}.
+     * has no passive binding-inspection method and these calls do not establish queue arguments or
+     * canonical exchange properties. This operation therefore records existence-only coverage;
+     * only a successful {@link #provision()} can establish canonical readiness.
      */
     public AgentRabbitTopologyReadiness.Snapshot passiveVerify() {
         synchronized (operationLock) {
@@ -68,12 +69,12 @@ public final class AgentRabbitTopologyProvisioner {
                 for (AgentRabbitTopologyManifest.QueueSpec queue : manifest.queues()) {
                     channel.queueDeclarePassive(queue.name());
                 }
-                readiness.markReady(AgentRabbitTopologyReadiness.Operation.PASSIVE_VERIFY);
+                readiness.markExistenceConfirmed();
                 return readiness.snapshot();
             } catch (Exception failure) {
-                readiness.markFailed(AgentRabbitTopologyReadiness.Operation.PASSIVE_VERIFY, failure);
-                throw new IllegalStateException(
-                        "D04 passive Rabbit topology verification failed", failure);
+                readiness.markFailed(
+                        AgentRabbitTopologyReadiness.Source.PASSIVE_VERIFY, failure);
+                throw AgentRabbitTopologyOperationException.passiveVerifyFailed(failure);
             } finally {
                 closeChannel(channel);
                 closeConnection(connection);

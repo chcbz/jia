@@ -86,9 +86,15 @@ class AgentRabbitTopologyConfigurationTest {
                     assertTrue(context.getBeansOfType(RabbitTemplate.class).isEmpty());
                     assertTrue(context.getBeansOfType(
                             RabbitListenerEndpointRegistry.class).isEmpty());
+                    AgentRabbitTopologyReadiness.Snapshot readiness = context
+                            .getBean(AgentRabbitTopologyReadiness.class).snapshot();
                     assertEquals(AgentRabbitTopologyReadiness.Status.NOT_CHECKED,
-                            context.getBean(AgentRabbitTopologyReadiness.class)
-                                    .snapshot().status());
+                            readiness.status());
+                    assertEquals(AgentRabbitTopologyReadiness.Source.NONE,
+                            readiness.source());
+                    assertEquals(AgentRabbitTopologyReadiness.Coverage.NONE,
+                            readiness.coverage());
+                    assertFalse(readiness.canonicalTopologyReady());
                 });
     }
 
