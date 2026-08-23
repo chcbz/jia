@@ -16,6 +16,9 @@ import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentTaskAggregationCommandDTO;
+import cn.jia.agent.entity.AgentTaskEventEntity;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.exception.AgentTaskStateException;
@@ -27,6 +30,7 @@ import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
@@ -55,6 +59,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -82,6 +87,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     private AgentTaskAggregationService aggregationService;
     private AgentPersonaBindingDao bindingDao;
     private final AtomicBoolean pauseNextLock = new AtomicBoolean();
+    private final AtomicLong persistedEventVersion = new AtomicLong();
     private volatile CountDownLatch identityLocked = new CountDownLatch(0);
     private volatile CountDownLatch allowTaskCommit = new CountDownLatch(0);
 
@@ -119,9 +125,12 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                 new AgentTaskAggregationServiceImpl(taskMetaDao, identityService,
                         new AgentTaskAggregationCalculator(), () -> 2_000L),
                 AgentTaskAggregationService.class);
+        AgentTaskMutationTransaction mutationTransaction =
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
         compatibilityService = transactionalClassProxy(new AgentLegacyTaskCompatibilityService(
                 taskMetaDao, memberDao, workItemDao, aggregationService,
-                pausingIdentityService, () -> 1_000L));
+                pausingIdentityService, mutationTransaction, this::persistedEvent,
+                () -> 1_000L));
     }
 
     @AfterEach
@@ -420,6 +429,32 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                         throw error.getCause();
                     }
                 });
+    }
+
+
+    private AgentTaskEventWriteResult persistedEvent(AgentTaskEventWriteCommand command) {
+        long currentVersion = persistedEventVersion.incrementAndGet();
+        AgentTaskEventEntity event = new AgentTaskEventEntity()
+                .setId(currentVersion)
+                .setTaskId(command.getTaskId())
+                .setEventVersion(currentVersion)
+                .setEventId(command.getEventId())
+                .setEventType(command.getEventType())
+                .setActorType(command.getActorType())
+                .setActorId(command.getActorId())
+                .setAggregateType(command.getAggregateType())
+                .setAggregateId(command.getAggregateId())
+                .setEventJson(command.getEventJson())
+                .setOccurredAt(command.getOccurredAt());
+        event.setTenantId(command.getTenantId());
+        event.setClientId(command.getClientId());
+        event.setCreateTime(command.getOccurredAt());
+        event.setUpdateTime(command.getOccurredAt());
+        return new AgentTaskEventWriteResult()
+                .setPreviousVersion(currentVersion - 1)
+                .setEventVersion(currentVersion)
+                .setCurrentVersion(currentVersion)
+                .setEvent(event);
     }
 
     private void await(CountDownLatch latch) {
