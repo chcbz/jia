@@ -8,6 +8,8 @@ import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.entity.AgentTaskEventEntity;
+import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
@@ -187,6 +189,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                             Reason.FORBIDDEN, "persisted identity not registered");
                 });
         eventWriter = mock(AgentTaskEventWriter.class);
+        org.mockito.Mockito.lenient().when(eventWriter.append(any()))
+                .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
         AgentTaskMutationTransaction mutationTransaction =
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
         AgentTaskAggregationService aggregationService = transactionalInterfaceProxy(
@@ -931,4 +935,12 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         }
         throw new NoSuchFieldException(name);
     }
+    private static AgentTaskEventWriteResult persisted(AgentTaskEventWriteCommand command) {
+        AgentTaskEventEntity event = new AgentTaskEventEntity();
+        event.setEventId(command.getEventId());
+        event.setEventType(command.getEventType());
+        event.setOccurredAt(command.getOccurredAt());
+        return new AgentTaskEventWriteResult().setEvent(event);
+    }
+
 }

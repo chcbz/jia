@@ -61,9 +61,9 @@ import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.task.service.TaskService;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -87,10 +87,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class AgentServiceImpl implements AgentService {
     private static final String BIND_MODE_SERVER = "server";
@@ -124,6 +124,74 @@ public class AgentServiceImpl implements AgentService {
     private final AgentSceneFeatureFlags sceneFeatureFlags;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter taskEventWriter;
+    private final AgentCommandTransportCapture commandTransportCapture;
+
+    /** Backward-compatible constructor used by existing focused tests with all M3 flags OFF. */
+    public AgentServiceImpl(
+            AgentRuntimeDao agentRuntimeDao,
+            AgentIdentityService agentIdentityService,
+            AgentPersonaDao agentPersonaDao,
+            AgentPersonaBindingDao agentPersonaBindingDao,
+            AgentTaskMetaDao agentTaskMetaDao,
+            AgentTaskMemberDao agentTaskMemberDao,
+            AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService,
+            AgentTaskNoteDao agentTaskNoteDao,
+            DialogueTemplateDao dialogueTemplateDao,
+            ObjectProvider<AgentEventPublisher> eventPublisherProvider,
+            ObjectProvider<TaskService> taskServiceProvider,
+            ObjectProvider<ApiKeyService> apiKeyServiceProvider,
+            ObjectProvider<AgentSceneService> sceneServiceProvider,
+            AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentSceneFeatureFlags sceneFeatureFlags,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter taskEventWriter) {
+        this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
+                agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
+                taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
+                scopePublicationCoordinator, sceneFeatureFlags, mutationTransaction,
+                taskEventWriter, AgentCommandTransportCapture.disabledForLegacyConstruction());
+    }
+
+    @Autowired
+    public AgentServiceImpl(
+            AgentRuntimeDao agentRuntimeDao,
+            AgentIdentityService agentIdentityService,
+            AgentPersonaDao agentPersonaDao,
+            AgentPersonaBindingDao agentPersonaBindingDao,
+            AgentTaskMetaDao agentTaskMetaDao,
+            AgentTaskMemberDao agentTaskMemberDao,
+            AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService,
+            AgentTaskNoteDao agentTaskNoteDao,
+            DialogueTemplateDao dialogueTemplateDao,
+            ObjectProvider<AgentEventPublisher> eventPublisherProvider,
+            ObjectProvider<TaskService> taskServiceProvider,
+            ObjectProvider<ApiKeyService> apiKeyServiceProvider,
+            ObjectProvider<AgentSceneService> sceneServiceProvider,
+            AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentSceneFeatureFlags sceneFeatureFlags,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter taskEventWriter,
+            AgentCommandTransportCapture commandTransportCapture) {
+        this.agentRuntimeDao = agentRuntimeDao;
+        this.agentIdentityService = agentIdentityService;
+        this.agentPersonaDao = agentPersonaDao;
+        this.agentPersonaBindingDao = agentPersonaBindingDao;
+        this.agentTaskMetaDao = agentTaskMetaDao;
+        this.agentTaskMemberDao = agentTaskMemberDao;
+        this.legacyTaskCompatibilityService = legacyTaskCompatibilityService;
+        this.agentTaskNoteDao = agentTaskNoteDao;
+        this.dialogueTemplateDao = dialogueTemplateDao;
+        this.eventPublisherProvider = eventPublisherProvider;
+        this.taskServiceProvider = taskServiceProvider;
+        this.apiKeyServiceProvider = apiKeyServiceProvider;
+        this.sceneServiceProvider = sceneServiceProvider;
+        this.scopePublicationCoordinator = scopePublicationCoordinator;
+        this.sceneFeatureFlags = sceneFeatureFlags;
+        this.mutationTransaction = mutationTransaction;
+        this.taskEventWriter = taskEventWriter;
+        this.commandTransportCapture = commandTransportCapture;
+    }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -721,25 +789,31 @@ public class AgentServiceImpl implements AgentService {
         }
         require(taskId.equals(meta.getTaskId()), "taskId does not match current scope");
         validateLegacyAssignableTask(meta);
+        AtomicReference<List<AgentRuntimeEntity>> lockedAssignedAgents =
+                new AtomicReference<>(List.of());
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
-                        tenantId, clientId, taskId, agentIds, automatic);
+                        tenantId, clientId, taskId, agentIds, automatic,
+                        (lockedTask, canonicalAgentIds) -> {
+                            List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
+                                    .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
+                                    .toList();
+                            for (AgentRuntimeEntity agent : runtimes) {
+                                validateAssignableAgent(agent, allowQueue);
+                                validateAbility(agent, lockedTask);
+                            }
+                            if (automatic) {
+                                validateCompleteAbilityCoverage(runtimes, lockedTask);
+                            }
+                            lockedAssignedAgents.set(List.copyOf(runtimes));
+                        });
         AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
                 agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
         requireScopedTaskProjection(assignedMeta, tenantId, clientId, taskId);
-        List<AgentRuntimeEntity> assignedAgents = List.of();
-        if (outcome.changed()) {
-            assignedAgents = outcome.agentIds().stream()
-                    .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
-                    .toList();
-            for (AgentRuntimeEntity agent : assignedAgents) {
-                validateAssignableAgent(agent, allowQueue);
-                validateAbility(agent, assignedMeta);
-            }
-            if (automatic) {
-                validateCompleteAbilityCoverage(assignedAgents, assignedMeta);
-            }
+        List<AgentRuntimeEntity> assignedAgents = lockedAssignedAgents.get();
+        if (outcome.changed() && assignedAgents.size() != outcome.agentIds().size()) {
+            throw new IllegalStateException("Changed assignment did not validate every target runtime");
         }
         applyAssignmentProjection(assignedMeta, outcome.agentIds());
         AgentTaskDTO task = toTaskDTO(assignedMeta);
@@ -749,6 +823,8 @@ public class AgentServiceImpl implements AgentService {
             return task;
         }
         task.setActionDispatchResults(List.of());
+        commandTransportCapture.captureTaskInvites(
+                task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt());
         publishTaskAssignmentSideEffectsAfterCommit(task, assignedAgents);
         publishTaskAssignmentSceneStates(taskId, assignedAgents);
         return task;

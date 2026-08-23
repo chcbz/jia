@@ -10,6 +10,8 @@ import cn.jia.agent.entity.AgentTaskAggregationDTO;
 import cn.jia.agent.entity.AgentTaskMemberDTO;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
@@ -149,20 +151,31 @@ public class AgentLegacyTaskCompatibilityService {
     @Transactional(rollbackFor = Exception.class)
     public AssignOutcome assignResolved(String tenantId, String clientId, String taskId,
             List<String> canonicalAgentIds, boolean automatic) {
+        return assignResolved(tenantId, clientId, taskId, canonicalAgentIds, automatic,
+                (task, agentIds) -> { });
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public AssignOutcome assignResolved(String tenantId, String clientId, String taskId,
+            List<String> canonicalAgentIds, boolean automatic,
+            AssignmentPrecommitValidator precommitValidator) {
         requireScope(tenantId, clientId, tenantId);
         requireExactText(taskId, "taskId", 100);
         List<String> agentIds = requireResolvedAgentIds(canonicalAgentIds);
+        Objects.requireNonNull(precommitValidator, "precommitValidator");
         long reservedAt = now();
         return mutationTransaction.executeAfterTaskRootReservation(
                 tenantId, clientId, taskId,
                 () -> taskMetaDao.reserveOpenTaskRoot(tenantId, clientId, taskId, reservedAt),
                 (task, rootCreated) -> assignResolvedLocked(
-                        tenantId, clientId, taskId, agentIds, automatic, reservedAt, task));
+                        tenantId, clientId, taskId, agentIds, automatic, reservedAt, task,
+                        precommitValidator));
     }
 
     private AssignOutcome assignResolvedLocked(
             String tenantId, String clientId, String taskId, List<String> agentIds,
-            boolean automatic, long changedAt, AgentTaskMetaEntity task) {
+            boolean automatic, long changedAt, AgentTaskMetaEntity task,
+            AssignmentPrecommitValidator precommitValidator) {
         validateLockedTask(task, tenantId, clientId, taskId);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, agentIds);
@@ -187,9 +200,10 @@ public class AgentLegacyTaskCompatibilityService {
         if (!members.isEmpty() || !defaultItems.isEmpty()) {
             List<String> persistedAgentIds = validateIdempotentAssignment(
                     task, taskId, agentIds, members, defaultItems);
-            return new AssignOutcome(persistedAgentIds, false);
+            return new AssignOutcome(persistedAgentIds, false, null, null);
         }
 
+        precommitValidator.validate(task, agentIds);
         String fromStatus = taskStatus.value();
         applyAssignmentMeta(task, agentIds, changedAt);
         requireSingleMutation(taskMetaDao.updateById(task), "task assignment metadata");
@@ -201,9 +215,9 @@ public class AgentLegacyTaskCompatibilityService {
                     index == 0 ? MEMBER_ROLE_COORDINATOR : MEMBER_ROLE_WORKER);
             insertDefaultWorkItem(tenantId, clientId, taskId, agentId);
         }
-        appendAssignmentEvents(tenantId, clientId, taskId, task, agentIds,
-                source, fromStatus, changedAt);
-        return new AssignOutcome(agentIds, true);
+        String taskAssignedEventId = appendAssignmentEvents(
+                tenantId, clientId, taskId, task, agentIds, source, fromStatus, changedAt);
+        return new AssignOutcome(agentIds, true, taskAssignedEventId, changedAt);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -391,7 +405,7 @@ public class AgentLegacyTaskCompatibilityService {
         return List.copyOf(ordered);
     }
 
-    private void appendAssignmentEvents(
+    private String appendAssignmentEvents(
             String tenantId, String clientId, String taskId, AgentTaskMetaEntity task,
             List<String> agentIds, String source, String fromStatus, long occurredAt) {
         long taskVersion = task.getTaskVersion();
@@ -403,10 +417,17 @@ public class AgentLegacyTaskCompatibilityService {
                 .put(TaskEventPayload.Key.MEMBER_COUNT, agentIds.size())
                 .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
                 .put(TaskEventPayload.Key.ASSIGNED_AT, occurredAt);
-        eventWriter.append(AgentTaskMutationEventSupport.command(
+        AgentTaskEventWriteCommand taskAssignedCommand = AgentTaskMutationEventSupport.command(
                 tenantId, clientId, taskId, TaskEventType.TASK_ASSIGNED,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK, taskId,
-                taskPayload, occurredAt, taskVersion));
+                taskPayload, occurredAt, taskVersion);
+        AgentTaskEventWriteResult taskAssignedResult = eventWriter.append(taskAssignedCommand);
+        if (taskAssignedResult == null || taskAssignedResult.getEvent() == null
+                || !Objects.equals(taskAssignedCommand.getEventId(),
+                        taskAssignedResult.getEvent().getEventId())) {
+            throw new IllegalStateException("TASK_ASSIGNED append did not return its persisted event identity");
+        }
+        String taskAssignedEventId = taskAssignedResult.getEvent().getEventId();
 
         agentIds.stream().sorted(AgentLegacyTaskCompatibilityService::compareUtf8Unsigned)
                 .forEach(agentId -> {
@@ -447,6 +468,7 @@ public class AgentLegacyTaskCompatibilityService {
                             TaskEventType.Aggregate.WORK_ITEM, assigned.workItemId(),
                             itemPayload, occurredAt, 0L));
                 });
+        return taskAssignedEventId;
     }
 
     private void appendMemberReportEvent(
@@ -1169,9 +1191,28 @@ public class AgentLegacyTaskCompatibilityService {
         }
     }
 
-    public record AssignOutcome(List<String> agentIds, boolean changed) {
+    @FunctionalInterface
+    public interface AssignmentPrecommitValidator {
+        void validate(AgentTaskMetaEntity task, List<String> agentIds);
+    }
+
+    public record AssignOutcome(
+            List<String> agentIds,
+            boolean changed,
+            String taskAssignedEventId,
+            Long occurredAt) {
+        public AssignOutcome(List<String> agentIds, boolean changed) {
+            this(agentIds, changed, null, null);
+        }
+
         public AssignOutcome {
             agentIds = List.copyOf(agentIds);
+            if (!changed && (taskAssignedEventId != null || occurredAt != null)) {
+                throw new IllegalArgumentException("unchanged assignment cannot carry command causation");
+            }
+            if (changed && ((taskAssignedEventId == null) != (occurredAt == null))) {
+                throw new IllegalArgumentException("changed assignment causation must be complete");
+            }
         }
     }
 

@@ -156,9 +156,18 @@ class AgentServiceImplTest extends BaseMockTest {
                         any(), any(), any(), any()))
                 .thenAnswer(invocation -> invocation.getArgument(3));
         org.mockito.Mockito.lenient().when(legacyTaskCompatibilityService.assignResolved(
-                        any(), any(), any(), any(), anyBoolean()))
-                .thenAnswer(invocation -> new AgentLegacyTaskCompatibilityService.AssignOutcome(
-                        invocation.getArgument(3), true));
+                        any(), any(), any(), any(), anyBoolean(),
+                        any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class)))
+                .thenAnswer(invocation -> {
+                    List<String> ids = invocation.getArgument(3);
+                    AgentTaskMetaEntity lockedTask = agentTaskMetaDao.findByTaskId(
+                            invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2));
+                    AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator validator =
+                            invocation.getArgument(5);
+                    validator.validate(lockedTask, ids);
+                    return new AgentLegacyTaskCompatibilityService.AssignOutcome(
+                            ids, true, "evt-task-assigned", 1_000L);
+                });
         org.mockito.Mockito.lenient().when(agentRuntimeDao.updateById(any())).thenReturn(1);
         org.mockito.Mockito.lenient().when(agentIdentityService.lockActiveCanonicalAgentIdsInScope(
                         any(), any(), any(), any()))
@@ -777,8 +786,9 @@ class AgentServiceImplTest extends BaseMockTest {
 
         verify(agentTaskMetaDao, never()).updateById(meta);
         verify(legacyTaskCompatibilityService).assignResolved(
-                "juyiting", "jia_client", "task-001",
-                List.of("agent-wuyong", "agent-linchong"), false);
+                eq("juyiting"), eq("jia_client"), eq("task-001"),
+                eq(List.of("agent-wuyong", "agent-linchong")), eq(false),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
         verify(eventPublisher).publishTaskEvent(eq("task_assigned"), any(AgentTaskDTO.class));
     }
 
@@ -966,7 +976,8 @@ class AgentServiceImplTest extends BaseMockTest {
 
             assertEquals(AgentConstants.TASK_STATUS_ASSIGNED, result.getStatus());
             verify(legacyTaskCompatibilityService).assignResolved(
-                    "juyiting", "jia_client", "task-001", List.of("agent-wuyong"), false);
+                    eq("juyiting"), eq("jia_client"), eq("task-001"), eq(List.of("agent-wuyong")), eq(false),
+                    any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
             verify(sceneService, never()).upsertState(any(), any());
             TransactionSynchronizationManager.getSynchronizations()
                     .forEach(synchronization -> synchronization.afterCommit());
@@ -1281,8 +1292,9 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(List.of("agent-wuyong", "agent-linchong"), result.getAssignedAgentIds());
         verify(agentTaskMetaDao, never()).updateById(meta);
         verify(legacyTaskCompatibilityService).assignResolved(
-                "juyiting", "jia_client", "task-001",
-                List.of("agent-wuyong", "agent-linchong"), true);
+                eq("juyiting"), eq("jia_client"), eq("task-001"),
+                eq(List.of("agent-wuyong", "agent-linchong")), eq(true),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
     }
 
     @Test
@@ -1320,8 +1332,9 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(AgentErrorConstants.AGENT_ABILITY_MISMATCH, failure.getCode());
         assertEquals("Automatic assignment does not cover all required abilities", failure.getMessage());
         verify(legacyTaskCompatibilityService).assignResolved(
-                "juyiting", "jia_client", "task-001",
-                List.of("agent-wuyong", "agent-linchong"), true);
+                eq("juyiting"), eq("jia_client"), eq("task-001"),
+                eq(List.of("agent-wuyong", "agent-linchong")), eq(true),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
     }
 
     @Test
@@ -1345,7 +1358,9 @@ class AgentServiceImplTest extends BaseMockTest {
                 () -> agentService.autoAssignTask("task-001", new AgentTaskAssignDTO()));
 
         assertEquals("No available agent can accept this task", failure.getMessage());
-        verify(legacyTaskCompatibilityService, never()).assignResolved(any(), any(), any(), any(), anyBoolean());
+        verify(legacyTaskCompatibilityService, never()).assignResolved(
+                any(), any(), any(), any(), anyBoolean(),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
     }
 
     @Test
@@ -2024,7 +2039,8 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("agent-wuyong", assigned.getAssignedAgentId());
         verify(legacyTaskCompatibilityService).assignResolved(
-                "juyiting", "jia_client", "task-001", List.of("agent-wuyong"), false);
+                eq("juyiting"), eq("jia_client"), eq("task-001"), eq(List.of("agent-wuyong")), eq(false),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
     }
 
     @Test
@@ -2052,7 +2068,8 @@ class AgentServiceImplTest extends BaseMockTest {
                 () -> agentService.assignTask("task-001", request));
 
         verify(legacyTaskCompatibilityService).assignResolved(
-                "juyiting", "jia_client", "task-001", List.of("agent-wuyong"), false);
+                eq("juyiting"), eq("jia_client"), eq("task-001"), eq(List.of("agent-wuyong")), eq(false),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
     }
 
@@ -2072,7 +2089,8 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
                 .thenReturn(meta);
         when(legacyTaskCompatibilityService.assignResolved(
-                "juyiting", "jia_client", "task-001", List.of("agent-wuyong"), false))
+                eq("juyiting"), eq("jia_client"), eq("task-001"), eq(List.of("agent-wuyong")),
+                eq(false), any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class)))
                 .thenReturn(new AgentLegacyTaskCompatibilityService.AssignOutcome(
                         List.of("agent-wuyong"), false));
         AgentTaskAssignDTO request = new AgentTaskAssignDTO();

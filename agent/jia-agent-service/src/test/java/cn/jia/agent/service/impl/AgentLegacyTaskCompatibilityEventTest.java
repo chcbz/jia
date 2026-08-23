@@ -6,6 +6,8 @@ import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskAggregationDTO;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.entity.AgentTaskEventEntity;
+import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
@@ -74,6 +76,8 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
         when(identityService.lockActiveCanonicalAgentIdsInScope(
                 eq(TENANT), eq(CLIENT), eq(TENANT), anyList()))
                 .thenAnswer(invocation -> List.copyOf(invocation.getArgument(3)));
+        org.mockito.Mockito.lenient().when(eventWriter.append(any()))
+                .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
     }
 
     @Test
@@ -231,4 +235,12 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
             throw new IllegalStateException(e);
         }
     }
+    private static AgentTaskEventWriteResult persisted(AgentTaskEventWriteCommand command) {
+        AgentTaskEventEntity event = new AgentTaskEventEntity();
+        event.setEventId(command.getEventId());
+        event.setEventType(command.getEventType());
+        event.setOccurredAt(command.getOccurredAt());
+        return new AgentTaskEventWriteResult().setEvent(event);
+    }
+
 }
