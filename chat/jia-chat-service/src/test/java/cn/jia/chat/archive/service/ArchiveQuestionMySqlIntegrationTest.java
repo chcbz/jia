@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -57,6 +58,10 @@ class ArchiveQuestionMySqlIntegrationTest {
         DriverManagerDataSource dataSource = new DriverManagerDataSource();
         dataSource.setDriverClassName("com.mysql.cj.jdbc.Driver");
         dataSource.setUrl(target.url());
+        Properties connectionProperties = new Properties();
+        connectionProperties.setProperty("useUnicode", "true");
+        connectionProperties.setProperty("characterEncoding", "UTF-8");
+        dataSource.setConnectionProperties(connectionProperties);
         dataSource.setUsername(System.getenv().getOrDefault("CYF_H05A_MYSQL_USER", "root"));
         dataSource.setPassword(System.getenv().getOrDefault("CYF_H05A_MYSQL_PASSWORD", ""));
         jdbc = new JdbcTemplate(dataSource);
