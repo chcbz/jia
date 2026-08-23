@@ -157,8 +157,8 @@ public final class RabbitMqServerLoader implements Startable {
         String password = randomSecret();
         String virtualHost = "/m3-" + suffix;
         RabbitMQContainer container = new RabbitMQContainer(DockerImageName.parse(checkedImage))
-                .withEnv("RABBITMQ_DEFAULT_USER", username)
-                .withEnv("RABBITMQ_DEFAULT_PASS", password)
+                .withAdminUser(username)
+                .withAdminPassword(password)
                 .withEnv("RABBITMQ_DEFAULT_VHOST", virtualHost);
         return new IsolatedContainer(container, checkedImage, username, password, virtualHost);
     }

@@ -32,6 +32,10 @@ class RabbitMqServerLoaderTest {
         assertNotEquals(first.password(), second.password());
         assertNotEquals(first.virtualHost(), second.virtualHost());
         assertNotEquals("/", first.virtualHost());
+        assertEquals(first.username(), first.containerForInspection().getAdminUsername());
+        assertEquals(first.password(), first.containerForInspection().getAdminPassword());
+        assertEquals(first.virtualHost(), first.containerForInspection().getEnvMap().get(
+                "RABBITMQ_DEFAULT_VHOST"));
         assertFalse(first.imageName().contains("3.8"));
         assertEquals(RabbitMqServerLoader.DEFAULT_IMAGE, first.imageName());
         assertTrue(first.containerForInspection().getExposedPorts().contains(5672));

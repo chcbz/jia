@@ -108,6 +108,24 @@ class AgentRabbitSafetyConfigurationTest {
     }
 
     @Test
+    void malformedDispatchAllowlistIsIgnoredWhileDispatchIsDisabled() {
+        RUNNER.withPropertyValues(
+                "agent.command-outbox.enabled=false",
+                "agent.rabbit-topology.enabled=false",
+                "agent.rabbit-publish.enabled=false",
+                "agent.rabbit-consume.enabled=false",
+                "agent.rabbit-dispatch.enabled=false",
+                "agent.rabbit-dispatch.allowed-scopes[0].tenant-id=\u00a0")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    AgentRabbitSafetyGate gate = context.getBean(AgentRabbitSafetyGate.class);
+                    assertEquals(AgentRabbitActivationState.OFF, gate.state());
+                    assertEquals(0, gate.dispatchScopeCount());
+                    assertFalse(gate.allowsDispatch("\u00a0", null));
+                });
+    }
+
+    @Test
     void runtimeEnvironmentMutationCannotRefreshGateOrRegisterConditionalBeans() {
         RUNNER.run(context -> {
             AgentRabbitSafetyGate gate = context.getBean(AgentRabbitSafetyGate.class);

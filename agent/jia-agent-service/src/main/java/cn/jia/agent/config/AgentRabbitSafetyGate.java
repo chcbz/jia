@@ -27,7 +27,9 @@ public final class AgentRabbitSafetyGate {
         brokerRequired = rabbitTopologyEnabled || rabbitPublishEnabled
                 || rabbitConsumeEnabled || rabbitDispatchEnabled;
 
-        dispatchAllowedScopes = validateScopes(properties.rabbitDispatch().allowedScopes());
+        dispatchAllowedScopes = rabbitDispatchEnabled
+                ? validateScopes(properties.rabbitDispatch().allowedScopes())
+                : Set.of();
         validateDependencies();
         if (brokerRequired) {
             validateBroker(properties.rabbitBroker());
