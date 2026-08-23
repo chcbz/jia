@@ -1,6 +1,5 @@
 package cn.jia.oauth.config;
 
-import cn.jia.core.config.SpringContextHolder;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
@@ -14,13 +13,18 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.resource.OAuth2ResourceServerConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.context.NullSecurityContextRepository;
+import org.springframework.security.web.savedrequest.NullRequestCache;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -53,6 +57,21 @@ public class ResourceServerConfig {
         private List<String> uris = new ArrayList<>();
     }
 
+    @Bean
+    @Order(2)
+    public SecurityFilterChain oauthIdentityResourceSecurityFilterChain(HttpSecurity http) {
+        http
+                .securityMatcher(PathPatternRequestMatcher.pathPattern(HttpMethod.GET, "/resource"))
+                .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .securityContext(context -> context
+                        .securityContextRepository(new NullSecurityContextRepository()))
+                .requestCache(cache -> cache.requestCache(new NullRequestCache()))
+                .csrf(AbstractHttpConfigurer::disable);
+        return http.build();
+    }
+
     /**
      * 配置资源服务器的安全过滤链
      *
@@ -60,11 +79,16 @@ public class ResourceServerConfig {
      * @return SecurityFilterChain 安全过滤链
      */
     @Bean
-    @Order(2)
-    public SecurityFilterChain resourceServerSecurityFilterChain(HttpSecurity http) {
-        List<String> resourceUris = SpringContextHolder.getBean(OauthResourceProperties.class).getUris();
+    @Order(3)
+    public SecurityFilterChain resourceServerSecurityFilterChain(
+            HttpSecurity http, OauthResourceProperties resourceProperties) {
+        List<String> resourceUris = resourceProperties.getUris();
+        if (resourceUris.isEmpty()) {
+            http.securityMatcher(request -> false);
+        } else {
+            http.securityMatcher(resourceUris.toArray(new String[0]));
+        }
         http
-                .securityMatcher(resourceUris.toArray(new String[0]))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(WX_MP_CHECK_SIGNATURE_PATH).permitAll()
                         .requestMatchers("/dwz/view/**").permitAll()
