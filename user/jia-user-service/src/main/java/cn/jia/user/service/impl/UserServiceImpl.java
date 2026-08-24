@@ -57,6 +57,7 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     @Override
     @Transactional
     public UserEntity create(UserEntity user) {
+        stripAccountSecurityMutation(user);
         // 处理LDAP用户
         handleLdapUserCreation(user);
         
@@ -68,6 +69,12 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         // 创建新用户
         createUserWithDefaultRole(user);
         return user;
+    }
+
+    @Override
+    public UserEntity update(UserEntity user) {
+        stripAccountSecurityMutation(user);
+        return super.update(user);
     }
 
     /**
@@ -177,12 +184,14 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     @Override
     public void sync(List<UserEntity> userList) {
         for (UserEntity user : userList) {
+            stripAccountSecurityMutation(user);
             upsert(user);
         }
     }
 
     @Override
     public UserEntity upsert(UserEntity user) {
+        stripAccountSecurityMutation(user);
         // 处理本地用户
         UserEntity searchUser = new UserEntity();
         searchUser.setJiacn(user.getJiacn());
@@ -531,6 +540,13 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         user.setUsername(existingUser.getUsername());
         user.setUpdateTime(existingUser.getUpdateTime());
         updateExistingLdapUser(user);
+    }
+
+    private static void stripAccountSecurityMutation(UserEntity user) {
+        if (user != null) {
+            user.setAccountState(null);
+            user.setAuthEpoch(null);
+        }
     }
 
     /**
