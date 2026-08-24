@@ -42,6 +42,10 @@ class AccountSecuritySqlContractTest {
         assertFalse(preflight.contains("WHERE client_id = '" + CLIENT_ID + "'"));
         assertFalse(migration.contains("WHERE client_id = '" + CLIENT_ID + "'"));
 
+        assertTrue(preflight.contains("SELECT OCTET_LENGTH(jiacn) AS jiacn_octets, HEX(jiacn) AS jiacn_hex,"));
+        assertTrue(preflight.contains("GROUP BY OCTET_LENGTH(jiacn), HEX(jiacn) HAVING COUNT(*) > 1"));
+        assertFalse(preflight.contains("GROUP BY CAST(jiacn AS BINARY)"));
+        assertTrue(preflight.contains("SELECT COUNT(*) AS null_jiacn_count FROM user_info WHERE jiacn IS NULL"));
         assertTrue(preflight.contains("target_client_collation_collision_count"));
         assertTrue(preflight.contains("account_security_foundation_preflight_requires_one_byte_exact_oauth_client"));
         assertTrue(preflight.contains("PREPARE asf_guard_stmt"));

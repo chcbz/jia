@@ -6,9 +6,10 @@ SHOW CREATE TABLE oauth_client;
 SELECT COUNT(*) AS user_count FROM user_info;
 SELECT COUNT(*) AS null_jiacn_count FROM user_info WHERE jiacn IS NULL;
 SELECT COUNT(*) AS blank_jiacn_count FROM user_info WHERE jiacn IS NOT NULL AND (CHAR_LENGTH(jiacn) = 0 OR jiacn REGEXP '^[[:space:]]+$');
-SELECT HEX(jiacn) AS jiacn_hex, COUNT(*) AS byte_exact_count
+SELECT OCTET_LENGTH(jiacn) AS jiacn_octets, HEX(jiacn) AS jiacn_hex,
+       COUNT(*) AS byte_exact_count
 FROM user_info WHERE jiacn IS NOT NULL
-GROUP BY CAST(jiacn AS BINARY) HAVING COUNT(*) > 1;
+GROUP BY OCTET_LENGTH(jiacn), HEX(jiacn) HAVING COUNT(*) > 1;
 SELECT LOWER(jiacn) AS folded_jiacn, COUNT(DISTINCT CAST(jiacn AS BINARY)) AS byte_variants, COUNT(*) AS row_count
 FROM user_info WHERE jiacn IS NOT NULL
 GROUP BY LOWER(jiacn) HAVING COUNT(DISTINCT CAST(jiacn AS BINARY)) > 1;
