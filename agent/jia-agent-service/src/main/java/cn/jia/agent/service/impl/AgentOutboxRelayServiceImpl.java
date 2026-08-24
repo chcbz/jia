@@ -35,6 +35,12 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     public static final String STALE_DELIVERY_FENCE = "STALE_DELIVERY_FENCE";
     public static final String MESSAGE_EXPIRED = "MESSAGE_EXPIRED";
     public static final String ATTEMPT_EXHAUSTED = "ATTEMPT_EXHAUSTED";
+    public static final String VERSION_FENCE_EXHAUSTED = "VERSION_FENCE_EXHAUSTED_V1";
+    public static final String DISCOVERY_DELIVERY_ID_INVALID =
+            "DISCOVERY_DELIVERY_ID_INVALID_V1";
+    public static final String DISCOVERY_SCOPE_INVALID = "DISCOVERY_SCOPE_INVALID_V1";
+    public static final String DISCOVERY_DELIVERY_NOT_FOUND =
+            "DISCOVERY_DELIVERY_NOT_FOUND_V1";
 
     private static final Set<String> TERMINAL_OUTBOX =
             Set.of("PUBLISHED", "FAILED", "EXPIRED", "DEAD");
@@ -72,23 +78,35 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         if (limit == 0) {
             return List.of();
         }
+        int corruptionLimit = Math.min(requested, settings.batchSize());
+        List<AgentOutboxCandidate> corrupt = dao.selectCorruptCandidates(now, corruptionLimit);
+        if (corrupt != null) {
+            Set<Long> quarantined = new HashSet<>();
+            for (AgentOutboxCandidate candidate : corrupt) {
+                if (candidate != null && candidate.outboxId() > 0
+                        && quarantined.add(candidate.outboxId())) {
+                    quarantineCandidate(candidate, now);
+                }
+            }
+        }
+
         List<AgentOutboxCandidate> merged = new ArrayList<>(limit * 2);
         List<AgentOutboxCandidate> due = dao.selectDueCandidates(now, limit);
         List<AgentOutboxCandidate> stale = dao.selectStaleCandidates(now, limit);
-        if (due != null) merged.addAll(due);
-        if (stale != null) merged.addAll(stale);
+        if (due != null) merged.addAll(due.stream().filter(Objects::nonNull).toList());
+        if (stale != null) merged.addAll(stale.stream().filter(Objects::nonNull).toList());
         merged.sort(Comparator.comparingLong(AgentOutboxCandidate::eligibleAt)
                 .thenComparingLong(AgentOutboxCandidate::outboxId));
         Set<Long> seen = new HashSet<>();
         List<AgentOutboxCandidate> result = new ArrayList<>(limit);
         for (AgentOutboxCandidate candidate : merged) {
-            if (candidate != null && candidate.outboxId() > 0 && candidate.deliveryId() > 0
-                    && validExact(candidate.tenantId(), 50)
-                    && validExact(candidate.clientId(), 50)
-                    && seen.add(candidate.outboxId())) {
-                result.add(candidate);
-                if (result.size() == limit) break;
+            if (!seen.add(candidate.outboxId())) continue;
+            if (!validCandidateHint(candidate)) {
+                quarantineCandidate(candidate, now);
+                continue;
             }
+            result.add(candidate);
+            if (result.size() == limit) break;
         }
         return List.copyOf(result);
     }
@@ -99,10 +117,12 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         if (!globallyPublishable()) {
             return AgentOutboxClaim.disabled();
         }
-        if (candidate == null || candidate.outboxId() <= 0 || candidate.deliveryId() <= 0
-                || !validExact(candidate.tenantId(), 50)
-                || !validExact(candidate.clientId(), 50)
+        if (candidate == null || candidate.outboxId() <= 0
                 || !validExact(leaseOwner, 100) || now <= 0) {
+            return AgentOutboxClaim.skipped();
+        }
+        if (!validCandidateHint(candidate)) {
+            quarantineCandidate(candidate, now);
             return AgentOutboxClaim.skipped();
         }
         AgentOutboxClaim result = claimTransaction.execute(
@@ -135,9 +155,13 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 || isTerminalOutbox(outbox.getStatus())) {
             return AgentOutboxClaim.skipped();
         }
+        if (versionFenceExhausted(outbox)
+                || (safeAssociation(delivery, outbox) && versionFenceExhausted(delivery))) {
+            quarantineBoth(delivery, outbox, VERSION_FENCE_EXHAUSTED, now);
+            return AgentOutboxClaim.skipped();
+        }
         if (delivery == null) {
-            disposeOutbox(outbox, "DEAD", null, "NONE", null, null,
-                    "NONE", null, null, null, null, "DELIVERY_NOT_FOUND", now);
+            quarantineBoth(null, outbox, DISCOVERY_DELIVERY_NOT_FOUND, now);
             return AgentOutboxClaim.skipped();
         }
 
@@ -212,6 +236,24 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             return AgentOutboxSettleResult.STALE;
         }
         boolean activeDelivery = tokenMatchesDelivery(token, delivery);
+        if (versionFenceExhausted(outbox)
+                || (activeDelivery && versionFenceExhausted(delivery))) {
+            quarantineBoth(activeDelivery ? delivery : null, outbox,
+                    VERSION_FENCE_EXHAUSTED, now);
+            return AgentOutboxSettleResult.DEAD;
+        }
+
+        // A broker-confirmed ACK+NOT_RETURNED is authoritative even if settlement runs
+        // at or after expiresAt. D07 owns the downstream authoritative expiry decision.
+        if (result.type() == AgentRabbitPublishResult.Type.ACK) {
+            if (activeDelivery) {
+                disposeDelivery(delivery, "PUBLISHED", null, null, now);
+            }
+            disposeOutbox(outbox, "PUBLISHED", null,
+                    "ACK", now, null, "NOT_RETURNED", null,
+                    null, null, now, null, now);
+            return AgentOutboxSettleResult.PUBLISHED;
+        }
 
         if (now >= token.expiresAt()) {
             if (activeDelivery) {
@@ -222,16 +264,6 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                     result.returnStatus(), returnedAt(result, now), result.returnReplyCode(),
                     result.returnReplyText(), null, MESSAGE_EXPIRED, now);
             return AgentOutboxSettleResult.EXPIRED;
-        }
-
-        if (result.type() == AgentRabbitPublishResult.Type.ACK) {
-            if (activeDelivery) {
-                disposeDelivery(delivery, "PUBLISHED", null, null, now);
-            }
-            disposeOutbox(outbox, "PUBLISHED", null,
-                    "ACK", now, null, "NOT_RETURNED", null,
-                    null, null, now, null, now);
-            return AgentOutboxSettleResult.PUBLISHED;
         }
 
         if (!activeDelivery) {
@@ -259,6 +291,48 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 result.returnStatus(), returnedAt(result, now), result.returnReplyCode(),
                 result.returnReplyText(), null, result.errorCode(), now);
         return AgentOutboxSettleResult.RETRY;
+    }
+
+    private void quarantineCandidate(AgentOutboxCandidate candidate, long now) {
+        if (candidate == null || candidate.outboxId() <= 0 || now <= 0) return;
+        claimTransaction.execute(ignored -> {
+            quarantineCandidateInTransaction(candidate, now);
+            return null;
+        });
+    }
+
+    private void quarantineCandidateInTransaction(AgentOutboxCandidate candidate, long now) {
+        boolean exactScope = validExact(candidate.tenantId(), 50)
+                && validExact(candidate.clientId(), 50);
+        AgentCommandDeliveryEntity delivery = null;
+        if (exactScope && candidate.deliveryId() > 0) {
+            // Preserve delivery -> outbox lock order whenever an association could be safe.
+            delivery = dao.lockDelivery(
+                    candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
+        }
+        AgentOutboxEventEntity outbox = dao.lockOutboxForQuarantine(candidate);
+        if (outbox == null || isTerminalOutbox(outbox.getStatus())
+                || !corruptionCandidateMatches(candidate, outbox)
+                || !eligibleForDiscovery(outbox, now)) {
+            return;
+        }
+
+        boolean paired = safeAssociation(delivery, outbox);
+        String errorCode;
+        if (versionFenceExhausted(outbox)
+                || (paired && versionFenceExhausted(delivery))) {
+            errorCode = VERSION_FENCE_EXHAUSTED;
+        } else if (!exactScope) {
+            errorCode = DISCOVERY_SCOPE_INVALID;
+        } else if (candidate.deliveryId() <= 0) {
+            errorCode = DISCOVERY_DELIVERY_ID_INVALID;
+        } else if (delivery == null) {
+            errorCode = DISCOVERY_DELIVERY_NOT_FOUND;
+        } else {
+            // The unlocked hint no longer represents a discovery-level poison row.
+            return;
+        }
+        quarantineBoth(paired ? delivery : null, outbox, errorCode, now);
     }
 
     private boolean globallyPublishable() {
@@ -444,6 +518,19 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 && Objects.equals(delivery.getLeaseUntil(), token.leaseUntil());
     }
 
+    private void quarantineBoth(
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity outbox,
+            String errorCode,
+            long now) {
+        if (safeAssociation(delivery, outbox)) {
+            requireOne(dao.quarantineDelivery(delivery, errorCode, now),
+                    "delivery quarantine CAS");
+        }
+        requireOne(dao.quarantineOutbox(outbox, errorCode, now),
+                "outbox quarantine CAS");
+    }
+
     private void disposeBoth(
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
@@ -480,6 +567,40 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
 
     private static boolean isTerminalOutbox(String status) {
         return status != null && TERMINAL_OUTBOX.contains(status);
+    }
+
+    private static boolean validCandidateHint(AgentOutboxCandidate candidate) {
+        return candidate.outboxId() > 0 && candidate.deliveryId() > 0
+                && candidate.outboxVersion() >= 0 && candidate.outboxStatus() != null
+                && Set.of("PENDING", "RETRY", "CLAIMED").contains(candidate.outboxStatus())
+                && validExact(candidate.tenantId(), 50)
+                && validExact(candidate.clientId(), 50);
+    }
+
+    private static boolean corruptionCandidateMatches(
+            AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox) {
+        return candidateMatches(candidate, outbox)
+                && Objects.equals(outbox.getVersion(), candidate.outboxVersion())
+                && Objects.equals(outbox.getStatus(), candidate.outboxStatus());
+    }
+
+    private static boolean eligibleForDiscovery(AgentOutboxEventEntity outbox, long now) {
+        if ("PENDING".equals(outbox.getStatus())) {
+            return outbox.getNextRetryAt() == null || outbox.getNextRetryAt() <= now;
+        }
+        if ("RETRY".equals(outbox.getStatus())) {
+            return outbox.getNextRetryAt() != null && outbox.getNextRetryAt() <= now;
+        }
+        return "CLAIMED".equals(outbox.getStatus())
+                && outbox.getLeaseUntil() != null && outbox.getLeaseUntil() <= now;
+    }
+
+    private static boolean versionFenceExhausted(AgentCommandDeliveryEntity delivery) {
+        return delivery != null && Objects.equals(delivery.getVersion(), Long.MAX_VALUE);
+    }
+
+    private static boolean versionFenceExhausted(AgentOutboxEventEntity outbox) {
+        return outbox != null && Objects.equals(outbox.getVersion(), Long.MAX_VALUE);
     }
 
     private static boolean candidateMatches(

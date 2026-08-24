@@ -7,6 +7,8 @@ import cn.jia.agent.entity.AgentOutboxEventEntity;
 import java.util.List;
 
 public interface AgentOutboxRelayDao {
+    List<AgentOutboxCandidate> selectCorruptCandidates(long now, int limit);
+
     List<AgentOutboxCandidate> selectDueCandidates(long now, int limit);
 
     List<AgentOutboxCandidate> selectStaleCandidates(long now, int limit);
@@ -14,6 +16,8 @@ public interface AgentOutboxRelayDao {
     AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId);
 
     AgentOutboxEventEntity lockOutbox(String tenantId, String clientId, long outboxId);
+
+    AgentOutboxEventEntity lockOutboxForQuarantine(AgentOutboxCandidate candidate);
 
     int claimDelivery(
             AgentCommandDeliveryEntity delivery, String leaseOwner, long leaseUntil,
@@ -32,4 +36,10 @@ public interface AgentOutboxRelayDao {
             String confirmStatus, Long confirmedAt, String confirmError,
             String returnStatus, Long returnedAt, Integer returnReplyCode,
             String returnReplyText, Long publishedAt, String lastError, long now);
+
+    int quarantineDelivery(
+            AgentCommandDeliveryEntity delivery, String errorCode, long now);
+
+    int quarantineOutbox(
+            AgentOutboxEventEntity outbox, String errorCode, long now);
 }

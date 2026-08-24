@@ -39,6 +39,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -58,6 +59,8 @@ class AgentOutboxRelayServiceImplTest {
         when(dao.disposeDelivery(any(), anyString(), any(), any(), anyLong())).thenReturn(1);
         when(dao.disposeOutbox(any(), anyString(), any(), anyString(), any(), any(),
                 anyString(), any(), any(), any(), any(), any(), anyLong())).thenReturn(1);
+        when(dao.quarantineDelivery(any(), anyString(), anyLong())).thenReturn(1);
+        when(dao.quarantineOutbox(any(), anyString(), anyLong())).thenReturn(1);
         service = service(allowedGate(), ready());
     }
 
@@ -86,6 +89,7 @@ class AgentOutboxRelayServiceImplTest {
         assertEquals(List.of(), notReady.discover(NOW, 50));
         assertEquals(AgentOutboxClaim.Status.DISABLED,
                 notReady.claim(candidate(1, NOW), "lease", NOW).status());
+        verify(dao, never()).selectCorruptCandidates(anyLong(), anyInt());
         verify(dao, never()).selectDueCandidates(anyLong(), anyInt());
         verify(dao, never()).lockDelivery(anyString(), anyString(), anyLong());
     }
@@ -138,7 +142,7 @@ class AgentOutboxRelayServiceImplTest {
         AgentOutboxRelayServiceImpl scoped = service(allowedGate(), ready());
 
         AgentOutboxClaim claim = scoped.claim(
-                new AgentOutboxCandidate(1, "tenant-b", "client-a", 41, NOW),
+                new AgentOutboxCandidate(1, "tenant-b", "client-a", 41, NOW, 0, "PENDING"),
                 "lease-a", NOW);
 
         assertEquals(AgentOutboxClaim.Status.SKIPPED, claim.status());
@@ -334,6 +338,152 @@ class AgentOutboxRelayServiceImplTest {
         assertEquals(EXPIRES, settings().nextRetryAt("evt-1", 2, 1, EXPIRES, EXPIRES));
     }
 
+
+    @Test
+    void ackNotReturnedWinsAtAndAfterExpiryForActiveAndStaleDeliveryFences() {
+        for (long settledAt : new long[] {EXPIRES, EXPIRES + 1}) {
+            for (boolean active : new boolean[] {true, false}) {
+                reset(dao);
+                stubMutationSuccess();
+                Fixture claimed = claimed();
+                AgentOutboxClaimToken token = token(claimed);
+                if (!active) {
+                    claimed.delivery.setActiveMessageId("msg-new").setActiveAttempt(2)
+                            .setVersion(2L).setLeaseOwner(null).setLeaseUntil(null);
+                }
+                arrange(claimed);
+
+                assertEquals(AgentOutboxSettleResult.PUBLISHED,
+                        service.settle(token, AgentRabbitPublishResult.ack(), settledAt));
+                verify(dao).disposeOutbox(eq(claimed.outbox), eq("PUBLISHED"), isNull(),
+                        eq("ACK"), eq(settledAt), isNull(), eq("NOT_RETURNED"), isNull(),
+                        isNull(), isNull(), eq(settledAt), isNull(), eq(settledAt));
+                if (active) {
+                    verify(dao).disposeDelivery(eq(claimed.delivery), eq("PUBLISHED"),
+                            isNull(), isNull(), eq(settledAt));
+                } else {
+                    verify(dao, never()).disposeDelivery(any(), anyString(), any(), any(), anyLong());
+                }
+            }
+        }
+    }
+
+    @Test
+    void discoveryQuarantinesBoundedPoisonLaneBeforeReturningLegalCandidate() {
+        AgentOutboxCandidate badDeliveryId =
+                new AgentOutboxCandidate(1, "tenant-a", "client-a", 0, 1, 0, "PENDING");
+        AgentOutboxCandidate blankScope =
+                new AgentOutboxCandidate(2, "", "client-a", 41, 2, 0, "PENDING");
+        AgentOutboxCandidate controlScope =
+                new AgentOutboxCandidate(3, "tenant-" + Character.toString(1), "client-a", 41, 3, 0, "PENDING");
+        AgentOutboxCandidate missingDelivery =
+                new AgentOutboxCandidate(4, "tenant-a", "client-a", 404, 4, 0, "PENDING");
+        AgentOutboxCandidate legal =
+                new AgentOutboxCandidate(10, "tenant-a", "client-a", 41, 10, 0, "PENDING");
+        when(dao.selectCorruptCandidates(NOW, 1)).thenReturn(
+                List.of(badDeliveryId), List.of(blankScope),
+                List.of(controlScope), List.of(missingDelivery));
+        when(dao.selectDueCandidates(NOW, 4)).thenReturn(List.of(legal));
+        when(dao.selectStaleCandidates(NOW, 4)).thenReturn(List.of());
+        when(dao.lockOutboxForQuarantine(badDeliveryId))
+                .thenReturn(poisonOutbox(badDeliveryId));
+        when(dao.lockOutboxForQuarantine(blankScope))
+                .thenReturn(poisonOutbox(blankScope));
+        when(dao.lockOutboxForQuarantine(controlScope))
+                .thenReturn(poisonOutbox(controlScope));
+        when(dao.lockOutboxForQuarantine(missingDelivery))
+                .thenReturn(poisonOutbox(missingDelivery));
+
+        for (int poll = 0; poll < 4; poll++) {
+            assertEquals(List.of(10L), service.discover(NOW, 1).stream()
+                    .map(AgentOutboxCandidate::outboxId).toList());
+        }
+
+        verify(dao, times(4)).selectCorruptCandidates(NOW, 1);
+        verify(dao, times(4)).selectDueCandidates(NOW, 4);
+        verify(dao, times(4)).selectStaleCandidates(NOW, 4);
+        verify(dao).quarantineOutbox(any(), eq(AgentOutboxRelayServiceImpl.DISCOVERY_DELIVERY_ID_INVALID), eq(NOW));
+        verify(dao, times(2)).quarantineOutbox(any(),
+                eq(AgentOutboxRelayServiceImpl.DISCOVERY_SCOPE_INVALID), eq(NOW));
+        verify(dao).quarantineOutbox(any(), eq(AgentOutboxRelayServiceImpl.DISCOVERY_DELIVERY_NOT_FOUND), eq(NOW));
+        verify(dao, never()).quarantineDelivery(any(), anyString(), anyLong());
+        verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+    }
+
+    @Test
+    void claimQuarantinesDeliveryOutboxVersionMaxWithoutOverflow() {
+        for (VersionMax max : VersionMax.values()) {
+            reset(dao);
+            stubMutationSuccess();
+            Fixture fixture = pending();
+            if (max != VersionMax.OUTBOX_ONLY) fixture.delivery.setVersion(Long.MAX_VALUE);
+            if (max != VersionMax.DELIVERY_ONLY) fixture.outbox.setVersion(Long.MAX_VALUE);
+            arrange(fixture);
+
+            assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                    service.claim(candidate(1, NOW), "lease-a", NOW).status(), max.name());
+            verify(dao).quarantineDelivery(eq(fixture.delivery),
+                    eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+            verify(dao).quarantineOutbox(eq(fixture.outbox),
+                    eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+            verify(dao, never()).claimDelivery(any(), anyString(), anyLong(), any(), anyLong());
+            verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+        }
+    }
+
+    @Test
+    void settleQuarantinesActiveVersionMaxButStaleMaxDeliveryCannotPoisonOldAck() {
+        for (VersionMax max : VersionMax.values()) {
+            reset(dao);
+            stubMutationSuccess();
+            Fixture fixture = claimed();
+            if (max != VersionMax.OUTBOX_ONLY) fixture.delivery.setVersion(Long.MAX_VALUE);
+            if (max != VersionMax.DELIVERY_ONLY) fixture.outbox.setVersion(Long.MAX_VALUE);
+            arrange(fixture);
+            AgentOutboxClaimToken token = token(
+                    fixture, fixture.outbox.getVersion(), fixture.delivery.getVersion());
+
+            assertEquals(AgentOutboxSettleResult.DEAD,
+                    service.settle(token, AgentRabbitPublishResult.ack(), NOW), max.name());
+            verify(dao).quarantineDelivery(eq(fixture.delivery),
+                    eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+            verify(dao).quarantineOutbox(eq(fixture.outbox),
+                    eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+        }
+
+        reset(dao);
+        stubMutationSuccess();
+        Fixture stale = claimed();
+        AgentOutboxClaimToken old = token(stale);
+        stale.delivery.setActiveMessageId("msg-new").setActiveAttempt(2)
+                .setVersion(Long.MAX_VALUE).setLeaseOwner(null).setLeaseUntil(null);
+        arrange(stale);
+        assertEquals(AgentOutboxSettleResult.PUBLISHED,
+                service.settle(old, AgentRabbitPublishResult.ack(), NOW));
+        verify(dao, never()).quarantineDelivery(any(), anyString(), anyLong());
+        verify(dao, never()).quarantineOutbox(any(), anyString(), anyLong());
+        verify(dao).disposeOutbox(eq(stale.outbox), eq("PUBLISHED"), any(), anyString(),
+                any(), any(), anyString(), any(), any(), any(), any(), any(), anyLong());
+    }
+
+
+    @Test
+    void staleCallbackCannotMutateMaxVersionRows() {
+        Fixture fixture = claimed();
+        AgentOutboxClaimToken old = token(fixture);
+        fixture.delivery.setVersion(Long.MAX_VALUE);
+        fixture.outbox.setVersion(Long.MAX_VALUE);
+        arrange(fixture);
+
+        assertEquals(AgentOutboxSettleResult.STALE,
+                service.settle(old, AgentRabbitPublishResult.ack(), NOW));
+        verify(dao, never()).quarantineDelivery(any(), anyString(), anyLong());
+        verify(dao, never()).quarantineOutbox(any(), anyString(), anyLong());
+        verify(dao, never()).disposeDelivery(any(), anyString(), any(), any(), anyLong());
+        verify(dao, never()).disposeOutbox(any(), anyString(), any(), anyString(), any(), any(),
+                anyString(), any(), any(), any(), any(), any(), anyLong());
+    }
+
     @Test
     void staleTokenIsExplicitAndPerformsNoDisposition() {
         Fixture claimed = claimed();
@@ -363,6 +513,26 @@ class AgentOutboxRelayServiceImplTest {
 
     private static AgentOutboxRelaySettings settings() {
         return new AgentOutboxRelaySettings(new AgentRabbitSafetyProperties.RabbitPublish(true));
+    }
+
+    private void stubMutationSuccess() {
+        when(dao.claimDelivery(any(), anyString(), anyLong(), isNull(), anyLong())).thenReturn(1);
+        when(dao.claimOutbox(any(), anyString(), anyLong(), isNull(), anyLong())).thenReturn(1);
+        when(dao.disposeDelivery(any(), anyString(), any(), any(), anyLong())).thenReturn(1);
+        when(dao.disposeOutbox(any(), anyString(), any(), anyString(), any(), any(),
+                anyString(), any(), any(), any(), any(), any(), anyLong())).thenReturn(1);
+        when(dao.quarantineDelivery(any(), anyString(), anyLong())).thenReturn(1);
+        when(dao.quarantineOutbox(any(), anyString(), anyLong())).thenReturn(1);
+    }
+
+    private static AgentOutboxEventEntity poisonOutbox(AgentOutboxCandidate candidate) {
+        AgentOutboxEventEntity outbox = pending().outbox;
+        outbox.setId(candidate.outboxId());
+        outbox.setTenantId(candidate.tenantId());
+        outbox.setClientId(candidate.clientId());
+        outbox.setDeliveryId(candidate.deliveryId()).setVersion(candidate.outboxVersion())
+                .setStatus(candidate.outboxStatus()).setNextRetryAt(null);
+        return outbox;
     }
 
     private void arrange(Fixture fixture) {
@@ -447,6 +617,16 @@ class AgentOutboxRelayServiceImplTest {
                 "lease-a", NOW + 30_000, 2, 1, "PENDING", "msg-1", 1, 1);
     }
 
+    private static AgentOutboxClaimToken token(
+            Fixture fixture, long outboxVersion, long deliveryVersion) {
+        return new AgentOutboxClaimToken(1, 41, "tenant-a", "client-a", "evt-1", "msg-1",
+                "cmd-1", "task-1", "agent-1", "task.invite",
+                fixture.outbox.getDestination(), fixture.outbox.getRoutingKey(),
+                fixture.outbox.getWirePayload(), fixture.outbox.getWirePayloadHash(), EXPIRES,
+                "lease-a", NOW + 30_000, 2, outboxVersion,
+                "PENDING", "msg-1", 1, deliveryVersion);
+    }
+
     private static byte[] wire(long expiresAt) {
         return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\"," +
                 "\"messageId\":\"msg-1\",\"commandId\":\"cmd-1\"," +
@@ -463,7 +643,7 @@ class AgentOutboxRelayServiceImplTest {
     }
 
     private static AgentOutboxCandidate candidate(long id, long eligible) {
-        return new AgentOutboxCandidate(id, "tenant-a", "client-a", 41, eligible);
+        return new AgentOutboxCandidate(id, "tenant-a", "client-a", 41, eligible, 0, "PENDING");
     }
 
     private static AgentRabbitTopologyReadiness ready() throws Exception {
@@ -504,6 +684,7 @@ class AgentOutboxRelayServiceImplTest {
 
     private record Fixture(AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) { }
     private enum Corruption { HASH, DESTINATION, BODY }
+    private enum VersionMax { DELIVERY_ONLY, OUTBOX_ONLY, BOTH }
     private enum ClaimCorruption {
         EVENT_ID, ACTIVE_MESSAGE, UNKNOWN_STATUS, PENDING_RETRY_TIME,
         RETRY_ACK_NOT_RETURNED, RETRY_CONFIRM_ERROR, STALE_RETURN_SHAPE

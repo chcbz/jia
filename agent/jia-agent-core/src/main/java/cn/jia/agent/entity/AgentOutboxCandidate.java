@@ -6,5 +6,7 @@ public record AgentOutboxCandidate(
         String tenantId,
         String clientId,
         long deliveryId,
-        long eligibleAt) {
+        long eligibleAt,
+        long outboxVersion,
+        String outboxStatus) {
 }

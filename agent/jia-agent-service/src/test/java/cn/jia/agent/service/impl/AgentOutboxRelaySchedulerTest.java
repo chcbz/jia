@@ -121,7 +121,7 @@ class AgentOutboxRelaySchedulerTest {
     }
 
     private static AgentOutboxCandidate candidate(long id) {
-        return new AgentOutboxCandidate(id, "tenant-a", "client-a", 41, id);
+        return new AgentOutboxCandidate(id, "tenant-a", "client-a", 41, id, 0, "PENDING");
     }
 
     private static AgentOutboxClaimToken token(long id) {

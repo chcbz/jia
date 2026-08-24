@@ -16,6 +16,11 @@ public class AgentOutboxRelayDaoImpl implements AgentOutboxRelayDao {
     private final AgentOutboxRelayMapper mapper;
 
     @Override
+    public List<AgentOutboxCandidate> selectCorruptCandidates(long now, int limit) {
+        return mapper.selectCorruptCandidates(now, limit);
+    }
+
+    @Override
     public List<AgentOutboxCandidate> selectDueCandidates(long now, int limit) {
         return mapper.selectDueCandidates(now, limit);
     }
@@ -35,6 +40,13 @@ public class AgentOutboxRelayDaoImpl implements AgentOutboxRelayDao {
     public AgentOutboxEventEntity lockOutbox(
             String tenantId, String clientId, long outboxId) {
         return mapper.selectOutboxForUpdate(tenantId, clientId, outboxId);
+    }
+
+    @Override
+    public AgentOutboxEventEntity lockOutboxForQuarantine(AgentOutboxCandidate candidate) {
+        return mapper.selectOutboxForQuarantine(
+                candidate.outboxId(), candidate.deliveryId(), candidate.outboxVersion(),
+                candidate.outboxStatus(), candidate.tenantId(), candidate.clientId());
     }
 
     @Override
@@ -67,5 +79,17 @@ public class AgentOutboxRelayDaoImpl implements AgentOutboxRelayDao {
         return mapper.disposeOutbox(outbox, newStatus, nextRetryAt,
                 confirmStatus, confirmedAt, confirmError, returnStatus, returnedAt,
                 returnReplyCode, returnReplyText, publishedAt, lastError, now);
+    }
+
+    @Override
+    public int quarantineDelivery(
+            AgentCommandDeliveryEntity delivery, String errorCode, long now) {
+        return mapper.quarantineDelivery(delivery, errorCode, now);
+    }
+
+    @Override
+    public int quarantineOutbox(
+            AgentOutboxEventEntity outbox, String errorCode, long now) {
+        return mapper.quarantineOutbox(outbox, errorCode, now);
     }
 }
