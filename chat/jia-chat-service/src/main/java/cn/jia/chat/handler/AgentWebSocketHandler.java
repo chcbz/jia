@@ -7,11 +7,13 @@ import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
+import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -33,9 +35,17 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.core.StreamReadFeature;
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -59,10 +69,15 @@ import java.util.function.Supplier;
  */
 @Slf4j
 @Component
-public class AgentWebSocketHandler extends TextWebSocketHandler implements AgentEventPublisher {
+public class AgentWebSocketHandler extends TextWebSocketHandler
+        implements AgentEventPublisher, AgentRawCommandDispatcher {
     private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
+    private static final ObjectMapper STRICT_RAW_COMMAND_JSON = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
     private static final Set<String> TASK_SCOPED_OUTBOUND_TYPES = Set.of(
             AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
             AgentProtocolConstants.TYPE_COMMAND_ACK,
@@ -837,6 +852,139 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 .filter(session -> clientId.equals(sessionClientId(session))
                         && ownerJiacn.equals(sessionJiacn(session)))
                 .forEach(session -> sendEvent(session, type, payload));
+    }
+
+    @Override
+    public AgentRawCommandDispatchResult dispatchExactRawCommand(
+            String tenantId,
+            String clientId,
+            String taskId,
+            String targetAgentId,
+            byte[] rawWireBytes) {
+        if (!validExactDispatchId(tenantId, 50)
+                || !validExactDispatchId(clientId, 50)
+                || !validExactDispatchId(taskId, 100)
+                || !validExactDispatchId(targetAgentId, 100)
+                || !validRawCommandEnvelope(
+                        tenantId, clientId, taskId, targetAgentId, rawWireBytes)) {
+            log.warn("Refusing invalid exact-scope raw Agent command dispatch");
+            return AgentRawCommandDispatchResult.rejected();
+        }
+
+        byte[] raw = java.util.Arrays.copyOf(rawWireBytes, rawWireBytes.length);
+        int matchingSessions = 0;
+        int sentSessions = 0;
+        for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
+            if (!entry.getValue().contains(targetAgentId)) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session == null || !session.isOpen()
+                    || !targetAgentId.equals(sessionAgentId(session))
+                    || !tenantId.equals(sessionJiacn(session))
+                    || !clientId.equals(sessionClientId(session))) {
+                continue;
+            }
+            matchingSessions++;
+            try {
+                synchronized (session) {
+                    session.sendMessage(new TextMessage(raw));
+                }
+                sentSessions++;
+            } catch (Exception sendFailure) {
+                log.warn("Exact-scope raw Agent command WebSocket send failed");
+            }
+        }
+        if (matchingSessions == 0) {
+            return AgentRawCommandDispatchResult.offline();
+        }
+        if (sentSessions == 0) {
+            return AgentRawCommandDispatchResult.sendFailed(matchingSessions);
+        }
+        return AgentRawCommandDispatchResult.sent(matchingSessions, sentSessions);
+    }
+
+    private boolean validRawCommandEnvelope(
+            String tenantId,
+            String clientId,
+            String taskId,
+            String targetAgentId,
+            byte[] rawWireBytes) {
+        if (rawWireBytes == null || rawWireBytes.length == 0
+                || rawWireBytes.length > cn.jia.agent.common.AgentCommandAmqpContract.MAX_WIRE_BYTES
+                || !validUtf8(rawWireBytes)) {
+            return false;
+        }
+        try {
+            JsonNode root = STRICT_RAW_COMMAND_JSON.readTree(rawWireBytes);
+            if (root == null || !root.isObject()
+                    || !integralJsonEquals(root, "schemaVersion", AgentProtocolConstants.VERSION_1)
+                    || !AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(textJson(root, "messageType"))
+                    || !tenantId.equals(textJson(root, "tenantId"))
+                    || !clientId.equals(textJson(root, "clientId"))
+                    || !taskId.equals(textJson(root, "taskId"))
+                    || !targetAgentId.equals(textJson(root, "targetAgentId"))
+                    || !validExactDispatchId(textJson(root, "messageId"), 100)
+                    || !validExactDispatchId(textJson(root, "commandId"), 100)
+                    || !validExactDispatchId(textJson(root, "commandType"), 64)
+                    || !positiveIntegralJson(root, "attempt")
+                    || !positiveIntegralJson(root, "expiresAt")
+                    || root.has("eventId") || root.has("deliveryId") || root.has("type")
+                    || (root.has("agentId")
+                            && !targetAgentId.equals(textJson(root, "agentId")))) {
+                return false;
+            }
+            JsonNode payload = root.get("payload");
+            return nestedJsonMatches(payload, "tenantId", tenantId)
+                    && nestedJsonMatches(payload, "clientId", clientId)
+                    && nestedJsonMatches(payload, "taskId", taskId)
+                    && nestedJsonMatches(payload, "targetAgentId", targetAgentId)
+                    && nestedJsonMatches(payload, "agentId", targetAgentId);
+        } catch (Exception malformed) {
+            return false;
+        }
+    }
+
+    private boolean validUtf8(byte[] rawWireBytes) {
+        try {
+            StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(rawWireBytes));
+            return true;
+        } catch (CharacterCodingException malformed) {
+            return false;
+        }
+    }
+
+    private boolean nestedJsonMatches(JsonNode payload, String field, String expected) {
+        if (payload == null || !payload.isObject() || !payload.has(field)) {
+            return true;
+        }
+        return expected.equals(textJson(payload, field));
+    }
+
+    private String textJson(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        return value != null && value.isTextual() ? value.textValue() : null;
+    }
+
+    private boolean integralJsonEquals(JsonNode root, String field, long expected) {
+        JsonNode value = root.get(field);
+        return value != null && value.isIntegralNumber() && value.canConvertToLong()
+                && value.longValue() == expected;
+    }
+
+    private boolean positiveIntegralJson(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        return value != null && value.isIntegralNumber() && value.canConvertToLong()
+                && value.longValue() > 0;
+    }
+
+    private boolean validExactDispatchId(String value, int maxLength) {
+        return value != null && !value.isEmpty() && value.length() <= maxLength
+                && value.equals(value.strip())
+                && value.codePoints().noneMatch(Character::isISOControl);
     }
 
     public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
