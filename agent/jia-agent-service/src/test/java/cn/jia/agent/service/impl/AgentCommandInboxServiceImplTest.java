@@ -331,7 +331,7 @@ class AgentCommandInboxServiceImplTest {
         assertEquals("SENT", duplicate.priorResult().resultStatus());
 
         for (String advanced : List.of(
-                "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "EXPIRED", "DEAD")) {
+                "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "REJECTED", "EXPIRED", "DEAD")) {
             dao.delivery.setStatus(advanced);
             AgentInboxClaim advancedDuplicate = service.claim(
                     message(), "worker-d", NOW + 4, LEASE);

@@ -27,8 +27,9 @@ import java.util.Set;
 /** D06 exact-scope monotonic ACK state machine. No Agent business side effects are performed here. */
 public final class AgentCommandAckServiceImpl implements AgentCommandAckService {
     public static final String AGENT_REPORTED_FAILED = "AGENT_REPORTED_FAILED";
+    public static final String AGENT_REPORTED_REJECTED = "AGENT_REPORTED_REJECTED";
     private static final Set<String> ACK_STATUSES = Set.of(
-            "RECEIVED", "STARTED", "SUCCEEDED", "FAILED");
+            "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "REJECTED");
 
     private final AgentCommandRecoveryDao dao;
     private final AgentRabbitSafetyGate gate;
@@ -77,7 +78,11 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
         String expected = expectedNext(current, ack.ackStatus());
         if (expected == null) throw rejected("ACK_TRANSITION_INVALID");
         validateVersionCapacity(current, delivery.getVersion());
-        String lastError = "FAILED".equals(expected) ? AGENT_REPORTED_FAILED : null;
+        String lastError = switch (expected) {
+            case "FAILED" -> AGENT_REPORTED_FAILED;
+            case "REJECTED" -> AGENT_REPORTED_REJECTED;
+            default -> null;
+        };
         int rowsUpdated = dao.advanceAck(delivery, expected, lastError, now);
         if (rowsUpdated != 1) throw rejected("ACK_CAS_LOST");
         return new AgentCommandAckResult(
@@ -121,7 +126,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || delivery.getVersion() == null || delivery.getVersion() < 0
                 || delivery.getExpiresAt() == null
                 || delivery.getLeaseOwner() != null || delivery.getLeaseUntil() != null
-                || !Set.of("SENT", "RECEIVED", "STARTED", "SUCCEEDED", "FAILED")
+                || !Set.of("SENT", "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "REJECTED")
                         .contains(delivery.getStatus())) {
             throw rejected("ACK_DELIVERY_IDENTITY_INVALID");
         }
@@ -240,9 +245,10 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
 
     private String expectedNext(String current, String requested) {
         return switch (current) {
-            case "SENT" -> "RECEIVED".equals(requested) ? requested : null;
-            case "RECEIVED" -> "STARTED".equals(requested) ? requested : null;
-            case "STARTED" -> Set.of("SUCCEEDED", "FAILED").contains(requested) ? requested : null;
+            case "SENT" -> Set.of("RECEIVED", "REJECTED").contains(requested) ? requested : null;
+            case "RECEIVED" -> Set.of("STARTED", "REJECTED").contains(requested) ? requested : null;
+            case "STARTED" -> Set.of("SUCCEEDED", "FAILED", "REJECTED").contains(requested)
+                    ? requested : null;
             default -> null;
         };
     }

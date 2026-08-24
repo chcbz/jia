@@ -1,22 +1,38 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentProtocolConstants;
+import cn.jia.agent.config.AgentOutboxRelaySettings;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
+import cn.jia.agent.config.AgentRabbitTopologyConfiguration;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitTopologyReadiness;
+import cn.jia.agent.dao.AgentCommandInboxDao;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
+import cn.jia.agent.dao.AgentOutboxRelayDao;
+import cn.jia.agent.dao.impl.AgentCommandInboxDaoImpl;
 import cn.jia.agent.dao.impl.AgentCommandRecoveryDaoImpl;
+import cn.jia.agent.dao.impl.AgentOutboxRelayDaoImpl;
 import cn.jia.agent.entity.AgentCommandAck;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
+import cn.jia.agent.entity.AgentInboxClaim;
+import cn.jia.agent.entity.AgentInboxDisposition;
+import cn.jia.agent.entity.AgentInboxConsumers;
+import cn.jia.agent.entity.AgentInboxMessage;
+import cn.jia.agent.entity.AgentOutboxClaim;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
+import cn.jia.agent.entity.AgentOutboxSettleResult;
+import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
 import cn.jia.agent.entity.AgentWaitingCommandCandidate;
+import cn.jia.agent.mapper.AgentCommandInboxMapper;
 import cn.jia.agent.mapper.AgentCommandRecoveryMapper;
+import cn.jia.agent.mapper.AgentOutboxRelayMapper;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
@@ -30,6 +46,7 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -56,6 +73,8 @@ class AgentCommandRecoveryRealTransactionTest {
     private JdbcTemplate jdbc;
     private DataSourceTransactionManager manager;
     private AgentCommandRecoveryDao dao;
+    private AgentOutboxRelayDao relayDao;
+    private AgentCommandInboxDao inboxDao;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -67,6 +86,8 @@ class AgentCommandRecoveryRealTransactionTest {
         MybatisConfiguration configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(AgentCommandRecoveryMapper.class);
+        configuration.addMapper(AgentOutboxRelayMapper.class);
+        configuration.addMapper(AgentCommandInboxMapper.class);
         GlobalConfig globalConfig = new GlobalConfig();
         globalConfig.setIdentifierGenerator(new DefaultIdentifierGenerator());
         MybatisSqlSessionFactoryBean bean = new MybatisSqlSessionFactoryBean();
@@ -74,8 +95,13 @@ class AgentCommandRecoveryRealTransactionTest {
         bean.setConfiguration(configuration);
         bean.setGlobalConfig(globalConfig);
         SqlSessionFactory factory = bean.getObject();
+        SqlSessionTemplate template = new SqlSessionTemplate(factory);
         dao = new AgentCommandRecoveryDaoImpl(
-                new SqlSessionTemplate(factory).getMapper(AgentCommandRecoveryMapper.class));
+                template.getMapper(AgentCommandRecoveryMapper.class));
+        relayDao = new AgentOutboxRelayDaoImpl(
+                template.getMapper(AgentOutboxRelayMapper.class));
+        inboxDao = new AgentCommandInboxDaoImpl(
+                template.getMapper(AgentCommandInboxMapper.class));
         manager = new DataSourceTransactionManager(source);
         insertWaitingSource();
     }
@@ -101,6 +127,57 @@ class AgentCommandRecoveryRealTransactionTest {
         assertFalse(Arrays.equals(
                 blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M1 + "'"),
                 blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M2 + "'")));
+    }
+
+
+    @Test
+    void maxMinusFiveCompletesReissueRelayAndInboxWithoutVersionWrap() {
+        jdbc.update("UPDATE agent_command_delivery SET version=? WHERE id=1", Long.MAX_VALUE - 5);
+        assertEquals(1, reissueService(dao).reissueForReconnect(scope(), 10, NOW).reissued());
+
+        AgentOutboxRelayServiceImpl relay = relayService();
+        var candidates = relay.discover(NOW + 1, 10);
+        assertEquals(1, candidates.size());
+        AgentOutboxClaim claim = relay.claim(candidates.getFirst(), "relay-d06", NOW + 1);
+        assertEquals(AgentOutboxClaim.Status.ACQUIRED, claim.status());
+        assertEquals(AgentOutboxSettleResult.PUBLISHED,
+                relay.settle(claim.token(), AgentRabbitPublishResult.ack(), NOW + 2));
+
+        byte[] wire = blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M2 + "'");
+        String eventId = string("SELECT event_id FROM agent_outbox_event WHERE message_id='" + M2 + "'");
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", M2, eventId,
+                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                1L, wire), "inbox-d06", NOW + 3, 10_000L);
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, inboxClaim.kind());
+        inbox.complete(inboxClaim.token(), AgentInboxDisposition.sent(), NOW + 4);
+
+        assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(Long.MAX_VALUE,
+                jdbc.queryForObject("SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals("PUBLISHED", string(
+                "SELECT status FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
+        assertEquals("PUBLISHED", string(
+                "SELECT status FROM agent_outbox_event WHERE message_id='" + M1 + "'"));
+        assertEquals("WAITING_AGENT", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+        assertEquals("PROCESSED", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M2 + "'"));
+    }
+
+    @Test
+    void maxMinusFourRejectsReissueBeforeCreatingAnUnfinishableMessage() {
+        jdbc.update("UPDATE agent_command_delivery SET version=? WHERE id=1", Long.MAX_VALUE - 4);
+
+        assertEquals(0, reissueService(dao).reissueForReconnect(scope(), 10, NOW).reissued());
+
+        assertEquals("WAITING_AGENT", string(
+                "SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(M1, string(
+                "SELECT active_message_id FROM agent_command_delivery WHERE id=1"));
+        assertEquals(1, number("SELECT COUNT(*) FROM agent_outbox_event"));
     }
 
     @Test
@@ -179,6 +256,28 @@ class AgentCommandRecoveryRealTransactionTest {
         return new AgentCommandReissueServiceImpl(
                 selectedDao, gate(), connected(), AgentRabbitTopologyManifest.canonical(),
                 manager, () -> ids.removeFirst());
+    }
+
+
+    private AgentOutboxRelayServiceImpl relayService() {
+        return new AgentOutboxRelayServiceImpl(
+                relayDao, gate(), AgentRabbitTopologyManifest.canonical(), ready(),
+                new AgentOutboxRelaySettings(new AgentRabbitSafetyProperties.RabbitPublish(true)),
+                manager);
+    }
+
+    private AgentRabbitTopologyReadiness ready() {
+        try {
+            AgentRabbitTopologyManifest manifest = AgentRabbitTopologyManifest.canonical();
+            AgentRabbitTopologyReadiness readiness =
+                    new AgentRabbitTopologyConfiguration().agentRabbitTopologyReadiness(manifest);
+            Method method = AgentRabbitTopologyReadiness.class.getDeclaredMethod("markProvisioned");
+            method.setAccessible(true);
+            method.invoke(readiness);
+            return readiness;
+        } catch (ReflectiveOperationException impossible) {
+            throw new AssertionError(impossible);
+        }
     }
 
     private AgentCommandReconnectScope scope() {
@@ -261,8 +360,9 @@ class AgentCommandRecoveryRealTransactionTest {
                   last_error VARCHAR(2000), version BIGINT NOT NULL, replay_parent_message_id VARCHAR(100),
                   replay_requester_id VARCHAR(100), replay_approver_id VARCHAR(100), replay_reason VARCHAR(1000),
                   tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
-                  UNIQUE(tenant_id,client_id,event_id), UNIQUE(tenant_id,client_id,message_id))
+                  UNIQUE(tenant_id,client_id,event_id))
                 """);
+        jdbc.execute("CREATE INDEX idx_outbox_message ON agent_outbox_event(tenant_id,client_id,message_id)");
         jdbc.execute("""
                 CREATE TABLE agent_consumer_inbox(
                   id BIGINT AUTO_INCREMENT PRIMARY KEY, consumer_name VARCHAR(100) NOT NULL, message_id VARCHAR(100) NOT NULL,

@@ -562,7 +562,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         boolean deliveryMatches = switch (result) {
             case "SENT" -> isOneOf(source.delivery().getStatus(),
                     "SENT", "RECEIVED", "STARTED", "SUCCEEDED",
-                    "FAILED", "EXPIRED", "DEAD");
+                    "FAILED", "REJECTED", "EXPIRED", "DEAD");
             case "WAITING_AGENT", "FAILED", "EXPIRED", "DEAD" ->
                     result.equals(source.delivery().getStatus());
             default -> false;

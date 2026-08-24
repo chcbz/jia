@@ -20,6 +20,7 @@ import java.util.function.LongSupplier;
 /** Non-blocking bounded reconnect queue plus bounded restart/lost-signal fallback scanner. */
 public final class AgentCommandReissueCoordinator implements AgentCommandReconnectSignal, AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandReissueCoordinator.class);
+    private static final long CLOSE_AWAIT_MILLIS = 1_000L;
 
     private final AgentCommandReissueService service;
     private final AgentCommandReissueSettings settings;
@@ -118,11 +119,23 @@ public final class AgentCommandReissueCoordinator implements AgentCommandReconne
                 ? simple : "RUNTIME_FAILURE";
     }
 
+    boolean workerTerminated() {
+        return worker.isTerminated();
+    }
+
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            worker.shutdownNow();
-            signals.clear();
+        if (!closed.compareAndSet(false, true)) return;
+        worker.shutdownNow();
+        signals.clear();
+        try {
+            if (!worker.awaitTermination(CLOSE_AWAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+                // The worker is daemon-backed, so a bounded shutdown cannot hold JVM termination.
+                LOG.warn("Agent command reissue worker did not terminate within bounded shutdown");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOG.warn("Interrupted while awaiting Agent command reissue worker shutdown");
         }
     }
 }

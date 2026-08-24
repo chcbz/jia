@@ -35,7 +35,8 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     public static final String REASON_SCHEDULER = "WAITING_AGENT_SCHEDULER";
     public static final String REQUESTER_SCHEDULER = "SYSTEM_SCHEDULER";
     public static final String AGENT_OFFLINE = AgentCommandRabbitConsumer.AGENT_OFFLINE;
-    private static final long MAX_SAFE_REISSUE_VERSION = Long.MAX_VALUE - 3;
+    // Reserve: D06 reissue, D03 claim+settle, and D07 claim+complete.
+    private static final long MAX_SAFE_REISSUE_VERSION = Long.MAX_VALUE - 5;
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandReissueServiceImpl.class);
 
     private final AgentCommandRecoveryDao dao;

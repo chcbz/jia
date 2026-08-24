@@ -38,6 +38,23 @@ class AgentCommandReissueCoordinatorTest {
         }
     }
 
+
+    @Test
+    void closeIsIdempotentClearsSignalsAndTerminatesDaemonWorkerBoundedly() {
+        RecordingService service = new RecordingService();
+        AgentCommandReissueCoordinator coordinator = new AgentCommandReissueCoordinator(
+                service, new AgentCommandReissueSettings(2, 1, 1, 100),
+                () -> 1_700_000_000_000L, true);
+        assertTrue(coordinator.signalReconnect(scope("agent-a")));
+
+        coordinator.close();
+        coordinator.close();
+
+        assertEquals(0, coordinator.queuedSignalCount());
+        assertTrue(coordinator.workerTerminated());
+        assertFalse(coordinator.signalReconnect(scope("agent-b")));
+    }
+
     @Test
     void emptyDuePageWrapsCursorAndInvalidSignalIsDeclined() {
         RecordingService service = new RecordingService();

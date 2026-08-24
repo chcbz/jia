@@ -116,6 +116,58 @@ class AgentOutboxRelayServiceImplTest {
         assertEquals(1, fixture.delivery.getAttemptCount());
     }
 
+
+    @Test
+    void exactAutomaticReissueReplayProvenanceIsClaimableButManualOrPartialIsDead() {
+        Fixture automatic = pending();
+        automatic.delivery.setActiveMessageId("msg-2")
+                .setReplayParentMessageId("msg-1")
+                .setReplayRequesterId("agent-1")
+                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        automatic.outbox.setMessageId("msg-2")
+                .setReplayParentMessageId("msg-1")
+                .setReplayRequesterId("agent-1")
+                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        byte[] wire = wire(EXPIRES).clone();
+        String rewritten = new String(wire, StandardCharsets.UTF_8)
+                .replace("\"messageId\":\"msg-1\"", "\"messageId\":\"msg-2\"");
+        automatic.outbox.setWirePayload(rewritten.getBytes(StandardCharsets.UTF_8))
+                .setWirePayloadHash(AgentCommandAmqpContract.sha256(
+                        rewritten.getBytes(StandardCharsets.UTF_8)));
+        arrange(automatic);
+        assertEquals(AgentOutboxClaim.Status.ACQUIRED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+
+        reset(dao);
+        stubMutationSuccess();
+        Fixture manual = pending();
+        manual.delivery.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("operator")
+                .setReplayApproverId("approver")
+                .setReplayReason("MANUAL_REISSUE");
+        manual.outbox.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("operator")
+                .setReplayApproverId("approver")
+                .setReplayReason("MANUAL_REISSUE");
+        arrange(manual);
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+        verify(dao).disposeOutbox(eq(manual.outbox), eq("DEAD"), isNull(), eq("NONE"),
+                isNull(), isNull(), eq("NONE"), isNull(), isNull(), isNull(), isNull(),
+                eq("UNSUPPORTED_REPLAY_PROVENANCE"), eq(NOW));
+
+        reset(dao);
+        stubMutationSuccess();
+        Fixture partial = pending();
+        partial.delivery.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("agent-1")
+                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        arrange(partial);
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+        verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+    }
+
     @Test
     void historicalPendingWithoutExactAdmissionMarkerBecomesDeadWithoutPublishToken() {
         Fixture fixture = pending();

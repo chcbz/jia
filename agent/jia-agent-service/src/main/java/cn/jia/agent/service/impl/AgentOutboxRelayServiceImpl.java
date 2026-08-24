@@ -376,7 +376,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 || outbox.getActiveAttempt() == null || outbox.getActiveAttempt() < 1) {
             return "SOURCE_FENCE_CORRUPT";
         }
-        if (hasReplayProvenance(delivery) || hasReplayProvenance(outbox)) {
+        if (!validAutomaticReplayProvenance(delivery, outbox)) {
             return "UNSUPPORTED_REPLAY_PROVENANCE";
         }
         if (!storedHashMatches(delivery.getCommandPayload(), delivery.getCommandPayloadHash())) {
@@ -672,6 +672,27 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 || outbox.getReplayRequesterId() != null
                 || outbox.getReplayApproverId() != null
                 || outbox.getReplayReason() != null;
+    }
+
+    /** D03 original publish and exact D06 automatic reissue are the only relay-admitted lanes. */
+    private static boolean validAutomaticReplayProvenance(
+            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
+        boolean deliveryHasReplay = hasReplayProvenance(delivery);
+        boolean outboxHasReplay = hasReplayProvenance(outbox);
+        if (!deliveryHasReplay && !outboxHasReplay) return true;
+        if (!deliveryHasReplay || !outboxHasReplay) return false;
+        return validExact(delivery.getReplayParentMessageId(), 100)
+                && !delivery.getActiveMessageId().equals(delivery.getReplayParentMessageId())
+                && validExact(delivery.getReplayRequesterId(), 100)
+                && delivery.getReplayApproverId() == null
+                && Set.of(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT,
+                        AgentCommandReissueServiceImpl.REASON_SCHEDULER)
+                        .contains(delivery.getReplayReason())
+                && Objects.equals(delivery.getReplayParentMessageId(),
+                        outbox.getReplayParentMessageId())
+                && Objects.equals(delivery.getReplayRequesterId(), outbox.getReplayRequesterId())
+                && outbox.getReplayApproverId() == null
+                && Objects.equals(delivery.getReplayReason(), outbox.getReplayReason());
     }
 
     private static boolean anyPublishDisposition(AgentOutboxEventEntity outbox) {

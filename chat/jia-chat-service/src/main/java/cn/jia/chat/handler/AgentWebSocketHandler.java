@@ -99,8 +99,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private final ChatConversationEventBroker chatConversationEventBroker;
     private final HallAnnouncementService hallAnnouncementService;
     private final AgentProtocolMessageNormalizer protocolMessageNormalizer;
-    private final AgentCommandReconnectSignal reconnectSignal;
-    private final AgentCommandAckService commandAckService;
+    private final Supplier<AgentCommandReconnectSignal> reconnectSignalSupplier;
+    private final Supplier<AgentCommandAckService> commandAckServiceSupplier;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
@@ -139,8 +139,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                                  ObjectProvider<AgentCommandAckService> commandAckServiceProvider) {
         this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker,
                 hallAnnouncementService, protocolMessageNormalizer,
-                reconnectSignalProvider == null ? null : reconnectSignalProvider.getIfAvailable(),
-                commandAckServiceProvider == null ? null : commandAckServiceProvider.getIfAvailable());
+                reconnectSignalProvider == null ? () -> null : reconnectSignalProvider::getIfAvailable,
+                commandAckServiceProvider == null ? () -> null : commandAckServiceProvider::getIfAvailable);
     }
 
     AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
@@ -149,14 +149,25 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                                  AgentProtocolMessageNormalizer protocolMessageNormalizer,
                                  AgentCommandReconnectSignal reconnectSignal,
                                  AgentCommandAckService commandAckService) {
+        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker,
+                hallAnnouncementService, protocolMessageNormalizer,
+                () -> reconnectSignal, () -> commandAckService);
+    }
+
+    private AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+                                 ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
+                                 HallAnnouncementService hallAnnouncementService,
+                                 AgentProtocolMessageNormalizer protocolMessageNormalizer,
+                                 Supplier<AgentCommandReconnectSignal> reconnectSignalSupplier,
+                                 Supplier<AgentCommandAckService> commandAckServiceSupplier) {
         this.chatClient = chatClient;
         this.agentServiceProvider = agentServiceProvider;
         this.chatMessageDao = chatMessageDao;
         this.chatConversationEventBroker = chatConversationEventBroker;
         this.hallAnnouncementService = hallAnnouncementService;
         this.protocolMessageNormalizer = protocolMessageNormalizer;
-        this.reconnectSignal = reconnectSignal;
-        this.commandAckService = commandAckService;
+        this.reconnectSignalSupplier = reconnectSignalSupplier;
+        this.commandAckServiceSupplier = commandAckServiceSupplier;
     }
 
     @Override
@@ -406,6 +417,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private void signalRegisteredReconnect(WebSocketSession session, String agentId) {
+        AgentCommandReconnectSignal reconnectSignal = reconnectSignalSupplier.get();
         if (reconnectSignal == null) return;
         String tenantId = sessionJiacn(session);
         String clientId = sessionClientId(session);
@@ -430,6 +442,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     "Agent must successfully register before command ACK");
             return;
         }
+        AgentCommandAckService commandAckService = commandAckServiceSupplier.get();
         if (commandAckService == null) {
             sendProtocolError(session, payload, "PROTOCOL_HANDLER_NOT_AVAILABLE",
                     "command.ack durable handling is unavailable");
@@ -1293,7 +1306,22 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     @Override
     public boolean isExactAgentConnected(String tenantId, String clientId, String targetAgentId) {
-        return isAgentConnected(tenantId, clientId, targetAgentId);
+        if (isBlank(tenantId) || isBlank(clientId) || isBlank(targetAgentId)) return false;
+        for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(targetAgentId)
+                    || !registeredAgentIds(sessionId).contains(targetAgentId)) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(sessionId);
+            if (session != null && session.isOpen()
+                    && targetAgentId.equals(sessionAgentId(session))
+                    && tenantId.equals(sessionJiacn(session))
+                    && clientId.equals(sessionClientId(session))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean isAgentConnected(String tenantId, String clientId, String agentId) {

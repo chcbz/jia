@@ -7,11 +7,19 @@ import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.config.AgentCommandRecoveryConfiguration;
+import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
+import cn.jia.agent.config.AgentRabbitSafetyGate;
+import cn.jia.agent.config.AgentRabbitSafetyProperties;
+import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.dao.AgentCommandRecoveryDao;
+import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.service.HallAnnouncementService;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,6 +27,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -26,12 +38,16 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
 
 class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     @Mock ChatClient chatClient;
@@ -52,10 +68,10 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         attributes.put("runtimeInstanceId", "runtime-a");
         attributes.put("jiacn", "tenant-a");
         attributes.put("clientId", "client-a");
-        when(session.getId()).thenReturn("session-a");
-        when(session.isOpen()).thenReturn(true);
-        when(session.getAttributes()).thenReturn(attributes);
-        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        org.mockito.Mockito.lenient().when(session.getId()).thenReturn("session-a");
+        org.mockito.Mockito.lenient().when(session.isOpen()).thenReturn(true);
+        org.mockito.Mockito.lenient().when(session.getAttributes()).thenReturn(attributes);
+        org.mockito.Mockito.lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         handler = new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, eventBroker,
                 null, new AgentProtocolMessageNormalizer(), reconnectSignal, ackService);
@@ -121,6 +137,68 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         assertEquals("RECEIVED", ack.getValue().ackStatus());
     }
 
+
+    @Test
+    void presenceBeforeSuccessfulRegisterDoesNotBecomeAuthoritativeExactPresence() throws Exception {
+        handler.afterConnectionEstablished(session);
+        AgentRuntimeDTO presence = new AgentRuntimeDTO();
+        presence.setAgentId("agent-a");
+        presence.setStatus(AgentConstants.STATUS_ONLINE);
+        when(agentService.updateStatus(any(), any())).thenReturn(presence);
+
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-only",
+                 "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
+                 "status":"online"}
+                """));
+
+        assertFalse(handler.isExactAgentConnected("tenant-a", "client-a", "agent-a"));
+    }
+
+    @Test
+    void canonicalA06RejectedAckIsForwardedAfterRegistration() throws Exception {
+        when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
+                new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
+        handler.handleTextMessage(session, registerMessage());
+        when(ackService.acknowledge(any(), anyLong())).thenReturn(
+                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "REJECTED", 3));
+
+        handler.handleTextMessage(session, ackMessage("ack-rejected", "dispatch-1", "REJECTED"));
+
+        ArgumentCaptor<AgentCommandAck> ack = ArgumentCaptor.forClass(AgentCommandAck.class);
+        verify(ackService).acknowledge(ack.capture(), anyLong());
+        assertEquals("REJECTED", ack.getValue().ackStatus());
+    }
+
+    @Test
+    void flagOnSpringContextWiresActualHandlerDispatcherWithoutConstructorCycle() {
+        new ApplicationContextRunner()
+                .withPropertyValues("agent.rabbit-dispatch.enabled=true")
+                .withBean(ChatClient.class, () -> mock(ChatClient.class))
+                .withBean(AgentService.class, () -> mock(AgentService.class))
+                .withBean(ChatMessageDao.class, () -> mock(ChatMessageDao.class))
+                .withBean(ChatConversationEventBroker.class,
+                        () -> mock(ChatConversationEventBroker.class))
+                .withBean(HallAnnouncementService.class,
+                        () -> mock(HallAnnouncementService.class))
+                .withBean(AgentCommandRecoveryDao.class,
+                        () -> mock(AgentCommandRecoveryDao.class))
+                .withBean(PlatformTransactionManager.class,
+                        () -> mock(PlatformTransactionManager.class))
+                .withBean(AgentRabbitSafetyGate.class,
+                        AgentWebSocketCommandRecoveryTest::enabledGate)
+                .withBean("agentRabbitTopologyManifest", AgentRabbitTopologyManifest.class,
+                        AgentRabbitTopologyManifest::canonical)
+                .withUserConfiguration(FlagOnRecoveryWiring.class)
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    AgentWebSocketHandler actual = context.getBean(AgentWebSocketHandler.class);
+                    assertSame(actual, context.getBean(AgentRawCommandDispatcher.class));
+                    assertTrue(context.containsBean("agentCommandReconnectSignal"));
+                    assertTrue(context.containsBean("agentCommandAckService"));
+                });
+    }
+
     @Test
     void ackHiddenScopeConflictIsRejectedWithoutDurableCallOrExistenceLeak() throws Exception {
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
@@ -160,4 +238,24 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
                  "ackStatus":"%s","ackAt":1700000000000}
                 """.formatted(messageId, correlationId, status));
     }
+    private static AgentRabbitSafetyGate enabledGate() {
+        AgentRabbitSafetyProperties properties = new AgentRabbitSafetyProperties(
+                new AgentRabbitSafetyProperties.CommandOutbox(true),
+                new AgentRabbitSafetyProperties.RabbitTopology(true),
+                new AgentRabbitSafetyProperties.RabbitPublish(true),
+                new AgentRabbitSafetyProperties.RabbitConsume(true),
+                new AgentRabbitSafetyProperties.RabbitDispatch(true),
+                new AgentRabbitSafetyProperties.RabbitBroker(
+                        "isolated.invalid", 35672, "user", "pass", "/d06"));
+        return new AgentRabbitSafetyGate(properties, new AgentRabbitDispatchScopeProperties(
+                java.util.List.of(new AgentRabbitDispatchScopeProperties.AllowedScope(
+                        "tenant-a", "client-a"))));
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @Import({AgentWebSocketHandler.class, AgentProtocolMessageNormalizer.class,
+            AgentCommandRecoveryConfiguration.class})
+    static class FlagOnRecoveryWiring {
+    }
+
 }

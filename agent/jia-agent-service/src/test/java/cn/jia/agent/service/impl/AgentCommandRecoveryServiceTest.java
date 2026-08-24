@@ -111,7 +111,7 @@ class AgentCommandRecoveryServiceTest {
                 dao -> dao.delivery.setExpiresAt(NOW),
                 dao -> dao.delivery.setActiveAttempt(Integer.MAX_VALUE)
                         .setAttemptCount(Integer.MAX_VALUE),
-                dao -> dao.delivery.setVersion(Long.MAX_VALUE - 2),
+                dao -> dao.delivery.setVersion(Long.MAX_VALUE - 4),
                 dao -> dao.delivery.setCommandPayloadHash(new byte[32]),
                 dao -> dao.outbox.setActiveAttempt(1),
                 dao -> dao.inbox.setActiveAttempt(2),
@@ -130,6 +130,21 @@ class AgentCommandRecoveryServiceTest {
         }
     }
 
+
+    @Test
+    void reissueVersionBudgetAcceptsMaxMinusFiveAndRejectsAnythingHigher() {
+        RecordingDao allowed = waitingDao();
+        allowed.delivery.setVersion(Long.MAX_VALUE - 5);
+        assertEquals(1, reissue(allowed, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+
+        RecordingDao exhausted = waitingDao();
+        exhausted.delivery.setVersion(Long.MAX_VALUE - 4);
+        assertEquals(0, reissue(exhausted, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertEquals(null, exhausted.inserted);
+    }
+
     @Test
     void schedulerRequiresDueAndReturnsFairnessCursor() {
         RecordingDao dao = waitingDao();
@@ -140,6 +155,22 @@ class AgentCommandRecoveryServiceTest {
         assertEquals(1, result.examined());
         assertEquals(0, result.reissued());
         assertEquals(1, result.lastVisitedDeliveryId());
+    }
+
+
+    @Test
+    void schedulerWithPresenceThatWasNotSuccessfullyRegisteredPerformsZeroMutation() {
+        RecordingDao dao = waitingDao();
+        PresenceDispatcher unregisteredPresence = new PresenceDispatcher(false);
+
+        AgentCommandReissueScanResult result = reissue(dao, unregisteredPresence)
+                .reissueDue(10, 0, NOW);
+
+        assertEquals(1, result.examined());
+        assertEquals(0, result.reissued());
+        assertFalse(dao.operations.contains("delivery"));
+        assertFalse(dao.operations.contains("reissue"));
+        assertEquals(null, dao.inserted);
     }
 
     @Test
@@ -176,6 +207,30 @@ class AgentCommandRecoveryServiceTest {
         assertEquals(3, dao.ackMutations);
     }
 
+
+    @Test
+    void ackAcceptsA06RejectedFromEachNonTerminalAndFreezesTerminalConflicts() {
+        for (String starting : List.of("SENT", "RECEIVED", "STARTED")) {
+            RecordingDao dao = sentDao();
+            dao.delivery.setStatus(starting);
+            AgentCommandAckServiceImpl service = ackService(dao, enabledGate());
+            assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                    service.acknowledge(ack("ack-rejected-" + starting, "REJECTED", M1), NOW).kind());
+            assertEquals("REJECTED", dao.delivery.getStatus());
+            assertEquals(AgentCommandAckServiceImpl.AGENT_REPORTED_REJECTED,
+                    dao.delivery.getLastError());
+            assertEquals(AgentCommandAckResult.Kind.PRIOR,
+                    service.acknowledge(ack("ack-rejected-duplicate-" + starting,
+                            "REJECTED", M1), NOW).kind());
+            for (String conflict : List.of("SUCCEEDED", "FAILED")) {
+                assertThrows(AgentCommandAckRejectedException.class,
+                        () -> service.acknowledge(
+                                ack("ack-conflict-" + conflict, conflict, M1), NOW));
+            }
+            assertEquals(1, dao.ackMutations);
+        }
+    }
+
     @Test
     void ackSkipBackwardTerminalConflictAndOldMessageFailClosed() {
         for (AgentCommandAck invalid : List.of(
@@ -205,6 +260,21 @@ class AgentCommandRecoveryServiceTest {
         assertThrows(AgentCommandAckRejectedException.class,
                 () -> service.acknowledge(ack("ack-conflict", "SUCCEEDED", M1), NOW));
         assertEquals("FAILED", terminal.delivery.getStatus());
+
+
+        for (String terminalStatus : List.of("SUCCEEDED", "FAILED")) {
+            RecordingDao completed = sentDao();
+            AgentCommandAckServiceImpl completedService = ackService(completed, enabledGate());
+            completedService.acknowledge(ack("ack-r-" + terminalStatus, "RECEIVED", M1), NOW);
+            completedService.acknowledge(ack("ack-s-" + terminalStatus, "STARTED", M1), NOW);
+            completedService.acknowledge(
+                    ack("ack-terminal-" + terminalStatus, terminalStatus, M1), NOW);
+            assertThrows(AgentCommandAckRejectedException.class,
+                    () -> completedService.acknowledge(
+                            ack("ack-rejected-conflict-" + terminalStatus, "REJECTED", M1), NOW));
+            assertEquals(terminalStatus, completed.delivery.getStatus());
+            assertEquals(3, completed.ackMutations);
+        }
     }
 
     @Test
