@@ -10,9 +10,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class AccountSecuritySqlContractTest {
     private static final String CLIENT_ID = "jiafewnnv58ec2379c";
-    private static final String EXACT_CLIENT_LENGTH =
+    private static final String PREFLIGHT_EXACT_CLIENT_LENGTH =
             "OCTET_LENGTH(client_id) = OCTET_LENGTH(@asf_oauth_client_id)";
-    private static final String EXACT_CLIENT_HEX = "HEX(client_id) = HEX(@asf_oauth_client_id)";
+    private static final String PREFLIGHT_EXACT_CLIENT_HEX = "HEX(client_id) = HEX(@asf_oauth_client_id)";
+    private static final String MIGRATION_EXACT_CLIENT_LENGTH =
+            "OCTET_LENGTH(client_id) = OCTET_LENGTH(_ascii'" + CLIENT_ID + "')";
+    private static final String MIGRATION_EXACT_CLIENT_HEX =
+            "HEX(client_id) = HEX(_ascii'" + CLIENT_ID + "')";
 
     @Test
     void mapperCarriesExactLookupAndSingleStatementBoundedCas() throws IOException {
@@ -31,25 +35,55 @@ class AccountSecuritySqlContractTest {
         String migration = resource("/db/account-security-foundation-oauth-client.sql");
 
         assertTrue(preflight.contains("SET @asf_oauth_client_id := _ascii'" + CLIENT_ID + "'"));
-        assertTrue(migration.contains("SET @asf_oauth_client_id := _ascii'" + CLIENT_ID + "'"));
-        assertTrue(count(preflight, EXACT_CLIENT_LENGTH) >= 5, preflight);
-        assertTrue(count(preflight, EXACT_CLIENT_HEX) >= 5, preflight);
-        assertTrue(count(migration, EXACT_CLIENT_LENGTH) >= 6, migration);
-        assertTrue(count(migration, EXACT_CLIENT_HEX) >= 6, migration);
+        assertTrue(count(preflight, PREFLIGHT_EXACT_CLIENT_LENGTH) >= 5, preflight);
+        assertTrue(count(preflight, PREFLIGHT_EXACT_CLIENT_HEX) >= 5, preflight);
+        assertTrue(count(migration, MIGRATION_EXACT_CLIENT_LENGTH) >= 6, migration);
+        assertTrue(count(migration, MIGRATION_EXACT_CLIENT_HEX) >= 6, migration);
         assertFalse(preflight.contains("WHERE client_id = '" + CLIENT_ID + "'"));
         assertFalse(migration.contains("WHERE client_id = '" + CLIENT_ID + "'"));
 
         assertTrue(preflight.contains("target_client_collation_collision_count"));
-        assertTrue(migration.contains("@asf_target_collision_count = 0"));
         assertTrue(preflight.contains("account_security_foundation_preflight_requires_one_byte_exact_oauth_client"));
-        assertTrue(migration.contains("account_security_foundation_migration_requires_one_byte_exact_oauth_client"));
-        assertTrue(migration.contains("account_security_foundation_oauth_client_postcondition_failed"));
-        assertTrue(migration.contains("@asf_post_collision_count = 0"));
+        assertTrue(preflight.contains("PREPARE asf_guard_stmt"));
+
+        assertTrue(migration.contains("DELIMITER $$"));
+        assertTrue(migration.contains("CREATE PROCEDURE asf_migrate_account_security_oauth_client()"));
+        assertTrue(migration.contains("SQL SECURITY INVOKER"));
+        assertTrue(migration.contains("DECLARE EXIT HANDLER FOR SQLEXCEPTION"));
+        assertTrue(migration.contains("ROLLBACK;"));
+        assertTrue(migration.contains("RESIGNAL;"));
+        assertTrue(migration.contains("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"));
+        assertTrue(migration.contains("START TRANSACTION;"));
+        assertTrue(migration.contains("FROM oauth_client FORCE INDEX (PRIMARY)"));
+        assertTrue(migration.contains("WHERE id >= _utf8mb4''"));
+        assertTrue(migration.contains("FOR UPDATE;"));
+        assertTrue(migration.contains("engine = 'InnoDB'"));
+        assertTrue(count(migration, "SIGNAL SQLSTATE '45000'") >= 5, migration);
+
+        String update = migration.substring(
+                migration.indexOf("UPDATE oauth_client"),
+                migration.indexOf("SET v_updated_rows = ROW_COUNT()"));
+        assertTrue(update.contains("AND v_exact_target_count = 1"));
+        assertTrue(update.contains("AND v_target_collision_count = 0"));
+        assertTrue(update.contains("AND v_target_invalid_json_count = 0"));
+        assertTrue(update.contains("AND JSON_VALID(client_settings)"));
+        assertTrue(update.contains("AND JSON_VALID(token_settings)"));
+        assertTrue(migration.contains("IF v_updated_rows <> 1"));
+        assertTrue(migration.contains("v_post_exact_target_count <> 1"));
+        assertTrue(migration.contains("v_post_collision_count <> 0"));
+        assertTrue(migration.contains("v_post_invalid_json_count <> 0"));
+        assertTrue(migration.contains("v_postcondition_count <> 1"));
+        assertTrue(migration.contains("COMMIT;"));
+        assertTrue(migration.indexOf("COMMIT;") < migration.indexOf("CALL asf_migrate_account_security_oauth_client();"));
+        assertTrue(migration.contains("CALL asf_migrate_account_security_oauth_client();\n"
+                + "DROP PROCEDURE asf_migrate_account_security_oauth_client;"));
+        assertFalse(migration.contains("PREPARE asf_guard_stmt"));
+        assertFalse(migration.contains("account_security_foundation_migration_requires_one_byte_exact_oauth_client"));
+        assertFalse(migration.contains("account_security_foundation_oauth_client_postcondition_failed"));
+
         assertTrue(migration.contains("HEX(client_authentication_methods) = HEX(_ascii'none')"));
         assertTrue(migration.contains("HEX(redirect_uris) = HEX(_ascii'https://kit.chaoyoufan.cn/oauth2/callback')"));
         assertTrue(migration.contains("HEX(scopes) = HEX(_ascii'openid')"));
-        assertTrue(preflight.contains("PREPARE asf_guard_stmt"));
-        assertTrue(migration.contains("PREPARE asf_guard_stmt"));
 
         assertTrue(preflight.contains("OCTET_LENGTH(id)="));
         assertTrue(preflight.contains("HEX(id)="));
