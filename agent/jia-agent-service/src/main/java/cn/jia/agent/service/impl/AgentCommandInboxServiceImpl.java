@@ -90,21 +90,23 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         AgentConsumerInboxEntity inbox = dao.lockInbox(
                 message.tenantId(), message.clientId(), message.consumerName(), message.messageId());
         if (inbox != null) {
+            // Poison validation wins over the publish-before-settle transient. A source cannot
+            // legitimately return to CLAIMED after this consumer has created its durable Inbox.
             validateInbox(message, source, inbox);
+            validateExistingInboxSourceStatus(message, source);
             return claimExisting(message, source, inbox, leaseOwner, now, leaseMillis);
         }
 
-        if (!"PUBLISHED".equals(source.outbox().getStatus())) {
-            throw sourceStatusFailure(
-                    message, source.outbox().getStatus(), "OUTBOX_NOT_PUBLISHED");
-        }
+        // A broker-confirmed old message can be stale, but a CLAIMED source with a drifted active
+        // fence is not the canonical D03 publish-before-settle race and must fail closed.
         if (source.staleActiveFence()) {
+            if (!"PUBLISHED".equals(source.outbox().getStatus())
+                    || !"PUBLISHED".equals(source.delivery().getStatus())) {
+                throw conflict(message, "ACTIVE_MESSAGE_FENCE_DRIFT_DURING_SOURCE_SETTLEMENT");
+            }
             return persistStaleMessage(message, source, now);
         }
-        if (!"PUBLISHED".equals(source.delivery().getStatus())) {
-            throw sourceStatusFailure(
-                    message, source.delivery().getStatus(), "DELIVERY_NOT_PUBLISHED");
-        }
+        validateFirstClaimSourceStatus(message, source);
         if (now >= source.expiresAt()) {
             return persistFirstExpiry(message, source, now);
         }
@@ -334,14 +336,39 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 || DB_SHADOW_MARKER.equals(outbox.getLastError())) {
             throw conflict(message, "DB_SHADOW_MARKER_STATUS_DRIFT");
         }
-        if (!"PUBLISHED".equals(outbox.getStatus())) {
-            throw sourceStatusFailure(
-                    message, outbox.getStatus(), "OUTBOX_NOT_PUBLISHED");
-        }
-
         boolean activeFence = Objects.equals(
                 delivery.getActiveMessageId(), outbox.getMessageId());
         return new Source(delivery, outbox, !activeFence, false, delivery.getExpiresAt());
+    }
+
+    private void validateExistingInboxSourceStatus(
+            ValidatedMessage message, Source source) {
+        if (!"PUBLISHED".equals(source.outbox().getStatus())) {
+            throw conflict(message, "OUTBOX_NOT_PUBLISHED_WITH_EXISTING_INBOX");
+        }
+    }
+
+    private void validateFirstClaimSourceStatus(
+            ValidatedMessage message, Source source) {
+        String outboxStatus = source.outbox().getStatus();
+        String deliveryStatus = source.delivery().getStatus();
+        if ("CLAIMED".equals(outboxStatus)) {
+            // D03 claims the outbox while the delivery remains in its pre-publish lane. This is
+            // the only durable shape that a broker-confirmed message may observe before settle.
+            if (isOneOf(deliveryStatus, "PENDING", "RETRY")) {
+                throw sourceNotSettled(message, "OUTBOX_NOT_PUBLISHED");
+            }
+            throw conflict(message, "CLAIMED_OUTBOX_DELIVERY_STATUS_DRIFT");
+        }
+        if (!"PUBLISHED".equals(outboxStatus)) {
+            throw conflict(message, "OUTBOX_NOT_PUBLISHED");
+        }
+        if ("CLAIMED".equals(deliveryStatus)) {
+            throw sourceNotSettled(message, "DELIVERY_NOT_PUBLISHED");
+        }
+        if (!"PUBLISHED".equals(deliveryStatus)) {
+            throw conflict(message, "DELIVERY_NOT_PUBLISHED");
+        }
     }
 
     private void validateDeliveryCore(
@@ -781,13 +808,6 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
-    }
-
-    private RuntimeException sourceStatusFailure(
-            ValidatedMessage message, String status, String reasonCode) {
-        return "CLAIMED".equals(status)
-                ? sourceNotSettled(message, reasonCode)
-                : conflict(message, reasonCode);
     }
 
     private AgentInboxSourceNotSettledException sourceNotSettled(

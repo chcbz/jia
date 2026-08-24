@@ -52,12 +52,13 @@ class AgentCommandInboxServiceImplTest {
     void confirmedPublishVisibleBeforeD03SettlementIsTypedTransientAfterProvenanceValidation() {
         RecordingDao outboxRace = new RecordingDao();
         outboxRace.outbox.setStatus("CLAIMED");
-        outboxRace.delivery.setStatus("CLAIMED");
+        outboxRace.delivery.setStatus("PENDING");
         AgentInboxSourceNotSettledException outboxFailure = assertThrows(
                 AgentInboxSourceNotSettledException.class,
                 () -> service(outboxRace, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
         assertEquals("OUTBOX_NOT_PUBLISHED", outboxFailure.reasonCode());
+        assertEquals(List.of("delivery", "outbox", "inbox"), outboxRace.operations);
         assertEquals(null, outboxRace.inbox);
 
         RecordingDao deliveryRace = new RecordingDao();
@@ -67,14 +68,47 @@ class AgentCommandInboxServiceImplTest {
                 () -> service(deliveryRace, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
         assertEquals("DELIVERY_NOT_PUBLISHED", deliveryFailure.reasonCode());
+        assertEquals(List.of("delivery", "outbox", "inbox"), deliveryRace.operations);
         assertEquals(null, deliveryRace.inbox);
 
-        RecordingDao corrupt = new RecordingDao();
-        corrupt.outbox.setStatus("RETRY");
+        for (String deterministic : List.of("PENDING", "RETRY", "FAILED", "DEAD")) {
+            RecordingDao corrupt = new RecordingDao();
+            corrupt.outbox.setStatus(deterministic);
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(corrupt, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE), deterministic);
+            assertEquals(null, corrupt.inbox, deterministic);
+        }
+    }
+
+    @Test
+    void claimedSourceCannotHideCorruptExistingInboxOrActiveFenceDrift() {
+        RecordingDao corruptInbox = new RecordingDao();
+        AgentCommandInboxServiceImpl corruptService = service(corruptInbox, enabledGate());
+        corruptService.claim(message(), "worker-a", NOW, LEASE);
+        corruptInbox.outbox.setStatus("CLAIMED");
+        corruptInbox.inbox.setWirePayloadHash(new byte[32]);
+
         assertThrows(AgentInboxIdentityConflictException.class,
-                () -> service(corrupt, enabledGate())
+                () -> corruptService.claim(message(), "worker-b", NOW + 1, LEASE));
+        assertTrue(corruptInbox.operations.contains("inbox"));
+        assertEquals("PROCESSING", corruptInbox.inbox.getStatus());
+
+        RecordingDao existingInbox = new RecordingDao();
+        AgentCommandInboxServiceImpl existingService = service(existingInbox, enabledGate());
+        existingService.claim(message(), "worker-a", NOW, LEASE);
+        existingInbox.outbox.setStatus("CLAIMED");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> existingService.claim(message(), "worker-b", NOW + 1, LEASE));
+
+        RecordingDao activeFence = new RecordingDao();
+        activeFence.outbox.setStatus("CLAIMED");
+        activeFence.delivery.setStatus("PENDING").setActiveMessageId("msg-other");
+
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(activeFence, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
-        assertEquals(null, corrupt.inbox);
+        assertEquals(null, activeFence.inbox);
     }
 
     @Test

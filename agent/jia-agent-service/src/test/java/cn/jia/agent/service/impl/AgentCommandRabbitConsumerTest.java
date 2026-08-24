@@ -36,8 +36,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,6 +50,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -558,6 +562,173 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     }
 
     @Test
+    void sourceClaimedParkingRedeliveryConsumesAfterSourcePublishes() throws Exception {
+        AtomicLong clock = new AtomicLong(NOW);
+        StatefulInboxService stateful = new StatefulInboxService(false);
+        CapturingPublisher capturing = new CapturingPublisher(true);
+        AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
+        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.sent(1, 1));
+        AgentCommandRabbitConsumer statefulConsumer = consumer(
+                stateful, exactDispatcher, capturing, clock);
+        Message original = message(0);
+
+        statefulConsumer.consume(original, channel);
+
+        assertEquals("NONE", stateful.state);
+        assertEquals(1, stateful.claimCount);
+        assertEquals(1, capturing.requests.size());
+        assertEquals(1, capturing.requests.getFirst().sourceSettlementRetry());
+        assertArrayEquals(original.getBody(), capturing.requests.getFirst().wirePayload());
+        verify(channel).basicAck(77L, false);
+
+        stateful.sourcePublished = true;
+        clock.set(NOW + 5_001L);
+        Channel redeliveryChannel = mock(Channel.class);
+        statefulConsumer.consume(redelivery(capturing.requests.getFirst(), 78L), redeliveryChannel);
+
+        assertEquals("PROCESSED", stateful.state);
+        assertEquals(2, stateful.claimCount);
+        assertEquals(1, stateful.successfulCompletions);
+        verify(exactDispatcher).dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", original.getBody());
+        verify(redeliveryChannel).basicAck(78L, false);
+        verify(redeliveryChannel, never()).basicNack(
+                anyLong(), any(Boolean.class), any(Boolean.class));
+    }
+
+    @Test
+    void confirmedRetryCopyReclaimsLeaseAfterRetryCompletionFailure() throws Exception {
+        AtomicLong clock = new AtomicLong(NOW);
+        StatefulInboxService stateful = new StatefulInboxService(true);
+        stateful.completionFailuresRemaining = 1;
+        CapturingPublisher capturing = new CapturingPublisher(true);
+        AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
+        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.sendFailed(1),
+                        AgentRawCommandDispatchResult.sent(1, 1));
+        AgentCommandRabbitConsumer statefulConsumer = consumer(
+                stateful, exactDispatcher, capturing, clock);
+
+        statefulConsumer.consume(message(0), channel);
+
+        assertEquals("PROCESSING", stateful.state);
+        assertEquals(1, capturing.requests.size());
+        assertEquals(1, stateful.completeAttempts);
+        assertEquals(AgentInboxDisposition.Type.RETRY,
+                stateful.attemptedDispositions.getFirst().type());
+        assertEquals(0, stateful.successfulCompletions);
+        verify(channel).basicAck(77L, false);
+
+        clock.set(NOW + AgentCommandRabbitConsumer.CLAIM_LEASE_MILLIS + 1);
+        Channel redeliveryChannel = mock(Channel.class);
+        statefulConsumer.consume(redelivery(capturing.requests.getFirst(), 78L), redeliveryChannel);
+
+        assertEquals("PROCESSED", stateful.state);
+        assertEquals(2, stateful.claimCount);
+        assertEquals(2, stateful.activeAttempt);
+        assertEquals(2, stateful.completeAttempts);
+        assertEquals(1, stateful.successfulCompletions);
+        verify(exactDispatcher, times(2)).dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", message(0).getBody());
+        verify(redeliveryChannel).basicAck(78L, false);
+    }
+
+    @Test
+    void offlineCompletionFailureRecoversFromConfirmedCopyWithoutHotRequeue()
+            throws Exception {
+        AtomicLong clock = new AtomicLong(NOW);
+        StatefulInboxService stateful = new StatefulInboxService(true);
+        stateful.completionFailuresRemaining = 1;
+        CapturingPublisher capturing = new CapturingPublisher(true);
+        AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
+        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.offline());
+        AgentCommandRabbitConsumer statefulConsumer = consumer(
+                stateful, exactDispatcher, capturing, clock);
+
+        statefulConsumer.consume(message(0), channel);
+
+        assertEquals("PROCESSING", stateful.state);
+        assertEquals(1, capturing.requests.size());
+        assertEquals(AgentInboxDisposition.Type.WAITING_AGENT,
+                stateful.attemptedDispositions.getFirst().type());
+        verify(channel).basicNack(77L, false, false);
+        verify(channel, never()).basicNack(77L, false, true);
+
+        clock.set(NOW + AgentCommandRabbitConsumer.CLAIM_LEASE_MILLIS + 1);
+        Channel redeliveryChannel = mock(Channel.class);
+        statefulConsumer.consume(redelivery(capturing.requests.getFirst(), 78L), redeliveryChannel);
+
+        assertEquals("WAITING_AGENT", stateful.state);
+        assertEquals(2, stateful.claimCount);
+        assertEquals(2, stateful.completeAttempts);
+        assertEquals(1, stateful.successfulCompletions);
+        assertEquals(AgentCommandRabbitConsumer.AGENT_OFFLINE, stateful.lastError);
+        verify(redeliveryChannel).basicAck(78L, false);
+        verify(redeliveryChannel, never()).basicNack(
+                anyLong(), any(Boolean.class), any(Boolean.class));
+    }
+
+    @Test
+    void offlineParkingFailureDeadLettersOriginalUnmodifiedWithoutHotLoop()
+            throws Exception {
+        AtomicLong clock = new AtomicLong(NOW);
+        StatefulInboxService stateful = new StatefulInboxService(true);
+        stateful.completionFailuresRemaining = 1;
+        CapturingPublisher capturing = new CapturingPublisher(false);
+        AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
+        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.offline());
+        AgentCommandRabbitConsumer statefulConsumer = consumer(
+                stateful, exactDispatcher, capturing, clock);
+        Message original = message(3);
+        byte[] originalBody = original.getBody().clone();
+        Map<String, Object> originalHeaders = new HashMap<>(
+                original.getMessageProperties().getHeaders());
+
+        statefulConsumer.consume(original, channel);
+
+        verify(channel).basicNack(77L, false, false);
+        verify(channel, never()).basicNack(77L, false, true);
+        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+        assertEquals("PROCESSING", stateful.state);
+        assertArrayEquals(originalBody, original.getBody());
+        assertEquals(originalHeaders, original.getMessageProperties().getHeaders());
+        assertEquals(3, capturing.requests.size());
+        assertEquals(List.of(
+                        AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY,
+                        AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY,
+                        AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY),
+                capturing.requests.stream()
+                        .map(AgentConfirmedPublishRequest::routingKey).toList());
+        for (AgentConfirmedPublishRequest attempt : capturing.requests) {
+            assertEquals(AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
+                    attempt.destination());
+            assertArrayEquals(originalBody, attempt.wirePayload());
+            assertArrayEquals(AgentCommandAmqpContract.sha256(originalBody),
+                    attempt.wirePayloadHash());
+            assertEquals("msg-1", attempt.messageId());
+            assertEquals("evt-1", attempt.eventId());
+            assertEquals(41L, attempt.deliveryId());
+            assertEquals("cmd-1", attempt.commandId());
+            assertEquals("tenant-a", attempt.tenantId());
+            assertEquals("client-a", attempt.clientId());
+            assertEquals("task-1", attempt.taskId());
+            assertEquals("agent-1", attempt.targetAgentId());
+            assertEquals(4, attempt.sourceSettlementRetry());
+        }
+    }
+
+    @Test
     void listenerIsPinnedToFrozenQueueConsumerIdAndD04Factory() throws Exception {
         RabbitListener listener = AgentCommandRabbitConsumer.class
                 .getMethod("consume", Message.class, Channel.class)
@@ -572,6 +743,164 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         assertEquals("agent.rabbit-dispatch", gate.prefix());
         assertEquals(List.of("enabled"), List.of(gate.name()));
         assertEquals("true", gate.havingValue());
+    }
+
+    private AgentCommandRabbitConsumer consumer(
+            AgentCommandInboxService service,
+            AgentRawCommandDispatcher exactDispatcher,
+            AgentConfirmedRabbitPublisher confirmedPublisher,
+            AtomicLong clock) {
+        return new AgentCommandRabbitConsumer(
+                service, accessService, exactDispatcher, confirmedPublisher,
+                allowedGate(), MANIFEST, clock::get, "d05-stateful-consumer");
+    }
+
+    private Message redelivery(AgentConfirmedPublishRequest request, long deliveryTag) {
+        MessageProperties properties = new MessageProperties();
+        properties.setContentType(AgentCommandAmqpContract.CONTENT_TYPE);
+        properties.setContentEncoding(AgentCommandAmqpContract.CONTENT_ENCODING);
+        properties.setType(AgentCommandAmqpContract.MESSAGE_TYPE);
+        properties.setMessageId(request.messageId());
+        properties.setReceivedDeliveryMode(MessageDeliveryMode.PERSISTENT);
+        properties.setConsumerQueue(AgentRabbitTopologyManifest.DISPATCH_QUEUE);
+        properties.setReceivedExchange(AgentRabbitTopologyManifest.MAIN_EXCHANGE);
+        properties.setReceivedRoutingKey(AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY);
+        properties.setDeliveryTag(deliveryTag);
+        properties.setHeaders(new HashMap<>(AgentCommandAmqpContract.headers(request)));
+        return new Message(request.wirePayload(), properties);
+    }
+
+    private static final class CapturingPublisher implements AgentConfirmedRabbitPublisher {
+        private final boolean acknowledge;
+        private final List<AgentConfirmedPublishRequest> requests = new ArrayList<>();
+
+        private CapturingPublisher(boolean acknowledge) {
+            this.acknowledge = acknowledge;
+        }
+
+        @Override
+        public AgentRabbitPublishResult publish(
+                AgentConfirmedPublishRequest request, long confirmTimeoutMillis) {
+            assertEquals(AgentCommandRabbitConsumer.CONFIRM_TIMEOUT_MILLIS,
+                    confirmTimeoutMillis);
+            requests.add(request);
+            return acknowledge ? AgentRabbitPublishResult.ack() : new AgentRabbitPublishResult(
+                    AgentRabbitPublishResult.Type.TIMEOUT, "TIMEOUT", "NOT_RETURNED",
+                    null, null, "RABBIT_CONFIRM_TIMEOUT");
+        }
+    }
+
+    private static final class StatefulInboxService implements AgentCommandInboxService {
+        private boolean sourcePublished;
+        private int completionFailuresRemaining;
+        private String state = "NONE";
+        private int claimCount;
+        private int completeAttempts;
+        private int successfulCompletions;
+        private final List<AgentInboxDisposition> attemptedDispositions = new ArrayList<>();
+        private int activeAttempt;
+        private long inboxVersion;
+        private long deliveryVersion;
+        private long leaseUntil;
+        private Long nextRetryAt;
+        private String lastError;
+        private byte[] frozenWire;
+        private AgentInboxClaimToken activeToken;
+
+        private StatefulInboxService(boolean sourcePublished) {
+            this.sourcePublished = sourcePublished;
+        }
+
+        @Override
+        public AgentInboxClaim claim(
+                AgentInboxMessage message, String leaseOwner, long now, long leaseMillis) {
+            claimCount++;
+            assertEquals(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                    message.consumerName());
+            assertEquals("tenant-a", message.tenantId());
+            assertEquals("client-a", message.clientId());
+            assertEquals("msg-1", message.messageId());
+            assertEquals("evt-1", message.eventId());
+            assertEquals("cmd-1", message.commandId());
+            assertEquals(41L, message.deliveryId());
+            if (frozenWire == null) {
+                frozenWire = message.rawWireBytes();
+            } else {
+                assertArrayEquals(frozenWire, message.rawWireBytes());
+            }
+            if (!sourcePublished) {
+                throw new AgentInboxSourceNotSettledException("OUTBOX_NOT_PUBLISHED");
+            }
+            if (isTerminal()) return AgentInboxClaim.priorResult(result(now));
+            if ("NONE".equals(state)) {
+                activeAttempt = 1;
+                inboxVersion = 0;
+                deliveryVersion = 1;
+                return acquire(leaseOwner, now, leaseMillis);
+            }
+            if ("PROCESSING".equals(state)) {
+                if (now < leaseUntil) return AgentInboxClaim.inFlight(leaseUntil - now);
+                activeAttempt++;
+                inboxVersion++;
+                return acquire(leaseOwner, now, leaseMillis);
+            }
+            if ("RETRY".equals(state)) {
+                if (nextRetryAt != null && now < nextRetryAt) {
+                    return AgentInboxClaim.inFlight(nextRetryAt - now);
+                }
+                activeAttempt++;
+                inboxVersion++;
+                deliveryVersion++;
+                return acquire(leaseOwner, now, leaseMillis);
+            }
+            throw new AssertionError("unsupported fake Inbox state " + state);
+        }
+
+        @Override
+        public AgentInboxResult complete(
+                AgentInboxClaimToken token, AgentInboxDisposition disposition, long now) {
+            completeAttempts++;
+            attemptedDispositions.add(disposition);
+            assertEquals(activeToken, token);
+            assertEquals("PROCESSING", state);
+            if (completionFailuresRemaining > 0) {
+                completionFailuresRemaining--;
+                throw new IllegalStateException("synthetic durable completion failure");
+            }
+            successfulCompletions++;
+            lastError = disposition.errorCode();
+            nextRetryAt = disposition.nextRetryAt();
+            state = disposition.type() == AgentInboxDisposition.Type.SENT
+                    ? "PROCESSED" : disposition.type().name();
+            activeToken = null;
+            return result(now);
+        }
+
+        private AgentInboxClaim acquire(String leaseOwner, long now, long leaseMillis) {
+            state = "PROCESSING";
+            nextRetryAt = null;
+            lastError = null;
+            leaseUntil = Math.min(now + leaseMillis, EXPIRES_AT);
+            activeToken = new AgentInboxClaimToken(
+                    91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                    "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
+                    leaseOwner, leaseUntil, activeAttempt, inboxVersion,
+                    1, deliveryVersion, EXPIRES_AT);
+            return AgentInboxClaim.acquired(activeToken);
+        }
+
+        private AgentInboxResult result(long now) {
+            String resultStatus = "PROCESSED".equals(state) ? "SENT" : state;
+            return new AgentInboxResult(
+                    91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                    "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
+                    state, resultStatus, now, lastError);
+        }
+
+        private boolean isTerminal() {
+            return List.of("PROCESSED", "WAITING_AGENT", "FAILED", "EXPIRED", "DEAD")
+                    .contains(state);
+        }
     }
 
     private AgentConfirmedPublishRequest capturedPublish() {
