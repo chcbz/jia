@@ -427,7 +427,16 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 && delivery.getLastError() == null;
         boolean confirmationPending = "PENDING".equals(outbox.getPublisherConfirmStatus())
                 && "PENDING".equals(outbox.getMandatoryReturnStatus());
-        boolean replayAbsent = delivery.getReplayParentMessageId() == null
+        boolean replayAuditValid = validClaimedReplayAudit(delivery, outbox);
+        if (!deliveryLaneValid || !leaseValid || !publishFenceValid
+                || !dispositionEmpty || !confirmationPending || !replayAuditValid) {
+            throw conflict(message, "CLAIMED_SOURCE_SHAPE_CORRUPT");
+        }
+    }
+
+    private boolean validClaimedReplayAudit(
+            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
+        boolean absent = delivery.getReplayParentMessageId() == null
                 && delivery.getReplayRequesterId() == null
                 && delivery.getReplayApproverId() == null
                 && delivery.getReplayReason() == null
@@ -435,10 +444,17 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 && outbox.getReplayRequesterId() == null
                 && outbox.getReplayApproverId() == null
                 && outbox.getReplayReason() == null;
-        if (!deliveryLaneValid || !leaseValid || !publishFenceValid
-                || !dispositionEmpty || !confirmationPending || !replayAbsent) {
-            throw conflict(message, "CLAIMED_SOURCE_SHAPE_CORRUPT");
-        }
+        if (absent) return true;
+        return validExact(delivery.getReplayParentMessageId(), 100)
+                && !delivery.getActiveMessageId().equals(delivery.getReplayParentMessageId())
+                && validExact(delivery.getReplayRequesterId(), 100)
+                && delivery.getReplayApproverId() == null
+                && Set.of("AGENT_RECONNECT", "WAITING_AGENT_SCHEDULER")
+                        .contains(delivery.getReplayReason())
+                && Objects.equals(delivery.getReplayParentMessageId(), outbox.getReplayParentMessageId())
+                && Objects.equals(delivery.getReplayRequesterId(), outbox.getReplayRequesterId())
+                && outbox.getReplayApproverId() == null
+                && Objects.equals(delivery.getReplayReason(), outbox.getReplayReason());
     }
 
     private void validateDeliveryCore(

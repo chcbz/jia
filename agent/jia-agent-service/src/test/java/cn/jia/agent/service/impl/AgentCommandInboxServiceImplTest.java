@@ -707,6 +707,29 @@ class AgentCommandInboxServiceImplTest {
                 .setLastError(null).setVersion(1L);
     }
 
+    @Test
+    void claimedSourceAcceptsOnlyExactD06ReplayAuditDuringPublishSettlementRace() {
+        RecordingDao canonical = new RecordingDao();
+        canonicalClaimed(canonical, "PENDING");
+        canonical.delivery.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
+        canonical.outbox.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
+        assertThrows(AgentInboxSourceNotSettledException.class,
+                () -> service(canonical, enabledGate())
+                        .claim(message(), "worker-a", NOW, LEASE));
+
+        RecordingDao poison = new RecordingDao();
+        canonicalClaimed(poison, "PENDING");
+        poison.delivery.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
+        poison.outbox.setReplayParentMessageId("msg-other")
+                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(poison, enabledGate())
+                        .claim(message(), "worker-a", NOW, LEASE));
+    }
+
     private AgentRabbitSafetyGate offGate() {
         return gate(false, false, false);
     }

@@ -3,11 +3,16 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -24,6 +29,10 @@ public final class AgentCommandCanonicalCodec {
     private static final int MAX_COLLABORATORS = 128;
     private static final int MAX_ABILITIES = 128;
     private static final Comparator<String> UTF8_ORDER = AgentCommandCanonicalCodec::compareUtf8Unsigned;
+    private static final ObjectMapper STRICT_BUSINESS_JSON = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
 
     private AgentCommandCanonicalCodec() {
     }
@@ -61,8 +70,13 @@ public final class AgentCommandCanonicalCodec {
     }
 
     public static byte[] wireBytes(AgentCommandDraft draft, String messageId) {
+        return wireBytes(draft, messageId, ATTEMPT);
+    }
+
+    public static byte[] wireBytes(AgentCommandDraft draft, String messageId, int attempt) {
         validate(draft);
         requireExact(messageId, "messageId", 100);
+        if (attempt <= 0) throw invalid("attempt must be positive");
         StringBuilder json = new StringBuilder(2048);
         json.append('{');
         number(json, "schemaVersion", draft.schemaVersion());
@@ -79,10 +93,28 @@ public final class AgentCommandCanonicalCodec {
         string(json, "commandType", draft.commandType());
         number(json, "issuedAt", draft.issuedAt());
         number(json, "expiresAt", draft.expiresAt());
-        number(json, "attempt", ATTEMPT);
+        number(json, "attempt", attempt);
         payload(json, draft.payload());
         json.append('}');
         return bounded(json);
+    }
+
+    public static AgentCommandDraft decodeBusinessBytes(byte[] raw) {
+        if (raw == null || raw.length == 0 || raw.length > MAX_CANONICAL_BYTES) {
+            throw invalid("canonical business bytes are missing or oversized");
+        }
+        try {
+            AgentCommandDraft draft = STRICT_BUSINESS_JSON.readValue(raw, AgentCommandDraft.class);
+            byte[] canonical = businessBytes(draft);
+            if (!Arrays.equals(raw, canonical)) {
+                throw invalid("business bytes are not the frozen canonical encoding");
+            }
+            return draft;
+        } catch (IllegalArgumentException invalid) {
+            throw invalid;
+        } catch (Exception malformed) {
+            throw invalid("business bytes cannot be decoded");
+        }
     }
 
     public static byte[] sha256(byte[] bytes) {

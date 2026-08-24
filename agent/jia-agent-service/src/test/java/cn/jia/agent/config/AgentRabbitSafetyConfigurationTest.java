@@ -1,6 +1,8 @@
 package cn.jia.agent.config;
 
+import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.dao.AgentOutboxRelayDao;
+import cn.jia.agent.service.AgentRawCommandDispatcher;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -25,6 +27,8 @@ import static org.mockito.Mockito.mock;
 class AgentRabbitSafetyConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
             .withBean(AgentOutboxRelayDao.class, () -> mock(AgentOutboxRelayDao.class))
+            .withBean(AgentCommandRecoveryDao.class, () -> mock(AgentCommandRecoveryDao.class))
+            .withBean(AgentRawCommandDispatcher.class, () -> mock(AgentRawCommandDispatcher.class))
             .withBean(PlatformTransactionManager.class,
                     () -> mock(PlatformTransactionManager.class))
             .withUserConfiguration(AgentRabbitSafetyConfiguration.class);

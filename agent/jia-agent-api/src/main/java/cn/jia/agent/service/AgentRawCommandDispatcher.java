@@ -7,6 +7,9 @@ import cn.jia.agent.entity.AgentRawCommandDispatchResult;
  * Implementations must send the supplied bytes without JSON reserialization or compatibility wrapping.
  */
 public interface AgentRawCommandDispatcher {
+    /** Exact registered-session presence used by D06 immediately before any reissue transaction. */
+    boolean isExactAgentConnected(String tenantId, String clientId, String targetAgentId);
+
     AgentRawCommandDispatchResult dispatchExactRawCommand(
             String tenantId,
             String clientId,
