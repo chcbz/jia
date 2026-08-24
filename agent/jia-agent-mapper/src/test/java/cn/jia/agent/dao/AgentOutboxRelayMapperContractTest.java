@@ -43,6 +43,8 @@ class AgentOutboxRelayMapperContractTest {
     void normalDiscoveryExcludesDeterminablePoisonAndCorruptionLaneSelectsIt() throws Exception {
         String corrupt = sql(method("selectCorruptCandidates"));
         assertTrue(corrupt.contains("and not ("));
+        assertTrue(corrupt.contains("o.version<9223372036854775806"));
+        assertTrue(corrupt.contains("d.version>=9223372036854775806"));
         for (String methodName : new String[] {"selectDueCandidates", "selectStaleCandidates"}) {
             String sql = sql(method(methodName));
             assertTrue(sql.contains("o.delivery_id>0"), methodName);
@@ -51,8 +53,8 @@ class AgentOutboxRelayMapperContractTest {
             assertTrue(sql.contains(
                     "not regexp concat('[',char(92),'p{cc}]')"), methodName);
             assertTrue(sql.contains("exists ( select 1 from agent_command_delivery"), methodName);
-            assertTrue(sql.contains("o.version<9223372036854775807"), methodName);
-            assertTrue(sql.contains("d.version=9223372036854775807"), methodName);
+            assertTrue(sql.contains("o.version<9223372036854775806"), methodName);
+            assertTrue(sql.contains("d.version>=9223372036854775806"), methodName);
         }
     }
 
@@ -104,8 +106,8 @@ class AgentOutboxRelayMapperContractTest {
         }
         assertTrue(outbox.contains("attempt_count=attempt_count+1"));
         assertTrue(outbox.contains("active_attempt=active_attempt+1"));
-        assertTrue(delivery.contains("version<9223372036854775807"));
-        assertTrue(outbox.contains("version<9223372036854775807"));
+        assertTrue(delivery.contains("version<9223372036854775806"));
+        assertTrue(outbox.contains("version<9223372036854775806"));
     }
 
     @Test

@@ -120,7 +120,7 @@ else
 fi
 
 {
-  echo "control_plane_date=Sunday, August 23, 2026"
+  echo "control_plane_date=Monday, August 24, 2026"
   echo "mysql_binary_version=$binary_version"
   echo "mysql_os_user=$MYSQL_OS_USER"
   echo "port=$PORT"

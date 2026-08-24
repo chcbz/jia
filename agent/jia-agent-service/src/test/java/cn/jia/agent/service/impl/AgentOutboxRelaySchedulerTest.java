@@ -58,6 +58,35 @@ class AgentOutboxRelaySchedulerTest {
     }
 
     @Test
+    void maxMinusOneCandidateIsQuarantinedByClaimWithoutPublisherInvocation() throws Exception {
+        AgentOutboxRelayService relay = mock(AgentOutboxRelayService.class);
+        AgentOutboxPublisher publisher = mock(AgentOutboxPublisher.class);
+        AgentRabbitTopologyReadiness readiness = notReady();
+        AgentOutboxRelayScheduler scheduler = new AgentOutboxRelayScheduler(
+                dispatchGate(), readiness, settings(), relay, publisher);
+        AgentOutboxCandidate fenced = new AgentOutboxCandidate(
+                1, "tenant-a", "client-a", 41, 1, Long.MAX_VALUE - 1, "PENDING");
+        try {
+            scheduler.start();
+            Thread.sleep(30);
+            when(relay.discover(anyLong(), anyInt())).thenReturn(List.of(fenced));
+            when(relay.claim(any(AgentOutboxCandidate.class), anyString(), anyLong()))
+                    .thenReturn(AgentOutboxClaim.skipped());
+            markReady(readiness);
+
+            scheduler.pollOnce();
+
+            verify(relay).claim(org.mockito.ArgumentMatchers.eq(fenced),
+                    anyString(), anyLong());
+            verify(publisher, never()).publish(any(), anyLong());
+            verify(relay, never()).settle(any(), any(), anyLong());
+            assertEquals(0, scheduler.inflightCount());
+        } finally {
+            scheduler.stop();
+        }
+    }
+
+    @Test
     void pollingIsMaxInflightBoundedAndGracefulStopDrainsCommittedWork() throws Exception {
         AgentOutboxRelayService relay = mock(AgentOutboxRelayService.class);
         AgentOutboxPublisher publisher = mock(AgentOutboxPublisher.class);

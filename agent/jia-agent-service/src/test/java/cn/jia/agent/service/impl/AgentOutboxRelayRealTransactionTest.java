@@ -310,6 +310,80 @@ class AgentOutboxRelayRealTransactionTest {
     }
 
     @Test
+    void claimCasRejectsMaxMinusOneWithoutMutation() {
+        jdbc.update("UPDATE agent_command_delivery SET version=?", Long.MAX_VALUE - 1);
+        jdbc.update("UPDATE agent_outbox_event SET version=?", Long.MAX_VALUE - 1);
+        AgentCommandDeliveryEntity delivery = productionDao.lockDelivery(
+                "tenant-a", "client-a", 41);
+        AgentOutboxEventEntity outbox = productionDao.lockOutbox(
+                "tenant-a", "client-a", 1);
+
+        assertEquals(0, productionDao.claimDelivery(
+                delivery, "worker-a", NOW + 30_000, null, NOW));
+        assertEquals(0, productionDao.claimOutbox(
+                outbox, "worker-a", NOW + 30_000, null, NOW));
+
+        assertEquals("PENDING", string("SELECT status FROM agent_command_delivery"));
+        assertEquals("PENDING", string("SELECT status FROM agent_outbox_event"));
+        assertEquals(null, stringOrNull("SELECT lease_owner FROM agent_command_delivery"));
+        assertEquals(null, stringOrNull("SELECT lease_owner FROM agent_outbox_event"));
+        assertEquals(Long.MAX_VALUE - 1,
+                longValue("SELECT version FROM agent_command_delivery"));
+        assertEquals(Long.MAX_VALUE - 1,
+                longValue("SELECT version FROM agent_outbox_event"));
+        assertEquals(0, integer("SELECT attempt_count FROM agent_outbox_event"));
+    }
+
+    @Test
+    void claimQuarantinesMaxMinusOneBeforePublishAndNeverWraps() {
+        for (VersionMax max : VersionMax.values()) {
+            resetPendingRows();
+            if (max != VersionMax.OUTBOX_ONLY) {
+                jdbc.update("UPDATE agent_command_delivery SET version=?", Long.MAX_VALUE - 1);
+            }
+            if (max != VersionMax.DELIVERY_ONLY) {
+                jdbc.update("UPDATE agent_outbox_event SET version=?", Long.MAX_VALUE - 1);
+            }
+
+            assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                    service(productionDao).claim(candidate(), "worker-a", NOW).status(),
+                    max.name());
+            assertEquals("DEAD", string("SELECT status FROM agent_command_delivery"));
+            assertEquals("DEAD", string("SELECT status FROM agent_outbox_event"));
+            assertEquals(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED,
+                    string("SELECT last_error FROM agent_outbox_event"));
+            assertEquals(max == VersionMax.OUTBOX_ONLY ? 1L : Long.MAX_VALUE,
+                    longValue("SELECT version FROM agent_command_delivery"));
+            assertEquals(max == VersionMax.DELIVERY_ONLY ? 1L : Long.MAX_VALUE,
+                    longValue("SELECT version FROM agent_outbox_event"));
+            assertEquals(List.of(), service(productionDao).discover(NOW, 1));
+            assertEquals(0, productionDao.selectCorruptCandidates(NOW, 4).size());
+        }
+    }
+
+    @Test
+    void maxMinusTwoClaimAndAckConsumeReservedIncrementsExactlyToMax() {
+        jdbc.update("UPDATE agent_command_delivery SET version=?", Long.MAX_VALUE - 2);
+        jdbc.update("UPDATE agent_outbox_event SET version=?", Long.MAX_VALUE - 2);
+
+        AgentOutboxClaimToken token = service(productionDao)
+                .claim(candidate(), "worker-a", NOW).token();
+
+        assertEquals(Long.MAX_VALUE - 1, token.deliveryVersion());
+        assertEquals(Long.MAX_VALUE - 1, token.outboxVersion());
+        assertEquals(Long.MAX_VALUE - 1,
+                longValue("SELECT version FROM agent_command_delivery"));
+        assertEquals(Long.MAX_VALUE - 1,
+                longValue("SELECT version FROM agent_outbox_event"));
+        assertEquals(AgentOutboxSettleResult.PUBLISHED,
+                service(productionDao).settle(token, AgentRabbitPublishResult.ack(), NOW + 1));
+        assertEquals("PUBLISHED", string("SELECT status FROM agent_command_delivery"));
+        assertEquals("PUBLISHED", string("SELECT status FROM agent_outbox_event"));
+        assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_command_delivery"));
+        assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_outbox_event"));
+    }
+
+    @Test
     void claimQuarantineSaturatesDeliveryAndOutboxMaxVersions() {
         for (VersionMax max : VersionMax.values()) {
             resetPendingRows();
@@ -386,6 +460,27 @@ class AgentOutboxRelayRealTransactionTest {
 
 
     @Test
+    void partialMaxMinusOneQuarantineFailureRollsBackBeforeRetryingSafely() {
+        jdbc.update("UPDATE agent_command_delivery SET version=?", Long.MAX_VALUE - 1);
+
+        assertThrows(IllegalStateException.class,
+                () -> service(new FailingDao(productionDao, Failure.QUARANTINE_OUTBOX))
+                        .claim(candidate(), "worker-a", NOW));
+        assertEquals("PENDING", string("SELECT status FROM agent_command_delivery"));
+        assertEquals("PENDING", string("SELECT status FROM agent_outbox_event"));
+        assertEquals(Long.MAX_VALUE - 1,
+                longValue("SELECT version FROM agent_command_delivery"));
+        assertEquals(0L, longValue("SELECT version FROM agent_outbox_event"));
+
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service(productionDao).claim(candidate(), "worker-a", NOW).status());
+        assertEquals("DEAD", string("SELECT status FROM agent_command_delivery"));
+        assertEquals("DEAD", string("SELECT status FROM agent_outbox_event"));
+        assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_command_delivery"));
+        assertEquals(1L, longValue("SELECT version FROM agent_outbox_event"));
+    }
+
+    @Test
     void partialVersionQuarantineFailureRollsBackPairedDeliveryMutation() {
         jdbc.update("UPDATE agent_command_delivery SET version=?", Long.MAX_VALUE);
 
@@ -406,31 +501,34 @@ class AgentOutboxRelayRealTransactionTest {
     }
 
     @Test
-    void staleCallbackCannotMutateMaxRowsAndStaleDiscoveryQuarantinesThemOnce() {
-        AgentOutboxClaimToken old = service(productionDao)
-                .claim(candidate(), "worker-a", NOW).token();
-        jdbc.update("""
-                UPDATE agent_command_delivery
-                SET version=?, lease_until=?
-                """, Long.MAX_VALUE, NOW);
-        jdbc.update("""
-                UPDATE agent_outbox_event
-                SET version=?, lease_until=?
-                """, Long.MAX_VALUE, NOW);
+    void staleCallbackCannotMutateMaxOrMaxMinusOneAndDiscoveryQuarantinesOnce() {
+        for (long fencedVersion : new long[] {Long.MAX_VALUE - 1, Long.MAX_VALUE}) {
+            resetPendingRows();
+            AgentOutboxClaimToken old = service(productionDao)
+                    .claim(candidate(), "worker-a", NOW).token();
+            jdbc.update("""
+                    UPDATE agent_command_delivery
+                    SET version=?, lease_until=?
+                    """, fencedVersion, NOW);
+            jdbc.update("""
+                    UPDATE agent_outbox_event
+                    SET version=?, lease_until=?
+                    """, fencedVersion, NOW);
 
-        assertEquals(AgentOutboxSettleResult.STALE,
-                service(productionDao).settle(old, AgentRabbitPublishResult.ack(), NOW + 1));
-        assertEquals("CLAIMED", string("SELECT status FROM agent_outbox_event"));
-        assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_outbox_event"));
+            assertEquals(AgentOutboxSettleResult.STALE,
+                    service(productionDao).settle(old, AgentRabbitPublishResult.ack(), NOW + 1));
+            assertEquals("CLAIMED", string("SELECT status FROM agent_outbox_event"));
+            assertEquals(fencedVersion, longValue("SELECT version FROM agent_outbox_event"));
 
-        assertEquals(List.of(), service(productionDao).discover(NOW + 1, 1));
-        assertEquals("DEAD", string("SELECT status FROM agent_command_delivery"));
-        assertEquals("DEAD", string("SELECT status FROM agent_outbox_event"));
-        assertEquals(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED,
-                string("SELECT last_error FROM agent_outbox_event"));
-        assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_command_delivery"));
-        assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_outbox_event"));
-        assertEquals(0, productionDao.selectCorruptCandidates(NOW + 1, 4).size());
+            assertEquals(List.of(), service(productionDao).discover(NOW + 1, 1));
+            assertEquals("DEAD", string("SELECT status FROM agent_command_delivery"));
+            assertEquals("DEAD", string("SELECT status FROM agent_outbox_event"));
+            assertEquals(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED,
+                    string("SELECT last_error FROM agent_outbox_event"));
+            assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_command_delivery"));
+            assertEquals(Long.MAX_VALUE, longValue("SELECT version FROM agent_outbox_event"));
+            assertEquals(0, productionDao.selectCorruptCandidates(NOW + 1, 4).size());
+        }
     }
 
     private DriverManagerDataSource dataSource() {

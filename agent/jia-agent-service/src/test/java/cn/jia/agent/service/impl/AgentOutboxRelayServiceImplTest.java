@@ -411,6 +411,71 @@ class AgentOutboxRelayServiceImplTest {
     }
 
     @Test
+    void normalDiscoveryDefensivelyQuarantinesMaxMinusOneHint() {
+        Fixture fixture = pending();
+        fixture.outbox.setVersion(Long.MAX_VALUE - 1);
+        AgentOutboxCandidate poison = new AgentOutboxCandidate(
+                1, "tenant-a", "client-a", 41, NOW, Long.MAX_VALUE - 1, "PENDING");
+        when(dao.selectCorruptCandidates(NOW, 1)).thenReturn(List.of());
+        when(dao.selectDueCandidates(NOW, 4)).thenReturn(List.of(poison));
+        when(dao.selectStaleCandidates(NOW, 4)).thenReturn(List.of());
+        when(dao.lockDelivery("tenant-a", "client-a", 41L)).thenReturn(fixture.delivery);
+        when(dao.lockOutboxForQuarantine(poison)).thenReturn(fixture.outbox);
+
+        assertEquals(List.of(), service.discover(NOW, 1));
+
+        verify(dao).quarantineDelivery(eq(fixture.delivery),
+                eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+        verify(dao).quarantineOutbox(eq(fixture.outbox),
+                eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+        verify(dao, never()).claimDelivery(any(), anyString(), anyLong(), any(), anyLong());
+        verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+    }
+
+    @Test
+    void corruptionLaneQuarantinesMaxMinusOneBeforeNormalDiscovery() {
+        Fixture fixture = pending();
+        fixture.outbox.setVersion(Long.MAX_VALUE - 1);
+        AgentOutboxCandidate poison = new AgentOutboxCandidate(
+                1, "tenant-a", "client-a", 41, NOW, Long.MAX_VALUE - 1, "PENDING");
+        when(dao.selectCorruptCandidates(NOW, 1)).thenReturn(List.of(poison));
+        when(dao.selectDueCandidates(NOW, 4)).thenReturn(List.of());
+        when(dao.selectStaleCandidates(NOW, 4)).thenReturn(List.of());
+        when(dao.lockDelivery("tenant-a", "client-a", 41L)).thenReturn(fixture.delivery);
+        when(dao.lockOutboxForQuarantine(poison)).thenReturn(fixture.outbox);
+
+        assertEquals(List.of(), service.discover(NOW, 1));
+
+        verify(dao).quarantineDelivery(eq(fixture.delivery),
+                eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+        verify(dao).quarantineOutbox(eq(fixture.outbox),
+                eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+        verify(dao, never()).claimDelivery(any(), anyString(), anyLong(), any(), anyLong());
+        verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+    }
+
+    @Test
+    void claimQuarantinesMaxMinusOneToReserveSettlementIncrement() {
+        for (VersionMax max : VersionMax.values()) {
+            reset(dao);
+            stubMutationSuccess();
+            Fixture fixture = pending();
+            if (max != VersionMax.OUTBOX_ONLY) fixture.delivery.setVersion(Long.MAX_VALUE - 1);
+            if (max != VersionMax.DELIVERY_ONLY) fixture.outbox.setVersion(Long.MAX_VALUE - 1);
+            arrange(fixture);
+
+            assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                    service.claim(candidate(1, NOW), "lease-a", NOW).status(), max.name());
+            verify(dao).quarantineDelivery(eq(fixture.delivery),
+                    eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+            verify(dao).quarantineOutbox(eq(fixture.outbox),
+                    eq(AgentOutboxRelayServiceImpl.VERSION_FENCE_EXHAUSTED), eq(NOW));
+            verify(dao, never()).claimDelivery(any(), anyString(), anyLong(), any(), anyLong());
+            verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+        }
+    }
+
+    @Test
     void claimQuarantinesDeliveryOutboxVersionMaxWithoutOverflow() {
         for (VersionMax max : VersionMax.values()) {
             reset(dao);
@@ -468,15 +533,17 @@ class AgentOutboxRelayServiceImplTest {
 
 
     @Test
-    void staleCallbackCannotMutateMaxVersionRows() {
-        Fixture fixture = claimed();
-        AgentOutboxClaimToken old = token(fixture);
-        fixture.delivery.setVersion(Long.MAX_VALUE);
-        fixture.outbox.setVersion(Long.MAX_VALUE);
-        arrange(fixture);
+    void staleCallbackCannotMutateMaxOrMaxMinusOneVersionRows() {
+        for (long fencedVersion : new long[] {Long.MAX_VALUE - 1, Long.MAX_VALUE}) {
+            Fixture fixture = claimed();
+            AgentOutboxClaimToken old = token(fixture);
+            fixture.delivery.setVersion(fencedVersion);
+            fixture.outbox.setVersion(fencedVersion);
+            arrange(fixture);
 
-        assertEquals(AgentOutboxSettleResult.STALE,
-                service.settle(old, AgentRabbitPublishResult.ack(), NOW));
+            assertEquals(AgentOutboxSettleResult.STALE,
+                    service.settle(old, AgentRabbitPublishResult.ack(), NOW));
+        }
         verify(dao, never()).quarantineDelivery(any(), anyString(), anyLong());
         verify(dao, never()).quarantineOutbox(any(), anyString(), anyLong());
         verify(dao, never()).disposeDelivery(any(), anyString(), any(), any(), anyLong());

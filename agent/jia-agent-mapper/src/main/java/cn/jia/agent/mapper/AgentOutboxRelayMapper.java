@@ -21,7 +21,7 @@ public interface AgentOutboxRelayMapper {
             AND OCTET_LENGTH(o.client_id)=OCTET_LENGTH(TRIM(o.client_id))
             AND o.tenant_id NOT REGEXP CONCAT('[',CHAR(92),'p{Cc}]')
             AND o.client_id NOT REGEXP CONCAT('[',CHAR(92),'p{Cc}]')
-            AND o.version<9223372036854775807
+            AND o.version<9223372036854775806
             AND EXISTS (
                 SELECT 1 FROM agent_command_delivery d
                 WHERE d.id=o.delivery_id
@@ -32,7 +32,7 @@ public interface AgentOutboxRelayMapper {
             )
             AND NOT EXISTS (
                 SELECT 1 FROM agent_command_delivery d
-                WHERE d.id=o.delivery_id AND d.version=9223372036854775807
+                WHERE d.id=o.delivery_id AND d.version>=9223372036854775806
                   AND CAST(d.tenant_id AS BINARY)=CAST(o.tenant_id AS BINARY)
                   AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(o.tenant_id)
                   AND CAST(d.client_id AS BINARY)=CAST(o.client_id AS BINARY)
@@ -177,7 +177,7 @@ public interface AgentOutboxRelayMapper {
             SET lease_owner=#{leaseOwner}, lease_until=#{leaseUntil}, last_error=#{lastError},
                 version=version+1, update_time=#{now}
             WHERE id=#{delivery.id} AND version=#{delivery.version}
-              AND version<9223372036854775807
+              AND version<9223372036854775806
               AND tenant_id=#{delivery.tenantId} AND client_id=#{delivery.clientId}
               AND command_id=#{delivery.commandId} AND active_message_id=#{delivery.activeMessageId}
               AND active_attempt=#{delivery.activeAttempt} AND status=#{delivery.status}
@@ -209,7 +209,7 @@ public interface AgentOutboxRelayMapper {
                 return_reply_code=NULL, return_reply_text=NULL, published_at=NULL,
                 last_error=#{lastError}, version=version+1, update_time=#{now}
             WHERE id=#{outbox.id} AND version=#{outbox.version}
-              AND version<9223372036854775807
+              AND version<9223372036854775806
               AND active_attempt=#{outbox.activeAttempt} AND attempt_count=#{outbox.attemptCount}
               AND tenant_id=#{outbox.tenantId} AND client_id=#{outbox.clientId}
               AND event_id=#{outbox.eventId} AND message_id=#{outbox.messageId}

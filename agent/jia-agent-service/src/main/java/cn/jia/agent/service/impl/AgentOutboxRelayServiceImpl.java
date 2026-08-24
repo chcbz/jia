@@ -155,8 +155,8 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 || isTerminalOutbox(outbox.getStatus())) {
             return AgentOutboxClaim.skipped();
         }
-        if (versionFenceExhausted(outbox)
-                || (safeAssociation(delivery, outbox) && versionFenceExhausted(delivery))) {
+        if (versionFenceCannotClaim(outbox)
+                || (safeAssociation(delivery, outbox) && versionFenceCannotClaim(delivery))) {
             quarantineBoth(delivery, outbox, VERSION_FENCE_EXHAUSTED, now);
             return AgentOutboxClaim.skipped();
         }
@@ -319,8 +319,8 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
 
         boolean paired = safeAssociation(delivery, outbox);
         String errorCode;
-        if (versionFenceExhausted(outbox)
-                || (paired && versionFenceExhausted(delivery))) {
+        if (versionFenceCannotClaim(outbox)
+                || (paired && versionFenceCannotClaim(delivery))) {
             errorCode = VERSION_FENCE_EXHAUSTED;
         } else if (!exactScope) {
             errorCode = DISCOVERY_SCOPE_INVALID;
@@ -571,7 +571,9 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
 
     private static boolean validCandidateHint(AgentOutboxCandidate candidate) {
         return candidate.outboxId() > 0 && candidate.deliveryId() > 0
-                && candidate.outboxVersion() >= 0 && candidate.outboxStatus() != null
+                && candidate.outboxVersion() >= 0
+                && candidate.outboxVersion() < Long.MAX_VALUE - 1
+                && candidate.outboxStatus() != null
                 && Set.of("PENDING", "RETRY", "CLAIMED").contains(candidate.outboxStatus())
                 && validExact(candidate.tenantId(), 50)
                 && validExact(candidate.clientId(), 50);
@@ -593,6 +595,16 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         }
         return "CLAIMED".equals(outbox.getStatus())
                 && outbox.getLeaseUntil() != null && outbox.getLeaseUntil() <= now;
+    }
+
+    private static boolean versionFenceCannotClaim(AgentCommandDeliveryEntity delivery) {
+        return delivery != null && delivery.getVersion() != null
+                && delivery.getVersion() >= Long.MAX_VALUE - 1;
+    }
+
+    private static boolean versionFenceCannotClaim(AgentOutboxEventEntity outbox) {
+        return outbox != null && outbox.getVersion() != null
+                && outbox.getVersion() >= Long.MAX_VALUE - 1;
     }
 
     private static boolean versionFenceExhausted(AgentCommandDeliveryEntity delivery) {
