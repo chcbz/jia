@@ -33,6 +33,8 @@ CREATE TABLE user_info (
     update_time bigint DEFAULT NULL COMMENT '最后更新时间',
     client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
     tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
+    account_state varchar(16) NOT NULL DEFAULT 'ACTIVE' COMMENT '账户生命周期状态',
+    auth_epoch bigint NOT NULL DEFAULT 0 COMMENT '认证会话版本',
     PRIMARY KEY (id),
     KEY user_info_jiacn_idx (jiacn),
     KEY user_info_openid_idx (openid),

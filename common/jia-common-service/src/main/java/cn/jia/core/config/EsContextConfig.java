@@ -4,6 +4,7 @@ import cn.jia.core.filter.EsContextFilter;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
 
 /**
  * 处理AJAX请求跨域的问题
@@ -23,7 +24,7 @@ public class EsContextConfig {
         FilterRegistrationBean<EsContextFilter> filterRegistrationBean = new FilterRegistrationBean<>();
         filterRegistrationBean.setFilter(new EsContextFilter());
         filterRegistrationBean.addUrlPatterns("/*");
-        filterRegistrationBean.setOrder(1);
+        filterRegistrationBean.setOrder(Ordered.HIGHEST_PRECEDENCE + 1);
         return filterRegistrationBean;
     }
 }

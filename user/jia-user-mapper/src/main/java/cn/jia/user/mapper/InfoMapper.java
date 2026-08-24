@@ -2,6 +2,7 @@ package cn.jia.user.mapper;
 
 import cn.jia.user.entity.UserEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
@@ -21,4 +22,10 @@ public interface InfoMapper extends BaseMapper<UserEntity> {
     List<UserEntity> selectByOrg(Long orgId);
 
     List<UserEntity> searchByExample(UserEntity user);
+
+    UserEntity selectSecurityById(@Param("userId") long userId);
+
+    List<UserEntity> selectSecurityByExactJiacn(@Param("jiacn") String jiacn);
+
+    int incrementAuthEpoch(@Param("userId") long userId, @Param("expectedEpoch") long expectedEpoch);
 }

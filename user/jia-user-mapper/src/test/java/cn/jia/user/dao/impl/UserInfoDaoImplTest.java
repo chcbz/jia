@@ -20,6 +20,15 @@ class UserInfoDaoImplTest extends BaseDbUnitTest {
     }
 
     @Test
+    void selectSecurityByExactJiacnPreservesBytesAndMapsDefaults() {
+        List<UserEntity> exact = userInfoDao.selectSecurityByExactJiacn("oH2zD1El9hvjnWu-LRmCr-JiTuXI");
+        assertEquals(1, exact.size());
+        assertEquals("ACTIVE", exact.getFirst().getAccountState());
+        assertEquals(0L, exact.getFirst().getAuthEpoch());
+        assertTrue(userInfoDao.selectSecurityByExactJiacn("oh2zd1el9hvjnwu-lrmcr-jituxi").isEmpty());
+    }
+
+    @Test
     void selectByUsername() {
         UserEntity username = userInfoDao.selectByUsername("oH2zD1El9hvjnWu-LRmCr-JiTuXI");
         assertNotNull(username);

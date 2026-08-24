@@ -2,6 +2,10 @@ package cn.jia.oauth.api;
 
 import cn.jia.core.config.ExceptionHandlerAdvice;
 import cn.jia.oauth.config.ResourceServerConfig;
+import cn.jia.oauth.security.AccountSecurityJwtValidator;
+import cn.jia.user.security.AccountSecurityService;
+import cn.jia.user.security.AccountSecuritySnapshot;
+import cn.jia.user.security.AccountState;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +33,7 @@ import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
@@ -36,6 +41,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.mockito.Mockito.*;
 
 class AuthenticationResourceSecurityTest {
 
@@ -158,10 +164,24 @@ class AuthenticationResourceSecurityTest {
         }
 
         @Bean
+        AccountSecurityService accountSecurityService() {
+            AccountSecurityService service = mock(AccountSecurityService.class);
+            when(service.findByUserId(17)).thenReturn(Optional.of(
+                    new AccountSecuritySnapshot(17, "jia-17", AccountState.ACTIVE, 4)));
+            when(service.findByUserId(18)).thenReturn(Optional.of(
+                    new AccountSecuritySnapshot(18, " jia-17 ", AccountState.ACTIVE, 2)));
+            return service;
+        }
+
+        @Bean
         @Primary
-        JwtDecoder testJwtDecoder() {
-            return token -> switch (token) {
+        JwtDecoder testJwtDecoder(AccountSecurityService accountSecurityService) {
+            return token -> {
+                Jwt jwt = switch (token) {
                 case "user-token" -> jwt(token, Map.of(
+                        "token_kind", "user",
+                        "uid", "17",
+                        "auth_epoch", 4L,
                         "sub", "user-17",
                         "client_id", "public-web",
                         "username", "alice",
@@ -170,9 +190,13 @@ class AuthenticationResourceSecurityTest {
                         "access_token", "must-not-leak",
                         "arbitrary_claim", "must-not-leak"));
                 case "machine-token" -> jwt(token, Map.of(
+                        "token_kind", "machine",
                         "sub", "machine-client",
                         "client_id", "machine-client"));
                 case "exact-identity-token" -> jwt(token, Map.of(
+                        "token_kind", "user",
+                        "uid", "18",
+                        "auth_epoch", 2L,
                         "sub", " user-17 ",
                         "client_id", " public-web ",
                         "username", " alice ",
@@ -214,6 +238,11 @@ class AuthenticationResourceSecurityTest {
                         "client_id", "public-web",
                         "scope", List.of("openid", "read\u0085write")));
                 default -> throw new BadJwtException("Malformed token");
+                };
+                if (new AccountSecurityJwtValidator(accountSecurityService).validate(jwt).hasErrors()) {
+                    throw new BadJwtException("Invalid token");
+                }
+                return jwt;
             };
         }
 

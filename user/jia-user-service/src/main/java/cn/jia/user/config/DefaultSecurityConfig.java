@@ -18,6 +18,8 @@ import cn.jia.user.entity.PermsVO;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
+import cn.jia.user.security.AccountSecurityService;
+import cn.jia.user.security.AccountSecuritySnapshot;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -66,6 +68,8 @@ public class DefaultSecurityConfig {
     private UserService userService;
     @Autowired
     private PermsService permsService;
+    @Autowired
+    private AccountSecurityService accountSecurityService;
     @Autowired(required = false)
     private SmsService smsService;
 
@@ -120,18 +124,10 @@ public class DefaultSecurityConfig {
 
     @Bean
     public UserDetailsService userDetailsService() {
-        return new UserDetailsService() {
-            /**
-             * 根据用户名获取登录用户信息
-             *
-             * @param username 用户名
-             * @return 用户详情
-             * @throws UsernameNotFoundException 异常
-             */
-            @Override
-            public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        return username -> {
+            try {
                 UserEntity user;
-                if (username.startsWith("wx-")) { //微信登录
+                if (username.startsWith("wx-")) {
                     user = userService.findByOpenid(username.substring(3));
                 } else if (username.startsWith("mb-")) {
                     user = userService.findByPhone(username.substring(3));
@@ -139,33 +135,29 @@ public class DefaultSecurityConfig {
                     user = userService.findByUsername(username);
                 }
 
-                if (user == null) {
-                    throw new UsernameNotFoundException("用户名：" + username + "不存在！");
-                }
+                AccountSecuritySnapshot account = currentAuthenticatableAccount(user);
 
-                // 获取用户的所有权限并且SpringSecurity需要的集合
                 Collection<GrantedAuthority> grantedAuthorities = new ArrayList<>();
-                List<PermsEntity> authList = permsService.findByUserId(user.getId());
+                List<PermsEntity> authList = permsService.findByUserId(account.userId());
                 if (CollectionUtil.isNotNullOrEmpty(authList)) {
                     PermsVO actionQueryVO = new PermsVO();
                     actionQueryVO.setIdList(authList.stream().map(PermsEntity::getId).collect(Collectors.toList()));
                     List<PermsEntity> list = permsService.findList(actionQueryVO);
-                    for (PermsEntity p : list) {
-                        if (EsConstants.PERMS_STATUS_ENABLE.equals(p.getStatus())) {
-                            GrantedAuthority grantedAuthority =
-                                    new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc());
-                            grantedAuthorities.add(grantedAuthority);
+                    for (PermsEntity permission : list) {
+                        if (EsConstants.PERMS_STATUS_ENABLE.equals(permission.getStatus())) {
+                            grantedAuthorities.add(new SimpleGrantedAuthority(
+                                    permission.getModule() + "-" + permission.getFunc()));
                         }
                     }
-                    //设置登录用户所属clientId
-//					redisTemplate.opsForValue().set("clientId_" + username, org.getClientId());
                 }
 
                 String password = user.getPassword();
-                //微信登录的话采用特定密码进行验证
                 if (username.startsWith("wx-")) {
                     password = PasswordUtil.encode("wxpwd");
                 } else if (username.startsWith("mb-")) {
+                    if (smsService == null) {
+                        throw authenticationFailed();
+                    }
                     SmsCodeEntity code = smsService.selectSmsCodeNoUsed(username.substring(3),
                             SmsConstants.SMS_CODE_TYPE_LOGIN);
                     if (code != null) {
@@ -174,9 +166,28 @@ public class DefaultSecurityConfig {
                     }
                 }
 
-                return new CustomUserDetails(user.getJiacn(), username, password, grantedAuthorities);
+                return new CustomUserDetails(account.userId(), account.jiacn(), account.authEpoch(),
+                        username, password, grantedAuthorities);
+            } catch (RuntimeException exception) {
+                log.warn("Account authentication lookup failed");
+                throw authenticationFailed();
             }
         };
+    }
+
+    private AccountSecuritySnapshot currentAuthenticatableAccount(UserEntity user) {
+        if (user == null || user.getId() == null || user.getId() <= 0) {
+            throw authenticationFailed();
+        }
+        AccountSecuritySnapshot account = accountSecurityService.findByUserId(user.getId())
+                .filter(AccountSecuritySnapshot::isAuthenticatable)
+                .filter(snapshot -> snapshot.jiacn().equals(user.getJiacn()))
+                .orElseThrow(DefaultSecurityConfig::authenticationFailed);
+        return account;
+    }
+
+    private static UsernameNotFoundException authenticationFailed() {
+        return new UsernameNotFoundException("Authentication failed");
     }
 
     @Bean
@@ -202,18 +213,12 @@ public class DefaultSecurityConfig {
                 if (request.getParameter("redirect_uri") != null) {
                     super.setTargetUrlParameter("redirect_uri");
                 }
-                String username = authentication.getName();
-                UserEntity user;
-                if (username.startsWith("wx-")) { //微信登录
-                    user = userService.findByOpenid(username.substring(3));
-                } else if (username.startsWith("mb-")) {
-                    user = userService.findByPhone(username.substring(3));
-                } else {
-                    user = userService.findByUsername(username);
+                if (!(authentication.getPrincipal() instanceof CustomUserDetails userDetails)) {
+                    throw new ServletException("Authenticated principal is not a user account");
                 }
                 EsContext context = EsContextHolder.getContext();
-                context.setUsername(username);
-                context.setJiacn(user.getJiacn());
+                context.setUsername(userDetails.getUsername());
+                context.setJiacn(userDetails.getJiacn());
                 Cookie cookie = EsContextHolder.genCookie();
                 response.addCookie(cookie);
                 super.onAuthenticationSuccess(request, response, authentication);

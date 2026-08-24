@@ -23,6 +23,8 @@ import cn.jia.oauth.service.ClientService;
 import cn.jia.user.entity.PermsEntity;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
+import cn.jia.user.security.AccountSecurityService;
+import cn.jia.user.security.AccountSecuritySnapshot;
 import com.nimbusds.oauth2.sdk.AuthorizationRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -67,6 +69,7 @@ import java.util.stream.Collectors;
 public class OauthController {
     private final ClientService clientService;
     private final UserService userService;
+    private final AccountSecurityService accountSecurityService;
     private final PermsService permsService;
     private final RestTemplate restTemplate;
     private final ThirdPartyLoginTransactionService thirdPartyLoginTransactionService;
@@ -454,15 +457,31 @@ public class OauthController {
         String clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
         EsContextHolder.getContext().setClientId(clientId);
         user = userService.upsert(user);
+        AccountSecuritySnapshot account;
+        try {
+            if (user.getId() == null || user.getId() <= 0) {
+                return thirdPartyLoginFailed("unknown");
+            }
+            String persistedJiacn = user.getJiacn();
+            account = accountSecurityService.findByUserId(user.getId())
+                    .filter(AccountSecuritySnapshot::isAuthenticatable)
+                    .filter(snapshot -> snapshot.jiacn().equals(persistedJiacn))
+                    .orElse(null);
+        } catch (RuntimeException exception) {
+            log.warn("第三方登录账户安全校验失败");
+            return thirdPartyLoginFailed("unknown");
+        }
+        if (account == null) {
+            log.warn("第三方登录账户不可认证");
+            return thirdPartyLoginFailed("unknown");
+        }
 
         Collection<? extends GrantedAuthority> authorities = new ArrayList<>();
-        if (user.getId() != null) {
-            List<PermsEntity> authList = permsService.findByUserId(user.getId());
-            if (CollectionUtil.isNotNullOrEmpty(authList)) {
-                authorities = authList.stream()
-                        .map(p -> new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc()))
-                        .collect(Collectors.toList());
-            }
+        List<PermsEntity> authList = permsService.findByUserId(account.userId());
+        if (CollectionUtil.isNotNullOrEmpty(authList)) {
+            authorities = authList.stream()
+                    .map(p -> new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc()))
+                    .collect(Collectors.toList());
         }
         String authUsername = StringUtil.firstNotEmpty(
                 user.getUsername(), user.getJiacn(), user.getOpenid(), user.getWeixinid(), user.getGithubid());
@@ -473,7 +492,8 @@ public class OauthController {
         if (StringUtil.isEmpty(user.getUsername())) {
             log.warn("第三方登录用户未配置 username，使用备用认证标识完成登录，userId: {}", user.getId());
         }
-        CustomUserDetails userDetails = new CustomUserDetails(user.getJiacn(), authUsername, null, authorities);
+        CustomUserDetails userDetails = new CustomUserDetails(account.userId(), account.jiacn(), account.authEpoch(),
+                authUsername, null, authorities);
         UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(userDetails, null, authorities);
         authToken.setDetails(new WebAuthenticationDetails(request));
         SecurityContextHolder.getContext().setAuthentication(authToken);
@@ -481,7 +501,7 @@ public class OauthController {
                 SecurityContextHolder.getContext());
         EsContext context = EsContextHolder.getContext();
         context.setUsername(authUsername);
-        context.setJiacn(user.getJiacn());
+        context.setJiacn(account.jiacn());
         if (StringUtil.isNotEmpty(state)) {
             thirdPartyLoginTransactionService.markCompleted(state, transaction);
         }

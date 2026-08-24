@@ -31,4 +31,10 @@ public interface UserInfoDao extends IBaseDao<UserEntity> {
     List<UserEntity> selectByOrg(Long orgId);
 
     List<UserEntity> searchByExample(UserEntity user);
+
+    UserEntity selectSecurityById(long userId);
+
+    List<UserEntity> selectSecurityByExactJiacn(String jiacn);
+
+    int incrementAuthEpoch(long userId, long expectedEpoch);
 }

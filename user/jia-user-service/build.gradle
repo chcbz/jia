@@ -12,6 +12,8 @@ dependencies {
     testImplementation project(':common:jia-common-test')
     testImplementation(libs.spring.ldap)
     testImplementation(libs.jodd)
+    testImplementation(libs.spring.security.config)
+    testImplementation(libs.spring.security.web)
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

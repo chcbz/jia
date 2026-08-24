@@ -121,5 +121,11 @@ public class UserEntity extends BaseEntity {
     @Schema(description = "订阅内容（多个以逗号隔开）")
     private String subscribe;
 
+    @Schema(description = "账户生命周期状态")
+    private String accountState;
+
+    @Schema(description = "认证会话版本")
+    private Long authEpoch;
+
 
 }

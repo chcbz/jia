@@ -60,4 +60,19 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
     public List<UserEntity> searchByExample(UserEntity user) {
         return baseMapper.searchByExample(user);
     }
+
+    @Override
+    public UserEntity selectSecurityById(long userId) {
+        return baseMapper.selectSecurityById(userId);
+    }
+
+    @Override
+    public List<UserEntity> selectSecurityByExactJiacn(String jiacn) {
+        return baseMapper.selectSecurityByExactJiacn(jiacn);
+    }
+
+    @Override
+    public int incrementAuthEpoch(long userId, long expectedEpoch) {
+        return baseMapper.incrementAuthEpoch(userId, expectedEpoch);
+    }
 }

@@ -13,8 +13,12 @@ import java.io.IOException;
 public class EsContextFilter implements Filter {
     @Override
     public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
-        HttpServletRequest request = (HttpServletRequest) req;
-        EsContextHolder.getContext(request);
-        chain.doFilter(req, res);
+        EsContextHolder.clearContext();
+        try {
+            EsContextHolder.getContext((HttpServletRequest) req);
+            chain.doFilter(req, res);
+        } finally {
+            EsContextHolder.clearContext();
+        }
     }
 }

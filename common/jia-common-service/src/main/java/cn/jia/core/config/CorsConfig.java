@@ -10,39 +10,38 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
+import java.util.Arrays;
 import java.util.List;
 
-/**
- * 处理AJAX请求跨域的问题
- *
- * @author chcbz
- * @since 2018年4月24日 上午11:57:33
- */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnExpression("${cors.enabled:true}")
 public class CorsConfig {
-    @Value("${cors.allowed.origin.patterns:*}")
+    @Value("${cors.allowed.origin.patterns:}")
     private String[] allowedOriginPatterns;
     @Value("${cors.allowed.methods:GET,POST,PUT,DELETE,OPTIONS}")
     private String[] allowedMethods;
-    @Value("${cors.allowed.headers:*}")
+    @Value("${cors.allowed.headers:Authorization,Content-Type,X-API-Key}")
     private String[] allowedHeaders;
 
-    private CorsConfiguration buildConfig() {
+    CorsConfiguration buildConfig() {
+        List<String> origins = nonblank(allowedOriginPatterns);
+        if (origins.contains("*")) {
+            throw new IllegalStateException("Credentialed CORS cannot allow wildcard origins");
+        }
         CorsConfiguration corsConfiguration = new CorsConfiguration();
-        corsConfiguration.setAllowedOriginPatterns(List.of(allowedOriginPatterns));
-        corsConfiguration.setAllowedHeaders(List.of(allowedHeaders));
-        corsConfiguration.setAllowedMethods(List.of(allowedMethods));
+        corsConfiguration.setAllowedOriginPatterns(origins);
+        corsConfiguration.setAllowedHeaders(nonblank(allowedHeaders));
+        corsConfiguration.setAllowedMethods(nonblank(allowedMethods));
         corsConfiguration.setAllowCredentials(true);
-//        corsConfiguration.addExposedHeader(HttpHeaderConStant.X_TOTAL_COUNT);
         return corsConfiguration;
     }
 
-    /**
-     * 跨域过滤器
-     *
-     * @return 跨域过滤器
-     */
+    private static List<String> nonblank(String[] values) {
+        return Arrays.stream(values == null ? new String[0] : values)
+                .filter(value -> value != null && !value.isBlank())
+                .toList();
+    }
+
     @Bean
     public FilterRegistrationBean<CorsFilter> corsFilterFilterRegistrationBean() {
         FilterRegistrationBean<CorsFilter> registrationBean = new FilterRegistrationBean<>();
