@@ -43,7 +43,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** D07 REQUIRED transaction and concurrency evidence on an H2 MySQL-mode database. */
 class AgentCommandInboxRealTransactionTest {
     private static final long NOW = 1_700_000_000_000L;
-    private static final byte[] WIRE = "wire".getBytes();
+    private static final byte[] WIRE = wire(
+            "tenant-a", "client-a", "msg-1", "cmd-1", NOW + 60_000);
 
     private JdbcTemplate jdbc;
     private DataSourceTransactionManager manager;
@@ -291,6 +292,7 @@ class AgentCommandInboxRealTransactionTest {
             String tenant, String client, long deliveryId,
             String messageId, String eventId, String commandId, long expiresAt) {
         byte[] command = "business".getBytes();
+        byte[] sourceWire = wire(tenant, client, messageId, commandId, expiresAt);
         assertEquals(1, jdbc.update("""
                 INSERT INTO agent_command_delivery(
                   id,command_id,task_id,target_agent_id,command_type,
@@ -309,7 +311,7 @@ class AgentCommandInboxRealTransactionTest {
                   version,tenant_id,client_id,create_time,update_time)
                 VALUES (2,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, eventId, messageId, commandId, deliveryId, "task", "task-1",
-                "jia.agent.command", "agent.command.general", WIRE, sha256(WIRE),
+                "jia.agent.command", "agent.command.general", sourceWire, sha256(sourceWire),
                 "PUBLISHED", 1, 1, expiresAt, "ACK", "NOT_RETURNED", 0,
                 tenant, client, NOW, NOW));
     }
@@ -379,6 +381,19 @@ class AgentCommandInboxRealTransactionTest {
 
     private String string(String sql) {
         return jdbc.queryForObject(sql, String.class);
+    }
+
+    private static byte[] wire(
+            String tenantId, String clientId, String messageId, String commandId,
+            long expiresAt) {
+        return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
+                + "\"messageId\":\"" + messageId + "\",\"commandId\":\""
+                + commandId + "\",\"tenantId\":\"" + tenantId
+                + "\",\"clientId\":\"" + clientId + "\","
+                + "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\","
+                + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,"
+                + "\"expiresAt\":" + expiresAt + ",\"payload\":{}}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private static byte[] sha256(byte[] bytes) {

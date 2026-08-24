@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.AgentCommandAmqpContract;
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.dao.AgentCommandInboxDao;
@@ -22,11 +24,21 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * D07 durable Inbox processor. It owns no Rabbit listener, broker ACK, WebSocket send, or domain mutation.
@@ -40,6 +52,18 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     public static final int MAX_WIRE_BYTES = 16_777_215;
 
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandInboxServiceImpl.class);
+    private static final Set<String> COMMAND_TYPES = Set.of(
+            AgentProtocolConstants.COMMAND_TASK_INVITE,
+            AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
+            AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME,
+            AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL,
+            AgentProtocolConstants.COMMAND_REQUEST_RESPOND,
+            AgentProtocolConstants.COMMAND_REVIEW_EXECUTE,
+            AgentProtocolConstants.COMMAND_CONTEXT_REFRESH);
+    private static final ObjectMapper STRICT_WIRE_JSON = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
 
     private final AgentCommandInboxDao dao;
     private final AgentRabbitSafetyGate gate;
@@ -106,7 +130,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             }
             return persistStaleMessage(message, source, now);
         }
-        validateFirstClaimSourceStatus(message, source);
+        validateFirstClaimSourceStatus(message, source, now);
         if (now >= source.expiresAt()) {
             return persistFirstExpiry(message, source, now);
         }
@@ -349,25 +373,71 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     }
 
     private void validateFirstClaimSourceStatus(
-            ValidatedMessage message, Source source) {
+            ValidatedMessage message, Source source, long now) {
         String outboxStatus = source.outbox().getStatus();
         String deliveryStatus = source.delivery().getStatus();
         if ("CLAIMED".equals(outboxStatus)) {
-            // D03 claims the outbox while the delivery remains in its pre-publish lane. This is
-            // the only durable shape that a broker-confirmed message may observe before settle.
-            if (isOneOf(deliveryStatus, "PENDING", "RETRY")) {
-                throw sourceNotSettled(message, "OUTBOX_NOT_PUBLISHED");
-            }
-            throw conflict(message, "CLAIMED_OUTBOX_DELIVERY_STATUS_DRIFT");
+            validateCanonicalClaimedSource(message, source, now);
+            throw sourceNotSettled(message, "OUTBOX_NOT_PUBLISHED");
         }
         if (!"PUBLISHED".equals(outboxStatus)) {
             throw conflict(message, "OUTBOX_NOT_PUBLISHED");
         }
-        if ("CLAIMED".equals(deliveryStatus)) {
-            throw sourceNotSettled(message, "DELIVERY_NOT_PUBLISHED");
-        }
         if (!"PUBLISHED".equals(deliveryStatus)) {
             throw conflict(message, "DELIVERY_NOT_PUBLISHED");
+        }
+    }
+
+    private void validateCanonicalClaimedSource(
+            ValidatedMessage message, Source source, long now) {
+        AgentCommandDeliveryEntity delivery = source.delivery();
+        AgentOutboxEventEntity outbox = source.outbox();
+        boolean pending = "PENDING".equals(delivery.getStatus());
+        boolean retry = "RETRY".equals(delivery.getStatus());
+        boolean deliveryLaneValid = (pending && delivery.getNextRetryAt() == null)
+                || (retry && delivery.getNextRetryAt() != null
+                && delivery.getNextRetryAt() > 0
+                && delivery.getNextRetryAt() <= now
+                && delivery.getNextRetryAt() < message.expiresAt());
+        // D03 also recognizes an expired CLAIMED lease as a canonical stale-claim redrive lane;
+        // the durable lease identity must still be present and byte-exact on both rows.
+        boolean leaseValid = validExact(outbox.getLeaseOwner(), 100)
+                && outbox.getLeaseUntil() != null && outbox.getLeaseUntil() > 0
+                && Objects.equals(delivery.getLeaseOwner(), outbox.getLeaseOwner())
+                && Objects.equals(delivery.getLeaseUntil(), outbox.getLeaseUntil());
+        // Outbox publish attempts are intentionally independent from the wire/delivery transport
+        // attempt. D03 increments both outbox attempt fences at claim and reserves one version for
+        // settlement, so Long.MAX_VALUE cannot be a canonical in-flight claim.
+        boolean publishFenceValid = outbox.getAttemptCount() != null
+                && outbox.getAttemptCount() >= 1
+                && outbox.getActiveAttempt() != null
+                && (long) outbox.getActiveAttempt() == (long) outbox.getAttemptCount() + 1L
+                && outbox.getVersion() != null && outbox.getVersion() > 0
+                && outbox.getVersion() < Long.MAX_VALUE
+                && delivery.getVersion() != null && delivery.getVersion() > 0
+                && delivery.getVersion() < Long.MAX_VALUE;
+        boolean dispositionEmpty = outbox.getNextRetryAt() == null
+                && outbox.getConfirmedAt() == null
+                && outbox.getConfirmError() == null
+                && outbox.getReturnedAt() == null
+                && outbox.getReturnReplyCode() == null
+                && outbox.getReturnReplyText() == null
+                && outbox.getPublishedAt() == null
+                && outbox.getLastError() == null
+                && delivery.getLastError() == null;
+        boolean confirmationPending = "PENDING".equals(outbox.getPublisherConfirmStatus())
+                && "PENDING".equals(outbox.getMandatoryReturnStatus());
+        boolean replayAbsent = delivery.getReplayParentMessageId() == null
+                && delivery.getReplayRequesterId() == null
+                && delivery.getReplayApproverId() == null
+                && delivery.getReplayReason() == null
+                && outbox.getReplayParentMessageId() == null
+                && outbox.getReplayRequesterId() == null
+                && outbox.getReplayApproverId() == null
+                && outbox.getReplayReason() == null;
+        if (!deliveryLaneValid || !leaseValid || !publishFenceValid
+                || !dispositionEmpty || !confirmationPending || !replayAbsent) {
+            throw conflict(message, "CLAIMED_SOURCE_SHAPE_CORRUPT");
         }
     }
 
@@ -376,13 +446,22 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         if (!Objects.equals(delivery.getId(), message.deliveryId())
                 || !Objects.equals(delivery.getTenantId(), message.tenantId())
                 || !Objects.equals(delivery.getClientId(), message.clientId())
-                || !Objects.equals(delivery.getCommandId(), message.commandId())) {
+                || !Objects.equals(delivery.getCommandId(), message.commandId())
+                || !Objects.equals(delivery.getTaskId(), message.taskId())
+                || !Objects.equals(delivery.getTargetAgentId(), message.targetAgentId())
+                || !Objects.equals(delivery.getCommandType(), message.commandType())
+                || !Objects.equals(delivery.getActiveAttempt(), message.activeAttempt())
+                || !Objects.equals(delivery.getExpiresAt(), message.expiresAt())) {
             throw conflict(message, "DELIVERY_IDENTITY_DRIFT");
         }
         if (delivery.getExpiresAt() == null || delivery.getExpiresAt() <= 0
                 || delivery.getActiveMessageId() == null || delivery.getActiveMessageId().isEmpty()
                 || delivery.getActiveMessageId().length() > 100
                 || delivery.getActiveMessageId().codePoints().anyMatch(Character::isISOControl)
+                // Transport issue/reissue count is the delivery attempt encoded in the wire;
+                // it must never be confused with the independent outbox publish attempt.
+                || delivery.getAttemptCount() == null
+                || !Objects.equals(delivery.getAttemptCount(), message.activeAttempt())
                 || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
                 || delivery.getVersion() == null || delivery.getVersion() < 0) {
             throw conflict(message, "DELIVERY_FENCE_CORRUPT");
@@ -403,10 +482,15 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 || !Objects.equals(outbox.getCommandId(), message.commandId())
                 || !Objects.equals(outbox.getDeliveryId(), message.deliveryId())
                 || !Objects.equals(outbox.getDeliveryId(), delivery.getId())
+                || !"task".equals(outbox.getAggregateType())
+                || !Objects.equals(outbox.getAggregateId(), message.taskId())
+                || !Objects.equals(outbox.getExpiresAt(), message.expiresAt())
                 || !Objects.equals(outbox.getExpiresAt(), delivery.getExpiresAt())) {
             throw conflict(message, "OUTBOX_IDENTITY_DRIFT");
         }
-        if (outbox.getActiveAttempt() == null || outbox.getActiveAttempt() <= 0
+        if (outbox.getId() == null || outbox.getId() <= 0
+                || outbox.getAttemptCount() == null || outbox.getAttemptCount() < 0
+                || outbox.getActiveAttempt() == null || outbox.getActiveAttempt() <= 0
                 || outbox.getVersion() == null || outbox.getVersion() < 0) {
             throw conflict(message, "OUTBOX_FENCE_CORRUPT");
         }
@@ -563,9 +647,25 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         if (!storedHashMatches(wirePayload, wireHash)) {
             throw tokenConflict(token, "INBOX_STORED_HASH_CORRUPT");
         }
+        FrozenWireProvenance provenance;
+        try {
+            provenance = decodeFrozenWire(wirePayload);
+        } catch (IllegalArgumentException malformed) {
+            throw tokenConflict(token, "INBOX_WIRE_PROVENANCE_INVALID");
+        }
+        if (!token.messageId().equals(provenance.messageId())
+                || !token.commandId().equals(provenance.commandId())
+                || !token.tenantId().equals(provenance.tenantId())
+                || !token.clientId().equals(provenance.clientId())
+                || token.deliveryActiveAttempt() != provenance.activeAttempt()
+                || token.expiresAt() != provenance.expiresAt()) {
+            throw tokenConflict(token, "INBOX_WIRE_PROVENANCE_DRIFT");
+        }
         return new ValidatedMessage(
                 token.consumerName(), token.tenantId(), token.clientId(), token.messageId(),
                 token.eventId(), token.commandId(), token.deliveryId(),
+                provenance.taskId(), provenance.targetAgentId(), provenance.commandType(),
+                provenance.activeAttempt(), provenance.expiresAt(),
                 Arrays.copyOf(wirePayload, wirePayload.length), Arrays.copyOf(wireHash, wireHash.length));
     }
 
@@ -694,10 +794,120 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         if (wireBytes == null || wireBytes.length == 0 || wireBytes.length > MAX_WIRE_BYTES) {
             throw new IllegalArgumentException("rawWireBytes must contain 1..16777215 bytes");
         }
-        return new ValidatedMessage(
+        FrozenWireProvenance provenance;
+        try {
+            provenance = decodeFrozenWire(wireBytes);
+        } catch (IllegalArgumentException malformed) {
+            throw messageConflict(message, "WIRE_CANONICAL_PROVENANCE_INVALID");
+        }
+        ValidatedMessage validated = new ValidatedMessage(
                 message.consumerName(), message.tenantId(), message.clientId(),
-                message.messageId(), message.eventId(), message.commandId(),
-                message.deliveryId(), wireBytes, sha256(wireBytes));
+                message.messageId(), message.eventId(), message.commandId(), message.deliveryId(),
+                provenance.taskId(), provenance.targetAgentId(), provenance.commandType(),
+                provenance.activeAttempt(), provenance.expiresAt(),
+                wireBytes, sha256(wireBytes));
+        if (!message.messageId().equals(provenance.messageId())
+                || !message.commandId().equals(provenance.commandId())
+                || !message.tenantId().equals(provenance.tenantId())
+                || !message.clientId().equals(provenance.clientId())) {
+            throw conflict(validated, "WIRE_CALLER_IDENTITY_CONFLICT");
+        }
+        return validated;
+    }
+
+    private FrozenWireProvenance decodeFrozenWire(byte[] raw) {
+        if (raw == null || raw.length == 0
+                || raw.length > AgentCommandAmqpContract.MAX_WIRE_BYTES) {
+            throw new IllegalArgumentException("wire size is invalid");
+        }
+        validateWireUtf8(raw);
+        JsonNode root;
+        try {
+            root = STRICT_WIRE_JSON.readTree(raw);
+        } catch (Exception malformed) {
+            throw new IllegalArgumentException("wire JSON is invalid", malformed);
+        }
+        if (root == null || !root.isObject()
+                || !integralEquals(root, "schemaVersion", AgentProtocolConstants.VERSION_1)
+                || !AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(wireText(root, "messageType"))
+                || root.has("eventId") || root.has("deliveryId") || root.has("type")) {
+            throw new IllegalArgumentException("wire envelope is invalid");
+        }
+        String messageId = wireExact(root, "messageId", 100);
+        String commandId = wireExact(root, "commandId", 100);
+        String tenantId = wireExact(root, "tenantId", 50);
+        String clientId = wireExact(root, "clientId", 50);
+        String taskId = wireExact(root, "taskId", 100);
+        String targetAgentId = wireExact(root, "targetAgentId", 100);
+        String commandType = wireExact(root, "commandType", 64);
+        if (!COMMAND_TYPES.contains(commandType)) {
+            throw new IllegalArgumentException("wire command type is invalid");
+        }
+        long activeAttempt = wireLong(root, "attempt");
+        long expiresAt = wireLong(root, "expiresAt");
+        if (activeAttempt <= 0 || activeAttempt > Integer.MAX_VALUE || expiresAt <= 0) {
+            throw new IllegalArgumentException("wire numeric provenance is invalid");
+        }
+        if (root.has("agentId")
+                && !targetAgentId.equals(wireText(root, "agentId"))) {
+            throw new IllegalArgumentException("wire target alias conflicts");
+        }
+        rejectNestedWireConflict(root.get("payload"), "tenantId", tenantId);
+        rejectNestedWireConflict(root.get("payload"), "clientId", clientId);
+        rejectNestedWireConflict(root.get("payload"), "taskId", taskId);
+        rejectNestedWireConflict(root.get("payload"), "targetAgentId", targetAgentId);
+        rejectNestedWireConflict(root.get("payload"), "agentId", targetAgentId);
+        rejectNestedWireConflict(root.get("payload"), "messageId", messageId);
+        rejectNestedWireConflict(root.get("payload"), "commandId", commandId);
+        return new FrozenWireProvenance(
+                messageId, commandId, tenantId, clientId, taskId, targetAgentId,
+                commandType, (int) activeAttempt, expiresAt);
+    }
+
+    private void validateWireUtf8(byte[] raw) {
+        try {
+            StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(raw));
+        } catch (CharacterCodingException malformed) {
+            throw new IllegalArgumentException("wire UTF-8 is invalid", malformed);
+        }
+    }
+
+    private String wireExact(JsonNode root, String field, int maxChars) {
+        String value = wireText(root, field);
+        if (!validExact(value, maxChars)) {
+            throw new IllegalArgumentException("wire field is invalid: " + field);
+        }
+        return value;
+    }
+
+    private String wireText(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        return value != null && value.isTextual() ? value.textValue() : null;
+    }
+
+    private long wireLong(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()) {
+            throw new IllegalArgumentException("wire numeric field is invalid: " + field);
+        }
+        return value.longValue();
+    }
+
+    private boolean integralEquals(JsonNode root, String field, long expected) {
+        JsonNode value = root.get(field);
+        return value != null && value.isIntegralNumber()
+                && value.canConvertToLong() && value.longValue() == expected;
+    }
+
+    private void rejectNestedWireConflict(JsonNode payload, String field, String expected) {
+        if (payload == null || !payload.isObject() || !payload.has(field)) return;
+        JsonNode value = payload.get(field);
+        if (!value.isTextual() || !expected.equals(value.textValue())) {
+            throw new IllegalArgumentException("wire nested provenance conflicts: " + field);
+        }
     }
 
     private void validateToken(AgentInboxClaimToken token) {
@@ -831,6 +1041,16 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         return new AgentInboxIdentityConflictException(reasonCode);
     }
 
+    private AgentInboxIdentityConflictException messageConflict(
+            AgentInboxMessage message, String reasonCode) {
+        LOG.warn("event={} reason={} consumerName={} tenantId={} clientId={} messageId={} "
+                        + "eventId={} commandId={} deliveryId={}",
+                IDENTITY_CONFLICT, reasonCode, message.consumerName(), message.tenantId(),
+                message.clientId(), message.messageId(), message.eventId(),
+                message.commandId(), message.deliveryId());
+        return new AgentInboxIdentityConflictException(reasonCode);
+    }
+
     private AgentInboxIdentityConflictException tokenConflict(
             AgentInboxClaimToken token, String reasonCode) {
         LOG.warn("event={} reason={} consumerName={} tenantId={} clientId={} messageId={} "
@@ -839,6 +1059,13 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 token.clientId(), token.messageId(), token.eventId(),
                 token.commandId(), token.deliveryId());
         return new AgentInboxIdentityConflictException(reasonCode);
+    }
+
+    private boolean validExact(String value, int maxChars) {
+        return value != null && !value.isEmpty() && value.length() <= maxChars
+                && value.equals(value.strip())
+                && value.codePoints().noneMatch(Character::isISOControl)
+                && validSurrogates(value);
     }
 
     private void requireExact(String value, String field, int maxChars) {
@@ -872,8 +1099,25 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             String eventId,
             String commandId,
             long deliveryId,
+            String taskId,
+            String targetAgentId,
+            String commandType,
+            int activeAttempt,
+            long expiresAt,
             byte[] wireBytes,
             byte[] wireHash) {
+    }
+
+    private record FrozenWireProvenance(
+            String messageId,
+            String commandId,
+            String tenantId,
+            String clientId,
+            String taskId,
+            String targetAgentId,
+            String commandType,
+            int activeAttempt,
+            long expiresAt) {
     }
 
     private record Source(

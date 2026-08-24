@@ -47,7 +47,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @EnabledIfEnvironmentVariable(named = "D07_MYSQL_URL", matches = ".+")
 class AgentCommandInboxMySqlTest {
     private static final long NOW = 1_700_000_000_000L;
-    private static final byte[] WIRE = "wire".getBytes();
+    private static final byte[] WIRE = wire(
+            "tenant-a", "client-a", "msg-1", "cmd-1", NOW + 60_000);
 
     private String databaseName;
     private JdbcTemplate admin;
@@ -238,16 +239,19 @@ class AgentCommandInboxMySqlTest {
 
     @Test
     void expiredBoundaryAndStaleMessageFenceDoNotAcquireOrRegressDelivery() {
+        byte[] expiredWire = wire("tenant-a", "client-a", "msg-1", "cmd-1", NOW);
         jdbc.update("UPDATE agent_command_delivery SET expires_at=? WHERE id=1", NOW);
-        jdbc.update("UPDATE agent_outbox_event SET expires_at=? WHERE event_id='evt-1'", NOW);
+        jdbc.update("UPDATE agent_outbox_event SET expires_at=?, wire_payload=?, "
+                        + "wire_payload_hash=? WHERE event_id='evt-1'",
+                NOW, expiredWire, sha256(expiredWire));
         AgentInboxClaim expired = service(productionDao)
-                .claim(message(), "worker-a", NOW, 10_000);
+                .claim(message(expiredWire), "worker-a", NOW, 10_000);
         assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, expired.kind());
         assertEquals("EXPIRED", expired.priorResult().status());
         assertEquals("EXPIRED", string("SELECT status FROM agent_command_delivery"));
 
         resetPublishedSource();
-        jdbc.update("UPDATE agent_command_delivery SET active_message_id='msg-new', active_attempt=2 WHERE id=1");
+        jdbc.update("UPDATE agent_command_delivery SET active_message_id='msg-new' WHERE id=1");
         AgentInboxClaim stale = service(productionDao)
                 .claim(message(), "worker-a", NOW, 10_000);
         assertEquals("DEAD", stale.priorResult().status());
@@ -323,7 +327,8 @@ class AgentCommandInboxMySqlTest {
                 "msg-2", "evt-2", "cmd-2", NOW + 60_000);
         AgentInboxMessage exact = new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                composed, "Client-A", "msg-1", "evt-1", "cmd-1", 1, WIRE);
+                composed, "Client-A", "msg-1", "evt-1", "cmd-1", 1,
+                wire(composed, "Client-A", "msg-1", "cmd-1", NOW + 60_000));
         service(productionDao).claim(exact, "worker-a", NOW, 10_000);
         assertEquals("CONSUMED", jdbc.queryForObject(
                 "SELECT status FROM agent_command_delivery WHERE id=1", String.class));
@@ -332,12 +337,14 @@ class AgentCommandInboxMySqlTest {
 
         AgentInboxMessage wrongCase = new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                composed, "client-a", "msg-1", "evt-1", "cmd-1", 1, WIRE);
+                composed, "client-a", "msg-1", "evt-1", "cmd-1", 1,
+                wire(composed, "Client-A", "msg-1", "cmd-1", NOW + 60_000));
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> service(productionDao).claim(wrongCase, "worker-b", NOW + 1, 10_000));
         AgentInboxMessage wrongNormalization = new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                decomposed, "Client-A", "msg-1", "evt-1", "cmd-1", 1, WIRE);
+                decomposed, "Client-A", "msg-1", "evt-1", "cmd-1", 1,
+                wire(composed, "Client-A", "msg-1", "cmd-1", NOW + 60_000));
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> service(productionDao).claim(
                         wrongNormalization, "worker-b", NOW + 1, 10_000));
@@ -375,9 +382,13 @@ class AgentCommandInboxMySqlTest {
     }
 
     private AgentInboxMessage message() {
+        return message(WIRE);
+    }
+
+    private AgentInboxMessage message(byte[] wire) {
         return new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 1, WIRE);
+                "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 1, wire);
     }
 
     private void assertProcessingConsumed() {
@@ -401,6 +412,7 @@ class AgentCommandInboxMySqlTest {
             String tenant, String client, long deliveryId,
             String messageId, String eventId, String commandId, long expiresAt) {
         byte[] command = ("business-" + commandId).getBytes();
+        byte[] sourceWire = wire(tenant, client, messageId, commandId, expiresAt);
         assertEquals(1, jdbc.update("""
                 INSERT INTO agent_command_delivery(
                   id,command_id,task_id,target_agent_id,command_type,
@@ -420,7 +432,7 @@ class AgentCommandInboxMySqlTest {
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, deliveryId + 1_000, eventId, messageId, commandId, deliveryId,
                 "task", "task-1", "jia.agent.command", "agent.command.general",
-                WIRE, sha256(WIRE), "PUBLISHED", 1, 1, expiresAt,
+                sourceWire, sha256(sourceWire), "PUBLISHED", 1, 1, expiresAt,
                 "ACK", "NOT_RETURNED", 0, tenant, client, NOW, NOW));
     }
 
@@ -464,6 +476,19 @@ class AgentCommandInboxMySqlTest {
         String value = System.getenv(name);
         if (value == null || value.isBlank()) throw new IllegalStateException(name + " is required");
         return value;
+    }
+
+    private static byte[] wire(
+            String tenantId, String clientId, String messageId, String commandId,
+            long expiresAt) {
+        return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
+                + "\"messageId\":\"" + messageId + "\",\"commandId\":\""
+                + commandId + "\",\"tenantId\":\"" + tenantId
+                + "\",\"clientId\":\"" + clientId + "\","
+                + "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\","
+                + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,"
+                + "\"expiresAt\":" + expiresAt + ",\"payload\":{}}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private static byte[] sha256(byte[] bytes) {

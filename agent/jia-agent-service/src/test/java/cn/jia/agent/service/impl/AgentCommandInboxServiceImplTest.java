@@ -34,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AgentCommandInboxServiceImplTest {
     private static final long NOW = 1_700_000_000_000L;
     private static final long LEASE = 10_000L;
+    private static final long EXPIRES_AT = NOW + 60_000L;
 
     @Test
     void offDbShadowAndConsumeDisabledReturnBeforeAnyDaoAccess() {
@@ -51,8 +52,7 @@ class AgentCommandInboxServiceImplTest {
     @Test
     void confirmedPublishVisibleBeforeD03SettlementIsTypedTransientAfterProvenanceValidation() {
         RecordingDao outboxRace = new RecordingDao();
-        outboxRace.outbox.setStatus("CLAIMED");
-        outboxRace.delivery.setStatus("PENDING");
+        canonicalClaimed(outboxRace, "PENDING");
         AgentInboxSourceNotSettledException outboxFailure = assertThrows(
                 AgentInboxSourceNotSettledException.class,
                 () -> service(outboxRace, enabledGate())
@@ -61,15 +61,18 @@ class AgentCommandInboxServiceImplTest {
         assertEquals(List.of("delivery", "outbox", "inbox"), outboxRace.operations);
         assertEquals(null, outboxRace.inbox);
 
-        RecordingDao deliveryRace = new RecordingDao();
-        deliveryRace.delivery.setStatus("CLAIMED");
-        AgentInboxSourceNotSettledException deliveryFailure = assertThrows(
-                AgentInboxSourceNotSettledException.class,
-                () -> service(deliveryRace, enabledGate())
+        RecordingDao retryRace = new RecordingDao();
+        canonicalClaimed(retryRace, "RETRY");
+        assertThrows(AgentInboxSourceNotSettledException.class,
+                () -> service(retryRace, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
-        assertEquals("DELIVERY_NOT_PUBLISHED", deliveryFailure.reasonCode());
-        assertEquals(List.of("delivery", "outbox", "inbox"), deliveryRace.operations);
-        assertEquals(null, deliveryRace.inbox);
+
+        RecordingDao impossibleDeliveryClaim = new RecordingDao();
+        impossibleDeliveryClaim.delivery.setStatus("CLAIMED");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(impossibleDeliveryClaim, enabledGate())
+                        .claim(message(), "worker-a", NOW, LEASE));
+        assertEquals(null, impossibleDeliveryClaim.inbox);
 
         for (String deterministic : List.of("PENDING", "RETRY", "FAILED", "DEAD")) {
             RecordingDao corrupt = new RecordingDao();
@@ -78,6 +81,27 @@ class AgentCommandInboxServiceImplTest {
                     () -> service(corrupt, enabledGate())
                             .claim(message(), "worker-a", NOW, LEASE), deterministic);
             assertEquals(null, corrupt.inbox, deterministic);
+        }
+    }
+
+    @Test
+    void claimedTransientAcceptsCanonicalStaleLeaseAndReservedSettlementVersionEdges() {
+        List<java.util.function.Consumer<RecordingDao>> canonicalEdges = List.of(
+                dao -> {
+                    dao.delivery.setLeaseUntil(NOW - 1);
+                    dao.outbox.setLeaseUntil(NOW - 1);
+                },
+                dao -> dao.delivery.setVersion(Long.MAX_VALUE - 1),
+                dao -> dao.outbox.setVersion(Long.MAX_VALUE - 1));
+        for (var edge : canonicalEdges) {
+            RecordingDao dao = new RecordingDao();
+            canonicalClaimed(dao, "PENDING");
+            edge.accept(dao);
+
+            assertThrows(AgentInboxSourceNotSettledException.class,
+                    () -> service(dao, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE));
+            assertEquals(null, dao.inbox);
         }
     }
 
@@ -102,8 +126,8 @@ class AgentCommandInboxServiceImplTest {
                 () -> existingService.claim(message(), "worker-b", NOW + 1, LEASE));
 
         RecordingDao activeFence = new RecordingDao();
-        activeFence.outbox.setStatus("CLAIMED");
-        activeFence.delivery.setStatus("PENDING").setActiveMessageId("msg-other");
+        canonicalClaimed(activeFence, "PENDING");
+        activeFence.delivery.setActiveMessageId("msg-other");
 
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> service(activeFence, enabledGate())
@@ -114,7 +138,7 @@ class AgentCommandInboxServiceImplTest {
     @Test
     void sourceRaceDoesNotOverrideWireIdentityOrStoredHashConflicts() {
         RecordingDao identity = new RecordingDao();
-        identity.outbox.setStatus("CLAIMED");
+        canonicalClaimed(identity, "PENDING");
         AgentInboxMessage wrongEvent = new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 "tenant-a", "client-a", "msg-1", "evt-other", "cmd-1", 1,
@@ -124,11 +148,145 @@ class AgentCommandInboxServiceImplTest {
                         .claim(wrongEvent, "worker-a", NOW, LEASE));
 
         RecordingDao hash = new RecordingDao();
-        hash.outbox.setStatus("CLAIMED");
+        canonicalClaimed(hash, "PENDING");
         hash.outbox.setWirePayloadHash(new byte[32]);
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> service(hash, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
+    }
+
+    @Test
+    void frozenWireProvenanceMustRemainStrictBeforeAnySourceLock() {
+        String canonical = new String(
+                message().rawWireBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        List<byte[]> malformed = List.of(
+                canonical.replace("\"taskId\":\"task-1\"",
+                                "\"taskId\":\"task-1\",\"taskId\":\"task-2\"")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                (canonical + " {}").getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                canonical.replace("\"payload\":{}",
+                                "\"eventId\":\"evt-1\",\"payload\":{}")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                canonical.replace("\"payload\":{}",
+                                "\"payload\":{\"taskId\":\"task-other\"}")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                canonical.replace("\"commandType\":\"TASK_INVITE\"",
+                                "\"commandType\":\"UNSUPPORTED\"")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                new byte[] {(byte) 0xc3, (byte) 0x28});
+        for (byte[] raw : malformed) {
+            RecordingDao dao = new RecordingDao();
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(dao, enabledGate())
+                            .claim(message(raw), "worker-a", NOW, LEASE));
+            assertEquals(0, dao.accesses);
+        }
+    }
+
+    @Test
+    void claimedTransientRejectsOutboxFrozenProvenanceDrift() {
+        List<java.util.function.Consumer<RecordingDao>> corruptions = List.of(
+                dao -> dao.outbox.setEventId("evt-other"),
+                dao -> dao.outbox.setMessageId("msg-other"),
+                dao -> dao.outbox.setCommandId("cmd-other"),
+                dao -> dao.outbox.setDeliveryId(2L),
+                dao -> dao.outbox.setAggregateType("agent"),
+                dao -> dao.outbox.setAggregateId("task-other"),
+                dao -> {
+                    byte[] drifted = new String(
+                            dao.outbox.getWirePayload(), java.nio.charset.StandardCharsets.UTF_8)
+                            .replace("\"taskId\":\"task-1\"",
+                                    "\"taskId\":\"task-other\"")
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    dao.outbox.setWirePayload(drifted).setWirePayloadHash(sha256(drifted));
+                },
+                dao -> dao.outbox.setWirePayloadHash(new byte[32]));
+        for (var corrupt : corruptions) {
+            RecordingDao dao = new RecordingDao();
+            canonicalClaimed(dao, "PENDING");
+            corrupt.accept(dao);
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(dao, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE));
+            assertEquals(null, dao.inbox);
+        }
+    }
+
+    @Test
+    void claimedTransientRejectsFrozenWireDeliveryAndExpiryDrift() {
+        List<java.util.function.Consumer<RecordingDao>> corruptions = List.of(
+                dao -> dao.delivery.setTaskId("task-other"),
+                dao -> dao.delivery.setTargetAgentId("agent-other"),
+                dao -> dao.delivery.setCommandType("WORK_ITEM_EXECUTE"),
+                dao -> dao.delivery.setActiveAttempt(2),
+                dao -> dao.delivery.setAttemptCount(2),
+                dao -> {
+                    dao.delivery.setExpiresAt(EXPIRES_AT + 1);
+                    dao.outbox.setExpiresAt(EXPIRES_AT + 1);
+                });
+        for (var corrupt : corruptions) {
+            RecordingDao dao = new RecordingDao();
+            canonicalClaimed(dao, "PENDING");
+            corrupt.accept(dao);
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(dao, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE));
+            assertEquals(null, dao.inbox);
+        }
+    }
+
+    @Test
+    void claimedRetryTransientRequiresTheExactD03EligibleLaneShape() {
+        List<java.util.function.Consumer<RecordingDao>> corruptions = List.of(
+                dao -> dao.delivery.setNextRetryAt(null),
+                dao -> dao.delivery.setNextRetryAt(NOW + 1),
+                dao -> dao.delivery.setNextRetryAt(EXPIRES_AT),
+                dao -> dao.outbox.setNextRetryAt(NOW - 1),
+                dao -> dao.delivery.setLastError("RABBIT_NACK"));
+        for (var corrupt : corruptions) {
+            RecordingDao dao = new RecordingDao();
+            canonicalClaimed(dao, "RETRY");
+            corrupt.accept(dao);
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(dao, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE));
+            assertEquals(null, dao.inbox);
+        }
+    }
+
+    @Test
+    void claimedTransientRejectsLeaseAttemptSettlementAndConfirmReturnFenceDrift() {
+        List<java.util.function.Consumer<RecordingDao>> corruptions = List.of(
+                dao -> dao.outbox.setLeaseOwner("other-relay"),
+                dao -> dao.outbox.setLeaseUntil(null),
+                dao -> dao.outbox.setLeaseUntil(0L),
+                dao -> dao.delivery.setLeaseUntil(NOW + 29_999),
+                dao -> dao.outbox.setAttemptCount(0),
+                dao -> dao.outbox.setActiveAttempt(1),
+                dao -> dao.outbox.setVersion(0L),
+                dao -> dao.delivery.setVersion(0L),
+                dao -> dao.outbox.setVersion(Long.MAX_VALUE),
+                dao -> dao.delivery.setVersion(Long.MAX_VALUE),
+                dao -> dao.outbox.setPublisherConfirmStatus("ACK"),
+                dao -> dao.outbox.setMandatoryReturnStatus("NOT_RETURNED"),
+                dao -> dao.outbox.setConfirmedAt(NOW),
+                dao -> dao.outbox.setConfirmError("RABBIT_NACK"),
+                dao -> dao.outbox.setReturnedAt(NOW).setReturnReplyCode(312)
+                        .setReturnReplyText("NO_ROUTE"),
+                dao -> dao.outbox.setPublishedAt(NOW));
+        for (var corrupt : corruptions) {
+            RecordingDao dao = new RecordingDao();
+            canonicalClaimed(dao, "PENDING");
+            corrupt.accept(dao);
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(dao, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE));
+            assertEquals(null, dao.inbox);
+        }
     }
 
     @Test
@@ -251,12 +409,10 @@ class AgentCommandInboxServiceImplTest {
 
     @Test
     void expiryBoundaryWritesExpiredInboxAndCurrentDeliveryOnly() {
-        RecordingDao dao = new RecordingDao();
-        dao.delivery.setExpiresAt(NOW);
-        dao.outbox.setExpiresAt(NOW);
+        RecordingDao dao = new RecordingDao(NOW);
         AgentCommandInboxServiceImpl service = service(dao, enabledGate());
 
-        AgentInboxClaim claim = service.claim(message(), "worker-a", NOW, LEASE);
+        AgentInboxClaim claim = service.claim(message(NOW), "worker-a", NOW, LEASE);
 
         assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, claim.kind());
         assertEquals("EXPIRED", claim.priorResult().status());
@@ -514,10 +670,41 @@ class AgentCommandInboxServiceImplTest {
     }
 
     private AgentInboxMessage message() {
+        return message(EXPIRES_AT);
+    }
+
+    private AgentInboxMessage message(long expiresAt) {
+        return message(wire(expiresAt));
+    }
+
+    private AgentInboxMessage message(byte[] rawWireBytes) {
         return new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 1,
-                "wire".getBytes());
+                rawWireBytes);
+    }
+
+    private static byte[] wire(long expiresAt) {
+        return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
+                + "\"messageId\":\"msg-1\",\"commandId\":\"cmd-1\","
+                + "\"tenantId\":\"tenant-a\",\"clientId\":\"client-a\","
+                + "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\","
+                + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,"
+                + "\"expiresAt\":" + expiresAt + ",\"payload\":{}}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static void canonicalClaimed(RecordingDao dao, String deliveryStatus) {
+        dao.delivery.setStatus(deliveryStatus)
+                .setNextRetryAt("RETRY".equals(deliveryStatus) ? NOW - 1 : null)
+                .setLeaseOwner("d03-relay").setLeaseUntil(NOW + 30_000)
+                .setLastError(null).setVersion(1L);
+        dao.outbox.setStatus("CLAIMED").setAttemptCount(1).setActiveAttempt(2)
+                .setNextRetryAt(null).setLeaseOwner("d03-relay").setLeaseUntil(NOW + 30_000)
+                .setPublisherConfirmStatus("PENDING").setConfirmedAt(null).setConfirmError(null)
+                .setMandatoryReturnStatus("PENDING").setReturnedAt(null)
+                .setReturnReplyCode(null).setReturnReplyText(null).setPublishedAt(null)
+                .setLastError(null).setVersion(1L);
     }
 
     private AgentRabbitSafetyGate offGate() {
@@ -563,22 +750,31 @@ class AgentCommandInboxServiceImplTest {
         private int accesses;
 
         private RecordingDao() {
-            byte[] wire = "wire".getBytes();
+            this(EXPIRES_AT);
+        }
+
+        private RecordingDao(long expiresAt) {
+            byte[] wire = wire(expiresAt);
             delivery = new AgentCommandDeliveryEntity()
-                    .setId(1L).setCommandId("cmd-1")
+                    .setId(1L).setCommandId("cmd-1").setTaskId("task-1")
+                    .setTargetAgentId("agent-1").setCommandType("TASK_INVITE")
                     .setCommandPayload("business".getBytes())
                     .setCommandPayloadHash(sha256("business".getBytes()))
-                    .setStatus("PUBLISHED").setAttemptCount(1)
+                    .setStatus("PUBLISHED").setAttemptCount(1).setNextRetryAt(null)
+                    .setLeaseOwner(null).setLeaseUntil(null)
                     .setActiveMessageId("msg-1").setActiveAttempt(1)
-                    .setExpiresAt(NOW + 60_000).setVersion(0L);
+                    .setExpiresAt(expiresAt).setLastError(null).setVersion(0L);
             delivery.setTenantId("tenant-a");
             delivery.setClientId("client-a");
             outbox = new AgentOutboxEventEntity()
                     .setId(2L).setEventId("evt-1").setMessageId("msg-1")
                     .setCommandId("cmd-1").setDeliveryId(1L)
+                    .setAggregateType("task").setAggregateId("task-1")
                     .setWirePayload(wire).setWirePayloadHash(sha256(wire))
-                    .setStatus("PUBLISHED").setActiveAttempt(1)
-                    .setExpiresAt(NOW + 60_000).setVersion(0L);
+                    .setStatus("PUBLISHED").setAttemptCount(1).setNextRetryAt(null)
+                    .setLeaseOwner(null).setLeaseUntil(null).setActiveAttempt(2)
+                    .setExpiresAt(expiresAt).setPublisherConfirmStatus("ACK")
+                    .setMandatoryReturnStatus("NOT_RETURNED").setVersion(0L);
             outbox.setTenantId("tenant-a");
             outbox.setClientId("client-a");
         }
