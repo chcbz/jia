@@ -68,11 +68,15 @@ class AccountSecuritySqlContractTest {
         assertTrue(update.contains("AND v_target_invalid_json_count = 0"));
         assertTrue(update.contains("AND JSON_VALID(client_settings)"));
         assertTrue(update.contains("AND JSON_VALID(token_settings)"));
-        assertTrue(migration.contains("IF v_updated_rows <> 1"));
+        assertTrue(migration.contains("IF v_updated_rows NOT IN (0, 1)"));
+        assertFalse(migration.contains("IF v_updated_rows <> 1"));
         assertTrue(migration.contains("v_post_exact_target_count <> 1"));
         assertTrue(migration.contains("v_post_collision_count <> 0"));
         assertTrue(migration.contains("v_post_invalid_json_count <> 0"));
         assertTrue(migration.contains("v_postcondition_count <> 1"));
+        assertTrue(migration.indexOf("IF v_updated_rows NOT IN (0, 1)")
+                < migration.indexOf("v_postcondition_count <> 1"));
+        assertTrue(migration.indexOf("v_postcondition_count <> 1") < migration.indexOf("COMMIT;"));
         assertTrue(migration.contains("COMMIT;"));
         assertTrue(migration.indexOf("COMMIT;") < migration.indexOf("CALL asf_migrate_account_security_oauth_client();"));
         assertTrue(migration.contains("CALL asf_migrate_account_security_oauth_client();\n"

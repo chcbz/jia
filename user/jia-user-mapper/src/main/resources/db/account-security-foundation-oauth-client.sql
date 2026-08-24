@@ -107,7 +107,9 @@ main: BEGIN
        AND v_target_invalid_json_count = 0;
 
     SET v_updated_rows = ROW_COUNT();
-    IF v_updated_rows <> 1 THEN
+    -- A fully compliant repeat is a no-op under MySQL's default affected-row semantics.
+    -- Both 0 and 1 continue to the complete byte-exact postcondition; every other count fails closed.
+    IF v_updated_rows NOT IN (0, 1) THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT = 'account-security-foundation: oauth client update affected an unexpected row count';
     END IF;
