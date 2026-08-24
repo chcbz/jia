@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,6 +26,28 @@ class AgentCommandInboxMapperContractTest {
         assertLock("selectOutboxForUpdate", "tenant_id", "client_id", "event_id");
         assertLock("selectInboxForUpdate",
                 "tenant_id", "client_id", "consumer_name", "message_id");
+    }
+
+    @Test
+    void sourceLockProjectionsMaterializeEveryEntityAndCanonicalPoisonFence() throws Exception {
+        assertEquals(List.of(
+                "id", "command_id", "task_id", "work_item_id", "target_agent_id",
+                "command_type", "command_payload", "command_payload_hash", "status",
+                "attempt_count", "next_retry_at", "lease_owner", "lease_until",
+                "active_message_id", "active_attempt", "expires_at", "last_error", "version",
+                "replay_parent_message_id", "replay_requester_id", "replay_approver_id",
+                "replay_reason", "tenant_id", "client_id", "create_time", "update_time"),
+                selectColumns("selectDeliveryForUpdate"));
+        assertEquals(List.of(
+                "id", "event_id", "message_id", "command_id", "delivery_id",
+                "aggregate_type", "aggregate_id", "destination", "routing_key", "wire_payload",
+                "wire_payload_hash", "status", "attempt_count", "next_retry_at", "lease_owner",
+                "lease_until", "active_attempt", "expires_at", "publisher_confirm_status",
+                "confirmed_at", "confirm_error", "mandatory_return_status", "returned_at",
+                "return_reply_code", "return_reply_text", "published_at", "last_error", "version",
+                "replay_parent_message_id", "replay_requester_id", "replay_approver_id",
+                "replay_reason", "tenant_id", "client_id", "create_time", "update_time"),
+                selectColumns("selectOutboxForUpdate"));
     }
 
     @Test
@@ -59,6 +82,14 @@ class AgentCommandInboxMapperContractTest {
         }
         assertFalse(sql.contains("json"));
         assertFalse(sql.contains("text"));
+    }
+
+    private static List<String> selectColumns(String methodName) throws Exception {
+        String sql = sql(method(methodName));
+        int select = sql.indexOf("select ");
+        int from = sql.indexOf(" from ");
+        assertTrue(select >= 0 && from > select, methodName + ": " + sql);
+        return List.of(sql.substring(select + 7, from).split("\\s*,\\s*"));
     }
 
     private static void assertLock(String methodName, String... exactColumns) throws Exception {

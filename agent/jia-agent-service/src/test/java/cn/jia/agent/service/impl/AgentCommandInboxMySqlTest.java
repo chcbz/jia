@@ -14,6 +14,7 @@ import cn.jia.agent.entity.AgentInboxDisposition;
 import cn.jia.agent.entity.AgentInboxFenceException;
 import cn.jia.agent.entity.AgentInboxIdentityConflictException;
 import cn.jia.agent.entity.AgentInboxMessage;
+import cn.jia.agent.entity.AgentInboxSourceNotSettledException;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.mapper.AgentCommandInboxMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -205,6 +206,42 @@ class AgentCommandInboxMySqlTest {
                 () -> service.claim(message(), "worker-a", NOW, 10_000));
         assertEquals(0, count("agent_consumer_inbox"));
         assertEquals("PUBLISHED", string("SELECT status FROM agent_command_delivery"));
+    }
+
+    @Test
+    void productionMapperMaterializesEveryClaimedPoisonColumnBeforeTransientGate() {
+        resetPublishedSource();
+        makeCanonicalClaimedSource();
+        assertThrows(AgentInboxSourceNotSettledException.class,
+                () -> service(productionDao).claim(message(), "worker-a", NOW, 10_000));
+
+        List<SourcePoison> poisons = List.of(
+                new SourcePoison("agent_outbox_event", "confirmed_at=1700000000000"),
+                new SourcePoison("agent_outbox_event", "confirm_error='RABBIT_NACK'"),
+                new SourcePoison("agent_outbox_event", "returned_at=1700000000000"),
+                new SourcePoison("agent_outbox_event", "return_reply_code=312"),
+                new SourcePoison("agent_outbox_event", "return_reply_text='NO_ROUTE'"),
+                new SourcePoison("agent_outbox_event", "published_at=1700000000000"),
+                new SourcePoison("agent_outbox_event", "replay_parent_message_id='msg-parent'"),
+                new SourcePoison("agent_outbox_event", "replay_requester_id='requester-1'"),
+                new SourcePoison("agent_outbox_event", "replay_approver_id='approver-1'"),
+                new SourcePoison("agent_outbox_event", "replay_reason='manual replay'"),
+                new SourcePoison("agent_command_delivery", "replay_parent_message_id='msg-parent'"),
+                new SourcePoison("agent_command_delivery", "replay_requester_id='requester-1'"),
+                new SourcePoison("agent_command_delivery", "replay_approver_id='approver-1'"),
+                new SourcePoison("agent_command_delivery", "replay_reason='manual replay'"));
+        for (SourcePoison poison : poisons) {
+            resetPublishedSource();
+            makeCanonicalClaimedSource();
+            assertEquals(1, jdbc.update(
+                    "UPDATE " + poison.table() + " SET " + poison.assignment()));
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(productionDao)
+                            .claim(message(), "worker-a", NOW, 10_000),
+                    poison.table() + ": " + poison.assignment());
+            assertEquals(0, count("agent_consumer_inbox"), poison.assignment());
+        }
     }
 
     @Test
@@ -427,13 +464,36 @@ class AgentCommandInboxMySqlTest {
                 INSERT INTO agent_outbox_event(
                   id,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
                   destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
-                  active_attempt,expires_at,publisher_confirm_status,mandatory_return_status,
-                  version,tenant_id,client_id,create_time,update_time)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  active_attempt,expires_at,publisher_confirm_status,confirmed_at,
+                  mandatory_return_status,published_at,version,
+                  tenant_id,client_id,create_time,update_time)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, deliveryId + 1_000, eventId, messageId, commandId, deliveryId,
                 "task", "task-1", "jia.agent.command", "agent.command.general",
                 sourceWire, sha256(sourceWire), "PUBLISHED", 1, 1, expiresAt,
-                "ACK", "NOT_RETURNED", 0, tenant, client, NOW, NOW));
+                "ACK", NOW, "NOT_RETURNED", NOW, 0, tenant, client, NOW, NOW));
+    }
+
+    private void makeCanonicalClaimedSource() {
+        assertEquals(1, jdbc.update("""
+                UPDATE agent_command_delivery
+                SET status='PENDING', attempt_count=1, next_retry_at=NULL,
+                    lease_owner='d03-relay', lease_until=?, active_attempt=1,
+                    last_error=NULL, version=1,
+                    replay_parent_message_id=NULL, replay_requester_id=NULL,
+                    replay_approver_id=NULL, replay_reason=NULL
+                """, NOW + 30_000));
+        assertEquals(1, jdbc.update("""
+                UPDATE agent_outbox_event
+                SET status='CLAIMED', attempt_count=1, next_retry_at=NULL,
+                    lease_owner='d03-relay', lease_until=?, active_attempt=2,
+                    publisher_confirm_status='PENDING', confirmed_at=NULL, confirm_error=NULL,
+                    mandatory_return_status='PENDING', returned_at=NULL,
+                    return_reply_code=NULL, return_reply_text=NULL, published_at=NULL,
+                    last_error=NULL, version=1,
+                    replay_parent_message_id=NULL, replay_requester_id=NULL,
+                    replay_approver_id=NULL, replay_reason=NULL
+                """, NOW + 30_000));
     }
 
     private AgentRabbitSafetyGate enabledGate() {
@@ -497,6 +557,9 @@ class AgentCommandInboxMySqlTest {
         } catch (Exception impossible) {
             throw new AssertionError(impossible);
         }
+    }
+
+    private record SourcePoison(String table, String assignment) {
     }
 
     private enum Failure { INBOX_INSERT, DELIVERY_CLAIM, DELIVERY_COMPLETE, INBOX_COMPLETE }

@@ -307,13 +307,14 @@ class AgentCommandInboxRealTransactionTest {
                 INSERT INTO agent_outbox_event(
                   id,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
                   destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
-                  active_attempt,expires_at,publisher_confirm_status,mandatory_return_status,
-                  version,tenant_id,client_id,create_time,update_time)
-                VALUES (2,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  active_attempt,expires_at,publisher_confirm_status,confirmed_at,
+                  mandatory_return_status,published_at,version,
+                  tenant_id,client_id,create_time,update_time)
+                VALUES (2,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, eventId, messageId, commandId, deliveryId, "task", "task-1",
                 "jia.agent.command", "agent.command.general", sourceWire, sha256(sourceWire),
-                "PUBLISHED", 1, 1, expiresAt, "ACK", "NOT_RETURNED", 0,
-                tenant, client, NOW, NOW));
+                "PUBLISHED", 1, 1, expiresAt, "ACK", NOW,
+                "NOT_RETURNED", NOW, 0, tenant, client, NOW, NOW));
     }
 
     private void createSchema() {
@@ -326,6 +327,8 @@ class AgentCommandInboxRealTransactionTest {
                   attempt_count INT NOT NULL, next_retry_at BIGINT, lease_owner VARCHAR(100),
                   lease_until BIGINT, active_message_id VARCHAR(100), active_attempt INT NOT NULL,
                   expires_at BIGINT NOT NULL, last_error VARCHAR(2000), version BIGINT NOT NULL,
+                  replay_parent_message_id VARCHAR(100), replay_requester_id VARCHAR(100),
+                  replay_approver_id VARCHAR(100), replay_reason VARCHAR(1000),
                   tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                   create_time BIGINT, update_time BIGINT,
                   UNIQUE(tenant_id,client_id,command_id))
@@ -340,9 +343,13 @@ class AgentCommandInboxRealTransactionTest {
                   wire_payload_hash BINARY(32) NOT NULL, status VARCHAR(32) NOT NULL,
                   attempt_count INT NOT NULL, next_retry_at BIGINT, lease_owner VARCHAR(100),
                   lease_until BIGINT, active_attempt INT NOT NULL, expires_at BIGINT NOT NULL,
-                  publisher_confirm_status VARCHAR(20) NOT NULL,
-                  mandatory_return_status VARCHAR(20) NOT NULL, last_error VARCHAR(2000),
-                  version BIGINT NOT NULL, tenant_id VARCHAR(50) NOT NULL,
+                  publisher_confirm_status VARCHAR(20) NOT NULL, confirmed_at BIGINT,
+                  confirm_error VARCHAR(2000), mandatory_return_status VARCHAR(20) NOT NULL,
+                  returned_at BIGINT, return_reply_code INT, return_reply_text VARCHAR(1000),
+                  published_at BIGINT, last_error VARCHAR(2000), version BIGINT NOT NULL,
+                  replay_parent_message_id VARCHAR(100), replay_requester_id VARCHAR(100),
+                  replay_approver_id VARCHAR(100), replay_reason VARCHAR(1000),
+                  tenant_id VARCHAR(50) NOT NULL,
                   client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
                   UNIQUE(tenant_id,client_id,event_id))
                 """);

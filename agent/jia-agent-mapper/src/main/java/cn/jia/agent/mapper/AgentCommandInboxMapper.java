@@ -15,7 +15,9 @@ public interface AgentCommandInboxMapper {
             SELECT id, command_id, task_id, work_item_id, target_agent_id, command_type,
                    command_payload, command_payload_hash, status, attempt_count,
                    next_retry_at, lease_owner, lease_until, active_message_id, active_attempt,
-                   expires_at, last_error, version, tenant_id, client_id, create_time, update_time
+                   expires_at, last_error, version, replay_parent_message_id,
+                   replay_requester_id, replay_approver_id, replay_reason,
+                   tenant_id, client_id, create_time, update_time
             FROM agent_command_delivery
             WHERE id=#{deliveryId}
               AND tenant_id=#{tenantId} AND client_id=#{clientId}
@@ -34,8 +36,10 @@ public interface AgentCommandInboxMapper {
             SELECT id, event_id, message_id, command_id, delivery_id, aggregate_type,
                    aggregate_id, destination, routing_key, wire_payload, wire_payload_hash,
                    status, attempt_count, next_retry_at, lease_owner, lease_until,
-                   active_attempt, expires_at, publisher_confirm_status,
-                   mandatory_return_status, last_error, version,
+                   active_attempt, expires_at, publisher_confirm_status, confirmed_at,
+                   confirm_error, mandatory_return_status, returned_at, return_reply_code,
+                   return_reply_text, published_at, last_error, version,
+                   replay_parent_message_id, replay_requester_id, replay_approver_id, replay_reason,
                    tenant_id, client_id, create_time, update_time
             FROM agent_outbox_event
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND event_id=#{eventId}
