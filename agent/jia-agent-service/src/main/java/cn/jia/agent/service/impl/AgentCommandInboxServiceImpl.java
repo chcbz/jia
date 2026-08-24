@@ -13,6 +13,7 @@ import cn.jia.agent.entity.AgentInboxFenceException;
 import cn.jia.agent.entity.AgentInboxIdentityConflictException;
 import cn.jia.agent.entity.AgentInboxMessage;
 import cn.jia.agent.entity.AgentInboxResult;
+import cn.jia.agent.entity.AgentInboxSourceNotSettledException;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.service.AgentCommandInboxService;
 import org.slf4j.Logger;
@@ -94,13 +95,15 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         }
 
         if (!"PUBLISHED".equals(source.outbox().getStatus())) {
-            throw conflict(message, "OUTBOX_NOT_PUBLISHED");
+            throw sourceStatusFailure(
+                    message, source.outbox().getStatus(), "OUTBOX_NOT_PUBLISHED");
         }
         if (source.staleActiveFence()) {
             return persistStaleMessage(message, source, now);
         }
         if (!"PUBLISHED".equals(source.delivery().getStatus())) {
-            throw conflict(message, "DELIVERY_NOT_PUBLISHED");
+            throw sourceStatusFailure(
+                    message, source.delivery().getStatus(), "DELIVERY_NOT_PUBLISHED");
         }
         if (now >= source.expiresAt()) {
             return persistFirstExpiry(message, source, now);
@@ -332,7 +335,8 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             throw conflict(message, "DB_SHADOW_MARKER_STATUS_DRIFT");
         }
         if (!"PUBLISHED".equals(outbox.getStatus())) {
-            throw conflict(message, "OUTBOX_NOT_PUBLISHED");
+            throw sourceStatusFailure(
+                    message, outbox.getStatus(), "OUTBOX_NOT_PUBLISHED");
         }
 
         boolean activeFence = Objects.equals(
@@ -777,6 +781,24 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
+    }
+
+    private RuntimeException sourceStatusFailure(
+            ValidatedMessage message, String status, String reasonCode) {
+        return "CLAIMED".equals(status)
+                ? sourceNotSettled(message, reasonCode)
+                : conflict(message, reasonCode);
+    }
+
+    private AgentInboxSourceNotSettledException sourceNotSettled(
+            ValidatedMessage message, String reasonCode) {
+        LOG.warn("event={} reason={} consumerName={} tenantId={} clientId={} messageId={} "
+                        + "eventId={} commandId={} deliveryId={}",
+                AgentInboxSourceNotSettledException.CODE, reasonCode,
+                message.consumerName(), message.tenantId(), message.clientId(),
+                message.messageId(), message.eventId(), message.commandId(),
+                message.deliveryId());
+        return new AgentInboxSourceNotSettledException(reasonCode);
     }
 
     private AgentInboxIdentityConflictException conflict(

@@ -71,6 +71,31 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     }
 
     @Test
+    void oneMatchingSessionFailureDoesNotPreventOtherExactSessionFromReceivingRawBytes()
+            throws Exception {
+        WebSocketSession failing = session("failing", "tenant-a", "client-a", "agent-1");
+        WebSocketSession succeeding = session("succeeding", "tenant-a", "client-a", "agent-1");
+        AgentWebSocketHandler handler = handler();
+        register(handler, failing, "agent-1");
+        register(handler, succeeding, "agent-1");
+        org.mockito.Mockito.clearInvocations(failing, succeeding);
+        doThrow(new IllegalStateException("simulated partial websocket failure"))
+                .when(failing).sendMessage(any(TextMessage.class));
+        byte[] raw = wire("tenant-a", "client-a", "task-1", "agent-1");
+
+        AgentRawCommandDispatchResult result = handler.dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", raw);
+
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
+        assertEquals(2, result.matchingSessionCount());
+        assertEquals(1, result.sentSessionCount());
+        verify(failing).sendMessage(any(TextMessage.class));
+        ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
+        verify(succeeding).sendMessage(sent.capture());
+        assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
     void invalidEnvelopeIsRejectedBeforePresenceLookupAndMatchingSendFailureIsDistinctFromOffline()
             throws Exception {
         WebSocketSession exact = session("exact", "tenant-a", "client-a", "agent-1");

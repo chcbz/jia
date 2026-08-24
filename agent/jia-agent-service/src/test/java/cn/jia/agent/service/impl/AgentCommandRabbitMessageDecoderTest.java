@@ -10,6 +10,7 @@ import org.springframework.amqp.core.MessageProperties;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -66,6 +67,38 @@ class AgentCommandRabbitMessageDecoderTest {
 
         byte[] utf16Body = ("\ufeff" + wire()).getBytes(StandardCharsets.UTF_16LE);
         assertReason("WIRE_ENCODING_INVALID", message(utf16Body));
+    }
+
+    @Test
+    void rejectsEveryMissingRequiredTypedHeaderAndSourceRetryBoundaries() {
+        for (String required : List.of(
+                AgentCommandAmqpContract.HEADER_WIRE_VERSION,
+                AgentCommandAmqpContract.HEADER_EVENT_ID,
+                AgentCommandAmqpContract.HEADER_DELIVERY_ID,
+                AgentCommandAmqpContract.HEADER_COMMAND_ID,
+                AgentCommandAmqpContract.HEADER_TENANT_ID,
+                AgentCommandAmqpContract.HEADER_CLIENT_ID,
+                AgentCommandAmqpContract.HEADER_TASK_ID,
+                AgentCommandAmqpContract.HEADER_TARGET_AGENT_ID,
+                AgentCommandAmqpContract.HEADER_ACTIVE_ATTEMPT,
+                AgentCommandAmqpContract.HEADER_EXPIRES_AT,
+                AgentCommandAmqpContract.HEADER_WIRE_SHA256,
+                AgentCommandAmqpContract.HEADER_TOPOLOGY_SHA256,
+                AgentCommandAmqpContract.HEADER_SOURCE_SETTLEMENT_RETRY)) {
+            Message missing = message(wire());
+            missing.getMessageProperties().getHeaders().remove(required);
+            assertReason("HEADER_MISSING", missing);
+        }
+
+        Message negativeRetry = message(wire());
+        negativeRetry.getMessageProperties().getHeaders().put(
+                AgentCommandAmqpContract.HEADER_SOURCE_SETTLEMENT_RETRY, Integer.valueOf(-1));
+        assertReason("NUMERIC_PROVENANCE_INVALID", negativeRetry);
+
+        Message retryOverflow = message(wire());
+        retryOverflow.getMessageProperties().getHeaders().put(
+                AgentCommandAmqpContract.HEADER_SOURCE_SETTLEMENT_RETRY, Integer.valueOf(1_001));
+        assertReason("NUMERIC_PROVENANCE_INVALID", retryOverflow);
     }
 
     @Test

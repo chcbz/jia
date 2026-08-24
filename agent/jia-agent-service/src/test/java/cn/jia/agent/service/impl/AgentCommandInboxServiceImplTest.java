@@ -12,6 +12,7 @@ import cn.jia.agent.entity.AgentInboxDisposition;
 import cn.jia.agent.entity.AgentInboxFenceException;
 import cn.jia.agent.entity.AgentInboxIdentityConflictException;
 import cn.jia.agent.entity.AgentInboxMessage;
+import cn.jia.agent.entity.AgentInboxSourceNotSettledException;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,55 @@ class AgentCommandInboxServiceImplTest {
             assertEquals(AgentInboxClaim.Kind.DISABLED, claim.kind());
             assertEquals(0, dao.accesses);
         }
+    }
+
+    @Test
+    void confirmedPublishVisibleBeforeD03SettlementIsTypedTransientAfterProvenanceValidation() {
+        RecordingDao outboxRace = new RecordingDao();
+        outboxRace.outbox.setStatus("CLAIMED");
+        outboxRace.delivery.setStatus("CLAIMED");
+        AgentInboxSourceNotSettledException outboxFailure = assertThrows(
+                AgentInboxSourceNotSettledException.class,
+                () -> service(outboxRace, enabledGate())
+                        .claim(message(), "worker-a", NOW, LEASE));
+        assertEquals("OUTBOX_NOT_PUBLISHED", outboxFailure.reasonCode());
+        assertEquals(null, outboxRace.inbox);
+
+        RecordingDao deliveryRace = new RecordingDao();
+        deliveryRace.delivery.setStatus("CLAIMED");
+        AgentInboxSourceNotSettledException deliveryFailure = assertThrows(
+                AgentInboxSourceNotSettledException.class,
+                () -> service(deliveryRace, enabledGate())
+                        .claim(message(), "worker-a", NOW, LEASE));
+        assertEquals("DELIVERY_NOT_PUBLISHED", deliveryFailure.reasonCode());
+        assertEquals(null, deliveryRace.inbox);
+
+        RecordingDao corrupt = new RecordingDao();
+        corrupt.outbox.setStatus("RETRY");
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(corrupt, enabledGate())
+                        .claim(message(), "worker-a", NOW, LEASE));
+        assertEquals(null, corrupt.inbox);
+    }
+
+    @Test
+    void sourceRaceDoesNotOverrideWireIdentityOrStoredHashConflicts() {
+        RecordingDao identity = new RecordingDao();
+        identity.outbox.setStatus("CLAIMED");
+        AgentInboxMessage wrongEvent = new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", "msg-1", "evt-other", "cmd-1", 1,
+                message().rawWireBytes());
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(identity, enabledGate())
+                        .claim(wrongEvent, "worker-a", NOW, LEASE));
+
+        RecordingDao hash = new RecordingDao();
+        hash.outbox.setStatus("CLAIMED");
+        hash.outbox.setWirePayloadHash(new byte[32]);
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(hash, enabledGate())
+                        .claim(message(), "worker-a", NOW, LEASE));
     }
 
     @Test

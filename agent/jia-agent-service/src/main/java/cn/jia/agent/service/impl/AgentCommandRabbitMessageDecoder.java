@@ -68,6 +68,9 @@ final class AgentCommandRabbitMessageDecoder {
                 throw invalid("UNKNOWN_AGENT_HEADER");
             }
         }
+        if (!headers.keySet().containsAll(FROZEN_HEADERS)) {
+            throw invalid("HEADER_MISSING");
+        }
         int wireVersion = integerHeader(headers, AgentCommandAmqpContract.HEADER_WIRE_VERSION);
         String eventId = stringHeader(headers, AgentCommandAmqpContract.HEADER_EVENT_ID, 100);
         long deliveryId = longHeader(headers, AgentCommandAmqpContract.HEADER_DELIVERY_ID);

@@ -15,6 +15,7 @@ import cn.jia.agent.entity.AgentInboxDisposition;
 import cn.jia.agent.entity.AgentInboxIdentityConflictException;
 import cn.jia.agent.entity.AgentInboxMessage;
 import cn.jia.agent.entity.AgentInboxResult;
+import cn.jia.agent.entity.AgentInboxSourceNotSettledException;
 import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.service.AgentCommandInboxService;
@@ -41,12 +42,13 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -63,7 +65,8 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     @Mock Channel channel;
 
     @Test
-    void successfulExactDispatchUsesRawBytesOutsideTransactionCompletesSentThenAcks() throws Exception {
+    void successfulExactDispatchUsesRawBytesOutsideTransactionCompletesSentThenAcks()
+            throws Exception {
         Message rabbit = message(0);
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(AgentInboxMessage.class), any(), anyLong(), anyLong()))
@@ -78,17 +81,13 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
                 "tenant-a", "client-a", "task-1", "agent-1", rabbit.getBody());
         stubCompletion(token, AgentInboxDisposition.Type.SENT);
 
-        consumer(allowedGate()).consume(rabbit, channel);
+        consumer().consume(rabbit, channel);
 
         ArgumentCaptor<AgentInboxMessage> claimed = ArgumentCaptor.forClass(AgentInboxMessage.class);
         verify(inboxService).claim(claimed.capture(), any(), anyLong(), anyLong());
         assertEquals(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 claimed.getValue().consumerName());
         assertArrayEquals(rabbit.getBody(), claimed.getValue().rawWireBytes());
-        ArgumentCaptor<AgentInboxDisposition> disposition =
-                ArgumentCaptor.forClass(AgentInboxDisposition.class);
-        verify(inboxService).complete(any(), disposition.capture(), anyLong());
-        assertEquals(AgentInboxDisposition.Type.SENT, disposition.getValue().type());
         InOrder order = inOrder(inboxService, accessService, dispatcher, channel);
         order.verify(inboxService).claim(any(), any(), anyLong(), anyLong());
         order.verify(accessService).resolveMemberAccess(
@@ -102,17 +101,15 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     }
 
     @Test
-    void offlineCompletesWaitingAgentWithFutureRetryAndAcksWithoutRabbitRequeue() throws Exception {
+    void offlineDurablyCompletesWaitingAgentThenAcksWithoutRabbitRetryOrRequeue()
+            throws Exception {
         AgentInboxClaimToken token = token();
-        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
-                .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        acquiredWritable(token);
         when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
                 .thenReturn(AgentRawCommandDispatchResult.offline());
         stubCompletion(token, AgentInboxDisposition.Type.WAITING_AGENT);
 
-        consumer(allowedGate()).consume(message(0), channel);
+        consumer().consume(message(0), channel);
 
         ArgumentCaptor<AgentInboxDisposition> disposition =
                 ArgumentCaptor.forClass(AgentInboxDisposition.class);
@@ -121,150 +118,443 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         assertEquals(NOW + AgentCommandRabbitConsumer.OFFLINE_RETRY_MILLIS,
                 disposition.getValue().nextRetryAt());
         assertEquals(AgentCommandRabbitConsumer.AGENT_OFFLINE, disposition.getValue().errorCode());
-        verify(channel).basicAck(77L, false);
-        verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
+        InOrder order = inOrder(inboxService, channel);
+        order.verify(inboxService).complete(any(), any(), anyLong());
+        order.verify(channel).basicAck(77L, false);
         verify(publisher, never()).publish(any(), anyLong());
+        verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
     }
 
     @Test
-    void duplicatePriorResultAcksWithoutAclSendOrCompletion() throws Exception {
+    void sourcePublishBeforeSettlementUsesTypedBoundedConfirmedParkingWithFrozenProvenance()
+            throws Exception {
+        Message rabbit = message(7);
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenThrow(new AgentInboxSourceNotSettledException("OUTBOX_NOT_PUBLISHED"));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(rabbit, channel);
+
+        AgentConfirmedPublishRequest retry = capturedPublish();
+        assertEquals(AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE, retry.destination());
+        assertEquals(AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY, retry.routingKey());
+        assertEquals("msg-1", retry.messageId());
+        assertEquals("evt-1", retry.eventId());
+        assertEquals(41L, retry.deliveryId());
+        assertEquals("cmd-1", retry.commandId());
+        assertEquals("tenant-a", retry.tenantId());
+        assertEquals("client-a", retry.clientId());
+        assertEquals("task-1", retry.taskId());
+        assertEquals("agent-1", retry.targetAgentId());
+        assertEquals(1, retry.activeAttempt());
+        assertEquals(8, retry.sourceSettlementRetry());
+        assertArrayEquals(rabbit.getBody(), retry.wirePayload());
+        assertArrayEquals(AgentCommandAmqpContract.sha256(rabbit.getBody()),
+                retry.wirePayloadHash());
+        verify(channel).basicAck(77L, false);
+        verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
+    }
+
+    @Test
+    void sourceOrClaimTransientParkingFailurePreservesOriginalByRequeueing() throws Exception {
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenThrow(new AgentInboxSourceNotSettledException("DELIVERY_NOT_PUBLISHED"));
+        when(publisher.publish(any(), anyLong())).thenReturn(timeout());
+
+        consumer().consume(message(0), channel);
+
+        verify(channel).basicNack(77L, false, true);
+        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+
+        org.mockito.Mockito.reset(channel, inboxService, publisher);
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenThrow(new IllegalStateException("temporary database failure"));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(0), channel);
+
+        verify(publisher).publish(any(), eq(AgentCommandRabbitConsumer.CONFIRM_TIMEOUT_MILLIS));
+        verify(channel).basicAck(77L, false);
+    }
+
+    @Test
+    void duplicatePriorResultAcksAndMalformedPriorResultParksWithoutDispatch() throws Exception {
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.priorResult(result(token(), "PROCESSED", "SENT")));
 
-        consumer(allowedGate()).consume(message(0), channel);
+        consumer().consume(message(0), channel);
 
         verify(channel).basicAck(77L, false);
         verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
         verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
-        verify(inboxService, never()).complete(any(), any(), anyLong());
+
+        org.mockito.Mockito.reset(channel, inboxService, publisher);
+        AgentInboxResult mismatched = new AgentInboxResult(
+                91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", "msg-other", "evt-1", "cmd-1", 41L,
+                "PROCESSED", "SENT", NOW, null);
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.priorResult(mismatched));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(0), channel);
+
+        verify(publisher).publish(any(), anyLong());
+        verify(channel).basicAck(77L, false);
     }
 
     @Test
-    void inFlightUsesBoundedConfirmedTtlRetryWithSameIdentityAndRawBytesThenAcks() throws Exception {
-        Message rabbit = message(2);
+    void inFlightChoosesLargestFittingFrozenLaneAndFallsBackThroughSmallerLanes()
+            throws Exception {
+        long expiresAt = NOW + 40_000L;
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.inFlight(40_000L));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(2, expiresAt), channel);
+
+        assertEquals(AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY,
+                capturedPublish().routingKey());
+        verify(channel).basicAck(77L, false);
+
+        org.mockito.Mockito.reset(channel, inboxService, publisher);
+        expiresAt = NOW + 10_000L;
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.inFlight(40_000L));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(2, expiresAt), channel);
+
+        assertEquals(AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY,
+                capturedPublish().routingKey());
+        verify(channel).basicAck(77L, false);
+    }
+
+    @Test
+    void inFlightPublishFailuresTryFittingFallbackThenRequeueOriginal() throws Exception {
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.inFlight(40_000L));
+        when(publisher.publish(any(), anyLong())).thenReturn(timeout());
+
+        consumer().consume(message(0, NOW + 400_000L), channel);
+
+        ArgumentCaptor<AgentConfirmedPublishRequest> attempts =
+                ArgumentCaptor.forClass(AgentConfirmedPublishRequest.class);
+        verify(publisher, times(3)).publish(attempts.capture(), anyLong());
+        assertEquals(List.of(
+                        AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY,
+                        AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY,
+                        AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY),
+                attempts.getAllValues().stream()
+                        .map(AgentConfirmedPublishRequest::routingKey).toList());
+        verify(channel).basicNack(77L, false, true);
+        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+    }
+
+    @Test
+    void inFlightDoesNotFinalDlqAtPolicyMaxBeforeLeaseAndWireMaxPreservesOriginal()
+            throws Exception {
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.inFlight(4_000L));
         when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
 
-        consumer(allowedGate()).consume(rabbit, channel);
+        consumer().consume(
+                message(AgentCommandRabbitConsumer.MAX_SOURCE_SETTLEMENT_RETRIES), channel);
 
-        ArgumentCaptor<AgentConfirmedPublishRequest> retry =
-                ArgumentCaptor.forClass(AgentConfirmedPublishRequest.class);
-        verify(publisher).publish(retry.capture(),
-                org.mockito.Mockito.eq(AgentCommandRabbitConsumer.CONFIRM_TIMEOUT_MILLIS));
-        assertEquals(AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
-                retry.getValue().destination());
-        assertEquals(AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY,
-                retry.getValue().routingKey());
-        assertEquals("msg-1", retry.getValue().messageId());
-        assertEquals(3, retry.getValue().sourceSettlementRetry());
-        assertArrayEquals(rabbit.getBody(), retry.getValue().wirePayload());
+        assertEquals(AgentCommandRabbitConsumer.MAX_SOURCE_SETTLEMENT_RETRIES + 1,
+                capturedPublish().sourceSettlementRetry());
         verify(channel).basicAck(77L, false);
-        verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
+
+        org.mockito.Mockito.reset(channel, inboxService, publisher);
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.inFlight(4_000L));
+
+        consumer().consume(message(AgentCommandRabbitConsumer.MAX_WIRE_SOURCE_SETTLEMENT_RETRY),
+                channel);
+
+        verify(publisher, never()).publish(any(), anyLong());
+        verify(channel).basicNack(77L, false, true);
+
+        org.mockito.Mockito.reset(channel, inboxService, publisher);
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.inFlight(4_000L));
+
+        consumer().consume(message(0, NOW + 5_000L), channel);
+
+        verify(publisher, never()).publish(any(), anyLong());
+        verify(channel).basicNack(77L, false, true);
     }
 
     @Test
-    void malformedConflictAndDisallowedScopeNackWithoutRequeueOrSideEffects() throws Exception {
+    void sourceSettlementLimitOrExpiryUsesConfirmedTerminalLaneInsteadOfNackDrop()
+            throws Exception {
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenThrow(new AgentInboxSourceNotSettledException("OUTBOX_NOT_PUBLISHED"));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(AgentCommandRabbitConsumer.MAX_SOURCE_SETTLEMENT_RETRIES),
+                channel);
+
+        AgentConfirmedPublishRequest terminal = capturedPublish();
+        assertEquals(AgentRabbitTopologyManifest.DEAD_ROUTING_KEY, terminal.routingKey());
+        assertEquals(AgentCommandRabbitConsumer.MAX_SOURCE_SETTLEMENT_RETRIES,
+                terminal.sourceSettlementRetry());
+        verify(channel).basicAck(77L, false);
+        verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
+
+        org.mockito.Mockito.reset(channel, inboxService, publisher);
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenThrow(new AgentInboxSourceNotSettledException("OUTBOX_NOT_PUBLISHED"));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(0, NOW), channel);
+
+        assertEquals(AgentRabbitTopologyManifest.DEAD_ROUTING_KEY,
+                capturedPublish().routingKey());
+        verify(channel).basicAck(77L, false);
+    }
+
+    @Test
+    void staleAcquiredTokenParksAndNeverChecksAclOrSends() throws Exception {
+        AgentInboxClaimToken stale = new AgentInboxClaimToken(
+                91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", "msg-other", "evt-1", "cmd-1", 41L,
+                "d05-test-consumer", NOW + AgentCommandRabbitConsumer.CLAIM_LEASE_MILLIS,
+                1, 0L, 1, 7L, EXPIRES_AT);
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.acquired(stale));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(0), channel);
+
+        verify(publisher).publish(any(), anyLong());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
+        verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
+        verify(channel).basicAck(77L, false);
+    }
+
+    @Test
+    void deterministicMalformedIdentityScopeAndAclDenialFailClosed() throws Exception {
         Message malformed = message(0);
         malformed.getMessageProperties().getHeaders().put(
                 AgentCommandAmqpContract.HEADER_TENANT_ID, "tenant-b");
-        consumer(allowedGate()).consume(malformed, channel);
+        consumer().consume(malformed, channel);
         verify(channel).basicNack(77L, false, false);
         verify(inboxService, never()).claim(any(), any(), anyLong(), anyLong());
 
         org.mockito.Mockito.reset(channel, inboxService);
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenThrow(new AgentInboxIdentityConflictException("OUTBOX_WIRE_BYTES_DRIFT"));
-        consumer(allowedGate()).consume(message(0), channel);
+        consumer().consume(message(0), channel);
         verify(channel).basicNack(77L, false, false);
 
         org.mockito.Mockito.reset(channel, inboxService);
         consumer(gateFor("tenant-b", "client-a")).consume(message(0), channel);
         verify(channel).basicNack(77L, false, false);
         verify(inboxService, never()).claim(any(), any(), anyLong(), anyLong());
-    }
 
-    @Test
-    void aclFailureCompletesDeadBeforeAckAndNeverTouchesWebSocket() throws Exception {
+        org.mockito.Mockito.reset(channel, inboxService);
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
         when(accessService.resolveMemberAccess(any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_ONLY);
         stubCompletion(token, AgentInboxDisposition.Type.DEAD);
-
-        consumer(allowedGate()).consume(message(0), channel);
-
-        ArgumentCaptor<AgentInboxDisposition> disposition =
-                ArgumentCaptor.forClass(AgentInboxDisposition.class);
-        verify(inboxService).complete(any(), disposition.capture(), anyLong());
-        assertEquals(AgentInboxDisposition.Type.DEAD, disposition.getValue().type());
-        assertEquals(AgentCommandRabbitConsumer.ACL_DENIED, disposition.getValue().errorCode());
+        consumer().consume(message(0), channel);
         verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
         verify(channel).basicAck(77L, false);
     }
 
     @Test
-    void websocketFailureCompletesRetryPublishesRawBytesThenAcks() throws Exception {
-        Message rabbit = message(0);
+    void aclResolverExceptionPublishesBeforeRetryCompletionAndAcks() throws Exception {
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
         when(accessService.resolveMemberAccess(any(), any(), any(), any()))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
-                .thenReturn(AgentRawCommandDispatchResult.sendFailed(1));
-        stubCompletion(token, AgentInboxDisposition.Type.RETRY);
+                .thenThrow(new IllegalStateException("temporary ACL database failure"));
         when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+        stubCompletion(token, AgentInboxDisposition.Type.RETRY);
 
-        consumer(allowedGate()).consume(rabbit, channel);
+        consumer().consume(message(0), channel);
 
         ArgumentCaptor<AgentInboxDisposition> disposition =
                 ArgumentCaptor.forClass(AgentInboxDisposition.class);
-        verify(inboxService).complete(any(), disposition.capture(), anyLong());
+        InOrder order = inOrder(publisher, inboxService, channel);
+        order.verify(publisher).publish(any(), anyLong());
+        order.verify(inboxService).complete(any(), disposition.capture(), anyLong());
+        order.verify(channel).basicAck(77L, false);
         assertEquals(AgentInboxDisposition.Type.RETRY, disposition.getValue().type());
-        assertEquals(NOW + 5_000L, disposition.getValue().nextRetryAt());
-        assertEquals(AgentCommandRabbitConsumer.WS_SEND_FAILED, disposition.getValue().errorCode());
+        assertEquals(AgentCommandRabbitConsumer.ACL_RESOLUTION_FAILED,
+                disposition.getValue().errorCode());
+        verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aclResolverRetryPublishFailureKeepsOriginalAndDoesNotWriteDeadOrRetry()
+            throws Exception {
+        AgentInboxClaimToken token = token();
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.acquired(token));
+        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("temporary ACL database failure"));
+        when(publisher.publish(any(), anyLong())).thenReturn(timeout());
+
+        consumer().consume(message(0), channel);
+
+        verify(inboxService, never()).complete(any(), any(), anyLong());
+        verify(channel).basicNack(77L, false, true);
+        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+    }
+
+    @Test
+    void websocketFailurePublishesBeforeRetryCompletionAndUsesRawBytes() throws Exception {
+        Message rabbit = message(0);
+        AgentInboxClaimToken token = token();
+        acquiredWritable(token);
+        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.sendFailed(2));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+        stubCompletion(token, AgentInboxDisposition.Type.RETRY);
+
+        consumer().consume(rabbit, channel);
+
         ArgumentCaptor<AgentConfirmedPublishRequest> retry =
                 ArgumentCaptor.forClass(AgentConfirmedPublishRequest.class);
-        verify(publisher).publish(retry.capture(), anyLong());
+        ArgumentCaptor<AgentInboxDisposition> disposition =
+                ArgumentCaptor.forClass(AgentInboxDisposition.class);
+        InOrder order = inOrder(publisher, inboxService, channel);
+        order.verify(publisher).publish(retry.capture(), anyLong());
+        order.verify(inboxService).complete(any(), disposition.capture(), anyLong());
+        order.verify(channel).basicAck(77L, false);
         assertArrayEquals(rabbit.getBody(), retry.getValue().wirePayload());
+        assertEquals(AgentInboxDisposition.Type.RETRY, disposition.getValue().type());
+        assertEquals(NOW + 5_000L, disposition.getValue().nextRetryAt());
+        assertEquals(AgentCommandRabbitConsumer.WS_SEND_FAILED,
+                disposition.getValue().errorCode());
+    }
+
+    @Test
+    void confirmedRetryAllowsAckWhenRetryCompletionThrowsOrReturnsMismatchedResult()
+            throws Exception {
+        AgentInboxClaimToken token = token();
+        acquiredWritable(token);
+        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.sendFailed(1));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+        when(inboxService.complete(any(), any(), anyLong()))
+                .thenThrow(new IllegalStateException("temporary completion failure"));
+
+        consumer().consume(message(0), channel);
+
+        verify(channel).basicAck(77L, false);
+        verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
+
+        org.mockito.Mockito.reset(
+                channel, inboxService, accessService, dispatcher, publisher);
+        acquiredWritable(token);
+        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.sendFailed(1));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+        when(inboxService.complete(any(), any(), anyLong()))
+                .thenReturn(result(token, "DEAD", "DEAD"));
+
+        consumer().consume(message(0), channel);
+
         verify(channel).basicAck(77L, false);
     }
 
     @Test
-    void retryPublishOrDurableCompletionFailureNacksWithoutHotRequeue() throws Exception {
+    void sentCompletionFailureParksAtLeaseLaneAndParkingFailureRequeuesWithoutResend()
+            throws Exception {
+        AgentInboxClaimToken token = token();
+        acquiredWritable(token);
+        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.sent(1, 1));
+        when(inboxService.complete(any(), any(), anyLong()))
+                .thenThrow(new IllegalStateException("temporary completion failure"));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(0), channel);
+
+        assertEquals(AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY,
+                capturedPublish().routingKey());
+        verify(channel).basicAck(77L, false);
+        verify(dispatcher, times(1)).dispatchExactRawCommand(any(), any(), any(), any(), any());
+
+        org.mockito.Mockito.reset(
+                channel, inboxService, accessService, dispatcher, publisher);
+        acquiredWritable(token);
+        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.sent(1, 1));
+        when(inboxService.complete(any(), any(), anyLong()))
+                .thenThrow(new IllegalStateException("temporary completion failure"));
+        when(publisher.publish(any(), anyLong())).thenReturn(timeout());
+
+        consumer().consume(message(0), channel);
+
+        verify(channel).basicNack(77L, false, true);
+        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+        verify(dispatcher, times(1)).dispatchExactRawCommand(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void offlineCompletionFailureCreatesRecoveryCopyAndDeadLettersOriginalWithoutHotRequeue()
+            throws Exception {
+        AgentInboxClaimToken token = token();
+        acquiredWritable(token);
+        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
+                .thenReturn(AgentRawCommandDispatchResult.offline());
+        when(inboxService.complete(any(), any(), anyLong()))
+                .thenThrow(new IllegalStateException("temporary completion failure"));
+        when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
+
+        consumer().consume(message(0), channel);
+
+        verify(publisher).publish(any(), anyLong());
+        verify(channel).basicNack(77L, false, false);
+        verify(channel, never()).basicNack(77L, false, true);
+        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+    }
+
+    @Test
+    void retryExhaustionForAclOrWebsocketIsAuditedDeadOnlyAfterExplicitMax()
+            throws Exception {
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
         when(accessService.resolveMemberAccess(any(), any(), any(), any()))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+                .thenThrow(new IllegalStateException("temporary ACL database failure"));
+        stubCompletion(token, AgentInboxDisposition.Type.DEAD);
+
+        consumer().consume(message(AgentCommandRabbitConsumer.MAX_SOURCE_SETTLEMENT_RETRIES),
+                channel);
+
+        ArgumentCaptor<AgentInboxDisposition> dead =
+                ArgumentCaptor.forClass(AgentInboxDisposition.class);
+        verify(inboxService).complete(any(), dead.capture(), anyLong());
+        assertEquals(AgentCommandRabbitConsumer.ACL_RESOLUTION_RETRY_EXHAUSTED,
+                dead.getValue().errorCode());
+        verify(publisher, never()).publish(any(), anyLong());
+        verify(channel).basicAck(77L, false);
+
+        org.mockito.Mockito.reset(
+                channel, inboxService, accessService, dispatcher, publisher);
+        acquiredWritable(token);
         when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
                 .thenReturn(AgentRawCommandDispatchResult.sendFailed(1));
-        stubCompletion(token, AgentInboxDisposition.Type.RETRY);
-        when(publisher.publish(any(), anyLong())).thenReturn(new AgentRabbitPublishResult(
-                AgentRabbitPublishResult.Type.TIMEOUT, "TIMEOUT", "NOT_RETURNED",
-                null, null, "RABBIT_CONFIRM_TIMEOUT"));
+        stubCompletion(token, AgentInboxDisposition.Type.DEAD);
 
-        consumer(allowedGate()).consume(message(0), channel);
+        consumer().consume(message(AgentCommandRabbitConsumer.MAX_SOURCE_SETTLEMENT_RETRIES),
+                channel);
 
-        verify(channel).basicNack(77L, false, false);
-        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
-
-        org.mockito.Mockito.reset(channel, inboxService, dispatcher, publisher, accessService);
-        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
-                .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-        when(dispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
-                .thenReturn(AgentRawCommandDispatchResult.sent(1, 1));
-        when(inboxService.complete(any(), any(), anyLong()))
-                .thenThrow(new IllegalStateException("simulated durable completion failure"));
-
-        consumer(allowedGate()).consume(message(0), channel);
-
-        verify(channel).basicNack(77L, false, false);
-        verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+        ArgumentCaptor<AgentInboxDisposition> wsDead =
+                ArgumentCaptor.forClass(AgentInboxDisposition.class);
+        verify(inboxService).complete(any(), wsDead.capture(), anyLong());
+        assertEquals(AgentCommandRabbitConsumer.WS_RETRY_EXHAUSTED,
+                wsDead.getValue().errorCode());
+        verify(publisher, never()).publish(any(), anyLong());
+        verify(channel).basicAck(77L, false);
     }
 
     @Test
@@ -274,13 +564,33 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
                 .getAnnotation(RabbitListener.class);
 
         assertEquals(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, listener.id());
-        assertEquals(List.of(AgentRabbitTopologyManifest.DISPATCH_QUEUE), List.of(listener.queues()));
+        assertEquals(List.of(AgentRabbitTopologyManifest.DISPATCH_QUEUE),
+                List.of(listener.queues()));
         assertEquals("agentCommandListenerContainerFactory", listener.containerFactory());
         ConditionalOnProperty gate = AgentCommandRabbitConsumer.class
                 .getAnnotation(ConditionalOnProperty.class);
         assertEquals("agent.rabbit-dispatch", gate.prefix());
         assertEquals(List.of("enabled"), List.of(gate.name()));
         assertEquals("true", gate.havingValue());
+    }
+
+    private AgentConfirmedPublishRequest capturedPublish() {
+        ArgumentCaptor<AgentConfirmedPublishRequest> retry =
+                ArgumentCaptor.forClass(AgentConfirmedPublishRequest.class);
+        verify(publisher).publish(retry.capture(),
+                eq(AgentCommandRabbitConsumer.CONFIRM_TIMEOUT_MILLIS));
+        return retry.getValue();
+    }
+
+    private void acquiredWritable(AgentInboxClaimToken token) {
+        when(inboxService.claim(any(), any(), anyLong(), anyLong()))
+                .thenReturn(AgentInboxClaim.acquired(token));
+        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+    }
+
+    private AgentCommandRabbitConsumer consumer() {
+        return consumer(allowedGate());
     }
 
     private AgentCommandRabbitConsumer consumer(AgentRabbitSafetyGate gate) {
@@ -312,21 +622,36 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     }
 
     private AgentInboxClaimToken token() {
+        return token(EXPIRES_AT);
+    }
+
+    private AgentInboxClaimToken token(long expiresAt) {
         return new AgentInboxClaimToken(
                 91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
-                "d05-test-consumer", NOW + AgentCommandRabbitConsumer.CLAIM_LEASE_MILLIS,
-                1, 0L, 1, 7L, EXPIRES_AT);
+                "d05-test-consumer",
+                Math.min(NOW + AgentCommandRabbitConsumer.CLAIM_LEASE_MILLIS, expiresAt),
+                1, 0L, 1, 7L, expiresAt);
+    }
+
+    private AgentRabbitPublishResult timeout() {
+        return new AgentRabbitPublishResult(
+                AgentRabbitPublishResult.Type.TIMEOUT, "TIMEOUT", "NOT_RETURNED",
+                null, null, "RABBIT_CONFIRM_TIMEOUT");
     }
 
     private Message message(int sourceRetry) {
-        byte[] body = wire().getBytes(StandardCharsets.UTF_8);
+        return message(sourceRetry, EXPIRES_AT);
+    }
+
+    private Message message(int sourceRetry, long expiresAt) {
+        byte[] body = wire(expiresAt).getBytes(StandardCharsets.UTF_8);
         AgentConfirmedPublishRequest request = new AgentConfirmedPublishRequest(
                 AgentRabbitTopologyManifest.MAIN_EXCHANGE,
                 AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY,
                 body, AgentCommandAmqpContract.sha256(body), "msg-1", "evt-1", 41L,
                 "cmd-1", "tenant-a", "client-a", "task-1", "agent-1",
-                AgentProtocolConstants.COMMAND_TASK_INVITE, 1, EXPIRES_AT,
+                AgentProtocolConstants.COMMAND_TASK_INVITE, 1, expiresAt,
                 MANIFEST.sha256(), sourceRetry);
         MessageProperties properties = new MessageProperties();
         properties.setContentType(AgentCommandAmqpContract.CONTENT_TYPE);
@@ -342,13 +667,14 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         return new Message(body, properties);
     }
 
-    private String wire() {
-        return """
-                {"schemaVersion":1,"messageType":"command.dispatch","messageId":"msg-1",\
-                "commandId":"cmd-1","tenantId":"tenant-a","clientId":"client-a",\
-                "taskId":"task-1","targetAgentId":"agent-1","commandType":"TASK_INVITE",\
-                "attempt":1,"expiresAt":2000000,"payload":{"instruction":"execute"}}
-                """.replace("\\\n", "").strip();
+    private String wire(long expiresAt) {
+        return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
+                + "\"messageId\":\"msg-1\",\"commandId\":\"cmd-1\","
+                + "\"tenantId\":\"tenant-a\",\"clientId\":\"client-a\","
+                + "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\","
+                + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,"
+                + "\"expiresAt\":" + expiresAt
+                + ",\"payload\":{\"instruction\":\"execute\"}}");
     }
 
     private AgentRabbitSafetyGate allowedGate() {

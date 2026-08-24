@@ -11,6 +11,7 @@ import cn.jia.agent.entity.AgentInboxDisposition;
 import cn.jia.agent.entity.AgentInboxIdentityConflictException;
 import cn.jia.agent.entity.AgentInboxMessage;
 import cn.jia.agent.entity.AgentInboxResult;
+import cn.jia.agent.entity.AgentInboxSourceNotSettledException;
 import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.service.AgentCommandInboxService;
@@ -30,6 +31,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.io.IOException;
 import java.time.Clock;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.LongSupplier;
@@ -41,14 +43,16 @@ public final class AgentCommandRabbitConsumer {
     static final long CLAIM_LEASE_MILLIS = 60_000L;
     static final long CONFIRM_TIMEOUT_MILLIS = 10_000L;
     static final long OFFLINE_RETRY_MILLIS = 30_000L;
-    static final int MAX_SOURCE_SETTLEMENT_RETRIES = 8;
+    static final int MAX_SOURCE_SETTLEMENT_RETRIES = 64;
+    static final int MAX_WIRE_SOURCE_SETTLEMENT_RETRY = 1_000;
 
     static final String ACL_DENIED = "TASK_MEMBER_ACCESS_DENIED";
     static final String ACL_RESOLUTION_FAILED = "TASK_MEMBER_ACCESS_RESOLUTION_FAILED";
+    static final String ACL_RESOLUTION_RETRY_EXHAUSTED = "ACL_RESOLUTION_RETRY_EXHAUSTED";
     static final String AGENT_OFFLINE = "AGENT_OFFLINE";
     static final String WS_SEND_FAILED = "WEBSOCKET_SEND_FAILED";
+    static final String WS_RETRY_EXHAUSTED = "WEBSOCKET_RETRY_EXHAUSTED";
     static final String WS_DISPATCH_REJECTED = "WEBSOCKET_DISPATCH_REJECTED";
-    static final String RETRY_WINDOW_CLOSED = "RETRY_WINDOW_CLOSED";
 
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandRabbitConsumer.class);
 
@@ -104,9 +108,11 @@ public final class AgentCommandRabbitConsumer {
             throw new IllegalArgumentException("Rabbit deliveryTag must be positive");
         }
 
+        DecodedAgentCommandMessage decoded = null;
         Settlement settlement;
         try {
-            settlement = process(message);
+            decoded = decoder.decode(message);
+            settlement = process(decoded);
         } catch (AgentCommandRabbitDecodeException invalid) {
             LOG.warn("Dropping invalid Agent command Rabbit message, reason={}",
                     invalid.reasonCode());
@@ -116,36 +122,47 @@ public final class AgentCommandRabbitConsumer {
                     safeReason(conflict.reasonCode()));
             settlement = Settlement.NACK_DROP;
         } catch (RuntimeException failure) {
-            LOG.warn("Fail-closed Agent command Rabbit consumption, reason={}",
+            LOG.warn("Parking transient Agent command Rabbit failure, reason={}",
                     safeFailureCode(failure));
-            settlement = Settlement.NACK_DROP;
+            settlement = decoded == null
+                    ? Settlement.NACK_REQUEUE
+                    : confirmedPark(decoded, 5_000L, LimitPolicy.FINAL_DEAD);
         }
 
-        if (settlement == Settlement.ACK) {
-            channel.basicAck(deliveryTag, false);
-        } else {
-            channel.basicNack(deliveryTag, false, false);
+        switch (settlement) {
+            case ACK -> channel.basicAck(deliveryTag, false);
+            case NACK_DROP -> channel.basicNack(deliveryTag, false, false);
+            case NACK_REQUEUE -> channel.basicNack(deliveryTag, false, true);
         }
     }
 
-    private Settlement process(Message rabbitMessage) {
-        DecodedAgentCommandMessage message = decoder.decode(rabbitMessage);
+    private Settlement process(DecodedAgentCommandMessage message) {
         if (!gate.allowsDispatch(message.tenantId(), message.clientId())) {
             return Settlement.NACK_DROP;
         }
 
         long claimNow = positiveNow();
-        AgentInboxClaim claim = inboxService.claim(new AgentInboxMessage(
-                        AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                        message.tenantId(), message.clientId(), message.messageId(),
-                        message.eventId(), message.commandId(), message.deliveryId(),
-                        message.rawWireBytes()),
-                leaseOwner, claimNow, CLAIM_LEASE_MILLIS);
-        if (claim == null) return Settlement.NACK_DROP;
+        AgentInboxClaim claim;
+        try {
+            claim = inboxService.claim(new AgentInboxMessage(
+                            AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                            message.tenantId(), message.clientId(), message.messageId(),
+                            message.eventId(), message.commandId(), message.deliveryId(),
+                            message.rawWireBytes()),
+                    leaseOwner, claimNow, CLAIM_LEASE_MILLIS);
+        } catch (AgentInboxSourceNotSettledException sourceRace) {
+            LOG.warn("Parking Agent command before source settlement, reason={}",
+                    safeReason(sourceRace.reasonCode()));
+            return confirmedPark(message, 5_000L, LimitPolicy.FINAL_DEAD);
+        }
+        if (claim == null) {
+            return confirmedPark(message, 5_000L, LimitPolicy.FINAL_DEAD);
+        }
         return switch (claim.kind()) {
-            case DISABLED -> Settlement.NACK_DROP;
+            case DISABLED -> Settlement.NACK_REQUEUE;
             case PRIOR_RESULT -> priorResultMatches(message, claim.priorResult())
-                    ? Settlement.ACK : Settlement.NACK_DROP;
+                    ? Settlement.ACK
+                    : confirmedPark(message, 5_000L, LimitPolicy.FINAL_DEAD);
             case IN_FLIGHT -> parkInFlight(message, claim.retryAfterMillis());
             case ACQUIRED -> dispatchAcquired(message, claim.token());
         };
@@ -153,13 +170,12 @@ public final class AgentCommandRabbitConsumer {
 
     private Settlement dispatchAcquired(
             DecodedAgentCommandMessage message, AgentInboxClaimToken token) {
-        if (!tokenMatches(message, token)) return Settlement.NACK_DROP;
+        if (!tokenMatches(message, token)) {
+            return confirmedPark(message, 5_000L, LimitPolicy.KEEP_ORIGINAL);
+        }
         long now = positiveNow();
         if (now >= token.expiresAt()) {
-            return complete(token,
-                    new AgentInboxDisposition(
-                            AgentInboxDisposition.Type.EXPIRED, null, "MESSAGE_EXPIRED"),
-                    now, "EXPIRED") ? Settlement.ACK : Settlement.NACK_DROP;
+            return completeExpired(token, now);
         }
 
         AgentTaskAccessLevel access;
@@ -168,10 +184,12 @@ public final class AgentCommandRabbitConsumer {
                     message.tenantId(), message.clientId(), message.taskId(),
                     message.targetAgentId());
         } catch (RuntimeException unavailable) {
-            return completeDead(token, ACL_RESOLUTION_FAILED);
+            return parkClaimedTransient(
+                    message, token, ACL_RESOLUTION_FAILED,
+                    ACL_RESOLUTION_RETRY_EXHAUSTED);
         }
         if (access == null || !access.canWrite()) {
-            return completeDead(token, ACL_DENIED);
+            return completeDead(message, token, ACL_DENIED);
         }
 
         assertNoDatabaseTransaction("WebSocket dispatch");
@@ -183,72 +201,175 @@ public final class AgentCommandRabbitConsumer {
         } catch (RuntimeException sendFailure) {
             dispatch = AgentRawCommandDispatchResult.sendFailed(1);
         }
-        if (dispatch == null) return completeDead(token, WS_DISPATCH_REJECTED);
+        if (dispatch == null) return completeDead(message, token, WS_DISPATCH_REJECTED);
         return switch (dispatch.status()) {
-            case SENT -> complete(token, AgentInboxDisposition.sent(), positiveNow(), "SENT")
-                    ? Settlement.ACK : Settlement.NACK_DROP;
-            case OFFLINE -> completeWaitingAgent(token);
-            case SEND_FAILED -> completeRetryAndPark(message, token);
-            case REJECTED -> completeDead(token, WS_DISPATCH_REJECTED);
+            case SENT -> completeSent(message, token);
+            case OFFLINE -> completeWaitingAgent(message, token);
+            case SEND_FAILED -> parkClaimedTransient(
+                    message, token, WS_SEND_FAILED, WS_RETRY_EXHAUSTED);
+            case REJECTED -> completeDead(message, token, WS_DISPATCH_REJECTED);
         };
     }
 
-    private Settlement completeWaitingAgent(AgentInboxClaimToken token) {
+    private Settlement completeSent(
+            DecodedAgentCommandMessage message, AgentInboxClaimToken token) {
+        long now = positiveNow();
+        if (tryComplete(token, AgentInboxDisposition.sent(), now, "SENT")) {
+            return Settlement.ACK;
+        }
+        return confirmedPark(
+                message, remainingLeaseDelay(token, now), LimitPolicy.KEEP_ORIGINAL);
+    }
+
+    private Settlement completeWaitingAgent(
+            DecodedAgentCommandMessage message, AgentInboxClaimToken token) {
         long now = positiveNow();
         Long retryAt = boundedRetryAt(now, token.expiresAt(), OFFLINE_RETRY_MILLIS);
-        if (retryAt == null) return completeDead(token, RETRY_WINDOW_CLOSED);
+        if (retryAt == null) return completeExpired(token, now);
         AgentInboxDisposition waiting = new AgentInboxDisposition(
                 AgentInboxDisposition.Type.WAITING_AGENT, retryAt, AGENT_OFFLINE);
-        return complete(token, waiting, now, "WAITING_AGENT")
-                ? Settlement.ACK : Settlement.NACK_DROP;
-    }
-
-    private Settlement completeRetryAndPark(
-            DecodedAgentCommandMessage message, AgentInboxClaimToken token) {
-        if (message.sourceSettlementRetry() >= MAX_SOURCE_SETTLEMENT_RETRIES) {
-            return completeDead(token, RETRY_WINDOW_CLOSED);
+        if (tryComplete(token, waiting, now, "WAITING_AGENT")) {
+            return Settlement.ACK;
         }
-        long now = positiveNow();
-        RetryLane lane = retryLane(5_000L, now, token.expiresAt());
-        if (lane == null) return completeDead(token, RETRY_WINDOW_CLOSED);
-        AgentInboxDisposition retry = new AgentInboxDisposition(
-                AgentInboxDisposition.Type.RETRY, now + lane.delayMillis(), WS_SEND_FAILED);
-        if (!complete(token, retry, now, "RETRY")) return Settlement.NACK_DROP;
-        return publishRetry(message, lane) ? Settlement.ACK : Settlement.NACK_DROP;
+        confirmedPark(message, remainingLeaseDelay(token, now), LimitPolicy.KEEP_ORIGINAL);
+        // Offline is the sole no-hot-requeue exception: a confirmed retry copy recovers the
+        // PROCESSING lease; otherwise Rabbit dead-letters the original as the durable copy.
+        return Settlement.NACK_DROP;
     }
 
-    private Settlement completeDead(AgentInboxClaimToken token, String errorCode) {
+    private Settlement parkClaimedTransient(
+            DecodedAgentCommandMessage message,
+            AgentInboxClaimToken token,
+            String retryError,
+            String exhaustedError) {
+        long now = positiveNow();
+        if (now >= token.expiresAt()) return completeExpired(token, now);
+        if (message.sourceSettlementRetry() >= MAX_SOURCE_SETTLEMENT_RETRIES) {
+            return completeDead(message, token, exhaustedError);
+        }
+        RetryLane lane = retryLane(5_000L, now, token.expiresAt());
+        if (lane == null) return Settlement.NACK_REQUEUE;
+        if (!tryPublishRetry(message, lane)) return Settlement.NACK_REQUEUE;
+
+        AgentInboxDisposition retry = new AgentInboxDisposition(
+                AgentInboxDisposition.Type.RETRY, now + lane.delayMillis(), retryError);
+        // Publish first: even if durable completion fails, the confirmed copy can lease-reclaim.
+        if (!tryComplete(token, retry, now, "RETRY")) {
+            LOG.warn("Confirmed Agent command retry retained after durable completion failure");
+        }
+        return Settlement.ACK;
+    }
+
+    private Settlement completeDead(
+            DecodedAgentCommandMessage message,
+            AgentInboxClaimToken token,
+            String errorCode) {
         long now = positiveNow();
         AgentInboxDisposition dead = new AgentInboxDisposition(
                 AgentInboxDisposition.Type.DEAD, null, errorCode);
-        return complete(token, dead, now, "DEAD")
-                ? Settlement.ACK : Settlement.NACK_DROP;
+        if (tryComplete(token, dead, now, "DEAD")) return Settlement.ACK;
+        return confirmedPark(
+                message, remainingLeaseDelay(token, now), LimitPolicy.KEEP_ORIGINAL);
+    }
+
+    private Settlement completeExpired(AgentInboxClaimToken token, long now) {
+        AgentInboxDisposition expired = new AgentInboxDisposition(
+                AgentInboxDisposition.Type.EXPIRED, null, "MESSAGE_EXPIRED");
+        return tryComplete(token, expired, now, "EXPIRED")
+                ? Settlement.ACK : Settlement.NACK_REQUEUE;
     }
 
     private Settlement parkInFlight(
             DecodedAgentCommandMessage message, Long retryAfterMillis) {
-        if (retryAfterMillis == null || retryAfterMillis <= 0
-                || message.sourceSettlementRetry() >= MAX_SOURCE_SETTLEMENT_RETRIES) {
-            return Settlement.NACK_DROP;
+        if (retryAfterMillis == null || retryAfterMillis <= 0) {
+            return Settlement.NACK_REQUEUE;
         }
-        long now = positiveNow();
-        RetryLane lane = retryLane(retryAfterMillis, now, message.expiresAt());
-        if (lane == null) return Settlement.NACK_DROP;
-        return publishRetry(message, lane) ? Settlement.ACK : Settlement.NACK_DROP;
+        return confirmedPark(message, retryAfterMillis, LimitPolicy.KEEP_ORIGINAL);
+    }
+
+    private Settlement confirmedPark(
+            DecodedAgentCommandMessage message,
+            long requestedDelayMillis,
+            LimitPolicy limitPolicy) {
+        long now;
+        try {
+            now = positiveNow();
+        } catch (RuntimeException unavailableClock) {
+            return Settlement.NACK_REQUEUE;
+        }
+        if (now >= message.expiresAt()) {
+            return limitPolicy == LimitPolicy.FINAL_DEAD && tryPublishDead(message)
+                    ? Settlement.ACK : Settlement.NACK_REQUEUE;
+        }
+        if (message.sourceSettlementRetry() >= MAX_SOURCE_SETTLEMENT_RETRIES
+                && limitPolicy == LimitPolicy.FINAL_DEAD) {
+            return tryPublishDead(message) ? Settlement.ACK : Settlement.NACK_REQUEUE;
+        }
+        for (RetryLane lane : retryLanes(
+                requestedDelayMillis, now, message.expiresAt())) {
+            if (tryPublishRetry(message, lane)) return Settlement.ACK;
+        }
+        return Settlement.NACK_REQUEUE;
+    }
+
+    private boolean tryPublishRetry(
+            DecodedAgentCommandMessage message, RetryLane lane) {
+        try {
+            return publishRetry(message, lane);
+        } catch (RuntimeException publishFailure) {
+            LOG.warn("Confirmed Agent command retry publish failed, reason={}",
+                    safeFailureCode(publishFailure));
+            return false;
+        }
     }
 
     private boolean publishRetry(DecodedAgentCommandMessage message, RetryLane lane) {
-        assertNoDatabaseTransaction("Rabbit retry publish");
+        if (message.sourceSettlementRetry() >= MAX_WIRE_SOURCE_SETTLEMENT_RETRY) {
+            return false;
+        }
+        return publish(message, lane.routingKey(), message.sourceSettlementRetry() + 1);
+    }
+
+    private boolean tryPublishDead(DecodedAgentCommandMessage message) {
+        try {
+            return publish(message, AgentRabbitTopologyManifest.DEAD_ROUTING_KEY,
+                    message.sourceSettlementRetry());
+        } catch (RuntimeException publishFailure) {
+            LOG.warn("Confirmed Agent command terminal parking failed, reason={}",
+                    safeFailureCode(publishFailure));
+            return false;
+        }
+    }
+
+    private boolean publish(
+            DecodedAgentCommandMessage message,
+            String routingKey,
+            int sourceSettlementRetry) {
+        assertNoDatabaseTransaction("Rabbit parking publish");
         AgentConfirmedPublishRequest request = new AgentConfirmedPublishRequest(
                 AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
-                lane.routingKey(), message.rawWireBytes(), message.wireSha256(),
+                routingKey, message.rawWireBytes(), message.wireSha256(),
                 message.messageId(), message.eventId(), message.deliveryId(),
                 message.commandId(), message.tenantId(), message.clientId(),
                 message.taskId(), message.targetAgentId(), message.commandType(),
                 message.activeAttempt(), message.expiresAt(), message.topologySha256(),
-                message.sourceSettlementRetry() + 1);
+                sourceSettlementRetry);
         AgentRabbitPublishResult result = publisher.publish(request, CONFIRM_TIMEOUT_MILLIS);
         return result != null && result.type() == AgentRabbitPublishResult.Type.ACK;
+    }
+
+    private boolean tryComplete(
+            AgentInboxClaimToken token,
+            AgentInboxDisposition disposition,
+            long now,
+            String expectedResultStatus) {
+        try {
+            return complete(token, disposition, now, expectedResultStatus);
+        } catch (RuntimeException completionFailure) {
+            LOG.warn("Agent command durable completion failed, reason={}",
+                    safeFailureCode(completionFailure));
+            return false;
+        }
     }
 
     private boolean complete(
@@ -272,7 +393,6 @@ public final class AgentCommandRabbitConsumer {
                 && result.processedAt() != null
                 && result.processedAt() > 0;
     }
-
 
     private String expectedInboxStatus(AgentInboxDisposition.Type type) {
         return type == AgentInboxDisposition.Type.SENT ? "PROCESSED" : type.name();
@@ -313,13 +433,36 @@ public final class AgentCommandRabbitConsumer {
     }
 
     private RetryLane retryLane(long requestedDelay, long now, long expiresAt) {
-        RetryLane lane = requestedDelay <= 5_000L
-                ? new RetryLane(5_000L, AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY)
-                : requestedDelay <= 30_000L
-                        ? new RetryLane(30_000L, AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY)
-                        : new RetryLane(300_000L, AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY);
-        Long retryAt = boundedRetryAt(now, expiresAt, lane.delayMillis());
-        return retryAt != null && retryAt == now + lane.delayMillis() ? lane : null;
+        List<RetryLane> lanes = retryLanes(requestedDelay, now, expiresAt);
+        return lanes.isEmpty() ? null : lanes.getFirst();
+    }
+
+    private List<RetryLane> retryLanes(long requestedDelay, long now, long expiresAt) {
+        List<RetryLane> candidates;
+        if (requestedDelay <= 5_000L) {
+            candidates = List.of(new RetryLane(
+                    5_000L, AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY));
+        } else if (requestedDelay <= 30_000L) {
+            candidates = List.of(
+                    new RetryLane(30_000L, AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY),
+                    new RetryLane(5_000L, AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY));
+        } else {
+            candidates = List.of(
+                    new RetryLane(300_000L, AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY),
+                    new RetryLane(30_000L, AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY),
+                    new RetryLane(5_000L, AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY));
+        }
+        return candidates.stream()
+                .filter(candidate -> laneFits(now, expiresAt, candidate.delayMillis()))
+                .toList();
+    }
+
+    private boolean laneFits(long now, long expiresAt, long delayMillis) {
+        try {
+            return Math.addExact(now, delayMillis) < expiresAt;
+        } catch (ArithmeticException overflow) {
+            return false;
+        }
     }
 
     private Long boundedRetryAt(long now, long expiresAt, long preferredDelay) {
@@ -331,6 +474,10 @@ public final class AgentCommandRabbitConsumer {
             return null;
         }
         return Math.min(preferred, expiresAt - 1);
+    }
+
+    private long remainingLeaseDelay(AgentInboxClaimToken token, long now) {
+        return Math.max(1L, token.leaseUntil() - now);
     }
 
     private long positiveNow() {
@@ -365,7 +512,9 @@ public final class AgentCommandRabbitConsumer {
                 ? simple : "RUNTIME_FAILURE";
     }
 
-    private enum Settlement { ACK, NACK_DROP }
+    private enum Settlement { ACK, NACK_DROP, NACK_REQUEUE }
+
+    private enum LimitPolicy { FINAL_DEAD, KEEP_ORIGINAL }
 
     private record RetryLane(long delayMillis, String routingKey) {
     }
