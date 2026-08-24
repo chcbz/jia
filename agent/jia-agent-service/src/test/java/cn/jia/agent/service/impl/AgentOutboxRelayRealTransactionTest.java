@@ -196,6 +196,85 @@ class AgentOutboxRelayRealTransactionTest {
     }
 
     @Test
+    void maxMinusTwoDoubleClaimHasOneWinnerAndLoserCannotQuarantineFreshLease()
+            throws Exception {
+        for (VersionMax max : VersionMax.values()) {
+            resetPendingRows();
+            long initialDeliveryVersion = 0L;
+            long initialOutboxVersion = 0L;
+            if (max != VersionMax.OUTBOX_ONLY) {
+                initialDeliveryVersion = Long.MAX_VALUE - 2;
+                jdbc.update("UPDATE agent_command_delivery SET version=?",
+                        initialDeliveryVersion);
+            }
+            if (max != VersionMax.DELIVERY_ONLY) {
+                initialOutboxVersion = Long.MAX_VALUE - 2;
+                jdbc.update("UPDATE agent_outbox_event SET version=?", initialOutboxVersion);
+            }
+            AgentOutboxCandidate oldHint = new AgentOutboxCandidate(
+                    1, "tenant-a", "client-a", 41, NOW,
+                    initialOutboxVersion, "PENDING");
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            List<AgentOutboxClaim> claims;
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<AgentOutboxClaim> first = executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return service(productionDao).claim(oldHint, "worker-a", NOW);
+                });
+                Future<AgentOutboxClaim> second = executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return service(productionDao).claim(oldHint, "worker-b", NOW);
+                });
+                assertEquals(true, ready.await(2, TimeUnit.SECONDS), max.name());
+                start.countDown();
+                claims = List.of(first.get(5, TimeUnit.SECONDS),
+                        second.get(5, TimeUnit.SECONDS));
+            }
+
+            assertEquals(1, claims.stream()
+                    .filter(claim -> claim.status() == AgentOutboxClaim.Status.ACQUIRED)
+                    .count(), max.name());
+            assertEquals(1, claims.stream()
+                    .filter(claim -> claim.status() == AgentOutboxClaim.Status.SKIPPED)
+                    .count(), max.name());
+            AgentOutboxClaim winner = claims.stream()
+                    .filter(claim -> claim.status() == AgentOutboxClaim.Status.ACQUIRED)
+                    .findFirst().orElseThrow();
+            long claimedDeliveryVersion = max == VersionMax.OUTBOX_ONLY
+                    ? 1L : Long.MAX_VALUE - 1;
+            long claimedOutboxVersion = max == VersionMax.DELIVERY_ONLY
+                    ? 1L : Long.MAX_VALUE - 1;
+            assertEquals("PENDING", string("SELECT status FROM agent_command_delivery"));
+            assertEquals("CLAIMED", string("SELECT status FROM agent_outbox_event"));
+            assertEquals(claimedDeliveryVersion,
+                    longValue("SELECT version FROM agent_command_delivery"));
+            assertEquals(claimedOutboxVersion,
+                    longValue("SELECT version FROM agent_outbox_event"));
+            assertEquals(null, stringOrNull("SELECT last_error FROM agent_command_delivery"));
+            assertEquals(null, stringOrNull("SELECT last_error FROM agent_outbox_event"));
+            assertEquals(1, integer("SELECT attempt_count FROM agent_outbox_event"));
+
+            assertEquals(AgentOutboxSettleResult.PUBLISHED,
+                    service(productionDao).settle(
+                            winner.token(), AgentRabbitPublishResult.ack(), NOW + 1),
+                    max.name());
+            assertEquals("PUBLISHED", string("SELECT status FROM agent_command_delivery"));
+            assertEquals("PUBLISHED", string("SELECT status FROM agent_outbox_event"));
+            assertEquals(max == VersionMax.OUTBOX_ONLY ? 2L : Long.MAX_VALUE,
+                    longValue("SELECT version FROM agent_command_delivery"));
+            assertEquals(max == VersionMax.DELIVERY_ONLY ? 2L : Long.MAX_VALUE,
+                    longValue("SELECT version FROM agent_outbox_event"));
+            assertEquals("ACK",
+                    string("SELECT publisher_confirm_status FROM agent_outbox_event"));
+            assertEquals("NOT_RETURNED",
+                    string("SELECT mandatory_return_status FROM agent_outbox_event"));
+        }
+    }
+
+    @Test
     void staleLeaseRepublishesByteExactIdentityAndOldCallbackIsStale() {
         AgentOutboxClaimToken first = service(productionDao)
                 .claim(candidate(), "worker-a", NOW).token();

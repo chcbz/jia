@@ -155,6 +155,14 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 || isTerminalOutbox(outbox.getStatus())) {
             return AgentOutboxClaim.skipped();
         }
+        // Discovery is an unlocked hint. Once another claimant advances status/version,
+        // this candidate is stale and must never mutate the winner's fresh lease.
+        if (candidateWasSupersededByFreshClaim(candidate, outbox, now)) {
+            return AgentOutboxClaim.skipped();
+        }
+        if (claimLaneNotYetEligible(outbox, now)) {
+            return AgentOutboxClaim.skipped();
+        }
         if (versionFenceCannotClaim(outbox)
                 || (safeAssociation(delivery, outbox) && versionFenceCannotClaim(delivery))) {
             quarantineBoth(delivery, outbox, VERSION_FENCE_EXHAUSTED, now);
@@ -178,14 +186,6 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                     AgentCommandTransportWriterImpl.DISPATCH_SCOPE_MARKER, now);
             return AgentOutboxClaim.skipped();
         }
-        // Discovery is an unlocked hint. A competing claimant may have moved a due/stale row.
-        if (("RETRY".equals(outbox.getStatus()) && outbox.getNextRetryAt() != null
-                && outbox.getNextRetryAt() > now)
-                || ("CLAIMED".equals(outbox.getStatus()) && outbox.getLeaseUntil() != null
-                && outbox.getLeaseUntil() > now)) {
-            return AgentOutboxClaim.skipped();
-        }
-
         String corruption = validateCommon(delivery, outbox);
         if (corruption == null) {
             corruption = validateLane(delivery, outbox, now);
@@ -582,8 +582,28 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     private static boolean corruptionCandidateMatches(
             AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox) {
         return candidateMatches(candidate, outbox)
-                && Objects.equals(outbox.getVersion(), candidate.outboxVersion())
+                && candidateFenceMatches(candidate, outbox);
+    }
+
+    private static boolean candidateFenceMatches(
+            AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox) {
+        return Objects.equals(outbox.getVersion(), candidate.outboxVersion())
                 && Objects.equals(outbox.getStatus(), candidate.outboxStatus());
+    }
+
+    private static boolean candidateWasSupersededByFreshClaim(
+            AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox, long now) {
+        return "CLAIMED".equals(outbox.getStatus())
+                && outbox.getLeaseUntil() != null && outbox.getLeaseUntil() > now
+                && !candidateFenceMatches(candidate, outbox);
+    }
+
+    private static boolean claimLaneNotYetEligible(
+            AgentOutboxEventEntity outbox, long now) {
+        return ("RETRY".equals(outbox.getStatus()) && outbox.getNextRetryAt() != null
+                && outbox.getNextRetryAt() > now)
+                || ("CLAIMED".equals(outbox.getStatus()) && outbox.getLeaseUntil() != null
+                && outbox.getLeaseUntil() > now);
     }
 
     private static boolean eligibleForDiscovery(AgentOutboxEventEntity outbox, long now) {

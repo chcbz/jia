@@ -455,6 +455,40 @@ class AgentOutboxRelayServiceImplTest {
     }
 
     @Test
+    void maxMinusTwoLoserCannotQuarantineFreshWinner() {
+        for (VersionMax max : VersionMax.values()) {
+            reset(dao);
+            stubMutationSuccess();
+            Fixture winner = claimed();
+            long candidateOutboxVersion = 0L;
+            if (max != VersionMax.OUTBOX_ONLY) {
+                winner.delivery.setVersion(Long.MAX_VALUE - 1);
+            }
+            if (max != VersionMax.DELIVERY_ONLY) {
+                winner.outbox.setVersion(Long.MAX_VALUE - 1);
+                candidateOutboxVersion = Long.MAX_VALUE - 2;
+            }
+            arrange(winner);
+            AgentOutboxCandidate loserHint = new AgentOutboxCandidate(
+                    1, "tenant-a", "client-a", 41, NOW,
+                    candidateOutboxVersion, "PENDING");
+
+            assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                    service.claim(loserHint, "lease-b", NOW).status(), max.name());
+
+            assertEquals("CLAIMED", winner.outbox.getStatus());
+            assertEquals("lease-a", winner.outbox.getLeaseOwner());
+            verify(dao, never()).quarantineDelivery(any(), anyString(), anyLong());
+            verify(dao, never()).quarantineOutbox(any(), anyString(), anyLong());
+            verify(dao, never()).disposeDelivery(any(), anyString(), any(), any(), anyLong());
+            verify(dao, never()).disposeOutbox(any(), anyString(), any(), anyString(), any(),
+                    any(), anyString(), any(), any(), any(), any(), any(), anyLong());
+            verify(dao, never()).claimDelivery(any(), anyString(), anyLong(), any(), anyLong());
+            verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+        }
+    }
+
+    @Test
     void claimQuarantinesMaxMinusOneToReserveSettlementIncrement() {
         for (VersionMax max : VersionMax.values()) {
             reset(dao);

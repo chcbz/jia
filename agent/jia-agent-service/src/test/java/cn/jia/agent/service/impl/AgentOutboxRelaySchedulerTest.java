@@ -33,6 +33,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -81,6 +82,46 @@ class AgentOutboxRelaySchedulerTest {
             verify(publisher, never()).publish(any(), anyLong());
             verify(relay, never()).settle(any(), any(), anyLong());
             assertEquals(0, scheduler.inflightCount());
+        } finally {
+            scheduler.stop();
+        }
+    }
+
+    @Test
+    void competingMaxMinusTwoHintsPublishOnlyTheWinningClaim() throws Exception {
+        AgentOutboxRelayService relay = mock(AgentOutboxRelayService.class);
+        AgentOutboxPublisher publisher = mock(AgentOutboxPublisher.class);
+        AgentRabbitTopologyReadiness readiness = notReady();
+        AgentOutboxRelayScheduler scheduler = new AgentOutboxRelayScheduler(
+                dispatchGate(), readiness, settings(), relay, publisher);
+        AgentOutboxCandidate oldHint = new AgentOutboxCandidate(
+                1, "tenant-a", "client-a", 41, 1, Long.MAX_VALUE - 2, "PENDING");
+        CountDownLatch published = new CountDownLatch(1);
+        CountDownLatch settled = new CountDownLatch(1);
+        when(publisher.publish(any(), anyLong())).thenAnswer(invocation -> {
+            published.countDown();
+            return AgentRabbitPublishResult.ack();
+        });
+        when(relay.settle(any(), any(), anyLong())).thenAnswer(invocation -> {
+            settled.countDown();
+            return AgentOutboxSettleResult.PUBLISHED;
+        });
+        try {
+            scheduler.start();
+            Thread.sleep(30);
+            when(relay.discover(anyLong(), anyInt())).thenReturn(List.of(oldHint, oldHint));
+            when(relay.claim(any(AgentOutboxCandidate.class), anyString(), anyLong()))
+                    .thenReturn(AgentOutboxClaim.acquired(token(1)), AgentOutboxClaim.skipped());
+            markReady(readiness);
+
+            scheduler.pollOnce();
+
+            assertTrue(published.await(1, TimeUnit.SECONDS));
+            assertTrue(settled.await(1, TimeUnit.SECONDS));
+            verify(relay, times(2)).claim(org.mockito.ArgumentMatchers.eq(oldHint),
+                    anyString(), anyLong());
+            verify(publisher, times(1)).publish(any(), anyLong());
+            verify(relay, times(1)).settle(any(), any(), anyLong());
         } finally {
             scheduler.stop();
         }
