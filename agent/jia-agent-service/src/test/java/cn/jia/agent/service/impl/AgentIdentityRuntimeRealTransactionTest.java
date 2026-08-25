@@ -398,12 +398,16 @@ class AgentIdentityRuntimeRealTransactionTest {
                 CREATE TABLE agent_persona_binding (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     jiacn VARCHAR_IGNORECASE(50) NOT NULL,
+                    owner_jiacn VARCHAR_IGNORECASE(50) GENERATED ALWAYS AS (jiacn),
                     persona_code VARCHAR_IGNORECASE(50) NOT NULL,
                     agent_id VARCHAR_IGNORECASE(100) NOT NULL,
                     bound_at BIGINT NOT NULL, status INT NOT NULL,
+                    active_persona_code VARCHAR_IGNORECASE(50) GENERATED ALWAYS AS
+                        (CASE WHEN status = 1 THEN persona_code ELSE NULL END),
                     create_time BIGINT, update_time BIGINT,
                     tenant_id VARCHAR_IGNORECASE(50), client_id VARCHAR_IGNORECASE(50),
-                    CONSTRAINT uk_a08_binding_persona UNIQUE (client_id, jiacn, persona_code)
+                    CONSTRAINT uk_a08_binding_persona
+                        UNIQUE (client_id, owner_jiacn, active_persona_code)
                 )
                 """);
         jdbc.execute("""
