@@ -25,7 +25,6 @@ import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
-import com.nimbusds.oauth2.sdk.AuthorizationRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -64,7 +63,6 @@ import java.util.stream.Collectors;
 @Slf4j
 @Controller
 @RequestMapping("/oauth")
-@SessionAttributes("authorizationRequest")
 @RequiredArgsConstructor
 public class OauthController {
     private final ClientService clientService;
@@ -515,15 +513,24 @@ public class OauthController {
      * @param model   模型数据
      * @return 访问确认视图
      */
-    @RequestMapping("/confirm_access")
-    public ModelAndView getAccessConfirmation(Map<String, Object> model) {
+    @GetMapping("/confirm_access")
+    public ModelAndView getAccessConfirmation(
+            @RequestParam("client_id") String clientId,
+            @RequestParam("state") String state,
+            @RequestParam(name = "scope", required = false, defaultValue = "") String scope) {
         log.info("进入访问确认页面");
-        AuthorizationRequest authorizationRequest = (AuthorizationRequest) model.get("authorizationRequest");
-        ModelAndView view = new ModelAndView();
-        view.setViewName("oauth/authorize");
-        view.addObject("clientId", authorizationRequest.getClientID());
-        view.addObject("scopes", authorizationRequest.getScope());
-        log.debug("访问确认页面，客户端ID: {}, 作用域: {}", authorizationRequest.getClientID(), authorizationRequest.getScope());
+        List<String> scopes = Arrays.stream(scope.trim().split("\\s+"))
+                .filter(item -> !item.isBlank())
+                .distinct()
+                .toList();
+        if (clientId.isBlank() || state.isBlank() || scopes.isEmpty()) {
+            throw new EsRuntimeException(EsErrorConstants.PARAMETER_INCORRECT);
+        }
+        ModelAndView view = new ModelAndView("oauth/authorize");
+        view.addObject("clientId", clientId);
+        view.addObject("state", state);
+        view.addObject("scopes", scopes);
+        log.debug("访问确认页面，客户端ID: {}, 作用域数量: {}", clientId, scopes.size());
         return view;
     }
 

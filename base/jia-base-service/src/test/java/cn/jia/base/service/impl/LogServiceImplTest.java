@@ -76,7 +76,8 @@ class LogServiceImplTest extends BaseMockTest {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/search");
         request.setQueryString("term=water+margin&PaSsWoRd=query-password-secret"
                 + "&code_verifier=query-code-secret&access_token=query-access-secret"
-                + "&api%5Fkey=query-api-secret&user%5Bpassword%5D=query-nested-password-secret");
+                + "&api%5Fkey=query-api-secret&user%5Bpassword%5D=query-nested-password-secret"
+                + "&credentials%5Bpassword%5D%5Braw%5D=query-deep-password-secret");
         setIdentity("Jia-B", "reader");
 
         LogEntity persisted = persist(request);
@@ -85,9 +86,30 @@ class LogServiceImplTest extends BaseMockTest {
         assertFalse(persisted.getUri().contains("?"));
         assertTrue(persisted.getParam().contains("water margin"));
         assertNoSecret(persisted, "query-password-secret", "query-code-secret", "query-access-secret",
-                "query-api-secret", "query-nested-password-secret");
+                "query-api-secret", "query-nested-password-secret", "query-deep-password-secret");
         assertFalse(persisted.getParam().toLowerCase(Locale.ROOT).contains("password"));
         assertFalse(persisted.getParam().toLowerCase(Locale.ROOT).contains("code_verifier"));
+    }
+
+    @Test
+    void sanitizesAuthorizationAndCookieNamesInQueryAndJsonBody() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/tasks");
+        request.setQueryString("safe=query-kept&Authorization=query-authorization-secret"
+                + "&Cookie=query-cookie-secret");
+        request.setContentType("application/json");
+        request.setContent(("{\"safe\":\"body-kept\","
+                + "\"Authorization\":\"json-authorization-secret\","
+                + "\"Cookie\":\"json-cookie-secret\","
+                + "\"credentials[password][raw]\":\"json-deep-password-secret\"}")
+                .getBytes(StandardCharsets.UTF_8));
+        setIdentity("Jia-B2", "reader");
+
+        LogEntity persisted = persist(request);
+
+        assertTrue(persisted.getParam().contains("query-kept"));
+        assertTrue(persisted.getParam().contains("body-kept"));
+        assertNoSecret(persisted, "query-authorization-secret", "query-cookie-secret",
+                "json-authorization-secret", "json-cookie-secret", "json-deep-password-secret");
     }
 
     @Test
@@ -131,7 +153,11 @@ class LogServiceImplTest extends BaseMockTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/login", "/oauth2/token", "/oauth2/authorize", "/oauth/confirm_access"})
+    @ValueSource(strings = {
+            "/login", "/oauth2/token", "/oauth2/authorize", "/oauth/confirm_access",
+            "/oauth2/device_authorization", "/oauth2/device_verification", "/oauth2/introspect",
+            "/oauth2/revoke", "/connect/logout", "/userinfo"
+    })
     void suppressesAllParametersOnExactCredentialEndpoints(String uri) throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", uri);
         request.setQueryString("safe=query-value&code=credential-query-secret");
@@ -160,6 +186,64 @@ class LogServiceImplTest extends BaseMockTest {
         assertEquals("/jia/oauth2/token", persisted.getUri());
         assertNull(persisted.getParam());
         assertNoSecret(persisted, "context-code-secret", "context-client-secret");
+    }
+
+    @Test
+    void suppressesTokenEndpointWithMatrixParameters() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/oauth2/token;jsessionid=ABC123");
+        request.setContentType("application/x-www-form-urlencoded");
+        request.setContent("code=matrix-code-secret&client_secret=matrix-client-secret"
+                .getBytes(StandardCharsets.UTF_8));
+        setIdentity("Jia-E3", "alice");
+
+        LogEntity persisted = persist(request);
+
+        assertNull(persisted.getParam());
+        assertNoSecret(persisted, "matrix-code-secret", "matrix-client-secret");
+    }
+
+    @Test
+    void suppressesCredentialEndpointBehindContextPathAndMatrixParameters() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/jia;jsessionid=CTX/oauth2/token;route=blue");
+        request.setContextPath("/jia");
+        request.setContentType("application/x-www-form-urlencoded");
+        request.setContent("code=context-matrix-code-secret&client_secret=context-matrix-client-secret"
+                .getBytes(StandardCharsets.UTF_8));
+        setIdentity("Jia-E4", "alice");
+
+        LogEntity persisted = persist(request);
+
+        assertNull(persisted.getParam());
+        assertNoSecret(persisted, "context-matrix-code-secret", "context-matrix-client-secret");
+    }
+
+    @Test
+    void suppressesLogoutIdTokenHint() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/connect/logout");
+        request.setQueryString("id_token_hint=logout-id-token-secret&post_logout_redirect_uri=https%3A%2F%2Fclient.example%2Fdone");
+        setIdentity("Jia-E5", "alice");
+
+        LogEntity persisted = persist(request);
+
+        assertNull(persisted.getParam());
+        assertNoSecret(persisted, "logout-id-token-secret");
+    }
+
+    @Test
+    void preservesPostLogoutRedirectUriAndLongOrdinaryIdentifiersOutsideCredentialEndpoints() throws Exception {
+        String ordinaryIdentifier = "ordinaryoperationreference0000000000000000000000";
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/profile/preferences");
+        request.setQueryString("post_logout_redirect_uri=https%3A%2F%2Fclient.example%2Fsigned-out"
+                + "&reference=" + ordinaryIdentifier);
+        setIdentity("Jia-E6", "alice");
+
+        LogEntity persisted = persist(request);
+
+        assertTrue(persisted.getParam().contains("post_logout_redirect_uri"));
+        assertTrue(persisted.getParam().contains("client.example"));
+        assertTrue(persisted.getParam().contains(ordinaryIdentifier));
+        assertFalse(persisted.getParam().contains(REDACTED_CREDENTIAL));
     }
 
     @Test

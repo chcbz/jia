@@ -26,7 +26,9 @@ import java.util.regex.Pattern;
 public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implements LogService {
     private static final String REDACTED_CREDENTIAL = "[REDACTED_CREDENTIAL]";
     private static final Set<String> CREDENTIAL_ENDPOINTS = Set.of(
-            "/login", "/oauth2/token", "/oauth2/authorize", "/oauth/confirm_access"
+            "/login", "/oauth2/token", "/oauth2/authorize", "/oauth/confirm_access",
+            "/oauth2/device_authorization", "/oauth2/device_verification", "/oauth2/introspect",
+            "/oauth2/revoke", "/connect/logout", "/userinfo"
     );
     private static final Set<String> SENSITIVE_HEADER_NAMES = Set.of(
             "authorization", "proxyauthorization", "xauthorization", "xforwardedauthorization",
@@ -37,12 +39,14 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
             "password", "passwd", "pwd", "code", "authorizationcode", "devicecode", "usercode",
             "codeverifier", "accesstoken", "refreshtoken", "idtoken", "token", "clientsecret",
             "clientassertion", "apikey", "xapikey", "secret", "credential", "otp", "totp", "smscode",
-            "verificationcode", "openid", "weixinid", "phone", "mobile"
+            "verificationcode", "openid", "weixinid", "phone", "mobile",
+            "authorization", "proxyauthorization", "cookie", "setcookie", "idtokenhint",
+            "state", "nonce", "bearer"
     );
     private static final List<Pattern> CREDENTIAL_VALUE_PATTERNS = List.of(
             Pattern.compile("(?i)wx(?:-|%2d)[A-Za-z0-9_-]{6,128}"),
             Pattern.compile("(?i)mb(?:-|%2d)\\+?[0-9_-]{6,32}"),
-            Pattern.compile("(?i)o[A-Za-z0-9_-]{19,63}"),
+            Pattern.compile("(?<![A-Za-z0-9_-])o[A-Za-z0-9_-]{27}(?![A-Za-z0-9_-])"),
             Pattern.compile("(?<!\\d)(?:\\+?86[- ]?)?1[3-9]\\d{9}(?!\\d)")
     );
 
@@ -114,14 +118,18 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
     }
 
     private boolean isCredentialEndpoint(EsRequestWrapper request) {
-        String requestUri = request.getRequestURI();
-        String contextPath = request.getContextPath();
+        String requestUri = stripMatrixParameters(request.getRequestURI());
+        String contextPath = stripMatrixParameters(request.getContextPath());
         if (contextPath != null && !contextPath.isEmpty() && requestUri != null
                 && requestUri.startsWith(contextPath)
                 && (requestUri.length() == contextPath.length() || requestUri.charAt(contextPath.length()) == '/')) {
             requestUri = requestUri.substring(contextPath.length());
         }
         return CREDENTIAL_ENDPOINTS.contains(requestUri);
+    }
+
+    private String stripMatrixParameters(String path) {
+        return path == null ? null : path.replaceAll(";[^/]*", "");
     }
 
     private Map<String, Object> sanitizeServletParameters(EsRequestWrapper request) {
@@ -207,12 +215,18 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
     }
 
     private boolean isSensitiveParameter(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
         if (SENSITIVE_PARAMETER_NAMES.contains(normalizeName(name))) {
             return true;
         }
-        int separator = Math.max(name == null ? -1 : name.lastIndexOf('.'),
-                Math.max(name == null ? -1 : name.lastIndexOf('['), name == null ? -1 : name.lastIndexOf('/')));
-        return separator >= 0 && SENSITIVE_PARAMETER_NAMES.contains(normalizeName(name.substring(separator + 1)));
+        for (String segment : name.split("[.\\[\\]/]+")) {
+            if (SENSITIVE_PARAMETER_NAMES.contains(normalizeName(segment))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String mediaType(String contentType) {

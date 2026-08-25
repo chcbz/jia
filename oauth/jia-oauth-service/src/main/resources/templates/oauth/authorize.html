@@ -38,9 +38,10 @@
 					<p>昵称，头像和性别</p>
 					授权后表明你已同意 <a href="#boot" style="color: #E9686B">OAUTH-BOOT 服务协议</a>
 					<form class="s_from" method="post" action="/oauth2/authorize">
-						<input type="hidden" name="user_oauth_approval" value="true"/>
+						<input type="hidden" name="client_id" th:value="${clientId}"/>
+						<input type="hidden" name="state" th:value="${state}"/>
 						<div th:each="item:${scopes}">
-							<input type="radio" th:name="'scope.'+${item}" value="true" hidden="hidden" checked="checked"/>
+							<input type="checkbox" name="scope" th:value="${item}" hidden="hidden" checked="checked"/>
 						</div>
 						<div class="last">
 							<button class="pull-left btn btn-large btn-primary" type="submit"> 同意/授权</button>
