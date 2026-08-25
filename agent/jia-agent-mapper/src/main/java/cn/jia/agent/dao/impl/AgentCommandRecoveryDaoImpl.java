@@ -26,8 +26,8 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
 
     @Override
     public List<AgentWaitingCommandCandidate> findDueCandidates(
-            long now, long afterDeliveryId, int limit) {
-        return mapper.selectDueCandidates(now, afterDeliveryId, limit);
+            long now, long sentBefore, long afterDeliveryId, int limit) {
+        return mapper.selectDueCandidates(now, sentBefore, afterDeliveryId, limit);
     }
 
     @Override
@@ -49,6 +49,13 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
     }
 
     @Override
+    public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int previousAttempt) {
+        return mapper.selectPreviousAttemptOutboxesForUpdate(
+                tenantId, clientId, deliveryId, previousAttempt);
+    }
+
+    @Override
     public AgentConsumerInboxEntity lockInbox(
             String tenantId, String clientId, String consumerName, String messageId) {
         return mapper.selectInboxForUpdate(tenantId, clientId, consumerName, messageId);
@@ -59,6 +66,18 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
             String requestedBy, String reason, String lastError, long now) {
         return mapper.reissueDelivery(delivery, newMessageId, delivery.getActiveMessageId(),
                 requestedBy, reason, lastError, now);
+    }
+
+    @Override
+    public int expireDelivery(
+            AgentCommandDeliveryEntity delivery, String lastError, long now) {
+        return mapper.expireDelivery(delivery, lastError, now);
+    }
+
+    @Override
+    public int expireWaitingInbox(
+            AgentConsumerInboxEntity inbox, String lastError, long now) {
+        return mapper.expireWaitingInbox(inbox, lastError, now);
     }
 
     @Override

@@ -5,5 +5,10 @@ public record AgentWaitingCommandCandidate(
         long deliveryId,
         String tenantId,
         String clientId,
-        String targetAgentId) {
+        String targetAgentId,
+        boolean expiryCandidate) {
+    public AgentWaitingCommandCandidate(
+            long deliveryId, String tenantId, String clientId, String targetAgentId) {
+        this(deliveryId, tenantId, clientId, targetAgentId, false);
+    }
 }

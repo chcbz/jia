@@ -24,6 +24,9 @@ class AgentCommandRecoveryMapperContractTest {
         }
         String due = sql("selectDueCandidates");
         assertTrue(due.contains("next_retry_at<=#{now}"));
+        assertTrue(due.contains("status='sent'"));
+        assertTrue(due.contains("update_time<=#{sentbefore}"));
+        assertTrue(due.contains("expires_at<=#{now}"));
         assertTrue(due.contains("id>#{afterdeliveryid}"));
         assertFalse(due.contains("for update"));
     }
@@ -32,7 +35,8 @@ class AgentCommandRecoveryMapperContractTest {
     void locksFollowDeliveryOutboxInboxAndUseExactPredicates() throws Exception {
         for (String method : new String[] {
                 "selectDeliveryForUpdate", "selectDeliveryByCommandForUpdate",
-                "selectActiveOutboxesForUpdate", "selectInboxForUpdate"}) {
+                "selectActiveOutboxesForUpdate", "selectPreviousAttemptOutboxesForUpdate",
+                "selectInboxForUpdate"}) {
             String sql = sql(method);
             assertTrue(sql.endsWith("for update"), method + ": " + sql);
             assertBinary(sql, "tenant_id");
@@ -41,6 +45,9 @@ class AgentCommandRecoveryMapperContractTest {
         assertBinary(sql("selectDeliveryByCommandForUpdate"), "command_id");
         assertBinary(sql("selectActiveOutboxesForUpdate"), "message_id");
         assertTrue(sql("selectActiveOutboxesForUpdate").contains("limit 2"));
+        String previous = sql("selectPreviousAttemptOutboxesForUpdate");
+        assertTrue(previous.contains("active_attempt=#{previousattempt}"));
+        assertTrue(previous.contains("limit 2"));
         assertBinary(sql("selectInboxForUpdate"), "consumer_name");
         assertBinary(sql("selectInboxForUpdate"), "message_id");
     }
@@ -51,7 +58,7 @@ class AgentCommandRecoveryMapperContractTest {
         for (String token : new String[] {
                 "version=#{delivery.version}", "active_message_id=#{delivery.activemessageid}",
                 "active_attempt=#{delivery.activeattempt}", "attempt_count=#{delivery.attemptcount}",
-                "next_retry_at=#{delivery.nextretryat}", "status='waiting_agent'"}) {
+                "#{delivery.nextretryat}", "status=#{delivery.status}"}) {
             assertTrue(reissue.contains(token), token + ": " + reissue);
         }
         assertFalse(reissue.contains("command_payload="));
@@ -63,6 +70,26 @@ class AgentCommandRecoveryMapperContractTest {
                 "active_attempt=#{delivery.activeattempt}", "status=#{delivery.status}"}) {
             assertTrue(ack.contains(token), token + ": " + ack);
         }
+    }
+
+    @Test
+    void expiryMutationsFenceBothDeliveryAndWaitingInbox() throws Exception {
+        String delivery = sql("expireDelivery");
+        for (String token : new String[] {"version=#{delivery.version}",
+                "active_message_id=#{delivery.activemessageid}",
+                "active_attempt=#{delivery.activeattempt}", "status=#{delivery.status}"}) {
+            assertTrue(delivery.contains(token), token + ": " + delivery);
+        }
+        String inbox = sql("expireWaitingInbox");
+        for (String token : new String[] {"version=#{inbox.version}",
+                "active_attempt=#{inbox.activeattempt}", "status='waiting_agent'",
+                "result_status='waiting_agent'"}) {
+            assertTrue(inbox.contains(token), token + ": " + inbox);
+        }
+        assertBinary(inbox, "tenant_id");
+        assertBinary(inbox, "client_id");
+        assertBinary(inbox, "consumer_name");
+        assertBinary(inbox, "message_id");
     }
 
     @Test

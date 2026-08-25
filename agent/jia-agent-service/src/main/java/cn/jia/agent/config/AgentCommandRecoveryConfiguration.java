@@ -29,9 +29,10 @@ public class AgentCommandRecoveryConfiguration {
             AgentRabbitSafetyGate gate,
             AgentRawCommandDispatcher dispatcher,
             @Qualifier("agentRabbitTopologyManifest") AgentRabbitTopologyManifest manifest,
+            @Qualifier("agentCommandReissueSettings") AgentCommandReissueSettings settings,
             PlatformTransactionManager transactionManager) {
         return new AgentCommandReissueServiceImpl(
-                dao, gate, dispatcher, manifest, transactionManager);
+                dao, gate, dispatcher, manifest, settings.sentAckTimeoutMillis(), transactionManager);
     }
 
     @Bean

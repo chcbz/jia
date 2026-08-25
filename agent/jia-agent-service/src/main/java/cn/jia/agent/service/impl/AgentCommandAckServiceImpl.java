@@ -65,10 +65,11 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 ack.tenantId(), ack.clientId(), delivery.getId(), delivery.getActiveMessageId());
         if (rows == null || rows.size() != 1) throw rejected("ACK_ACTIVE_OUTBOX_CARDINALITY");
         AgentOutboxEventEntity outbox = rows.getFirst();
+        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery);
         AgentConsumerInboxEntity inbox = dao.lockInbox(
                 ack.tenantId(), ack.clientId(), AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 delivery.getActiveMessageId());
-        validateSentSource(delivery, outbox, inbox);
+        validateSentSource(ack, delivery, outbox, previousAttempts, inbox, now);
 
         String current = delivery.getStatus();
         if (ack.ackStatus().equals(current)) {
@@ -126,16 +127,35 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || delivery.getVersion() == null || delivery.getVersion() < 0
                 || delivery.getExpiresAt() == null
                 || delivery.getLeaseOwner() != null || delivery.getLeaseUntil() != null
-                || !Set.of("SENT", "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "REJECTED")
-                        .contains(delivery.getStatus())) {
+                || !Set.of("CONSUMED", "SENT", "RECEIVED", "STARTED",
+                        "SUCCEEDED", "FAILED", "REJECTED").contains(delivery.getStatus())) {
             throw rejected("ACK_DELIVERY_IDENTITY_INVALID");
         }
     }
 
     private void validateSentSource(
+            AgentCommandAck ack,
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
-            AgentConsumerInboxEntity inbox) {
+            List<AgentOutboxEventEntity> previousAttempts,
+            AgentConsumerInboxEntity inbox,
+            long now) {
+        boolean fastReceivedLane = Set.of("CONSUMED", "RECEIVED").contains(delivery.getStatus())
+                && "RECEIVED".equals(ack.ackStatus())
+                && inbox != null && "PROCESSING".equals(inbox.getStatus())
+                && inbox.getResultStatus() == null
+                && inbox.getProcessedAt() == null
+                && exact(inbox.getLeaseOwner(), 100)
+                && inbox.getLeaseUntil() != null && inbox.getLeaseUntil() > now
+                && now < delivery.getExpiresAt()
+                && delivery.getNextRetryAt() == null && delivery.getLastError() == null
+                && inbox.getNextRetryAt() == null && inbox.getLastError() == null;
+        boolean settledSentLane = !"CONSUMED".equals(delivery.getStatus())
+                && inbox != null && "PROCESSED".equals(inbox.getStatus())
+                && "SENT".equals(inbox.getResultStatus())
+                && inbox.getProcessedAt() != null && inbox.getProcessedAt() > 0
+                && inbox.getNextRetryAt() == null && inbox.getLeaseOwner() == null
+                && inbox.getLeaseUntil() == null && inbox.getLastError() == null;
         if (outbox == null || inbox == null
                 || outbox.getId() == null || outbox.getId() <= 0
                 || inbox.getId() == null || inbox.getId() <= 0
@@ -169,21 +189,17 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || !outbox.getEventId().equals(inbox.getEventId())
                 || !delivery.getCommandId().equals(inbox.getCommandId())
                 || !Objects.equals(delivery.getId(), inbox.getDeliveryId())
-                || !"PROCESSED".equals(inbox.getStatus())
+                || (!fastReceivedLane && !settledSentLane)
                 || inbox.getAttemptCount() == null || inbox.getAttemptCount() <= 0
                 || inbox.getActiveAttempt() == null
                 || !inbox.getActiveAttempt().equals(inbox.getAttemptCount())
                 || inbox.getVersion() == null || inbox.getVersion() < 0
-                || !"SENT".equals(inbox.getResultStatus())
-                || inbox.getProcessedAt() == null || inbox.getProcessedAt() <= 0
-                || inbox.getNextRetryAt() != null || inbox.getLeaseOwner() != null
-                || inbox.getLeaseUntil() != null || inbox.getLastError() != null
                 || !Objects.equals(inbox.getExpiresAt(), delivery.getExpiresAt())
                 || !Arrays.equals(outbox.getWirePayload(), inbox.getWirePayload())
                 || !hashEquals(outbox.getWirePayloadHash(), inbox.getWirePayloadHash())
                 || !storedHash(outbox.getWirePayload(), outbox.getWirePayloadHash())
                 || !storedHash(inbox.getWirePayload(), inbox.getWirePayloadHash())
-                || !validReplayAudit(delivery, outbox, inbox)) {
+                || !validReplayAudit(delivery, outbox, previousAttempts, inbox)) {
             throw rejected("ACK_SOURCE_PROVENANCE_INVALID");
         }
         AgentCommandDraft draft;
@@ -213,6 +229,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
     private boolean validReplayAudit(
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
+            List<AgentOutboxEventEntity> previousAttempts,
             AgentConsumerInboxEntity inbox) {
         if (inbox.getReplayParentMessageId() != null
                 || inbox.getReplayRequesterId() != null
@@ -220,17 +237,23 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || inbox.getReplayReason() != null) {
             return false;
         }
-        return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
-                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
-                delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
-                delivery.getReplayApproverId(), delivery.getReplayReason(),
-                outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
-                outbox.getReplayApproverId(), outbox.getReplayReason());
+        return AgentCommandAutomaticReplayProvenance.validImmediateParent(
+                delivery, outbox, previousAttempts);
+    }
+
+    private List<AgentOutboxEventEntity> lockPreviousAttempts(
+            AgentCommandDeliveryEntity delivery) {
+        if (delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 1) {
+            return List.of();
+        }
+        return dao.lockPreviousAttemptOutboxes(
+                delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
+                delivery.getActiveAttempt() - 1);
     }
 
     private String expectedNext(String current, String requested) {
         return switch (current) {
+            case "CONSUMED" -> "RECEIVED".equals(requested) ? requested : null;
             case "SENT" -> Set.of("RECEIVED", "REJECTED").contains(requested) ? requested : null;
             case "RECEIVED" -> Set.of("STARTED", "REJECTED").contains(requested) ? requested : null;
             case "STARTED" -> Set.of("SUCCEEDED", "FAILED", "REJECTED").contains(requested)
@@ -241,7 +264,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
 
     private void validateVersionCapacity(String current, long version) {
         long maximum = switch (current) {
-            case "SENT" -> Long.MAX_VALUE - 3;
+            case "CONSUMED", "SENT" -> Long.MAX_VALUE - 3;
             case "RECEIVED" -> Long.MAX_VALUE - 2;
             case "STARTED" -> Long.MAX_VALUE - 1;
             default -> -1;

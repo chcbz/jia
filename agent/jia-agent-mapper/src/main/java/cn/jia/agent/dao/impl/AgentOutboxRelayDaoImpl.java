@@ -43,6 +43,13 @@ public class AgentOutboxRelayDaoImpl implements AgentOutboxRelayDao {
     }
 
     @Override
+    public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int previousAttempt) {
+        return mapper.selectPreviousAttemptOutboxesForUpdate(
+                tenantId, clientId, deliveryId, previousAttempt);
+    }
+
+    @Override
     public AgentOutboxEventEntity lockOutboxForQuarantine(AgentOutboxCandidate candidate) {
         return mapper.selectOutboxForQuarantine(
                 candidate.outboxId(), candidate.deliveryId(), candidate.outboxVersion(),

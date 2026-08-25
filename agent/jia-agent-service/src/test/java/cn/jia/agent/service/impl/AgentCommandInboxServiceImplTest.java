@@ -321,7 +321,7 @@ class AgentCommandInboxServiceImplTest {
                     () -> service(dao, enabledGate())
                             .claim(message(dao.outbox.getWirePayload()), "worker-a", NOW, LEASE));
 
-            assertEquals(List.of("delivery", "outbox"), dao.operations);
+            assertEquals(List.of("delivery", "outbox", "previous"), dao.operations);
             assertEquals(null, dao.inbox);
             assertEquals("PUBLISHED", dao.delivery.getStatus());
             assertEquals(0L, dao.delivery.getVersion());
@@ -349,7 +349,7 @@ class AgentCommandInboxServiceImplTest {
             assertThrows(AgentInboxIdentityConflictException.class,
                     () -> service.claim(sourceMessage, "worker-b", NOW + 2, LEASE));
 
-            assertEquals(List.of("delivery", "outbox"), List.copyOf(
+            assertEquals(List.of("delivery", "outbox", "previous"), List.copyOf(
                     dao.operations.subList(operationCount, dao.operations.size())));
             assertEquals("SENT", dao.delivery.getStatus());
             assertEquals(deliveryVersion, dao.delivery.getVersion());
@@ -375,7 +375,7 @@ class AgentCommandInboxServiceImplTest {
             assertThrows(AgentInboxIdentityConflictException.class,
                     () -> service.complete(token, AgentInboxDisposition.sent(), NOW + 1));
 
-            assertEquals(List.of("delivery", "outbox", "inbox"), List.copyOf(
+            assertEquals(List.of("delivery", "outbox", "previous", "inbox"), List.copyOf(
                     dao.operations.subList(operationCount, dao.operations.size())));
             assertEquals("CONSUMED", dao.delivery.getStatus());
             assertEquals(deliveryVersion, dao.delivery.getVersion());
@@ -385,13 +385,52 @@ class AgentCommandInboxServiceImplTest {
     }
 
     @Test
+    void immediateParentIsRequiredOnFirstExistingAndCompletionPaths() {
+        RecordingDao first = automaticReplay(new RecordingDao(), "agent-1", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        first.previousAttempts = List.of();
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(first, enabledGate()).claim(
+                        message(first.outbox.getWirePayload()), "worker-a", NOW, LEASE));
+        assertEquals(null, first.inbox);
+        assertEquals("PUBLISHED", first.delivery.getStatus());
+
+        RecordingDao existing = automaticReplay(new RecordingDao(), "agent-1", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        AgentCommandInboxServiceImpl existingService = service(existing, enabledGate());
+        AgentInboxMessage existingMessage = message(existing.outbox.getWirePayload());
+        AgentInboxClaimToken existingToken = existingService
+                .claim(existingMessage, "worker-a", NOW, LEASE).token();
+        existingService.complete(existingToken, AgentInboxDisposition.sent(), NOW + 1);
+        existing.previousAttempts = List.of();
+        long existingVersion = existing.delivery.getVersion();
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> existingService.claim(existingMessage, "worker-b", NOW + 2, LEASE));
+        assertEquals(existingVersion, existing.delivery.getVersion());
+
+        RecordingDao completion = automaticReplay(new RecordingDao(), "agent-1", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        AgentCommandInboxServiceImpl completionService = service(completion, enabledGate());
+        AgentInboxClaimToken token = completionService.claim(
+                message(completion.outbox.getWirePayload()), "worker-a", NOW, LEASE).token();
+        completion.previousAttempts.getFirst().setMessageId("non-immediate-parent");
+        long completionVersion = completion.delivery.getVersion();
+        long inboxVersion = completion.inbox.getVersion();
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> completionService.complete(token, AgentInboxDisposition.sent(), NOW + 1));
+        assertEquals(completionVersion, completion.delivery.getVersion());
+        assertEquals(inboxVersion, completion.inbox.getVersion());
+        assertEquals("PROCESSING", completion.inbox.getStatus());
+    }
+
+    @Test
     void attemptTwoMissingAuditFailsClosedOnFirstExistingAndCompletionPaths() {
         RecordingDao first = new RecordingDao();
         setTransportAttempt(first, 2);
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> service(first, enabledGate()).claim(
                         message(first.outbox.getWirePayload()), "worker-a", NOW, LEASE));
-        assertEquals(List.of("delivery", "outbox"), first.operations);
+        assertEquals(List.of("delivery", "outbox", "previous"), first.operations);
         assertEquals(null, first.inbox);
         assertEquals("PUBLISHED", first.delivery.getStatus());
 
@@ -409,7 +448,7 @@ class AgentCommandInboxServiceImplTest {
         long existingInboxVersion = existing.inbox.getVersion();
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> existingService.claim(existingMessage, "worker-b", NOW + 2, LEASE));
-        assertEquals(List.of("delivery", "outbox"), List.copyOf(
+        assertEquals(List.of("delivery", "outbox", "previous"), List.copyOf(
                 existing.operations.subList(existingOperations, existing.operations.size())));
         assertEquals(existingDeliveryVersion, existing.delivery.getVersion());
         assertEquals(existingInboxVersion, existing.inbox.getVersion());
@@ -427,7 +466,7 @@ class AgentCommandInboxServiceImplTest {
         assertThrows(AgentInboxIdentityConflictException.class,
                 () -> completionService.complete(
                         completionToken, AgentInboxDisposition.sent(), NOW + 1));
-        assertEquals(List.of("delivery", "outbox", "inbox"), List.copyOf(
+        assertEquals(List.of("delivery", "outbox", "previous", "inbox"), List.copyOf(
                 completion.operations.subList(completionOperations, completion.operations.size())));
         assertEquals(completionDeliveryVersion, completion.delivery.getVersion());
         assertEquals(completionInboxVersion, completion.inbox.getVersion());
@@ -893,7 +932,7 @@ class AgentCommandInboxServiceImplTest {
                     () -> service(invalid, enabledGate())
                             .claim(message(invalid.outbox.getWirePayload()),
                                     "worker-a", NOW, LEASE));
-            assertEquals(List.of("delivery", "outbox"), invalid.operations);
+            assertEquals(List.of("delivery", "outbox", "previous"), invalid.operations);
             assertEquals(null, invalid.inbox);
         }
     }
@@ -924,6 +963,28 @@ class AgentCommandInboxServiceImplTest {
         dao.outbox.setActiveAttempt(attempt).setWirePayload(wire).setWirePayloadHash(wireHash);
         if (dao.inbox != null) {
             dao.inbox.setWirePayload(wire).setWirePayloadHash(wireHash);
+        }
+        if (attempt > 1) {
+            byte[] parentWire = new String(wire(dao.delivery.getExpiresAt()),
+                    java.nio.charset.StandardCharsets.UTF_8)
+                    .replace("\"messageId\":\"msg-1\"",
+                            "\"messageId\":\"msg-parent\"")
+                    .replace("\"attempt\":1", "\"attempt\":" + (attempt - 1))
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            var route = cn.jia.agent.config.AgentRabbitTopologyManifest.canonical()
+                    .defaultCommandPublishRoute();
+            AgentOutboxEventEntity parent = new AgentOutboxEventEntity()
+                    .setId(1L).setEventId("evt-parent").setMessageId("msg-parent")
+                    .setCommandId("cmd-1").setDeliveryId(1L)
+                    .setAggregateType("task").setAggregateId("task-1")
+                    .setDestination(route.destination()).setRoutingKey(route.routingKey())
+                    .setWirePayload(parentWire).setWirePayloadHash(sha256(parentWire))
+                    .setStatus("PUBLISHED").setAttemptCount(1).setActiveAttempt(attempt - 1)
+                    .setExpiresAt(dao.delivery.getExpiresAt()).setPublisherConfirmStatus("ACK")
+                    .setConfirmedAt(NOW - 20).setMandatoryReturnStatus("NOT_RETURNED")
+                    .setPublishedAt(NOW - 19).setVersion(1L);
+            parent.setTenantId("tenant-a"); parent.setClientId("client-a");
+            dao.previousAttempts = List.of(parent);
         }
     }
 
@@ -991,6 +1052,7 @@ class AgentCommandInboxServiceImplTest {
         private AgentCommandDeliveryEntity delivery;
         private AgentOutboxEventEntity outbox;
         private AgentConsumerInboxEntity inbox;
+        private List<AgentOutboxEventEntity> previousAttempts = List.of();
         private int accesses;
 
         private RecordingDao() {
@@ -1010,10 +1072,13 @@ class AgentCommandInboxServiceImplTest {
                     .setExpiresAt(expiresAt).setLastError(null).setVersion(0L);
             delivery.setTenantId("tenant-a");
             delivery.setClientId("client-a");
+            var route = cn.jia.agent.config.AgentRabbitTopologyManifest.canonical()
+                    .defaultCommandPublishRoute();
             outbox = new AgentOutboxEventEntity()
                     .setId(2L).setEventId("evt-1").setMessageId("msg-1")
                     .setCommandId("cmd-1").setDeliveryId(1L)
                     .setAggregateType("task").setAggregateId("task-1")
+                    .setDestination(route.destination()).setRoutingKey(route.routingKey())
                     .setWirePayload(wire).setWirePayloadHash(sha256(wire))
                     .setStatus("PUBLISHED").setAttemptCount(1).setNextRetryAt(null)
                     .setLeaseOwner(null).setLeaseUntil(null).setActiveAttempt(1)
@@ -1035,6 +1100,13 @@ class AgentCommandInboxServiceImplTest {
             accessed("outbox");
             return exact(tenantId, clientId) && Objects.equals(outbox.getEventId(), eventId)
                     ? outbox : null;
+        }
+
+        @Override
+        public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+                String tenantId, String clientId, long deliveryId, int previousAttempt) {
+            accessed("previous");
+            return previousAttempts;
         }
 
         @Override

@@ -8,6 +8,8 @@ import cn.jia.agent.mapper.AgentCommandInboxMapper;
 import jakarta.inject.Named;
 import lombok.RequiredArgsConstructor;
 
+import java.util.List;
+
 @Named
 @RequiredArgsConstructor
 public class AgentCommandInboxDaoImpl implements AgentCommandInboxDao {
@@ -21,6 +23,13 @@ public class AgentCommandInboxDaoImpl implements AgentCommandInboxDao {
     @Override
     public AgentOutboxEventEntity lockOutbox(String tenantId, String clientId, String eventId) {
         return mapper.selectOutboxForUpdate(tenantId, clientId, eventId);
+    }
+
+    @Override
+    public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int previousAttempt) {
+        return mapper.selectPreviousAttemptOutboxesForUpdate(
+                tenantId, clientId, deliveryId, previousAttempt);
     }
 
     @Override

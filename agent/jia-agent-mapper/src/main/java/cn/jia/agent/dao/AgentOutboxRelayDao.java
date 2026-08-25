@@ -17,6 +17,9 @@ public interface AgentOutboxRelayDao {
 
     AgentOutboxEventEntity lockOutbox(String tenantId, String clientId, long outboxId);
 
+    List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int previousAttempt);
+
     AgentOutboxEventEntity lockOutboxForQuarantine(AgentOutboxCandidate candidate);
 
     int claimDelivery(

@@ -28,12 +28,15 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Supplier;
 
-/** D06 sole WAITING_AGENT reissue path. It never performs Rabbit or WebSocket network I/O in a transaction. */
+/** D06 sole WAITING_AGENT/SENT recovery path. It never performs Rabbit or WebSocket network I/O in a transaction. */
 public final class AgentCommandReissueServiceImpl implements AgentCommandReissueService {
     public static final String REASON_AGENT_RECONNECT = "AGENT_RECONNECT";
     public static final String REASON_SCHEDULER = "WAITING_AGENT_SCHEDULER";
     public static final String REQUESTER_SCHEDULER = "SYSTEM_SCHEDULER";
     public static final String AGENT_OFFLINE = AgentCommandRabbitConsumer.AGENT_OFFLINE;
+    public static final String SENT_ACK_TIMEOUT = "SENT_ACK_TIMEOUT";
+    public static final String MESSAGE_EXPIRED = AgentCommandInboxServiceImpl.MESSAGE_EXPIRED;
+    private static final long DEFAULT_SENT_ACK_TIMEOUT_MILLIS = 30_000L;
     // Reserve all remaining delivery mutations: D06 reissue, D03 claim+settle,
     // D07 claim+complete, and A06 ACK RECEIVED+STARTED+terminal.
     private static final long MAX_SAFE_REISSUE_VERSION = Long.MAX_VALUE - 8;
@@ -45,6 +48,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private final AgentRabbitTopologyManifest.PublishRoute route;
     private final TransactionTemplate transaction;
     private final Supplier<UUID> uuidSupplier;
+    private final long sentAckTimeoutMillis;
 
     public AgentCommandReissueServiceImpl(
             AgentCommandRecoveryDao dao,
@@ -52,7 +56,19 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             AgentRawCommandDispatcher dispatcher,
             AgentRabbitTopologyManifest manifest,
             PlatformTransactionManager transactionManager) {
-        this(dao, gate, dispatcher, manifest, transactionManager, UUID::randomUUID);
+        this(dao, gate, dispatcher, manifest, DEFAULT_SENT_ACK_TIMEOUT_MILLIS,
+                transactionManager, UUID::randomUUID);
+    }
+
+    public AgentCommandReissueServiceImpl(
+            AgentCommandRecoveryDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher,
+            AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis,
+            PlatformTransactionManager transactionManager) {
+        this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis,
+                transactionManager, UUID::randomUUID);
     }
 
     AgentCommandReissueServiceImpl(
@@ -62,11 +78,27 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             AgentRabbitTopologyManifest manifest,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
+        this(dao, gate, dispatcher, manifest, DEFAULT_SENT_ACK_TIMEOUT_MILLIS,
+                transactionManager, uuidSupplier);
+    }
+
+    AgentCommandReissueServiceImpl(
+            AgentCommandRecoveryDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher,
+            AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis,
+            PlatformTransactionManager transactionManager,
+            Supplier<UUID> uuidSupplier) {
         this.dao = Objects.requireNonNull(dao, "dao");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
         this.route = Objects.requireNonNull(manifest, "manifest").defaultCommandPublishRoute();
         this.uuidSupplier = Objects.requireNonNull(uuidSupplier, "uuidSupplier");
+        if (sentAckTimeoutMillis < 1_000L || sentAckTimeoutMillis > 3_600_000L) {
+            throw new IllegalArgumentException("sentAckTimeoutMillis is out of range");
+        }
+        this.sentAckTimeoutMillis = sentAckTimeoutMillis;
         this.transaction = new TransactionTemplate(
                 Objects.requireNonNull(transactionManager, "transactionManager"));
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
@@ -93,9 +125,11 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         validateScan(limit, now);
         if (afterDeliveryId < 0) throw new IllegalArgumentException("afterDeliveryId must be non-negative");
         if (!isDispatchState()) return new AgentCommandReissueScanResult(0, 0, afterDeliveryId);
-        List<AgentWaitingCommandCandidate> candidates = dao.findDueCandidates(now, afterDeliveryId, limit);
+        long sentBefore = now > sentAckTimeoutMillis ? now - sentAckTimeoutMillis : 0L;
+        List<AgentWaitingCommandCandidate> candidates = dao.findDueCandidates(
+                now, sentBefore, afterDeliveryId, limit);
         if (candidates.isEmpty() && afterDeliveryId > 0) {
-            candidates = dao.findDueCandidates(now, 0, limit);
+            candidates = dao.findDueCandidates(now, sentBefore, 0, limit);
         }
         return process(candidates, REQUESTER_SCHEDULER, REASON_SCHEDULER, true, now);
     }
@@ -114,8 +148,10 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             cursor = Math.max(cursor, candidate.deliveryId());
             if (!validCandidate(candidate)
                     || !allows(candidate.tenantId(), candidate.clientId())
-                    || !dispatcher.isExactAgentConnected(
-                            candidate.tenantId(), candidate.clientId(), candidate.targetAgentId())) {
+                    || (!candidate.expiryCandidate()
+                        && !dispatcher.isExactAgentConnected(
+                                candidate.tenantId(), candidate.clientId(),
+                                candidate.targetAgentId()))) {
                 continue;
             }
             try {
@@ -143,18 +179,19 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         AgentCommandDeliveryEntity delivery = dao.lockDelivery(
                 candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
         if (delivery == null || !candidate.targetAgentId().equals(delivery.getTargetAgentId())) return false;
-        validateWaitingDelivery(delivery, requireDue, now);
+        validateRecoverableDelivery(delivery, requireDue, now);
 
         List<AgentOutboxEventEntity> activeRows = dao.lockActiveOutboxes(
                 delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
                 delivery.getActiveMessageId());
         if (activeRows == null || activeRows.size() != 1) throw conflict("ACTIVE_OUTBOX_CARDINALITY");
         AgentOutboxEventEntity sourceOutbox = activeRows.getFirst();
+        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery);
 
         AgentConsumerInboxEntity sourceInbox = dao.lockInbox(
                 delivery.getTenantId(), delivery.getClientId(),
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, delivery.getActiveMessageId());
-        validateSource(delivery, sourceOutbox, sourceInbox);
+        validateSource(delivery, sourceOutbox, sourceInbox, previousAttempts);
 
         AgentCommandDraft draft;
         try {
@@ -173,6 +210,16 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || !hashEquals(AgentCommandCanonicalCodec.sha256(sourceWire),
                         sourceOutbox.getWirePayloadHash())) {
             throw conflict("SOURCE_WIRE_CANONICAL_DRIFT");
+        }
+
+        if (now >= delivery.getExpiresAt()) {
+            expireLocked(delivery, sourceInbox, now);
+            return false;
+        }
+        if (requireDue && "SENT".equals(delivery.getStatus())) {
+            Long updatedAt = delivery.getUpdateTime();
+            long sentBefore = now > sentAckTimeoutMillis ? now - sentAckTimeoutMillis : 0L;
+            if (updatedAt == null || updatedAt <= 0 || updatedAt > sentBefore) return false;
         }
 
         int nextAttempt;
@@ -241,35 +288,69 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         return true;
     }
 
-    private void validateWaitingDelivery(
+    private void validateRecoverableDelivery(
             AgentCommandDeliveryEntity delivery, boolean requireDue, long now) {
+        boolean waiting = "WAITING_AGENT".equals(delivery.getStatus());
+        boolean sent = "SENT".equals(delivery.getStatus());
+        boolean expiryValid = delivery.getExpiresAt() != null && delivery.getExpiresAt() > 0;
+        boolean waitingShape = waiting && expiryValid
+                && delivery.getNextRetryAt() != null && delivery.getNextRetryAt() > 0
+                && delivery.getNextRetryAt() < delivery.getExpiresAt()
+                && (!requireDue || delivery.getNextRetryAt() <= now)
+                && AGENT_OFFLINE.equals(delivery.getLastError());
+        boolean sentShape = sent && expiryValid
+                && delivery.getNextRetryAt() == null
+                && delivery.getLastError() == null
+                && delivery.getUpdateTime() != null && delivery.getUpdateTime() > 0;
         if (!exact(delivery.getTenantId(), 50) || !exact(delivery.getClientId(), 50)
                 || delivery.getId() == null || delivery.getId() <= 0
                 || !exact(delivery.getCommandId(), 100) || !exact(delivery.getTaskId(), 100)
                 || !exact(delivery.getTargetAgentId(), 100)
                 || !AgentProtocolConstants.COMMAND_TASK_INVITE.equals(delivery.getCommandType())
-                || !"WAITING_AGENT".equals(delivery.getStatus())
+                || (!waitingShape && !sentShape)
                 || delivery.getAttemptCount() == null || delivery.getAttemptCount() <= 0
                 || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
                 || !delivery.getAttemptCount().equals(delivery.getActiveAttempt())
-                || delivery.getActiveAttempt() == Integer.MAX_VALUE
+                || (now < delivery.getExpiresAt()
+                    && delivery.getActiveAttempt() == Integer.MAX_VALUE)
                 || !exact(delivery.getActiveMessageId(), 100)
-                || delivery.getNextRetryAt() == null || delivery.getNextRetryAt() <= 0
-                || delivery.getExpiresAt() == null || now >= delivery.getExpiresAt()
-                || delivery.getNextRetryAt() >= delivery.getExpiresAt()
-                || (requireDue && delivery.getNextRetryAt() > now)
+                || delivery.getExpiresAt() == null || delivery.getExpiresAt() <= 0
                 || delivery.getLeaseOwner() != null || delivery.getLeaseUntil() != null
-                || !AGENT_OFFLINE.equals(delivery.getLastError())
                 || delivery.getVersion() == null || delivery.getVersion() < 0
-                || delivery.getVersion() > MAX_SAFE_REISSUE_VERSION) {
-            throw conflict("WAITING_DELIVERY_SHAPE_INVALID");
+                || delivery.getVersion() > (now >= delivery.getExpiresAt()
+                    ? Long.MAX_VALUE - 1 : MAX_SAFE_REISSUE_VERSION)) {
+            throw conflict("RECOVERABLE_DELIVERY_SHAPE_INVALID");
         }
+    }
+
+    private List<AgentOutboxEventEntity> lockPreviousAttempts(
+            AgentCommandDeliveryEntity delivery) {
+        if (delivery.getActiveAttempt() == 1) return List.of();
+        return dao.lockPreviousAttemptOutboxes(
+                delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
+                delivery.getActiveAttempt() - 1);
     }
 
     private void validateSource(
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
-            AgentConsumerInboxEntity inbox) {
+            AgentConsumerInboxEntity inbox,
+            List<AgentOutboxEventEntity> previousAttempts) {
+        boolean waiting = "WAITING_AGENT".equals(delivery.getStatus());
+        boolean waitingInbox = waiting
+                && "WAITING_AGENT".equals(inbox == null ? null : inbox.getStatus())
+                && "WAITING_AGENT".equals(inbox.getResultStatus())
+                && inbox.getNextRetryAt() != null
+                && inbox.getNextRetryAt().equals(delivery.getNextRetryAt())
+                && inbox.getProcessedAt() != null && inbox.getProcessedAt() > 0
+                && inbox.getNextRetryAt() > inbox.getProcessedAt()
+                && AGENT_OFFLINE.equals(inbox.getLastError());
+        boolean sentInbox = "SENT".equals(delivery.getStatus())
+                && "PROCESSED".equals(inbox == null ? null : inbox.getStatus())
+                && "SENT".equals(inbox.getResultStatus())
+                && inbox.getNextRetryAt() == null
+                && inbox.getProcessedAt() != null && inbox.getProcessedAt() > 0
+                && inbox.getLastError() == null;
         if (outbox == null || inbox == null
                 || outbox.getId() == null || outbox.getId() <= 0
                 || inbox.getId() == null || inbox.getId() <= 0
@@ -304,43 +385,47 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || !Objects.equals(delivery.getId(), inbox.getDeliveryId())
                 || !Arrays.equals(outbox.getWirePayload(), inbox.getWirePayload())
                 || !hashEquals(outbox.getWirePayloadHash(), inbox.getWirePayloadHash())
-                || !"WAITING_AGENT".equals(inbox.getStatus())
-                || !"WAITING_AGENT".equals(inbox.getResultStatus())
+                || (!waitingInbox && !sentInbox)
                 || inbox.getAttemptCount() == null || inbox.getAttemptCount() <= 0
                 || inbox.getActiveAttempt() == null
                 || !inbox.getActiveAttempt().equals(inbox.getAttemptCount())
-                || inbox.getNextRetryAt() == null
-                || !inbox.getNextRetryAt().equals(delivery.getNextRetryAt())
                 || inbox.getLeaseOwner() != null || inbox.getLeaseUntil() != null
                 || !Objects.equals(inbox.getExpiresAt(), delivery.getExpiresAt())
-                || inbox.getProcessedAt() == null || inbox.getProcessedAt() <= 0
-                || inbox.getNextRetryAt() <= inbox.getProcessedAt()
-                || !AGENT_OFFLINE.equals(inbox.getLastError())
                 || inbox.getVersion() == null || inbox.getVersion() < 0
                 || inbox.getReplayParentMessageId() != null
                 || inbox.getReplayRequesterId() != null
                 || inbox.getReplayApproverId() != null
                 || inbox.getReplayReason() != null) {
-            throw conflict("WAITING_SOURCE_PROVENANCE_INVALID");
+            throw conflict("RECOVERABLE_SOURCE_PROVENANCE_INVALID");
         }
         if (!storedHash(outbox.getWirePayload(), outbox.getWirePayloadHash())
                 || !storedHash(inbox.getWirePayload(), inbox.getWirePayloadHash())) {
-            throw conflict("WAITING_SOURCE_HASH_INVALID");
+            throw conflict("RECOVERABLE_SOURCE_HASH_INVALID");
         }
-        if (!validReplayAudit(delivery, outbox)) {
-            throw conflict("WAITING_SOURCE_REPLAY_AUDIT_INVALID");
+        if (!AgentCommandAutomaticReplayProvenance.validImmediateParent(
+                delivery, outbox, previousAttempts)) {
+            throw conflict("RECOVERABLE_SOURCE_REPLAY_PARENT_INVALID");
         }
     }
 
-    private boolean validReplayAudit(
-            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
-        return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
-                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
-                delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
-                delivery.getReplayApproverId(), delivery.getReplayReason(),
-                outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
-                outbox.getReplayApproverId(), outbox.getReplayReason());
+    private void expireLocked(
+            AgentCommandDeliveryEntity delivery, AgentConsumerInboxEntity inbox, long now) {
+        boolean waiting = "WAITING_AGENT".equals(delivery.getStatus());
+        if (delivery.getVersion() == Long.MAX_VALUE
+                || (waiting && inbox.getVersion() == Long.MAX_VALUE)) {
+            throw conflict("EXPIRY_VERSION_EXHAUSTED");
+        }
+        requireOne(dao.expireDelivery(delivery, MESSAGE_EXPIRED, now),
+                "delivery expiry");
+        if (waiting) {
+            requireOne(dao.expireWaitingInbox(inbox, MESSAGE_EXPIRED, now),
+                    "waiting Inbox expiry");
+        }
+    }
+
+    private void requireOne(int rows, String operation) {
+        if (rows != 1) throw new IllegalStateException(
+                operation + " returned " + rows + " rows; expected 1");
     }
 
     private void validateDraftMatches(AgentCommandDeliveryEntity delivery, AgentCommandDraft draft) {

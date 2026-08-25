@@ -86,6 +86,9 @@ class AgentOutboxRelayMapperContractTest {
     void rowLocksAreSeparateDeliveryThenOutboxPrimitivesWithExactScope() throws Exception {
         assertLock("selectDeliveryForUpdate");
         assertLock("selectOutboxForUpdate");
+        assertLock("selectPreviousAttemptOutboxesForUpdate");
+        assertTrue(sql(method("selectPreviousAttemptOutboxesForUpdate"))
+                .contains("active_attempt=#{previousattempt}"));
     }
 
     @Test

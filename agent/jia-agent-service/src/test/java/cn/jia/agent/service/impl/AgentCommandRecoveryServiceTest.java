@@ -214,6 +214,83 @@ class AgentCommandRecoveryServiceTest {
     }
 
     @Test
+    void sentRecoveryUsesReconnectImmediatelyAndSchedulerOnlyAfterAckTimeout() {
+        RecordingDao reconnect = sentDao();
+        reconnect.delivery.setUpdateTime(NOW - 1);
+        assertEquals(1, reissue(reconnect, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertEquals(M1, reconnect.parentMessageId);
+        assertEquals(COMMAND_ID, reconnect.inserted.getCommandId());
+        assertNotEquals(M1, reconnect.inserted.getMessageId());
+
+        RecordingDao fresh = sentDao();
+        fresh.delivery.setUpdateTime(NOW - 1);
+        assertEquals(0, reissue(fresh, new PresenceDispatcher(true))
+                .reissueDue(10, 0, NOW).reissued());
+        assertFalse(fresh.operations.contains("reissue"));
+
+        RecordingDao stale = sentDao();
+        stale.delivery.setUpdateTime(NOW - 30_001L);
+        assertEquals(1, reissue(stale, new PresenceDispatcher(true))
+                .reissueDue(10, 0, NOW).reissued());
+        assertEquals(AgentCommandReissueServiceImpl.REQUESTER_SCHEDULER,
+                stale.inserted.getReplayRequesterId());
+    }
+
+    @Test
+    void expiredWaitingIsAtomicallyTerminalizedWithoutRegisteredPresence() {
+        RecordingDao expired = waitingDao();
+        AgentCommandReissueScanResult result = reissue(
+                expired, new PresenceDispatcher(false)).reissueDue(10, 0, EXPIRES);
+
+        assertEquals(1, result.examined());
+        assertEquals(0, result.reissued());
+        assertEquals("EXPIRED", expired.delivery.getStatus());
+        assertEquals("EXPIRED", expired.inbox.getStatus());
+        assertEquals("EXPIRED", expired.inbox.getResultStatus());
+        assertEquals(List.of("delivery", "outbox", "inbox",
+                "expireDelivery", "expireInbox"), expired.operations);
+        assertEquals(null, expired.inserted);
+    }
+
+    @Test
+    void expiredSentIsTerminalizedWithoutReplayAndPreservesSentInboxEvidence() {
+        RecordingDao expired = sentDao();
+        AgentCommandReissueScanResult result = reissue(
+                expired, new PresenceDispatcher(false)).reissueDue(10, 0, EXPIRES);
+
+        assertEquals(1, result.examined());
+        assertEquals(0, result.reissued());
+        assertEquals("EXPIRED", expired.delivery.getStatus());
+        assertEquals("PROCESSED", expired.inbox.getStatus());
+        assertEquals("SENT", expired.inbox.getResultStatus());
+        assertTrue(expired.operations.contains("expireDelivery"));
+        assertFalse(expired.operations.contains("expireInbox"));
+        assertEquals(null, expired.inserted);
+    }
+
+    @Test
+    void replayParentMustExistAndBeTheImmediatePriorTransportAttempt() {
+        RecordingDao nonexistent = waitingDao();
+        setTransportAttempt(nonexistent, 2);
+        replayAudit(nonexistent, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        nonexistent.previousAttempts = List.of();
+        assertEquals(0, reissue(nonexistent, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertFalse(nonexistent.operations.contains("reissue"));
+
+        RecordingDao skipped = waitingDao();
+        setTransportAttempt(skipped, 3);
+        replayAudit(skipped, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        skipped.previousAttempts.getFirst().setActiveAttempt(1);
+        assertEquals(0, reissue(skipped, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertFalse(skipped.operations.contains("reissue"));
+    }
+
+    @Test
     void schedulerRequiresDueAndReturnsFairnessCursor() {
         RecordingDao dao = waitingDao();
         dao.delivery.setNextRetryAt(NOW + 1);
@@ -422,6 +499,46 @@ class AgentCommandRecoveryServiceTest {
     }
 
     @Test
+    void ackRequiresExistingImmediateReplayParentWithoutMutation() {
+        RecordingDao missing = sentDao();
+        setTransportAttempt(missing, 2);
+        replayAudit(missing, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        missing.previousAttempts = List.of();
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(missing, enabledGate()).acknowledge(
+                        ack("ack-parent-missing", "RECEIVED", M1), NOW));
+        assertEquals(0, missing.ackMutations);
+
+        RecordingDao skipped = sentDao();
+        setTransportAttempt(skipped, 3);
+        replayAudit(skipped, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        skipped.previousAttempts.getFirst().setActiveAttempt(1);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(skipped, enabledGate()).acknowledge(
+                        ack("ack-parent-skipped", "RECEIVED", M1), NOW));
+        assertEquals(0, skipped.ackMutations);
+    }
+
+    @Test
+    void fastReceivedAckAgainstProcessingInboxAdvancesOnlyDelivery() {
+        RecordingDao dao = sourceDao();
+        dao.delivery.setStatus("CONSUMED").setNextRetryAt(null).setLastError(null);
+        dao.inbox.setStatus("PROCESSING").setResultStatus(null)
+                .setProcessedAt(null).setNextRetryAt(null).setLastError(null)
+                .setLeaseOwner("worker-a").setLeaseUntil(NOW + 10_000L);
+
+        AgentCommandAckResult result = ackService(dao, enabledGate()).acknowledge(
+                ack("ack-fast-received", "RECEIVED", M1), NOW);
+
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED, result.kind());
+        assertEquals("RECEIVED", dao.delivery.getStatus());
+        assertEquals("PROCESSING", dao.inbox.getStatus());
+        assertEquals(1, dao.ackMutations);
+    }
+
+    @Test
     void ackRejectsNonIndependentIdSourcePoisonAndDisabledGate() {
         RecordingDao sameMessage = sentDao();
         assertThrows(AgentCommandAckRejectedException.class,
@@ -493,6 +610,7 @@ class AgentCommandRecoveryServiceTest {
                 .setExpiresAt(EXPIRES).setVersion(7L);
         delivery.setTenantId("tenant-a");
         delivery.setClientId("client-a");
+        delivery.setUpdateTime(NOW - 100_000L);
 
         AgentRabbitTopologyManifest.PublishRoute route =
                 AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
@@ -525,6 +643,26 @@ class AgentCommandRecoveryServiceTest {
         dao.delivery.setAttemptCount(attempt).setActiveAttempt(attempt);
         dao.outbox.setActiveAttempt(attempt).setWirePayload(wire).setWirePayloadHash(wireHash);
         dao.inbox.setWirePayload(wire).setWirePayloadHash(wireHash);
+        if (attempt > 1) {
+            String parentMessageId = "parent-message";
+            byte[] parentWire = AgentCommandCanonicalCodec.wireBytes(
+                    draft(), parentMessageId, attempt - 1);
+            AgentOutboxEventEntity parent = new AgentOutboxEventEntity()
+                    .setId(9L).setEventId("parent-event").setMessageId(parentMessageId)
+                    .setCommandId(COMMAND_ID).setDeliveryId(1L)
+                    .setAggregateType("task").setAggregateId("task-1")
+                    .setDestination(dao.outbox.getDestination())
+                    .setRoutingKey(dao.outbox.getRoutingKey())
+                    .setWirePayload(parentWire)
+                    .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(parentWire))
+                    .setStatus("PUBLISHED").setAttemptCount(1).setActiveAttempt(attempt - 1)
+                    .setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK")
+                    .setConfirmedAt(NOW - 20).setMandatoryReturnStatus("NOT_RETURNED")
+                    .setPublishedAt(NOW - 19).setVersion(2L);
+            parent.setTenantId("tenant-a");
+            parent.setClientId("client-a");
+            dao.previousAttempts = List.of(parent);
+        }
     }
 
     private static void replayAudit(
@@ -610,6 +748,9 @@ class AgentCommandRecoveryServiceTest {
         private String requestedBy;
         private String reason;
         private AgentOutboxEventEntity inserted;
+        private List<AgentOutboxEventEntity> previousAttempts = List.of();
+        private int expireDeliveryRows = 1;
+        private int expireInboxRows = 1;
 
         private RecordingDao(
                 AgentCommandDeliveryEntity delivery,
@@ -629,10 +770,12 @@ class AgentCommandRecoveryServiceTest {
         }
 
         @Override
-        public List<AgentWaitingCommandCandidate> findDueCandidates(long now, long afterDeliveryId, int limit) {
+        public List<AgentWaitingCommandCandidate> findDueCandidates(
+                long now, long sentBefore, long afterDeliveryId, int limit) {
             discoveryCalls++;
             return List.of(new AgentWaitingCommandCandidate(
-                    1, delivery.getTenantId(), delivery.getClientId(), delivery.getTargetAgentId()));
+                    1, delivery.getTenantId(), delivery.getClientId(), delivery.getTargetAgentId(),
+                    delivery.getExpiresAt() <= now));
         }
 
         @Override
@@ -656,6 +799,13 @@ class AgentCommandRecoveryServiceTest {
         }
 
         @Override
+        public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+                String tenantId, String clientId, long deliveryId, int previousAttempt) {
+            operations.add("previous");
+            return previousAttempts;
+        }
+
+        @Override
         public AgentConsumerInboxEntity lockInbox(
                 String tenantId, String clientId, String consumerName, String messageId) {
             operations.add("inbox");
@@ -671,6 +821,29 @@ class AgentCommandRecoveryServiceTest {
             this.requestedBy = requestedBy;
             this.reason = reason;
             return reissueRows;
+        }
+
+        @Override
+        public int expireDelivery(
+                AgentCommandDeliveryEntity delivery, String lastError, long now) {
+            operations.add("expireDelivery");
+            if (expireDeliveryRows == 1) {
+                delivery.setStatus("EXPIRED").setNextRetryAt(null).setLastError(lastError)
+                        .setVersion(delivery.getVersion() + 1);
+            }
+            return expireDeliveryRows;
+        }
+
+        @Override
+        public int expireWaitingInbox(
+                AgentConsumerInboxEntity inbox, String lastError, long now) {
+            operations.add("expireInbox");
+            if (expireInboxRows == 1) {
+                inbox.setStatus("EXPIRED").setResultStatus("EXPIRED").setNextRetryAt(null)
+                        .setProcessedAt(now).setLastError(lastError)
+                        .setVersion(inbox.getVersion() + 1);
+            }
+            return expireInboxRows;
         }
 
         @Override

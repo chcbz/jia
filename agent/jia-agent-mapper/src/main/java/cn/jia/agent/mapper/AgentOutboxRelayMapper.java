@@ -154,6 +154,30 @@ public interface AgentOutboxRelayMapper {
                    replay_parent_message_id, replay_requester_id, replay_approver_id, replay_reason,
                    tenant_id, client_id, create_time, update_time
             FROM agent_outbox_event
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+              AND delivery_id=#{deliveryId} AND active_attempt=#{previousAttempt}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+            ORDER BY id ASC LIMIT 2 FOR UPDATE
+            """)
+    List<AgentOutboxEventEntity> selectPreviousAttemptOutboxesForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId,
+            @Param("previousAttempt") int previousAttempt);
+
+    @Select("""
+            SELECT id, event_id, message_id, command_id, delivery_id, aggregate_type,
+                   aggregate_id, destination, routing_key, wire_payload, wire_payload_hash,
+                   status, attempt_count, next_retry_at, lease_owner, lease_until,
+                   active_attempt, expires_at, publisher_confirm_status, confirmed_at,
+                   confirm_error, mandatory_return_status, returned_at, return_reply_code,
+                   return_reply_text, published_at, last_error, version,
+                   replay_parent_message_id, replay_requester_id, replay_approver_id, replay_reason,
+                   tenant_id, client_id, create_time, update_time
+            FROM agent_outbox_event
             WHERE id=#{outboxId} AND delivery_id=#{deliveryId}
               AND version=#{outboxVersion} AND status=#{outboxStatus}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)

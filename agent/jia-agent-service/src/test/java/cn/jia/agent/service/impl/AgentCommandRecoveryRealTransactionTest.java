@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentOutboxRelaySettings;
+import cn.jia.agent.config.AgentCommandReissueSettings;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
@@ -129,6 +130,70 @@ class AgentCommandRecoveryRealTransactionTest {
                 blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M2 + "'")));
     }
 
+
+    @Test
+    void fastReceivedAckBeforeSentCompletionIsDurableAndNeverRegresses() {
+        jdbc.update("DELETE FROM agent_consumer_inbox");
+        jdbc.update("UPDATE agent_command_delivery SET status='PUBLISHED',next_retry_at=NULL,"
+                + "last_error=NULL,version=7 WHERE id=1");
+        byte[] wire = blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M1 + "'");
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        var claim = inbox.claim(new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", M1, "event-1",
+                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                1L, wire), "fast-ack-worker", NOW, 10_000L);
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
+        assertEquals("CONSUMED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSING", string("SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+
+        AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+        assertEquals("RECEIVED", ack.acknowledge(
+                ack("fast-received", "RECEIVED", M1), NOW + 1).status());
+        assertEquals("RECEIVED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+
+        inbox.complete(claim.token(), AgentInboxDisposition.sent(), NOW + 2);
+        assertEquals("RECEIVED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSED", string("SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+        assertEquals("SENT", string("SELECT result_status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+    }
+
+    @Test
+    void restartSchedulerRecoversStaleSentWithNewTransportIdentity() {
+        jdbc.update("UPDATE agent_command_delivery SET status='SENT',next_retry_at=NULL,"
+                + "last_error=NULL,update_time=? WHERE id=1", NOW - 30_001L);
+        jdbc.update("UPDATE agent_consumer_inbox SET status='PROCESSED',result_status='SENT',"
+                + "next_retry_at=NULL,last_error=NULL WHERE id=20");
+        AgentCommandReissueServiceImpl service = reissueService(dao);
+        try (AgentCommandReissueCoordinator coordinator = new AgentCommandReissueCoordinator(
+                service, new AgentCommandReissueSettings(2, 1, 10, 100, 30_000L),
+                () -> NOW, false)) {
+            coordinator.runOnce();
+        }
+        assertEquals("PENDING", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(M2, string("SELECT active_message_id FROM agent_command_delivery WHERE id=1"));
+        assertEquals(2, number("SELECT active_attempt FROM agent_command_delivery WHERE id=1"));
+        assertEquals(2, number("SELECT COUNT(*) FROM agent_outbox_event"));
+        assertEquals(M1, string("SELECT replay_parent_message_id FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
+    }
+
+    @Test
+    void expiredWaitingTerminalizesDeliveryAndInboxAtomically() {
+        assertEquals(0, reissueService(dao).reissueDue(10, 0, EXPIRES).reissued());
+        assertEquals("EXPIRED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("EXPIRED", string("SELECT status FROM agent_consumer_inbox WHERE id=20"));
+        assertEquals("EXPIRED", string("SELECT result_status FROM agent_consumer_inbox WHERE id=20"));
+
+        insertWaitingSourceAfterDelete();
+        AgentCommandRecoveryDao failing = new DelegatingDao(dao) {
+            @Override public int expireWaitingInbox(
+                    AgentConsumerInboxEntity inbox, String lastError, long now) { return 0; }
+        };
+        assertThrows(IllegalStateException.class,
+                () -> reissueService(failing).reissueDue(10, 0, EXPIRES));
+        assertEquals("WAITING_AGENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("WAITING_AGENT", string("SELECT status FROM agent_consumer_inbox WHERE id=20"));
+    }
 
     @Test
     void maxMinusEightCompletesAllEightMutationsAtRejectedTerminalMaxVersion() {
@@ -302,6 +367,13 @@ class AgentCommandRecoveryRealTransactionTest {
                 "task-1", null, status, NOW);
     }
 
+    private void insertWaitingSourceAfterDelete() {
+        jdbc.update("DELETE FROM agent_consumer_inbox");
+        jdbc.update("DELETE FROM agent_outbox_event");
+        jdbc.update("DELETE FROM agent_command_delivery");
+        insertWaitingSource();
+    }
+
     private void insertWaitingSource() {
         AgentCommandDraft draft = new AgentCommandDraft(1, "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624", "task-1", "cause-1",
                 "tenant-a", "client-a", "task-1", null, "agent-a",
@@ -422,8 +494,9 @@ class AgentCommandRecoveryRealTransactionTest {
                 String targetAgentId, long now, long afterDeliveryId, int limit) {
             return delegate.findReconnectCandidates(tenantId, clientId, targetAgentId, now, afterDeliveryId, limit);
         }
-        @Override public List<AgentWaitingCommandCandidate> findDueCandidates(long now, long afterDeliveryId, int limit) {
-            return delegate.findDueCandidates(now, afterDeliveryId, limit);
+        @Override public List<AgentWaitingCommandCandidate> findDueCandidates(
+                long now, long sentBefore, long afterDeliveryId, int limit) {
+            return delegate.findDueCandidates(now, sentBefore, afterDeliveryId, limit);
         }
         @Override public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId) {
             return delegate.lockDelivery(tenantId, clientId, deliveryId);
@@ -435,6 +508,11 @@ class AgentCommandRecoveryRealTransactionTest {
                 long deliveryId, String messageId) {
             return delegate.lockActiveOutboxes(tenantId, clientId, deliveryId, messageId);
         }
+        @Override public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+                String tenantId, String clientId, long deliveryId, int previousAttempt) {
+            return delegate.lockPreviousAttemptOutboxes(
+                    tenantId, clientId, deliveryId, previousAttempt);
+        }
         @Override public AgentConsumerInboxEntity lockInbox(String tenantId, String clientId,
                 String consumerName, String messageId) {
             return delegate.lockInbox(tenantId, clientId, consumerName, messageId);
@@ -442,6 +520,14 @@ class AgentCommandRecoveryRealTransactionTest {
         @Override public int reissueDelivery(AgentCommandDeliveryEntity delivery, String newMessageId,
                 String requestedBy, String reason, String lastError, long now) {
             return delegate.reissueDelivery(delivery, newMessageId, requestedBy, reason, lastError, now);
+        }
+        @Override public int expireDelivery(
+                AgentCommandDeliveryEntity delivery, String lastError, long now) {
+            return delegate.expireDelivery(delivery, lastError, now);
+        }
+        @Override public int expireWaitingInbox(
+                AgentConsumerInboxEntity inbox, String lastError, long now) {
+            return delegate.expireWaitingInbox(inbox, lastError, now);
         }
         @Override public int insertOutbox(AgentOutboxEventEntity outbox) { return delegate.insertOutbox(outbox); }
         @Override public int advanceAck(AgentCommandDeliveryEntity delivery, String newStatus, String lastError, long now) {

@@ -9,6 +9,9 @@ public interface AgentCommandInboxDao {
 
     AgentOutboxEventEntity lockOutbox(String tenantId, String clientId, String eventId);
 
+    java.util.List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int previousAttempt);
+
     AgentConsumerInboxEntity lockInbox(
             String tenantId, String clientId, String consumerName, String messageId);
 

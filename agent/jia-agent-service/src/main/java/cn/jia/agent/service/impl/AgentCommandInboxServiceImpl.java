@@ -309,17 +309,25 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 token.tenantId(), token.clientId(), token.deliveryId());
         AgentOutboxEventEntity outbox = dao.lockOutbox(
                 token.tenantId(), token.clientId(), token.eventId());
+        java.util.List<AgentOutboxEventEntity> previousAttempts =
+                lockPreviousAttempts(delivery, outbox);
         AgentConsumerInboxEntity inbox = dao.lockInbox(
                 token.tenantId(), token.clientId(), token.consumerName(), token.messageId());
-        validateCompletionRows(token, delivery, outbox, inbox);
+        validateCompletionRows(token, disposition, delivery, outbox, previousAttempts, inbox);
         validateDispositionTiming(disposition, token, delivery.getExpiresAt(), now);
 
         Completion completion = completion(disposition);
         ValidatedMessage identity = tokenIdentity(token, inbox.getWirePayload(), inbox.getWirePayloadHash());
-        requireOne(updateDelivery(
-                identity, delivery, "CONSUMED", completion.deliveryStatus(),
-                disposition.nextRetryAt(), disposition.errorCode(), now),
-                "completion delivery disposition", identity);
+        if ("CONSUMED".equals(delivery.getStatus())) {
+            requireOne(updateDelivery(
+                    identity, delivery, "CONSUMED", completion.deliveryStatus(),
+                    disposition.nextRetryAt(), disposition.errorCode(), now),
+                    "completion delivery disposition", identity);
+        } else if (disposition.type() != AgentInboxDisposition.Type.SENT
+                || !"RECEIVED".equals(delivery.getStatus())) {
+            throw new AgentInboxFenceException(
+                    "only a durably fast RECEIVED ACK may precede SENT completion");
+        }
         int inboxRows = dao.completeInbox(
                 token.inboxId(), token.tenantId(), token.clientId(),
                 token.consumerName(), token.messageId(), token.leaseOwner(),
@@ -344,8 +352,10 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         AgentOutboxEventEntity outbox = dao.lockOutbox(
                 message.tenantId(), message.clientId(), message.eventId());
         if (outbox == null) throw conflict(message, "OUTBOX_NOT_FOUND");
+        java.util.List<AgentOutboxEventEntity> previousAttempts =
+                lockPreviousAttempts(delivery, outbox);
         validateOutbox(message, delivery, outbox);
-        validateReplayAudit(message, delivery, outbox);
+        validateReplayAudit(message, delivery, outbox, previousAttempts);
 
         boolean shadowDelivery = "DEAD".equals(delivery.getStatus())
                 && DB_SHADOW_MARKER.equals(delivery.getLastError());
@@ -436,16 +446,23 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     private void validateReplayAudit(
             ValidatedMessage message,
             AgentCommandDeliveryEntity delivery,
-            AgentOutboxEventEntity outbox) {
-        if (!AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
-                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
-                delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
-                delivery.getReplayApproverId(), delivery.getReplayReason(),
-                outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
-                outbox.getReplayApproverId(), outbox.getReplayReason())) {
+            AgentOutboxEventEntity outbox,
+            java.util.List<AgentOutboxEventEntity> previousAttempts) {
+        if (!AgentCommandAutomaticReplayProvenance.validImmediateParent(
+                delivery, outbox, previousAttempts)) {
             throw conflict(message, "REPLAY_PROVENANCE_CORRUPT");
         }
+    }
+
+    private java.util.List<AgentOutboxEventEntity> lockPreviousAttempts(
+            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
+        if (delivery == null || outbox == null || delivery.getActiveAttempt() == null
+                || delivery.getActiveAttempt() <= 1) {
+            return java.util.List.of();
+        }
+        return dao.lockPreviousAttemptOutboxes(
+                delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
+                delivery.getActiveAttempt() - 1);
     }
 
     private void validateDeliveryCore(
@@ -620,8 +637,10 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
 
     private void validateCompletionRows(
             AgentInboxClaimToken token,
+            AgentInboxDisposition disposition,
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
+            java.util.List<AgentOutboxEventEntity> previousAttempts,
             AgentConsumerInboxEntity inbox) {
         if (delivery == null || outbox == null || inbox == null) {
             throw new AgentInboxFenceException("claim source row is missing");
@@ -629,16 +648,21 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         ValidatedMessage identity = tokenIdentity(token, inbox.getWirePayload(), inbox.getWirePayloadHash());
         validateDeliveryCore(identity, delivery);
         validateOutbox(identity, delivery, outbox);
-        validateReplayAudit(identity, delivery, outbox);
+        validateReplayAudit(identity, delivery, outbox, previousAttempts);
         if (!"PUBLISHED".equals(outbox.getStatus())) {
             throw tokenConflict(token, "OUTBOX_NOT_PUBLISHED");
         }
         validateInbox(identity, new Source(
                 delivery, outbox, false, false, delivery.getExpiresAt()), inbox);
-        if (!"CONSUMED".equals(delivery.getStatus())
+        boolean ordinaryCompletion = "CONSUMED".equals(delivery.getStatus())
+                && Objects.equals(delivery.getVersion(), token.deliveryVersion());
+        boolean fastReceivedCompletion = disposition.type() == AgentInboxDisposition.Type.SENT
+                && "RECEIVED".equals(delivery.getStatus())
+                && token.deliveryVersion() < Long.MAX_VALUE
+                && Objects.equals(delivery.getVersion(), token.deliveryVersion() + 1);
+        if ((!ordinaryCompletion && !fastReceivedCompletion)
                 || !Objects.equals(delivery.getActiveMessageId(), token.messageId())
                 || !Objects.equals(delivery.getActiveAttempt(), token.deliveryActiveAttempt())
-                || !Objects.equals(delivery.getVersion(), token.deliveryVersion())
                 || !"PROCESSING".equals(inbox.getStatus())
                 || !Objects.equals(inbox.getLeaseOwner(), token.leaseOwner())
                 || !Objects.equals(inbox.getLeaseUntil(), token.leaseUntil())

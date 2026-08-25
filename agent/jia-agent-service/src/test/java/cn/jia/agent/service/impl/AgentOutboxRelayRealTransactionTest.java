@@ -839,6 +839,11 @@ class AgentOutboxRelayRealTransactionTest {
         @Override public AgentOutboxEventEntity lockOutbox(String tenant, String client, long id) {
             return delegate.lockOutbox(tenant, client, id);
         }
+        @Override public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+                String tenant, String client, long deliveryId, int previousAttempt) {
+            return delegate.lockPreviousAttemptOutboxes(
+                    tenant, client, deliveryId, previousAttempt);
+        }
         @Override public AgentOutboxEventEntity lockOutboxForQuarantine(
                 AgentOutboxCandidate candidate) {
             return delegate.lockOutboxForQuarantine(candidate);

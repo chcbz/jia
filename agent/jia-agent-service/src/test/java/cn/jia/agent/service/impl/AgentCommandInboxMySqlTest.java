@@ -584,6 +584,13 @@ class AgentCommandInboxMySqlTest {
         }
 
         @Override
+        public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+                String tenantId, String clientId, long deliveryId, int previousAttempt) {
+            return delegate.lockPreviousAttemptOutboxes(
+                    tenantId, clientId, deliveryId, previousAttempt);
+        }
+
+        @Override
         public AgentConsumerInboxEntity lockInbox(
                 String tenantId, String clientId, String consumerName, String messageId) {
             return delegate.lockInbox(tenantId, clientId, consumerName, messageId);

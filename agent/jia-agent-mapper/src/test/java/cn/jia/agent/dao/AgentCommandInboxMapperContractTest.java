@@ -24,6 +24,9 @@ class AgentCommandInboxMapperContractTest {
     void sourceAndInboxLocksAreForUpdateWithBinaryOctetScopePredicates() throws Exception {
         assertLock("selectDeliveryForUpdate", "tenant_id", "client_id");
         assertLock("selectOutboxForUpdate", "tenant_id", "client_id", "event_id");
+        assertLock("selectPreviousAttemptOutboxesForUpdate", "tenant_id", "client_id");
+        assertTrue(sql(method("selectPreviousAttemptOutboxesForUpdate"))
+                .contains("active_attempt=#{previousattempt}"));
         assertLock("selectInboxForUpdate",
                 "tenant_id", "client_id", "consumer_name", "message_id");
     }

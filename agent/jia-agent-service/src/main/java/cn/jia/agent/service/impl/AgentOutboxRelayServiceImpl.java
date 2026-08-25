@@ -151,6 +151,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
         AgentOutboxEventEntity outbox = dao.lockOutbox(
                 candidate.tenantId(), candidate.clientId(), candidate.outboxId());
+        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery, outbox);
         if (outbox == null || !candidateMatches(candidate, outbox)
                 || isTerminalOutbox(outbox.getStatus())) {
             return AgentOutboxClaim.skipped();
@@ -186,7 +187,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                     AgentCommandTransportWriterImpl.DISPATCH_SCOPE_MARKER, now);
             return AgentOutboxClaim.skipped();
         }
-        String corruption = validateCommon(delivery, outbox);
+        String corruption = validateCommon(delivery, outbox, previousAttempts);
         if ("UNSUPPORTED_REPLAY_PROVENANCE".equals(corruption)) {
             // Provenance is an authorization boundary, not a relay-owned state transition.
             // Reject without claim, publish, quarantine, or terminal mutation.
@@ -237,10 +238,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 token.tenantId(), token.clientId(), token.deliveryId());
         AgentOutboxEventEntity outbox = dao.lockOutbox(
                 token.tenantId(), token.clientId(), token.outboxId());
+        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery, outbox);
         if (!tokenMatchesOutbox(token, outbox)) {
             return AgentOutboxSettleResult.STALE;
         }
         boolean activeDelivery = tokenMatchesDelivery(token, delivery);
+        if (activeDelivery && !AgentCommandAutomaticReplayProvenance.validImmediateParent(
+                delivery, outbox, previousAttempts)) {
+            return AgentOutboxSettleResult.STALE;
+        }
         if (versionFenceExhausted(outbox)
                 || (activeDelivery && versionFenceExhausted(delivery))) {
             quarantineBoth(activeDelivery ? delivery : null, outbox,
@@ -352,7 +358,9 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     }
 
     private String validateCommon(
-            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity outbox,
+            List<AgentOutboxEventEntity> previousAttempts) {
         if (delivery.getId() == null || outbox.getId() == null
                 || !Objects.equals(delivery.getId(), outbox.getDeliveryId())
                 || !Objects.equals(delivery.getTenantId(), outbox.getTenantId())
@@ -381,7 +389,8 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 || outbox.getActiveAttempt() == null || outbox.getActiveAttempt() < 1) {
             return "SOURCE_FENCE_CORRUPT";
         }
-        if (!validAutomaticReplayProvenance(delivery, outbox)) {
+        if (!AgentCommandAutomaticReplayProvenance.validImmediateParent(
+                delivery, outbox, previousAttempts)) {
             return "UNSUPPORTED_REPLAY_PROVENANCE";
         }
         if (!storedHashMatches(delivery.getCommandPayload(), delivery.getCommandPayloadHash())) {
@@ -664,15 +673,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     }
 
     /** D03 original publish and exact D06 automatic reissue are the only relay-admitted lanes. */
-    private static boolean validAutomaticReplayProvenance(
+    private List<AgentOutboxEventEntity> lockPreviousAttempts(
             AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
-        return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
-                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
-                delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
-                delivery.getReplayApproverId(), delivery.getReplayReason(),
-                outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
-                outbox.getReplayApproverId(), outbox.getReplayReason());
+        if (delivery == null || outbox == null || delivery.getActiveAttempt() == null
+                || delivery.getActiveAttempt() <= 1) {
+            return List.of();
+        }
+        return dao.lockPreviousAttemptOutboxes(
+                delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
+                delivery.getActiveAttempt() - 1);
     }
 
     private static boolean anyPublishDisposition(AgentOutboxEventEntity outbox) {

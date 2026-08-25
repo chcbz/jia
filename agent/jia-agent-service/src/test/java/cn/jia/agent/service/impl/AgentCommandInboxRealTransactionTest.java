@@ -78,7 +78,7 @@ class AgentCommandInboxRealTransactionTest {
 
     @Test
     void claimAndDeliveryCommitTogether() {
-        jdbc.update("UPDATE agent_outbox_event SET active_attempt=7 WHERE event_id='evt-1'");
+        jdbc.update("UPDATE agent_outbox_event SET attempt_count=7 WHERE event_id='evt-1'");
         AgentInboxClaim claim = service(productionDao).claim(message(), "worker-a", NOW, 10_000);
 
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
@@ -430,6 +430,13 @@ class AgentCommandInboxRealTransactionTest {
         @Override
         public AgentOutboxEventEntity lockOutbox(String tenantId, String clientId, String eventId) {
             return delegate.lockOutbox(tenantId, clientId, eventId);
+        }
+
+        @Override
+        public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
+                String tenantId, String clientId, long deliveryId, int previousAttempt) {
+            return delegate.lockPreviousAttemptOutboxes(
+                    tenantId, clientId, deliveryId, previousAttempt);
         }
 
         @Override

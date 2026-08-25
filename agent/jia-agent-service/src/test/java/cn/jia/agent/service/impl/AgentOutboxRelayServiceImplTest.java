@@ -194,6 +194,57 @@ class AgentOutboxRelayServiceImplTest {
     }
 
     @Test
+    void automaticReplayRequiresExistingImmediatePriorTransportAttempt() {
+        Fixture missing = automaticReplay("agent-1", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        arrange(missing);
+        when(dao.lockPreviousAttemptOutboxes("tenant-a", "client-a", 41L, 1))
+                .thenReturn(List.of());
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+        verifyNoRelayMutation();
+
+        reset(dao);
+        stubMutationSuccess();
+        Fixture skipped = automaticReplay("agent-1", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        arrange(skipped);
+        AgentOutboxEventEntity wrong = previousAttempt(skipped).setActiveAttempt(0);
+        when(dao.lockPreviousAttemptOutboxes("tenant-a", "client-a", 41L, 1))
+                .thenReturn(List.of(wrong));
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+        verifyNoRelayMutation();
+    }
+
+    @Test
+    void automaticReplaySettlementRevalidatesImmediateParentWithoutMutation() {
+        for (boolean missing : List.of(true, false)) {
+            reset(dao);
+            stubMutationSuccess();
+            Fixture claimed = automaticReplay("agent-1", null,
+                    AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+            claimed.delivery.setLeaseOwner("lease-a").setLeaseUntil(NOW + 30_000)
+                    .setLastError(null).setVersion(1L);
+            claimed.outbox.setStatus("CLAIMED").setAttemptCount(1)
+                    .setLeaseOwner("lease-a").setLeaseUntil(NOW + 30_000)
+                    .setPublisherConfirmStatus("PENDING")
+                    .setMandatoryReturnStatus("PENDING")
+                    .setLastError(null).setVersion(1L);
+            arrange(claimed);
+            List<AgentOutboxEventEntity> invalidPrevious = missing
+                    ? List.of()
+                    : List.of(previousAttempt(claimed).setActiveAttempt(0));
+            when(dao.lockPreviousAttemptOutboxes("tenant-a", "client-a", 41L, 1))
+                    .thenReturn(invalidPrevious);
+
+            assertEquals(AgentOutboxSettleResult.STALE,
+                    service.settle(token(claimed), AgentRabbitPublishResult.ack(), NOW));
+            verifyNoRelayMutation();
+        }
+    }
+
+    @Test
     void automaticReplayRequesterReasonBindingRejectsEveryDisguisedLaneWithoutMutation() {
         List<Fixture> invalid = List.of(
                 automaticReplay("operator", null,
@@ -751,6 +802,30 @@ class AgentOutboxRelayServiceImplTest {
                 .thenReturn(fixture.delivery);
         when(dao.lockOutbox(fixture.outbox.getTenantId(), fixture.outbox.getClientId(), 1L))
                 .thenReturn(fixture.outbox);
+        if (fixture.delivery.getActiveAttempt() != null
+                && fixture.delivery.getActiveAttempt() > 1) {
+            when(dao.lockPreviousAttemptOutboxes(
+                    fixture.delivery.getTenantId(), fixture.delivery.getClientId(),
+                    fixture.delivery.getId(), fixture.delivery.getActiveAttempt() - 1))
+                    .thenReturn(List.of(previousAttempt(fixture)));
+        }
+    }
+
+    private static AgentOutboxEventEntity previousAttempt(Fixture fixture) {
+        byte[] parentWire = wire(EXPIRES);
+        AgentOutboxEventEntity parent = new AgentOutboxEventEntity()
+                .setId(9L).setEventId("evt-parent").setMessageId("msg-1")
+                .setCommandId("cmd-1").setDeliveryId(41L).setAggregateType("task")
+                .setAggregateId("task-1").setDestination(fixture.outbox.getDestination())
+                .setRoutingKey(fixture.outbox.getRoutingKey())
+                .setWirePayload(parentWire)
+                .setWirePayloadHash(AgentCommandAmqpContract.sha256(parentWire))
+                .setStatus("PUBLISHED").setAttemptCount(1).setActiveAttempt(1)
+                .setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK")
+                .setConfirmedAt(NOW - 20).setMandatoryReturnStatus("NOT_RETURNED")
+                .setPublishedAt(NOW - 19).setVersion(1L);
+        parent.setTenantId("tenant-a"); parent.setClientId("client-a");
+        return parent;
     }
 
     private static Fixture pending() {
@@ -845,11 +920,19 @@ class AgentOutboxRelayServiceImplTest {
     }
 
     private static AgentOutboxClaimToken token(Fixture fixture) {
-        return new AgentOutboxClaimToken(1, 41, "tenant-a", "client-a", "evt-1", "msg-1",
-                "cmd-1", "task-1", "agent-1", "task.invite",
+        return new AgentOutboxClaimToken(
+                fixture.outbox.getId(), fixture.delivery.getId(),
+                fixture.outbox.getTenantId(), fixture.outbox.getClientId(),
+                fixture.outbox.getEventId(), fixture.outbox.getMessageId(),
+                fixture.outbox.getCommandId(), fixture.delivery.getTaskId(),
+                fixture.delivery.getTargetAgentId(), fixture.delivery.getCommandType(),
                 fixture.outbox.getDestination(), fixture.outbox.getRoutingKey(),
-                fixture.outbox.getWirePayload(), fixture.outbox.getWirePayloadHash(), EXPIRES,
-                "lease-a", NOW + 30_000, 1, 1, "PENDING", "msg-1", 1, 1);
+                fixture.outbox.getWirePayload(), fixture.outbox.getWirePayloadHash(),
+                fixture.outbox.getExpiresAt(), fixture.outbox.getLeaseOwner(),
+                fixture.outbox.getLeaseUntil(), fixture.outbox.getAttemptCount(),
+                fixture.outbox.getVersion(), fixture.delivery.getStatus(),
+                fixture.delivery.getActiveMessageId(), fixture.delivery.getActiveAttempt(),
+                fixture.delivery.getVersion());
     }
 
     private static AgentOutboxClaimToken token(
