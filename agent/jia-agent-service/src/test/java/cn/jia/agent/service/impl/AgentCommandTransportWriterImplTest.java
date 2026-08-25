@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
@@ -18,6 +19,7 @@ import cn.jia.agent.entity.AgentTaskInvitePayload;
 import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
+import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -34,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -181,8 +184,10 @@ class AgentCommandTransportWriterImplTest {
     }
 
     @Test
-    void revokedOwnershipRollsBackBeforeAnyTransportWrite() {
+    void agentBizOwnershipDenialIsTranslatedWithCauseAndZeroTransportWrites() {
         AgentCommandDraft draft = hallDraft(1_000L, "执行工作项并回报结果");
+        AgentBizException ownershipDenied = new AgentBizException(
+                AgentErrorConstants.AGENT_FORBIDDEN, "ownership revoked");
         when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(agentService.requireApiKeyOwnedAgentForUpdate(
@@ -190,15 +195,22 @@ class AgentCommandTransportWriterImplTest {
                 .thenReturn(runtime(CALLER, AgentConstants.STATUS_ONLINE));
         when(agentService.requireApiKeyOwnedAgentForUpdate(
                 "client-a", "tenant-a", "agent-1"))
-                .thenThrow(new IllegalArgumentException("ownership revoked"));
+                .thenThrow(ownershipDenied);
 
-        assertThrows(IllegalArgumentException.class, () -> hallWriter(
-                gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
-                .writeAuthorizedHall(draft, CALLER));
+        IllegalArgumentException denied = assertThrows(
+                IllegalArgumentException.class, () -> hallWriter(
+                        gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
+                        .writeAuthorizedHall(draft, CALLER));
 
+        assertEquals("Caller or target is not active in the trusted owner scope",
+                denied.getMessage());
+        assertSame(ownershipDenied, denied.getCause());
         verify(dao, never()).lockDelivery(any(), any(), any());
         verify(dao, never()).insertDelivery(any());
         verify(dao, never()).insertOutbox(any());
+        verify(dao, never()).promoteShadowDelivery(any(), any(), anyLong());
+        verify(dao, never()).promoteShadowOutbox(any(), any(), anyLong());
+        verify(transactions, never()).commit(any(TransactionStatus.class));
         verify(transactions).rollback(any(TransactionStatus.class));
     }
 

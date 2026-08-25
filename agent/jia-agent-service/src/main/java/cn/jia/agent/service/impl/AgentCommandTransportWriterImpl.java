@@ -153,8 +153,14 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             }
         }
         for (String agentId : lockedAgents) {
-            AgentRuntimeDTO runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                    draft.clientId(), draft.tenantId(), agentId);
+            AgentRuntimeDTO runtime;
+            try {
+                runtime = agentService.requireApiKeyOwnedAgentForUpdate(
+                        draft.clientId(), draft.tenantId(), agentId);
+            } catch (AgentServiceImpl.AgentBizException denied) {
+                throw new IllegalArgumentException(
+                        "Caller or target is not active in the trusted owner scope", denied);
+            }
             if (runtime == null || !agentId.equals(runtime.getAgentId())
                     || !RUNTIME_STATUSES.contains(runtime.getStatus())) {
                 throw new IllegalArgumentException(
