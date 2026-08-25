@@ -46,7 +46,7 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
     private static final List<Pattern> CREDENTIAL_VALUE_PATTERNS = List.of(
             Pattern.compile("(?i)wx(?:-|%2d)[A-Za-z0-9_-]{6,128}"),
             Pattern.compile("(?i)mb(?:-|%2d)\\+?[0-9_-]{6,32}"),
-            Pattern.compile("(?<![A-Za-z0-9_-])o[A-Za-z0-9_-]{27}(?![A-Za-z0-9_-])"),
+            Pattern.compile("(?i)(?:openid|weixinid)\\s*(?:=|:|%3d|%3a)\\s*[A-Za-z0-9_-]{6,128}"),
             Pattern.compile("(?<!\\d)(?:\\+?86[- ]?)?1[3-9]\\d{9}(?!\\d)")
     );
 

@@ -29,6 +29,7 @@ import static org.mockito.Mockito.when;
 class LogServiceImplTest extends BaseMockTest {
     private static final String REDACTED_CREDENTIAL = "[REDACTED_CREDENTIAL]";
     private static final String RAW_OPENID = "oH2zD1El9hvjnWu-LRmCr-JiTuXI";
+    private static final String ORDINARY_28_CHARACTER_IDENTIFIER = "operationreference1234567890";
 
     @Mock
     private LogDao logDao;
@@ -117,7 +118,7 @@ class LogServiceImplTest extends BaseMockTest {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/agent/run");
         request.setContentType("application/vnd.jia.audit+json;charset=UTF-8");
         request.setContent(("{\"task\":\"inspect\",\"password\":\"json-password-secret\","
-                + "\"reference\":\"" + RAW_OPENID + "\","
+                + "\"openid\":\"" + RAW_OPENID + "\","
                 + "\"nested\":{\"CODE_VERIFIER\":\"json-code-secret\",\"safe\":\"kept\"},"
                 + "\"items\":[{\"access-token\":\"json-access-secret\",\"name\":\"first\"},"
                 + "{\"client_secret\":\"json-client-secret\",\"name\":\"second\"}],"
@@ -130,7 +131,7 @@ class LogServiceImplTest extends BaseMockTest {
         assertTrue(persisted.getParam().contains("kept"));
         assertTrue(persisted.getParam().contains("first"));
         assertTrue(persisted.getParam().contains("second"));
-        assertTrue(persisted.getParam().contains(REDACTED_CREDENTIAL));
+        assertFalse(persisted.getParam().toLowerCase(Locale.ROOT).contains("openid"));
         assertNoSecret(persisted, "json-password-secret", "json-code-secret", "json-access-secret",
                 "json-client-secret", "json-id-secret", RAW_OPENID);
     }
@@ -231,18 +232,26 @@ class LogServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void preservesPostLogoutRedirectUriAndLongOrdinaryIdentifiersOutsideCredentialEndpoints() throws Exception {
-        String ordinaryIdentifier = "ordinaryoperationreference0000000000000000000000";
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/profile/preferences");
+    void preservesPostLogoutRedirectUriAndExactOpenIdShapeCollisionAcrossAuditCarriers() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/profile/preferences/" + ORDINARY_28_CHARACTER_IDENTIFIER);
+        request.setRemoteAddr(ORDINARY_28_CHARACTER_IDENTIFIER);
         request.setQueryString("post_logout_redirect_uri=https%3A%2F%2Fclient.example%2Fsigned-out"
-                + "&reference=" + ordinaryIdentifier);
-        setIdentity("Jia-E6", "alice");
+                + "&reference=" + ORDINARY_28_CHARACTER_IDENTIFIER);
+        request.addHeader("User-Agent", "audit-client/1.0 " + ORDINARY_28_CHARACTER_IDENTIFIER);
+        request.addHeader("X-Request-ID", ORDINARY_28_CHARACTER_IDENTIFIER);
+        setIdentity("Jia-E6", ORDINARY_28_CHARACTER_IDENTIFIER);
 
         LogEntity persisted = persist(request);
 
         assertTrue(persisted.getParam().contains("post_logout_redirect_uri"));
         assertTrue(persisted.getParam().contains("client.example"));
-        assertTrue(persisted.getParam().contains(ordinaryIdentifier));
+        assertTrue(persisted.getParam().contains(ORDINARY_28_CHARACTER_IDENTIFIER));
+        assertTrue(persisted.getUri().contains(ORDINARY_28_CHARACTER_IDENTIFIER));
+        assertEquals(ORDINARY_28_CHARACTER_IDENTIFIER, persisted.getIp());
+        assertTrue(persisted.getUserAgent().contains(ORDINARY_28_CHARACTER_IDENTIFIER));
+        assertTrue(persisted.getHeader().contains(ORDINARY_28_CHARACTER_IDENTIFIER));
+        assertEquals(ORDINARY_28_CHARACTER_IDENTIFIER, persisted.getUsername());
         assertFalse(persisted.getParam().contains(REDACTED_CREDENTIAL));
     }
 
@@ -261,12 +270,12 @@ class LogServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void redactsCredentialMarkersFromEveryAuditCarrierWithoutJiacnFallback() throws Exception {
+    void redactsContextualCredentialMarkersAcrossAuditCarriersWithoutJiacnFallback() throws Exception {
         String wxLogin = "wx-" + RAW_OPENID;
         String mobileLogin = "mb-13800138000";
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/callback/" + wxLogin);
-        request.setRemoteAddr(RAW_OPENID);
-        request.setQueryString("note=" + RAW_OPENID + "&safe=kept");
+        request.setRemoteAddr("192.0.2.20");
+        request.setQueryString("openid=" + RAW_OPENID + "&safe=kept");
         request.addHeader("User-Agent", "audit-client/1.0 openid=" + RAW_OPENID);
         request.addHeader("X-Request-ID", mobileLogin);
         setIdentity(null, wxLogin);
@@ -274,13 +283,13 @@ class LogServiceImplTest extends BaseMockTest {
         LogEntity persisted = persist(request);
 
         assertNull(persisted.getJiacn());
-        assertEquals(REDACTED_CREDENTIAL, persisted.getIp());
+        assertEquals("192.0.2.20", persisted.getIp());
         assertEquals(REDACTED_CREDENTIAL, persisted.getUsername());
         assertTrue(persisted.getUri().contains(REDACTED_CREDENTIAL));
         assertTrue(persisted.getUserAgent().contains(REDACTED_CREDENTIAL));
         assertTrue(persisted.getHeader().contains(REDACTED_CREDENTIAL));
-        assertTrue(persisted.getParam().contains(REDACTED_CREDENTIAL));
         assertTrue(persisted.getParam().contains("kept"));
+        assertFalse(persisted.getParam().toLowerCase(Locale.ROOT).contains("openid"));
         assertNoSecret(persisted, RAW_OPENID, wxLogin, mobileLogin, "13800138000");
     }
 
