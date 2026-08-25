@@ -1,6 +1,6 @@
 package cn.jia.agent.config;
 
-import cn.jia.agent.dao.AgentCommandTransportDao;
+import cn.jia.agent.dao.AgentHallCommandTransportDao;
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import cn.jia.agent.service.AgentCommandMailboxService;
 import cn.jia.agent.service.AgentCommandTransportWriter;
@@ -25,7 +25,7 @@ public class AgentCommandTransportWriterConfiguration {
     @Bean
     @Conditional(AgentCommandOutboxEnabledCondition.class)
     public AgentCommandTransportWriter agentCommandTransportWriter(
-            AgentCommandTransportDao dao,
+            AgentHallCommandTransportDao dao,
             AgentRabbitSafetyGate gate,
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,

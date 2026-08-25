@@ -1,6 +1,6 @@
 package cn.jia.agent.config;
 
-import cn.jia.agent.dao.AgentCommandTransportDao;
+import cn.jia.agent.dao.AgentHallCommandTransportDao;
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import cn.jia.agent.service.AgentCommandMailboxService;
 import cn.jia.agent.service.AgentCommandTransportWriter;
@@ -17,7 +17,8 @@ import static org.mockito.Mockito.mock;
 
 class AgentCommandTransportWriterConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
-            .withBean(AgentCommandTransportDao.class, () -> mock(AgentCommandTransportDao.class))
+            .withBean(AgentHallCommandTransportDao.class,
+                    () -> mock(AgentHallCommandTransportDao.class))
             .withBean(AgentCommandTransportMapper.class,
                     () -> mock(AgentCommandTransportMapper.class))
             .withBean(PlatformTransactionManager.class,

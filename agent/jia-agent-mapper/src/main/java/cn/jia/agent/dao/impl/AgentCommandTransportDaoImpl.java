@@ -1,6 +1,6 @@
 package cn.jia.agent.dao.impl;
 
-import cn.jia.agent.dao.AgentCommandTransportDao;
+import cn.jia.agent.dao.AgentHallCommandTransportDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
@@ -11,7 +11,7 @@ import java.util.List;
 
 @Named
 @RequiredArgsConstructor
-public class AgentCommandTransportDaoImpl implements AgentCommandTransportDao {
+public class AgentCommandTransportDaoImpl implements AgentHallCommandTransportDao {
     private final AgentCommandTransportMapper mapper;
 
     @Override

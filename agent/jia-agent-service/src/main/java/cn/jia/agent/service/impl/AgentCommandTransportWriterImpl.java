@@ -6,6 +6,7 @@ import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandTransportDao;
+import cn.jia.agent.dao.AgentHallCommandTransportDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandTransportWriteResult;
@@ -40,6 +41,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentConstants.STATUS_OFFLINE, AgentConstants.STATUS_ERROR);
 
     private final AgentCommandTransportDao dao;
+    private final AgentHallCommandTransportDao hallDao;
     private final AgentRabbitSafetyGate gate;
     private final AgentService agentService;
     private final AgentTaskCollaborationAccessService accessService;
@@ -47,12 +49,13 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
     private final Supplier<UUID> uuidSupplier;
 
     public AgentCommandTransportWriterImpl(
-            AgentCommandTransportDao dao,
+            AgentHallCommandTransportDao dao,
             AgentRabbitSafetyGate gate,
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,
             PlatformTransactionManager transactionManager) {
-        this(dao, gate, agentService, accessService, transactionManager, UUID::randomUUID);
+        this(dao, dao, gate, agentService, accessService,
+                transactionManager, UUID::randomUUID);
     }
 
     /** Compatibility constructor for the pre-D08 TASK_INVITE producer and its focused tests. */
@@ -61,17 +64,30 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentRabbitSafetyGate gate,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
-        this(dao, gate, null, null, transactionManager, uuidSupplier);
+        this(dao, null, gate, null, null, transactionManager, uuidSupplier);
     }
 
     AgentCommandTransportWriterImpl(
+            AgentHallCommandTransportDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentService agentService,
+            AgentTaskCollaborationAccessService accessService,
+            PlatformTransactionManager transactionManager,
+            Supplier<UUID> uuidSupplier) {
+        this(dao, dao, gate, agentService, accessService,
+                transactionManager, uuidSupplier);
+    }
+
+    private AgentCommandTransportWriterImpl(
             AgentCommandTransportDao dao,
+            AgentHallCommandTransportDao hallDao,
             AgentRabbitSafetyGate gate,
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
         this.dao = Objects.requireNonNull(dao, "dao");
+        this.hallDao = hallDao;
         this.gate = Objects.requireNonNull(gate, "gate");
         this.agentService = agentService;
         this.accessService = accessService;
@@ -121,7 +137,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
      * The existing ForUpdate access contracts own the task/member and identity/runtime locks.
      */
     private void requireAuthorizedHall(AgentCommandDraft draft, String callerAgentId) {
-        if (agentService == null || accessService == null) {
+        if (hallDao == null || agentService == null || accessService == null) {
             throw new IllegalStateException("Hall command authorization services are unavailable");
         }
         requireExact(callerAgentId, "callerAgentId", 100);
@@ -320,7 +336,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
     private AgentCommandTransportWriteResult promoteShadowCapture(
             AgentCommandDeliveryEntity delivery, AgentCommandDraft storedDraft, long now) {
         validatePromotableShadowDelivery(delivery, now);
-        List<AgentOutboxEventEntity> active = dao.lockActiveOutboxes(
+        List<AgentOutboxEventEntity> active = hallDao.lockActiveOutboxes(
                 delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
                 delivery.getActiveMessageId());
         if (active == null || active.size() != 1) {
@@ -329,10 +345,10 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         }
         AgentOutboxEventEntity outbox = active.getFirst();
         validatePromotableShadowOutbox(delivery, outbox, storedDraft);
-        requireOne(dao.promoteShadowDelivery(
+        requireOne(hallDao.promoteShadowDelivery(
                 delivery, DISPATCH_ELIGIBLE_MARKER, now),
                 "shadow delivery promotion");
-        requireOne(dao.promoteShadowOutbox(
+        requireOne(hallDao.promoteShadowOutbox(
                 outbox, DISPATCH_ELIGIBLE_MARKER, now),
                 "shadow outbox promotion");
         return new AgentCommandTransportWriteResult(

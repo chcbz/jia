@@ -8,7 +8,7 @@ import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
-import cn.jia.agent.dao.AgentCommandTransportDao;
+import cn.jia.agent.dao.AgentHallCommandTransportDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentHallCommandPayload;
@@ -47,14 +47,14 @@ import static org.mockito.Mockito.when;
 class AgentCommandTransportWriterImplTest {
     private static final String CALLER = "agent-0";
 
-    private AgentCommandTransportDao dao;
+    private AgentHallCommandTransportDao dao;
     private AgentService agentService;
     private AgentTaskCollaborationAccessService accessService;
     private PlatformTransactionManager transactions;
 
     @BeforeEach
     void setUp() {
-        dao = mock(AgentCommandTransportDao.class);
+        dao = mock(AgentHallCommandTransportDao.class);
         agentService = mock(AgentService.class);
         accessService = mock(AgentTaskCollaborationAccessService.class);
         transactions = mock(PlatformTransactionManager.class);
