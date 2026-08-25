@@ -394,9 +394,10 @@ class AgentCommandRecoveryServiceTest {
 
     @Test
     void ackRejectsSettledSentAndTerminalPriorDispositionDriftWithoutMutation() {
-        for (java.util.function.Consumer<RecordingDao> poison : List.of(
-                dao -> dao.delivery.setNextRetryAt(NOW + 1),
-                dao -> dao.delivery.setLastError("poison"))) {
+        for (java.util.function.Consumer<RecordingDao> poison
+                : List.<java.util.function.Consumer<RecordingDao>>of(
+                        dao -> dao.delivery.setNextRetryAt(NOW + 1),
+                        dao -> dao.delivery.setLastError("poison"))) {
             RecordingDao dao = sentDao();
             poison.accept(dao);
             Long poisonedNextRetryAt = dao.delivery.getNextRetryAt();
