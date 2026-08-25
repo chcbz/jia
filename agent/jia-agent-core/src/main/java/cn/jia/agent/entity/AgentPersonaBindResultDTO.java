@@ -15,9 +15,9 @@ public class AgentPersonaBindResultDTO implements Serializable {
     private String mode;
     private String agentId;
     private String profileId;
-    private Long bindingId;
+    private String bindingId;
     private String hostedState;
-    private Long generation;
+    private String generation;
     private String workdir;
     private String codexHome;
     private String profilesFile;

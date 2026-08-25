@@ -1,9 +1,9 @@
 package cn.jia.agent.service;
 
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.entity.AgentHostedProfileEntity;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
-import cn.jia.agent.common.AgentErrorConstants;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -18,13 +18,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 
 @Component
 public class AgentHostedProfilePublisher {
@@ -76,27 +76,62 @@ public class AgentHostedProfilePublisher {
             fail("Hosted persona configuration is invalid");
         }
         verifyRuntimeCapabilities();
-        Path workdir = clientsDir.resolve(hosted.getCanonicalAgentId());
-        Path codexHome = runtimeDir.resolve(".codex-hosted-" + hosted.getProfileKey());
+        Path workdir = workdir(hosted);
+        Path codexHome = codexHome(hosted);
         try {
             Files.createDirectories(workdir);
             Files.createDirectories(codexHome);
             copyBootstrap("config.toml", codexHome);
             copyBootstrap("auth.json", codexHome);
             Files.createDirectories(profilesFile.getParent());
-            Path lockPath = profilesFile.resolveSibling(profilesFile.getFileName() + ".lock");
+            Path lockPath = lockPath();
+            boolean existed;
             try (FileChannel lockChannel = FileChannel.open(lockPath,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                  FileLock ignored = lockChannel.lock()) {
                 String current = Files.exists(profilesFile)
                         ? Files.readString(profilesFile, StandardCharsets.UTF_8) : DEFAULT_SECTION;
                 String desired = section(hosted, persona, workdir, codexHome, enabled, apiKey, nextGeneration);
-                String next = replaceCas(current, hosted, expectedGeneration, nextGeneration, desired);
-                if (!next.equals(current)) atomicPublish(next);
+                Replacement replacement = replaceCas(
+                        current, hosted, expectedGeneration, nextGeneration, desired);
+                if (!replacement.content().equals(current)) atomicPublish(replacement.content());
+                existed = replacement.existed();
             }
-            return new PublishedPaths(workdir.toString(), codexHome.toString(), profilesFile.toString());
+            return paths(hosted, !existed, existed);
         } catch (IOException e) {
             fail("Hosted profile publication failed: " + e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    public PublishedPaths inspectExisting(AgentHostedProfileEntity hosted, long expectedGeneration) {
+        requireExactHosted(hosted);
+        if (expectedGeneration < 0) fail("Hosted profile inspection generation is invalid");
+        verifyRuntimeCapabilities();
+        try {
+            if (!Files.exists(profilesFile)) {
+                fail("Hosted profile durable state has no published section");
+            }
+            try (FileChannel lockChannel = FileChannel.open(lockPath(),
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                 FileLock ignored = lockChannel.lock()) {
+                if (!Files.exists(profilesFile)) {
+                    fail("Hosted profile durable state has no published section");
+                }
+                String current = Files.readString(profilesFile, StandardCharsets.UTF_8);
+                ProfileIndex index = profileIndex(current, hosted);
+                if (index.target() == null) {
+                    fail("Hosted profile durable state has no published section");
+                }
+                validateTarget(current, index.target(), hosted);
+                long actualGeneration = markerGeneration(index.target().body(current));
+                if (actualGeneration != expectedGeneration) {
+                    fail("Hosted profile durable generation does not match published section");
+                }
+            }
+            return paths(hosted, false, true);
+        } catch (IOException e) {
+            fail("Hosted profile inspection failed: " + e.getClass().getSimpleName());
             return null;
         }
     }
@@ -145,62 +180,131 @@ public class AgentHostedProfilePublisher {
         }
     }
 
-    private String replaceCas(String profiles, AgentHostedProfileEntity hosted,
+    private Replacement replaceCas(String profiles, AgentHostedProfileEntity hosted,
             long expectedGeneration, long nextGeneration, String desired) {
-        List<Range> sections = sections(profiles);
-        Range target = null;
-        for (Range range : sections) {
-            String body = profiles.substring(range.start, range.end);
-            String header = "[agent." + hosted.getProfileKey() + "]";
-            boolean sameHeader = body.lines().findFirst().orElse("").trim().equals(header);
-            boolean sameBinding = body.contains("# cyfHostedBindingId=" + hosted.getBindingId());
-            boolean sameAgent = body.lines().anyMatch(line -> line.equals("agentId=" + hosted.getCanonicalAgentId()));
-            if ((sameBinding || sameAgent) && !sameHeader) fail("Hosted profile identity collision");
-            if (sameHeader) {
-                if (target != null) fail("Duplicate hosted profile key");
-                target = range;
-            }
-        }
+        ProfileIndex index = profileIndex(profiles, hosted);
+        Section target = index.target();
         if (target == null) {
             if (expectedGeneration != 0) fail("Hosted profile generation conflict: section missing");
-            return profiles.stripTrailing() + "\n\n" + desired.strip() + "\n";
+            return new Replacement(profiles.stripTrailing() + "\n\n" + desired.strip() + "\n", false);
         }
-        String existing = profiles.substring(target.start, target.end);
-        String bindingMarker = "# cyfHostedBindingId=" + hosted.getBindingId();
-        String agentMarker = "# cyfHostedCanonicalAgentId=" + hosted.getCanonicalAgentId();
-        if (!existing.contains(bindingMarker) || !existing.contains(agentMarker)) {
-            fail("Legacy or colliding hosted profile is not adoptable");
-        }
+        validateTarget(profiles, target, hosted);
+        String existing = target.body(profiles);
         long actual = markerGeneration(existing);
-        if (actual == nextGeneration && normalize(existing).equals(normalize(desired))) return profiles;
+        if (actual == nextGeneration && normalize(existing).equals(normalize(desired))) {
+            return new Replacement(profiles, true);
+        }
         if (actual != expectedGeneration) fail("Hosted profile generation conflict");
-        return profiles.substring(0, target.start) + desired.strip() + "\n" + profiles.substring(target.end);
+        return new Replacement(profiles.substring(0, target.start()) + desired.strip() + "\n"
+                + profiles.substring(target.end()), true);
     }
 
-    private List<Range> sections(String text) {
-        List<Range> result = new ArrayList<>();
-        int cursor = 0;
-        while (true) {
-            int start = text.indexOf("[agent.", cursor);
-            if (start < 0) break;
-            if (start > 0 && text.charAt(start - 1) != '\n') { cursor = start + 1; continue; }
-            int nextAgent = text.indexOf("\n[agent.", start + 1);
-            int nextProfile = text.indexOf("\n[profile.", start + 1);
-            int end = text.length();
-            if (nextAgent >= 0) end = Math.min(end, nextAgent + 1);
-            if (nextProfile >= 0) end = Math.min(end, nextProfile + 1);
-            result.add(new Range(start, end));
-            cursor = end;
+    private ProfileIndex profileIndex(String profiles, AgentHostedProfileEntity hosted) {
+        List<Header> headers = headers(profiles);
+        Section target = null;
+        for (int index = 0; index < headers.size(); index++) {
+            Header header = headers.get(index);
+            int end = index + 1 < headers.size() ? headers.get(index + 1).start() : profiles.length();
+            if (header.family() == null) continue;
+            Section section = new Section(header.start(), end, header.family(), header.key(),
+                    assignments(profiles.substring(header.start(), end)));
+            long agentIdCount = section.assignments().stream()
+                    .filter(assignment -> "agentId".equals(assignment.key())).count();
+            if (agentIdCount > 1) fail("Hosted profile agentId is duplicated or ambiguous");
+            boolean intendedTarget = "agent".equals(section.family())
+                    && hosted.getProfileKey().equals(section.key());
+            if (hosted.getProfileKey().equals(section.key()) && !intendedTarget) {
+                fail("Hosted profile target section is ambiguous");
+            }
+            String body = section.body(profiles);
+            boolean sameBinding = hasExactLine(body,
+                    "# cyfHostedBindingId=" + hosted.getBindingId());
+            boolean sameCanonicalMarker = hasExactLine(body,
+                    "# cyfHostedCanonicalAgentId=" + hosted.getCanonicalAgentId());
+            boolean sameAgent = section.assignments().stream().anyMatch(assignment ->
+                    "agentId".equals(assignment.key())
+                            && hosted.getCanonicalAgentId().equals(assignment.value()));
+            if ((sameBinding || sameCanonicalMarker || sameAgent) && !intendedTarget) {
+                fail("Hosted profile identity collision");
+            }
+            if (intendedTarget) {
+                if (target != null) fail("Duplicate hosted profile key");
+                target = section;
+            }
+        }
+        return new ProfileIndex(target);
+    }
+
+    private List<Header> headers(String text) {
+        List<Header> result = new ArrayList<>();
+        int lineStart = 0;
+        while (lineStart <= text.length()) {
+            int newline = text.indexOf('\n', lineStart);
+            int lineEnd = newline < 0 ? text.length() : newline;
+            String line = trimRuntimeWhitespace(text.substring(lineStart, lineEnd));
+            if (line.length() >= 3 && line.startsWith("[") && line.endsWith("]")) {
+                String name = trimRuntimeWhitespace(line.substring(1, line.length() - 1));
+                String family = null;
+                String key = null;
+                if (name.startsWith("agent.") && name.length() > "agent.".length()) {
+                    family = "agent";
+                    key = name.substring("agent.".length());
+                } else if (name.startsWith("profile.") && name.length() > "profile.".length()) {
+                    family = "profile";
+                    key = name.substring("profile.".length());
+                }
+                result.add(new Header(lineStart, family, key));
+            }
+            if (newline < 0) break;
+            lineStart = newline + 1;
         }
         return result;
+    }
+
+    private List<Assignment> assignments(String section) {
+        List<Assignment> result = new ArrayList<>();
+        boolean header = true;
+        for (String line : section.lines().toList()) {
+            if (header) {
+                header = false;
+                continue;
+            }
+            String trimmed = trimRuntimeWhitespace(line);
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
+            int separator = trimmed.indexOf('=');
+            if (separator < 0) continue;
+            result.add(new Assignment(
+                    trimRuntimeWhitespace(trimmed.substring(0, separator)),
+                    trimRuntimeWhitespace(trimmed.substring(separator + 1))));
+        }
+        return result;
+    }
+
+    private void validateTarget(String profiles, Section target, AgentHostedProfileEntity hosted) {
+        String existing = target.body(profiles);
+        if (countExactLine(existing, "# cyfHostedBindingId=" + hosted.getBindingId()) != 1
+                || countExactLine(existing,
+                    "# cyfHostedCanonicalAgentId=" + hosted.getCanonicalAgentId()) != 1) {
+            fail("Legacy or colliding hosted profile is not adoptable");
+        }
+        List<String> agentIds = target.assignments().stream()
+                .filter(assignment -> "agentId".equals(assignment.key()))
+                .map(Assignment::value).toList();
+        if (agentIds.size() != 1 || !hosted.getCanonicalAgentId().equals(agentIds.getFirst())) {
+            fail("Hosted profile target identity is invalid");
+        }
     }
 
     private long markerGeneration(String section) {
         String prefix = "# cyfHostedGeneration=";
         List<String> values = section.lines().filter(line -> line.startsWith(prefix)).toList();
         if (values.size() != 1) fail("Hosted profile generation marker is missing or duplicated");
-        try { return Long.parseLong(values.getFirst().substring(prefix.length())); }
-        catch (NumberFormatException e) { fail("Hosted profile generation marker is invalid"); return -1; }
+        try {
+            return Long.parseLong(values.getFirst().substring(prefix.length()));
+        } catch (NumberFormatException e) {
+            fail("Hosted profile generation marker is invalid");
+            return -1;
+        }
     }
 
     private String section(AgentHostedProfileEntity hosted, AgentPersonaEntity persona,
@@ -227,8 +331,10 @@ public class AgentHostedProfilePublisher {
         Path directory = profilesFile.getParent();
         Path temp = Files.createTempFile(directory, profilesFile.getFileName() + ".", ".tmp");
         try {
-            try { Files.setPosixFilePermissions(temp, PosixFilePermissions.fromString("rw-------")); }
-            catch (UnsupportedOperationException ignored) { }
+            try {
+                Files.setPosixFilePermissions(temp, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException ignored) {
+            }
             try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE,
                     StandardOpenOption.TRUNCATE_EXISTING)) {
                 ByteBuffer bytes = StandardCharsets.UTF_8.encode(content);
@@ -257,6 +363,31 @@ public class AgentHostedProfilePublisher {
         }
     }
 
+    private PublishedPaths paths(AgentHostedProfileEntity hosted, boolean created, boolean alreadyExists) {
+        return new PublishedPaths(workdir(hosted).toString(), codexHome(hosted).toString(),
+                profilesFile.toString(), created, alreadyExists);
+    }
+
+    private Path workdir(AgentHostedProfileEntity hosted) {
+        return clientsDir.resolve(hosted.getCanonicalAgentId());
+    }
+
+    private Path codexHome(AgentHostedProfileEntity hosted) {
+        return runtimeDir.resolve(".codex-hosted-" + hosted.getProfileKey());
+    }
+
+    private Path lockPath() {
+        return profilesFile.resolveSibling(profilesFile.getFileName() + ".lock");
+    }
+
+    private boolean hasExactLine(String body, String expected) {
+        return countExactLine(body, expected) > 0;
+    }
+
+    private long countExactLine(String body, String expected) {
+        return body.lines().filter(expected::equals).count();
+    }
+
     private void requireExactHosted(AgentHostedProfileEntity h) {
         if (h == null || h.getBindingId() == null || h.getBindingId() <= 0
                 || blank(h.getTenantId()) || blank(h.getClientId()) || blank(h.getOwnerJiacn())
@@ -276,14 +407,60 @@ public class AgentHostedProfilePublisher {
             fail("Hosted profile durable key is invalid");
         }
     }
-    private boolean blank(String value) { return value == null || value.isBlank() || !value.equals(value.strip()); }
+
+    private String trimRuntimeWhitespace(String value) {
+        int start = 0;
+        while (start < value.length()) {
+            int codePoint = value.codePointAt(start);
+            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) break;
+            start += Character.charCount(codePoint);
+        }
+        int end = value.length();
+        while (end > start) {
+            int codePoint = value.codePointBefore(end);
+            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) break;
+            end -= Character.charCount(codePoint);
+        }
+        return value.substring(start, end);
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.isBlank() || !value.equals(value.strip());
+    }
+
     private boolean safeConfigValue(String value) {
         return value != null && !value.isBlank() && value.equals(value.strip())
                 && value.codePoints().noneMatch(Character::isISOControl);
     }
-    private String normalize(String value) { return value.strip().replace("\r\n", "\n"); }
-    private void fail(String message) { throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, message); }
 
-    private record Range(int start, int end) {}
-    public record PublishedPaths(String workdir, String codexHome, String profilesFile) {}
+    private String normalize(String value) {
+        return value.strip().replace("\r\n", "\n");
+    }
+
+    private void fail(String message) {
+        throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, message);
+    }
+
+    private record Header(int start, String family, String key) {
+    }
+
+    private record Assignment(String key, String value) {
+    }
+
+    private record Section(int start, int end, String family, String key,
+            List<Assignment> assignments) {
+        private String body(String profiles) {
+            return profiles.substring(start, end);
+        }
+    }
+
+    private record ProfileIndex(Section target) {
+    }
+
+    private record Replacement(String content, boolean existed) {
+    }
+
+    public record PublishedPaths(String workdir, String codexHome, String profilesFile,
+            boolean created, boolean alreadyExists) {
+    }
 }

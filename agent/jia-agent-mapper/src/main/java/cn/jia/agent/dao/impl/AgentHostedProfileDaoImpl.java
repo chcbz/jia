@@ -25,16 +25,36 @@ public class AgentHostedProfileDaoImpl extends BaseDaoImpl<AgentHostedProfileMap
         }
         return baseMapper.transition(id, es, eg, ns, ng, de, System.currentTimeMillis());
     }
-    @Override public int markRepair(long id, String rs, String errorCategory) {
-        if (id <= 0 || !AgentHostedProfileState.VALUES.contains(rs)
-                || AgentHostedProfileState.REPAIR_REQUIRED.equals(rs)) {
+    @Override public int markRepair(long id, String expectedState, String expectedResumeState,
+            long expectedGeneration, String resumeState, String errorCategory) {
+        requireDurableCheckpoint(id, expectedState, expectedResumeState, expectedGeneration);
+        if (!AgentHostedProfileState.VALUES.contains(resumeState)
+                || AgentHostedProfileState.REPAIR_REQUIRED.equals(resumeState)) {
             throw new IllegalArgumentException("hosted repair checkpoint is invalid");
         }
         String category = errorCategory == null ? "HOSTED_PROFILE_FAILURE:RuntimeException" : errorCategory;
         if (!category.matches("[A-Z0-9_]+:[A-Za-z0-9_$]{1,160}")) {
             throw new IllegalArgumentException("hosted repair error category is invalid");
         }
-        return baseMapper.markRepair(id, rs, category, System.currentTimeMillis());
+        return baseMapper.markRepair(id, expectedState, expectedResumeState, expectedGeneration,
+                resumeState, category, System.currentTimeMillis());
+    }
+
+    @Override public int resumeRepair(long id, String resumeState, long expectedGeneration) {
+        if (id <= 0 || expectedGeneration < 0 || !AgentHostedProfileState.VALUES.contains(resumeState)
+                || AgentHostedProfileState.REPAIR_REQUIRED.equals(resumeState)) {
+            throw new IllegalArgumentException("hosted repair resume checkpoint is invalid");
+        }
+        return baseMapper.resumeRepair(id, resumeState, expectedGeneration, System.currentTimeMillis());
+    }
+
+    private void requireDurableCheckpoint(long id, String expectedState,
+            String expectedResumeState, long expectedGeneration) {
+        if (id <= 0 || expectedGeneration < 0 || !AgentHostedProfileState.VALUES.contains(expectedState)
+                || (expectedResumeState != null
+                    && !AgentHostedProfileState.VALUES.contains(expectedResumeState))) {
+            throw new IllegalArgumentException("hosted expected checkpoint is invalid");
+        }
     }
 
     private void requireScope(String tenantId, String clientId, String ownerJiacn, long bindingId) {

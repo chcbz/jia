@@ -1293,7 +1293,8 @@ public class AgentServiceImpl implements AgentService {
     private AgentRuntimeDTO toCatalogDTO(AgentPersonaEntity persona, String clientId, String jiacn) {
         AgentPersonaBindingEntity binding = Boolean.TRUE.equals(persona.getSystemAgent())
                 ? null
-                : agentPersonaBindingDao.findActiveByClientAndPersona(clientId, persona.getPersonaCode());
+                : agentPersonaBindingDao.findExactActiveByScopeAndPersona(
+                        jiacn, clientId, jiacn, persona.getPersonaCode());
         boolean boundToMe = binding != null && jiacn.equals(binding.getJiacn());
         String catalogAgentId = null;
         if (boundToMe) {

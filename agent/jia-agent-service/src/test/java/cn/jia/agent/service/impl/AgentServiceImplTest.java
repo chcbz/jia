@@ -1112,29 +1112,61 @@ class AgentServiceImplTest extends BaseMockTest {
 
 
     @Test
-    void personaCatalogDoesNotResolveOtherOwnerBindingThroughCurrentScope() {
+    void personaCatalogDisclosesOnlyExactOwnerBindingAndTreatsForeignOwnerAsUnbound() {
         AgentPersonaEntity persona = persona("lujunyi", "卢俊义", "玉麒麟");
-        AgentPersonaBindingEntity otherOwnerBinding = binding("jyt-jiafewnnv58ec2379c-lujunyi", "lujunyi");
-        otherOwnerBinding.setJiacn("other-owner");
-        otherOwnerBinding.setTenantId("other-owner");
-
+        AgentPersonaBindingEntity foreign = binding("foreign-agent", "lujunyi");
+        foreign.setTenantId("other-owner");
+        foreign.setJiacn("other-owner");
         when(agentPersonaDao.selectAll()).thenReturn(List.of(persona));
         when(agentPersonaBindingDao.findActiveByClientAndPersona("jia_client", "lujunyi"))
-                .thenReturn(otherOwnerBinding);
+                .thenReturn(foreign);
+        when(agentPersonaBindingDao.findExactActiveByScopeAndPersona(
+                "juyiting", "jia_client", "juyiting", "lujunyi")).thenReturn(null);
 
         List<AgentRuntimeDTO> result = agentService.listPersonaCatalog();
 
         assertEquals(1, result.size());
         AgentRuntimeDTO dto = result.getFirst();
         assertEquals("lujunyi", dto.getPersonaCode());
-        assertEquals(null, dto.getAgentId());
-        assertEquals("other-owner", dto.getOwnerJiacn());
-        assertEquals(true, dto.getBound());
-        assertEquals(false, dto.getBoundToMe());
-        assertEquals(false, dto.getCanBind());
+        assertNull(dto.getAgentId());
+        assertNull(dto.getOwnerJiacn());
+        assertFalse(dto.getBound());
+        assertFalse(dto.getBoundToMe());
+        assertTrue(dto.getCanBind());
         assertEquals(AgentConstants.STATUS_OFFLINE, dto.getStatus());
+        verify(agentPersonaBindingDao).findExactActiveByScopeAndPersona(
+                "juyiting", "jia_client", "juyiting", "lujunyi");
+        verify(agentPersonaBindingDao, never()).findActiveByClientAndPersona(any(), any());
         verify(agentIdentityService, never()).requireRegistrationIdentityInScope(any(), any(), any(), any());
         verify(agentRuntimeDao, never()).findByAgentId(any());
+    }
+
+    @Test
+    void personaCatalogExactOwnerBindingIsBoundAndCannotBindAgain() {
+        AgentPersonaEntity persona = persona("lujunyi", "卢俊义", "玉麒麟");
+        AgentPersonaBindingEntity binding = binding(
+                "agt_0123456789abcdef0123456789abcdef", "lujunyi");
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentRuntimeEntity runtime = runtimeAgent(
+                identity.getCanonicalAgentId(), "卢俊义", AgentConstants.STATUS_ONLINE, "[]");
+        runtime.setClientId("jia_client");
+        runtime.setOwnerJiacn("juyiting");
+        runtime.setBindingId(binding.getId());
+        when(agentPersonaDao.selectAll()).thenReturn(List.of(persona));
+        when(agentPersonaBindingDao.findExactActiveByScopeAndPersona(
+                "juyiting", "jia_client", "juyiting", "lujunyi")).thenReturn(binding);
+        when(agentIdentityService.requireRegistrationIdentityInScope(
+                "juyiting", "jia_client", "juyiting", binding.getAgentId())).thenReturn(identity);
+        when(agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId())).thenReturn(runtime);
+
+        AgentRuntimeDTO dto = agentService.listPersonaCatalog().getFirst();
+
+        assertEquals(identity.getCanonicalAgentId(), dto.getAgentId());
+        assertEquals("juyiting", dto.getOwnerJiacn());
+        assertTrue(dto.getBound());
+        assertTrue(dto.getBoundToMe());
+        assertFalse(dto.getCanBind());
+        assertTrue(dto.getCanOperate());
     }
 
     @Test

@@ -27,15 +27,17 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
 
 
     @Override
+    public AgentPersonaBindingEntity findExactActiveByScopeAndPersona(
+            String tenantId, String clientId, String ownerJiacn, String personaCode) {
+        requirePersonaScope(tenantId, clientId, ownerJiacn, personaCode);
+        return baseMapper.findExactActiveByScopeAndPersona(
+                tenantId, clientId, ownerJiacn, personaCode, AgentConstants.BINDING_STATUS_ACTIVE);
+    }
+
+    @Override
     public AgentPersonaBindingEntity findExactActiveByScopeAndPersonaForUpdate(
             String tenantId, String clientId, String ownerJiacn, String personaCode) {
-        requireExact(tenantId, "tenantId", 50);
-        requireExact(clientId, "clientId", 50);
-        requireExact(ownerJiacn, "ownerJiacn", 50);
-        requireExact(personaCode, "personaCode", 50);
-        if ("0".equals(ownerJiacn) || !tenantId.equals(ownerJiacn)) {
-            throw new IllegalArgumentException("persona owner scope is invalid");
-        }
+        requirePersonaScope(tenantId, clientId, ownerJiacn, personaCode);
         return baseMapper.findExactActiveByScopeAndPersonaForUpdate(
                 tenantId, clientId, ownerJiacn, personaCode, AgentConstants.BINDING_STATUS_ACTIVE);
     }
@@ -79,6 +81,17 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         return baseMapper.selectList(activeWrapper(clientId)
                 .eq(AgentPersonaBindingEntity::getJiacn, jiacn)
                 .orderByAsc(AgentPersonaBindingEntity::getPersonaCode));
+    }
+
+    private void requirePersonaScope(String tenantId, String clientId,
+            String ownerJiacn, String personaCode) {
+        requireExact(tenantId, "tenantId", 50);
+        requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
+        requireExact(personaCode, "personaCode", 50);
+        if ("0".equals(ownerJiacn) || !tenantId.equals(ownerJiacn)) {
+            throw new IllegalArgumentException("persona owner scope is invalid");
+        }
     }
 
     private void requireExact(String value, String field, int maxCodePoints) {

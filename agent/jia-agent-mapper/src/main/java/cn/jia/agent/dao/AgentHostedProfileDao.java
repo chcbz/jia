@@ -8,5 +8,7 @@ public interface AgentHostedProfileDao extends IBaseDao<AgentHostedProfileEntity
     AgentHostedProfileEntity findExactForUpdate(String tenantId, String clientId, String ownerJiacn, long bindingId);
     int transition(long id, String expectedState, long expectedGeneration,
             String nextState, long nextGeneration, boolean desiredEnabled);
-    int markRepair(long id, String resumeState, String lastError);
+    int markRepair(long id, String expectedState, String expectedResumeState,
+            long expectedGeneration, String resumeState, String lastError);
+    int resumeRepair(long id, String resumeState, long expectedGeneration);
 }

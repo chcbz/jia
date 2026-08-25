@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AgentPersonaBindResultDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import cn.jia.core.util.JsonUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -22,13 +23,20 @@ class AgentHostedProfilePublisherTest {
     @TempDir Path temp;
 
     @Test
-    void responseContractHasNoCredentialField() {
+    void responseContractHasNoCredentialFieldAndLargeIdentifiersSerializeAsStrings() throws Exception {
         Set<String> fields = Arrays.stream(AgentPersonaBindResultDTO.class.getDeclaredFields())
                 .filter(field -> !java.lang.reflect.Modifier.isStatic(field.getModifiers()))
                 .map(Field::getName).collect(Collectors.toSet());
         assertFalse(fields.contains("apiKey"));
         assertFalse(fields.contains("credential"));
         assertFalse(fields.contains("secret"));
+
+        AgentPersonaBindResultDTO result = new AgentPersonaBindResultDTO();
+        result.setBindingId("9223372036854775806");
+        result.setGeneration("9223372036854775805");
+        String json = JsonUtil.getMapper().writeValueAsString(result);
+        assertTrue(json.contains("\"bindingId\":\"9223372036854775806\""));
+        assertTrue(json.contains("\"generation\":\"9223372036854775805\""));
     }
 
     @Test
@@ -42,38 +50,99 @@ class AgentHostedProfilePublisherTest {
     }
 
     @Test
-    void disabledStageThenEnableUsesGenerationCasAndIsIdempotent() throws Exception {
-        Fixture f = fixture();
-        f.publisher.publish(f.hosted, f.persona, 0, 1, false, "dedicated-secret");
-        String staged = Files.readString(f.profiles);
+    void disabledStageThenEnableUsesGenerationCasAndReportsConfiguredPathsTruthfully() throws Exception {
+        Fixture fixture = fixture("configured");
+        AgentHostedProfilePublisher.PublishedPaths first = fixture.publisher.publish(
+                fixture.hosted, fixture.persona, 0, 1, false, "dedicated-secret");
+        String staged = Files.readString(fixture.profiles);
         assertTrue(staged.contains("enabled=false"));
         assertTrue(staged.contains("# cyfHostedGeneration=1"));
         assertTrue(staged.contains("apiKey=dedicated-secret"));
+        assertEquals(fixture.clients.resolve(fixture.hosted.getCanonicalAgentId()).toString(), first.workdir());
+        assertEquals(fixture.runtime.resolve(".codex-hosted-" + fixture.hosted.getProfileKey()).toString(),
+                first.codexHome());
+        assertEquals(fixture.profiles.toString(), first.profilesFile());
+        assertTrue(first.created());
+        assertFalse(first.alreadyExists());
 
-        f.publisher.publish(f.hosted, f.persona, 0, 1, false, "dedicated-secret");
-        assertEquals(staged, Files.readString(f.profiles));
+        AgentHostedProfilePublisher.PublishedPaths retry = fixture.publisher.publish(
+                fixture.hosted, fixture.persona, 0, 1, false, "dedicated-secret");
+        assertEquals(staged, Files.readString(fixture.profiles));
+        assertFalse(retry.created());
+        assertTrue(retry.alreadyExists());
 
-        f.publisher.publish(f.hosted, f.persona, 1, 2, true, "dedicated-secret");
-        String enabled = Files.readString(f.profiles);
+        AgentHostedProfilePublisher.PublishedPaths enabledPaths = fixture.publisher.publish(
+                fixture.hosted, fixture.persona, 1, 2, true, "dedicated-secret");
+        String enabled = Files.readString(fixture.profiles);
         assertTrue(enabled.contains("enabled=true"));
         assertTrue(enabled.contains("# cyfHostedGeneration=2"));
+        assertFalse(enabledPaths.created());
+        assertTrue(enabledPaths.alreadyExists());
+
+        AgentHostedProfilePublisher.PublishedPaths inspected =
+                fixture.publisher.inspectExisting(fixture.hosted, 2L);
+        assertEquals(enabledPaths.workdir(), inspected.workdir());
+        assertFalse(inspected.created());
+        assertTrue(inspected.alreadyExists());
     }
 
     @Test
-    void generationConflictAndLegacyCollisionFailClosedWithoutOverwrite() throws Exception {
-        Fixture f = fixture();
-        f.publisher.publish(f.hosted, f.persona, 0, 1, false, "dedicated-secret");
-        String stable = Files.readString(f.profiles);
-        assertThrows(AgentBizException.class,
-                () -> f.publisher.publish(f.hosted, f.persona, 0, 2, true, "dedicated-secret"));
-        assertEquals(stable, Files.readString(f.profiles));
+    void runtimeCompatibleProfileAndWhitespaceAgentIdCollisionsFailClosed() throws Exception {
+        Fixture fixture = fixture("collision");
+        for (String colliding : List.of(
+                """
+                [profile.shadow]
+                agentId = %s
+                """.formatted(fixture.hosted.getCanonicalAgentId()),
+                "   [agent.shadow]   \n   agentId    =    %s   \n"
+                        .formatted(fixture.hosted.getCanonicalAgentId()),
+                "[profile.nbsp]\nagentId\u00a0=\u00a0%s\n"
+                        .formatted(fixture.hosted.getCanonicalAgentId()))) {
+            Files.writeString(fixture.profiles, colliding);
+            String stable = Files.readString(fixture.profiles);
+            assertThrows(AgentBizException.class, () -> fixture.publisher.publish(
+                    fixture.hosted, fixture.persona, 0, 1, false, "dedicated-secret"));
+            assertEquals(stable, Files.readString(fixture.profiles));
+        }
+    }
 
-        Files.writeString(f.profiles, "[agent." + f.hosted.getProfileKey() + "]\nagentId="
-                + f.hosted.getCanonicalAgentId() + "\nenabled=true\n");
-        String legacy = Files.readString(f.profiles);
+    @Test
+    void duplicateAgentIdAndAmbiguousProfileTargetFailClosed() throws Exception {
+        Fixture fixture = fixture("ambiguous");
+        Files.writeString(fixture.profiles, """
+                [agent.shadow]
+                agentId=agt_11111111111111111111111111111111
+                agentId=agt_22222222222222222222222222222222
+                """);
+        assertThrows(AgentBizException.class, () -> fixture.publisher.publish(
+                fixture.hosted, fixture.persona, 0, 1, false, "dedicated-secret"));
+
+        Files.writeString(fixture.profiles, "[profile." + fixture.hosted.getProfileKey() + "]\nenabled=true\n");
+        assertThrows(AgentBizException.class, () -> fixture.publisher.publish(
+                fixture.hosted, fixture.persona, 0, 1, false, "dedicated-secret"));
+    }
+
+    @Test
+    void generationConflictLegacyCollisionAndMissingActiveSectionFailClosedWithoutOverwrite() throws Exception {
+        Fixture fixture = fixture("generation");
+        fixture.publisher.publish(fixture.hosted, fixture.persona, 0, 1, false, "dedicated-secret");
+        String stable = Files.readString(fixture.profiles);
         assertThrows(AgentBizException.class,
-                () -> f.publisher.publish(f.hosted, f.persona, 0, 1, false, "dedicated-secret"));
-        assertEquals(legacy, Files.readString(f.profiles));
+                () -> fixture.publisher.publish(fixture.hosted, fixture.persona,
+                        0, 2, true, "dedicated-secret"));
+        assertEquals(stable, Files.readString(fixture.profiles));
+
+        Files.writeString(fixture.profiles, "[agent." + fixture.hosted.getProfileKey() + "]\nagentId="
+                + fixture.hosted.getCanonicalAgentId() + "\nenabled=true\n");
+        String legacy = Files.readString(fixture.profiles);
+        assertThrows(AgentBizException.class,
+                () -> fixture.publisher.publish(fixture.hosted, fixture.persona,
+                        0, 1, false, "dedicated-secret"));
+        assertEquals(legacy, Files.readString(fixture.profiles));
+
+        Files.delete(fixture.profiles);
+        assertThrows(AgentBizException.class,
+                () -> fixture.publisher.inspectExisting(fixture.hosted, 2L));
     }
 
     @Test
@@ -110,7 +179,8 @@ class AgentHostedProfilePublisherTest {
         Path clients = temp.resolve("clients-drift");
         Files.createDirectories(runtime);
         byte[] original = "runtime-v1".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        Files.write(runtime.resolve("agent-client.mjs"), "runtime-v2".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(runtime.resolve("agent-client.mjs"),
+                "runtime-v2".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         Files.writeString(runtime.resolve(AgentHostedProfilePublisher.CAPABILITY_MANIFEST), """
                 contractVersion=1
                 perProfileApiKey=true
@@ -124,9 +194,9 @@ class AgentHostedProfilePublisherTest {
         assertFalse(Files.exists(clients));
     }
 
-    private Fixture fixture() throws Exception {
-        Path runtime = temp.resolve("runtime");
-        Path clients = temp.resolve("clients");
+    private Fixture fixture(String name) throws Exception {
+        Path runtime = temp.resolve("runtime-" + name);
+        Path clients = temp.resolve("clients-" + name);
         Files.createDirectories(runtime.resolve(".codex"));
         Files.writeString(runtime.resolve(".codex/config.toml"), "model='test'");
         Files.writeString(runtime.resolve(".codex/auth.json"), "{}");
@@ -141,22 +211,33 @@ class AgentHostedProfilePublisherTest {
                 """.formatted(AgentHostedProfilePublisher.sha256(runtimeSource)).strip());
         FixtureData data = data();
         return new Fixture(new AgentHostedProfilePublisher(runtime, clients), data.hosted,
-                data.persona, runtime.resolve("codex-profiles.conf"));
+                data.persona, runtime, clients, runtime.resolve("codex-profiles.conf"));
     }
 
     private FixtureData data() {
         Scope scope = new Scope("owner-a", "client-a", "owner-a");
         AgentHostedProfileEntity hosted = new AgentHostedProfileEntity();
-        hosted.setBindingId(11L); hosted.setTenantId(scope.tenantId()); hosted.setClientId(scope.clientId());
-        hosted.setOwnerJiacn(scope.ownerJiacn()); hosted.setCanonicalAgentId("agt_0123456789abcdef0123456789abcdef");
-        hosted.setPersonaCode("wuyong"); hosted.setProfileKey(AgentHostedBindingTransaction.scopeDigest(scope) + 11L);
-        hosted.setApiKeyId("key-11"); hosted.setGeneration(0L); hosted.setLifecycleState("PREPARED");
+        hosted.setBindingId(11L);
+        hosted.setTenantId(scope.tenantId());
+        hosted.setClientId(scope.clientId());
+        hosted.setOwnerJiacn(scope.ownerJiacn());
+        hosted.setCanonicalAgentId("agt_0123456789abcdef0123456789abcdef");
+        hosted.setPersonaCode("wuyong");
+        hosted.setProfileKey(AgentHostedBindingTransaction.scopeDigest(scope) + 11L);
+        hosted.setApiKeyId("key-11");
+        hosted.setGeneration(0L);
+        hosted.setLifecycleState("PREPARED");
         AgentPersonaEntity persona = new AgentPersonaEntity();
-        persona.setPersonaCode("wuyong"); persona.setName("Wu Yong"); persona.setTitle("Strategist");
+        persona.setPersonaCode("wuyong");
+        persona.setName("Wu Yong");
+        persona.setTitle("Strategist");
         return new FixtureData(hosted, persona);
     }
 
     private record Fixture(AgentHostedProfilePublisher publisher, AgentHostedProfileEntity hosted,
-            AgentPersonaEntity persona, Path profiles) {}
-    private record FixtureData(AgentHostedProfileEntity hosted, AgentPersonaEntity persona) {}
+            AgentPersonaEntity persona, Path runtime, Path clients, Path profiles) {
+    }
+
+    private record FixtureData(AgentHostedProfileEntity hosted, AgentPersonaEntity persona) {
+    }
 }

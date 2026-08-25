@@ -10,6 +10,9 @@ public interface AgentPersonaBindingDao extends IBaseDao<AgentPersonaBindingEnti
 
     AgentPersonaBindingEntity findActiveByClientAndPersona(String clientId, String personaCode);
 
+    AgentPersonaBindingEntity findExactActiveByScopeAndPersona(
+            String tenantId, String clientId, String ownerJiacn, String personaCode);
+
     AgentPersonaBindingEntity findExactActiveByScopeAndPersonaForUpdate(
             String tenantId, String clientId, String ownerJiacn, String personaCode);
 
