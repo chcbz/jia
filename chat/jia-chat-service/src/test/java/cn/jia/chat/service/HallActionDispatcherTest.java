@@ -350,8 +350,11 @@ class HallActionDispatcherTest extends BaseMockTest {
     void dbShadowLegacySideEffectIsNotRepeatedOrClaimedAfterCanaryCutover() {
         when(writerProvider.getIfAvailable()).thenReturn(writer);
         when(writer.writeAuthorizedHall(any(), eq("caller-agent")))
-                .thenReturn(new AgentCommandTransportWriteResult(
-                        71L, "cmd-shadow", "message-shadow", "event-shadow", false))
+                .thenAnswer(invocation -> {
+                    AgentCommandDraft draft = invocation.getArgument(0);
+                    return new AgentCommandTransportWriteResult(
+                            71L, draft.commandId(), "message-shadow", "event-shadow", false);
+                })
                 .thenThrow(new AgentCommandShadowIntentException(
                         "DB_SHADOW intent is capture-only; submit a new intent for canary dispatch"));
         when(agentWebSocketHandler.isAgentConnected(
