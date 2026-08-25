@@ -64,6 +64,8 @@ import com.github.pagehelper.PageInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -572,11 +574,48 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task search scope is required");
+        }
+        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
+        Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
+        if (!(tenantClaim instanceof String tenantId)
+                || !(clientClaim instanceof String clientId)
+                || tenantId.isEmpty() || clientId.isEmpty()
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(tenantId)
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(clientId)
+                || tenantId.codePointCount(0, tenantId.length()) > 50
+                || clientId.codePointCount(0, clientId.length()) > 50
+                || Character.isWhitespace(tenantId.codePointAt(0))
+                || Character.isSpaceChar(tenantId.codePointAt(0))
+                || Character.isWhitespace(tenantId.codePointBefore(tenantId.length()))
+                || Character.isSpaceChar(tenantId.codePointBefore(tenantId.length()))
+                || Character.isWhitespace(clientId.codePointAt(0))
+                || Character.isSpaceChar(clientId.codePointAt(0))
+                || Character.isWhitespace(clientId.codePointBefore(clientId.length()))
+                || Character.isSpaceChar(clientId.codePointBefore(clientId.length()))
+                || tenantId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || clientId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || tenantId.codePoints().anyMatch(Character::isISOControl)
+                || clientId.codePoints().anyMatch(Character::isISOControl)
+                || "0".equals(tenantId) || "0".equals(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task search scope is invalid");
+        }
+
         int pageNum = Optional.ofNullable(request.getPageNum()).orElse(1);
         int pageSize = Optional.ofNullable(request.getPageSize()).orElse(20);
         String keyword = request.getKeyword();
-        List<AgentTaskDTO> tasks = agentTaskMetaDao.search(request.getStatus(), request.getAbility())
+        List<AgentTaskDTO> tasks = agentTaskMetaDao.search(
+                        tenantId, clientId, request.getStatus(), request.getAbility())
                 .stream()
+                .peek(task -> requireScopedTaskProjection(
+                        task, tenantId, clientId, task == null ? null : task.getTaskId()))
                 .map(this::toTaskDTO)
                 .filter(task -> matchesTaskKeyword(task, keyword))
                 .toList();
@@ -585,6 +624,40 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public Map<String, Long> countTasksByStatus(AgentTaskSearchDTO request) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task count scope is required");
+        }
+        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
+        Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
+        if (!(tenantClaim instanceof String tenantId)
+                || !(clientClaim instanceof String clientId)
+                || tenantId.isEmpty() || clientId.isEmpty()
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(tenantId)
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(clientId)
+                || tenantId.codePointCount(0, tenantId.length()) > 50
+                || clientId.codePointCount(0, clientId.length()) > 50
+                || Character.isWhitespace(tenantId.codePointAt(0))
+                || Character.isSpaceChar(tenantId.codePointAt(0))
+                || Character.isWhitespace(tenantId.codePointBefore(tenantId.length()))
+                || Character.isSpaceChar(tenantId.codePointBefore(tenantId.length()))
+                || Character.isWhitespace(clientId.codePointAt(0))
+                || Character.isSpaceChar(clientId.codePointAt(0))
+                || Character.isWhitespace(clientId.codePointBefore(clientId.length()))
+                || Character.isSpaceChar(clientId.codePointBefore(clientId.length()))
+                || tenantId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || clientId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || tenantId.codePoints().anyMatch(Character::isISOControl)
+                || clientId.codePoints().anyMatch(Character::isISOControl)
+                || "0".equals(tenantId) || "0".equals(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task count scope is invalid");
+        }
+
         Map<String, Long> counts = new LinkedHashMap<>();
         counts.put("total", 0L);
         List.of(AgentConstants.TASK_STATUS_OPEN, AgentConstants.TASK_STATUS_ASSIGNED,
@@ -594,10 +667,14 @@ public class AgentServiceImpl implements AgentService {
 
         String ability = request == null ? null : request.getAbility();
         String keyword = request == null ? null : request.getKeyword();
-        agentTaskMetaDao.search(null, ability).stream()
-                .filter(task -> StringUtil.isBlank(keyword) || String.valueOf(task.getTaskId()).contains(keyword))
+        agentTaskMetaDao.search(tenantId, clientId, null, ability).stream()
+                .peek(task -> requireScopedTaskProjection(
+                        task, tenantId, clientId, task == null ? null : task.getTaskId()))
+                .filter(task -> StringUtil.isBlank(keyword)
+                        || String.valueOf(task.getTaskId()).contains(keyword))
                 .forEach(task -> {
-                    String status = Optional.ofNullable(task.getRewardStatus()).orElse(AgentConstants.TASK_STATUS_OPEN);
+                    String status = Optional.ofNullable(task.getRewardStatus())
+                            .orElse(AgentConstants.TASK_STATUS_OPEN);
                     counts.put("total", counts.get("total") + 1);
                     counts.put(status, counts.getOrDefault(status, 0L) + 1);
                 });

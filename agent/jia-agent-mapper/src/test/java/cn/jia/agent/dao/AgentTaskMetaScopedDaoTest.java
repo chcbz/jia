@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -88,6 +90,29 @@ class AgentTaskMetaScopedDaoTest {
 
 
     @Test
+    void taskSearchSqlUsesByteExactTenantAndClientWithoutLegacyFallback()
+            throws Exception {
+        Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "searchExactInScope", String.class, String.class,
+                String.class, String.class);
+        String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
+
+        assertTrue(sql.contains("where tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("cast(tenant_id as binary(200)) "
+                + "= cast(#{tenantid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(tenant_id) = octet_length(#{tenantid})"), sql);
+        assertTrue(sql.contains("cast(client_id as binary(200)) "
+                + "= cast(#{clientid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(client_id) = octet_length(#{clientid})"), sql);
+        assertTrue(sql.contains("reward_status = #{status}"), sql);
+        assertTrue(sql.contains("required_abilities like concat('%', '\"', #{ability}, '\"', '%')"), sql);
+        assertFalse(sql.contains("tenant_id = '0'"), sql);
+        assertFalse(sql.contains("tenant_id is null"), sql);
+        assertTrue(sql.contains("order by update_time desc"), sql);
+    }
+
+    @Test
     void workItemRootLockUsesByteExactScopeChildAndTaskJoinWithDeterministicOrder()
             throws Exception {
         Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
@@ -144,6 +169,20 @@ class AgentTaskMetaScopedDaoTest {
         assertEquals(List.of(), dao.findByAgentId(
                 "tenant-a", "client-a", "agent-a", 9999));
         verify(mapper).selectByAgentInScope("tenant-a", "client-a", "agent-a", 500);
+
+        when(mapper.searchExactInScope(
+                "tenant-a", "client-a", "open", "planning"))
+                .thenReturn(List.of());
+        assertEquals(List.of(), dao.search(
+                "tenant-a", "client-a", "open", "planning"));
+        verify(mapper).searchExactInScope(
+                "tenant-a", "client-a", "open", "planning");
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.search("0", "client-a", null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.search("tenant-a", "0", null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.search(" tenant-a", "client-a", null, null));
 
         dao.reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);
         verify(mapper).reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);
