@@ -16,6 +16,7 @@ import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
+import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.chat.handler.AgentProtocolMessageNormalizer;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.core.context.EsContext;
