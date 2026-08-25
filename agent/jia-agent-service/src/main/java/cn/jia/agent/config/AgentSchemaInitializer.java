@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
@@ -244,8 +245,10 @@ public class AgentSchemaInitializer implements InitializingBean {
                   ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
                 WHERE tc.CONSTRAINT_SCHEMA=DATABASE() AND tc.TABLE_NAME='agent_hosted_profile'
                   AND tc.CONSTRAINT_TYPE='CHECK'
-                """, rs -> actualChecks.put(rs.getString("CONSTRAINT_NAME"),
-                        normalizeIdentityExpression(rs.getString("CHECK_CLAUSE"))));
+                """, (RowCallbackHandler) rs -> {
+            actualChecks.put(rs.getString("CONSTRAINT_NAME"),
+                    normalizeIdentityExpression(rs.getString("CHECK_CLAUSE")));
+        });
         java.util.Map<String, String> normalizedChecks = new java.util.HashMap<>();
         expectedChecks.forEach((name, clause) -> normalizedChecks.put(name, normalizeIdentityExpression(clause)));
         if (!actualChecks.equals(normalizedChecks)) {
