@@ -169,6 +169,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 && inbox != null && "PROCESSED".equals(inbox.getStatus())
                 && "SENT".equals(inbox.getResultStatus())
                 && inbox.getProcessedAt() != null && inbox.getProcessedAt() > 0
+                && delivery.getNextRetryAt() == null && validAckLastError(delivery)
                 && inbox.getNextRetryAt() == null && inbox.getLeaseOwner() == null
                 && inbox.getLeaseUntil() == null && inbox.getLastError() == null;
         if (outbox == null || inbox == null

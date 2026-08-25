@@ -393,6 +393,59 @@ class AgentCommandRecoveryServiceTest {
     }
 
     @Test
+    void ackRejectsSettledSentAndTerminalPriorDispositionDriftWithoutMutation() {
+        for (java.util.function.Consumer<RecordingDao> poison : List.of(
+                dao -> dao.delivery.setNextRetryAt(NOW + 1),
+                dao -> dao.delivery.setLastError("poison"))) {
+            RecordingDao dao = sentDao();
+            poison.accept(dao);
+            Long poisonedNextRetryAt = dao.delivery.getNextRetryAt();
+            String poisonedLastError = dao.delivery.getLastError();
+
+            assertThrows(AgentCommandAckRejectedException.class,
+                    () -> ackService(dao, enabledGate()).acknowledge(
+                            ack("ack-poisoned-sent", "RECEIVED", M1), NOW));
+            assertEquals("SENT", dao.delivery.getStatus());
+            assertEquals(poisonedNextRetryAt, dao.delivery.getNextRetryAt());
+            assertEquals(poisonedLastError, dao.delivery.getLastError());
+            assertEquals(0, dao.ackMutations);
+        }
+
+        for (String terminal : List.of("SUCCEEDED", "FAILED", "REJECTED")) {
+            String validLastError = switch (terminal) {
+                case "FAILED" -> AgentCommandAckServiceImpl.AGENT_REPORTED_FAILED;
+                case "REJECTED" -> AgentCommandAckServiceImpl.AGENT_REPORTED_REJECTED;
+                default -> null;
+            };
+            String invalidLastError = switch (terminal) {
+                case "FAILED" -> null;
+                case "REJECTED" -> AgentCommandAckServiceImpl.AGENT_REPORTED_FAILED;
+                default -> "poison";
+            };
+
+            RecordingDao retryDrift = sentDao();
+            retryDrift.delivery.setStatus(terminal).setLastError(validLastError)
+                    .setNextRetryAt(NOW + 1);
+            assertThrows(AgentCommandAckRejectedException.class,
+                    () -> ackService(retryDrift, enabledGate()).acknowledge(
+                            ack("ack-terminal-retry-drift-" + terminal, terminal, M1), NOW));
+            assertEquals(terminal, retryDrift.delivery.getStatus());
+            assertEquals(NOW + 1, retryDrift.delivery.getNextRetryAt());
+            assertEquals(validLastError, retryDrift.delivery.getLastError());
+            assertEquals(0, retryDrift.ackMutations);
+
+            RecordingDao errorDrift = sentDao();
+            errorDrift.delivery.setStatus(terminal).setLastError(invalidLastError);
+            assertThrows(AgentCommandAckRejectedException.class,
+                    () -> ackService(errorDrift, enabledGate()).acknowledge(
+                            ack("ack-terminal-error-drift-" + terminal, terminal, M1), NOW));
+            assertEquals(terminal, errorDrift.delivery.getStatus());
+            assertEquals(invalidLastError, errorDrift.delivery.getLastError());
+            assertEquals(0, errorDrift.ackMutations);
+        }
+    }
+
+    @Test
     void ackSkipBackwardTerminalConflictAndOldMessageFailClosed() {
         for (AgentCommandAck invalid : List.of(
                 ack("ack-skip", "STARTED", M1),

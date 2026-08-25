@@ -676,7 +676,11 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             AgentInboxDisposition disposition,
             AgentCommandDeliveryEntity delivery) {
         if (disposition.type() != AgentInboxDisposition.Type.SENT
-                || delivery.getVersion() == null) {
+                || delivery.getVersion() == null
+                || delivery.getNextRetryAt() != null
+                || delivery.getLeaseOwner() != null
+                || delivery.getLeaseUntil() != null
+                || !validAckCompletionLastError(delivery)) {
             return false;
         }
         long versionDelta;
@@ -693,6 +697,16 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                     || (versionDelta == 1 && token.deliveryActiveAttempt() > 1);
             case "REJECTED" -> versionDelta >= 1 && versionDelta <= 3;
             default -> false;
+        };
+    }
+
+    private boolean validAckCompletionLastError(AgentCommandDeliveryEntity delivery) {
+        return switch (delivery.getStatus()) {
+            case "FAILED" -> AgentCommandAckServiceImpl.AGENT_REPORTED_FAILED.equals(
+                    delivery.getLastError());
+            case "REJECTED" -> AgentCommandAckServiceImpl.AGENT_REPORTED_REJECTED.equals(
+                    delivery.getLastError());
+            default -> delivery.getLastError() == null;
         };
     }
 

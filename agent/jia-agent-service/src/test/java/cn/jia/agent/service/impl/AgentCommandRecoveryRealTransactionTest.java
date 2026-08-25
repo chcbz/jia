@@ -25,6 +25,7 @@ import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentInboxClaim;
 import cn.jia.agent.entity.AgentInboxDisposition;
 import cn.jia.agent.entity.AgentInboxConsumers;
+import cn.jia.agent.entity.AgentInboxFenceException;
 import cn.jia.agent.entity.AgentInboxMessage;
 import cn.jia.agent.entity.AgentOutboxClaim;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
@@ -167,6 +168,60 @@ class AgentCommandRecoveryRealTransactionTest {
                 "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
         assertEquals("SENT", string(
                 "SELECT result_status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+    }
+
+    @Test
+    void sentCompletionRejectsAckDeliveryShapePoisonAndKeepsInboxProcessing() {
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentInboxClaim claim = claimFirstPublished(inbox, "shape-poison-worker", NOW);
+        AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+        assertEquals("RECEIVED", ack.acknowledge(
+                ack("shape-poison-received", "RECEIVED", M1), NOW + 1).status());
+
+        jdbc.update("UPDATE agent_command_delivery SET next_retry_at=? WHERE id=1", NOW + 10_000L);
+        assertSentCompletionRejected(inbox, claim, NOW + 2);
+        jdbc.update("UPDATE agent_command_delivery SET next_retry_at=NULL WHERE id=1");
+
+        jdbc.update("UPDATE agent_command_delivery SET lease_owner='poison-owner' WHERE id=1");
+        assertSentCompletionRejected(inbox, claim, NOW + 3);
+        jdbc.update("UPDATE agent_command_delivery SET lease_owner=NULL WHERE id=1");
+
+        jdbc.update("UPDATE agent_command_delivery SET lease_until=? WHERE id=1", NOW + 10_000L);
+        assertSentCompletionRejected(inbox, claim, NOW + 4);
+        jdbc.update("UPDATE agent_command_delivery SET lease_until=NULL WHERE id=1");
+
+        jdbc.update("UPDATE agent_command_delivery SET last_error='poison' WHERE id=1");
+        assertSentCompletionRejected(inbox, claim, NOW + 5);
+        jdbc.update("UPDATE agent_command_delivery SET last_error=NULL WHERE id=1");
+
+        assertEquals("STARTED", ack.acknowledge(
+                ack("shape-poison-started", "STARTED", M1), NOW + 6).status());
+        assertEquals("FAILED", ack.acknowledge(
+                ack("shape-poison-failed", "FAILED", M1), NOW + 7).status());
+        jdbc.update("UPDATE agent_command_delivery SET last_error='wrong-failed-marker' WHERE id=1");
+        assertSentCompletionRejected(inbox, claim, NOW + 8);
+        jdbc.update("UPDATE agent_command_delivery SET last_error=? WHERE id=1",
+                AgentCommandAckServiceImpl.AGENT_REPORTED_FAILED);
+        inbox.complete(claim.token(), AgentInboxDisposition.sent(), NOW + 9);
+        assertEquals("FAILED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSED", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+
+        insertWaitingSourceAfterDelete();
+        inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        claim = claimFirstPublished(inbox, "rejected-marker-worker", NOW + 10);
+        ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+        assertEquals("REJECTED", ack.acknowledge(
+                ack("shape-poison-rejected", "REJECTED", M1), NOW + 11).status());
+        jdbc.update("UPDATE agent_command_delivery SET last_error=? WHERE id=1",
+                AgentCommandAckServiceImpl.AGENT_REPORTED_FAILED);
+        assertSentCompletionRejected(inbox, claim, NOW + 12);
+        jdbc.update("UPDATE agent_command_delivery SET last_error=? WHERE id=1",
+                AgentCommandAckServiceImpl.AGENT_REPORTED_REJECTED);
+        inbox.complete(claim.token(), AgentInboxDisposition.sent(), NOW + 13);
+        assertEquals("REJECTED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSED", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
     }
 
     @Test
@@ -447,6 +502,59 @@ class AgentCommandRecoveryRealTransactionTest {
         return new AgentCommandAck("tenant-a", "client-a", "agent-a", messageId, correlationId,
                 "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
                 "task-1", null, status, NOW);
+    }
+
+    private AgentInboxClaim claimFirstPublished(
+            AgentCommandInboxServiceImpl inbox, String worker, long now) {
+        jdbc.update("DELETE FROM agent_consumer_inbox");
+        jdbc.update("UPDATE agent_command_delivery SET status='PUBLISHED',next_retry_at=NULL,"
+                + "lease_owner=NULL,lease_until=NULL,last_error=NULL,version=7 WHERE id=1");
+        byte[] wire = blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M1 + "'");
+        AgentInboxClaim claim = inbox.claim(new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", M1, "event-1",
+                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                1L, wire), worker, now, 10_000L);
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
+        return claim;
+    }
+
+    private void assertSentCompletionRejected(
+            AgentCommandInboxServiceImpl inbox, AgentInboxClaim claim, long now) {
+        String deliveryStatus = string("SELECT status FROM agent_command_delivery WHERE id=1");
+        Long nextRetryAt = jdbc.queryForObject(
+                "SELECT next_retry_at FROM agent_command_delivery WHERE id=1", Long.class);
+        String leaseOwner = jdbc.queryForObject(
+                "SELECT lease_owner FROM agent_command_delivery WHERE id=1", String.class);
+        Long leaseUntil = jdbc.queryForObject(
+                "SELECT lease_until FROM agent_command_delivery WHERE id=1", Long.class);
+        String lastError = jdbc.queryForObject(
+                "SELECT last_error FROM agent_command_delivery WHERE id=1", String.class);
+        long deliveryVersion = jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class);
+        long inboxVersion = jdbc.queryForObject(
+                "SELECT version FROM agent_consumer_inbox WHERE message_id='" + M1 + "'", Long.class);
+
+        assertThrows(AgentInboxFenceException.class,
+                () -> inbox.complete(claim.token(), AgentInboxDisposition.sent(), now));
+
+        assertEquals(deliveryStatus, string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(nextRetryAt, jdbc.queryForObject(
+                "SELECT next_retry_at FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals(leaseOwner, jdbc.queryForObject(
+                "SELECT lease_owner FROM agent_command_delivery WHERE id=1", String.class));
+        assertEquals(leaseUntil, jdbc.queryForObject(
+                "SELECT lease_until FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals(lastError, jdbc.queryForObject(
+                "SELECT last_error FROM agent_command_delivery WHERE id=1", String.class));
+        assertEquals(deliveryVersion, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals("PROCESSING", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+        assertEquals(1, number("SELECT COUNT(*) FROM agent_consumer_inbox WHERE message_id='"
+                + M1 + "' AND result_status IS NULL AND processed_at IS NULL"));
+        assertEquals(inboxVersion, jdbc.queryForObject(
+                "SELECT version FROM agent_consumer_inbox WHERE message_id='" + M1 + "'", Long.class));
     }
 
     private void insertWaitingSourceAfterDelete() {
