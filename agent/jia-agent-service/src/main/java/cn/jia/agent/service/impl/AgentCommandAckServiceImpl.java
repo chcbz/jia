@@ -68,11 +68,24 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 ack.tenantId(), ack.clientId(), delivery.getId(), delivery.getActiveMessageId());
         if (rows == null || rows.size() != 1) throw rejected("ACK_ACTIVE_OUTBOX_CARDINALITY");
         AgentOutboxEventEntity outbox = rows.getFirst();
+        boolean directParentTerminal = isDirectParentTerminalCandidate(ack, delivery, outbox);
+        if (!ack.correlationId().equals(delivery.getActiveMessageId()) && !directParentTerminal) {
+            throw rejected("ACK_ACTIVE_MESSAGE_MISMATCH");
+        }
         List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery);
         AgentConsumerInboxEntity inbox = dao.lockInbox(
                 ack.tenantId(), ack.clientId(), AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                 delivery.getActiveMessageId());
+        AgentConsumerInboxEntity parentInbox = directParentTerminal
+                ? dao.lockInbox(
+                        ack.tenantId(), ack.clientId(),
+                        AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, ack.correlationId())
+                : null;
         validateSentSource(ack, delivery, outbox, previousAttempts, inbox, now);
+        if (directParentTerminal) {
+            validateDirectParentTerminalSource(
+                    ack, delivery, outbox, previousAttempts, parentInbox);
+        }
 
         String current = delivery.getStatus();
         if (ack.ackStatus().equals(current)) {
@@ -123,7 +136,9 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || !Objects.equals(ack.workItemId(), delivery.getWorkItemId())
                 || !ack.registeredAgentId().equals(delivery.getTargetAgentId())
                 || !AgentProtocolConstants.COMMAND_TASK_INVITE.equals(delivery.getCommandType())
-                || !ack.correlationId().equals(delivery.getActiveMessageId())
+                || (!ack.correlationId().equals(delivery.getActiveMessageId())
+                    && !(delivery.getActiveAttempt() != null && delivery.getActiveAttempt() > 1
+                        && TERMINAL_ACK_STATUSES.contains(ack.ackStatus())))
                 || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
                 || delivery.getAttemptCount() == null || delivery.getAttemptCount() <= 0
                 || !delivery.getAttemptCount().equals(delivery.getActiveAttempt())
@@ -240,6 +255,85 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
         if (!Arrays.equals(canonicalWire, outbox.getWirePayload())) {
             throw rejected("ACK_WIRE_CANONICAL_DRIFT");
         }
+    }
+
+
+    private boolean isDirectParentTerminalCandidate(
+            AgentCommandAck ack,
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity activeOutbox) {
+        return delivery.getActiveAttempt() != null && delivery.getActiveAttempt() > 1
+                && TERMINAL_ACK_STATUSES.contains(ack.ackStatus())
+                && activeOutbox != null
+                && ack.correlationId().equals(activeOutbox.getReplayParentMessageId());
+    }
+
+    private void validateDirectParentTerminalSource(
+            AgentCommandAck ack,
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity activeOutbox,
+            List<AgentOutboxEventEntity> previousAttempts,
+            AgentConsumerInboxEntity parentInbox) {
+        if (previousAttempts == null || previousAttempts.size() != 1) {
+            throw rejected("ACK_PARENT_OUTBOX_CARDINALITY");
+        }
+        AgentOutboxEventEntity parentOutbox = previousAttempts.getFirst();
+        if (parentOutbox == null
+                || !ack.correlationId().equals(parentOutbox.getMessageId())
+                || !ack.correlationId().equals(delivery.getReplayParentMessageId())
+                || !ack.correlationId().equals(activeOutbox.getReplayParentMessageId())
+                || parentOutbox.getActiveAttempt() == null
+                || delivery.getActiveAttempt() == null
+                || parentOutbox.getActiveAttempt() != delivery.getActiveAttempt() - 1
+                || !validSettledParentInbox(delivery, parentOutbox, parentInbox)) {
+            throw rejected("ACK_PARENT_SOURCE_PROVENANCE_INVALID");
+        }
+        AgentCommandDraft draft;
+        try {
+            draft = AgentCommandCanonicalCodec.decodeBusinessBytes(delivery.getCommandPayload());
+        } catch (IllegalArgumentException invalid) {
+            throw rejected("ACK_PARENT_COMMAND_PAYLOAD_INVALID");
+        }
+        byte[] canonicalParentWire = AgentCommandCanonicalCodec.wireBytes(
+                draft, parentOutbox.getMessageId(), parentOutbox.getActiveAttempt());
+        if (!Arrays.equals(canonicalParentWire, parentOutbox.getWirePayload())
+                || !Arrays.equals(canonicalParentWire, parentInbox.getWirePayload())) {
+            throw rejected("ACK_PARENT_WIRE_CANONICAL_DRIFT");
+        }
+    }
+
+    private boolean validSettledParentInbox(
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity parentOutbox,
+            AgentConsumerInboxEntity parentInbox) {
+        return parentInbox != null
+                && parentInbox.getId() != null && parentInbox.getId() > 0
+                && AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1.equals(
+                        parentInbox.getConsumerName())
+                && Objects.equals(parentInbox.getTenantId(), delivery.getTenantId())
+                && Objects.equals(parentInbox.getClientId(), delivery.getClientId())
+                && Objects.equals(parentInbox.getMessageId(), parentOutbox.getMessageId())
+                && Objects.equals(parentInbox.getEventId(), parentOutbox.getEventId())
+                && Objects.equals(parentInbox.getCommandId(), delivery.getCommandId())
+                && Objects.equals(parentInbox.getDeliveryId(), delivery.getId())
+                && "PROCESSED".equals(parentInbox.getStatus())
+                && "SENT".equals(parentInbox.getResultStatus())
+                && parentInbox.getProcessedAt() != null && parentInbox.getProcessedAt() > 0
+                && parentInbox.getAttemptCount() != null && parentInbox.getAttemptCount() > 0
+                && parentInbox.getActiveAttempt() != null
+                && parentInbox.getActiveAttempt().equals(parentInbox.getAttemptCount())
+                && parentInbox.getNextRetryAt() == null
+                && parentInbox.getLeaseOwner() == null && parentInbox.getLeaseUntil() == null
+                && parentInbox.getLastError() == null
+                && parentInbox.getVersion() != null && parentInbox.getVersion() >= 0
+                && Objects.equals(parentInbox.getExpiresAt(), delivery.getExpiresAt())
+                && parentInbox.getReplayParentMessageId() == null
+                && parentInbox.getReplayRequesterId() == null
+                && parentInbox.getReplayApproverId() == null
+                && parentInbox.getReplayReason() == null
+                && Arrays.equals(parentOutbox.getWirePayload(), parentInbox.getWirePayload())
+                && hashEquals(parentOutbox.getWirePayloadHash(), parentInbox.getWirePayloadHash())
+                && storedHash(parentInbox.getWirePayload(), parentInbox.getWirePayloadHash());
     }
 
     private boolean validAckLastError(AgentCommandDeliveryEntity delivery) {

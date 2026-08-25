@@ -271,17 +271,19 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     @Test
-    void automaticReplayNonterminalCannotStrandSentAndNextAttemptTerminalizes() {
+    void automaticReplayNonterminalStaysSentAndDirectParentTerminalConvergesWithoutM3() {
         jdbc.update("UPDATE agent_command_delivery SET status='SENT',next_retry_at=NULL,"
                 + "last_error=NULL,update_time=? WHERE id=1", NOW);
         jdbc.update("UPDATE agent_consumer_inbox SET status='PROCESSED',result_status='SENT',"
-                + "next_retry_at=NULL,last_error=NULL WHERE id=20");
+                + "next_retry_at=NULL,lease_owner=NULL,lease_until=NULL,last_error=NULL WHERE id=20");
 
         assertEquals(1, reissueService(dao, M2, E2)
                 .reissueForReconnect(scope(), 10, NOW + 1).reissued());
         publishAndComplete(M2, "replay-attempt-2", NOW + 2);
         assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
         assertEquals(M2, string("SELECT active_message_id FROM agent_command_delivery WHERE id=1"));
+        assertEquals(M1, string(
+                "SELECT replay_parent_message_id FROM agent_command_delivery WHERE id=1"));
         assertEquals(2, number("SELECT active_attempt FROM agent_command_delivery WHERE id=1"));
 
         AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
@@ -300,30 +302,79 @@ class AgentCommandRecoveryRealTransactionTest {
                     "SELECT last_error FROM agent_command_delivery WHERE id=1", String.class));
         }
 
-        for (String staleStatus : List.of("STARTED", "SUCCEEDED")) {
-            assertThrows(AgentCommandAckRejectedException.class,
-                    () -> ack.acknowledge(ack(
-                            "queued-attempt-1-" + staleStatus, staleStatus, M1), NOW + 7));
-        }
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ack.acknowledge(
+                        ack("queued-attempt-1-started", "STARTED", M1), NOW + 7));
         assertEquals(sentVersion, jdbc.queryForObject(
                 "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
 
-        long timeoutNow = NOW + 30_010L;
-        assertEquals(1, reissueService(dao, M3, E3)
-                .reissueDue(10, 0, timeoutNow).reissued());
-        publishAndComplete(M3, "replay-attempt-3", timeoutNow + 1);
-        assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
-        assertEquals(M3, string("SELECT active_message_id FROM agent_command_delivery WHERE id=1"));
-        assertEquals(3, number("SELECT active_attempt FROM agent_command_delivery WHERE id=1"));
-
         AgentCommandAckResult terminal = ack.acknowledge(
-                ack("attempt-3-terminal", "SUCCEEDED", M3), timeoutNow + 5);
+                ack("queued-attempt-1-terminal", "SUCCEEDED", M1), NOW + 8);
         assertEquals(AgentCommandAckResult.Kind.ADVANCED, terminal.kind());
         assertEquals("SUCCEEDED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
-        assertEquals(3, number("SELECT COUNT(*) FROM agent_outbox_event"));
-        assertEquals(M2, string(
-                "SELECT replay_parent_message_id FROM agent_outbox_event WHERE message_id='"
-                        + M3 + "'"));
+        assertEquals(M2, string("SELECT active_message_id FROM agent_command_delivery WHERE id=1"));
+        assertEquals(M1, string(
+                "SELECT replay_parent_message_id FROM agent_command_delivery WHERE id=1"));
+        long terminalVersion = jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class);
+
+        assertEquals(AgentCommandAckResult.Kind.PRIOR,
+                ack.acknowledge(ack(
+                        "queued-attempt-1-terminal-duplicate", "SUCCEEDED", M1), NOW + 9).kind());
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ack.acknowledge(
+                        ack("queued-attempt-1-terminal-conflict", "FAILED", M1), NOW + 9));
+        assertEquals(terminalVersion, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+
+        long timeoutNow = NOW + 30_010L;
+        assertEquals(0, reissueService(dao, M3, E3)
+                .reissueDue(10, 0, timeoutNow).reissued());
+        assertEquals(2, number("SELECT COUNT(*) FROM agent_outbox_event"));
+        assertEquals(0, number(
+                "SELECT COUNT(*) FROM agent_outbox_event WHERE message_id='" + M3 + "'"));
+    }
+
+    @Test
+    void directParentTerminalRejectsParentInboxAndReplayAuditPoisonTransactionally() {
+        jdbc.update("UPDATE agent_command_delivery SET status='SENT',next_retry_at=NULL,"
+                + "last_error=NULL,update_time=? WHERE id=1", NOW);
+        jdbc.update("UPDATE agent_consumer_inbox SET status='PROCESSED',result_status='SENT',"
+                + "next_retry_at=NULL,lease_owner=NULL,lease_until=NULL,last_error=NULL WHERE id=20");
+        assertEquals(1, reissueService(dao, M2, E2)
+                .reissueForReconnect(scope(), 10, NOW + 1).reissued());
+        publishAndComplete(M2, "replay-parent-poison", NOW + 2);
+
+        AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+        long version = jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class);
+
+        jdbc.update("UPDATE agent_consumer_inbox SET last_error='poison' WHERE message_id=?", M1);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ack.acknowledge(
+                        ack("parent-inbox-poison", "SUCCEEDED", M1), NOW + 6));
+        assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(version, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        jdbc.update("UPDATE agent_consumer_inbox SET last_error=NULL WHERE message_id=?", M1);
+
+        jdbc.update("UPDATE agent_outbox_event SET replay_requester_id='operator' WHERE message_id=?", M2);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ack.acknowledge(
+                        ack("replay-audit-poison", "SUCCEEDED", M1), NOW + 7));
+        assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(version, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        jdbc.update("UPDATE agent_outbox_event SET replay_requester_id='agent-a' WHERE message_id=?", M2);
+
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                ack.acknowledge(ack("parent-after-restore", "FAILED", M1), NOW + 8).kind());
+        assertEquals("FAILED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(AgentCommandAckServiceImpl.AGENT_REPORTED_FAILED,
+                string("SELECT last_error FROM agent_command_delivery WHERE id=1"));
+        assertEquals(version + 1, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals(2, number("SELECT COUNT(*) FROM agent_outbox_event"));
     }
 
     @Test

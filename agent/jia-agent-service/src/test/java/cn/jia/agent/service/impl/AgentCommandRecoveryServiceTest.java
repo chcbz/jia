@@ -45,6 +45,7 @@ class AgentCommandRecoveryServiceTest {
     private static final String M1 = "11111111-1111-1111-1111-111111111111";
     private static final String M2 = "22222222-2222-2222-2222-222222222222";
     private static final String E2 = "33333333-3333-3333-3333-333333333333";
+    private static final String M3 = "44444444-4444-4444-4444-444444444444";
 
     @Test
     void reconnectWinnerCreatesOneFreshCanonicalOutboxAndParentAudit() {
@@ -580,21 +581,19 @@ class AgentCommandRecoveryServiceTest {
         for (String starting : List.of("CONSUMED", "SENT")) {
             for (String nonterminal : List.of("RECEIVED", "STARTED")) {
                 RecordingDao replay = sentDao();
+                setAutomaticReplay(replay);
                 if ("CONSUMED".equals(starting)) {
                     replay.delivery.setStatus("CONSUMED");
                     replay.inbox.setStatus("PROCESSING").setResultStatus(null)
                             .setProcessedAt(null).setLeaseOwner("worker-a")
                             .setLeaseUntil(NOW + 10_000L);
                 }
-                setTransportAttempt(replay, 2);
-                replayAudit(replay, "agent-a", null,
-                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
                 long version = replay.delivery.getVersion();
 
                 assertThrows(AgentCommandAckRejectedException.class,
                         () -> ackService(replay, enabledGate()).acknowledge(
                                 ack("ack-replayed-" + starting + "-" + nonterminal,
-                                        nonterminal, M1), NOW));
+                                        nonterminal, M2), NOW));
 
                 assertEquals(starting, replay.delivery.getStatus());
                 assertEquals(version, replay.delivery.getVersion());
@@ -606,26 +605,26 @@ class AgentCommandRecoveryServiceTest {
     }
 
     @Test
-    void automaticReplayAcceptsDirectTerminalAndRejectsOriginalAttemptOrStaleFence() {
-        for (String terminal : List.of("SUCCEEDED", "FAILED")) {
+    void automaticReplayAcceptsOnlyDirectParentTerminalAndFreezesDuplicatesAndConflicts() {
+        for (String terminal : List.of("SUCCEEDED", "FAILED", "REJECTED")) {
             RecordingDao replay = sentDao();
-            setTransportAttempt(replay, 2);
-            replayAudit(replay, "agent-a", null,
-                    AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+            setAutomaticReplay(replay);
             AgentCommandAckServiceImpl service = ackService(replay, enabledGate());
 
             AgentCommandAckResult advanced = service.acknowledge(
-                    ack("ack-direct-" + terminal, terminal, M1), NOW);
+                    ack("ack-parent-" + terminal, terminal, M1), NOW);
             assertEquals(AgentCommandAckResult.Kind.ADVANCED, advanced.kind());
             assertEquals(terminal, replay.delivery.getStatus());
+            assertEquals(M2, replay.delivery.getActiveMessageId());
+            assertEquals(M1, replay.delivery.getReplayParentMessageId());
             assertEquals(1, replay.ackMutations);
             assertEquals(AgentCommandAckResult.Kind.PRIOR,
                     service.acknowledge(
-                            ack("ack-direct-duplicate-" + terminal, terminal, M1), NOW).kind());
+                            ack("ack-parent-duplicate-" + terminal, terminal, M1), NOW).kind());
+            String conflict = "SUCCEEDED".equals(terminal) ? "FAILED" : "SUCCEEDED";
             assertThrows(AgentCommandAckRejectedException.class,
                     () -> service.acknowledge(
-                            ack("ack-direct-stale-" + terminal, terminal,
-                                    "parent-message"), NOW));
+                            ack("ack-parent-conflict-" + terminal, conflict, M1), NOW));
             assertEquals(1, replay.ackMutations);
         }
 
@@ -634,6 +633,67 @@ class AgentCommandRecoveryServiceTest {
                 () -> ackService(original, enabledGate()).acknowledge(
                         ack("ack-original-skip", "SUCCEEDED", M1), NOW));
         assertEquals(0, original.ackMutations);
+    }
+
+    @Test
+    void directParentTerminalRejectsNonAdjacentPoisonExpiryVersionAndWrongIdentity() {
+        List<java.util.function.Consumer<RecordingDao>> parentPoison = List.of(
+                dao -> dao.parentInbox = null,
+                dao -> dao.parentInbox.setLastError("poison"),
+                dao -> dao.parentInbox.setLeaseOwner("poison").setLeaseUntil(NOW + 1),
+                dao -> dao.parentInbox.setWirePayloadHash(new byte[32]),
+                dao -> dao.outbox.setReplayRequesterId("operator"),
+                dao -> dao.delivery.setReplayReason("MANUAL_REPLAY"));
+        for (var poison : parentPoison) {
+            RecordingDao replay = sentDao();
+            setAutomaticReplay(replay);
+            poison.accept(replay);
+            long version = replay.delivery.getVersion();
+            assertThrows(AgentCommandAckRejectedException.class,
+                    () -> ackService(replay, enabledGate()).acknowledge(
+                            ack("ack-parent-poison", "SUCCEEDED", M1), NOW));
+            assertEquals("SENT", replay.delivery.getStatus());
+            assertEquals(version, replay.delivery.getVersion());
+            assertEquals(0, replay.ackMutations);
+        }
+
+        RecordingDao nonAdjacent = sentDao();
+        setThirdAutomaticReplay(nonAdjacent);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(nonAdjacent, enabledGate()).acknowledge(
+                        ack("ack-non-adjacent", "SUCCEEDED", M1), NOW));
+        assertEquals(0, nonAdjacent.ackMutations);
+
+        RecordingDao expired = sentDao();
+        setAutomaticReplay(expired);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(expired, enabledGate()).acknowledge(
+                        ack("ack-parent-expired", "SUCCEEDED", M1), EXPIRES));
+        assertEquals(0, expired.ackMutations);
+
+        RecordingDao exhausted = sentDao();
+        setAutomaticReplay(exhausted);
+        exhausted.delivery.setVersion(Long.MAX_VALUE - 2);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(exhausted, enabledGate()).acknowledge(
+                        ack("ack-parent-version", "SUCCEEDED", M1), NOW));
+        assertEquals(0, exhausted.ackMutations);
+
+        RecordingDao wrongAgent = sentDao();
+        setAutomaticReplay(wrongAgent);
+        AgentCommandAck wrongIdentity = new AgentCommandAck(
+                "tenant-a", "client-a", "agent-other", "ack-wrong-agent", M1,
+                COMMAND_ID, "task-1", null, "SUCCEEDED", NOW);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(wrongAgent, enabledGate()).acknowledge(wrongIdentity, NOW));
+        assertEquals(0, wrongAgent.ackMutations);
+
+        RecordingDao shadow = sentDao();
+        setAutomaticReplay(shadow);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(shadow, dbShadowGate()).acknowledge(
+                        ack("ack-db-shadow", "SUCCEEDED", M1), NOW));
+        assertEquals(List.of(), shadow.operations);
     }
 
     @Test
@@ -836,6 +896,73 @@ class AgentCommandRecoveryServiceTest {
                 .setReplayReason(reason);
     }
 
+    private static void setAutomaticReplay(RecordingDao dao) {
+        setAutomaticReplay(dao, 2, M2, M1, null);
+    }
+
+    private static void setThirdAutomaticReplay(RecordingDao dao) {
+        setAutomaticReplay(dao, 3, M3, M2, M1);
+    }
+
+    private static void setAutomaticReplay(
+            RecordingDao dao, int activeAttempt, String activeMessageId,
+            String parentMessageId, String parentParentMessageId) {
+        byte[] activeWire = AgentCommandCanonicalCodec.wireBytes(
+                draft(), activeMessageId, activeAttempt);
+        byte[] parentWire = AgentCommandCanonicalCodec.wireBytes(
+                draft(), parentMessageId, activeAttempt - 1);
+        String activeEvent = "event-active-" + activeAttempt;
+        String parentEvent = "event-parent-" + (activeAttempt - 1);
+
+        dao.delivery.setAttemptCount(activeAttempt).setActiveAttempt(activeAttempt)
+                .setActiveMessageId(activeMessageId)
+                .setReplayParentMessageId(parentMessageId)
+                .setReplayRequesterId("agent-a").setReplayApproverId(null)
+                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        dao.outbox.setEventId(activeEvent).setMessageId(activeMessageId)
+                .setActiveAttempt(activeAttempt)
+                .setWirePayload(activeWire)
+                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(activeWire))
+                .setReplayParentMessageId(parentMessageId)
+                .setReplayRequesterId("agent-a").setReplayApproverId(null)
+                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        dao.inbox.setMessageId(activeMessageId).setEventId(activeEvent)
+                .setWirePayload(activeWire)
+                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(activeWire));
+
+        AgentOutboxEventEntity parent = new AgentOutboxEventEntity()
+                .setId(9L).setEventId(parentEvent).setMessageId(parentMessageId)
+                .setCommandId(COMMAND_ID).setDeliveryId(1L)
+                .setAggregateType("task").setAggregateId("task-1")
+                .setDestination(dao.outbox.getDestination()).setRoutingKey(dao.outbox.getRoutingKey())
+                .setWirePayload(parentWire)
+                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(parentWire))
+                .setStatus("PUBLISHED").setAttemptCount(1).setActiveAttempt(activeAttempt - 1)
+                .setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK")
+                .setConfirmedAt(NOW - 20).setMandatoryReturnStatus("NOT_RETURNED")
+                .setPublishedAt(NOW - 19).setVersion(2L);
+        parent.setTenantId("tenant-a");
+        parent.setClientId("client-a");
+        if (parentParentMessageId != null) {
+            parent.setReplayParentMessageId(parentParentMessageId)
+                    .setReplayRequesterId("agent-a").setReplayApproverId(null)
+                    .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        }
+        dao.previousAttempts = List.of(parent);
+
+        dao.parentInbox = new AgentConsumerInboxEntity()
+                .setId(19L).setConsumerName(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1)
+                .setMessageId(parentMessageId).setEventId(parentEvent)
+                .setCommandId(COMMAND_ID).setDeliveryId(1L)
+                .setWirePayload(parentWire)
+                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(parentWire))
+                .setStatus("PROCESSED").setResultStatus("SENT")
+                .setAttemptCount(1).setActiveAttempt(1).setExpiresAt(EXPIRES)
+                .setProcessedAt(NOW - 18).setVersion(1L);
+        dao.parentInbox.setTenantId("tenant-a");
+        dao.parentInbox.setClientId("client-a");
+    }
+
     private static AgentCommandDraft draft() {
         return new AgentCommandDraft(1, COMMAND_ID, "task-1", "cause-1",
                 "tenant-a", "client-a", "task-1", null, "agent-a",
@@ -866,6 +993,16 @@ class AgentCommandRecoveryServiceTest {
                         "isolated.invalid", 35672, "user", "pass", "/d06"));
         return new AgentRabbitSafetyGate(properties, new AgentRabbitDispatchScopeProperties(
                 List.of(new AgentRabbitDispatchScopeProperties.AllowedScope("tenant-a", "client-a"))));
+    }
+
+    private static AgentRabbitSafetyGate dbShadowGate() {
+        return new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(
+                new AgentRabbitSafetyProperties.CommandOutbox(true),
+                new AgentRabbitSafetyProperties.RabbitTopology(false),
+                new AgentRabbitSafetyProperties.RabbitPublish(false),
+                new AgentRabbitSafetyProperties.RabbitConsume(false),
+                new AgentRabbitSafetyProperties.RabbitDispatch(false),
+                null));
     }
 
     private static AgentRabbitSafetyGate offGate() {
@@ -899,6 +1036,7 @@ class AgentCommandRecoveryServiceTest {
         private final AgentCommandDeliveryEntity delivery;
         private final AgentOutboxEventEntity outbox;
         private final AgentConsumerInboxEntity inbox;
+        private AgentConsumerInboxEntity parentInbox;
         private final List<String> operations = new ArrayList<>();
         private int discoveryCalls;
         private int reissueRows = 1;
@@ -970,7 +1108,11 @@ class AgentCommandRecoveryServiceTest {
         public AgentConsumerInboxEntity lockInbox(
                 String tenantId, String clientId, String consumerName, String messageId) {
             operations.add("inbox");
-            return inbox;
+            if (messageId.equals(inbox.getMessageId())) return inbox;
+            if (parentInbox != null && messageId.equals(parentInbox.getMessageId())) {
+                return parentInbox;
+            }
+            return null;
         }
 
         @Override
