@@ -5,6 +5,7 @@ import cn.jia.chat.archive.store.ArchiveQuestionStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.EventRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -45,6 +46,7 @@ public class ArchiveQuestionEventDelivery {
     private final AtomicLong recoveryCursor = new AtomicLong();
     private final AtomicLong rewindEpoch = new AtomicLong();
 
+    @Autowired
     public ArchiveQuestionEventDelivery(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                                         ArchiveTransactions transactions) {
         this(store, broker, transactions, publisherExecutor());

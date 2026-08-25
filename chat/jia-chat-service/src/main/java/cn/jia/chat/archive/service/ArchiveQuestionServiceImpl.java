@@ -12,6 +12,7 @@ import cn.jia.chat.archive.store.ArchiveQuestionStore.EventRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.MutationRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.QuestionRecord;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -44,6 +45,7 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
     private final ArchiveWriteJson json = new ArchiveWriteJson();
     private final Clock clock;
 
+    @Autowired
     public ArchiveQuestionServiceImpl(ArchiveQuestionStore store, ArchivePersonalDataStore content,
                                       ArchiveTransactions transactions, ArchiveQuestionProvider provider,
                                       ArchiveQuestionEventDelivery delivery) {

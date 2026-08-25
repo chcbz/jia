@@ -5,6 +5,7 @@ import cn.jia.chat.archive.dto.*;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.ArchivePersonalDataStore;
 import cn.jia.chat.archive.store.ArchivePersonalDataStore.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -30,6 +31,7 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
     private final Clock clock;
     private final ArchiveWriteJson json = new ArchiveWriteJson();
 
+    @Autowired
     public ArchivePersonalDataServiceImpl(ArchivePersonalDataStore store, ArchiveTransactions transactions) {
         this(store, transactions, Clock.systemUTC());
     }

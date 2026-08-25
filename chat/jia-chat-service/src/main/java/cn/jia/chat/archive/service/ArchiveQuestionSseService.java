@@ -7,6 +7,7 @@ import cn.jia.chat.archive.store.ArchiveQuestionStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.EventRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.QuestionRecord;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -72,6 +73,7 @@ public class ArchiveQuestionSseService {
     private final java.util.ArrayDeque<CompletionWork> completionQueue = new java.util.ArrayDeque<>();
     private final AtomicBoolean stopped = new AtomicBoolean();
 
+    @Autowired
     public ArchiveQuestionSseService(ArchiveQuestionStore store, ArchiveQuestionEventBroker broker,
                                      ArchiveQuestionAccessPolicy accessPolicy) {
         this(store, broker, accessPolicy, replayExecutor(),
