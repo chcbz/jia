@@ -486,7 +486,7 @@ class AgentCommandInboxMySqlTest {
         assertEquals(1, jdbc.update("""
                 UPDATE agent_outbox_event
                 SET status='CLAIMED', attempt_count=1, next_retry_at=NULL,
-                    lease_owner='d03-relay', lease_until=?, active_attempt=2,
+                    lease_owner='d03-relay', lease_until=?, active_attempt=1,
                     publisher_confirm_status='PENDING', confirmed_at=NULL, confirm_error=NULL,
                     mandatory_return_status='PENDING', returned_at=NULL,
                     return_reply_code=NULL, return_reply_text=NULL, published_at=NULL,

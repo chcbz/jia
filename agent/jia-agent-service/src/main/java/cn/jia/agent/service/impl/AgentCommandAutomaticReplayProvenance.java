@@ -24,6 +24,8 @@ final class AgentCommandAutomaticReplayProvenance {
 
     static boolean validOptionalAudit(
             String activeMessageId,
+            Integer deliveryActiveAttempt,
+            Integer outboxActiveAttempt,
             String targetAgentId,
             String deliveryParentMessageId,
             String deliveryRequesterId,
@@ -33,6 +35,11 @@ final class AgentCommandAutomaticReplayProvenance {
             String outboxRequesterId,
             String outboxApproverId,
             String outboxReason) {
+        if (deliveryActiveAttempt == null || outboxActiveAttempt == null
+                || deliveryActiveAttempt < 1
+                || !deliveryActiveAttempt.equals(outboxActiveAttempt)) {
+            return false;
+        }
         boolean deliveryAbsent = deliveryParentMessageId == null
                 && deliveryRequesterId == null
                 && deliveryApproverId == null
@@ -41,8 +48,8 @@ final class AgentCommandAutomaticReplayProvenance {
                 && outboxRequesterId == null
                 && outboxApproverId == null
                 && outboxReason == null;
-        if (deliveryAbsent && outboxAbsent) {
-            return true;
+        if (deliveryActiveAttempt == 1) {
+            return deliveryAbsent && outboxAbsent;
         }
         if (deliveryAbsent || outboxAbsent
                 || !exact(activeMessageId, 100)

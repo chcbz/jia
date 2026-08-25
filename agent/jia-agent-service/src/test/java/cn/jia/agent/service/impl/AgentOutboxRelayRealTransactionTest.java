@@ -112,7 +112,7 @@ class AgentOutboxRelayRealTransactionTest {
                 """, NOW);
         jdbc.update("""
                 UPDATE agent_outbox_event
-                SET status='RETRY', attempt_count=1, active_attempt=2, next_retry_at=?,
+                SET status='RETRY', attempt_count=1, active_attempt=1, next_retry_at=?,
                     publisher_confirm_status='ACK', confirmed_at=?,
                     confirm_error='RABBIT_NACK', mandatory_return_status='NOT_RETURNED',
                     last_error='RABBIT_NACK'
@@ -138,7 +138,7 @@ class AgentOutboxRelayRealTransactionTest {
 
         assertEquals("CLAIMED", string("SELECT status FROM agent_outbox_event"));
         assertEquals(1, integer("SELECT attempt_count FROM agent_outbox_event"));
-        assertEquals(2, integer("SELECT active_attempt FROM agent_outbox_event"));
+        assertEquals(1, integer("SELECT active_attempt FROM agent_outbox_event"));
         assertEquals(1, integer("SELECT attempt_count FROM agent_command_delivery"));
         assertEquals("worker-a", string("SELECT lease_owner FROM agent_command_delivery"));
     }

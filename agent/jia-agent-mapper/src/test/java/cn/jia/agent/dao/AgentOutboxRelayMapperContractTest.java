@@ -105,7 +105,7 @@ class AgentOutboxRelayMapperContractTest {
             assertTrue(outbox.contains(value), value);
         }
         assertTrue(outbox.contains("attempt_count=attempt_count+1"));
-        assertTrue(outbox.contains("active_attempt=active_attempt+1"));
+        assertFalse(outbox.contains("active_attempt=active_attempt+1"));
         assertTrue(delivery.contains("version<9223372036854775806"));
         assertTrue(outbox.contains("version<9223372036854775806"));
     }

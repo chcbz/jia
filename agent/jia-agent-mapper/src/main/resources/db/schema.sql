@@ -681,7 +681,7 @@ CREATE TABLE IF NOT EXISTS agent_outbox_event (
     next_retry_at               BIGINT DEFAULT NULL COMMENT 'Next eligible publish epoch millis',
     lease_owner                 VARCHAR(100) DEFAULT NULL COMMENT 'Current relay lease owner',
     lease_until                 BIGINT DEFAULT NULL COMMENT 'Relay lease expiry epoch millis',
-    active_attempt              INT NOT NULL DEFAULT 0 COMMENT 'Current publish attempt fence',
+    active_attempt              INT NOT NULL DEFAULT 0 COMMENT 'Current transport issue/reissue attempt fence',
     expires_at                  BIGINT NOT NULL COMMENT 'Wire message expiry epoch millis',
     publisher_confirm_status    VARCHAR(20) NOT NULL DEFAULT 'NONE' COMMENT 'NONE/PENDING/ACK/NACK/TIMEOUT',
     confirmed_at                BIGINT DEFAULT NULL COMMENT 'Publisher confirm completion epoch millis',

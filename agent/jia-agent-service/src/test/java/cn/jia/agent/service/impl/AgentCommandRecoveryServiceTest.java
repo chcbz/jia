@@ -72,7 +72,7 @@ class AgentCommandRecoveryServiceTest {
         assertEquals(1L, created.getDeliveryId());
         assertEquals("PENDING", created.getStatus());
         assertEquals(0, created.getAttemptCount());
-        assertEquals(1, created.getActiveAttempt());
+        assertEquals(2, created.getActiveAttempt());
         assertEquals(M1, created.getReplayParentMessageId());
         assertEquals("agent-a", created.getReplayRequesterId());
         assertEquals(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT,
@@ -113,7 +113,7 @@ class AgentCommandRecoveryServiceTest {
                         .setAttemptCount(Integer.MAX_VALUE),
                 dao -> dao.delivery.setVersion(Long.MAX_VALUE - 7),
                 dao -> dao.delivery.setCommandPayloadHash(new byte[32]),
-                dao -> dao.outbox.setActiveAttempt(1),
+                dao -> dao.outbox.setActiveAttempt(2),
                 dao -> dao.inbox.setActiveAttempt(2),
                 dao -> dao.inbox.setMessageId("stale-message"),
                 dao -> dao.inbox.setReplayReason("poison"),
@@ -173,6 +173,7 @@ class AgentCommandRecoveryServiceTest {
                 dao -> replayAudit(dao, "agent-a", "operator", "AGENT_RECONNECT"));
         for (var corrupt : poison) {
             RecordingDao dao = waitingDao();
+            setTransportAttempt(dao, 2);
             replayAudit(dao, "agent-a", null, "AGENT_RECONNECT");
             corrupt.accept(dao);
 
@@ -183,6 +184,33 @@ class AgentCommandRecoveryServiceTest {
             assertFalse(dao.operations.contains("reissue"));
             assertEquals(null, dao.inserted);
         }
+    }
+
+    @Test
+    void reissueSourceRequiresAttemptAuditAndKeepsPublishRetryCountIndependent() {
+        RecordingDao missingAudit = waitingDao();
+        setTransportAttempt(missingAudit, 2);
+        assertEquals(0, reissue(missingAudit, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertFalse(missingAudit.operations.contains("reissue"));
+        assertEquals(null, missingAudit.inserted);
+
+        RecordingDao mismatch = waitingDao();
+        mismatch.outbox.setActiveAttempt(2);
+        assertEquals(0, reissue(mismatch, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertFalse(mismatch.operations.contains("reissue"));
+        assertEquals(null, mismatch.inserted);
+
+        RecordingDao automatic = waitingDao();
+        setTransportAttempt(automatic, 2);
+        replayAudit(automatic, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        automatic.outbox.setAttemptCount(7);
+        assertEquals(1, reissue(automatic, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+        assertEquals(3, automatic.inserted.getActiveAttempt());
+        assertEquals(0, automatic.inserted.getAttemptCount());
     }
 
     @Test
@@ -340,6 +368,7 @@ class AgentCommandRecoveryServiceTest {
                 List.of(AgentCommandReissueServiceImpl.REQUESTER_SCHEDULER,
                         AgentCommandReissueServiceImpl.REASON_SCHEDULER))) {
             RecordingDao dao = sentDao();
+            setTransportAttempt(dao, 2);
             replayAudit(dao, valid.get(0), null, valid.get(1));
             assertEquals(AgentCommandAckResult.Kind.ADVANCED,
                     ackService(dao, enabledGate()).acknowledge(
@@ -356,12 +385,40 @@ class AgentCommandRecoveryServiceTest {
                         .setReplayRequesterId("agent-a").setReplayReason("AGENT_RECONNECT"));
         for (var corrupt : poison) {
             RecordingDao dao = sentDao();
+            setTransportAttempt(dao, 2);
             corrupt.accept(dao);
             assertThrows(AgentCommandAckRejectedException.class,
                     () -> ackService(dao, enabledGate()).acknowledge(
                             ack("ack-invalid", "RECEIVED", M1), NOW));
             assertEquals(0, dao.ackMutations);
         }
+    }
+
+    @Test
+    void ackRequiresAttemptAuditAndKeepsPublishRetryCountIndependent() {
+        RecordingDao missingAudit = sentDao();
+        setTransportAttempt(missingAudit, 2);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(missingAudit, enabledGate()).acknowledge(
+                        ack("ack-missing-audit", "RECEIVED", M1), NOW));
+        assertEquals(0, missingAudit.ackMutations);
+
+        RecordingDao mismatch = sentDao();
+        mismatch.outbox.setActiveAttempt(2);
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(mismatch, enabledGate()).acknowledge(
+                        ack("ack-attempt-mismatch", "RECEIVED", M1), NOW));
+        assertEquals(0, mismatch.ackMutations);
+
+        RecordingDao automatic = sentDao();
+        setTransportAttempt(automatic, 2);
+        replayAudit(automatic, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        automatic.outbox.setAttemptCount(7);
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                ackService(automatic, enabledGate()).acknowledge(
+                        ack("ack-automatic", "RECEIVED", M1), NOW).kind());
+        assertEquals(1, automatic.ackMutations);
     }
 
     @Test
@@ -444,7 +501,7 @@ class AgentCommandRecoveryServiceTest {
                 .setDeliveryId(1L).setAggregateType("task").setAggregateId("task-1")
                 .setDestination(route.destination()).setRoutingKey(route.routingKey())
                 .setWirePayload(wire).setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire))
-                .setStatus("PUBLISHED").setAttemptCount(1).setActiveAttempt(2)
+                .setStatus("PUBLISHED").setAttemptCount(1).setActiveAttempt(1)
                 .setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK").setConfirmedAt(NOW - 10)
                 .setMandatoryReturnStatus("NOT_RETURNED").setPublishedAt(NOW - 9)
                 .setVersion(2L);
@@ -460,6 +517,14 @@ class AgentCommandRecoveryServiceTest {
         inbox.setTenantId("tenant-a");
         inbox.setClientId("client-a");
         return new RecordingDao(delivery, outbox, inbox);
+    }
+
+    private static void setTransportAttempt(RecordingDao dao, int attempt) {
+        byte[] wire = AgentCommandCanonicalCodec.wireBytes(draft(), M1, attempt);
+        byte[] wireHash = AgentCommandCanonicalCodec.sha256(wire);
+        dao.delivery.setAttemptCount(attempt).setActiveAttempt(attempt);
+        dao.outbox.setActiveAttempt(attempt).setWirePayload(wire).setWirePayloadHash(wireHash);
+        dao.inbox.setWirePayload(wire).setWirePayloadHash(wireHash);
     }
 
     private static void replayAudit(

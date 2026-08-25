@@ -226,7 +226,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 delivery.getTaskId(), delivery.getTargetAgentId(), delivery.getCommandType(),
                 outbox.getDestination(), outbox.getRoutingKey(), outbox.getWirePayload(),
                 outbox.getWirePayloadHash(), outbox.getExpiresAt(), leaseOwner, leaseUntil,
-                outbox.getActiveAttempt() + 1, outbox.getVersion() + 1,
+                outbox.getAttemptCount() + 1, outbox.getVersion() + 1,
                 delivery.getStatus(), delivery.getActiveMessageId(),
                 delivery.getActiveAttempt(), delivery.getVersion() + 1));
     }
@@ -288,7 +288,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         }
 
         long nextRetryAt = settings.nextRetryAt(
-                outbox.getEventId(), outbox.getActiveAttempt(), outbox.getAttemptCount(),
+                outbox.getEventId(), token.publishAttempt(), outbox.getAttemptCount(),
                 now, outbox.getExpiresAt());
         disposeDelivery(delivery, "RETRY", nextRetryAt, result.errorCode(), now);
         disposeOutbox(outbox, "RETRY", nextRetryAt,
@@ -424,7 +424,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
         if (!"PENDING".equals(delivery.getStatus())
                 || delivery.getNextRetryAt() != null
-                || outbox.getAttemptCount() != 0 || outbox.getActiveAttempt() != 1
+                || outbox.getAttemptCount() != 0
                 || outbox.getNextRetryAt() != null
                 || outbox.getLeaseOwner() != null || outbox.getLeaseUntil() != null
                 || delivery.getLeaseOwner() != null || delivery.getLeaseUntil() != null
@@ -440,7 +440,6 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox, long now) {
         if (!"RETRY".equals(delivery.getStatus())
                 || outbox.getAttemptCount() < 1
-                || outbox.getActiveAttempt() != outbox.getAttemptCount() + 1
                 || outbox.getNextRetryAt() == null || outbox.getNextRetryAt() > now
                 || outbox.getNextRetryAt() > outbox.getExpiresAt()
                 || outbox.getLeaseOwner() != null || outbox.getLeaseUntil() != null
@@ -464,7 +463,6 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 || (retryDelivery && (delivery.getNextRetryAt() == null
                         || delivery.getNextRetryAt() > now))
                 || outbox.getAttemptCount() < 1
-                || outbox.getActiveAttempt() != outbox.getAttemptCount() + 1
                 || outbox.getNextRetryAt() != null
                 || !validExact(outbox.getLeaseOwner(), 100)
                 || outbox.getLeaseUntil() == null || outbox.getLeaseUntil() > now
@@ -498,8 +496,8 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 && "CLAIMED".equals(outbox.getStatus())
                 && Objects.equals(outbox.getLeaseOwner(), token.leaseOwner())
                 && Objects.equals(outbox.getLeaseUntil(), token.leaseUntil())
-                && Objects.equals(outbox.getActiveAttempt(), token.publishAttempt())
-                && Objects.equals(outbox.getAttemptCount(), token.publishAttempt() - 1)
+                && Objects.equals(outbox.getActiveAttempt(), token.deliveryActiveAttempt())
+                && Objects.equals(outbox.getAttemptCount(), token.publishAttempt())
                 && Objects.equals(outbox.getVersion(), token.outboxVersion())
                 && "PENDING".equals(outbox.getPublisherConfirmStatus())
                 && "PENDING".equals(outbox.getMandatoryReturnStatus());
@@ -669,7 +667,8 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     private static boolean validAutomaticReplayProvenance(
             AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
         return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getTargetAgentId(),
+                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
                 delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
                 delivery.getReplayApproverId(), delivery.getReplayReason(),
                 outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),

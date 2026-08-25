@@ -203,7 +203,6 @@ public interface AgentOutboxRelayMapper {
             UPDATE agent_outbox_event
             SET status='CLAIMED', attempt_count=attempt_count+1,
                 next_retry_at=NULL, lease_owner=#{leaseOwner}, lease_until=#{leaseUntil},
-                active_attempt=active_attempt+1,
                 publisher_confirm_status='PENDING', confirmed_at=NULL, confirm_error=NULL,
                 mandatory_return_status='PENDING', returned_at=NULL,
                 return_reply_code=NULL, return_reply_text=NULL, published_at=NULL,

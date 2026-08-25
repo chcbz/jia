@@ -120,7 +120,7 @@ class AgentCommandRecoveryRealTransactionTest {
         assertEquals("PUBLISHED", string("SELECT status FROM agent_outbox_event WHERE message_id='" + M1 + "'"));
         assertEquals("PENDING", string("SELECT status FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
         assertEquals(0, number("SELECT attempt_count FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
-        assertEquals(1, number("SELECT active_attempt FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
+        assertEquals(2, number("SELECT active_attempt FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
         assertEquals("DISPATCH_ELIGIBLE_V1", string(
                 "SELECT last_error FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
         assertEquals(M1, string("SELECT replay_parent_message_id FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
@@ -330,7 +330,7 @@ class AgentCommandRecoveryRealTransactionTest {
                   destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
                   active_attempt,expires_at,publisher_confirm_status,confirmed_at,
                   mandatory_return_status,published_at,version,tenant_id,client_id,create_time,update_time)
-                VALUES (10,'event-1',?,'cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624',1,'task','task-1',?,?,?,?,'PUBLISHED',1,2,?,
+                VALUES (10,'event-1',?,'cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624',1,'task','task-1',?,?,?,?,'PUBLISHED',1,1,?,
                         'ACK',?,'NOT_RETURNED',?,2,'tenant-a','client-a',?,?)
                 """, M1, route.destination(), route.routingKey(), wire,
                 AgentCommandCanonicalCodec.sha256(wire), EXPIRES, NOW - 10, NOW - 9, NOW, NOW);

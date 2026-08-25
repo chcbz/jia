@@ -103,7 +103,7 @@ class AgentOutboxRelayServiceImplTest {
 
         assertEquals(AgentOutboxClaim.Status.ACQUIRED, claim.status());
         AgentOutboxClaimToken token = claim.token();
-        assertEquals(2, token.publishAttempt());
+        assertEquals(1, token.publishAttempt());
         assertEquals(1, token.deliveryActiveAttempt());
         assertArrayEquals(fixture.outbox.getWirePayload(), token.wirePayload());
         InOrder ordered = inOrder(dao);
@@ -119,21 +119,8 @@ class AgentOutboxRelayServiceImplTest {
 
     @Test
     void exactAutomaticReissueReplayProvenanceIsClaimableButManualOrPartialHasZeroMutation() {
-        Fixture automatic = pending();
-        automatic.delivery.setActiveMessageId("msg-2")
-                .setReplayParentMessageId("msg-1")
-                .setReplayRequesterId("agent-1")
-                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
-        automatic.outbox.setMessageId("msg-2")
-                .setReplayParentMessageId("msg-1")
-                .setReplayRequesterId("agent-1")
-                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
-        byte[] wire = wire(EXPIRES).clone();
-        String rewritten = new String(wire, StandardCharsets.UTF_8)
-                .replace("\"messageId\":\"msg-1\"", "\"messageId\":\"msg-2\"");
-        automatic.outbox.setWirePayload(rewritten.getBytes(StandardCharsets.UTF_8))
-                .setWirePayloadHash(AgentCommandAmqpContract.sha256(
-                        rewritten.getBytes(StandardCharsets.UTF_8)));
+        Fixture automatic = automaticReplay(
+                "agent-1", null, AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
         arrange(automatic);
         assertEquals(AgentOutboxClaim.Status.ACQUIRED,
                 service.claim(candidate(1, NOW), "lease-a", NOW).status());
@@ -161,6 +148,46 @@ class AgentOutboxRelayServiceImplTest {
                 .setReplayRequesterId("agent-1")
                 .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
         arrange(partial);
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+        verifyNoRelayMutation();
+    }
+
+    @Test
+    void relayRejectsMissingOrContradictoryAttemptAuditWithoutMutation() {
+        Fixture missingAudit = pending();
+        missingAudit.delivery.setAttemptCount(2).setActiveAttempt(2);
+        missingAudit.outbox.setActiveAttempt(2);
+        byte[] attemptTwoWire = new String(missingAudit.outbox.getWirePayload(),
+                StandardCharsets.UTF_8)
+                .replace("\"attempt\":1", "\"attempt\":2")
+                .getBytes(StandardCharsets.UTF_8);
+        missingAudit.outbox.setWirePayload(attemptTwoWire)
+                .setWirePayloadHash(AgentCommandAmqpContract.sha256(attemptTwoWire));
+        arrange(missingAudit);
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+        verifyNoRelayMutation();
+
+        reset(dao);
+        stubMutationSuccess();
+        Fixture mismatch = pending();
+        mismatch.outbox.setActiveAttempt(2);
+        arrange(mismatch);
+        assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                service.claim(candidate(1, NOW), "lease-a", NOW).status());
+        verifyNoRelayMutation();
+
+        reset(dao);
+        stubMutationSuccess();
+        Fixture attemptOneAudit = pending();
+        attemptOneAudit.delivery.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("agent-1")
+                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        attemptOneAudit.outbox.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("agent-1")
+                .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        arrange(attemptOneAudit);
         assertEquals(AgentOutboxClaim.Status.SKIPPED,
                 service.claim(candidate(1, NOW), "lease-a", NOW).status());
         verifyNoRelayMutation();
@@ -381,7 +408,7 @@ class AgentOutboxRelayServiceImplTest {
 
         assertEquals(AgentOutboxSettleResult.RETRY, service.settle(token, nack(), NOW));
 
-        long retryAt = settings().nextRetryAt("evt-1", 2, 1, NOW, EXPIRES);
+        long retryAt = settings().nextRetryAt("evt-1", 1, 1, NOW, EXPIRES);
         verify(dao).disposeDelivery(eq(claimed.delivery), eq("RETRY"), eq(retryAt),
                 eq("RABBIT_NACK"), eq(NOW));
         verify(dao).disposeOutbox(eq(claimed.outbox), eq("RETRY"), eq(retryAt),
@@ -393,14 +420,14 @@ class AgentOutboxRelayServiceImplTest {
     @Test
     void exhaustedFailureAndExpiryBoundaryNeverScheduleBeyondExpiry() {
         Fixture exhausted = claimed();
-        exhausted.outbox.setAttemptCount(20).setActiveAttempt(21).setVersion(1L);
+        exhausted.outbox.setAttemptCount(20).setActiveAttempt(1).setVersion(1L);
         arrange(exhausted);
         AgentOutboxClaimToken token = new AgentOutboxClaimToken(
                 1, 41, "tenant-a", "client-a", "evt-1", "msg-1", "cmd-1",
                 "task-1", "agent-1", "task.invite", exhausted.outbox.getDestination(),
                 exhausted.outbox.getRoutingKey(), exhausted.outbox.getWirePayload(),
                 exhausted.outbox.getWirePayloadHash(), EXPIRES, "lease-a", NOW + 30_000,
-                21, 1, "PENDING", "msg-1", 1, 1);
+                20, 1, "PENDING", "msg-1", 1, 1);
         assertEquals(AgentOutboxSettleResult.FAILED, service.settle(token, nack(), NOW));
         verify(dao).disposeOutbox(eq(exhausted.outbox), eq("FAILED"), isNull(), anyString(),
                 any(), any(), anyString(), any(), any(), any(), any(),
@@ -669,7 +696,7 @@ class AgentOutboxRelayServiceImplTest {
                 "task-1", "agent-1", "task.invite", claimed.outbox.getDestination(),
                 claimed.outbox.getRoutingKey(), claimed.outbox.getWirePayload(),
                 claimed.outbox.getWirePayloadHash(), EXPIRES, "lease-a", NOW + 30_000,
-                2, 1, "PENDING", "msg-1", 1, 1);
+                1, 1, "PENDING", "msg-1", 1, 1);
         assertEquals(AgentOutboxSettleResult.STALE,
                 service.settle(stale, AgentRabbitPublishResult.ack(), NOW));
         verify(dao, never()).disposeDelivery(any(), anyString(), any(), any(), anyLong());
@@ -758,11 +785,12 @@ class AgentOutboxRelayServiceImplTest {
             String requester, String approver, String reason) {
         Fixture fixture = pending();
         fixture.delivery.setActiveMessageId("msg-2")
+                .setAttemptCount(2).setActiveAttempt(2)
                 .setReplayParentMessageId("msg-1")
                 .setReplayRequesterId(requester)
                 .setReplayApproverId(approver)
                 .setReplayReason(reason);
-        fixture.outbox.setMessageId("msg-2")
+        fixture.outbox.setMessageId("msg-2").setActiveAttempt(2)
                 .setReplayParentMessageId("msg-1")
                 .setReplayRequesterId(requester)
                 .setReplayApproverId(approver)
@@ -770,6 +798,7 @@ class AgentOutboxRelayServiceImplTest {
         byte[] rewritten = new String(wire(EXPIRES), StandardCharsets.UTF_8)
                 .replace("\"messageId\":\"msg-1\"",
                         "\"messageId\":\"msg-2\"")
+                .replace("\"attempt\":1", "\"attempt\":2")
                 .getBytes(StandardCharsets.UTF_8);
         fixture.outbox.setWirePayload(rewritten)
                 .setWirePayloadHash(AgentCommandAmqpContract.sha256(rewritten));
@@ -788,7 +817,7 @@ class AgentOutboxRelayServiceImplTest {
         fixture.delivery.setStatus("RETRY").setNextRetryAt(NOW)
                 .setLeaseOwner(null).setLeaseUntil(null)
                 .setLastError("RABBIT_NACK").setVersion(2L);
-        fixture.outbox.setStatus("RETRY").setAttemptCount(1).setActiveAttempt(2)
+        fixture.outbox.setStatus("RETRY").setAttemptCount(1).setActiveAttempt(1)
                 .setNextRetryAt(NOW).setLeaseOwner(null).setLeaseUntil(null)
                 .setPublisherConfirmStatus("NACK").setConfirmedAt(NOW - 1)
                 .setConfirmError("RABBIT_NACK")
@@ -808,7 +837,7 @@ class AgentOutboxRelayServiceImplTest {
         Fixture fixture = pending();
         fixture.delivery.setLeaseOwner("lease-a").setLeaseUntil(NOW + 30_000)
                 .setLastError(null).setVersion(1L);
-        fixture.outbox.setStatus("CLAIMED").setAttemptCount(1).setActiveAttempt(2)
+        fixture.outbox.setStatus("CLAIMED").setAttemptCount(1).setActiveAttempt(1)
                 .setLeaseOwner("lease-a").setLeaseUntil(NOW + 30_000)
                 .setPublisherConfirmStatus("PENDING").setMandatoryReturnStatus("PENDING")
                 .setLastError(null).setVersion(1L);
@@ -820,7 +849,7 @@ class AgentOutboxRelayServiceImplTest {
                 "cmd-1", "task-1", "agent-1", "task.invite",
                 fixture.outbox.getDestination(), fixture.outbox.getRoutingKey(),
                 fixture.outbox.getWirePayload(), fixture.outbox.getWirePayloadHash(), EXPIRES,
-                "lease-a", NOW + 30_000, 2, 1, "PENDING", "msg-1", 1, 1);
+                "lease-a", NOW + 30_000, 1, 1, "PENDING", "msg-1", 1, 1);
     }
 
     private static AgentOutboxClaimToken token(
@@ -829,7 +858,7 @@ class AgentOutboxRelayServiceImplTest {
                 "cmd-1", "task-1", "agent-1", "task.invite",
                 fixture.outbox.getDestination(), fixture.outbox.getRoutingKey(),
                 fixture.outbox.getWirePayload(), fixture.outbox.getWirePayloadHash(), EXPIRES,
-                "lease-a", NOW + 30_000, 2, outboxVersion,
+                "lease-a", NOW + 30_000, 1, outboxVersion,
                 "PENDING", "msg-1", 1, deliveryVersion);
     }
 

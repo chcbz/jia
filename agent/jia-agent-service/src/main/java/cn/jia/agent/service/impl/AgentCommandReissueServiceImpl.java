@@ -219,7 +219,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 .setWirePayloadHash(newWireHash)
                 .setStatus("PENDING")
                 .setAttemptCount(0)
-                .setActiveAttempt(AgentCommandCanonicalCodec.ATTEMPT)
+                .setActiveAttempt(nextAttempt)
                 .setExpiresAt(delivery.getExpiresAt())
                 .setPublisherConfirmStatus("NONE")
                 .setMandatoryReturnStatus("NONE")
@@ -284,8 +284,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || !route.routingKey().equals(outbox.getRoutingKey())
                 || !"PUBLISHED".equals(outbox.getStatus())
                 || outbox.getAttemptCount() == null || outbox.getAttemptCount() <= 0
-                || outbox.getActiveAttempt() == null
-                || (long) outbox.getActiveAttempt() != (long) outbox.getAttemptCount() + 1L
+                || outbox.getActiveAttempt() == null || outbox.getActiveAttempt() <= 0
                 || outbox.getNextRetryAt() != null || outbox.getLeaseOwner() != null
                 || outbox.getLeaseUntil() != null
                 || !"ACK".equals(outbox.getPublisherConfirmStatus())
@@ -336,7 +335,8 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private boolean validReplayAudit(
             AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
         return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getTargetAgentId(),
+                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
                 delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
                 delivery.getReplayApproverId(), delivery.getReplayReason(),
                 outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),

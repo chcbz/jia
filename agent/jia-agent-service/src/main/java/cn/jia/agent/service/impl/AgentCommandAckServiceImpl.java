@@ -151,8 +151,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                         outbox.getDestination(), outbox.getRoutingKey())
                 || !"PUBLISHED".equals(outbox.getStatus())
                 || outbox.getAttemptCount() == null || outbox.getAttemptCount() <= 0
-                || outbox.getActiveAttempt() == null
-                || (long) outbox.getActiveAttempt() != (long) outbox.getAttemptCount() + 1L
+                || outbox.getActiveAttempt() == null || outbox.getActiveAttempt() <= 0
                 || outbox.getNextRetryAt() != null || outbox.getLeaseOwner() != null
                 || outbox.getLeaseUntil() != null || outbox.getLastError() != null
                 || outbox.getVersion() == null || outbox.getVersion() < 0
@@ -222,7 +221,8 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
             return false;
         }
         return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getTargetAgentId(),
+                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
                 delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
                 delivery.getReplayApproverId(), delivery.getReplayReason(),
                 outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),

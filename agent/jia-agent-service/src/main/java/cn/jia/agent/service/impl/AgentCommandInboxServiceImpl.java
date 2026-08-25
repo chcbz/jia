@@ -406,13 +406,12 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 && outbox.getLeaseUntil() != null && outbox.getLeaseUntil() > 0
                 && Objects.equals(delivery.getLeaseOwner(), outbox.getLeaseOwner())
                 && Objects.equals(delivery.getLeaseUntil(), outbox.getLeaseUntil());
-        // Outbox publish attempts are intentionally independent from the wire/delivery transport
-        // attempt. D03 increments both outbox attempt fences at claim and reserves one version for
-        // settlement, so Long.MAX_VALUE cannot be a canonical in-flight claim.
+        // Outbox attempt_count is the independent Rabbit publish claim/retry fence. The shared
+        // provenance validator separately requires outbox.active_attempt to remain equal to the
+        // delivery transport/reissue attempt throughout claim and settlement.
         boolean publishFenceValid = outbox.getAttemptCount() != null
                 && outbox.getAttemptCount() >= 1
-                && outbox.getActiveAttempt() != null
-                && (long) outbox.getActiveAttempt() == (long) outbox.getAttemptCount() + 1L
+                && outbox.getActiveAttempt() != null && outbox.getActiveAttempt() > 0
                 && outbox.getVersion() != null && outbox.getVersion() > 0
                 && outbox.getVersion() < Long.MAX_VALUE
                 && delivery.getVersion() != null && delivery.getVersion() > 0
@@ -439,7 +438,8 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox) {
         if (!AgentCommandAutomaticReplayProvenance.validOptionalAudit(
-                delivery.getActiveMessageId(), delivery.getTargetAgentId(),
+                delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                outbox.getActiveAttempt(), delivery.getTargetAgentId(),
                 delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
                 delivery.getReplayApproverId(), delivery.getReplayReason(),
                 outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
