@@ -1118,8 +1118,6 @@ class AgentServiceImplTest extends BaseMockTest {
         foreign.setTenantId("other-owner");
         foreign.setJiacn("other-owner");
         when(agentPersonaDao.selectAll()).thenReturn(List.of(persona));
-        when(agentPersonaBindingDao.findActiveByClientAndPersona("jia_client", "lujunyi"))
-                .thenReturn(foreign);
         when(agentPersonaBindingDao.findExactActiveByScopeAndPersona(
                 "juyiting", "jia_client", "juyiting", "lujunyi")).thenReturn(null);
 
