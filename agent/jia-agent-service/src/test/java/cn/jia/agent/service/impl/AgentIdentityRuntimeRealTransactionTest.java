@@ -130,7 +130,7 @@ class AgentIdentityRuntimeRealTransactionTest {
 
     @Test
     void newBindFirstRegisterAndRepeatedRegisterCompleteStableLifecycle() {
-        AgentRuntimeDTO bound = agentService.bindPersona("wuyong");
+        AgentRuntimeDTO bound = agentService.bindPersona("juyiting", "jia_client", "juyiting", "wuyong");
         assertTrue(bound.getAgentId().matches("agt_[0-9a-f]{32}"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_persona_binding"));
         assertEquals("PROVISIONED", jdbc.queryForObject(
@@ -170,7 +170,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                 wire(new AgentPersonaDaoImpl(), mapper(AgentPersonaMapper.class)),
                 bindingDao, identityService);
 
-        assertThrows(IllegalStateException.class, () -> failing.bindPersona("wuyong"));
+        assertThrows(IllegalStateException.class, () -> failing.bindPersona("juyiting", "jia_client", "juyiting", "wuyong"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_persona_binding"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_identity_registry"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_runtime"));
@@ -299,7 +299,7 @@ class AgentIdentityRuntimeRealTransactionTest {
             if (!start.await(10, TimeUnit.SECONDS)) {
                 return new AssertionError("barrier timeout");
             }
-            return agentService.bindPersona("wuyong");
+            return agentService.bindPersona("juyiting", "jia_client", "juyiting", "wuyong");
         } catch (Throwable error) {
             return error;
         } finally {

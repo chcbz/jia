@@ -25,6 +25,21 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
                 .last("limit 1"));
     }
 
+
+    @Override
+    public AgentPersonaBindingEntity findExactActiveByScopeAndPersonaForUpdate(
+            String tenantId, String clientId, String ownerJiacn, String personaCode) {
+        requireExact(tenantId, "tenantId", 50);
+        requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
+        requireExact(personaCode, "personaCode", 50);
+        if ("0".equals(ownerJiacn) || !tenantId.equals(ownerJiacn)) {
+            throw new IllegalArgumentException("persona owner scope is invalid");
+        }
+        return baseMapper.findExactActiveByScopeAndPersonaForUpdate(
+                tenantId, clientId, ownerJiacn, personaCode, AgentConstants.BINDING_STATUS_ACTIVE);
+    }
+
     @Override
     public AgentPersonaBindingEntity findActiveByClientAndAgentId(String clientId, String agentId) {
         return baseMapper.selectOne(activeWrapper(clientId)
@@ -42,9 +57,9 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
 
     @Override
     public AgentPersonaBindingEntity findActiveByClientJiacnAndAgentId(String clientId, String jiacn, String agentId) {
-        requireExact(clientId, "clientId");
-        requireExact(jiacn, "jiacn");
-        requireExact(agentId, "agentId");
+        requireExact(clientId, "clientId", 50);
+        requireExact(jiacn, "jiacn", 50);
+        requireExact(agentId, "agentId", 100);
         return baseMapper.findExactActiveByOwner(
                 clientId, jiacn, agentId, AgentConstants.BINDING_STATUS_ACTIVE);
     }
@@ -52,9 +67,9 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
     @Override
     public AgentPersonaBindingEntity findActiveByClientJiacnAndAgentIdForUpdate(
             String clientId, String jiacn, String agentId) {
-        requireExact(clientId, "clientId");
-        requireExact(jiacn, "jiacn");
-        requireExact(agentId, "agentId");
+        requireExact(clientId, "clientId", 50);
+        requireExact(jiacn, "jiacn", 50);
+        requireExact(agentId, "agentId", 100);
         return baseMapper.findExactActiveByOwnerForUpdate(
                 clientId, jiacn, agentId, AgentConstants.BINDING_STATUS_ACTIVE);
     }
@@ -66,11 +81,28 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
                 .orderByAsc(AgentPersonaBindingEntity::getPersonaCode));
     }
 
-    private void requireExact(String value, String field) {
-        if (value == null || value.isBlank() || !value.equals(value.strip())
-                || value.chars().anyMatch(Character::isISOControl)) {
+    private void requireExact(String value, String field, int maxCodePoints) {
+        if (value == null || value.isEmpty() || value.codePointCount(0, value.length()) > maxCodePoints
+                || hasUnpairedSurrogate(value)
+                || isPadding(value.codePointAt(0)) || isPadding(value.codePointBefore(value.length()))
+                || value.codePoints().noneMatch(codePoint -> !isPadding(codePoint))
+                || value.codePoints().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException(field + " is invalid");
         }
+    }
+
+    private boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) return true;
+            } else if (Character.isLowSurrogate(unit)) return true;
+        }
+        return false;
+    }
+
+    private boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
     private LambdaQueryWrapper<AgentPersonaBindingEntity> activeWrapper(String clientId) {

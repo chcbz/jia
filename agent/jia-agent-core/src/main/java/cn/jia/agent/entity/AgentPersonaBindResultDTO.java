@@ -15,10 +15,12 @@ public class AgentPersonaBindResultDTO implements Serializable {
     private String mode;
     private String agentId;
     private String profileId;
+    private Long bindingId;
+    private String hostedState;
+    private Long generation;
     private String workdir;
     private String codexHome;
     private String profilesFile;
-    private String apiKey;
     private Boolean serverProfileCreated;
     private Boolean serverProfileAlreadyExists;
     private String message;

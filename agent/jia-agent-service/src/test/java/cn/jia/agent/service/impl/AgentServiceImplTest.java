@@ -36,7 +36,6 @@ import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskNoteEntity;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
-import cn.jia.agent.entity.AgentPersonaBindResultDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.task.entity.TaskPlanEntity;
@@ -425,41 +424,6 @@ class AgentServiceImplTest extends BaseMockTest {
         org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
                 agentIdentityService, agentRuntimeDao);
         lockOrder.verify(agentIdentityService).activateForFirstRegistration(identity);
-        lockOrder.verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
-    }
-
-    @Test
-    void unbindUpdatesOnlyLockedCurrentRuntimeAndPreservesAbilities() {
-        String personaCode = "review-unbind-lock-20260823";
-        AgentPersonaBindingEntity binding = binding("agent-001", personaCode);
-        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
-        AgentPersonaEntity persona = persona(personaCode, "Review Agent", "Reviewer");
-        AgentRuntimeEntity stale = ownedAgent(
-                "agent-001", "Review Agent", AgentConstants.STATUS_ONLINE, "[\"stale-skill\"]");
-        AgentRuntimeEntity lockedCurrent = ownedAgent(
-                "agent-001", "Review Agent", AgentConstants.STATUS_ONLINE, "[\"fresh-skill\"]");
-        when(agentPersonaDao.findByCode(personaCode)).thenReturn(persona);
-        when(agentPersonaBindingDao.findActiveByClientJiacnAndPersona(
-                "jia_client", "juyiting", personaCode)).thenReturn(binding);
-        when(agentIdentityService.requireRegistrationIdentityInScope(
-                "juyiting", "jia_client", "juyiting", "agent-001")).thenReturn(identity);
-        org.mockito.Mockito.doReturn(lockedCurrent).when(agentRuntimeDao)
-                .findByAgentIdForUpdate("agent-001");
-
-        agentService.unbindPersona(personaCode);
-
-        assertEquals(AgentConstants.STATUS_OFFLINE, lockedCurrent.getStatus());
-        assertEquals("[\"fresh-skill\"]", lockedCurrent.getAbilities());
-        assertEquals(AgentConstants.STATUS_ONLINE, stale.getStatus());
-        verify(agentIdentityService).suspendForBinding(
-                "juyiting", "jia_client", "juyiting", binding.getId());
-        verify(agentRuntimeDao, never()).findByAgentId("agent-001");
-        verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
-        verify(agentRuntimeDao).updateById(lockedCurrent);
-        org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
-                agentIdentityService, agentRuntimeDao);
-        lockOrder.verify(agentIdentityService).suspendForBinding(
-                "juyiting", "jia_client", "juyiting", binding.getId());
         lockOrder.verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
     }
 
@@ -1178,12 +1142,14 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentPersonaEntity persona = persona("wuyong", "吴用", "智多星");
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
 
-        AgentRuntimeDTO result = agentService.bindPersona("wuyong");
+        AgentRuntimeDTO result = agentService.bindPersona("juyiting", "jia_client", "juyiting", "wuyong");
 
         assertTrue(result.getAgentId().matches("agt_[0-9a-f]{32}"));
         assertTrue(!result.getAgentId().startsWith("jyt-"));
         ArgumentCaptor<AgentPersonaBindingEntity> bindingCaptor =
                 ArgumentCaptor.forClass(AgentPersonaBindingEntity.class);
+        verify(agentPersonaBindingDao).findExactActiveByScopeAndPersonaForUpdate(
+                "juyiting", "jia_client", "juyiting", "wuyong");
         verify(agentPersonaBindingDao).insert(bindingCaptor.capture());
         AgentPersonaBindingEntity binding = bindingCaptor.getValue();
         assertEquals("juyiting", binding.getTenantId());
@@ -1220,23 +1186,6 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(agentRuntimeDao).insert(runtimeCaptor.capture());
         assertEquals(canonical, runtimeCaptor.getValue().getAgentId());
         assertEquals(binding.getId(), runtimeCaptor.getValue().getBindingId());
-    }
-
-    @Test
-    void localPersonaBindingReturnsApiKeyForAgentSetup() {
-        AgentPersonaEntity persona = persona("husanniang", "扈三娘", "一丈青");
-        OauthApiKeyEntity apiKey = new OauthApiKeyEntity();
-        apiKey.setApiKey("cdx_test_key");
-        apiKey.setStatus(1);
-
-        when(agentPersonaDao.findByCode("husanniang")).thenReturn(persona);
-        when(apiKeyServiceProvider.getIfAvailable()).thenReturn(apiKeyService);
-        when(apiKeyService.findList(any(OauthApiKeyEntity.class))).thenReturn(List.of(apiKey));
-
-        AgentPersonaBindResultDTO result = agentService.bindPersona("husanniang", "local");
-
-        assertEquals("cdx_test_key", result.getApiKey());
-        assertTrue(result.getEnvExample().contains("OPENCLAW_API_KEY=cdx_test_key"));
     }
 
     @Test

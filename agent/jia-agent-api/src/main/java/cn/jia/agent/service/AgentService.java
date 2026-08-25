@@ -2,7 +2,6 @@ package cn.jia.agent.service;
 
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
-import cn.jia.agent.entity.AgentPersonaBindResultDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
@@ -33,11 +32,7 @@ public interface AgentService {
 
     List<AgentRuntimeDTO> listPersonaCatalog();
 
-    AgentRuntimeDTO bindPersona(String personaCode);
-
-    AgentPersonaBindResultDTO bindPersona(String personaCode, String mode);
-
-    void unbindPersona(String personaCode);
+    AgentRuntimeDTO bindPersona(String tenantId, String clientId, String ownerJiacn, String personaCode);
 
     AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId);
 
