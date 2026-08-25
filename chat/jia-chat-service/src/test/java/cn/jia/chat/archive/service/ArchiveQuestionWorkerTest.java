@@ -13,6 +13,8 @@ import cn.jia.chat.archive.store.ArchiveQuestionStore.QuestionRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.core.env.MapPropertySource;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -20,6 +22,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,6 +30,7 @@ import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -72,6 +76,25 @@ class ArchiveQuestionWorkerTest {
     @AfterEach
     void tearDown() {
         if (delivery != null) delivery.stop();
+    }
+
+    @Test
+    void springContextSelectsFiveArgumentProductionConstructor() {
+        ArchiveQuestionProvider provider = request -> ArchiveQuestionProvider.Answer.complete("unused");
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getPropertySources().addFirst(new MapPropertySource(
+                    "archiveQuestionWorkerTest", Map.of("archive.question.enabled", "true")));
+            context.getBeanFactory().registerSingleton("archiveQuestionStore", store);
+            context.getBeanFactory().registerSingleton("archiveTransactions", transactions);
+            context.getBeanFactory().registerSingleton("archiveQuestionProvider", provider);
+            context.getBeanFactory().registerSingleton("archiveQuestionEventDelivery", delivery);
+            context.getBeanFactory().registerSingleton("archiveQuestionAccessPolicy", enabledPolicy());
+            context.registerBean(ArchiveQuestionWorker.class);
+
+            context.refresh();
+
+            assertNotNull(context.getBean(ArchiveQuestionWorker.class));
+        }
     }
 
     @Test

@@ -8,6 +8,7 @@ import cn.jia.chat.archive.store.ArchiveQuestionStore.EventRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.OutboxRecord;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.QuestionRecord;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -56,6 +57,7 @@ public class ArchiveQuestionWorker {
     private final QueueScanState exhaustedScan = new QueueScanState(retryBudget);
     private boolean exhaustedFirst = true;
 
+    @Autowired
     public ArchiveQuestionWorker(ArchiveQuestionStore store, ArchiveTransactions transactions,
                                  ArchiveQuestionProvider provider, ArchiveQuestionEventDelivery delivery,
                                  ArchiveQuestionAccessPolicy accessPolicy) {
