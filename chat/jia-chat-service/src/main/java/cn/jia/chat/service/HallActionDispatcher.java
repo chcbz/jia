@@ -2,6 +2,7 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
@@ -16,6 +17,7 @@ import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
+import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -133,7 +135,8 @@ public class HallActionDispatcher {
             if (writer == null) {
                 throw new IllegalStateException("durable command writer is unavailable");
             }
-            AgentCommandTransportWriteResult written = writer.write(request.draft());
+            AgentCommandTransportWriteResult written = writer.writeAuthorizedHall(
+                    request.draft(), trustedCaller.callerAgentId());
             if (written == null || written.deliveryId() <= 0
                     || !request.draft().commandId().equals(written.commandId())) {
                 throw new IllegalStateException("durable command writer returned an invalid result");
@@ -168,40 +171,69 @@ public class HallActionDispatcher {
         if (trustedCaller == null) {
             return emptyDurableMailbox(includeTerminal);
         }
+        MailboxRequest request;
         try {
-            requireTrustedScope(trustedCaller);
-            if (!gate.allowsDispatch(trustedCaller.tenantId(), trustedCaller.clientId())) {
-                return mailbox(agentId);
-            }
-            requireExact(agentId, "targetAgentId", 100);
-            if (taskId != null) requireExact(taskId, "taskId", 100);
-            requireTrustedCaller(trustedCaller);
-            requireOwnedAgent(trustedCaller, trustedCaller.callerAgentId());
-            requireOwnedAgent(trustedCaller, agentId);
-            if (taskId != null) {
-                requireWritableMember(trustedCaller, taskId, trustedCaller.callerAgentId());
-                requireWritableMember(trustedCaller, taskId, agentId);
-            }
-            Cursor keyset = decodeCursor(cursor);
-            AgentCommandMailboxService query = mailboxProvider.getIfAvailable();
-            if (query == null) throw new IllegalStateException("durable mailbox query is unavailable");
-            AgentCommandMailboxPage page = query.query(
-                    trustedCaller.tenantId(), trustedCaller.clientId(),
-                    trustedCaller.callerAgentId(), agentId, taskId,
-                    keyset == null ? null : keyset.createTime(),
-                    keyset == null ? null : keyset.id(), limit, includeTerminal);
-            List<HallDurableMailboxItem> items = page.entries().stream()
-                    .map(entry -> new HallDurableMailboxItem(
-                            entry.commandId(), entry.taskId(), entry.workItemId(),
-                            entry.targetAgentId(), entry.commandType(), entry.status(),
-                            entry.expiresAt(), entry.createTime(), entry.updateTime()))
-                    .toList();
-            String next = page.nextBeforeCreateTime() == null ? null
-                    : encodeCursor(page.nextBeforeCreateTime(), page.nextBeforeId());
-            return new HallDurableMailboxPage(items, next, includeTerminal);
-        } catch (RuntimeException forbiddenOrMissing) {
-            // Empty is deliberately indistinguishable across missing and forbidden scopes.
+            request = validateMailboxRequest(
+                    agentId, taskId, cursor, limit, trustedCaller);
+        } catch (IllegalArgumentException malformed) {
             return emptyDurableMailbox(includeTerminal);
+        }
+        if (!request.durableScope()) {
+            return mailbox(agentId);
+        }
+        try {
+            requireMailboxAccess(agentId, taskId, trustedCaller);
+        } catch (HallMailboxAccessDeniedException denied) {
+            return emptyDurableMailbox(includeTerminal);
+        }
+
+        AgentCommandMailboxService query = mailboxProvider.getIfAvailable();
+        if (query == null) {
+            throw new IllegalStateException("durable mailbox query is unavailable");
+        }
+        AgentCommandMailboxPage page = query.query(
+                trustedCaller.tenantId(), trustedCaller.clientId(),
+                trustedCaller.callerAgentId(), agentId, taskId,
+                request.cursor() == null ? null : request.cursor().createTime(),
+                request.cursor() == null ? null : request.cursor().id(),
+                limit, includeTerminal);
+        if (page == null || page.entries() == null) {
+            throw new IllegalStateException("durable mailbox query returned no projection");
+        }
+        List<HallDurableMailboxItem> items = page.entries().stream()
+                .map(entry -> new HallDurableMailboxItem(
+                        entry.commandId(), entry.taskId(), entry.workItemId(),
+                        entry.targetAgentId(), entry.commandType(), entry.status(),
+                        entry.expiresAt(), entry.createTime(), entry.updateTime()))
+                .toList();
+        String next = page.nextBeforeCreateTime() == null ? null
+                : encodeCursor(page.nextBeforeCreateTime(), page.nextBeforeId());
+        return new HallDurableMailboxPage(items, next, includeTerminal);
+    }
+
+    private MailboxRequest validateMailboxRequest(
+            String agentId, String taskId, String cursor, int limit,
+            HallTrustedCaller trustedCaller) {
+        requireTrustedScope(trustedCaller);
+        if (!gate.allowsDispatch(trustedCaller.tenantId(), trustedCaller.clientId())) {
+            return new MailboxRequest(false, null);
+        }
+        requireExact(agentId, "targetAgentId", 100);
+        if (taskId != null) requireExact(taskId, "taskId", 100);
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("mailbox limit is invalid");
+        }
+        requireTrustedCaller(trustedCaller);
+        return new MailboxRequest(true, decodeCursor(cursor));
+    }
+
+    private void requireMailboxAccess(
+            String agentId, String taskId, HallTrustedCaller trustedCaller) {
+        requireOwnedAgent(trustedCaller, trustedCaller.callerAgentId());
+        requireOwnedAgent(trustedCaller, agentId);
+        if (taskId != null) {
+            requireWritableMember(trustedCaller, taskId, trustedCaller.callerAgentId());
+            requireWritableMember(trustedCaller, taskId, agentId);
         }
     }
 
@@ -230,11 +262,6 @@ public class HallActionDispatcher {
         if (intent.getTriggerEventId() != null) {
             requireExact(intent.getTriggerEventId(), "triggerEventId", 100);
         }
-        requireOwnedAgent(trustedCaller, trustedCaller.callerAgentId());
-        requireWritableMember(trustedCaller, intent.getTaskId(), trustedCaller.callerAgentId());
-        requireOwnedAgent(trustedCaller, intent.getActorAgentId());
-        requireWritableMember(trustedCaller, intent.getTaskId(), intent.getActorAgentId());
-
         AgentHallCommandContext context = typedContext(intent.getContext());
         AgentHallCommandPayload payload = new AgentHallCommandPayload(
                 intent.getActionType(), intent.getInstruction(), "juyiting",
@@ -286,11 +313,20 @@ public class HallActionDispatcher {
     }
 
     private void requireOwnedAgent(HallTrustedCaller caller, String agentId) {
-        AgentRuntimeDTO runtime = agentService.requireApiKeyOwnedAgent(
-                caller.clientId(), caller.tenantId(), agentId);
+        AgentRuntimeDTO runtime;
+        try {
+            runtime = agentService.requireApiKeyOwnedAgent(
+                    caller.clientId(), caller.tenantId(), agentId);
+        } catch (AgentBizException denied) {
+            if (AgentErrorConstants.AGENT_FORBIDDEN.equals(denied.getCode())
+                    || AgentErrorConstants.AGENT_NOT_FOUND.equals(denied.getCode())) {
+                throw new HallMailboxAccessDeniedException();
+            }
+            throw denied;
+        }
         if (runtime == null || !agentId.equals(runtime.getAgentId())
                 || !RUNTIME_STATUSES.contains(runtime.getStatus())) {
-            throw new IllegalArgumentException("Agent is not active in trusted scope");
+            throw new HallMailboxAccessDeniedException();
         }
     }
 
@@ -299,7 +335,7 @@ public class HallActionDispatcher {
         AgentTaskAccessLevel access = accessService.resolveMemberAccess(
                 caller.tenantId(), caller.clientId(), taskId, agentId);
         if (access == null || !access.canWrite()) {
-            throw new IllegalArgumentException("Agent is not a writable task member");
+            throw new HallMailboxAccessDeniedException();
         }
     }
 
@@ -479,5 +515,11 @@ public class HallActionDispatcher {
     }
 
     private record Cursor(long createTime, long id) {
+    }
+
+    private record MailboxRequest(boolean durableScope, Cursor cursor) {
+    }
+
+    private static final class HallMailboxAccessDeniedException extends RuntimeException {
     }
 }

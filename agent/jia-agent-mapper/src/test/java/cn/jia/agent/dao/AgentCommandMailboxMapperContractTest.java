@@ -2,6 +2,7 @@ package cn.jia.agent.dao;
 
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -67,14 +68,74 @@ class AgentCommandMailboxMapperContractTest {
         }
     }
 
+    @Test
+    void shadowPromotionUsesBoundedDeliveryThenOutboxLocks() throws Exception {
+        String delivery = selectSql("selectDeliveryForUpdate");
+        String outbox = selectSql("selectActiveOutboxesForUpdate");
+
+        assertTrue(delivery.contains("from agent_command_delivery"));
+        assertTrue(delivery.contains("limit 1 for update"));
+        assertTrue(outbox.contains("from agent_outbox_event"));
+        assertTrue(outbox.contains("delivery_id=#{deliveryid}"));
+        assertTrue(outbox.contains("message_id=#{messageid}"));
+        assertTrue(outbox.contains("order by id"));
+        assertTrue(outbox.contains("limit 2 for update"));
+    }
+
+    @Test
+    void shadowPromotionCasRequiresExactIdentityMarkerStatusAndVersion() throws Exception {
+        String delivery = updateSql("promoteShadowDelivery");
+        String outbox = updateSql("promoteShadowOutbox");
+
+        for (String required : new String[] {
+                "id=#{delivery.id}", "command_id=#{delivery.commandid}",
+                "active_message_id=#{delivery.activemessageid}", "status='dead'",
+                "last_error=#{delivery.lasterror}",
+                "active_attempt=#{delivery.activeattempt}",
+                "attempt_count=#{delivery.attemptcount}", "version=#{delivery.version}"}) {
+            assertTrue(delivery.contains(required), required + ": " + delivery);
+        }
+        for (String required : new String[] {
+                "id=#{outbox.id}", "event_id=#{outbox.eventid}",
+                "message_id=#{outbox.messageid}", "command_id=#{outbox.commandid}",
+                "delivery_id=#{outbox.deliveryid}", "status='dead'",
+                "last_error=#{outbox.lasterror}",
+                "active_attempt=#{outbox.activeattempt}",
+                "attempt_count=#{outbox.attemptcount}", "version=#{outbox.version}"}) {
+            assertTrue(outbox.contains(required), required + ": " + outbox);
+        }
+        assertTrue(delivery.contains("set status='pending', last_error=#{marker}"));
+        assertTrue(outbox.contains("set status='pending', last_error=#{marker}"));
+    }
+
     private static String sql(String methodName) throws Exception {
+        return selectSql(methodName);
+    }
+
+    private static String selectSql(String methodName) throws Exception {
         Method method = null;
         for (Method candidate : AgentCommandTransportMapper.class.getDeclaredMethods()) {
             if (candidate.getName().equals(methodName)) method = candidate;
         }
         if (method == null) throw new NoSuchMethodException(methodName);
         Select select = method.getAnnotation(Select.class);
-        return String.join(" ", select.value())
+        if (select == null) throw new IllegalStateException(methodName + " is not @Select");
+        return normalize(select.value());
+    }
+
+    private static String updateSql(String methodName) throws Exception {
+        Method method = null;
+        for (Method candidate : AgentCommandTransportMapper.class.getDeclaredMethods()) {
+            if (candidate.getName().equals(methodName)) method = candidate;
+        }
+        if (method == null) throw new NoSuchMethodException(methodName);
+        Update update = method.getAnnotation(Update.class);
+        if (update == null) throw new IllegalStateException(methodName + " is not @Update");
+        return normalize(update.value());
+    }
+
+    private static String normalize(String[] sql) {
+        return String.join(" ", sql)
                 .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
     }
 

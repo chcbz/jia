@@ -36,6 +36,7 @@ public final class AgentCommandCanonicalCodec {
     private static final int MAX_ABILITIES = 128;
     private static final int MAX_HALL_LIST = 32;
     private static final Set<String> HALL_COMMAND_TYPES = Set.of(
+            AgentProtocolConstants.COMMAND_TASK_INVITE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME,
             AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL,
@@ -83,6 +84,7 @@ public final class AgentCommandCanonicalCodec {
     public static String hallCommandTypeForAction(String actionType) {
         requireExact(actionType, "actionType", 64);
         return switch (actionType) {
+            case "task_briefing", "task_invite" -> AgentProtocolConstants.COMMAND_TASK_INVITE;
             case "work_item_execute", "execute" -> AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE;
             case "work_item_resume", "resume" -> AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME;
             case "work_item_cancel", "cancel" -> AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL;
@@ -95,8 +97,13 @@ public final class AgentCommandCanonicalCodec {
     }
 
     public static boolean isSupportedCommandType(String commandType) {
-        return AgentProtocolConstants.COMMAND_TASK_INVITE.equals(commandType)
-                || HALL_COMMAND_TYPES.contains(commandType);
+        return HALL_COMMAND_TYPES.contains(commandType);
+    }
+
+    public static boolean isHallIntentCommand(AgentCommandDraft draft) {
+        return draft != null && draft.intentId() != null
+                && draft.payload() instanceof AgentHallCommandPayload
+                && HALL_COMMAND_TYPES.contains(draft.commandType());
     }
 
     public static List<String> canonicalHallList(List<String> values, String field) {
@@ -129,7 +136,7 @@ public final class AgentCommandCanonicalCodec {
         string(json, "commandType", draft.commandType());
         number(json, "issuedAt", draft.issuedAt());
         number(json, "expiresAt", draft.expiresAt());
-        if (isHall(draft.commandType())) string(json, "intentId", draft.intentId());
+        if (isHallIntentCommand(draft)) string(json, "intentId", draft.intentId());
         payload(json, draft.payload());
         json.append('}');
         return bounded(json);
@@ -159,7 +166,7 @@ public final class AgentCommandCanonicalCodec {
         string(json, "commandType", draft.commandType());
         number(json, "issuedAt", draft.issuedAt());
         number(json, "expiresAt", draft.expiresAt());
-        if (isHall(draft.commandType())) string(json, "intentId", draft.intentId());
+        if (isHallIntentCommand(draft)) string(json, "intentId", draft.intentId());
         number(json, "attempt", attempt);
         payload(json, draft.payload());
         json.append('}');
@@ -174,7 +181,7 @@ public final class AgentCommandCanonicalCodec {
             JsonNode root = STRICT_JSON.readTree(raw);
             if (root == null || !root.isObject()) throw invalid("business JSON must be an object");
             String commandType = text(root, "commandType");
-            boolean hall = isHall(commandType);
+            boolean hall = root.has("intentId");
             if (root.size() != (hall ? 14 : 13)) throw invalid("business envelope contains unknown fields");
             AgentCommandPayload decodedPayload = hall
                     ? decodeHallPayload(root.get("payload"))
@@ -258,8 +265,8 @@ public final class AgentCommandCanonicalCodec {
             throw invalid("correlationId must equal taskId");
         }
         if (draft.issuedAt() <= 0) throw invalid("issuedAt must be positive");
-        if (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())) {
-            if (draft.intentId() != null) throw invalid("TASK_INVITE must not contain intentId");
+        if (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())
+                && draft.intentId() == null) {
             String expected = taskInviteCommandId(
                     draft.tenantId(), draft.clientId(), draft.taskId(), draft.targetAgentId());
             if (!expected.equals(draft.commandId())) throw invalid("commandId does not match frozen identity");
@@ -270,7 +277,9 @@ public final class AgentCommandCanonicalCodec {
             validateTaskInvitePayload(invite, draft.targetAgentId());
             return;
         }
-        if (!isHall(draft.commandType())) throw invalid("commandType is outside the frozen allowlist");
+        if (!HALL_COMMAND_TYPES.contains(draft.commandType())) {
+            throw invalid("commandType is outside the frozen allowlist");
+        }
         requireExact(draft.intentId(), "intentId", 100);
         String expected = hallCommandId(draft.tenantId(), draft.clientId(), draft.taskId(),
                 draft.targetAgentId(), draft.intentId(), draft.commandType());
@@ -442,10 +451,6 @@ public final class AgentCommandCanonicalCodec {
         array(json, "referenceIds", context.referenceIds());
         array(json, "tags", context.tags());
         json.append('}');
-    }
-
-    private static boolean isHall(String commandType) {
-        return HALL_COMMAND_TYPES.contains(commandType);
     }
 
     private static byte[] bounded(StringBuilder json) {

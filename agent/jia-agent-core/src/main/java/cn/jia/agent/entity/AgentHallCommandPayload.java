@@ -1,6 +1,6 @@
 package cn.jia.agent.entity;
 
-/** Typed Hall action payload shared by all non-TASK_INVITE Protocol v1 commands. */
+/** Typed Hall action payload shared by the canonical Hall Protocol v1 command allowlist. */
 public record AgentHallCommandPayload(
         String actionType,
         String instruction,

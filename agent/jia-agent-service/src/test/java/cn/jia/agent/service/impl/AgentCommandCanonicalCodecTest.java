@@ -77,8 +77,10 @@ class AgentCommandCanonicalCodecTest {
     }
 
     @Test
-    void acceptsEveryFrozenHallCommandTypeWithoutTaskInviteMasquerading() {
+    void acceptsEveryFrozenHallCommandTypeIncludingIntentScopedTaskInvite() {
         List<ActionType> allowlist = List.of(
+                new ActionType("task_briefing", AgentProtocolConstants.COMMAND_TASK_INVITE),
+                new ActionType("task_invite", AgentProtocolConstants.COMMAND_TASK_INVITE),
                 new ActionType("execute", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE),
                 new ActionType("resume", AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME),
                 new ActionType("cancel", AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL),
@@ -93,10 +95,29 @@ class AgentCommandCanonicalCodecTest {
             byte[] bytes = AgentCommandCanonicalCodec.businessBytes(draft);
             AgentCommandDraft decoded = AgentCommandCanonicalCodec.decodeBusinessBytes(bytes);
             assertEquals(item.commandType(), decoded.commandType());
-            assertFalse(AgentProtocolConstants.COMMAND_TASK_INVITE.equals(decoded.commandType()));
             assertEquals("intent-1", decoded.causationId());
             assertInstanceOf(AgentHallCommandPayload.class, decoded.payload());
         }
+    }
+
+    @Test
+    void hallTaskBriefingUsesTaskInviteTypeWithoutChangingLegacyInviteIdentity() {
+        AgentCommandDraft hall = hallDraft(
+                "task_briefing", AgentProtocolConstants.COMMAND_TASK_INVITE,
+                1000L, "请阅读任务简报并确认职责", null, null);
+        byte[] bytes = AgentCommandCanonicalCodec.businessBytes(hall);
+        AgentCommandDraft decoded = AgentCommandCanonicalCodec.decodeBusinessBytes(bytes);
+
+        assertTrue(hall.commandId().startsWith(
+                AgentCommandCanonicalCodec.HALL_COMMAND_ID_PREFIX));
+        assertFalse(hall.commandId().startsWith(
+                AgentCommandCanonicalCodec.TASK_INVITE_COMMAND_ID_PREFIX));
+        assertEquals(AgentProtocolConstants.COMMAND_TASK_INVITE, decoded.commandType());
+        assertEquals("intent-1", decoded.intentId());
+        assertInstanceOf(AgentHallCommandPayload.class, decoded.payload());
+        assertEquals("task_briefing",
+                ((AgentHallCommandPayload) decoded.payload()).actionType());
+        assertEquals(taskInviteCommandId(), taskInviteDraft("Task One").commandId());
     }
 
     @Test

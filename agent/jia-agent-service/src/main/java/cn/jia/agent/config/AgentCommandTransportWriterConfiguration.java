@@ -4,6 +4,8 @@ import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import cn.jia.agent.service.AgentCommandMailboxService;
 import cn.jia.agent.service.AgentCommandTransportWriter;
+import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.impl.AgentCommandTransportWriterImpl;
 import cn.jia.agent.service.impl.AgentCommandMailboxServiceImpl;
 import org.springframework.context.annotation.Bean;
@@ -25,7 +27,10 @@ public class AgentCommandTransportWriterConfiguration {
     public AgentCommandTransportWriter agentCommandTransportWriter(
             AgentCommandTransportDao dao,
             AgentRabbitSafetyGate gate,
+            AgentService agentService,
+            AgentTaskCollaborationAccessService accessService,
             PlatformTransactionManager transactionManager) {
-        return new AgentCommandTransportWriterImpl(dao, gate, transactionManager);
+        return new AgentCommandTransportWriterImpl(
+                dao, gate, agentService, accessService, transactionManager);
     }
 }

@@ -2,6 +2,7 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
@@ -11,11 +12,13 @@ import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandMailboxEntry;
 import cn.jia.agent.entity.AgentCommandMailboxPage;
 import cn.jia.agent.entity.AgentCommandTransportWriteResult;
+import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.service.AgentCommandMailboxService;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
+import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.chat.handler.AgentProtocolMessageNormalizer;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.core.context.EsContext;
@@ -26,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import java.util.List;
 import java.util.Map;
@@ -182,7 +186,7 @@ class HallActionDispatcherTest extends BaseMockTest {
 
         assertEquals(HallActionDispatcher.STATUS_FAILED, result.getStatus());
         verify(writerProvider, never()).getIfAvailable();
-        verify(writer, never()).write(any());
+        verify(writer, never()).writeAuthorizedHall(any(), any());
         verify(agentWebSocketHandler, never()).isAgentConnected(any(), any(), any());
         verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
         assertTrue(dispatcher.mailbox("agent-target").isEmpty());
@@ -192,13 +196,8 @@ class HallActionDispatcherTest extends BaseMockTest {
     void canaryOnlineAndOfflineTargetsBothUseOneDurableFactSourceOnly() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        allowOwned("caller-agent", AgentConstants.STATUS_ONLINE);
-        allowOwned("agent-online", AgentConstants.STATUS_ONLINE);
-        allowOwned("agent-offline", AgentConstants.STATUS_OFFLINE);
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(writerProvider.getIfAvailable()).thenReturn(writer);
-        when(writer.write(any())).thenAnswer(invocation -> {
+        when(writer.writeAuthorizedHall(any(), any())).thenAnswer(invocation -> {
             AgentCommandDraft draft = invocation.getArgument(0);
             return new AgentCommandTransportWriteResult(
                     41L, draft.commandId(), "message-1", "event-1", false);
@@ -213,11 +212,46 @@ class HallActionDispatcherTest extends BaseMockTest {
 
         assertEquals(HallActionDispatcher.STATUS_ACCEPTED, online.getStatus());
         assertEquals(HallActionDispatcher.STATUS_ACCEPTED, offline.getStatus());
-        verify(writer, org.mockito.Mockito.times(2)).write(any());
+        verify(writer, org.mockito.Mockito.times(2)).writeAuthorizedHall(
+                any(), eq("caller-agent"));
+        verify(agentService, never()).requireApiKeyOwnedAgent(any(), any(), any());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
         verify(agentWebSocketHandler, never()).isAgentConnected(any(), any(), any());
         verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
         assertTrue(dispatcher.mailbox("agent-online").isEmpty());
         assertTrue(dispatcher.mailbox("agent-offline").isEmpty());
+    }
+
+    @Test
+    void taskBriefingEndpointShapeDurablyDispatchesIntentScopedTaskInvite() {
+        HallActionDispatcher dispatcher = dispatcher(
+                AgentRabbitActivationState.DISPATCH_CANARY, true);
+        when(writerProvider.getIfAvailable()).thenReturn(writer);
+        when(writer.writeAuthorizedHall(any(), eq("caller-agent"))).thenAnswer(invocation -> {
+            AgentCommandDraft draft = invocation.getArgument(0);
+            return new AgentCommandTransportWriteResult(
+                    61L, draft.commandId(), "message-briefing", "event-briefing", false);
+        });
+        HallActionIntent intent = durableIntent(
+                "intent-briefing", "agent-target", "task-1");
+        intent.setActionType("task_briefing");
+        intent.setInstruction("请阅读任务简报并确认职责");
+
+        HallActionDispatchResult result = dispatcher.dispatch(
+                intent, new HallTrustedCaller("tenant-a", "client-a", "caller-agent"));
+
+        assertEquals(HallActionDispatcher.STATUS_ACCEPTED, result.getStatus());
+        ArgumentCaptor<AgentCommandDraft> draft =
+                ArgumentCaptor.forClass(AgentCommandDraft.class);
+        verify(writer).writeAuthorizedHall(draft.capture(), eq("caller-agent"));
+        assertEquals(AgentProtocolConstants.COMMAND_TASK_INVITE,
+                draft.getValue().commandType());
+        assertEquals("intent-briefing", draft.getValue().intentId());
+        assertTrue(draft.getValue().commandId().startsWith("cmd_hall_action_"));
+        AgentHallCommandPayload payload = assertInstanceOf(
+                AgentHallCommandPayload.class, draft.getValue().payload());
+        assertEquals("task_briefing", payload.actionType());
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
     }
 
     @Test
@@ -236,40 +270,23 @@ class HallActionDispatcherTest extends BaseMockTest {
     }
 
     @Test
-    void callerTaskDenialAndTargetIdentityFailureProduceZeroWritesAndZeroLegacyIo() {
+    void transactionalWriterDenialProducesNoAcceptedClaimOrLegacyIo() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
         HallTrustedCaller caller = new HallTrustedCaller(
                 "tenant-a", "client-a", "caller-agent");
-        allowOwned("caller-agent", AgentConstants.STATUS_ONLINE);
-        when(accessService.resolveMemberAccess(
-                "tenant-a", "client-a", "task-1", "caller-agent"))
-                .thenReturn(AgentTaskAccessLevel.READ_ONLY);
+        when(writerProvider.getIfAvailable()).thenReturn(writer);
+        when(writer.writeAuthorizedHall(any(), eq("caller-agent")))
+                .thenThrow(new IllegalArgumentException("authorization revoked"));
 
-        HallActionDispatchResult callerDenied = dispatcher.dispatch(
+        HallActionDispatchResult denied = dispatcher.dispatch(
                 durableIntent("intent-denied", "agent-target", "task-1"), caller);
 
-        assertEquals(HallActionDispatcher.STATUS_FAILED, callerDenied.getStatus());
-        verify(agentService, never()).requireApiKeyOwnedAgent(
-                "client-a", "tenant-a", "agent-target");
-        verify(writerProvider, never()).getIfAvailable();
+        assertEquals(HallActionDispatcher.STATUS_FAILED, denied.getStatus());
+        verify(writer).writeAuthorizedHall(any(), eq("caller-agent"));
+        verify(agentService, never()).requireApiKeyOwnedAgent(any(), any(), any());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
         verify(agentWebSocketHandler, never()).isAgentConnected(any(), any(), any());
-
-        HallActionDispatcher targetDispatcher = dispatcher(
-                AgentRabbitActivationState.DISPATCH_CANARY, true);
-        allowOwned("caller-agent", AgentConstants.STATUS_ONLINE);
-        when(accessService.resolveMemberAccess(
-                "tenant-a", "client-a", "task-1", "caller-agent"))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-        when(agentService.requireApiKeyOwnedAgent(
-                "client-a", "tenant-a", "agent-target"))
-                .thenThrow(new IllegalArgumentException("cross-scope target"));
-
-        HallActionDispatchResult targetDenied = targetDispatcher.dispatch(
-                durableIntent("intent-target-denied", "agent-target", "task-1"), caller);
-
-        assertEquals(HallActionDispatcher.STATUS_FAILED, targetDenied.getStatus());
-        verify(writer, never()).write(any());
         verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
     }
 
@@ -289,15 +306,14 @@ class HallActionDispatcherTest extends BaseMockTest {
         assertEquals(HallActionDispatcher.STATUS_FAILED,
                 dispatcher.dispatch(nested, caller).getStatus());
         verify(writerProvider, never()).getIfAvailable();
-        verify(writer, never()).write(any());
+        verify(writer, never()).writeAuthorizedHall(any(), any());
     }
 
     @Test
     void dbShadowCapturesTerminalDurableRowThenUsesLegacyWithoutDurableDeliveryClaim() {
         HallActionDispatcher dispatcher = dispatcher(AgentRabbitActivationState.DB_SHADOW, false);
-        allowAcl("caller-agent", "agent-target", "task-1");
         when(writerProvider.getIfAvailable()).thenReturn(writer);
-        when(writer.write(any())).thenAnswer(invocation -> {
+        when(writer.writeAuthorizedHall(any(), any())).thenAnswer(invocation -> {
             AgentCommandDraft draft = invocation.getArgument(0);
             return new AgentCommandTransportWriteResult(
                     51L, draft.commandId(), "message-shadow", "event-shadow", false);
@@ -314,7 +330,9 @@ class HallActionDispatcherTest extends BaseMockTest {
         assertEquals(HallActionDispatcher.STATUS_DISPATCHED, result.getStatus());
         assertEquals("dispatched", result.getMessage());
         assertFalse(result.getMessage().contains("durable"));
-        verify(writer).write(any());
+        verify(writer).writeAuthorizedHall(any(), eq("caller-agent"));
+        verify(agentService, never()).requireApiKeyOwnedAgent(any(), any(), any());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
         verify(agentWebSocketHandler).sendDirectMessageToAgent(
                 eq("agent-target"), any(Map.class));
     }
@@ -364,6 +382,81 @@ class HallActionDispatcherTest extends BaseMockTest {
         assertTrue(forged.items().isEmpty());
         verify(mailboxProvider, never()).getIfAvailable();
         verify(agentWebSocketHandler, never()).isAgentConnected(any(), any(), any());
+    }
+
+    @Test
+    void durableMailboxMapsExplicitForbiddenIdentityToEmpty() {
+        HallActionDispatcher dispatcher = dispatcher(
+                AgentRabbitActivationState.DISPATCH_CANARY, true);
+        allowOwned("caller-agent", AgentConstants.STATUS_ONLINE);
+        when(agentService.requireApiKeyOwnedAgent(
+                "client-a", "tenant-a", "agent-target"))
+                .thenThrow(new AgentBizException(
+                        AgentErrorConstants.AGENT_FORBIDDEN, "forbidden"));
+
+        HallDurableMailboxPage page = assertInstanceOf(HallDurableMailboxPage.class,
+                dispatcher.mailbox("agent-target", "task-1", null, 50, false,
+                        new HallTrustedCaller(
+                                "tenant-a", "client-a", "caller-agent")));
+
+        assertTrue(page.items().isEmpty());
+        verify(mailboxProvider, never()).getIfAvailable();
+    }
+
+    @Test
+    void durableMailboxAclInfrastructureFailureIsObservable() {
+        HallActionDispatcher dispatcher = dispatcher(
+                AgentRabbitActivationState.DISPATCH_CANARY, true);
+        allowOwned("caller-agent", AgentConstants.STATUS_ONLINE);
+        allowOwned("agent-target", AgentConstants.STATUS_OFFLINE);
+        when(accessService.resolveMemberAccess(
+                "tenant-a", "client-a", "task-1", "caller-agent"))
+                .thenThrow(new DataAccessResourceFailureException(
+                        "membership database unavailable"));
+
+        DataAccessResourceFailureException failure = assertThrows(
+                DataAccessResourceFailureException.class, () ->
+                        dispatcher.mailbox("agent-target", "task-1", null, 50, false,
+                                new HallTrustedCaller(
+                                        "tenant-a", "client-a", "caller-agent")));
+
+        assertEquals("membership database unavailable", failure.getMessage());
+        verify(mailboxProvider, never()).getIfAvailable();
+    }
+
+    @Test
+    void durableMailboxProviderFailureIsObservable() {
+        HallActionDispatcher dispatcher = dispatcher(
+                AgentRabbitActivationState.DISPATCH_CANARY, true);
+        allowAcl("caller-agent", "agent-target", "task-1");
+        when(mailboxProvider.getIfAvailable())
+                .thenThrow(new IllegalStateException("provider infrastructure unavailable"));
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () ->
+                dispatcher.mailbox("agent-target", "task-1", null, 50, false,
+                        new HallTrustedCaller(
+                                "tenant-a", "client-a", "caller-agent")));
+
+        assertEquals("provider infrastructure unavailable", failure.getMessage());
+    }
+
+    @Test
+    void durableMailboxSqlFailureIsObservable() {
+        HallActionDispatcher dispatcher = dispatcher(
+                AgentRabbitActivationState.DISPATCH_CANARY, true);
+        allowAcl("caller-agent", "agent-target", "task-1");
+        when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
+        when(durableMailbox.query(any(), any(), any(), any(), any(),
+                any(), any(), eq(50), eq(false)))
+                .thenThrow(new DataAccessResourceFailureException("mysql unavailable"));
+
+        DataAccessResourceFailureException failure = assertThrows(
+                DataAccessResourceFailureException.class, () ->
+                        dispatcher.mailbox("agent-target", "task-1", null, 50, false,
+                                new HallTrustedCaller(
+                                        "tenant-a", "client-a", "caller-agent")));
+
+        assertEquals("mysql unavailable", failure.getMessage());
     }
 
     private HallActionDispatcher dispatcher(

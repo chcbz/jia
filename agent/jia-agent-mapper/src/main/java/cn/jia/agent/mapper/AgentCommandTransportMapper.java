@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -14,7 +15,9 @@ public interface AgentCommandTransportMapper {
             SELECT id, command_id, task_id, work_item_id, target_agent_id, command_type,
                    command_payload, command_payload_hash, status, attempt_count,
                    next_retry_at, lease_owner, lease_until, active_message_id, active_attempt,
-                   expires_at, last_error, version, tenant_id, client_id, create_time, update_time
+                   expires_at, last_error, version, replay_parent_message_id,
+                   replay_requester_id, replay_approver_id, replay_reason,
+                   tenant_id, client_id, create_time, update_time
             FROM agent_command_delivery
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND command_id=#{commandId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
@@ -29,6 +32,85 @@ public interface AgentCommandTransportMapper {
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("commandId") String commandId);
+
+    @Select("""
+            SELECT id,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
+                   destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
+                   next_retry_at,lease_owner,lease_until,active_attempt,expires_at,
+                   publisher_confirm_status,confirmed_at,confirm_error,mandatory_return_status,
+                   returned_at,return_reply_code,return_reply_text,published_at,last_error,version,
+                   replay_parent_message_id,replay_requester_id,replay_approver_id,replay_reason,
+                   tenant_id,client_id,create_time,update_time
+            FROM agent_outbox_event
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND delivery_id=#{deliveryId}
+              AND message_id=#{messageId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(message_id AS BINARY)=CAST(#{messageId} AS BINARY)
+              AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{messageId})
+            ORDER BY id
+            LIMIT 2 FOR UPDATE
+            """)
+    List<AgentOutboxEventEntity> selectActiveOutboxesForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId,
+            @Param("messageId") String messageId);
+
+    @Update("""
+            UPDATE agent_command_delivery
+            SET status='PENDING', last_error=#{marker}, version=version+1, update_time=#{now}
+            WHERE id=#{delivery.id} AND tenant_id=#{delivery.tenantId}
+              AND client_id=#{delivery.clientId} AND command_id=#{delivery.commandId}
+              AND active_message_id=#{delivery.activeMessageId}
+              AND status='DEAD' AND last_error=#{delivery.lastError}
+              AND active_attempt=#{delivery.activeAttempt} AND attempt_count=#{delivery.attemptCount}
+              AND version=#{delivery.version}
+              AND CAST(tenant_id AS BINARY)=CAST(#{delivery.tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{delivery.tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{delivery.clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{delivery.clientId})
+              AND CAST(command_id AS BINARY)=CAST(#{delivery.commandId} AS BINARY)
+              AND OCTET_LENGTH(command_id)=OCTET_LENGTH(#{delivery.commandId})
+              AND CAST(active_message_id AS BINARY)=CAST(#{delivery.activeMessageId} AS BINARY)
+              AND OCTET_LENGTH(active_message_id)=OCTET_LENGTH(#{delivery.activeMessageId})
+              AND CAST(last_error AS BINARY)=CAST(#{delivery.lastError} AS BINARY)
+              AND OCTET_LENGTH(last_error)=OCTET_LENGTH(#{delivery.lastError})
+            """)
+    int promoteShadowDelivery(
+            @Param("delivery") AgentCommandDeliveryEntity delivery,
+            @Param("marker") String marker,
+            @Param("now") long now);
+
+    @Update("""
+            UPDATE agent_outbox_event
+            SET status='PENDING', last_error=#{marker}, version=version+1, update_time=#{now}
+            WHERE id=#{outbox.id} AND tenant_id=#{outbox.tenantId}
+              AND client_id=#{outbox.clientId} AND event_id=#{outbox.eventId}
+              AND message_id=#{outbox.messageId} AND command_id=#{outbox.commandId}
+              AND delivery_id=#{outbox.deliveryId}
+              AND status='DEAD' AND last_error=#{outbox.lastError}
+              AND active_attempt=#{outbox.activeAttempt} AND attempt_count=#{outbox.attemptCount}
+              AND version=#{outbox.version}
+              AND CAST(tenant_id AS BINARY)=CAST(#{outbox.tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{outbox.tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{outbox.clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{outbox.clientId})
+              AND CAST(event_id AS BINARY)=CAST(#{outbox.eventId} AS BINARY)
+              AND OCTET_LENGTH(event_id)=OCTET_LENGTH(#{outbox.eventId})
+              AND CAST(message_id AS BINARY)=CAST(#{outbox.messageId} AS BINARY)
+              AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{outbox.messageId})
+              AND CAST(command_id AS BINARY)=CAST(#{outbox.commandId} AS BINARY)
+              AND OCTET_LENGTH(command_id)=OCTET_LENGTH(#{outbox.commandId})
+              AND CAST(last_error AS BINARY)=CAST(#{outbox.lastError} AS BINARY)
+              AND OCTET_LENGTH(last_error)=OCTET_LENGTH(#{outbox.lastError})
+            """)
+    int promoteShadowOutbox(
+            @Param("outbox") AgentOutboxEventEntity outbox,
+            @Param("marker") String marker,
+            @Param("now") long now);
 
     @Insert("""
             INSERT INTO agent_command_delivery

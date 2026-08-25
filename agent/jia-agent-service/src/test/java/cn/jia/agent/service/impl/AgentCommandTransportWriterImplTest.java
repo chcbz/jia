@@ -1,20 +1,28 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.access.AgentTaskAccessLevel;
+import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
+import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
-import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentHallCommandPayload;
+import cn.jia.agent.entity.AgentOutboxEventEntity;
+import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.nio.charset.StandardCharsets;
@@ -28,18 +36,27 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentCommandTransportWriterImplTest {
+    private static final String CALLER = "agent-0";
+
     private AgentCommandTransportDao dao;
+    private AgentService agentService;
+    private AgentTaskCollaborationAccessService accessService;
     private PlatformTransactionManager transactions;
 
     @BeforeEach
     void setUp() {
         dao = mock(AgentCommandTransportDao.class);
+        agentService = mock(AgentService.class);
+        accessService = mock(AgentTaskCollaborationAccessService.class);
         transactions = mock(PlatformTransactionManager.class);
         when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
     }
@@ -89,9 +106,8 @@ class AgentCommandTransportWriterImplTest {
         AgentCommandDeliveryEntity existing = existing(draft, bytes);
         when(dao.lockDelivery(draft.tenantId(), draft.clientId(), draft.commandId()))
                 .thenReturn(existing);
-        AgentCommandTransportWriterImpl writer = writer();
 
-        var result = writer.write(draft);
+        var result = assignmentWriter().write(draft);
 
         assertTrue(result.duplicate());
         assertEquals(77L, result.deliveryId());
@@ -108,7 +124,92 @@ class AgentCommandTransportWriterImplTest {
                 .thenReturn(existing(conflicting,
                         AgentCommandCanonicalCodec.businessBytes(conflicting)));
 
-        assertThrows(IllegalStateException.class, () -> writer().write(requested));
+        assertThrows(IllegalStateException.class, () -> assignmentWriter().write(requested));
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+    }
+
+    @Test
+    void hallAuthorizationLocksInsideRequiredTransactionBeforeTransportRows() {
+        AgentCommandDraft draft = hallDraft(1_000L, "执行工作项并回报结果");
+        allowHallAuthorization();
+        when(dao.insertDelivery(any())).thenAnswer(invocation -> {
+            invocation.<AgentCommandDeliveryEntity>getArgument(0).setId(91L);
+            return 1;
+        });
+        when(dao.insertOutbox(any())).thenReturn(1);
+
+        var result = hallWriter(gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
+                .writeAuthorizedHall(draft, CALLER);
+
+        assertFalse(result.duplicate());
+        InOrder order = inOrder(transactions, accessService, agentService, dao);
+        order.verify(transactions).getTransaction(any());
+        order.verify(accessService).resolveMemberAccessForUpdate(
+                "tenant-a", "client-a", "task-1", CALLER);
+        order.verify(accessService).resolveMemberAccessForUpdate(
+                "tenant-a", "client-a", "task-1", "agent-1");
+        order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
+                "client-a", "tenant-a", CALLER);
+        order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
+                "client-a", "tenant-a", "agent-1");
+        order.verify(dao).lockDelivery("tenant-a", "client-a", draft.commandId());
+        order.verify(dao).insertDelivery(any());
+        order.verify(dao).insertOutbox(any());
+        order.verify(transactions).commit(any(TransactionStatus.class));
+    }
+
+    @Test
+    void revokedWritableMembershipRollsBackBeforeAnyTransportWrite() {
+        AgentCommandDraft draft = hallDraft(1_000L, "执行工作项并回报结果");
+        when(accessService.resolveMemberAccessForUpdate(
+                "tenant-a", "client-a", "task-1", CALLER))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        when(accessService.resolveMemberAccessForUpdate(
+                "tenant-a", "client-a", "task-1", "agent-1"))
+                .thenReturn(AgentTaskAccessLevel.NONE);
+
+        assertThrows(IllegalArgumentException.class, () -> hallWriter(
+                gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
+                .writeAuthorizedHall(draft, CALLER));
+
+        verify(agentService, never()).requireApiKeyOwnedAgentForUpdate(any(), any(), any());
+        verify(dao, never()).lockDelivery(any(), any(), any());
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+        verify(transactions).rollback(any(TransactionStatus.class));
+    }
+
+    @Test
+    void revokedOwnershipRollsBackBeforeAnyTransportWrite() {
+        AgentCommandDraft draft = hallDraft(1_000L, "执行工作项并回报结果");
+        when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any()))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        when(agentService.requireApiKeyOwnedAgentForUpdate(
+                "client-a", "tenant-a", CALLER))
+                .thenReturn(runtime(CALLER, AgentConstants.STATUS_ONLINE));
+        when(agentService.requireApiKeyOwnedAgentForUpdate(
+                "client-a", "tenant-a", "agent-1"))
+                .thenThrow(new IllegalArgumentException("ownership revoked"));
+
+        assertThrows(IllegalArgumentException.class, () -> hallWriter(
+                gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
+                .writeAuthorizedHall(draft, CALLER));
+
+        verify(dao, never()).lockDelivery(any(), any(), any());
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+        verify(transactions).rollback(any(TransactionStatus.class));
+    }
+
+    @Test
+    void genericWriterRejectsHallCommandBeforeTransactionOrDatabaseAccess() {
+        AgentCommandDraft draft = hallDraft(1_000L, "执行工作项并回报结果");
+
+        assertThrows(IllegalStateException.class, () -> assignmentWriter().write(draft));
+
+        verify(transactions, never()).getTransaction(any());
+        verify(dao, never()).lockDelivery(any(), any(), any());
         verify(dao, never()).insertDelivery(any());
         verify(dao, never()).insertOutbox(any());
     }
@@ -120,8 +221,10 @@ class AgentCommandTransportWriterImplTest {
         byte[] storedBytes = AgentCommandCanonicalCodec.businessBytes(stored);
         when(dao.lockDelivery(retry.tenantId(), retry.clientId(), retry.commandId()))
                 .thenReturn(existing(stored, storedBytes));
+        allowHallAuthorization();
 
-        var result = writer().write(retry);
+        var result = hallWriter(gate(AgentRabbitActivationState.DB_SHADOW, false))
+                .writeAuthorizedHall(retry, CALLER);
 
         assertTrue(result.duplicate());
         assertEquals(77L, result.deliveryId());
@@ -136,10 +239,124 @@ class AgentCommandTransportWriterImplTest {
         byte[] storedBytes = AgentCommandCanonicalCodec.businessBytes(stored);
         when(dao.lockDelivery(changed.tenantId(), changed.clientId(), changed.commandId()))
                 .thenReturn(existing(stored, storedBytes));
+        allowHallAuthorization();
 
-        assertThrows(IllegalStateException.class, () -> writer().write(changed));
+        assertThrows(IllegalStateException.class, () -> hallWriter(
+                gate(AgentRabbitActivationState.DB_SHADOW, false))
+                .writeAuthorizedHall(changed, CALLER));
         verify(dao, never()).insertDelivery(any());
         verify(dao, never()).insertOutbox(any());
+    }
+
+    @Test
+    void legacyTaskInviteShadowDuplicateIsNeverPromotedByHallCutover() {
+        AgentCommandDraft draft = draft("Task One");
+        byte[] bytes = AgentCommandCanonicalCodec.businessBytes(draft);
+        AgentCommandDeliveryEntity existing = existing(draft, bytes)
+                .setStatus("DEAD")
+                .setAttemptCount(1)
+                .setActiveAttempt(1)
+                .setLastError(AgentCommandTransportWriterImpl.DB_SHADOW_MARKER)
+                .setVersion(0L);
+        when(dao.lockDelivery(draft.tenantId(), draft.clientId(), draft.commandId()))
+                .thenReturn(existing);
+        AgentCommandTransportWriterImpl writer = new AgentCommandTransportWriterImpl(
+                dao, gate(AgentRabbitActivationState.DISPATCH_CANARY, true),
+                transactions, () -> new UUID(0, 1));
+
+        var result = writer.write(draft);
+
+        assertTrue(result.duplicate());
+        assertEquals(existing.getId(), result.deliveryId());
+        assertEquals(existing.getActiveMessageId(), result.messageId());
+        assertNull(result.outboxEventId());
+        verify(dao, never()).lockActiveOutboxes(any(), any(), anyLong(), any());
+        verify(dao, never()).promoteShadowDelivery(any(), any(), anyLong());
+        verify(dao, never()).promoteShadowOutbox(any(), any(), anyLong());
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+    }
+
+    @Test
+    void hallShadowDeadRetryPromotesExistingIdentityTruthfullyAndThenIsIdempotent() {
+        AgentCommandDraft stored = hallDraft(1_000L, "执行工作项并回报结果");
+        AgentCommandDraft retry = hallDraft(9_000L, "执行工作项并回报结果");
+        byte[] business = AgentCommandCanonicalCodec.businessBytes(stored);
+        AgentCommandDeliveryEntity delivery = existing(stored, business)
+                .setStatus("DEAD")
+                .setAttemptCount(1)
+                .setActiveAttempt(1)
+                .setLastError(AgentCommandTransportWriterImpl.DB_SHADOW_MARKER)
+                .setVersion(0L);
+        delivery.setUpdateTime(stored.issuedAt());
+        AgentRabbitTopologyManifest.PublishRoute route =
+                AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
+        byte[] wire = AgentCommandCanonicalCodec.wireBytes(
+                stored, delivery.getActiveMessageId(), 1);
+        AgentOutboxEventEntity outbox = new AgentOutboxEventEntity()
+                .setId(88L)
+                .setEventId("event-shadow")
+                .setMessageId(delivery.getActiveMessageId())
+                .setCommandId(stored.commandId())
+                .setDeliveryId(delivery.getId())
+                .setAggregateType("task")
+                .setAggregateId(stored.taskId())
+                .setDestination(route.destination())
+                .setRoutingKey(route.routingKey())
+                .setWirePayload(wire)
+                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire))
+                .setStatus("DEAD")
+                .setAttemptCount(0)
+                .setActiveAttempt(1)
+                .setExpiresAt(stored.expiresAt())
+                .setPublisherConfirmStatus("NONE")
+                .setMandatoryReturnStatus("NONE")
+                .setLastError(AgentCommandTransportWriterImpl.DB_SHADOW_MARKER)
+                .setVersion(0L);
+        outbox.setTenantId(stored.tenantId());
+        outbox.setClientId(stored.clientId());
+        outbox.setCreateTime(stored.issuedAt());
+        outbox.setUpdateTime(stored.issuedAt());
+        when(dao.lockDelivery(retry.tenantId(), retry.clientId(), retry.commandId()))
+                .thenReturn(delivery);
+        when(dao.lockActiveOutboxes(
+                stored.tenantId(), stored.clientId(), delivery.getId(),
+                delivery.getActiveMessageId())).thenReturn(List.of(outbox));
+        when(dao.promoteShadowDelivery(any(), any(), anyLong())).thenReturn(1);
+        when(dao.promoteShadowOutbox(any(), any(), anyLong())).thenReturn(1);
+        allowHallAuthorization();
+        AgentCommandTransportWriterImpl writer = hallWriter(
+                gate(AgentRabbitActivationState.DISPATCH_CANARY, true));
+
+        var promoted = writer.writeAuthorizedHall(retry, CALLER);
+
+        assertFalse(promoted.duplicate());
+        assertEquals(delivery.getId(), promoted.deliveryId());
+        assertEquals(delivery.getActiveMessageId(), promoted.messageId());
+        assertEquals(outbox.getEventId(), promoted.outboxEventId());
+        verify(dao).promoteShadowDelivery(
+                delivery, AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER,
+                retry.issuedAt());
+        verify(dao).promoteShadowOutbox(
+                outbox, AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER,
+                retry.issuedAt());
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+
+        delivery.setStatus("PENDING")
+                .setLastError(AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER)
+                .setVersion(1L);
+        delivery.setUpdateTime(retry.issuedAt());
+        var duplicate = writer.writeAuthorizedHall(hallDraft(
+                10_000L, "执行工作项并回报结果"), CALLER);
+
+        assertTrue(duplicate.duplicate());
+        assertEquals(delivery.getId(), duplicate.deliveryId());
+        assertEquals(delivery.getActiveMessageId(), duplicate.messageId());
+        assertNull(duplicate.outboxEventId());
+        verify(dao, times(1)).lockActiveOutboxes(any(), any(), anyLong(), any());
+        verify(dao, times(1)).promoteShadowDelivery(any(), any(), anyLong());
+        verify(dao, times(1)).promoteShadowOutbox(any(), any(), anyLong());
     }
 
     @Test
@@ -172,10 +389,31 @@ class AgentCommandTransportWriterImplTest {
         verify(dao, never()).insertOutbox(any());
     }
 
-    private AgentCommandTransportWriterImpl writer() {
+    private AgentCommandTransportWriterImpl assignmentWriter() {
         return new AgentCommandTransportWriterImpl(
                 dao, gate(AgentRabbitActivationState.DB_SHADOW, false),
                 transactions, () -> new UUID(0, 1));
+    }
+
+    private AgentCommandTransportWriterImpl hallWriter(AgentRabbitSafetyGate gate) {
+        return new AgentCommandTransportWriterImpl(
+                dao, gate, agentService, accessService,
+                transactions, () -> new UUID(0, 1));
+    }
+
+    private void allowHallAuthorization() {
+        when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any()))
+                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
+        when(agentService.requireApiKeyOwnedAgentForUpdate(any(), any(), any()))
+                .thenAnswer(invocation -> runtime(
+                        invocation.getArgument(2), AgentConstants.STATUS_ONLINE));
+    }
+
+    private AgentRuntimeDTO runtime(String agentId, String status) {
+        AgentRuntimeDTO runtime = new AgentRuntimeDTO();
+        runtime.setAgentId(agentId);
+        runtime.setStatus(status);
+        return runtime;
     }
 
     private void assertAdmission(
@@ -200,7 +438,7 @@ class AgentCommandTransportWriterImplTest {
         assertEquals(marker, delivery.getValue().getLastError());
         assertEquals(status, outbox.getValue().getStatus());
         assertEquals(marker, outbox.getValue().getLastError());
-        var route = cn.jia.agent.config.AgentRabbitTopologyManifest.canonical()
+        var route = AgentRabbitTopologyManifest.canonical()
                 .defaultCommandPublishRoute();
         assertEquals(route.destination(), outbox.getValue().getDestination());
         assertEquals(route.routingKey(), outbox.getValue().getRoutingKey());
@@ -215,6 +453,8 @@ class AgentCommandTransportWriterImplTest {
                 .setExpiresAt(draft.expiresAt()).setActiveMessageId("existing-message");
         entity.setTenantId(draft.tenantId());
         entity.setClientId(draft.clientId());
+        entity.setCreateTime(draft.issuedAt());
+        entity.setUpdateTime(draft.issuedAt());
         return entity;
     }
 

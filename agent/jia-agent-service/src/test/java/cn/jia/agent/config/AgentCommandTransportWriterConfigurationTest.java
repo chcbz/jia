@@ -4,6 +4,8 @@ import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import cn.jia.agent.service.AgentCommandMailboxService;
 import cn.jia.agent.service.AgentCommandTransportWriter;
+import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -20,6 +22,9 @@ class AgentCommandTransportWriterConfigurationTest {
                     () -> mock(AgentCommandTransportMapper.class))
             .withBean(PlatformTransactionManager.class,
                     () -> mock(PlatformTransactionManager.class))
+            .withBean(AgentService.class, () -> mock(AgentService.class))
+            .withBean(AgentTaskCollaborationAccessService.class,
+                    () -> mock(AgentTaskCollaborationAccessService.class))
             .withUserConfiguration(
                     AgentRabbitSafetyConfiguration.class,
                     AgentCommandTransportWriterConfiguration.class);
