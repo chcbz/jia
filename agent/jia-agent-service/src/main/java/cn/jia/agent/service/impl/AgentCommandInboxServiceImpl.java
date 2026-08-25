@@ -345,6 +345,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 message.tenantId(), message.clientId(), message.eventId());
         if (outbox == null) throw conflict(message, "OUTBOX_NOT_FOUND");
         validateOutbox(message, delivery, outbox);
+        validateReplayAudit(message, delivery, outbox);
 
         boolean shadowDelivery = "DEAD".equals(delivery.getStatus())
                 && DB_SHADOW_MARKER.equals(delivery.getLastError());
@@ -427,21 +428,24 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 && delivery.getLastError() == null;
         boolean confirmationPending = "PENDING".equals(outbox.getPublisherConfirmStatus())
                 && "PENDING".equals(outbox.getMandatoryReturnStatus());
-        boolean replayAuditValid = validClaimedReplayAudit(delivery, outbox);
         if (!deliveryLaneValid || !leaseValid || !publishFenceValid
-                || !dispositionEmpty || !confirmationPending || !replayAuditValid) {
+                || !dispositionEmpty || !confirmationPending) {
             throw conflict(message, "CLAIMED_SOURCE_SHAPE_CORRUPT");
         }
     }
 
-    private boolean validClaimedReplayAudit(
-            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
-        return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
+    private void validateReplayAudit(
+            ValidatedMessage message,
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity outbox) {
+        if (!AgentCommandAutomaticReplayProvenance.validOptionalAudit(
                 delivery.getActiveMessageId(), delivery.getTargetAgentId(),
                 delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
                 delivery.getReplayApproverId(), delivery.getReplayReason(),
                 outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
-                outbox.getReplayApproverId(), outbox.getReplayReason());
+                outbox.getReplayApproverId(), outbox.getReplayReason())) {
+            throw conflict(message, "REPLAY_PROVENANCE_CORRUPT");
+        }
     }
 
     private void validateDeliveryCore(
@@ -625,6 +629,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         ValidatedMessage identity = tokenIdentity(token, inbox.getWirePayload(), inbox.getWirePayloadHash());
         validateDeliveryCore(identity, delivery);
         validateOutbox(identity, delivery, outbox);
+        validateReplayAudit(identity, delivery, outbox);
         if (!"PUBLISHED".equals(outbox.getStatus())) {
             throw tokenConflict(token, "OUTBOX_NOT_PUBLISHED");
         }

@@ -310,6 +310,96 @@ class AgentCommandInboxServiceImplTest {
     }
 
     @Test
+    void publishedFirstClaimRejectsInvalidReplayAuditBeforeInboxOrDeliveryMutation() {
+        for (var corrupt : replayAuditCorruptions()) {
+            RecordingDao dao = new RecordingDao();
+            corrupt.accept(dao);
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(dao, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE));
+
+            assertEquals(List.of("delivery", "outbox"), dao.operations);
+            assertEquals(null, dao.inbox);
+            assertEquals("PUBLISHED", dao.delivery.getStatus());
+            assertEquals(0L, dao.delivery.getVersion());
+            assertEquals("PUBLISHED", dao.outbox.getStatus());
+            assertEquals(0L, dao.outbox.getVersion());
+        }
+    }
+
+    @Test
+    void publishedExistingPriorRejectsInvalidReplayAuditWithoutDurableMutation() {
+        for (var corrupt : replayAuditCorruptions()) {
+            RecordingDao dao = new RecordingDao();
+            AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+            AgentInboxClaimToken token = service
+                    .claim(message(), "worker-a", NOW, LEASE).token();
+            service.complete(token, AgentInboxDisposition.sent(), NOW + 1);
+            corrupt.accept(dao);
+            int operationCount = dao.operations.size();
+            long deliveryVersion = dao.delivery.getVersion();
+            long inboxVersion = dao.inbox.getVersion();
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service.claim(message(), "worker-b", NOW + 2, LEASE));
+
+            assertEquals(List.of("delivery", "outbox"), List.copyOf(
+                    dao.operations.subList(operationCount, dao.operations.size())));
+            assertEquals("SENT", dao.delivery.getStatus());
+            assertEquals(deliveryVersion, dao.delivery.getVersion());
+            assertEquals("PROCESSED", dao.inbox.getStatus());
+            assertEquals(inboxVersion, dao.inbox.getVersion());
+        }
+    }
+
+    @Test
+    void completionRelockRejectsReplayAuditTamperingBeforeDeliveryOrInboxMutation() {
+        for (var corrupt : replayAuditCorruptions()) {
+            RecordingDao dao = new RecordingDao();
+            AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+            AgentInboxClaimToken token = service
+                    .claim(message(), "worker-a", NOW, LEASE).token();
+            corrupt.accept(dao);
+            int operationCount = dao.operations.size();
+            long deliveryVersion = dao.delivery.getVersion();
+            long inboxVersion = dao.inbox.getVersion();
+
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service.complete(token, AgentInboxDisposition.sent(), NOW + 1));
+
+            assertEquals(List.of("delivery", "outbox", "inbox"), List.copyOf(
+                    dao.operations.subList(operationCount, dao.operations.size())));
+            assertEquals("CONSUMED", dao.delivery.getStatus());
+            assertEquals(deliveryVersion, dao.delivery.getVersion());
+            assertEquals("PROCESSING", dao.inbox.getStatus());
+            assertEquals(inboxVersion, dao.inbox.getVersion());
+        }
+    }
+
+    @Test
+    void publishedClaimCompletionAndPriorAllowNullAndStrictAutomaticReplayAudits() {
+        List<java.util.function.Consumer<RecordingDao>> validAudits = List.of(
+                dao -> { },
+                dao -> replayAudit(dao, "agent-1", null,
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT),
+                dao -> replayAudit(dao, AgentCommandReissueServiceImpl.REQUESTER_SCHEDULER, null,
+                        AgentCommandReissueServiceImpl.REASON_SCHEDULER));
+        for (var audit : validAudits) {
+            RecordingDao dao = new RecordingDao();
+            audit.accept(dao);
+            AgentCommandInboxServiceImpl service = service(dao, enabledGate());
+
+            AgentInboxClaim first = service.claim(message(), "worker-a", NOW, LEASE);
+            assertEquals(AgentInboxClaim.Kind.ACQUIRED, first.kind());
+            assertEquals("SENT", service.complete(
+                    first.token(), AgentInboxDisposition.sent(), NOW + 1).resultStatus());
+            assertEquals(AgentInboxClaim.Kind.PRIOR_RESULT, service.claim(
+                    message(), "worker-b", NOW + 2, LEASE).kind());
+        }
+    }
+
+    @Test
     void exactDuplicateIsInFlightThenReturnsPriorSchemaResultAfterSentCompletion() {
         RecordingDao dao = new RecordingDao();
         AgentCommandInboxServiceImpl service = service(dao, enabledGate());
@@ -727,28 +817,36 @@ class AgentCommandInboxServiceImplTest {
                 () -> service(scheduler, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
 
-        List<RecordingDao> poison = new ArrayList<>();
-        poison.add(replayAudit(new RecordingDao(), "operator", null,
-                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
-        poison.add(replayAudit(new RecordingDao(), "agent-other", null,
-                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
-        poison.add(replayAudit(new RecordingDao(), "agent-1", null,
-                AgentCommandReissueServiceImpl.REASON_SCHEDULER));
-        poison.add(replayAudit(new RecordingDao(), "agent-1", "manual-approver",
-                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
-        RecordingDao partial = new RecordingDao();
-        partial.delivery.setReplayParentMessageId("msg-parent")
-                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
-        partial.outbox.setReplayParentMessageId("msg-other")
-                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
-        poison.add(partial);
-        for (RecordingDao invalid : poison) {
+        for (var corrupt : replayAuditCorruptions()) {
+            RecordingDao invalid = new RecordingDao();
             canonicalClaimed(invalid, "PENDING");
+            corrupt.accept(invalid);
             assertThrows(AgentInboxIdentityConflictException.class,
                     () -> service(invalid, enabledGate())
                             .claim(message(), "worker-a", NOW, LEASE));
-            assertEquals(List.of("delivery", "outbox", "inbox"), invalid.operations);
+            assertEquals(List.of("delivery", "outbox"), invalid.operations);
+            assertEquals(null, invalid.inbox);
         }
+    }
+
+    private static List<java.util.function.Consumer<RecordingDao>> replayAuditCorruptions() {
+        return List.of(
+                dao -> dao.delivery.setReplayParentMessageId("msg-parent")
+                        .setReplayRequesterId("agent-1")
+                        .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT),
+                dao -> {
+                    replayAudit(dao, "agent-1", null,
+                            AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+                    dao.outbox.setReplayParentMessageId("msg-other");
+                },
+                dao -> replayAudit(dao, "operator", null,
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT),
+                dao -> replayAudit(dao, "agent-other", null,
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT),
+                dao -> replayAudit(dao, "agent-1", null,
+                        AgentCommandReissueServiceImpl.REASON_SCHEDULER),
+                dao -> replayAudit(dao, "agent-1", "manual-approver",
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
     }
 
     private static RecordingDao replayAudit(
