@@ -30,6 +30,8 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
     public static final String AGENT_REPORTED_REJECTED = "AGENT_REPORTED_REJECTED";
     private static final Set<String> ACK_STATUSES = Set.of(
             "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "REJECTED");
+    private static final Set<String> TERMINAL_ACK_STATUSES = Set.of(
+            "SUCCEEDED", "FAILED", "REJECTED");
 
     private final AgentCommandRecoveryDao dao;
     private final AgentRabbitSafetyGate gate;
@@ -60,6 +62,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 ack.tenantId(), ack.clientId(), ack.commandId());
         if (delivery == null) throw rejected("ACK_DELIVERY_NOT_FOUND");
         validateDeliveryIdentity(ack, delivery);
+        validateAuthoritativeExpiry(ack, delivery, now);
 
         List<AgentOutboxEventEntity> rows = dao.lockActiveOutboxes(
                 ack.tenantId(), ack.clientId(), delivery.getId(), delivery.getActiveMessageId());
@@ -130,6 +133,15 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || !Set.of("CONSUMED", "SENT", "RECEIVED", "STARTED",
                         "SUCCEEDED", "FAILED", "REJECTED").contains(delivery.getStatus())) {
             throw rejected("ACK_DELIVERY_IDENTITY_INVALID");
+        }
+    }
+
+    private void validateAuthoritativeExpiry(
+            AgentCommandAck ack, AgentCommandDeliveryEntity delivery, long now) {
+        boolean exactTerminalPrior = ack.ackStatus().equals(delivery.getStatus())
+                && TERMINAL_ACK_STATUSES.contains(delivery.getStatus());
+        if (now >= delivery.getExpiresAt() && !exactTerminalPrior) {
+            throw rejected("ACK_DELIVERY_EXPIRED");
         }
     }
 

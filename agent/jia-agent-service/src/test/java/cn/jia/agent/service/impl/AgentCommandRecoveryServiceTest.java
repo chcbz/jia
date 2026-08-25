@@ -539,6 +539,48 @@ class AgentCommandRecoveryServiceTest {
     }
 
     @Test
+    void expiredSentRejectsLateReceivedBeforeSourceLocksAndStillExpires() {
+        RecordingDao dao = sentDao();
+        long version = dao.delivery.getVersion();
+
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(dao, enabledGate()).acknowledge(
+                        ack("ack-expired-received", "RECEIVED", M1), EXPIRES));
+
+        assertEquals("SENT", dao.delivery.getStatus());
+        assertEquals(version, dao.delivery.getVersion());
+        assertEquals(0, dao.ackMutations);
+        assertEquals(List.of("delivery"), dao.operations);
+
+        AgentCommandReissueScanResult recovery = reissue(
+                dao, new PresenceDispatcher(false)).reissueDue(10, 0, EXPIRES);
+        assertEquals(1, recovery.examined());
+        assertEquals(0, recovery.reissued());
+        assertEquals("EXPIRED", dao.delivery.getStatus());
+        assertFalse(dao.operations.contains("ack"));
+    }
+
+    @Test
+    void expiredExactTerminalDuplicateRemainsPriorWithoutMutation() {
+        for (String terminal : List.of("SUCCEEDED", "FAILED", "REJECTED")) {
+            RecordingDao dao = sentDao();
+            AgentCommandAckServiceImpl service = ackService(dao, enabledGate());
+            service.acknowledge(ack("ack-received-" + terminal, "RECEIVED", M1), NOW);
+            service.acknowledge(ack("ack-started-" + terminal, "STARTED", M1), NOW);
+            service.acknowledge(ack("ack-terminal-" + terminal, terminal, M1), NOW);
+            long version = dao.delivery.getVersion();
+
+            AgentCommandAckResult duplicate = service.acknowledge(
+                    ack("ack-expired-duplicate-" + terminal, terminal, M1), EXPIRES);
+
+            assertEquals(AgentCommandAckResult.Kind.PRIOR, duplicate.kind());
+            assertEquals(terminal, dao.delivery.getStatus());
+            assertEquals(version, dao.delivery.getVersion());
+            assertEquals(3, dao.ackMutations);
+        }
+    }
+
+    @Test
     void ackRejectsNonIndependentIdSourcePoisonAndDisabledGate() {
         RecordingDao sameMessage = sentDao();
         assertThrows(AgentCommandAckRejectedException.class,

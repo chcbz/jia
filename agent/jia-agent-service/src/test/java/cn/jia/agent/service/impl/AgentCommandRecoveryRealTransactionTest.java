@@ -16,6 +16,7 @@ import cn.jia.agent.dao.impl.AgentCommandInboxDaoImpl;
 import cn.jia.agent.dao.impl.AgentCommandRecoveryDaoImpl;
 import cn.jia.agent.dao.impl.AgentOutboxRelayDaoImpl;
 import cn.jia.agent.entity.AgentCommandAck;
+import cn.jia.agent.entity.AgentCommandAckRejectedException;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
@@ -193,6 +194,33 @@ class AgentCommandRecoveryRealTransactionTest {
                 () -> reissueService(failing).reissueDue(10, 0, EXPIRES));
         assertEquals("WAITING_AGENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
         assertEquals("WAITING_AGENT", string("SELECT status FROM agent_consumer_inbox WHERE id=20"));
+    }
+
+    @Test
+    void expiredSentLateReceivedCannotEscapeExpiryRecovery() {
+        jdbc.update("UPDATE agent_command_delivery SET status='SENT',next_retry_at=NULL,"
+                + "last_error=NULL,update_time=? WHERE id=1", EXPIRES - 1);
+        jdbc.update("UPDATE agent_consumer_inbox SET status='PROCESSED',result_status='SENT',"
+                + "next_retry_at=NULL,last_error=NULL WHERE id=20");
+        long version = jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class);
+        AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ack.acknowledge(ack("late-received", "RECEIVED", M1), EXPIRES));
+
+        assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(version, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals(1, number("SELECT COUNT(*) FROM agent_outbox_event"));
+
+        assertEquals(0, reissueService(dao).reissueDue(10, 0, EXPIRES).reissued());
+        assertEquals("EXPIRED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(version + 1, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals("PROCESSED", string("SELECT status FROM agent_consumer_inbox WHERE id=20"));
+        assertEquals("SENT", string("SELECT result_status FROM agent_consumer_inbox WHERE id=20"));
+        assertEquals(1, number("SELECT COUNT(*) FROM agent_outbox_event"));
     }
 
     @Test
