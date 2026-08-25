@@ -1,6 +1,5 @@
 package cn.jia.agent.service.impl;
 
-import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
@@ -135,7 +134,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || !ack.taskId().equals(delivery.getTaskId())
                 || !Objects.equals(ack.workItemId(), delivery.getWorkItemId())
                 || !ack.registeredAgentId().equals(delivery.getTargetAgentId())
-                || !AgentProtocolConstants.COMMAND_TASK_INVITE.equals(delivery.getCommandType())
+                || !AgentCommandCanonicalCodec.isSupportedCommandType(delivery.getCommandType())
                 || (!ack.correlationId().equals(delivery.getActiveMessageId())
                     && !(delivery.getActiveAttempt() != null && delivery.getActiveAttempt() > 1
                         && TERMINAL_ACK_STATUSES.contains(ack.ackStatus())))

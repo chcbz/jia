@@ -1,5 +1,6 @@
 package cn.jia.chat.service;
 
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import lombok.Data;
 
 import java.util.List;
@@ -13,6 +14,7 @@ public class HallActionIntent {
     private String actorAgentId;
     private List<String> targetAgentIds;
     private String taskId;
+    private String workItemId;
     private String conversationId;
     private String reason;
     private String instruction;
@@ -20,4 +22,9 @@ public class HallActionIntent {
     private String autonomyLevel;
     private Boolean requiresApproval;
     private String status;
+
+    @JsonAnySetter
+    public void rejectUnknownField(String field, Object ignored) {
+        throw new IllegalArgumentException("Unknown Hall action field: " + field);
+    }
 }

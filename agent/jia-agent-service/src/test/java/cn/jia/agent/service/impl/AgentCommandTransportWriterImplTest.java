@@ -9,6 +9,7 @@ import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
+import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -113,6 +114,35 @@ class AgentCommandTransportWriterImplTest {
     }
 
     @Test
+    void hallRetryAtLaterServerTimeReturnsPriorWithoutNewRows() {
+        AgentCommandDraft stored = hallDraft(1_000L, "执行工作项并回报结果");
+        AgentCommandDraft retry = hallDraft(9_000L, "执行工作项并回报结果");
+        byte[] storedBytes = AgentCommandCanonicalCodec.businessBytes(stored);
+        when(dao.lockDelivery(retry.tenantId(), retry.clientId(), retry.commandId()))
+                .thenReturn(existing(stored, storedBytes));
+
+        var result = writer().write(retry);
+
+        assertTrue(result.duplicate());
+        assertEquals(77L, result.deliveryId());
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+    }
+
+    @Test
+    void hallRetryWithChangedPayloadConflictsWithoutOverwrite() {
+        AgentCommandDraft stored = hallDraft(1_000L, "执行工作项并回报结果");
+        AgentCommandDraft changed = hallDraft(9_000L, "执行工作项并回报不同结果");
+        byte[] storedBytes = AgentCommandCanonicalCodec.businessBytes(stored);
+        when(dao.lockDelivery(changed.tenantId(), changed.clientId(), changed.commandId()))
+                .thenReturn(existing(stored, storedBytes));
+
+        assertThrows(IllegalStateException.class, () -> writer().write(changed));
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+    }
+
+    @Test
     void mqShadowCreatesTerminalCaptureOnlyRowsAndNoDispatchBacklog() {
         assertAdmission(gate(AgentRabbitActivationState.MQ_SHADOW, false),
                 "DEAD", AgentCommandTransportWriterImpl.MQ_SHADOW_MARKER);
@@ -186,6 +216,20 @@ class AgentCommandTransportWriterImplTest {
         entity.setTenantId(draft.tenantId());
         entity.setClientId(draft.clientId());
         return entity;
+    }
+
+    private AgentCommandDraft hallDraft(long issuedAt, String instruction) {
+        String intentId = "intent-hall-1";
+        String commandType = AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE;
+        String commandId = AgentCommandCanonicalCodec.hallCommandId(
+                "tenant-a", "client-a", "task-1", "agent-1", intentId, commandType);
+        return new AgentCommandDraft(
+                1, commandId, "task-1", intentId, "tenant-a", "client-a", "task-1",
+                "work-1", "agent-1", commandType, issuedAt,
+                issuedAt + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, intentId,
+                new AgentHallCommandPayload(
+                        "execute", instruction, "juyiting", null, null,
+                        null, null, false, null));
     }
 
     private AgentCommandDraft draft(String title) {

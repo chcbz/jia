@@ -15,6 +15,7 @@ import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentCommandReissueScanResult;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentInboxConsumers;
+import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
@@ -46,6 +47,36 @@ class AgentCommandRecoveryServiceTest {
     private static final String M2 = "22222222-2222-2222-2222-222222222222";
     private static final String E2 = "33333333-3333-3333-3333-333333333333";
     private static final String M3 = "44444444-4444-4444-4444-444444444444";
+
+    @Test
+    void d06AckAndReissueAcceptEveryCanonicalHallCommandType() {
+        List<ActionType> allowlist = List.of(
+                new ActionType("execute", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE),
+                new ActionType("resume", AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME),
+                new ActionType("cancel", AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL),
+                new ActionType("ask_help", AgentProtocolConstants.COMMAND_REQUEST_RESPOND),
+                new ActionType("review", AgentProtocolConstants.COMMAND_REVIEW_EXECUTE),
+                new ActionType("request_report", AgentProtocolConstants.COMMAND_CONTEXT_REFRESH));
+
+        for (ActionType item : allowlist) {
+            AgentCommandDraft draft = hallDraft(item.actionType(), item.commandType());
+            RecordingDao waiting = withDraft(waitingDao(), draft);
+            AgentCommandReissueScanResult reissued = reissue(
+                    waiting, new PresenceDispatcher(true))
+                    .reissueForReconnect(reconnectScope(), 10, NOW);
+            assertEquals(1, reissued.reissued(), item.commandType());
+            assertEquals(draft.commandId(), waiting.inserted.getCommandId());
+            assertTrue(new String(waiting.inserted.getWirePayload(), StandardCharsets.UTF_8)
+                    .contains("\"commandType\":\"" + item.commandType() + "\""));
+
+            RecordingDao sent = withDraft(sentDao(), draft);
+            AgentCommandAck ack = new AgentCommandAck(
+                    "tenant-a", "client-a", "agent-a", "ack-" + item.actionType(), M1,
+                    draft.commandId(), "task-1", draft.workItemId(), "RECEIVED", NOW);
+            AgentCommandAckResult result = ackService(sent, enabledGate()).acknowledge(ack, NOW);
+            assertEquals(AgentCommandAckResult.Kind.ADVANCED, result.kind(), item.commandType());
+        }
+    }
 
     @Test
     void reconnectWinnerCreatesOneFreshCanonicalOutboxAndParentAudit() {
@@ -858,6 +889,38 @@ class AgentCommandRecoveryServiceTest {
         return new RecordingDao(delivery, outbox, inbox);
     }
 
+    private static RecordingDao withDraft(
+            RecordingDao dao, AgentCommandDraft draft) {
+        byte[] business = AgentCommandCanonicalCodec.businessBytes(draft);
+        byte[] wire = AgentCommandCanonicalCodec.wireBytes(draft, M1, 1);
+        byte[] businessHash = AgentCommandCanonicalCodec.sha256(business);
+        byte[] wireHash = AgentCommandCanonicalCodec.sha256(wire);
+        dao.delivery.setCommandId(draft.commandId()).setTaskId(draft.taskId())
+                .setWorkItemId(draft.workItemId()).setTargetAgentId(draft.targetAgentId())
+                .setCommandType(draft.commandType()).setCommandPayload(business)
+                .setCommandPayloadHash(businessHash).setExpiresAt(draft.expiresAt());
+        dao.outbox.setCommandId(draft.commandId()).setAggregateId(draft.taskId())
+                .setWirePayload(wire).setWirePayloadHash(wireHash)
+                .setExpiresAt(draft.expiresAt());
+        dao.inbox.setCommandId(draft.commandId()).setWirePayload(wire)
+                .setWirePayloadHash(wireHash).setExpiresAt(draft.expiresAt());
+        return dao;
+    }
+
+    private static AgentCommandDraft hallDraft(String actionType, String commandType) {
+        String intentId = "intent-d06-" + actionType;
+        String commandId = AgentCommandCanonicalCodec.hallCommandId(
+                "tenant-a", "client-a", "task-1", "agent-a", intentId, commandType);
+        return new AgentCommandDraft(
+                1, commandId, "task-1", intentId,
+                "tenant-a", "client-a", "task-1", "work-1", "agent-a",
+                commandType, ISSUED,
+                ISSUED + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS,
+                intentId, new AgentHallCommandPayload(
+                        actionType, "执行聚义厅命令并回报结果", "juyiting",
+                        null, null, null, null, false, null));
+    }
+
     private static void setTransportAttempt(RecordingDao dao, int attempt) {
         byte[] wire = AgentCommandCanonicalCodec.wireBytes(draft(), M1, attempt);
         byte[] wireHash = AgentCommandCanonicalCodec.sha256(wire);
@@ -1008,6 +1071,9 @@ class AgentCommandRecoveryServiceTest {
     private static AgentRabbitSafetyGate offGate() {
         return new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(
                 null, null, null, null, null, null));
+    }
+
+    private record ActionType(String actionType, String commandType) {
     }
 
     private static final class PresenceDispatcher implements AgentRawCommandDispatcher {

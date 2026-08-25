@@ -1,6 +1,8 @@
 package cn.jia.agent.config;
 
 import cn.jia.agent.dao.AgentCommandTransportDao;
+import cn.jia.agent.mapper.AgentCommandTransportMapper;
+import cn.jia.agent.service.AgentCommandMailboxService;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -14,6 +16,8 @@ import static org.mockito.Mockito.mock;
 class AgentCommandTransportWriterConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
             .withBean(AgentCommandTransportDao.class, () -> mock(AgentCommandTransportDao.class))
+            .withBean(AgentCommandTransportMapper.class,
+                    () -> mock(AgentCommandTransportMapper.class))
             .withBean(PlatformTransactionManager.class,
                     () -> mock(PlatformTransactionManager.class))
             .withUserConfiguration(
@@ -25,7 +29,9 @@ class AgentCommandTransportWriterConfigurationTest {
         RUNNER.run(context -> {
             assertNull(context.getStartupFailure());
             assertFalse(context.containsBean("agentCommandTransportWriter"));
+            assertFalse(context.containsBean("agentCommandMailboxService"));
             assertTrue(context.getBeansOfType(AgentCommandTransportWriter.class).isEmpty());
+            assertTrue(context.getBeansOfType(AgentCommandMailboxService.class).isEmpty());
         });
     }
 
@@ -35,6 +41,7 @@ class AgentCommandTransportWriterConfigurationTest {
                 .run(context -> {
                     assertNull(context.getStartupFailure());
                     assertTrue(context.containsBean("agentCommandTransportWriter"));
+                    assertTrue(context.containsBean("agentCommandMailboxService"));
                     assertFalse(context.containsBean("agentRabbitConnectionFactory"));
                 });
     }

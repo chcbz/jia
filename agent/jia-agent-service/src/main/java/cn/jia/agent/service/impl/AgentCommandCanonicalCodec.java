@@ -2,9 +2,13 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentCommandPayload;
+import cn.jia.agent.entity.AgentHallCommandContext;
+import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -19,17 +23,29 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** Byte-exact canonical JSON codec for the frozen D02 TASK_INVITE contract. */
+/** Byte-exact canonical JSON codec for frozen TASK_INVITE and bounded Hall commands. */
 public final class AgentCommandCanonicalCodec {
     public static final int SCHEMA_VERSION = 1;
     public static final int ATTEMPT = 1;
     public static final long TASK_INVITE_TTL_MILLIS = 3_600_000L;
+    public static final long HALL_COMMAND_TTL_MILLIS = 3_600_000L;
     public static final int MAX_CANONICAL_BYTES = 131_072;
-    public static final String COMMAND_ID_PREFIX = "cmd_task_invite_";
+    public static final String TASK_INVITE_COMMAND_ID_PREFIX = "cmd_task_invite_";
+    public static final String HALL_COMMAND_ID_PREFIX = "cmd_hall_action_";
     private static final int MAX_COLLABORATORS = 128;
     private static final int MAX_ABILITIES = 128;
+    private static final int MAX_HALL_LIST = 32;
+    private static final Set<String> HALL_COMMAND_TYPES = Set.of(
+            AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
+            AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME,
+            AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL,
+            AgentProtocolConstants.COMMAND_REQUEST_RESPOND,
+            AgentProtocolConstants.COMMAND_REVIEW_EXECUTE,
+            AgentProtocolConstants.COMMAND_CONTEXT_REFRESH);
+    private static final Set<String> AUTONOMY_LEVELS = Set.of(
+            "manual", "supervised", "autonomous");
     private static final Comparator<String> UTF8_ORDER = AgentCommandCanonicalCodec::compareUtf8Unsigned;
-    private static final ObjectMapper STRICT_BUSINESS_JSON = JsonMapper.builder()
+    private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .build();
@@ -45,7 +61,56 @@ public final class AgentCommandCanonicalCodec {
         requireExact(targetAgentId, "targetAgentId", 100);
         String seed = tenantId + '\0' + clientId + '\0' + taskId + '\0'
                 + targetAgentId + '\0' + AgentProtocolConstants.COMMAND_TASK_INVITE;
-        return COMMAND_ID_PREFIX + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
+        return TASK_INVITE_COMMAND_ID_PREFIX + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    public static String hallCommandId(
+            String tenantId, String clientId, String taskId, String targetAgentId,
+            String intentId, String commandType) {
+        requireExact(tenantId, "tenantId", 50);
+        requireExact(clientId, "clientId", 50);
+        requireExact(taskId, "taskId", 100);
+        requireExact(targetAgentId, "targetAgentId", 100);
+        requireExact(intentId, "intentId", 100);
+        if (!HALL_COMMAND_TYPES.contains(commandType)) {
+            throw invalid("commandType is outside the Hall allowlist");
+        }
+        String seed = tenantId + '\0' + clientId + '\0' + taskId + '\0'
+                + targetAgentId + '\0' + intentId + '\0' + commandType;
+        return HALL_COMMAND_ID_PREFIX + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    public static String hallCommandTypeForAction(String actionType) {
+        requireExact(actionType, "actionType", 64);
+        return switch (actionType) {
+            case "work_item_execute", "execute" -> AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE;
+            case "work_item_resume", "resume" -> AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME;
+            case "work_item_cancel", "cancel" -> AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL;
+            case "ask_help", "request_respond", "respond_request" ->
+                    AgentProtocolConstants.COMMAND_REQUEST_RESPOND;
+            case "review", "review_execute" -> AgentProtocolConstants.COMMAND_REVIEW_EXECUTE;
+            case "context_refresh", "request_report" -> AgentProtocolConstants.COMMAND_CONTEXT_REFRESH;
+            default -> throw invalid("actionType is outside the Hall allowlist");
+        };
+    }
+
+    public static boolean isSupportedCommandType(String commandType) {
+        return AgentProtocolConstants.COMMAND_TASK_INVITE.equals(commandType)
+                || HALL_COMMAND_TYPES.contains(commandType);
+    }
+
+    public static List<String> canonicalHallList(List<String> values, String field) {
+        if (values == null || values.isEmpty()) return List.of();
+        if (values.size() > MAX_HALL_LIST) throw invalid(field + " exceeds 32 entries");
+        Set<String> unique = new HashSet<>();
+        List<String> result = new ArrayList<>();
+        for (String value : values) {
+            requireContent(value, field, 100);
+            if (!unique.add(value)) throw invalid(field + " contains a duplicate");
+            result.add(value);
+        }
+        result.sort(UTF8_ORDER);
+        return List.copyOf(result);
     }
 
     public static byte[] businessBytes(AgentCommandDraft draft) {
@@ -64,6 +129,7 @@ public final class AgentCommandCanonicalCodec {
         string(json, "commandType", draft.commandType());
         number(json, "issuedAt", draft.issuedAt());
         number(json, "expiresAt", draft.expiresAt());
+        if (isHall(draft.commandType())) string(json, "intentId", draft.intentId());
         payload(json, draft.payload());
         json.append('}');
         return bounded(json);
@@ -93,6 +159,7 @@ public final class AgentCommandCanonicalCodec {
         string(json, "commandType", draft.commandType());
         number(json, "issuedAt", draft.issuedAt());
         number(json, "expiresAt", draft.expiresAt());
+        if (isHall(draft.commandType())) string(json, "intentId", draft.intentId());
         number(json, "attempt", attempt);
         payload(json, draft.payload());
         json.append('}');
@@ -104,7 +171,29 @@ public final class AgentCommandCanonicalCodec {
             throw invalid("canonical business bytes are missing or oversized");
         }
         try {
-            AgentCommandDraft draft = STRICT_BUSINESS_JSON.readValue(raw, AgentCommandDraft.class);
+            JsonNode root = STRICT_JSON.readTree(raw);
+            if (root == null || !root.isObject()) throw invalid("business JSON must be an object");
+            String commandType = text(root, "commandType");
+            boolean hall = isHall(commandType);
+            if (root.size() != (hall ? 14 : 13)) throw invalid("business envelope contains unknown fields");
+            AgentCommandPayload decodedPayload = hall
+                    ? decodeHallPayload(root.get("payload"))
+                    : decodeTaskInvitePayload(root.get("payload"));
+            AgentCommandDraft draft = new AgentCommandDraft(
+                    integer(root, "schemaVersion"),
+                    text(root, "commandId"),
+                    text(root, "correlationId"),
+                    text(root, "causationId"),
+                    text(root, "tenantId"),
+                    text(root, "clientId"),
+                    text(root, "taskId"),
+                    nullableText(root, "workItemId"),
+                    text(root, "targetAgentId"),
+                    commandType,
+                    longValue(root, "issuedAt"),
+                    longValue(root, "expiresAt"),
+                    hall ? text(root, "intentId") : null,
+                    decodedPayload);
             byte[] canonical = businessBytes(draft);
             if (!Arrays.equals(raw, canonical)) {
                 throw invalid("business bytes are not the frozen canonical encoding");
@@ -165,28 +254,48 @@ public final class AgentCommandCanonicalCodec {
         requireExact(draft.taskId(), "taskId", 100);
         if (draft.workItemId() != null) requireExact(draft.workItemId(), "workItemId", 100);
         requireExact(draft.targetAgentId(), "targetAgentId", 100);
-        if (!AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())) {
-            throw invalid("D02 only accepts TASK_INVITE");
-        }
         if (!draft.taskId().equals(draft.correlationId())) {
             throw invalid("correlationId must equal taskId");
         }
-        String expected = taskInviteCommandId(
-                draft.tenantId(), draft.clientId(), draft.taskId(), draft.targetAgentId());
-        if (!expected.equals(draft.commandId())) throw invalid("commandId does not match frozen identity");
         if (draft.issuedAt() <= 0) throw invalid("issuedAt must be positive");
+        if (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())) {
+            if (draft.intentId() != null) throw invalid("TASK_INVITE must not contain intentId");
+            String expected = taskInviteCommandId(
+                    draft.tenantId(), draft.clientId(), draft.taskId(), draft.targetAgentId());
+            if (!expected.equals(draft.commandId())) throw invalid("commandId does not match frozen identity");
+            requireFixedExpiry(draft, TASK_INVITE_TTL_MILLIS, "TASK_INVITE");
+            if (!(draft.payload() instanceof AgentTaskInvitePayload invite)) {
+                throw invalid("TASK_INVITE payload type is invalid");
+            }
+            validateTaskInvitePayload(invite, draft.targetAgentId());
+            return;
+        }
+        if (!isHall(draft.commandType())) throw invalid("commandType is outside the frozen allowlist");
+        requireExact(draft.intentId(), "intentId", 100);
+        String expected = hallCommandId(draft.tenantId(), draft.clientId(), draft.taskId(),
+                draft.targetAgentId(), draft.intentId(), draft.commandType());
+        if (!expected.equals(draft.commandId())) throw invalid("Hall commandId does not match frozen identity");
+        requireFixedExpiry(draft, HALL_COMMAND_TTL_MILLIS, "Hall command");
+        if (!(draft.payload() instanceof AgentHallCommandPayload hall)) {
+            throw invalid("Hall payload type is invalid");
+        }
+        validateHallPayload(hall, draft);
+    }
+
+    private static void requireFixedExpiry(AgentCommandDraft draft, long ttl, String commandClass) {
         long expectedExpiry;
         try {
-            expectedExpiry = Math.addExact(draft.issuedAt(), TASK_INVITE_TTL_MILLIS);
+            expectedExpiry = Math.addExact(draft.issuedAt(), ttl);
         } catch (ArithmeticException overflow) {
             throw invalid("expiresAt overflow");
         }
-        if (draft.expiresAt() != expectedExpiry) throw invalid("expiresAt must use the fixed TASK_INVITE TTL");
-        validatePayload(draft.payload(), draft.targetAgentId());
+        if (draft.expiresAt() != expectedExpiry) {
+            throw invalid("expiresAt must use the fixed " + commandClass + " TTL");
+        }
     }
 
-    private static void validatePayload(AgentTaskInvitePayload payload, String targetAgentId) {
-        if (payload == null) throw invalid("payload is required");
+    private static void validateTaskInvitePayload(
+            AgentTaskInvitePayload payload, String targetAgentId) {
         requireLiteral(payload.actionType(), "task_briefing", "actionType");
         requireLiteral(payload.reason(), "宋江首领已完成悬赏分派，请按职责协作推进。", "reason");
         requireLiteral(payload.instruction(),
@@ -209,7 +318,87 @@ public final class AgentCommandCanonicalCodec {
         requireLiteral(payload.conversationType(), "juyiting", "conversationType");
     }
 
-    private static void payload(StringBuilder json, AgentTaskInvitePayload payload) {
+    private static void validateHallPayload(AgentHallCommandPayload payload, AgentCommandDraft draft) {
+        if (!draft.commandType().equals(hallCommandTypeForAction(payload.actionType()))) {
+            throw invalid("actionType conflicts with commandType");
+        }
+        requireContent(payload.instruction(), "instruction", 8_000);
+        requireLiteral(payload.conversationType(), "juyiting", "conversationType");
+        optionalContent(payload.reason(), "reason", 2_000);
+        optionalContent(payload.conversationId(), "conversationId", 100);
+        optionalContent(payload.triggerEventId(), "triggerEventId", 100);
+        if (!java.util.Objects.equals(payload.triggerEventId(),
+                payload.triggerEventId() == null ? null : draft.causationId())) {
+            throw invalid("triggerEventId conflicts with causationId");
+        }
+        if (payload.triggerEventId() == null && !draft.intentId().equals(draft.causationId())) {
+            throw invalid("causationId must equal intentId when triggerEventId is absent");
+        }
+        if (payload.autonomyLevel() != null && !AUTONOMY_LEVELS.contains(payload.autonomyLevel())) {
+            throw invalid("autonomyLevel is outside the frozen allowlist");
+        }
+        validateHallContext(payload.context());
+    }
+
+    private static void validateHallContext(AgentHallCommandContext context) {
+        if (context == null) return;
+        optionalContent(context.taskTitle(), "context.taskTitle", 500);
+        optionalContent(context.workItemTitle(), "context.workItemTitle", 500);
+        optionalContent(context.requestSummary(), "context.requestSummary", 2_000);
+        optionalContent(context.reviewSummary(), "context.reviewSummary", 2_000);
+        optionalContent(context.contextVersion(), "context.contextVersion", 100);
+        List<String> references = canonicalHallList(context.referenceIds(), "context.referenceIds");
+        List<String> tags = canonicalHallList(context.tags(), "context.tags");
+        if (!references.equals(context.referenceIds()) || !tags.equals(context.tags())) {
+            throw invalid("Hall context lists are not canonical");
+        }
+    }
+
+    private static AgentTaskInvitePayload decodeTaskInvitePayload(JsonNode node) {
+        requireObjectSize(node, 10, "TASK_INVITE payload");
+        return new AgentTaskInvitePayload(
+                text(node, "actionType"), text(node, "reason"), text(node, "instruction"),
+                text(node, "taskTitle"), stringArray(node, "requiredAbilities"),
+                text(node, "coordinatorAgentId"), stringArray(node, "collaboratorAgentIds"),
+                text(node, "assignmentRole"), text(node, "acceptance"),
+                text(node, "conversationType"));
+    }
+
+    private static AgentHallCommandPayload decodeHallPayload(JsonNode node) {
+        requireObjectSize(node, 9, "Hall payload");
+        JsonNode context = node.get("context");
+        if (context == null) throw invalid("context is missing");
+        AgentHallCommandContext decodedContext = null;
+        if (!context.isNull()) {
+            requireObjectSize(context, 7, "Hall context");
+            decodedContext = new AgentHallCommandContext(
+                    nullableText(context, "taskTitle"), nullableText(context, "workItemTitle"),
+                    nullableText(context, "requestSummary"), nullableText(context, "reviewSummary"),
+                    nullableText(context, "contextVersion"),
+                    stringArray(context, "referenceIds"), stringArray(context, "tags"));
+        }
+        JsonNode approval = node.get("requiresApproval");
+        if (approval == null) throw invalid("requiresApproval is missing");
+        Boolean requiresApproval = approval.isNull()
+                ? null : booleanValue(approval, "requiresApproval");
+        return new AgentHallCommandPayload(
+                text(node, "actionType"), text(node, "instruction"),
+                text(node, "conversationType"), nullableText(node, "reason"),
+                nullableText(node, "conversationId"), nullableText(node, "triggerEventId"),
+                nullableText(node, "autonomyLevel"), requiresApproval, decodedContext);
+    }
+
+    private static void payload(StringBuilder json, AgentCommandPayload payload) {
+        if (payload instanceof AgentTaskInvitePayload invite) {
+            taskInvitePayload(json, invite);
+        } else if (payload instanceof AgentHallCommandPayload hall) {
+            hallPayload(json, hall);
+        } else {
+            throw invalid("payload type is outside the frozen allowlist");
+        }
+    }
+
+    private static void taskInvitePayload(StringBuilder json, AgentTaskInvitePayload payload) {
         comma(json); quote(json, "payload"); json.append(':').append('{');
         string(json, "actionType", payload.actionType());
         string(json, "reason", payload.reason());
@@ -222,6 +411,41 @@ public final class AgentCommandCanonicalCodec {
         string(json, "acceptance", payload.acceptance());
         string(json, "conversationType", payload.conversationType());
         json.append('}');
+    }
+
+    private static void hallPayload(StringBuilder json, AgentHallCommandPayload payload) {
+        comma(json); quote(json, "payload"); json.append(':').append('{');
+        string(json, "actionType", payload.actionType());
+        string(json, "instruction", payload.instruction());
+        string(json, "conversationType", payload.conversationType());
+        nullableString(json, "reason", payload.reason());
+        nullableString(json, "conversationId", payload.conversationId());
+        nullableString(json, "triggerEventId", payload.triggerEventId());
+        nullableString(json, "autonomyLevel", payload.autonomyLevel());
+        nullableBoolean(json, "requiresApproval", payload.requiresApproval());
+        hallContext(json, payload.context());
+        json.append('}');
+    }
+
+    private static void hallContext(StringBuilder json, AgentHallCommandContext context) {
+        comma(json); quote(json, "context"); json.append(':');
+        if (context == null) {
+            json.append("null");
+            return;
+        }
+        json.append('{');
+        nullableString(json, "taskTitle", context.taskTitle());
+        nullableString(json, "workItemTitle", context.workItemTitle());
+        nullableString(json, "requestSummary", context.requestSummary());
+        nullableString(json, "reviewSummary", context.reviewSummary());
+        nullableString(json, "contextVersion", context.contextVersion());
+        array(json, "referenceIds", context.referenceIds());
+        array(json, "tags", context.tags());
+        json.append('}');
+    }
+
+    private static boolean isHall(String commandType) {
+        return HALL_COMMAND_TYPES.contains(commandType);
     }
 
     private static byte[] bounded(StringBuilder json) {
@@ -241,6 +465,11 @@ public final class AgentCommandCanonicalCodec {
     private static void nullableString(StringBuilder json, String key, String value) {
         comma(json); quote(json, key); json.append(':');
         if (value == null) json.append("null"); else quote(json, value);
+    }
+
+    private static void nullableBoolean(StringBuilder json, String key, Boolean value) {
+        comma(json); quote(json, key); json.append(':');
+        if (value == null) json.append("null"); else json.append(value);
     }
 
     private static void array(StringBuilder json, String key, List<String> values) {
@@ -283,13 +512,25 @@ public final class AgentCommandCanonicalCodec {
         if (!expected.equals(value)) throw invalid(field + " is outside the frozen allowlist");
     }
 
+    private static void optionalContent(String value, String field, int maxChars) {
+        if (value != null) requireContent(value, field, maxChars);
+    }
+
     private static void requireContent(String value, String field, int maxChars) {
         requireExact(value, field, maxChars);
         String lower = value.toLowerCase(Locale.ROOT);
         if (lower.contains("authorization:") || lower.contains("bearer ")
-                || lower.contains("api_key=") || lower.contains("api-key=")
-                || lower.contains("password=") || lower.contains("token=")
-                || lower.contains("-----begin private key")) {
+                || lower.contains("x-api-key:") || lower.contains("api-key:")
+                || lower.contains("apikey:") || lower.contains("api_key=")
+                || lower.contains("api-key=") || lower.contains("apikey=")
+                || lower.contains("password=") || lower.contains("password:")
+                || lower.contains("passwd=") || lower.contains("token=")
+                || lower.contains("token:") || lower.contains("secret=")
+                || lower.contains("secret:") || lower.contains("client_secret")
+                || lower.contains("access_token") || lower.contains("refresh_token")
+                || lower.contains("private_key") || lower.contains("ssh-rsa ")
+                || lower.contains("-----begin private key")
+                || lower.contains("-----begin rsa private key")) {
             throw invalid(field + " contains forbidden credential-like content");
         }
     }
@@ -300,6 +541,57 @@ public final class AgentCommandCanonicalCodec {
                 || !validSurrogates(value)) {
             throw invalid(field + " must be byte-exact, unpadded, control-free and <= " + maxChars + " chars");
         }
+    }
+
+    private static void requireObjectSize(JsonNode node, int size, String field) {
+        if (node == null || !node.isObject() || node.size() != size) {
+            throw invalid(field + " contains unknown or missing fields");
+        }
+    }
+
+    private static String text(JsonNode node, String field) {
+        JsonNode value = node == null ? null : node.get(field);
+        if (value == null || !value.isTextual()) throw invalid(field + " must be a string");
+        return value.textValue();
+    }
+
+    private static String nullableText(JsonNode node, String field) {
+        JsonNode value = node == null ? null : node.get(field);
+        if (value == null) throw invalid(field + " is missing");
+        if (value.isNull()) return null;
+        if (!value.isTextual()) throw invalid(field + " must be a string or null");
+        return value.textValue();
+    }
+
+    private static int integer(JsonNode node, String field) {
+        long value = longValue(node, field);
+        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) throw invalid(field + " is out of range");
+        return (int) value;
+    }
+
+    private static long longValue(JsonNode node, String field) {
+        JsonNode value = node == null ? null : node.get(field);
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()) {
+            throw invalid(field + " must be an integer");
+        }
+        return value.longValue();
+    }
+
+    private static Boolean booleanValue(JsonNode node, String field) {
+        if (!node.isBoolean()) throw invalid(field + " must be a boolean or null");
+        return node.booleanValue();
+    }
+
+    private static List<String> stringArray(JsonNode node, String field) {
+        JsonNode value = node == null ? null : node.get(field);
+        if (value == null || !value.isArray()) throw invalid(field + " must be an array");
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < value.size(); i++) {
+            JsonNode item = value.get(i);
+            if (item == null || !item.isTextual()) throw invalid(field + " must contain only strings");
+            result.add(item.textValue());
+        }
+        return List.copyOf(result);
     }
 
     private static boolean validSurrogates(String value) {

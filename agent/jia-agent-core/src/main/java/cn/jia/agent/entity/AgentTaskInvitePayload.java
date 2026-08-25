@@ -13,7 +13,7 @@ public record AgentTaskInvitePayload(
         List<String> collaboratorAgentIds,
         String assignmentRole,
         String acceptance,
-        String conversationType) {
+        String conversationType) implements AgentCommandPayload {
     public AgentTaskInvitePayload {
         requiredAbilities = requiredAbilities == null ? List.of() : List.copyOf(requiredAbilities);
         collaboratorAgentIds = collaboratorAgentIds == null

@@ -154,6 +154,26 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentCommandDraft draft,
             byte[] commandBytes,
             byte[] commandHash) {
+        byte[] comparableBytes = commandBytes;
+        byte[] comparableHash = commandHash;
+        Long comparableExpiry = draft.expiresAt();
+        if (!cn.jia.agent.common.AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())
+                && existing.getCommandPayload() != null) {
+            AgentCommandDraft stored;
+            try {
+                stored = AgentCommandCanonicalCodec.decodeBusinessBytes(existing.getCommandPayload());
+            } catch (IllegalArgumentException corrupt) {
+                throw new IllegalStateException("Existing Agent command payload is not canonical", corrupt);
+            }
+            AgentCommandDraft stableRetry = new AgentCommandDraft(
+                    draft.schemaVersion(), draft.commandId(), draft.correlationId(), draft.causationId(),
+                    draft.tenantId(), draft.clientId(), draft.taskId(), draft.workItemId(),
+                    draft.targetAgentId(), draft.commandType(), stored.issuedAt(), stored.expiresAt(),
+                    draft.intentId(), draft.payload());
+            comparableBytes = AgentCommandCanonicalCodec.businessBytes(stableRetry);
+            comparableHash = AgentCommandCanonicalCodec.sha256(comparableBytes);
+            comparableExpiry = stored.expiresAt();
+        }
         boolean identityMatches = Objects.equals(existing.getTenantId(), draft.tenantId())
                 && Objects.equals(existing.getClientId(), draft.clientId())
                 && Objects.equals(existing.getCommandId(), draft.commandId())
@@ -161,11 +181,11 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
                 && Objects.equals(existing.getWorkItemId(), draft.workItemId())
                 && Objects.equals(existing.getTargetAgentId(), draft.targetAgentId())
                 && Objects.equals(existing.getCommandType(), draft.commandType())
-                && Objects.equals(existing.getExpiresAt(), draft.expiresAt());
+                && Objects.equals(existing.getExpiresAt(), comparableExpiry);
         boolean bytesMatch = existing.getCommandPayloadHash() != null
                 && existing.getCommandPayload() != null
-                && MessageDigest.isEqual(existing.getCommandPayloadHash(), commandHash)
-                && Arrays.equals(existing.getCommandPayload(), commandBytes);
+                && MessageDigest.isEqual(existing.getCommandPayloadHash(), comparableHash)
+                && Arrays.equals(existing.getCommandPayload(), comparableBytes);
         if (!identityMatches || !bytesMatch) {
             throw new IllegalStateException(
                     "Agent commandId conflict: frozen identity or canonical payload differs");

@@ -1,6 +1,5 @@
 package cn.jia.agent.service.impl;
 
-import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
@@ -306,7 +305,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || delivery.getId() == null || delivery.getId() <= 0
                 || !exact(delivery.getCommandId(), 100) || !exact(delivery.getTaskId(), 100)
                 || !exact(delivery.getTargetAgentId(), 100)
-                || !AgentProtocolConstants.COMMAND_TASK_INVITE.equals(delivery.getCommandType())
+                || !AgentCommandCanonicalCodec.isSupportedCommandType(delivery.getCommandType())
                 || (!waitingShape && !sentShape)
                 || delivery.getAttemptCount() == null || delivery.getAttemptCount() <= 0
                 || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
