@@ -503,7 +503,7 @@ class AgentCommandRecoveryServiceTest {
             replayAudit(dao, valid.get(0), null, valid.get(1));
             assertEquals(AgentCommandAckResult.Kind.ADVANCED,
                     ackService(dao, enabledGate()).acknowledge(
-                            ack("ack-valid-" + valid.get(1), "RECEIVED", M1), NOW).kind());
+                            ack("ack-valid-" + valid.get(1), "SUCCEEDED", M1), NOW).kind());
             assertEquals(1, dao.ackMutations);
         }
 
@@ -520,7 +520,7 @@ class AgentCommandRecoveryServiceTest {
             corrupt.accept(dao);
             assertThrows(AgentCommandAckRejectedException.class,
                     () -> ackService(dao, enabledGate()).acknowledge(
-                            ack("ack-invalid", "RECEIVED", M1), NOW));
+                            ack("ack-invalid", "SUCCEEDED", M1), NOW));
             assertEquals(0, dao.ackMutations);
         }
     }
@@ -531,14 +531,14 @@ class AgentCommandRecoveryServiceTest {
         setTransportAttempt(missingAudit, 2);
         assertThrows(AgentCommandAckRejectedException.class,
                 () -> ackService(missingAudit, enabledGate()).acknowledge(
-                        ack("ack-missing-audit", "RECEIVED", M1), NOW));
+                        ack("ack-missing-audit", "SUCCEEDED", M1), NOW));
         assertEquals(0, missingAudit.ackMutations);
 
         RecordingDao mismatch = sentDao();
         mismatch.outbox.setActiveAttempt(2);
         assertThrows(AgentCommandAckRejectedException.class,
                 () -> ackService(mismatch, enabledGate()).acknowledge(
-                        ack("ack-attempt-mismatch", "RECEIVED", M1), NOW));
+                        ack("ack-attempt-mismatch", "SUCCEEDED", M1), NOW));
         assertEquals(0, mismatch.ackMutations);
 
         RecordingDao automatic = sentDao();
@@ -548,7 +548,7 @@ class AgentCommandRecoveryServiceTest {
         automatic.outbox.setAttemptCount(7);
         assertEquals(AgentCommandAckResult.Kind.ADVANCED,
                 ackService(automatic, enabledGate()).acknowledge(
-                        ack("ack-automatic", "RECEIVED", M1), NOW).kind());
+                        ack("ack-automatic", "SUCCEEDED", M1), NOW).kind());
         assertEquals(1, automatic.ackMutations);
     }
 
@@ -561,7 +561,7 @@ class AgentCommandRecoveryServiceTest {
         missing.previousAttempts = List.of();
         assertThrows(AgentCommandAckRejectedException.class,
                 () -> ackService(missing, enabledGate()).acknowledge(
-                        ack("ack-parent-missing", "RECEIVED", M1), NOW));
+                        ack("ack-parent-missing", "SUCCEEDED", M1), NOW));
         assertEquals(0, missing.ackMutations);
 
         RecordingDao skipped = sentDao();
@@ -571,8 +571,38 @@ class AgentCommandRecoveryServiceTest {
         skipped.previousAttempts.getFirst().setActiveAttempt(1);
         assertThrows(AgentCommandAckRejectedException.class,
                 () -> ackService(skipped, enabledGate()).acknowledge(
-                        ack("ack-parent-skipped", "RECEIVED", M1), NOW));
+                        ack("ack-parent-skipped", "SUCCEEDED", M1), NOW));
         assertEquals(0, skipped.ackMutations);
+    }
+
+    @Test
+    void automaticReplayRejectsNonterminalLedgerReplayWithoutMutation() {
+        for (String starting : List.of("CONSUMED", "SENT")) {
+            for (String nonterminal : List.of("RECEIVED", "STARTED")) {
+                RecordingDao replay = sentDao();
+                if ("CONSUMED".equals(starting)) {
+                    replay.delivery.setStatus("CONSUMED");
+                    replay.inbox.setStatus("PROCESSING").setResultStatus(null)
+                            .setProcessedAt(null).setLeaseOwner("worker-a")
+                            .setLeaseUntil(NOW + 10_000L);
+                }
+                setTransportAttempt(replay, 2);
+                replayAudit(replay, "agent-a", null,
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+                long version = replay.delivery.getVersion();
+
+                assertThrows(AgentCommandAckRejectedException.class,
+                        () -> ackService(replay, enabledGate()).acknowledge(
+                                ack("ack-replayed-" + starting + "-" + nonterminal,
+                                        nonterminal, M1), NOW));
+
+                assertEquals(starting, replay.delivery.getStatus());
+                assertEquals(version, replay.delivery.getVersion());
+                assertEquals(null, replay.delivery.getNextRetryAt());
+                assertEquals(null, replay.delivery.getLastError());
+                assertEquals(0, replay.ackMutations);
+            }
+        }
     }
 
     @Test

@@ -280,7 +280,8 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
         boolean automaticReplay = delivery.getActiveAttempt() != null
                 && delivery.getActiveAttempt() > 1;
         return switch (delivery.getStatus()) {
-            case "CONSUMED", "SENT" -> Set.of("RECEIVED", "REJECTED").contains(requested)
+            case "CONSUMED", "SENT" -> "REJECTED".equals(requested)
+                    || (!automaticReplay && "RECEIVED".equals(requested))
                     || (automaticReplay && Set.of("SUCCEEDED", "FAILED").contains(requested))
                     ? requested : null;
             case "RECEIVED" -> Set.of("STARTED", "REJECTED").contains(requested)
