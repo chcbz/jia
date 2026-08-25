@@ -5,7 +5,7 @@ import cn.jia.agent.entity.AgentOutboxEventEntity;
 
 import java.util.List;
 
-/** D08 Hall extension for bounded shadow-capture promotion. */
+/** D08 Hall extension for bounded MQ-shadow promotion; DB-shadow remains capture-only. */
 public interface AgentHallCommandTransportDao extends AgentCommandTransportDao {
     List<AgentOutboxEventEntity> lockActiveOutboxes(
             String tenantId, String clientId, long deliveryId, String messageId);

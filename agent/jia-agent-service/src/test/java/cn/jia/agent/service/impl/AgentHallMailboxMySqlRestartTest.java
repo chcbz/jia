@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.access.AgentTaskAccessLevel;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentCommandTransportSchemaInitializer;
@@ -21,9 +22,12 @@ import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.mapper.AgentCommandRecoveryMapper;
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
+import cn.jia.agent.service.AgentCommandMailboxAccessDeniedException;
+import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
+import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
@@ -136,8 +140,8 @@ class AgentHallMailboxMySqlRestartTest {
                 "SELECT status FROM agent_command_delivery"));
 
         RuntimeContext restarted = newContext();
-        AgentCommandMailboxServiceImpl mailbox = new AgentCommandMailboxServiceImpl(
-                restarted.transportMapper());
+        AgentCommandMailboxServiceImpl mailbox = mailbox(
+                restarted, ISSUED + 1_000L);
         AgentCommandMailboxPage page = mailbox.query(
                 TENANT, CLIENT, CALLER, TARGET, TASK, null, null, 10, false);
 
@@ -146,12 +150,15 @@ class AgentHallMailboxMySqlRestartTest {
         assertEquals(AgentProtocolConstants.COMMAND_CONTEXT_REFRESH,
                 page.entries().getFirst().commandType());
         assertEquals("PENDING", page.entries().getFirst().status());
-        assertTrue(mailbox.query("tenant-other", CLIENT, CALLER, TARGET, TASK,
-                null, null, 10, false).entries().isEmpty());
-        assertTrue(mailbox.query(TENANT, CLIENT, "agent-other", TARGET, TASK,
-                null, null, 10, false).entries().isEmpty());
-        assertTrue(mailbox.query(TENANT, CLIENT, CALLER, TARGET, "task-other",
-                null, null, 10, false).entries().isEmpty());
+        assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> mailbox.query(
+                "tenant-other", CLIENT, CALLER, TARGET, TASK,
+                null, null, 10, false));
+        assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> mailbox.query(
+                TENANT, CLIENT, "agent-other", TARGET, TASK,
+                null, null, 10, false));
+        assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> mailbox.query(
+                TENANT, CLIENT, CALLER, TARGET, "task-other",
+                null, null, 10, false));
 
         AgentCommandTransportWriteResult duplicate = writer(restarted, ids(M2, E2)).writeAuthorizedHall(
                 hallDraft(ISSUED + 50_000L, "请回报当前进展、风险和下一步计划"), CALLER);
@@ -202,8 +209,8 @@ class AgentHallMailboxMySqlRestartTest {
         assertTrue(newWire.contains("\"messageId\":\"" + M2 + "\""));
         assertTrue(newWire.contains("\"commandId\":\"" + draft.commandId() + "\""));
 
-        AgentCommandMailboxPage page = new AgentCommandMailboxServiceImpl(
-                restarted.transportMapper()).query(
+        AgentCommandMailboxPage page = mailbox(
+                restarted, ISSUED + 10_000L).query(
                 TENANT, CLIENT, CALLER, TARGET, TASK, null, null, 10, false);
         assertEquals(1, page.entries().size());
         assertEquals("PENDING", page.entries().getFirst().status());
@@ -315,8 +322,7 @@ class AgentHallMailboxMySqlRestartTest {
     }
 
     @Test
-    void shadowDeadCapturePromotesAfterCanaryRestartWithSameProvenanceAndIdempotency()
-            throws Exception {
+    void shadowDeadCaptureRemainsNonDispatchableAfterCanaryRestart() throws Exception {
         AgentCommandDraft shadowDraft = hallDraft(
                 ISSUED, "请回报当前进展、风险和下一步计划");
         AgentCommandTransportWriteResult captured = writer(
@@ -328,27 +334,21 @@ class AgentHallMailboxMySqlRestartTest {
         byte[] wireBytes = firstContext.jdbc().queryForObject(
                 "SELECT wire_payload FROM agent_outbox_event WHERE event_id=?",
                 byte[].class, captured.outboxEventId());
-        assertEquals("DEAD", string(firstContext.jdbc(),
-                "SELECT status FROM agent_command_delivery"));
-        assertEquals(AgentCommandTransportWriterImpl.DB_SHADOW_MARKER,
-                string(firstContext.jdbc(),
-                        "SELECT last_error FROM agent_command_delivery"));
 
         RuntimeContext restarted = newContext();
-        AgentCommandTransportWriteResult promoted = writer(
-                restarted, ids(M2, E2), gate(AgentRabbitActivationState.DISPATCH_CANARY))
-                .writeAuthorizedHall(hallDraft(
-                        ISSUED + 1_000L, "请回报当前进展、风险和下一步计划"), CALLER);
+        AgentCommandShadowIntentException denied = assertThrows(
+                AgentCommandShadowIntentException.class, () -> writer(
+                        restarted, ids(M2, E2), gate(AgentRabbitActivationState.DISPATCH_CANARY))
+                        .writeAuthorizedHall(hallDraft(
+                                ISSUED + 1_000L,
+                                "请回报当前进展、风险和下一步计划"), CALLER));
 
-        assertFalse(promoted.duplicate());
-        assertEquals(captured.deliveryId(), promoted.deliveryId());
-        assertEquals(captured.messageId(), promoted.messageId());
-        assertEquals(captured.outboxEventId(), promoted.outboxEventId());
-        assertEquals("PENDING", string(restarted.jdbc(),
+        assertTrue(denied.getMessage().contains("new intent"));
+        assertEquals("DEAD", string(restarted.jdbc(),
                 "SELECT status FROM agent_command_delivery"));
-        assertEquals("PENDING", string(restarted.jdbc(),
+        assertEquals("DEAD", string(restarted.jdbc(),
                 "SELECT status FROM agent_outbox_event"));
-        assertEquals(AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER,
+        assertEquals(AgentCommandTransportWriterImpl.DB_SHADOW_MARKER,
                 string(restarted.jdbc(),
                         "SELECT last_error FROM agent_command_delivery"));
         assertTrue(Arrays.equals(commandBytes, restarted.jdbc().queryForObject(
@@ -357,16 +357,128 @@ class AgentHallMailboxMySqlRestartTest {
         assertTrue(Arrays.equals(wireBytes, restarted.jdbc().queryForObject(
                 "SELECT wire_payload FROM agent_outbox_event WHERE event_id=?",
                 byte[].class, captured.outboxEventId())));
-
-        AgentCommandTransportWriteResult duplicate = writer(
-                restarted, ids(M2, E2), gate(AgentRabbitActivationState.DISPATCH_CANARY))
-                .writeAuthorizedHall(hallDraft(
-                        ISSUED + 2_000L, "请回报当前进展、风险和下一步计划"), CALLER);
-        assertTrue(duplicate.duplicate());
-        assertEquals(captured.deliveryId(), duplicate.deliveryId());
-        assertEquals(captured.messageId(), duplicate.messageId());
         assertEquals(1, count(restarted.jdbc(), "agent_command_delivery"));
         assertEquals(1, count(restarted.jdbc(), "agent_outbox_event"));
+    }
+
+    @Test
+    void concurrentMailboxMembershipRevokeReturnsNoProjectionAfterLockWait()
+            throws Exception {
+        writer(firstContext, ids(M1, E1)).writeAuthorizedHall(
+                hallDraft(ISSUED, "请回报当前进展、风险和下一步计划"), CALLER);
+        RuntimeContext revokeContext = newContext();
+        RuntimeContext queryContext = newContext();
+        CountDownLatch revokedWhileLocked = new CountDownLatch(1);
+        CountDownLatch allowRevokeCommit = new CountDownLatch(1);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> revoke = workers.submit(() -> {
+                TransactionTemplate transaction = new TransactionTemplate(
+                        revokeContext.transactionManager());
+                transaction.executeWithoutResult(status -> {
+                    assertEquals(1, revokeContext.jdbc().update("""
+                            UPDATE agent_task_member SET member_status='left',update_time=?
+                            WHERE tenant_id=? AND client_id=? AND task_id=? AND agent_id=?
+                            """, ISSUED + 1, TENANT, CLIENT, TASK, TARGET));
+                    revokedWhileLocked.countDown();
+                    try {
+                        if (!allowRevokeCommit.await(5, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("revoke commit was not released");
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("revoke interrupted", interrupted);
+                    }
+                });
+            });
+            assertTrue(revokedWhileLocked.await(5, TimeUnit.SECONDS));
+
+            Future<AgentCommandMailboxPage> attempted = workers.submit(() -> mailbox(
+                    queryContext, ISSUED + 1_000L).query(
+                    TENANT, CLIENT, CALLER, TARGET, TASK,
+                    null, null, 10, false));
+            Thread.sleep(250);
+            assertFalse(attempted.isDone(),
+                    "mailbox query must wait on the target membership lock");
+
+            allowRevokeCommit.countDown();
+            revoke.get(5, TimeUnit.SECONDS);
+            ExecutionException denied = assertThrows(ExecutionException.class,
+                    () -> attempted.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(AgentCommandMailboxAccessDeniedException.class,
+                    denied.getCause());
+            assertEquals(1, count(queryContext.jdbc(), "agent_command_delivery"));
+        } finally {
+            allowRevokeCommit.countDown();
+            workers.shutdownNow();
+            assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void concurrentMailboxOwnershipRevokeReturnsNoProjectionAfterLockWait()
+            throws Exception {
+        writer(firstContext, ids(M1, E1)).writeAuthorizedHall(
+                hallDraft(ISSUED, "请回报当前进展、风险和下一步计划"), CALLER);
+        RuntimeContext revokeContext = newContext();
+        RuntimeContext queryContext = newContext();
+        CountDownLatch revokedWhileLocked = new CountDownLatch(1);
+        CountDownLatch allowRevokeCommit = new CountDownLatch(1);
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> revoke = workers.submit(() -> {
+                TransactionTemplate transaction = new TransactionTemplate(
+                        revokeContext.transactionManager());
+                transaction.executeWithoutResult(status -> {
+                    assertEquals(1, revokeContext.jdbc().update("""
+                            UPDATE d08_agent_identity SET identity_status='revoked'
+                            WHERE tenant_id=? AND client_id=? AND agent_id=?
+                            """, TENANT, CLIENT, TARGET));
+                    revokedWhileLocked.countDown();
+                    try {
+                        if (!allowRevokeCommit.await(5, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("revoke commit was not released");
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("revoke interrupted", interrupted);
+                    }
+                });
+            });
+            assertTrue(revokedWhileLocked.await(5, TimeUnit.SECONDS));
+
+            Future<AgentCommandMailboxPage> attempted = workers.submit(() -> mailbox(
+                    queryContext, ISSUED + 1_000L).query(
+                    TENANT, CLIENT, CALLER, TARGET, TASK,
+                    null, null, 10, false));
+            Thread.sleep(250);
+            assertFalse(attempted.isDone(),
+                    "mailbox query must wait on the target ownership lock");
+
+            allowRevokeCommit.countDown();
+            revoke.get(5, TimeUnit.SECONDS);
+            ExecutionException denied = assertThrows(ExecutionException.class,
+                    () -> attempted.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(AgentCommandMailboxAccessDeniedException.class,
+                    denied.getCause());
+            assertEquals(1, count(queryContext.jdbc(), "agent_command_delivery"));
+        } finally {
+            allowRevokeCommit.countDown();
+            workers.shutdownNow();
+            assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void defaultMailboxProjectionExcludesExpiredPendingRows() throws Exception {
+        writer(firstContext, ids(M1, E1)).writeAuthorizedHall(
+                hallDraft(ISSUED, "请回报当前进展、风险和下一步计划"), CALLER);
+
+        AgentCommandMailboxPage page = mailbox(firstContext, EXPIRES).query(
+                TENANT, CLIENT, CALLER, TARGET, TASK,
+                null, null, 10, false);
+
+        assertTrue(page.entries().isEmpty());
     }
 
     @Test
@@ -380,9 +492,19 @@ class AgentHallMailboxMySqlRestartTest {
         assertEquals(AgentProtocolConstants.COMMAND_TASK_INVITE,
                 string(firstContext.jdbc(),
                         "SELECT command_type FROM agent_command_delivery"));
+        String wire = new String(firstContext.jdbc().queryForObject(
+                "SELECT wire_payload FROM agent_outbox_event WHERE event_id=?",
+                byte[].class, written.outboxEventId()), StandardCharsets.UTF_8);
+        assertTrue(wire.contains("\"type\":\"agent_direct_message\""));
+        assertTrue(wire.contains("\"targetAgentId\":\"" + TARGET + "\""));
+        assertTrue(wire.contains("\"agentId\":\"" + TARGET + "\""));
+        assertTrue(wire.contains("\"actionType\":\"task_briefing\""));
+        assertTrue(wire.contains("\"content\":\"请阅读任务简报并确认职责\""));
+        assertTrue(wire.contains("\"autonomyLevel\":\"assist\""));
+        assertTrue(wire.contains("\"metadata\":{"));
         RuntimeContext restarted = newContext();
-        AgentCommandMailboxPage page = new AgentCommandMailboxServiceImpl(
-                restarted.transportMapper()).query(
+        AgentCommandMailboxPage page = mailbox(
+                restarted, ISSUED + 1_000L).query(
                 TENANT, CLIENT, CALLER, TARGET, TASK, null, null, 10, false);
 
         assertEquals(1, page.entries().size());
@@ -410,6 +532,13 @@ class AgentHallMailboxMySqlRestartTest {
         assertEquals(0, count(firstContext.jdbc(), "agent_command_delivery"));
         assertEquals(0, count(firstContext.jdbc(), "agent_outbox_event"));
         assertEquals(0, count(firstContext.jdbc(), "agent_consumer_inbox"));
+    }
+
+    private AgentCommandMailboxServiceImpl mailbox(
+            RuntimeContext context, long now) {
+        return new AgentCommandMailboxServiceImpl(
+                context.transportMapper(), lockedAgentService(context),
+                lockedAccessService(context), context.transactionManager(), () -> now);
     }
 
     private AgentCommandTransportWriterImpl writer(
@@ -489,7 +618,9 @@ class AgentHallMailboxMySqlRestartTest {
                             """, (row, index) -> row.getString(1),
                             tenantId, clientId, agentId, tenantId, clientId, agentId);
                     if (!List.of(agentId).equals(identities)) {
-                        throw new IllegalArgumentException("Agent identity is not owned");
+                        throw new AgentBizException(
+                                AgentErrorConstants.AGENT_FORBIDDEN,
+                                "Agent identity is not owned");
                     }
                     List<String> statuses = context.jdbc().query(
                             """
@@ -502,7 +633,9 @@ class AgentHallMailboxMySqlRestartTest {
                             """, (row, index) -> row.getString(1),
                             tenantId, clientId, agentId, tenantId, clientId, agentId);
                     if (statuses.size() != 1) {
-                        throw new IllegalArgumentException("Agent runtime is not owned");
+                        throw new AgentBizException(
+                                AgentErrorConstants.AGENT_NOT_FOUND,
+                                "Agent runtime is not owned");
                     }
                     AgentRuntimeDTO runtime = new AgentRuntimeDTO();
                     runtime.setAgentId(agentId);
@@ -674,7 +807,7 @@ class AgentHallMailboxMySqlRestartTest {
                 new AgentHallCommandPayload(
                         "task_briefing", "请阅读任务简报并确认职责", "juyiting",
                         "协作任务已分派", "conversation-1", null,
-                        "supervised", false,
+                        "assist", false,
                         new AgentHallCommandContext(
                                 "接口联调", null, null, null, "v1",
                                 List.of("ref-1"), List.of("briefing"))));

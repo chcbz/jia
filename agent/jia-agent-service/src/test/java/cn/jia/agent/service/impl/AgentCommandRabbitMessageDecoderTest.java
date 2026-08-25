@@ -42,6 +42,16 @@ class AgentCommandRabbitMessageDecoderTest {
     }
 
     @Test
+    void preservesExistingD05HallTaskInviteBytesWithoutRequiringCompatibilityFields() {
+        Message rabbit = message(d05HallTaskInviteWire());
+
+        DecodedAgentCommandMessage decoded = decoder.decode(rabbit);
+
+        assertEquals(AgentProtocolConstants.COMMAND_TASK_INVITE, decoded.commandType());
+        assertArrayEquals(rabbit.getBody(), decoded.rawWireBytes());
+    }
+
+    @Test
     void rejectsHeaderTypesUnknownAgentHeadersAndTransportDrift() {
         Message wrongType = message(wire());
         wrongType.getMessageProperties().getHeaders().put(
@@ -164,6 +174,20 @@ class AgentCommandRabbitMessageDecoderTest {
         headers.put(AgentCommandAmqpContract.HEADER_SOURCE_SETTLEMENT_RETRY, Integer.valueOf(0));
         properties.setHeaders(headers);
         return new Message(body, properties);
+    }
+
+    private String d05HallTaskInviteWire() {
+        return """
+                {"schemaVersion":1,"messageType":"command.dispatch","messageId":"msg-1",\
+                "commandId":"cmd-1","correlationId":"task-1","causationId":"intent-d05",\
+                "tenantId":"tenant-a","clientId":"client-a","taskId":"task-1",\
+                "workItemId":null,"targetAgentId":"agent-1","commandType":"TASK_INVITE",\
+                "issuedAt":1000,"expiresAt":9999999999,"intentId":"intent-d05","attempt":1,\
+                "payload":{"actionType":"task_briefing","instruction":"Read the task briefing",\
+                "conversationType":"juyiting","reason":null,"conversationId":null,\
+                "triggerEventId":null,"autonomyLevel":"supervised",\
+                "requiresApproval":false,"context":null}}
+                """.replace("\\\n", "").strip();
     }
 
     private String wire() {

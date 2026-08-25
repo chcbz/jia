@@ -823,9 +823,10 @@ public class AgentServiceImpl implements AgentService {
             return task;
         }
         task.setActionDispatchResults(List.of());
-        commandTransportCapture.captureTaskInvites(
+        boolean durableAssignmentDelivery = commandTransportCapture.captureTaskInvites(
                 task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt());
-        publishTaskAssignmentSideEffectsAfterCommit(task, assignedAgents);
+        publishTaskAssignmentSideEffectsAfterCommit(
+                task, assignedAgents, durableAssignmentDelivery);
         publishTaskAssignmentSceneStates(taskId, assignedAgents);
         return task;
     }
@@ -2110,10 +2111,13 @@ codexTimeoutMs=900000
     }
 
     private void publishTaskAssignmentSideEffectsAfterCommit(
-            AgentTaskDTO task, List<AgentRuntimeEntity> assignedAgents) {
+            AgentTaskDTO task, List<AgentRuntimeEntity> assignedAgents,
+            boolean durableAssignmentDelivery) {
         List<AgentRuntimeEntity> agents = List.copyOf(assignedAgents);
-        publishOptionalAfterCommit("legacy-task-assignment", () -> {
-            task.setActionDispatchResults(dispatchTaskAssignedActions(task, agents));
+        publishOptionalAfterCommit("task-assignment", () -> {
+            if (!durableAssignmentDelivery) {
+                task.setActionDispatchResults(dispatchTaskAssignedActions(task, agents));
+            }
             publishTaskEvent("task_assigned", task);
         });
     }

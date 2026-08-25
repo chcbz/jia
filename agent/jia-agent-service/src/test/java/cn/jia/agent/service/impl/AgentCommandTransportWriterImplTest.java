@@ -15,6 +15,7 @@ import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,7 +41,6 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -278,7 +278,7 @@ class AgentCommandTransportWriterImplTest {
     }
 
     @Test
-    void hallShadowDeadRetryPromotesExistingIdentityTruthfullyAndThenIsIdempotent() {
+    void dbShadowHallIntentRemainsDeadAndRequiresNewIntentAfterCanaryCutover() {
         AgentCommandDraft stored = hallDraft(1_000L, "执行工作项并回报结果");
         AgentCommandDraft retry = hallDraft(9_000L, "执行工作项并回报结果");
         byte[] business = AgentCommandCanonicalCodec.businessBytes(stored);
@@ -289,74 +289,21 @@ class AgentCommandTransportWriterImplTest {
                 .setLastError(AgentCommandTransportWriterImpl.DB_SHADOW_MARKER)
                 .setVersion(0L);
         delivery.setUpdateTime(stored.issuedAt());
-        AgentRabbitTopologyManifest.PublishRoute route =
-                AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
-        byte[] wire = AgentCommandCanonicalCodec.wireBytes(
-                stored, delivery.getActiveMessageId(), 1);
-        AgentOutboxEventEntity outbox = new AgentOutboxEventEntity()
-                .setId(88L)
-                .setEventId("event-shadow")
-                .setMessageId(delivery.getActiveMessageId())
-                .setCommandId(stored.commandId())
-                .setDeliveryId(delivery.getId())
-                .setAggregateType("task")
-                .setAggregateId(stored.taskId())
-                .setDestination(route.destination())
-                .setRoutingKey(route.routingKey())
-                .setWirePayload(wire)
-                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire))
-                .setStatus("DEAD")
-                .setAttemptCount(0)
-                .setActiveAttempt(1)
-                .setExpiresAt(stored.expiresAt())
-                .setPublisherConfirmStatus("NONE")
-                .setMandatoryReturnStatus("NONE")
-                .setLastError(AgentCommandTransportWriterImpl.DB_SHADOW_MARKER)
-                .setVersion(0L);
-        outbox.setTenantId(stored.tenantId());
-        outbox.setClientId(stored.clientId());
-        outbox.setCreateTime(stored.issuedAt());
-        outbox.setUpdateTime(stored.issuedAt());
         when(dao.lockDelivery(retry.tenantId(), retry.clientId(), retry.commandId()))
                 .thenReturn(delivery);
-        when(dao.lockActiveOutboxes(
-                stored.tenantId(), stored.clientId(), delivery.getId(),
-                delivery.getActiveMessageId())).thenReturn(List.of(outbox));
-        when(dao.promoteShadowDelivery(any(), any(), anyLong())).thenReturn(1);
-        when(dao.promoteShadowOutbox(any(), any(), anyLong())).thenReturn(1);
         allowHallAuthorization();
-        AgentCommandTransportWriterImpl writer = hallWriter(
-                gate(AgentRabbitActivationState.DISPATCH_CANARY, true));
 
-        var promoted = writer.writeAuthorizedHall(retry, CALLER);
+        AgentCommandShadowIntentException denied = assertThrows(
+                AgentCommandShadowIntentException.class, () -> hallWriter(
+                        gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
+                        .writeAuthorizedHall(retry, CALLER));
 
-        assertFalse(promoted.duplicate());
-        assertEquals(delivery.getId(), promoted.deliveryId());
-        assertEquals(delivery.getActiveMessageId(), promoted.messageId());
-        assertEquals(outbox.getEventId(), promoted.outboxEventId());
-        verify(dao).promoteShadowDelivery(
-                delivery, AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER,
-                retry.issuedAt());
-        verify(dao).promoteShadowOutbox(
-                outbox, AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER,
-                retry.issuedAt());
+        assertTrue(denied.getMessage().contains("new intent"));
+        verify(dao, never()).lockActiveOutboxes(any(), any(), anyLong(), any());
+        verify(dao, never()).promoteShadowDelivery(any(), any(), anyLong());
+        verify(dao, never()).promoteShadowOutbox(any(), any(), anyLong());
         verify(dao, never()).insertDelivery(any());
         verify(dao, never()).insertOutbox(any());
-
-        delivery.setStatus("PENDING")
-                .setLastError(AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER)
-                .setVersion(1L);
-        delivery.setUpdateTime(retry.issuedAt());
-        var duplicate = writer.writeAuthorizedHall(hallDraft(
-                10_000L, "执行工作项并回报结果"), CALLER);
-
-        assertTrue(duplicate.duplicate());
-        assertEquals(delivery.getId(), duplicate.deliveryId());
-        assertEquals(delivery.getActiveMessageId(), duplicate.messageId());
-        assertNull(duplicate.outboxEventId());
-        verify(dao, times(1)).lockActiveOutboxes(any(), any(), anyLong(), any());
-        verify(dao, times(1)).promoteShadowDelivery(any(), any(), anyLong());
-        verify(dao, times(1)).promoteShadowOutbox(any(), any(), anyLong());
     }
 
     @Test

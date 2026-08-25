@@ -44,7 +44,7 @@ public final class AgentCommandCanonicalCodec {
             AgentProtocolConstants.COMMAND_REVIEW_EXECUTE,
             AgentProtocolConstants.COMMAND_CONTEXT_REFRESH);
     private static final Set<String> AUTONOMY_LEVELS = Set.of(
-            "manual", "supervised", "autonomous");
+            "assist", "manual", "supervised", "autonomous");
     private static final Comparator<String> UTF8_ORDER = AgentCommandCanonicalCodec::compareUtf8Unsigned;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -164,6 +164,7 @@ public final class AgentCommandCanonicalCodec {
         nullableString(json, "workItemId", draft.workItemId());
         string(json, "targetAgentId", draft.targetAgentId());
         string(json, "commandType", draft.commandType());
+        if (isHallTaskInvite(draft)) taskInviteCompatibility(json, draft);
         number(json, "issuedAt", draft.issuedAt());
         number(json, "expiresAt", draft.expiresAt());
         if (isHallIntentCommand(draft)) string(json, "intentId", draft.intentId());
@@ -407,6 +408,29 @@ public final class AgentCommandCanonicalCodec {
         }
     }
 
+
+    private static boolean isHallTaskInvite(AgentCommandDraft draft) {
+        return isHallIntentCommand(draft)
+                && AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType());
+    }
+
+    private static void taskInviteCompatibility(
+            StringBuilder json, AgentCommandDraft draft) {
+        AgentHallCommandPayload payload = (AgentHallCommandPayload) draft.payload();
+        string(json, "type", AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE);
+        string(json, "agentId", draft.targetAgentId());
+        string(json, "actionType", payload.actionType());
+        string(json, "content", payload.instruction());
+        comma(json); quote(json, "metadata"); json.append(':').append('{');
+        string(json, "taskId", draft.taskId());
+        nullableString(json, "reason", payload.reason());
+        nullableString(json, "autonomyLevel", payload.autonomyLevel());
+        nullableBoolean(json, "requiresApproval", payload.requiresApproval());
+        hallContext(json, payload.context());
+        bool(json, "autonomy", true);
+        json.append('}');
+    }
+
     private static void taskInvitePayload(StringBuilder json, AgentTaskInvitePayload payload) {
         comma(json); quote(json, "payload"); json.append(':').append('{');
         string(json, "actionType", payload.actionType());
@@ -475,6 +499,10 @@ public final class AgentCommandCanonicalCodec {
     private static void nullableBoolean(StringBuilder json, String key, Boolean value) {
         comma(json); quote(json, key); json.append(':');
         if (value == null) json.append("null"); else json.append(value);
+    }
+
+    private static void bool(StringBuilder json, String key, boolean value) {
+        comma(json); quote(json, key); json.append(':').append(value);
     }
 
     private static void array(StringBuilder json, String key, List<String> values) {

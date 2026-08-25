@@ -18,8 +18,12 @@ public class AgentCommandTransportWriterConfiguration {
     @Bean
     @Conditional(AgentCommandOutboxEnabledCondition.class)
     public AgentCommandMailboxService agentCommandMailboxService(
-            AgentCommandTransportMapper mapper) {
-        return new AgentCommandMailboxServiceImpl(mapper);
+            AgentCommandTransportMapper mapper,
+            AgentService agentService,
+            AgentTaskCollaborationAccessService accessService,
+            PlatformTransactionManager transactionManager) {
+        return new AgentCommandMailboxServiceImpl(
+                mapper, agentService, accessService, transactionManager);
     }
 
     @Bean

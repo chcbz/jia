@@ -1,10 +1,14 @@
 package cn.jia.chat.handler;
 
+import cn.jia.agent.common.AgentProtocolConstants;
+import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.test.BaseMockTest;
@@ -74,6 +78,64 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         verify(otherAgent, never()).sendMessage(any(TextMessage.class));
     }
 
+
+    @Test
+    void hallTaskInviteCompatibilityBytesRemainExactThroughRawDispatch()
+            throws Exception {
+        WebSocketSession exact = session(
+                "task-invite-compat", "tenant-a", "client-a", "agent-1");
+        AgentWebSocketHandler handler = handler();
+        register(handler, exact, "agent-1");
+        org.mockito.Mockito.clearInvocations(exact);
+        String intentId = "intent-task-invite";
+        String commandType = AgentProtocolConstants.COMMAND_TASK_INVITE;
+        AgentCommandDraft draft = new AgentCommandDraft(
+                1, AgentCommandCanonicalCodec.hallCommandId(
+                        "tenant-a", "client-a", "task-1", "agent-1",
+                        intentId, commandType),
+                "task-1", intentId, "tenant-a", "client-a", "task-1",
+                null, "agent-1", commandType, 1_000L, 3_601_000L,
+                intentId, new AgentHallCommandPayload(
+                        "task_briefing", "Read the task briefing", "juyiting",
+                        null, null, null, "assist", false, null));
+        byte[] raw = AgentCommandCanonicalCodec.wireBytes(draft, "message-task-invite");
+
+        AgentRawCommandDispatchResult result = handler.dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", raw);
+
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
+        ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
+        verify(exact).sendMessage(sent.capture());
+        assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+        String wire = sent.getValue().getPayload();
+        assertTrue(wire.contains("\"type\":\"agent_direct_message\""));
+        assertTrue(wire.contains("\"agentId\":\"agent-1\""));
+        assertTrue(wire.contains("\"actionType\":\"task_briefing\""));
+        assertTrue(wire.contains("\"content\":\"Read the task briefing\""));
+        assertTrue(wire.contains("\"autonomyLevel\":\"assist\""));
+        assertTrue(wire.contains("\"metadata\":{"));
+    }
+
+    @Test
+    void existingD05HallTaskInviteBytesRemainExactWithoutCompatibilityWrapper()
+            throws Exception {
+        WebSocketSession exact = session(
+                "task-invite-d05", "tenant-a", "client-a", "agent-1");
+        AgentWebSocketHandler handler = handler();
+        register(handler, exact, "agent-1");
+        org.mockito.Mockito.clearInvocations(exact);
+        byte[] raw = d05HallTaskInviteWire();
+
+        AgentRawCommandDispatchResult result = handler.dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", raw);
+
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
+        ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
+        verify(exact).sendMessage(sent.capture());
+        assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+        assertFalse(sent.getValue().getPayload().contains("\"type\""));
+        assertTrue(sent.getValue().getPayload().contains("\"intentId\":\"intent-d05\""));
+    }
 
     @Test
     void presenceBeforeRegisterIsOfflineForRawCommandAndRegisterMakesItReachable()
@@ -241,6 +303,21 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 "jiacn", tenantId,
                 "clientId", clientId)));
         return session;
+    }
+
+    private byte[] d05HallTaskInviteWire() {
+        return """
+                {"schemaVersion":1,"messageType":"command.dispatch",\
+                "messageId":"message-d05-task-invite","commandId":"cmd-d05-task-invite",\
+                "correlationId":"task-1","causationId":"intent-d05",\
+                "tenantId":"tenant-a","clientId":"client-a","taskId":"task-1",\
+                "workItemId":null,"targetAgentId":"agent-1","commandType":"TASK_INVITE",\
+                "issuedAt":1000,"expiresAt":3601000,"intentId":"intent-d05","attempt":1,\
+                "payload":{"actionType":"task_briefing","instruction":"Read the task briefing",\
+                "conversationType":"juyiting","reason":null,"conversationId":null,\
+                "triggerEventId":null,"autonomyLevel":"supervised",\
+                "requiresApproval":false,"context":null}}
+                """.replace("\\\n", "").strip().getBytes(StandardCharsets.UTF_8);
     }
 
     private byte[] wire(

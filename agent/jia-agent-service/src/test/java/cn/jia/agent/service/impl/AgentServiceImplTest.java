@@ -126,6 +126,8 @@ class AgentServiceImplTest extends BaseMockTest {
     AgentTaskMutationTransaction mutationTransaction;
     @Mock
     AgentTaskEventWriter taskEventWriter;
+    @Mock
+    AgentCommandTransportCapture commandTransportCapture;
     private final AtomicReference<AgentTaskMetaEntity> lastInsertedTask = new AtomicReference<>();
     AgentServiceImpl agentService;
 
@@ -1082,6 +1084,45 @@ class AgentServiceImplTest extends BaseMockTest {
         assertTrue(intents.stream().allMatch(intent -> !intent.getRequiresApproval()));
         assertEquals(2, result.getActionDispatchResults().size());
         assertTrue(result.getActionDispatchResults().stream().allMatch(dispatch -> "dispatched".equals(dispatch.getStatus())));
+    }
+
+    @Test
+    void canaryAssignmentUsesDurableInviteWithoutLegacyAgentActionDoubleSend() {
+        agentService = new AgentServiceImpl(
+                agentRuntimeDao, agentIdentityService, agentPersonaDao,
+                agentPersonaBindingDao, agentTaskMetaDao, agentTaskMemberDao,
+                legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao,
+                eventPublisherProvider, taskServiceProvider, apiKeyServiceProvider,
+                sceneServiceProvider, scopePublicationCoordinator,
+                new AgentSceneFeatureFlags(true, true), mutationTransaction,
+                taskEventWriter, commandTransportCapture);
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE,
+                "[\"planning\"]");
+        when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(agent);
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(0L);
+        when(agentTaskMetaDao.findByTaskId(
+                "juyiting", "jia_client", "task-001")).thenReturn(meta);
+        when(commandTransportCapture.captureTaskInvites(
+                any(), any(), eq("evt-task-assigned"), eq(1_000L)))
+                .thenReturn(true);
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentId("agent-wuyong");
+
+        AgentTaskDTO result = agentService.assignTask("task-001", request);
+
+        verify(commandTransportCapture).captureTaskInvites(
+                eq(result), any(), eq("evt-task-assigned"), eq(1_000L));
+        verify(eventPublisher, never()).publishAgentAction(any());
+        verify(eventPublisher).publishTaskEvent("task_assigned", result);
+        assertTrue(result.getActionDispatchResults().isEmpty());
     }
 
     @Test

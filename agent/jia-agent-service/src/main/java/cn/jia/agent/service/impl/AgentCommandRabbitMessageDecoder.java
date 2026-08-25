@@ -135,13 +135,14 @@ final class AgentCommandRabbitMessageDecoder {
                 || !targetAgentId.equals(text(root, "targetAgentId"))
                 || !integralEquals(root, "attempt", activeAttempt)
                 || !integralEquals(root, "expiresAt", expiresAt)
-                || root.has("eventId") || root.has("deliveryId") || root.has("type")
+                || root.has("eventId") || root.has("deliveryId")
                 || (root.has("agentId")
                         && !targetAgentId.equals(text(root, "agentId")))) {
             throw invalid("HEADER_BODY_CONFLICT");
         }
         String commandType = requireExact(text(root, "commandType"), 64, "COMMAND_TYPE_INVALID");
         if (!COMMAND_TYPES.contains(commandType)) throw invalid("COMMAND_TYPE_NOT_ALLOWED");
+        validateTaskInviteCompatibility(root, commandType, taskId, targetAgentId);
         rejectNestedConflict(root.get("payload"), "tenantId", tenantId);
         rejectNestedConflict(root.get("payload"), "clientId", clientId);
         rejectNestedConflict(root.get("payload"), "taskId", taskId);
@@ -173,6 +174,41 @@ final class AgentCommandRabbitMessageDecoder {
         }
         if (sent != null && sent != received) {
             throw invalid("DELIVERY_MODE_CONFLICT");
+        }
+    }
+
+    private static void validateTaskInviteCompatibility(
+            JsonNode root, String commandType, String taskId, String targetAgentId) {
+        boolean hallTaskInvite = AgentProtocolConstants.COMMAND_TASK_INVITE.equals(commandType)
+                && root.has("intentId");
+        boolean compatibilityDeclared = root.has("type") || root.has("actionType")
+                || root.has("content") || root.has("metadata");
+        if (!hallTaskInvite) {
+            if (root.has("type") || root.has("actionType") || root.has("content")
+                    || root.has("metadata")) {
+                throw invalid("COMMAND_COMPATIBILITY_FIELDS_INVALID");
+            }
+            return;
+        }
+        if (!compatibilityDeclared) return;
+        JsonNode payload = root.get("payload");
+        JsonNode metadata = root.get("metadata");
+        if (!AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE.equals(text(root, "type"))
+                || !targetAgentId.equals(text(root, "agentId"))
+                || payload == null || !payload.isObject()
+                || !java.util.Objects.equals(text(root, "actionType"), text(payload, "actionType"))
+                || !java.util.Objects.equals(text(root, "content"), text(payload, "instruction"))
+                || metadata == null || !metadata.isObject() || metadata.size() != 6
+                || !taskId.equals(text(metadata, "taskId"))
+                || !java.util.Objects.equals(metadata.get("reason"), payload.get("reason"))
+                || !java.util.Objects.equals(
+                        metadata.get("autonomyLevel"), payload.get("autonomyLevel"))
+                || !java.util.Objects.equals(
+                        metadata.get("requiresApproval"), payload.get("requiresApproval"))
+                || !java.util.Objects.equals(metadata.get("context"), payload.get("context"))
+                || !metadata.path("autonomy").isBoolean()
+                || !metadata.path("autonomy").booleanValue()) {
+            throw invalid("COMMAND_COMPATIBILITY_FIELDS_INVALID");
         }
     }
 

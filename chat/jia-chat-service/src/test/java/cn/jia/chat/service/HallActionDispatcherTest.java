@@ -1,8 +1,5 @@
 package cn.jia.chat.service;
 
-import cn.jia.agent.access.AgentTaskAccessLevel;
-import cn.jia.agent.common.AgentConstants;
-import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
@@ -13,12 +10,12 @@ import cn.jia.agent.entity.AgentCommandMailboxEntry;
 import cn.jia.agent.entity.AgentCommandMailboxPage;
 import cn.jia.agent.entity.AgentCommandTransportWriteResult;
 import cn.jia.agent.entity.AgentHallCommandPayload;
-import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.service.AgentCommandMailboxAccessDeniedException;
 import cn.jia.agent.service.AgentCommandMailboxService;
+import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
-import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.chat.handler.AgentProtocolMessageNormalizer;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.core.context.EsContext;
@@ -251,6 +248,17 @@ class HallActionDispatcherTest extends BaseMockTest {
         AgentHallCommandPayload payload = assertInstanceOf(
                 AgentHallCommandPayload.class, draft.getValue().payload());
         assertEquals("task_briefing", payload.actionType());
+        assertEquals("assist", payload.autonomyLevel());
+        assertEquals(Boolean.FALSE, payload.requiresApproval());
+        String wire = new String(AgentCommandCanonicalCodec.wireBytes(
+                draft.getValue(), "message-briefing"), java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(wire.contains("\"type\":\"agent_direct_message\""));
+        assertTrue(wire.contains("\"targetAgentId\":\"agent-target\""));
+        assertTrue(wire.contains("\"agentId\":\"agent-target\""));
+        assertTrue(wire.contains("\"actionType\":\"task_briefing\""));
+        assertTrue(wire.contains("\"content\":\"请阅读任务简报并确认职责\""));
+        assertTrue(wire.contains("\"autonomyLevel\":\"assist\""));
+        assertTrue(wire.contains("\"metadata\":{"));
         verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
     }
 
@@ -338,10 +346,41 @@ class HallActionDispatcherTest extends BaseMockTest {
     }
 
     @Test
+    void dbShadowLegacySideEffectIsNotRepeatedOrClaimedAfterCanaryCutover() {
+        when(writerProvider.getIfAvailable()).thenReturn(writer);
+        when(writer.writeAuthorizedHall(any(), eq("caller-agent")))
+                .thenReturn(new AgentCommandTransportWriteResult(
+                        71L, "cmd-shadow", "message-shadow", "event-shadow", false))
+                .thenThrow(new AgentCommandShadowIntentException(
+                        "DB_SHADOW intent is capture-only; submit a new intent for canary dispatch"));
+        when(agentWebSocketHandler.isAgentConnected(
+                "tenant-a", "client-a", "agent-target")).thenReturn(true);
+        when(agentWebSocketHandler.sendDirectMessageToAgent(
+                eq("agent-target"), any(Map.class))).thenReturn(true);
+        HallTrustedCaller caller = new HallTrustedCaller(
+                "tenant-a", "client-a", "caller-agent");
+        HallActionIntent shadow = durableIntent("intent-shadow-cutover", "agent-target", "task-1");
+
+        HallActionDispatchResult legacy = dispatcher(
+                AgentRabbitActivationState.DB_SHADOW, false).dispatch(shadow, caller);
+        HallActionIntent retry = durableIntent(
+                "intent-shadow-cutover", "agent-target", "task-1");
+        HallActionDispatchResult canary = dispatcher(
+                AgentRabbitActivationState.DISPATCH_CANARY, true).dispatch(retry, caller);
+
+        assertEquals(HallActionDispatcher.STATUS_DISPATCHED, legacy.getStatus());
+        assertEquals(HallActionDispatcher.STATUS_FAILED, canary.getStatus());
+        assertTrue(canary.getMessage().contains("new intent"));
+        verify(writer, org.mockito.Mockito.times(2)).writeAuthorizedHall(
+                any(), eq("caller-agent"));
+        verify(agentWebSocketHandler, org.mockito.Mockito.times(1))
+                .sendDirectMessageToAgent(eq("agent-target"), any(Map.class));
+    }
+
+    @Test
     void durableMailboxUsesTrustedProjectionAndOpaqueStableCursor() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        allowAcl("caller-agent", "agent-target", "task-1");
         when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
         AgentCommandMailboxEntry entry = new AgentCommandMailboxEntry(
                 "cmd-1", "task-1", "work-1", "agent-target",
@@ -388,11 +427,10 @@ class HallActionDispatcherTest extends BaseMockTest {
     void durableMailboxMapsExplicitForbiddenIdentityToEmpty() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        allowOwned("caller-agent", AgentConstants.STATUS_ONLINE);
-        when(agentService.requireApiKeyOwnedAgent(
-                "client-a", "tenant-a", "agent-target"))
-                .thenThrow(new AgentBizException(
-                        AgentErrorConstants.AGENT_FORBIDDEN, "forbidden"));
+        when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
+        when(durableMailbox.query(any(), any(), any(), any(), any(),
+                any(), any(), eq(50), eq(false)))
+                .thenThrow(new AgentCommandMailboxAccessDeniedException());
 
         HallDurableMailboxPage page = assertInstanceOf(HallDurableMailboxPage.class,
                 dispatcher.mailbox("agent-target", "task-1", null, 50, false,
@@ -400,17 +438,17 @@ class HallActionDispatcherTest extends BaseMockTest {
                                 "tenant-a", "client-a", "caller-agent")));
 
         assertTrue(page.items().isEmpty());
-        verify(mailboxProvider, never()).getIfAvailable();
+        verify(durableMailbox).query(any(), any(), any(), any(), any(),
+                any(), any(), eq(50), eq(false));
     }
 
     @Test
     void durableMailboxAclInfrastructureFailureIsObservable() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        allowOwned("caller-agent", AgentConstants.STATUS_ONLINE);
-        allowOwned("agent-target", AgentConstants.STATUS_OFFLINE);
-        when(accessService.resolveMemberAccess(
-                "tenant-a", "client-a", "task-1", "caller-agent"))
+        when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
+        when(durableMailbox.query(any(), any(), any(), any(), any(),
+                any(), any(), eq(50), eq(false)))
                 .thenThrow(new DataAccessResourceFailureException(
                         "membership database unavailable"));
 
@@ -421,6 +459,27 @@ class HallActionDispatcherTest extends BaseMockTest {
                                         "tenant-a", "client-a", "caller-agent")));
 
         assertEquals("membership database unavailable", failure.getMessage());
+        verify(durableMailbox).query(any(), any(), any(), any(), any(),
+                any(), any(), eq(50), eq(false));
+    }
+
+    @Test
+    void malformedMailboxTargetTaskCursorAndLimitRemainExplicitErrors() {
+        HallActionDispatcher dispatcher = dispatcher(
+                AgentRabbitActivationState.DISPATCH_CANARY, true);
+        HallTrustedCaller caller = new HallTrustedCaller(
+                "tenant-a", "client-a", "caller-agent");
+
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.mailbox(
+                " agent-target", "task-1", null, 50, false, caller));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.mailbox(
+                "agent-target", "task-1 ", null, 50, false, caller));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.mailbox(
+                "agent-target", "task-1", "not-a-cursor", 50, false, caller));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.mailbox(
+                "agent-target", "task-1", null, 0, false, caller));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.mailbox(
+                "agent-target", "task-1", null, 101, false, caller));
         verify(mailboxProvider, never()).getIfAvailable();
     }
 
@@ -428,7 +487,6 @@ class HallActionDispatcherTest extends BaseMockTest {
     void durableMailboxProviderFailureIsObservable() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        allowAcl("caller-agent", "agent-target", "task-1");
         when(mailboxProvider.getIfAvailable())
                 .thenThrow(new IllegalStateException("provider infrastructure unavailable"));
 
@@ -444,7 +502,6 @@ class HallActionDispatcherTest extends BaseMockTest {
     void durableMailboxSqlFailureIsObservable() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        allowAcl("caller-agent", "agent-target", "task-1");
         when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
         when(durableMailbox.query(any(), any(), any(), any(), any(),
                 any(), any(), eq(50), eq(false)))
@@ -464,25 +521,6 @@ class HallActionDispatcherTest extends BaseMockTest {
         return new HallActionDispatcher(
                 agentWebSocketHandler, gate(state, scopeAllowed), writerProvider,
                 mailboxProvider, agentService, accessService, () -> 1_000L);
-    }
-
-    private void allowAcl(String callerAgentId, String targetAgentId, String taskId) {
-        allowOwned(callerAgentId, AgentConstants.STATUS_ONLINE);
-        allowOwned(targetAgentId, AgentConstants.STATUS_OFFLINE);
-        when(accessService.resolveMemberAccess(
-                "tenant-a", "client-a", taskId, callerAgentId))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-        when(accessService.resolveMemberAccess(
-                "tenant-a", "client-a", taskId, targetAgentId))
-                .thenReturn(AgentTaskAccessLevel.READ_WRITE);
-    }
-
-    private void allowOwned(String agentId, String status) {
-        AgentRuntimeDTO runtime = new AgentRuntimeDTO();
-        runtime.setAgentId(agentId);
-        runtime.setStatus(status);
-        when(agentService.requireApiKeyOwnedAgent("client-a", "tenant-a", agentId))
-                .thenReturn(runtime);
     }
 
     private HallActionIntent durableIntent(String intentId, String targetAgentId, String taskId) {

@@ -1056,8 +1056,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         try {
             JsonNode root = STRICT_RAW_COMMAND_JSON.readTree(rawWireBytes);
-            if (root == null || !root.isObject()
-                    || !integralJsonEquals(root, "schemaVersion", AgentProtocolConstants.VERSION_1)
+            if (root == null || !root.isObject()) return false;
+            String commandType = textJson(root, "commandType");
+            if (!integralJsonEquals(root, "schemaVersion", AgentProtocolConstants.VERSION_1)
                     || !AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(textJson(root, "messageType"))
                     || !tenantId.equals(textJson(root, "tenantId"))
                     || !clientId.equals(textJson(root, "clientId"))
@@ -1065,12 +1066,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || !targetAgentId.equals(textJson(root, "targetAgentId"))
                     || !validExactDispatchId(textJson(root, "messageId"), 100)
                     || !validExactDispatchId(textJson(root, "commandId"), 100)
-                    || !validExactDispatchId(textJson(root, "commandType"), 64)
+                    || !validExactDispatchId(commandType, 64)
                     || !positiveIntegralJson(root, "attempt")
                     || !positiveIntegralJson(root, "expiresAt")
-                    || root.has("eventId") || root.has("deliveryId") || root.has("type")
+                    || root.has("eventId") || root.has("deliveryId")
                     || (root.has("agentId")
-                            && !targetAgentId.equals(textJson(root, "agentId")))) {
+                            && !targetAgentId.equals(textJson(root, "agentId")))
+                    || !validTaskInviteCompatibility(
+                            root, commandType, taskId, targetAgentId)) {
                 return false;
             }
             JsonNode payload = root.get("payload");
@@ -1082,6 +1085,38 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         } catch (Exception malformed) {
             return false;
         }
+    }
+
+    private boolean validTaskInviteCompatibility(
+            JsonNode root, String commandType, String taskId, String targetAgentId) {
+        boolean hallTaskInvite = AgentProtocolConstants.COMMAND_TASK_INVITE.equals(commandType)
+                && root.has("intentId");
+        boolean compatibilityDeclared = root.has("type") || root.has("actionType")
+                || root.has("content") || root.has("metadata");
+        if (!hallTaskInvite) {
+            return !root.has("type") && !root.has("actionType")
+                    && !root.has("content") && !root.has("metadata");
+        }
+        if (!compatibilityDeclared) return true;
+        JsonNode payload = root.get("payload");
+        JsonNode metadata = root.get("metadata");
+        return AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE.equals(textJson(root, "type"))
+                && targetAgentId.equals(textJson(root, "agentId"))
+                && payload != null && payload.isObject()
+                && java.util.Objects.equals(
+                        textJson(root, "actionType"), textJson(payload, "actionType"))
+                && java.util.Objects.equals(
+                        textJson(root, "content"), textJson(payload, "instruction"))
+                && metadata != null && metadata.isObject() && metadata.size() == 6
+                && taskId.equals(textJson(metadata, "taskId"))
+                && java.util.Objects.equals(metadata.get("reason"), payload.get("reason"))
+                && java.util.Objects.equals(
+                        metadata.get("autonomyLevel"), payload.get("autonomyLevel"))
+                && java.util.Objects.equals(
+                        metadata.get("requiresApproval"), payload.get("requiresApproval"))
+                && java.util.Objects.equals(metadata.get("context"), payload.get("context"))
+                && metadata.path("autonomy").isBoolean()
+                && metadata.path("autonomy").booleanValue();
     }
 
     private boolean validUtf8(byte[] rawWireBytes) {

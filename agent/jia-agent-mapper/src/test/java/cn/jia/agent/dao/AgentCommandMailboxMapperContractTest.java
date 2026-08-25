@@ -24,7 +24,7 @@ class AgentCommandMailboxMapperContractTest {
         assertTrue(sql.contains("d.create_time<#{beforecreatetime}"));
         assertTrue(sql.contains("d.create_time=#{beforecreatetime} and d.id<#{beforeid}"));
         assertTrue(sql.contains("order by d.create_time desc, d.id desc"));
-        assertTrue(sql.contains("limit #{limit}"));
+        assertTrue(sql.contains("limit #{limit} for update"));
     }
 
     @Test
@@ -66,6 +66,15 @@ class AgentCommandMailboxMapperContractTest {
                 "publisher_confirm_status", "mandatory_return_status", "last_error"}) {
             assertFalse(select.contains(forbidden), forbidden + ": " + select);
         }
+    }
+
+    @Test
+    void defaultExcludesExpiredNonTerminalRowsAtTrustedServerTime() throws Exception {
+        String sql = sql("selectMailboxPage");
+
+        assertTrue(sql.contains(
+                "d.status in ('succeeded','failed','rejected','expired','dead') or d.expires_at>#{now}"));
+        assertTrue(sql.contains("limit #{limit} for update"));
     }
 
     @Test

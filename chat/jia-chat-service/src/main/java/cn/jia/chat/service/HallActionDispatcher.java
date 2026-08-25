@@ -1,8 +1,5 @@
 package cn.jia.chat.service;
 
-import cn.jia.agent.access.AgentTaskAccessLevel;
-import cn.jia.agent.common.AgentConstants;
-import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
@@ -11,13 +8,13 @@ import cn.jia.agent.entity.AgentCommandMailboxPage;
 import cn.jia.agent.entity.AgentCommandTransportWriteResult;
 import cn.jia.agent.entity.AgentHallCommandContext;
 import cn.jia.agent.entity.AgentHallCommandPayload;
-import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.service.AgentCommandMailboxAccessDeniedException;
 import cn.jia.agent.service.AgentCommandMailboxService;
+import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
-import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -44,9 +41,6 @@ public class HallActionDispatcher {
     public static final String STATUS_QUEUED = "queued";
     public static final String STATUS_ACCEPTED = "accepted";
     public static final String STATUS_FAILED = "failed";
-    private static final Set<String> RUNTIME_STATUSES = Set.of(
-            AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY,
-            AgentConstants.STATUS_OFFLINE, AgentConstants.STATUS_ERROR);
     private static final Set<String> CONTEXT_FIELDS = Set.of(
             "taskTitle", "workItemTitle", "requestSummary", "reviewSummary",
             "contextVersion", "referenceIds", "tags");
@@ -148,9 +142,16 @@ public class HallActionDispatcher {
                                 ? "accepted from prior durable command"
                                 : "accepted for durable delivery");
             }
-            // DB/MQ shadow captures are terminal and non-dispatchable. M1 remains the delivery path.
+            // Shadow mode never dispatches its capture directly; M1 remains the delivery path.
             return legacyDispatch(intent,
                     new TaskCommandScope(request.tenantId(), request.clientId()));
+        } catch (AgentCommandShadowIntentException shadowIntent) {
+            if (intent != null) intent.setStatus(STATUS_FAILED);
+            return new HallActionDispatchResult(
+                    intent == null ? null : intent.getIntentId(),
+                    intent == null ? null : intent.getActorAgentId(),
+                    STATUS_FAILED,
+                    "prior shadow intent is non-dispatchable; submit a new intent");
         } catch (RuntimeException rejected) {
             return rejected(intent);
         }
@@ -168,35 +169,29 @@ public class HallActionDispatcher {
                 || !isDispatchState()) {
             return mailbox(agentId);
         }
-        if (trustedCaller == null) {
+        if (trustedCaller == null || trustedCaller.callerAgentId() == null) {
             return emptyDurableMailbox(includeTerminal);
         }
-        MailboxRequest request;
-        try {
-            request = validateMailboxRequest(
-                    agentId, taskId, cursor, limit, trustedCaller);
-        } catch (IllegalArgumentException malformed) {
-            return emptyDurableMailbox(includeTerminal);
-        }
+        MailboxRequest request = validateMailboxRequest(
+                agentId, taskId, cursor, limit, trustedCaller);
         if (!request.durableScope()) {
             return mailbox(agentId);
         }
-        try {
-            requireMailboxAccess(agentId, taskId, trustedCaller);
-        } catch (HallMailboxAccessDeniedException denied) {
-            return emptyDurableMailbox(includeTerminal);
-        }
-
         AgentCommandMailboxService query = mailboxProvider.getIfAvailable();
         if (query == null) {
             throw new IllegalStateException("durable mailbox query is unavailable");
         }
-        AgentCommandMailboxPage page = query.query(
-                trustedCaller.tenantId(), trustedCaller.clientId(),
-                trustedCaller.callerAgentId(), agentId, taskId,
-                request.cursor() == null ? null : request.cursor().createTime(),
-                request.cursor() == null ? null : request.cursor().id(),
-                limit, includeTerminal);
+        AgentCommandMailboxPage page;
+        try {
+            page = query.query(
+                    trustedCaller.tenantId(), trustedCaller.clientId(),
+                    trustedCaller.callerAgentId(), agentId, taskId,
+                    request.cursor() == null ? null : request.cursor().createTime(),
+                    request.cursor() == null ? null : request.cursor().id(),
+                    limit, includeTerminal);
+        } catch (AgentCommandMailboxAccessDeniedException denied) {
+            return emptyDurableMailbox(includeTerminal);
+        }
         if (page == null || page.entries() == null) {
             throw new IllegalStateException("durable mailbox query returned no projection");
         }
@@ -227,16 +222,6 @@ public class HallActionDispatcher {
         return new MailboxRequest(true, decodeCursor(cursor));
     }
 
-    private void requireMailboxAccess(
-            String agentId, String taskId, HallTrustedCaller trustedCaller) {
-        requireOwnedAgent(trustedCaller, trustedCaller.callerAgentId());
-        requireOwnedAgent(trustedCaller, agentId);
-        if (taskId != null) {
-            requireWritableMember(trustedCaller, taskId, trustedCaller.callerAgentId());
-            requireWritableMember(trustedCaller, taskId, agentId);
-        }
-    }
-
     private DurableRequest requireDurableRequest(
             HallActionIntent intent, HallTrustedCaller trustedCaller) {
         if (intent == null) throw new IllegalArgumentException("intent is required");
@@ -263,10 +248,15 @@ public class HallActionDispatcher {
             requireExact(intent.getTriggerEventId(), "triggerEventId", 100);
         }
         AgentHallCommandContext context = typedContext(intent.getContext());
+        boolean taskBriefing = AgentProtocolConstants.COMMAND_TASK_INVITE.equals(commandType);
+        String autonomyLevel = intent.getAutonomyLevel() == null && taskBriefing
+                ? "assist" : intent.getAutonomyLevel();
+        Boolean requiresApproval = intent.getRequiresApproval() == null && taskBriefing
+                ? Boolean.FALSE : intent.getRequiresApproval();
         AgentHallCommandPayload payload = new AgentHallCommandPayload(
                 intent.getActionType(), intent.getInstruction(), "juyiting",
                 intent.getReason(), intent.getConversationId(), intent.getTriggerEventId(),
-                intent.getAutonomyLevel(), intent.getRequiresApproval(), context);
+                autonomyLevel, requiresApproval, context);
         long issuedAt = clock.getAsLong();
         if (issuedAt <= 0) throw new IllegalStateException("clock returned an invalid time");
         long expiresAt = Math.addExact(issuedAt,
@@ -310,33 +300,6 @@ public class HallActionDispatcher {
 
     private HallDurableMailboxPage emptyDurableMailbox(boolean includeTerminal) {
         return new HallDurableMailboxPage(List.of(), null, includeTerminal);
-    }
-
-    private void requireOwnedAgent(HallTrustedCaller caller, String agentId) {
-        AgentRuntimeDTO runtime;
-        try {
-            runtime = agentService.requireApiKeyOwnedAgent(
-                    caller.clientId(), caller.tenantId(), agentId);
-        } catch (AgentBizException denied) {
-            if (AgentErrorConstants.AGENT_FORBIDDEN.equals(denied.getCode())
-                    || AgentErrorConstants.AGENT_NOT_FOUND.equals(denied.getCode())) {
-                throw new HallMailboxAccessDeniedException();
-            }
-            throw denied;
-        }
-        if (runtime == null || !agentId.equals(runtime.getAgentId())
-                || !RUNTIME_STATUSES.contains(runtime.getStatus())) {
-            throw new HallMailboxAccessDeniedException();
-        }
-    }
-
-    private void requireWritableMember(
-            HallTrustedCaller caller, String taskId, String agentId) {
-        AgentTaskAccessLevel access = accessService.resolveMemberAccess(
-                caller.tenantId(), caller.clientId(), taskId, agentId);
-        if (access == null || !access.canWrite()) {
-            throw new HallMailboxAccessDeniedException();
-        }
     }
 
     private AgentHallCommandContext typedContext(Map<String, ?> raw) {
@@ -520,6 +483,4 @@ public class HallActionDispatcher {
     private record MailboxRequest(boolean durableScope, Cursor cursor) {
     }
 
-    private static final class HallMailboxAccessDeniedException extends RuntimeException {
-    }
 }

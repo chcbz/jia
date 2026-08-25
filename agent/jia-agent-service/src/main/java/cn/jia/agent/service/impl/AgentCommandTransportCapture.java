@@ -47,12 +47,12 @@ public class AgentCommandTransportCapture {
         return new AgentCommandTransportCapture();
     }
 
-    public void captureTaskInvites(
+    public boolean captureTaskInvites(
             AgentTaskDTO task,
             List<AgentRuntimeEntity> assignedAgents,
             String taskAssignedEventId,
             long occurredAt) {
-        if (compatibilityDisabled || !gate.commandOutboxEnabled()) return;
+        if (compatibilityDisabled || !gate.commandOutboxEnabled()) return false;
         AgentCommandTransportWriter writer = writerProvider.getIfAvailable();
         if (writer == null) {
             throw new IllegalStateException(
@@ -91,6 +91,7 @@ public class AgentCommandTransportCapture {
                     targetAgentId, AgentProtocolConstants.COMMAND_TASK_INVITE,
                     occurredAt, expiresAt, payload));
         }
+        return gate.allowsDispatch(task.getTenantId(), task.getClientId());
     }
 
     private static int compareUtf8Unsigned(String left, String right) {

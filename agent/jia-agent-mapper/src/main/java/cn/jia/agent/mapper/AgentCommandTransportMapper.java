@@ -229,6 +229,8 @@ public interface AgentCommandTransportMapper {
                    OR (d.create_time=#{beforeCreateTime} AND d.id<#{beforeId}))
               AND (#{includeTerminal}=TRUE
                    OR d.status NOT IN ('SUCCEEDED','FAILED','REJECTED','EXPIRED','DEAD'))
+              AND (d.status IN ('SUCCEEDED','FAILED','REJECTED','EXPIRED','DEAD')
+                   OR d.expires_at>#{now})
               AND d.status IN ('PENDING','CLAIMED','PUBLISHED','CONSUMED','SENT','RECEIVED',
                                'STARTED','SUCCEEDED','WAITING_AGENT','RETRY','FAILED',
                                'REJECTED','EXPIRED','DEAD')
@@ -254,7 +256,7 @@ public interface AgentCommandTransportMapper {
                     AND OCTET_LENGTH(t.reward_status)=OCTET_LENGTH('archived')))
               AND d.create_time IS NOT NULL AND d.update_time IS NOT NULL
             ORDER BY d.create_time DESC, d.id DESC
-            LIMIT #{limit}
+            LIMIT #{limit} FOR UPDATE
             """)
     List<AgentCommandMailboxRow> selectMailboxPage(
             @Param("tenantId") String tenantId,
@@ -265,6 +267,7 @@ public interface AgentCommandTransportMapper {
             @Param("beforeCreateTime") Long beforeCreateTime,
             @Param("beforeId") Long beforeId,
             @Param("limit") int limit,
-            @Param("includeTerminal") boolean includeTerminal);
+            @Param("includeTerminal") boolean includeTerminal,
+            @Param("now") long now);
 
 }

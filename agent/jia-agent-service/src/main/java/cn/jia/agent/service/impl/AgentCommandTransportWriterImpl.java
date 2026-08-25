@@ -2,7 +2,6 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.common.AgentConstants;
-import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandTransportDao;
@@ -12,6 +11,7 @@ import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandTransportWriteResult;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
@@ -296,9 +296,15 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
                     "Agent commandId conflict: frozen identity or canonical payload differs");
         }
         if (admission.dispatchEligible()
-                && AgentCommandCanonicalCodec.isHallIntentCommand(draft)
-                && shadowCaptureMarker(existing.getLastError())) {
-            return promoteShadowCapture(existing, comparable.storedDraft(), draft.issuedAt());
+                && AgentCommandCanonicalCodec.isHallIntentCommand(draft)) {
+            if (DB_SHADOW_MARKER.equals(existing.getLastError())) {
+                throw new AgentCommandShadowIntentException(
+                        "DB_SHADOW intent is capture-only; submit a new intent for canary dispatch");
+            }
+            if (MQ_SHADOW_MARKER.equals(existing.getLastError())) {
+                return promoteShadowCapture(
+                        existing, comparable.storedDraft(), draft.issuedAt());
+            }
         }
         return new AgentCommandTransportWriteResult(
                 existing.getId(), draft.commandId(), existing.getActiveMessageId(), null, true);
@@ -425,7 +431,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
     }
 
     private boolean shadowCaptureMarker(String marker) {
-        return DB_SHADOW_MARKER.equals(marker) || MQ_SHADOW_MARKER.equals(marker);
+        return MQ_SHADOW_MARKER.equals(marker);
     }
 
     private String nextUuid(String field) {
