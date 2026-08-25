@@ -56,10 +56,15 @@ import com.github.pagehelper.PageInfo;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -71,6 +76,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -1713,55 +1719,58 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(agentTaskMetaDao).search("tenant-a", "client-a", null, null);
     }
 
-    @Test
-    void taskSearchAndCountsFailClosedWithoutAuthenticatedScopeOrForLegacyZeroScope() {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidTaskScopeAuthentications")
+    void taskSearchAndCountsRejectInvalidAuthenticationBeforeDao(
+            String caseName, Authentication authentication) {
         EsContext poisoned = new EsContext();
         poisoned.setJiacn("cookie-tenant");
         poisoned.setClientId("cookie-client");
         EsContextHolder.setContext(poisoned);
-        SecurityContextHolder.clearContext();
+        SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        assertThrows(AgentServiceImpl.AgentBizException.class,
+        AgentServiceImpl.AgentBizException searchFailure = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
                 () -> agentService.searchTasks(new AgentTaskSearchDTO()));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
+        AgentServiceImpl.AgentBizException countFailure = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
                 () -> agentService.countTasksByStatus(new AgentTaskSearchDTO()));
 
-        Jwt missingClient = Jwt.withTokenValue("task-search-missing-client")
-                .header("alg", "none")
-                .claim("jiacn", "tenant-a")
-                .issuedAt(Instant.now())
-                .expiresAt(Instant.now().plusSeconds(60))
-                .build();
-        SecurityContextHolder.getContext().setAuthentication(
-                new JwtAuthenticationToken(missingClient, List.of()));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> agentService.searchTasks(new AgentTaskSearchDTO()));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> agentService.countTasksByStatus(new AgentTaskSearchDTO()));
-
-        authenticateTaskScope("0", "client-a");
-        assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> agentService.searchTasks(new AgentTaskSearchDTO()));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> agentService.countTasksByStatus(new AgentTaskSearchDTO()));
+        assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, searchFailure.getCode());
+        assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, countFailure.getCode());
         verify(agentTaskMetaDao, never()).search(any(), any(), any(), any());
     }
 
-    @Test
-    void taskSearchAndCountsRejectUnexpectedLegacyRowsFromDao() {
-        AgentTaskMetaEntity legacy = new AgentTaskMetaEntity();
-        legacy.setTaskId("legacy-task");
-        legacy.setTenantId("0");
-        legacy.setClientId("client-a");
-        legacy.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+    @ParameterizedTest(name = "searchTasks rejects {0}")
+    @MethodSource("contaminatedTaskRows")
+    void searchTasksRejectsWholeResultForContaminatedDaoRow(
+            String caseName, String rowTenantId, String rowClientId) {
+        AgentTaskMetaEntity valid = scopedTaskRow("valid-task", "tenant-a", "client-a");
+        AgentTaskMetaEntity contaminated = scopedTaskRow(
+                "contaminated-task", rowTenantId, rowClientId);
         when(agentTaskMetaDao.search("tenant-a", "client-a", null, null))
-                .thenReturn(List.of(legacy));
+                .thenReturn(List.of(valid, contaminated));
         authenticateTaskScope("tenant-a", "client-a");
 
         assertThrows(IllegalArgumentException.class,
                 () -> agentService.searchTasks(new AgentTaskSearchDTO()));
+        verify(agentTaskMetaDao).search("tenant-a", "client-a", null, null);
+    }
+
+    @ParameterizedTest(name = "countTasksByStatus rejects {0}")
+    @MethodSource("contaminatedTaskRows")
+    void countTasksByStatusRejectsWholeResultForContaminatedDaoRow(
+            String caseName, String rowTenantId, String rowClientId) {
+        AgentTaskMetaEntity valid = scopedTaskRow("valid-task", "tenant-a", "client-a");
+        AgentTaskMetaEntity contaminated = scopedTaskRow(
+                "contaminated-task", rowTenantId, rowClientId);
+        when(agentTaskMetaDao.search("tenant-a", "client-a", null, null))
+                .thenReturn(List.of(valid, contaminated));
+        authenticateTaskScope("tenant-a", "client-a");
+
         assertThrows(IllegalArgumentException.class,
                 () -> agentService.countTasksByStatus(new AgentTaskSearchDTO()));
+        verify(agentTaskMetaDao).search("tenant-a", "client-a", null, null);
     }
 
     @Test
@@ -2530,16 +2539,85 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(60L, stats.getAverageDurationSeconds());
     }
 
-    private void authenticateTaskScope(String tenantId, String clientId) {
-        Jwt jwt = Jwt.withTokenValue("task-search-token")
+    private static Stream<Arguments> invalidTaskScopeAuthentications() {
+        Stream.Builder<Arguments> cases = Stream.builder();
+        cases.add(Arguments.of("no authentication", (Authentication) null));
+        cases.add(Arguments.of("authenticated non-JWT",
+                new UsernamePasswordAuthenticationToken("user", "credential", List.of())));
+        cases.add(Arguments.of("missing jiacn", taskScopeAuthentication(null, "client-a")));
+        cases.add(Arguments.of("missing client_id", taskScopeAuthentication("tenant-a", null)));
+        cases.add(Arguments.of("non-String jiacn", taskScopeAuthentication(7L, "client-a")));
+        cases.add(Arguments.of("non-String client_id",
+                taskScopeAuthentication("tenant-a", Boolean.TRUE)));
+        cases.add(Arguments.of("jiacn contains U+0000 control",
+                taskScopeAuthentication("tenant" + (char) 0x0000 + "-a", "client-a")));
+        cases.add(Arguments.of("client_id contains U+000A control",
+                taskScopeAuthentication("tenant-a", "client" + (char) 0x000A + "-a")));
+        for (int codeUnit : new int[]{0xD800, 0xDC00}) {
+            String surrogate = String.valueOf((char) codeUnit);
+            String label = String.format("U+%04X", codeUnit);
+            cases.add(Arguments.of("jiacn contains unpaired " + label,
+                    taskScopeAuthentication("tenant-" + surrogate, "client-a")));
+            cases.add(Arguments.of("client_id contains unpaired " + label,
+                    taskScopeAuthentication("tenant-a", "client-" + surrogate)));
+        }
+        for (int codePoint : new int[]{0x0020, 0x00A0, 0x2007, 0x202F}) {
+            String padding = new String(Character.toChars(codePoint));
+            String label = String.format("U+%04X", codePoint);
+            cases.add(Arguments.of("jiacn leading " + label,
+                    taskScopeAuthentication(padding + "tenant-a", "client-a")));
+            cases.add(Arguments.of("jiacn trailing " + label,
+                    taskScopeAuthentication("tenant-a" + padding, "client-a")));
+            cases.add(Arguments.of("client_id leading " + label,
+                    taskScopeAuthentication("tenant-a", padding + "client-a")));
+            cases.add(Arguments.of("client_id trailing " + label,
+                    taskScopeAuthentication("tenant-a", "client-a" + padding)));
+        }
+        cases.add(Arguments.of("legacy jiacn zero",
+                taskScopeAuthentication("0", "client-a")));
+        return cases.build();
+    }
+
+    private static Stream<Arguments> contaminatedTaskRows() {
+        return Stream.of(
+                Arguments.of("foreign tenant", "tenant-b", "client-a"),
+                Arguments.of("foreign client", "tenant-a", "client-b"),
+                Arguments.of("tenant case drift", "Tenant-A", "client-a"),
+                Arguments.of("client case drift", "tenant-a", "Client-A"),
+                Arguments.of("leading padded tenant", " tenant-a", "client-a"),
+                Arguments.of("trailing padded tenant", "tenant-a ", "client-a"),
+                Arguments.of("leading padded client", "tenant-a", " client-a"),
+                Arguments.of("trailing padded client", "tenant-a", "client-a "));
+    }
+
+    private static JwtAuthenticationToken taskScopeAuthentication(
+            Object tenantClaim, Object clientClaim) {
+        Jwt.Builder builder = Jwt.withTokenValue("task-search-token")
                 .header("alg", "none")
-                .claim("jiacn", tenantId)
-                .claim("client_id", clientId)
                 .issuedAt(Instant.now())
-                .expiresAt(Instant.now().plusSeconds(60))
-                .build();
+                .expiresAt(Instant.now().plusSeconds(60));
+        if (tenantClaim != null) {
+            builder.claim("jiacn", tenantClaim);
+        }
+        if (clientClaim != null) {
+            builder.claim("client_id", clientClaim);
+        }
+        return new JwtAuthenticationToken(builder.build(), List.of());
+    }
+
+    private static AgentTaskMetaEntity scopedTaskRow(
+            String taskId, String tenantId, String clientId) {
+        AgentTaskMetaEntity task = new AgentTaskMetaEntity();
+        task.setTaskId(taskId);
+        task.setTenantId(tenantId);
+        task.setClientId(clientId);
+        task.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        return task;
+    }
+
+    private void authenticateTaskScope(String tenantId, String clientId) {
         SecurityContextHolder.getContext().setAuthentication(
-                new JwtAuthenticationToken(jwt, List.of()));
+                taskScopeAuthentication(tenantId, clientId));
     }
 
     private AgentTaskMemberEntity taskMember(
