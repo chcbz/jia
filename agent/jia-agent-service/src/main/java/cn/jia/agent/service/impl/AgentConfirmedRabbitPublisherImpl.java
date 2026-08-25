@@ -15,8 +15,19 @@ import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import com.rabbitmq.client.LongString;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -57,6 +68,21 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
     @Override
     public AgentRabbitPublishResult publish(
             AgentConfirmedPublishRequest request, long confirmTimeoutMillis) {
+        return publishInternal(request, null, confirmTimeoutMillis);
+    }
+
+    @Override
+    public AgentRabbitPublishResult publishPreservingHeaders(
+            AgentConfirmedPublishRequest request,
+            Map<String, Object> preservedHeaders,
+            long confirmTimeoutMillis) {
+        return publishInternal(request, preservedHeaders, confirmTimeoutMillis);
+    }
+
+    private AgentRabbitPublishResult publishInternal(
+            AgentConfirmedPublishRequest request,
+            Map<String, Object> preservedHeaders,
+            long confirmTimeoutMillis) {
         if (confirmTimeoutMillis <= 0
                 || confirmTimeoutMillis > MAX_CONFIRM_TIMEOUT_MILLIS) {
             throw new IllegalArgumentException(
@@ -87,13 +113,21 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
             return exception("RABBIT_CORRELATION_ID_UNAVAILABLE");
         }
 
+        Map<String, Object> headers;
+        try {
+            headers = preservedHeaders == null
+                    ? AgentCommandAmqpContract.headers(request)
+                    : validatePreservedHeaders(request, preservedHeaders);
+        } catch (IllegalArgumentException invalid) {
+            return exception("PRESERVED_HEADERS_INVALID");
+        }
         MessageProperties properties = new MessageProperties();
         properties.setContentType(AgentCommandAmqpContract.CONTENT_TYPE);
         properties.setContentEncoding(AgentCommandAmqpContract.CONTENT_ENCODING);
         properties.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
         properties.setMessageId(request.messageId());
         properties.setType(AgentCommandAmqpContract.MESSAGE_TYPE);
-        properties.setHeaders(AgentCommandAmqpContract.headers(request));
+        properties.setHeaders(headers);
         Message message = new Message(request.wirePayload(), properties);
         CorrelationData correlation = new CorrelationData(correlationId.toString());
 
@@ -142,6 +176,222 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
                     ? returned(returned, "NONE")
                     : exception("RABBIT_CONFIRM_EXCEPTION");
         }
+    }
+
+    private static final Set<String> DEAD_LETTER_HEADERS = Set.of(
+            "x-death", "x-first-death-exchange", "x-first-death-queue",
+            "x-first-death-reason", "x-last-death-exchange", "x-last-death-queue",
+            "x-last-death-reason");
+    private static final Set<String> DEATH_ENTRY_KEYS = Set.of(
+            "count", "reason", "queue", "time", "exchange", "routing-keys",
+            "original-expiration");
+    private static final int MAX_DEATH_ENTRIES = 16;
+    private static final int MAX_DEATH_ROUTING_KEYS = 8;
+
+    static Map<String, Object> validatePreservedHeaders(
+            AgentConfirmedPublishRequest request, Map<String, Object> candidate) {
+        Objects.requireNonNull(candidate, "preservedHeaders");
+        Map<String, Object> canonical = AgentCommandAmqpContract.headers(request);
+        if (candidate.size() < canonical.size()
+                || candidate.size() > canonical.size() + DEAD_LETTER_HEADERS.size()) {
+            throw new IllegalArgumentException("DLQ header count is invalid");
+        }
+        LinkedHashMap<String, Object> preserved = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : candidate.entrySet()) {
+            String name = entry.getKey();
+            Object value = entry.getValue();
+            if (name == null || value == null
+                    || (!canonical.containsKey(name) && !DEAD_LETTER_HEADERS.contains(name))) {
+                throw new IllegalArgumentException("Unexpected DLQ header");
+            }
+            preserved.put(name, value);
+        }
+        for (Map.Entry<String, Object> expected : canonical.entrySet()) {
+            if (!headerEquals(expected.getValue(), candidate.get(expected.getKey()))) {
+                throw new IllegalArgumentException("Canonical DLQ header drift");
+            }
+        }
+        validateDeathHeaders(candidate);
+        return Collections.unmodifiableMap(preserved);
+    }
+
+    private static void validateDeathHeaders(Map<String, Object> candidate) {
+        Object deaths = candidate.get("x-death");
+        boolean anyDeathHeader = DEAD_LETTER_HEADERS.stream().anyMatch(candidate::containsKey);
+        if (deaths == null) {
+            if (anyDeathHeader) {
+                throw new IllegalArgumentException("Partial DLQ death provenance is invalid");
+            }
+            return; // D05 confirmed terminal parking publishes directly to the DLX.
+        }
+        if (!(deaths instanceof List<?> history)
+                || history.isEmpty() || history.size() > MAX_DEATH_ENTRIES) {
+            throw new IllegalArgumentException("DLQ death history is invalid");
+        }
+        List<DeathEntry> entries = history.stream()
+                .map(AgentConfirmedRabbitPublisherImpl::deathEntry)
+                .toList();
+        for (int index = 1; index < entries.size(); index++) {
+            if (entries.get(index - 1).time() < entries.get(index).time()) {
+                throw new IllegalArgumentException("DLQ death history order is invalid");
+            }
+        }
+        validateDeathSummary(candidate, "x-first-death", entries, true);
+        validateDeathSummary(candidate, "x-last-death", entries, false);
+    }
+
+    private static DeathEntry deathEntry(Object value) {
+        if (!(value instanceof Map<?, ?> raw)
+                || raw.size() < 6 || raw.size() > DEATH_ENTRY_KEYS.size()) {
+            throw new IllegalArgumentException("DLQ death entry shape is invalid");
+        }
+        LinkedHashMap<String, Object> entry = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> field : raw.entrySet()) {
+            if (!(field.getKey() instanceof String name) || field.getValue() == null
+                    || !DEATH_ENTRY_KEYS.contains(name) || entry.put(name, field.getValue()) != null) {
+                throw new IllegalArgumentException("DLQ death entry field is invalid");
+            }
+        }
+        if (!entry.keySet().containsAll(Set.of(
+                "count", "reason", "queue", "time", "exchange", "routing-keys"))) {
+            throw new IllegalArgumentException("DLQ death entry is incomplete");
+        }
+        long count = positiveIntegral(entry.get("count"));
+        String reason = exactHeaderText(entry.get("reason"), 32);
+        String queue = exactHeaderText(entry.get("queue"), 100);
+        String exchange = exactHeaderText(entry.get("exchange"), 100);
+        if (!(entry.get("time") instanceof Date time) || time.getTime() <= 0) {
+            throw new IllegalArgumentException("DLQ death timestamp is invalid");
+        }
+        if (!(entry.get("routing-keys") instanceof List<?> routing)
+                || routing.isEmpty() || routing.size() > MAX_DEATH_ROUTING_KEYS) {
+            throw new IllegalArgumentException("DLQ death routing keys are invalid");
+        }
+        List<String> routingKeys = routing.stream()
+                .map(valuePart -> exactHeaderText(valuePart, 100)).toList();
+        if (routingKeys.stream().distinct().count() != routingKeys.size()) {
+            throw new IllegalArgumentException("DLQ death routing keys are duplicated");
+        }
+        Object originalExpiration = entry.get("original-expiration");
+        if (originalExpiration != null
+                && !exactHeaderText(originalExpiration, 20).matches("[0-9]{1,20}")) {
+            throw new IllegalArgumentException("DLQ original expiration is invalid");
+        }
+        validateDeathRoute(reason, queue, exchange, routingKeys);
+        return new DeathEntry(count, reason, queue, exchange, time.getTime());
+    }
+
+    private static void validateDeathRoute(
+            String reason, String queue, String exchange, List<String> routingKeys) {
+        if (AgentRabbitTopologyManifest.DISPATCH_QUEUE.equals(queue)) {
+            if (!"rejected".equals(reason)
+                    || !AgentRabbitTopologyManifest.MAIN_EXCHANGE.equals(exchange)
+                    || routingKeys.size() != 1
+                    || !AgentRabbitTopologyManifest.canonical().allowsCommandPublish(
+                            exchange, routingKeys.getFirst())) {
+                throw new IllegalArgumentException("DLQ dispatch death route is invalid");
+            }
+            return;
+        }
+        Map<String, String> retryRoutes = Map.of(
+                AgentRabbitTopologyManifest.RETRY_5S_QUEUE,
+                        AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY,
+                AgentRabbitTopologyManifest.RETRY_30S_QUEUE,
+                        AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY,
+                AgentRabbitTopologyManifest.RETRY_5M_QUEUE,
+                        AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY);
+        String expectedRouting = retryRoutes.get(queue);
+        if (!"expired".equals(reason)
+                || !AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE.equals(exchange)
+                || expectedRouting == null || routingKeys.size() != 1
+                || !expectedRouting.equals(routingKeys.getFirst())) {
+            throw new IllegalArgumentException("DLQ retry death route is invalid");
+        }
+    }
+
+    private static void validateDeathSummary(
+            Map<String, Object> candidate,
+            String prefix,
+            List<DeathEntry> entries,
+            boolean required) {
+        String queue = optionalHeaderText(candidate, prefix + "-queue", 100);
+        String exchange = optionalHeaderText(candidate, prefix + "-exchange", 100);
+        String reason = optionalHeaderText(candidate, prefix + "-reason", 32);
+        int present = (queue == null ? 0 : 1) + (exchange == null ? 0 : 1)
+                + (reason == null ? 0 : 1);
+        if ((required && present != 3) || (!required && present != 0 && present != 3)) {
+            throw new IllegalArgumentException("DLQ death summary is incomplete");
+        }
+        DeathEntry expected = required ? entries.getLast() : entries.getFirst();
+        if (present == 3 && (!expected.queue().equals(queue)
+                || !expected.exchange().equals(exchange) || !expected.reason().equals(reason))) {
+            throw new IllegalArgumentException("DLQ death summary does not match history");
+        }
+    }
+
+    private static String optionalHeaderText(
+            Map<String, Object> candidate, String name, int maxLength) {
+        return candidate.containsKey(name) ? exactHeaderText(candidate.get(name), maxLength) : null;
+    }
+
+    private static long positiveIntegral(Object value) {
+        if (!(value instanceof Number number)) {
+            throw new IllegalArgumentException("DLQ death count is invalid");
+        }
+        Long integral = integralValue(number);
+        if (integral == null || integral <= 0) {
+            throw new IllegalArgumentException("DLQ death count is invalid");
+        }
+        return integral;
+    }
+
+    private static String exactHeaderText(Object value, int maxLength) {
+        String text = headerText(value);
+        if (text == null || text.isEmpty() || text.length() > maxLength
+                || !text.equals(text.strip())
+                || text.codePoints().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException("DLQ death text is invalid");
+        }
+        return text;
+    }
+
+    private static boolean headerEquals(Object expected, Object actual) {
+        if (expected instanceof Number number) {
+            return actual instanceof Number other
+                    && integralValue(number) != null
+                    && Objects.equals(integralValue(number), integralValue(other));
+        }
+        return Objects.equals(expected.toString(), headerText(actual));
+    }
+
+    private static Long integralValue(Number number) {
+        if (number instanceof Byte || number instanceof Short
+                || number instanceof Integer || number instanceof Long) {
+            return number.longValue();
+        }
+        if (number instanceof BigInteger integer) {
+            return integer.bitLength() <= 63 ? integer.longValue() : null;
+        }
+        if (number instanceof BigDecimal decimal) {
+            try {
+                return decimal.longValueExact();
+            } catch (ArithmeticException invalid) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static String headerText(Object value) {
+        if (value instanceof String text) return text;
+        if (value instanceof LongString text) {
+            return new String(text.getBytes(), StandardCharsets.UTF_8);
+        }
+        return null;
+    }
+
+    private record DeathEntry(
+            long count, String reason, String queue, String exchange, long time) {
     }
 
     private static AgentRabbitPublishResult returned(

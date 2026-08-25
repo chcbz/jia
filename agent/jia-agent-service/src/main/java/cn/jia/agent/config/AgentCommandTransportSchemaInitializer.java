@@ -19,7 +19,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * Conditional D01 initializer for the three reliable Agent command transport tables.
+ * Conditional D01/D09 initializer for reliable Agent command transport and append-only operations audit.
  *
  * <p>The caller registers this bean only when {@code agent.command-outbox.enabled=true}.
  * This initializer performs DDL and read-only catalog validation only: it never backfills or
@@ -28,9 +28,12 @@ import java.util.TreeMap;
 public final class AgentCommandTransportSchemaInitializer implements InitializingBean {
     static final String DDL_RESOURCE = "db/agent-command-transport-schema.sql";
     static final List<String> TABLES = List.of(
-            "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox");
+            "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox",
+            "agent_command_operation_audit");
     private static final Set<String> TABLE_SET = Set.copyOf(TABLES);
     private static final String BINARY_COLLATION = "utf8mb4_0900_bin";
+    static final String AUDIT_UPDATE_TRIGGER = "trg_command_operation_audit_no_update";
+    static final String AUDIT_DELETE_TRIGGER = "trg_command_operation_audit_no_delete";
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -42,18 +45,21 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
     public void afterPropertiesSet() {
         requireMySql();
         List<String> present = inspectPresentTables();
-        if (!present.isEmpty() && present.size() != TABLES.size()) {
-            throw partialSchema(present);
-        }
+        List<String> legacyTransport = TABLES.subList(0, 3);
         if (present.isEmpty()) {
             for (String statement : ddlStatements()) {
                 jdbcTemplate.execute(statement);
             }
-            present = inspectPresentTables();
-            if (!TABLE_SET.equals(Set.copyOf(present))) {
-                throw new IllegalStateException("D01 command transport schema creation did not produce exact 3/3 tables: "
-                        + present);
-            }
+        } else if (present.size() == legacyTransport.size()
+                && Set.copyOf(present).equals(Set.copyOf(legacyTransport))) {
+            jdbcTemplate.execute(ddlStatements().get(3));
+        } else if (!TABLE_SET.equals(Set.copyOf(present))) {
+            throw partialSchema(present);
+        }
+        present = inspectPresentTables();
+        if (!TABLE_SET.equals(Set.copyOf(present))) {
+            throw new IllegalStateException("Agent command transport schema creation did not produce exact 4/4 tables: "
+                    + present);
         }
         validateSchema();
     }
@@ -66,6 +72,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
         for (TableExpectation expected : expectedTables().values()) {
             validateTable(expected);
         }
+        ensureAndValidateAuditTriggers();
     }
 
     private void requireMySql() {
@@ -92,7 +99,8 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                 WHERE table_schema = DATABASE()
                   AND table_name IN ('agent_command_delivery',
                                      'agent_outbox_event',
-                                     'agent_consumer_inbox')
+                                     'agent_consumer_inbox',
+                                     'agent_command_operation_audit')
                 ORDER BY table_name
                 """, String.class);
     }
@@ -192,13 +200,14 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
         } catch (IOException e) {
             throw new IllegalStateException("Missing D01 transport DDL resource " + DDL_RESOURCE, e);
         }
-        List<String> statements = splitSql(sql);
-        if (statements.size() != TABLES.size()) {
-            throw new IllegalStateException("D01 transport DDL must contain exactly three statements");
+        List<String> migration = splitSql(sql);
+        if (migration.size() != TABLES.size() + 4) {
+            throw new IllegalStateException(
+                    "Agent command transport DDL must contain four tables and two exact trigger replacements");
         }
+        List<String> statements = migration.subList(0, TABLES.size());
         for (int index = 0; index < statements.size(); index++) {
-            String normalized = statements.get(index).replaceAll("(?m)^\\s*--.*$", " ")
-                    .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+            String normalized = normalizeResourceSql(statements.get(index));
             String requiredPrefix = "create table if not exists " + TABLES.get(index) + " ";
             boolean containsDml = normalized.matches("(?s).*\\binsert\\s+into\\b.*")
                     || normalized.matches("(?s).*\\bupdate\\s+[`a-z0-9_]+\\s+set\\b.*")
@@ -209,7 +218,119 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                 throw new IllegalStateException("D01 transport DDL contains unsafe or reordered SQL");
             }
         }
-        return statements;
+        List<String> expectedTriggerMigration = List.of(
+                "drop trigger if exists " + AUDIT_UPDATE_TRIGGER,
+                "drop trigger if exists " + AUDIT_DELETE_TRIGGER,
+                createTriggerSql(expectedAuditTriggers().get(AUDIT_UPDATE_TRIGGER)),
+                createTriggerSql(expectedAuditTriggers().get(AUDIT_DELETE_TRIGGER)));
+        for (int index = 0; index < expectedTriggerMigration.size(); index++) {
+            String actual = normalizeResourceSql(migration.get(TABLES.size() + index));
+            String expected = normalizeResourceSql(expectedTriggerMigration.get(index));
+            if (!expected.equals(actual)) {
+                throw new IllegalStateException("D09 operation audit trigger migration drift at statement "
+                        + (TABLES.size() + index + 1));
+            }
+        }
+        return List.copyOf(statements);
+    }
+
+    private static String normalizeResourceSql(String sql) {
+        return sql.replaceAll("(?m)^\\s*--.*$", " ")
+                    .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private void ensureAndValidateAuditTriggers() {
+        Map<String, TriggerDefinition> expected = expectedAuditTriggers();
+        Map<String, TriggerDefinition> actual = inspectAuditTriggers();
+        for (TriggerDefinition trigger : actual.values()) {
+            TriggerDefinition required = expected.get(trigger.name());
+            if (required == null || !triggerMatches(required, trigger)) {
+                throw new IllegalStateException("D09 operation audit trigger " + trigger.name()
+                        + " has an incompatible definition");
+            }
+        }
+        for (TriggerDefinition required : expected.values()) {
+            if (!actual.containsKey(required.name())) {
+                try {
+                    jdbcTemplate.execute(createTriggerSql(required));
+                } catch (RuntimeException concurrentOrFailedCreate) {
+                    TriggerDefinition raced = inspectAuditTriggers().get(required.name());
+                    if (raced == null || !triggerMatches(required, raced)) {
+                        throw concurrentOrFailedCreate;
+                    }
+                }
+            }
+        }
+        actual = inspectAuditTriggers();
+        if (actual.size() != expected.size()) {
+            throw new IllegalStateException("D09 requires two exact operation audit protection triggers");
+        }
+        for (TriggerDefinition required : expected.values()) {
+            TriggerDefinition trigger = actual.get(required.name());
+            if (trigger == null || !triggerMatches(required, trigger)) {
+                throw new IllegalStateException("D09 operation audit trigger " + required.name()
+                        + " has an incompatible definition");
+            }
+        }
+    }
+
+    private Map<String, TriggerDefinition> inspectAuditTriggers() {
+        List<TriggerDefinition> rows = jdbcTemplate.query("""
+                SELECT trigger_name,event_object_table,action_timing,event_manipulation,action_statement
+                FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE()
+                  AND (event_object_table='agent_command_operation_audit'
+                       OR trigger_name IN (?,?))
+                ORDER BY trigger_name
+                """, (rs, rowNum) -> new TriggerDefinition(
+                rs.getString("trigger_name"), rs.getString("event_object_table"),
+                rs.getString("action_timing"), rs.getString("event_manipulation"),
+                rs.getString("action_statement")), AUDIT_UPDATE_TRIGGER, AUDIT_DELETE_TRIGGER);
+        Map<String, TriggerDefinition> result = new TreeMap<>();
+        for (TriggerDefinition row : rows) {
+            if (row.name() == null || result.put(row.name(), row) != null) {
+                throw new IllegalStateException("D09 operation audit trigger catalog is ambiguous");
+            }
+        }
+        return Map.copyOf(result);
+    }
+
+    static Map<String, TriggerDefinition> expectedAuditTriggers() {
+        return Map.of(
+                AUDIT_UPDATE_TRIGGER, new TriggerDefinition(
+                        AUDIT_UPDATE_TRIGGER, "agent_command_operation_audit", "BEFORE", "UPDATE",
+                        "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
+                                + "'D09: operation audit rows are immutable after insert'"),
+                AUDIT_DELETE_TRIGGER, new TriggerDefinition(
+                        AUDIT_DELETE_TRIGGER, "agent_command_operation_audit", "BEFORE", "DELETE",
+                        "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
+                                + "'D09: physical delete of operation audit rows is forbidden'"));
+    }
+
+    private static String createTriggerSql(TriggerDefinition trigger) {
+        return "CREATE TRIGGER " + trigger.name() + " " + trigger.timing() + " "
+                + trigger.event() + " ON " + trigger.table() + " FOR EACH ROW "
+                + trigger.statement();
+    }
+
+    private boolean triggerMatches(TriggerDefinition expected, TriggerDefinition actual) {
+        return expected.table().equalsIgnoreCase(actual.table())
+                && expected.timing().equalsIgnoreCase(actual.timing())
+                && expected.event().equalsIgnoreCase(actual.event())
+                && normalizeSql(expected.statement()).equals(normalizeSql(actual.statement()));
+    }
+
+    static String normalizeSql(String sql) {
+        if (sql == null) return "";
+        return sql.toLowerCase(Locale.ROOT)
+                .replace("`", "")
+                .replace("_utf8mb4", "")
+                .replace("\\", "")
+                .replaceAll("\\s*\\(\\s*", "(")
+                .replaceAll("\\s*\\)\\s*", ")")
+                .replaceAll("\\s*,\\s*", ",")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     static List<String> splitSql(String sql) {
@@ -342,6 +463,31 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                         index("idx_inbox_command", false, "tenant_id", "client_id", "command_id", "status", "id"),
                         index("idx_inbox_processed", false, "tenant_id", "client_id", "consumer_name",
                                 "result_status", "processed_at", "id"))));
+        tables.put("agent_command_operation_audit", new TableExpectation(
+                "agent_command_operation_audit",
+                List.of(
+                        id(), varchar("operation_id", 100, false, null),
+                        varchar("phase", 16, false, null), varchar("operation_type", 32, false, null),
+                        varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                        varchar("task_id", 100, false, null), varchar("target_agent_id", 100, false, null),
+                        varchar("command_id", 100, true, null),
+                        varchar("source_message_id", 100, false, null),
+                        varchar("new_message_id", 100, true, null), bigint("delivery_id", false, null),
+                        integer("source_attempt", true, null), integer("new_attempt", true, null),
+                        binary32Nullable("wire_hash"), varchar("requester_id", 100, false, null),
+                        varchar("approver_id", 100, true, null), varchar("reason", 1000, false, null),
+                        varchar("ticket_reference", 200, false, null),
+                        bigint("requested_at", false, null), bigint("completed_at", true, null),
+                        varchar("outcome", 32, false, null), varchar("error_code", 200, true, null),
+                        varchar("created_by", 100, false, null), bigint("created_at", false, null)),
+                indexes(
+                        index("PRIMARY", true, "id"),
+                        index("uk_command_operation_phase", true, "operation_id", "phase"),
+                        index("idx_command_operation_scope", false, "tenant_id", "client_id", "id"),
+                        index("idx_command_operation_source", false, "tenant_id", "client_id",
+                                "delivery_id", "source_message_id", "id"),
+                        index("idx_command_operation_outcome", false, "tenant_id", "client_id",
+                                "operation_type", "outcome", "created_at", "id"))));
         return Map.copyOf(tables);
     }
 
@@ -370,6 +516,10 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
         return new ColumnDefinition(name, "binary", "binary(32)", false, null, null, "");
     }
 
+    private static ColumnDefinition binary32Nullable(String name) {
+        return new ColumnDefinition(name, "binary", "binary(32)", true, null, null, "");
+    }
+
     private static Map<String, IndexDefinition> indexes(IndexEntry... entries) {
         Map<String, IndexDefinition> result = new TreeMap<>();
         for (IndexEntry entry : entries) {
@@ -383,8 +533,8 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
     }
 
     private static IllegalStateException partialSchema(List<String> present) {
-        return new IllegalStateException("D01 command transport schema is partial; expected exact 0/3 or 3/3 tables, got "
-                + present.size() + "/3: " + present);
+        return new IllegalStateException("Agent command transport schema is partial; expected exact 0/4, legacy 3/4, or 4/4 tables, got "
+                + present.size() + "/4: " + present);
     }
 
     static record TableExpectation(
@@ -400,6 +550,10 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
     }
 
     static record IndexDefinition(boolean unique, List<String> columns) {
+    }
+
+    static record TriggerDefinition(
+            String name, String table, String timing, String event, String statement) {
     }
 
     private record IndexEntry(String name, IndexDefinition definition) {

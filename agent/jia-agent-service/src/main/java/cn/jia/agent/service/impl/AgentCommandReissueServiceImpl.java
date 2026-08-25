@@ -5,6 +5,8 @@ import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
+import cn.jia.agent.entity.AgentCommandManualReissueResult;
+import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentCommandReissueScanResult;
@@ -101,6 +103,221 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         this.transaction = new TransactionTemplate(
                 Objects.requireNonNull(transactionManager, "transactionManager"));
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
+    }
+
+
+    @Override
+    public AgentCommandManualReissueResult reissueManually(
+            AgentCommandOperationRequest request, long now) {
+        validateManualRequest(request, now);
+        if (!allows(request.tenantId(), request.clientId())) {
+            throw conflict("MANUAL_REISSUE_SCOPE_DISABLED");
+        }
+        AgentCommandManualReissueResult result = transaction.execute(status ->
+                manualReissueLocked(request, now));
+        if (result == null) throw conflict("MANUAL_REISSUE_TRANSACTION_EMPTY");
+        return result;
+    }
+
+    private AgentCommandManualReissueResult manualReissueLocked(
+            AgentCommandOperationRequest request, long now) {
+        if (!allows(request.tenantId(), request.clientId())) {
+            throw conflict("MANUAL_REISSUE_SCOPE_DISABLED");
+        }
+        AgentCommandDeliveryEntity delivery = dao.lockDelivery(
+                request.tenantId(), request.clientId(), request.deliveryId());
+        if (delivery == null
+                || !request.taskId().equals(delivery.getTaskId())
+                || !request.targetAgentId().equals(delivery.getTargetAgentId())
+                || !request.sourceMessageId().equals(delivery.getActiveMessageId())) {
+            throw conflict("MANUAL_REISSUE_NOT_FOUND");
+        }
+        validateManualDelivery(delivery, now);
+        List<AgentOutboxEventEntity> activeRows = dao.lockActiveOutboxes(
+                delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
+                delivery.getActiveMessageId());
+        if (activeRows == null || activeRows.size() != 1) {
+            throw conflict("MANUAL_REISSUE_OUTBOX_CARDINALITY");
+        }
+        AgentOutboxEventEntity sourceOutbox = activeRows.getFirst();
+        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery);
+        AgentConsumerInboxEntity sourceInbox = dao.lockInbox(
+                delivery.getTenantId(), delivery.getClientId(),
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, delivery.getActiveMessageId());
+        validateManualSource(delivery, sourceOutbox, sourceInbox, previousAttempts);
+
+        AgentCommandDraft draft;
+        try {
+            draft = AgentCommandCanonicalCodec.decodeBusinessBytes(delivery.getCommandPayload());
+        } catch (IllegalArgumentException invalid) {
+            throw conflict("COMMAND_PAYLOAD_NOT_CANONICAL");
+        }
+        validateDraftMatches(delivery, draft);
+        if (!storedHash(delivery.getCommandPayload(), delivery.getCommandPayloadHash())) {
+            throw conflict("COMMAND_PAYLOAD_HASH_DRIFT");
+        }
+        byte[] sourceWire = AgentCommandCanonicalCodec.wireBytes(
+                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
+        if (!Arrays.equals(sourceWire, sourceOutbox.getWirePayload())
+                || !storedHash(sourceOutbox.getWirePayload(), sourceOutbox.getWirePayloadHash())) {
+            throw conflict("SOURCE_WIRE_CANONICAL_DRIFT");
+        }
+
+        int nextAttempt;
+        try {
+            nextAttempt = Math.addExact(delivery.getActiveAttempt(), 1);
+        } catch (ArithmeticException overflow) {
+            throw conflict("DELIVERY_ATTEMPT_EXHAUSTED");
+        }
+        String newMessageId = nextUuid("messageId");
+        String newEventId = nextUuid("eventId");
+        if (newMessageId.equals(delivery.getActiveMessageId())
+                || newMessageId.equals(delivery.getCommandId())
+                || newEventId.equals(sourceOutbox.getEventId())
+                || newEventId.equals(newMessageId)
+                || newEventId.equals(delivery.getCommandId())) {
+            throw conflict("REISSUE_ID_COLLISION");
+        }
+        byte[] newWire = AgentCommandCanonicalCodec.wireBytes(draft, newMessageId, nextAttempt);
+        byte[] newWireHash = AgentCommandCanonicalCodec.sha256(newWire);
+        if (!allows(delivery.getTenantId(), delivery.getClientId())) {
+            throw conflict("MANUAL_REISSUE_SCOPE_DISABLED");
+        }
+        int deliveryRows = dao.manualReissueDelivery(
+                delivery, newMessageId, request.requesterId(), request.approverId(),
+                request.reason(), AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER, now);
+        requireOne(deliveryRows, "manual delivery reissue");
+
+        AgentOutboxEventEntity outbox = new AgentOutboxEventEntity()
+                .setEventId(newEventId)
+                .setMessageId(newMessageId)
+                .setCommandId(delivery.getCommandId())
+                .setDeliveryId(delivery.getId())
+                .setAggregateType("task")
+                .setAggregateId(delivery.getTaskId())
+                .setDestination(route.destination())
+                .setRoutingKey(route.routingKey())
+                .setWirePayload(newWire)
+                .setWirePayloadHash(newWireHash)
+                .setStatus("PENDING")
+                .setAttemptCount(0)
+                .setActiveAttempt(nextAttempt)
+                .setExpiresAt(delivery.getExpiresAt())
+                .setPublisherConfirmStatus("NONE")
+                .setMandatoryReturnStatus("NONE")
+                .setLastError(AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER)
+                .setVersion(0L)
+                .setReplayParentMessageId(delivery.getActiveMessageId())
+                .setReplayRequesterId(request.requesterId())
+                .setReplayApproverId(request.approverId())
+                .setReplayReason(request.reason());
+        outbox.setTenantId(delivery.getTenantId());
+        outbox.setClientId(delivery.getClientId());
+        outbox.setCreateTime(now);
+        outbox.setUpdateTime(now);
+        requireOne(dao.insertOutbox(outbox), "manual reissue outbox insert");
+        if (outbox.getId() == null || outbox.getId() <= 0) {
+            throw new IllegalStateException("manual reissue outbox insert did not return a generated id");
+        }
+        return new AgentCommandManualReissueResult(
+                delivery.getId(), delivery.getCommandId(), delivery.getActiveMessageId(),
+                newMessageId, newEventId, delivery.getActiveAttempt(), nextAttempt);
+    }
+
+    private void validateManualRequest(AgentCommandOperationRequest request, long now) {
+        if (request == null || now <= 0 || request.deliveryId() <= 0
+                || !exact(request.tenantId(), 50) || !exact(request.clientId(), 50)
+                || !exact(request.taskId(), 100) || !exact(request.targetAgentId(), 100)
+                || !exact(request.sourceMessageId(), 100)
+                || !exact(request.requesterId(), 100) || !exact(request.approverId(), 100)
+                || request.requesterId().equals(request.approverId())
+                || !exact(request.reason(), 1000) || !exact(request.ticketReference(), 200)
+                || REASON_AGENT_RECONNECT.equals(request.reason())
+                || REASON_SCHEDULER.equals(request.reason())) {
+            throw new IllegalArgumentException("manual reissue request is invalid");
+        }
+    }
+
+    private void validateManualDelivery(AgentCommandDeliveryEntity delivery, long now) {
+        boolean allowedStatus = "DEAD".equals(delivery.getStatus())
+                || "FAILED".equals(delivery.getStatus());
+        if (!allowedStatus || delivery.getExpiresAt() == null || now >= delivery.getExpiresAt()
+                || delivery.getNextRetryAt() != null || delivery.getLeaseOwner() != null
+                || delivery.getLeaseUntil() != null || !exact(delivery.getLastError(), 2000)
+                || delivery.getAttemptCount() == null || delivery.getAttemptCount() <= 0
+                || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
+                || !delivery.getAttemptCount().equals(delivery.getActiveAttempt())
+                || delivery.getActiveAttempt() == Integer.MAX_VALUE
+                || delivery.getVersion() == null || delivery.getVersion() < 0
+                || delivery.getVersion() > MAX_SAFE_REISSUE_VERSION
+                || !AgentCommandCanonicalCodec.isSupportedCommandType(delivery.getCommandType())) {
+            throw conflict("MANUAL_REISSUE_DELIVERY_FORBIDDEN");
+        }
+    }
+
+    private void validateManualSource(
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity outbox,
+            AgentConsumerInboxEntity inbox,
+            List<AgentOutboxEventEntity> previousAttempts) {
+        if (outbox == null) {
+            throw conflict("MANUAL_REISSUE_SOURCE_PROVENANCE_INVALID");
+        }
+        boolean published = "PUBLISHED".equals(outbox.getStatus())
+                && outbox.getAttemptCount() != null && outbox.getAttemptCount() > 0
+                && outbox.getNextRetryAt() == null && outbox.getLeaseOwner() == null
+                && outbox.getLeaseUntil() == null
+                && "ACK".equals(outbox.getPublisherConfirmStatus())
+                && outbox.getConfirmedAt() != null && outbox.getConfirmedAt() > 0
+                && outbox.getConfirmError() == null
+                && "NOT_RETURNED".equals(outbox.getMandatoryReturnStatus())
+                && outbox.getReturnedAt() == null && outbox.getReturnReplyCode() == null
+                && outbox.getReturnReplyText() == null
+                && outbox.getPublishedAt() != null && outbox.getPublishedAt() > 0
+                && outbox.getLastError() == null;
+        boolean publishTerminal = ("DEAD".equals(outbox.getStatus())
+                || "FAILED".equals(outbox.getStatus()))
+                && outbox.getNextRetryAt() == null && outbox.getLeaseOwner() == null
+                && outbox.getLeaseUntil() == null && outbox.getPublishedAt() == null
+                && exact(outbox.getLastError(), 2000);
+        boolean inboxTerminal = inbox != null
+                && ("DEAD".equals(inbox.getStatus()) || "FAILED".equals(inbox.getStatus()))
+                && ("DEAD".equals(inbox.getResultStatus()) || "FAILED".equals(inbox.getResultStatus()))
+                && inbox.getNextRetryAt() == null && inbox.getLeaseOwner() == null
+                && inbox.getLeaseUntil() == null && inbox.getProcessedAt() != null
+                && inbox.getProcessedAt() > 0 && exact(inbox.getLastError(), 2000)
+                && storedHash(inbox.getWirePayload(), inbox.getWirePayloadHash())
+                && Arrays.equals(outbox.getWirePayload(), inbox.getWirePayload());
+        if (outbox == null || outbox.getId() == null || outbox.getId() <= 0
+                || !sameScope(delivery, outbox)
+                || !Objects.equals(delivery.getId(), outbox.getDeliveryId())
+                || !delivery.getCommandId().equals(outbox.getCommandId())
+                || !delivery.getActiveMessageId().equals(outbox.getMessageId())
+                || !delivery.getTaskId().equals(outbox.getAggregateId())
+                || !"task".equals(outbox.getAggregateType())
+                || !route.destination().equals(outbox.getDestination())
+                || !route.routingKey().equals(outbox.getRoutingKey())
+                || !Objects.equals(delivery.getActiveAttempt(), outbox.getActiveAttempt())
+                || !Objects.equals(delivery.getExpiresAt(), outbox.getExpiresAt())
+                || outbox.getVersion() == null || outbox.getVersion() < 0
+                || !storedHash(outbox.getWirePayload(), outbox.getWirePayloadHash())
+                || (!published && !publishTerminal)
+                || (published && !inboxTerminal)
+                || (publishTerminal && inbox != null)
+                || !AgentCommandAutomaticReplayProvenance.validImmediateParent(
+                        delivery, outbox, previousAttempts)) {
+            throw conflict("MANUAL_REISSUE_SOURCE_PROVENANCE_INVALID");
+        }
+        if (inbox != null && (!sameScope(delivery, inbox)
+                || !AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1.equals(inbox.getConsumerName())
+                || !delivery.getActiveMessageId().equals(inbox.getMessageId())
+                || !outbox.getEventId().equals(inbox.getEventId())
+                || !delivery.getCommandId().equals(inbox.getCommandId())
+                || !Objects.equals(delivery.getId(), inbox.getDeliveryId())
+                || !Objects.equals(delivery.getActiveAttempt(), inbox.getActiveAttempt())
+                || !Objects.equals(delivery.getExpiresAt(), inbox.getExpiresAt()))) {
+            throw conflict("MANUAL_REISSUE_INBOX_PROVENANCE_INVALID");
+        }
     }
 
     @Override

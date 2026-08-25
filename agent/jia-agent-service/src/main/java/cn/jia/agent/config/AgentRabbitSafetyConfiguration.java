@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Import;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(AgentRabbitSafetyProperties.class)
 @Import({AgentRabbitTopologyConfiguration.class, AgentOutboxRelayConfiguration.class,
-        AgentCommandRecoveryConfiguration.class})
+        AgentCommandRecoveryConfiguration.class, AgentCommandOperationsConfiguration.class})
 public class AgentRabbitSafetyConfiguration {
     @Bean
     public AgentRabbitSafetyGate agentRabbitSafetyGate(

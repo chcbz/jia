@@ -23,6 +23,10 @@ public interface AgentCommandRecoveryDao {
             String tenantId, String clientId, String consumerName, String messageId);
     int reissueDelivery(AgentCommandDeliveryEntity delivery, String newMessageId,
             String requestedBy, String reason, String lastError, long now);
+    default int manualReissueDelivery(AgentCommandDeliveryEntity delivery, String newMessageId,
+            String requestedBy, String approverId, String reason, String lastError, long now) {
+        throw new UnsupportedOperationException("manual reissue is unavailable");
+    }
     int expireDelivery(AgentCommandDeliveryEntity delivery, String lastError, long now);
     int expireWaitingInbox(AgentConsumerInboxEntity inbox, String lastError, long now);
     int insertOutbox(AgentOutboxEventEntity outbox);

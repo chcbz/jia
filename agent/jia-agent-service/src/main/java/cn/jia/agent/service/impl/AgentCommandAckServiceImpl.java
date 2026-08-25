@@ -277,7 +277,9 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
             throw rejected("ACK_PARENT_OUTBOX_CARDINALITY");
         }
         AgentOutboxEventEntity parentOutbox = previousAttempts.getFirst();
-        if (parentOutbox == null
+        if (!AgentCommandAutomaticReplayProvenance.validAutomaticImmediateParent(
+                    delivery, activeOutbox, previousAttempts)
+                || parentOutbox == null
                 || !ack.correlationId().equals(parentOutbox.getMessageId())
                 || !ack.correlationId().equals(delivery.getReplayParentMessageId())
                 || !ack.correlationId().equals(activeOutbox.getReplayParentMessageId())

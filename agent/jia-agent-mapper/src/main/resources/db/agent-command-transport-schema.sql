@@ -1,6 +1,6 @@
 -- D01 command transport schema for reliable Agent command delivery.
--- Target: MySQL 8.0.21. Safe to repeat only when all three tables already exist exactly.
--- The conditional AgentCommandTransportSchemaInitializer enforces 0/3 or 3/3 before this DDL.
+-- Target: MySQL 8.0.21. Standalone execution is repeatable for the exact four-table schema.
+-- The conditional AgentCommandTransportSchemaInitializer accepts fresh 0/4, legacy 3/4, or exact 4/4.
 -- Historical backfill and all business DML are intentionally excluded.
 
 CREATE TABLE IF NOT EXISTS agent_command_delivery (
@@ -119,3 +119,55 @@ CREATE TABLE IF NOT EXISTS agent_consumer_inbox (
     KEY idx_inbox_command (tenant_id, client_id, command_id, status, id),
     KEY idx_inbox_processed (tenant_id, client_id, consumer_name, result_status, processed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Idempotent Agent command consumer inbox with byte-exact wire payload';
+
+CREATE TABLE IF NOT EXISTS agent_command_operation_audit (
+    id                          BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    operation_id                VARCHAR(100) NOT NULL COMMENT 'Stable privileged operation id',
+    phase                       VARCHAR(16) NOT NULL COMMENT 'REQUEST or RESULT append-only phase',
+    operation_type              VARCHAR(32) NOT NULL COMMENT 'BROKER_REDRIVE or MANUAL_REISSUE',
+    tenant_id                   VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+    client_id                   VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+    task_id                     VARCHAR(100) NOT NULL COMMENT 'Exact scoped task id',
+    target_agent_id             VARCHAR(100) NOT NULL COMMENT 'Exact target Agent id',
+    command_id                  VARCHAR(100) DEFAULT NULL COMMENT 'Validated durable business command id',
+    source_message_id           VARCHAR(100) NOT NULL COMMENT 'Requested source transport message id',
+    new_message_id              VARCHAR(100) DEFAULT NULL COMMENT 'New transport id for manual reissue',
+    delivery_id                 BIGINT NOT NULL COMMENT 'Validated or requested delivery id',
+    source_attempt              INT DEFAULT NULL COMMENT 'Validated source transport attempt',
+    new_attempt                 INT DEFAULT NULL COMMENT 'New manual reissue attempt',
+    wire_hash                   BINARY(32) DEFAULT NULL COMMENT 'Validated SHA-256 only; no payload bytes',
+    requester_id                VARCHAR(100) NOT NULL COMMENT 'Trusted authenticated requester subject',
+    approver_id                 VARCHAR(100) DEFAULT NULL COMMENT 'Trusted distinct approver subject',
+    reason                      VARCHAR(1000) NOT NULL COMMENT 'Bounded operational reason',
+    ticket_reference            VARCHAR(200) NOT NULL COMMENT 'Bounded approval/change reference',
+    requested_at                BIGINT NOT NULL COMMENT 'Request epoch millis',
+    completed_at                BIGINT DEFAULT NULL COMMENT 'Terminal result epoch millis',
+    outcome                     VARCHAR(32) NOT NULL COMMENT 'REQUESTED/SUCCEEDED/REJECTED/FAILED',
+    error_code                  VARCHAR(200) DEFAULT NULL COMMENT 'Sanitized bounded error code',
+    created_by                  VARCHAR(100) NOT NULL COMMENT 'Immutable creator identity',
+    created_at                  BIGINT NOT NULL COMMENT 'Immutable creation epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_command_operation_phase (operation_id, phase),
+    KEY idx_command_operation_scope (tenant_id, client_id, id),
+    KEY idx_command_operation_source (tenant_id, client_id, delivery_id, source_message_id, id),
+    KEY idx_command_operation_outcome (tenant_id, client_id, operation_type, outcome, created_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Append-only privileged Agent command operation audit';
+
+-- MySQL 8.0.21 has no CREATE TRIGGER IF NOT EXISTS. The standalone migration
+-- is repeatable by replacing only the two D09-owned exact trigger definitions;
+-- the runtime initializer instead validates existing definitions before it
+-- creates a missing trigger and never overwrites drift.
+DROP TRIGGER IF EXISTS trg_command_operation_audit_no_update;
+DROP TRIGGER IF EXISTS trg_command_operation_audit_no_delete;
+
+CREATE TRIGGER trg_command_operation_audit_no_update
+BEFORE UPDATE ON agent_command_operation_audit
+FOR EACH ROW
+SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'D09: operation audit rows are immutable after insert';
+
+CREATE TRIGGER trg_command_operation_audit_no_delete
+BEFORE DELETE ON agent_command_operation_audit
+FOR EACH ROW
+SIGNAL SQLSTATE '45000'
+    SET MESSAGE_TEXT = 'D09: physical delete of operation audit rows is forbidden';

@@ -69,6 +69,13 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
     }
 
     @Override
+    public int manualReissueDelivery(AgentCommandDeliveryEntity delivery, String newMessageId,
+            String requestedBy, String approverId, String reason, String lastError, long now) {
+        return mapper.manualReissueDelivery(delivery, newMessageId, delivery.getActiveMessageId(),
+                requestedBy, approverId, reason, lastError, now);
+    }
+
+    @Override
     public int expireDelivery(
             AgentCommandDeliveryEntity delivery, String lastError, long now) {
         return mapper.expireDelivery(delivery, lastError, now);

@@ -60,6 +60,7 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
         initializer.afterPropertiesSet();
         List<String> first = catalogSnapshot(jdbc);
         assertTransportTablesEmpty(jdbc);
+        assertAuditImmutable(jdbc);
 
         initializer.afterPropertiesSet();
         assertEquals(first, catalogSnapshot(jdbc));
@@ -74,6 +75,9 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
 
         JdbcTemplate migration = newDatabase("migration");
         executeSql(migration, readResource("db/agent-command-transport-schema.sql"));
+        List<String> firstMigration = catalogSnapshot(migration);
+        executeSql(migration, readResource("db/agent-command-transport-schema.sql"));
+        assertEquals(firstMigration, catalogSnapshot(migration));
         new AgentCommandTransportSchemaInitializer(migration).afterPropertiesSet();
 
         JdbcTemplate initializer = newDatabase("initializer");
@@ -131,7 +135,7 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
     }
 
     @Test
-    void oneOfThreeAndTwoOfThreeFailClosedWithoutAutoCompletion() {
+    void oneAndTwoOfFourFailClosedWithoutAutoCompletion() {
         List<String> ddl = AgentCommandTransportSchemaInitializer.ddlStatements();
         for (int count : List.of(1, 2)) {
             JdbcTemplate jdbc = newDatabase("partial" + count);
@@ -141,13 +145,52 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
 
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
-            assertTrue(failure.getMessage().contains(count + "/3"), failure.getMessage());
+            assertTrue(failure.getMessage().contains(count + "/4"), failure.getMessage());
             assertEquals(count, transportTableCount(jdbc));
             for (int index = count; index < ddl.size(); index++) {
                 assertFalse(tableExists(jdbc,
                         AgentCommandTransportSchemaInitializer.TABLES.get(index)));
             }
         }
+    }
+
+    @Test
+    void exactLegacyThreeTransportTablesUpgradeOnlyAddsEmptyAuditTable() {
+        JdbcTemplate jdbc = newDatabase("legacy_three");
+        List<String> ddl = AgentCommandTransportSchemaInitializer.ddlStatements();
+        for (int index = 0; index < 3; index++) jdbc.execute(ddl.get(index));
+
+        new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
+
+        assertEquals(4, transportTableCount(jdbc));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_command_operation_audit", Long.class));
+        assertAuditImmutable(jdbc);
+    }
+
+    @Test
+    void weakenedAuditTriggerFailsClosedWithoutReplacement() {
+        JdbcTemplate jdbc = newDatabase("audit_trigger_drift");
+        new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
+        jdbc.execute("DROP TRIGGER "
+                + AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER);
+        jdbc.execute("CREATE TRIGGER "
+                + AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER
+                + " BEFORE UPDATE ON agent_command_operation_audit FOR EACH ROW "
+                + "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='weakened'");
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(failure.getMessage().contains(
+                AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER), failure.getMessage());
+        String statement = jdbc.queryForObject("""
+                SELECT action_statement
+                FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE() AND trigger_name=?
+                """, String.class, AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER);
+        assertTrue(AgentCommandTransportSchemaInitializer.normalizeSql(statement)
+                .contains("message_text = 'weakened'"), statement);
     }
 
     @Test
@@ -292,7 +335,7 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
                 SELECT CONCAT(table_name,'|',engine,'|',table_collation)
                 FROM information_schema.tables
                 WHERE table_schema=DATABASE()
-                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox')
+                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox','agent_command_operation_audit')
                 ORDER BY table_name
                 """, String.class));
         result.addAll(jdbc.queryForList("""
@@ -301,7 +344,7 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
                     IFNULL(collation_name,'<NULL>'),IFNULL(extra,''))
                 FROM information_schema.columns
                 WHERE table_schema=DATABASE()
-                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox')
+                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox','agent_command_operation_audit')
                 ORDER BY table_name,ordinal_position
                 """, String.class));
         result.addAll(jdbc.queryForList("""
@@ -309,8 +352,16 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
                     column_name,IFNULL(sub_part,'<NULL>'),index_type,is_visible)
                 FROM information_schema.statistics
                 WHERE table_schema=DATABASE()
-                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox')
+                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox','agent_command_operation_audit')
                 ORDER BY table_name,index_name,seq_in_index
+                """, String.class));
+        result.addAll(jdbc.queryForList("""
+                SELECT CONCAT_WS('|',trigger_name,event_object_table,action_timing,
+                    event_manipulation,action_statement)
+                FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE()
+                  AND event_object_table='agent_command_operation_audit'
+                ORDER BY trigger_name
                 """, String.class));
         return List.copyOf(result);
     }
@@ -341,9 +392,47 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
     }
 
     private void assertTransportTablesEmpty(JdbcTemplate jdbc) {
-        assertEquals(3, transportTableCount(jdbc));
+        assertEquals(4, transportTableCount(jdbc));
         for (String table : AgentCommandTransportSchemaInitializer.TABLES) {
             assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class), table);
+        }
+    }
+
+    private void assertAuditImmutable(JdbcTemplate jdbc) {
+        assertEquals(2, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE()
+                  AND event_object_table='agent_command_operation_audit'
+                """, Integer.class));
+        jdbc.update("""
+                INSERT INTO agent_command_operation_audit(
+                    operation_id,phase,operation_type,tenant_id,client_id,task_id,target_agent_id,
+                    source_message_id,delivery_id,requester_id,reason,ticket_reference,
+                    requested_at,outcome,created_by,created_at)
+                VALUES('op-immutable','REQUEST','BROKER_REDRIVE','tenant-a','client-a','task-1',
+                       'agent-a','message-1',1,'operator-a','reason','INC-42',1,'REQUESTED',
+                       'operator-a',1)
+                """);
+        assertThrows(RuntimeException.class, () -> jdbc.update("""
+                UPDATE agent_command_operation_audit SET outcome='FAILED'
+                WHERE operation_id='op-immutable' AND phase='REQUEST'
+                """));
+        assertThrows(RuntimeException.class, () -> jdbc.update("""
+                DELETE FROM agent_command_operation_audit
+                WHERE operation_id='op-immutable' AND phase='REQUEST'
+                """));
+        assertEquals("REQUESTED", jdbc.queryForObject("""
+                SELECT outcome FROM agent_command_operation_audit
+                WHERE operation_id='op-immutable' AND phase='REQUEST'
+                """, String.class));
+        jdbc.execute("DROP TRIGGER " + AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER);
+        jdbc.execute("DROP TRIGGER " + AgentCommandTransportSchemaInitializer.AUDIT_DELETE_TRIGGER);
+        jdbc.update("DELETE FROM agent_command_operation_audit WHERE operation_id='op-immutable'");
+        for (AgentCommandTransportSchemaInitializer.TriggerDefinition trigger
+                : AgentCommandTransportSchemaInitializer.expectedAuditTriggers().values()) {
+            jdbc.execute("CREATE TRIGGER " + trigger.name() + " " + trigger.timing() + " "
+                    + trigger.event() + " ON " + trigger.table() + " FOR EACH ROW "
+                    + trigger.statement());
         }
     }
 
@@ -351,7 +440,7 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
         return jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
                 WHERE table_schema=DATABASE()
-                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox')
+                  AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox','agent_command_operation_audit')
                 """, Integer.class);
     }
 

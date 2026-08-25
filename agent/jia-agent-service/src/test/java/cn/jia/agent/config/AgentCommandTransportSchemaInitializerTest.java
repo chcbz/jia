@@ -77,7 +77,7 @@ class AgentCommandTransportSchemaInitializerTest {
                 .run(context -> {
                     Throwable failure = context.getStartupFailure();
                     assertNotNull(failure, spelling);
-                    assertTrue(failureChain(failure).contains("exact 0/3 or 3/3"),
+                    assertTrue(failureChain(failure).contains("exact 0/4, legacy 3/4, or 4/4"),
                             spelling + ": " + failureChain(failure));
                     assertEquals(List.of(), partial.executedSql, spelling);
                 });
@@ -116,7 +116,7 @@ class AgentCommandTransportSchemaInitializerTest {
     }
 
     @Test
-    void oneOfThreeAndTwoOfThreeBothFailClosedWithoutAutoCompletion() throws Exception {
+    void oneOrTwoOfFourFailClosedWithoutAutoCompletion() throws Exception {
         for (List<String> present : List.of(
                 List.of("agent_command_delivery"),
                 List.of("agent_command_delivery", "agent_outbox_event"))) {
@@ -124,15 +124,27 @@ class AgentCommandTransportSchemaInitializerTest {
                     present.toArray(String[]::new));
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
-            assertTrue(failure.getMessage().contains(present.size() + "/3"), failure.getMessage());
+            assertTrue(failure.getMessage().contains(present.size() + "/4"), failure.getMessage());
             assertEquals(List.of(), jdbc.executedSql, present.toString());
         }
     }
 
     @Test
-    void initializerDdlIsExactlyThreeCreateStatementsAndContainsNoDataMutation() {
+    void exactLegacyThreeTableCatalogAddsOnlyAppendOnlyAuditTable() throws Exception {
+        RecordingCatalogJdbcTemplate legacy = partialCatalog(
+                "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox");
+        IllegalStateException validation = assertThrows(IllegalStateException.class,
+                () -> new AgentCommandTransportSchemaInitializer(legacy).afterPropertiesSet());
+        assertEquals(1, legacy.executedSql.size());
+        assertTrue(legacy.executedSql.getFirst().toLowerCase(Locale.ROOT)
+                .contains("create table if not exists agent_command_operation_audit"));
+        assertTrue(validation.getMessage().contains("exact 4/4"), validation.getMessage());
+    }
+
+    @Test
+    void initializerDdlIsExactlyFourCreateStatementsAndContainsNoDataMutation() {
         List<String> statements = AgentCommandTransportSchemaInitializer.ddlStatements();
-        assertEquals(3, statements.size());
+        assertEquals(4, statements.size());
         for (int index = 0; index < statements.size(); index++) {
             String normalized = statements.get(index)
                     .replaceAll("(?m)^\\s*--.*$", " ")
@@ -144,6 +156,22 @@ class AgentCommandTransportSchemaInitializerTest {
                 assertFalse((" " + normalized + " ").contains(forbidden), forbidden);
             }
         }
+        Map<String, AgentCommandTransportSchemaInitializer.TriggerDefinition> triggers =
+                AgentCommandTransportSchemaInitializer.expectedAuditTriggers();
+        assertEquals(List.of(
+                        AgentCommandTransportSchemaInitializer.AUDIT_DELETE_TRIGGER,
+                        AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER),
+                triggers.keySet().stream().sorted().toList());
+        assertEquals("DELETE", triggers.get(
+                AgentCommandTransportSchemaInitializer.AUDIT_DELETE_TRIGGER).event());
+        assertEquals("UPDATE", triggers.get(
+                AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER).event());
+        triggers.values().forEach(trigger -> {
+            assertEquals("agent_command_operation_audit", trigger.table());
+            assertEquals("BEFORE", trigger.timing());
+            assertTrue(AgentCommandTransportSchemaInitializer.normalizeSql(trigger.statement())
+                    .startsWith("signal sqlstate '45000' set message_text = 'd09:"));
+        });
     }
 
     @Test

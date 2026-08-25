@@ -2,6 +2,7 @@ package cn.jia.agent.config;
 
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.dao.AgentOutboxRelayDao;
+import cn.jia.agent.service.AgentCommandOperationsService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -44,6 +45,8 @@ class AgentRabbitSafetyConfigurationTest {
             assertEquals(AgentRabbitActivationState.OFF,
                     context.getBean(AgentRabbitReadiness.class).state());
             assertFalse(context.containsBean("agentRabbitBrokerSettings"));
+            assertTrue(context.getBeansOfType(AgentCommandOperationsService.class).isEmpty());
+            assertFalse(context.containsBean("agentCommandOperationsService"));
             assertSame(gate, context.getBean(AgentRabbitSafetyGate.class));
         });
     }

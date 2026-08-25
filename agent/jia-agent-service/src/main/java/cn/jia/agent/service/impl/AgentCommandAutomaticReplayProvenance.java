@@ -30,6 +30,19 @@ final class AgentCommandAutomaticReplayProvenance {
         };
     }
 
+    /** General durable replay binding. Manual replay is never classified as automatic. */
+    static boolean validReplayBinding(
+            String targetAgentId, String requestedBy, String approverId, String reason) {
+        if (validRequesterBinding(targetAgentId, requestedBy, approverId, reason)) {
+            return true;
+        }
+        return exact(targetAgentId, 100) && exact(requestedBy, 100)
+                && exact(approverId, 100) && exact(reason, 1000)
+                && !requestedBy.equals(approverId)
+                && !AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT.equals(reason)
+                && !AgentCommandReissueServiceImpl.REASON_SCHEDULER.equals(reason);
+    }
+
     static boolean validOptionalAudit(
             String activeMessageId,
             Integer deliveryActiveAttempt,
@@ -63,7 +76,7 @@ final class AgentCommandAutomaticReplayProvenance {
                 || !exact(activeMessageId, 100)
                 || !exact(deliveryParentMessageId, 100)
                 || activeMessageId.equals(deliveryParentMessageId)
-                || !validRequesterBinding(targetAgentId, deliveryRequesterId,
+                || !validReplayBinding(targetAgentId, deliveryRequesterId,
                         deliveryApproverId, deliveryReason)) {
             return false;
         }
@@ -71,7 +84,7 @@ final class AgentCommandAutomaticReplayProvenance {
                 && Objects.equals(deliveryRequesterId, outboxRequesterId)
                 && Objects.equals(deliveryApproverId, outboxApproverId)
                 && Objects.equals(deliveryReason, outboxReason)
-                && validRequesterBinding(targetAgentId, outboxRequesterId,
+                && validReplayBinding(targetAgentId, outboxRequesterId,
                         outboxApproverId, outboxReason);
     }
 
@@ -150,6 +163,21 @@ final class AgentCommandAutomaticReplayProvenance {
         } catch (IllegalArgumentException invalid) {
             return false;
         }
+    }
+
+    static boolean validAutomaticImmediateParent(
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity activeOutbox,
+            List<AgentOutboxEventEntity> lockedPreviousAttempts) {
+        return validImmediateParent(delivery, activeOutbox, lockedPreviousAttempts)
+                && delivery.getActiveAttempt() != null
+                && delivery.getActiveAttempt() > 1
+                && validRequesterBinding(delivery.getTargetAgentId(),
+                        delivery.getReplayRequesterId(), delivery.getReplayApproverId(),
+                        delivery.getReplayReason())
+                && validRequesterBinding(delivery.getTargetAgentId(),
+                        activeOutbox.getReplayRequesterId(), activeOutbox.getReplayApproverId(),
+                        activeOutbox.getReplayReason());
     }
 
     private static boolean storedHash(byte[] bytes, byte[] hash) {

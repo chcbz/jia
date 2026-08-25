@@ -11,6 +11,8 @@ import cn.jia.agent.entity.AgentCommandAckRejectedException;
 import cn.jia.agent.entity.AgentCommandAckResult;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentCommandManualReissueResult;
+import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentCommandReissueScanResult;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
@@ -76,6 +78,57 @@ class AgentCommandRecoveryServiceTest {
             AgentCommandAckResult result = ackService(sent, enabledGate()).acknowledge(ack, NOW);
             assertEquals(AgentCommandAckResult.Kind.ADVANCED, result.kind(), item.commandType());
         }
+    }
+
+    @Test
+    void approvedManualReissueUsesD06LockOrderCasAndFreshTransportIdentity() {
+        AgentCommandDraft manualDraft = hallDraft(
+                "execute", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
+        RecordingDao dao = withDraft(sourceDao(), manualDraft);
+        dao.delivery.setStatus("DEAD").setNextRetryAt(null).setLastError("BROKER_DEAD");
+        dao.inbox.setStatus("DEAD").setResultStatus("DEAD").setNextRetryAt(null)
+                .setLeaseOwner(null).setLeaseUntil(null).setProcessedAt(NOW - 1)
+                .setLastError("BROKER_DEAD");
+        List<UUID> ids = new ArrayList<>(List.of(UUID.fromString(M2), UUID.fromString(E2)));
+        AgentCommandReissueServiceImpl service = new AgentCommandReissueServiceImpl(
+                dao, enabledGate(), new PresenceDispatcher(false),
+                AgentRabbitTopologyManifest.canonical(), transactionManager(),
+                () -> ids.removeFirst());
+        AgentCommandOperationRequest request = new AgentCommandOperationRequest(
+                "tenant-a", "client-a", 1L, "task-1", "agent-a", M1,
+                "operator-a", "approver-b", "incident recovery", "INC-42");
+
+        AgentCommandManualReissueResult result = service.reissueManually(request, NOW);
+
+        assertEquals(new AgentCommandManualReissueResult(
+                1L, manualDraft.commandId(), M1, M2, E2, 1, 2), result);
+        assertEquals(List.of("delivery", "outbox", "inbox", "manualReissue", "insert"),
+                dao.operations);
+        assertEquals("operator-a", dao.requestedBy);
+        assertEquals("approver-b", dao.approverId);
+        assertEquals("incident recovery", dao.reason);
+        assertEquals(M1, dao.inserted.getReplayParentMessageId());
+        assertEquals("approver-b", dao.inserted.getReplayApproverId());
+        assertEquals(2, dao.inserted.getActiveAttempt());
+        assertArrayEquals(AgentCommandCanonicalCodec.businessBytes(manualDraft),
+                dao.delivery.getCommandPayload());
+        assertArrayEquals(AgentCommandCanonicalCodec.sha256(dao.inserted.getWirePayload()),
+                dao.inserted.getWirePayloadHash());
+        assertTrue(new String(dao.inserted.getWirePayload(), StandardCharsets.UTF_8)
+                .contains("\"commandType\":\""
+                        + AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE + "\""));
+    }
+
+    @Test
+    void manualReplayLineageIsDurableButNeverQualifiesForAutomaticParentAckLane() {
+        RecordingDao dao = sourceDao();
+        setTransportAttempt(dao, 2);
+        replayAudit(dao, "operator-a", "approver-b", "incident recovery");
+
+        assertTrue(AgentCommandAutomaticReplayProvenance.validImmediateParent(
+                dao.delivery, dao.outbox, dao.previousAttempts));
+        assertFalse(AgentCommandAutomaticReplayProvenance.validAutomaticImmediateParent(
+                dao.delivery, dao.outbox, dao.previousAttempts));
     }
 
     @Test
@@ -1111,6 +1164,7 @@ class AgentCommandRecoveryServiceTest {
         private String newMessageId;
         private String parentMessageId;
         private String requestedBy;
+        private String approverId;
         private String reason;
         private AgentOutboxEventEntity inserted;
         private List<AgentOutboxEventEntity> previousAttempts = List.of();
@@ -1188,6 +1242,20 @@ class AgentCommandRecoveryServiceTest {
             this.newMessageId = newMessageId;
             this.parentMessageId = delivery.getActiveMessageId();
             this.requestedBy = requestedBy;
+            this.reason = reason;
+            return reissueRows;
+        }
+
+        @Override
+        public int manualReissueDelivery(
+                AgentCommandDeliveryEntity delivery, String newMessageId,
+                String requestedBy, String approverId, String reason,
+                String lastError, long now) {
+            operations.add("manualReissue");
+            this.newMessageId = newMessageId;
+            this.parentMessageId = delivery.getActiveMessageId();
+            this.requestedBy = requestedBy;
+            this.approverId = approverId;
             this.reason = reason;
             return reissueRows;
         }

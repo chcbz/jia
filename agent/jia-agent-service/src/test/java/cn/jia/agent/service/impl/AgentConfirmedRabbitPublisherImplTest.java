@@ -21,6 +21,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -245,6 +247,58 @@ class AgentConfirmedRabbitPublisherImplTest {
         verify(template).send(eq(AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE),
                 eq(AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY),
                 any(Message.class), any(CorrelationData.class));
+    }
+
+    @Test
+    void d09PreservedDlqHeadersAreAllowlistedBoundedAndWrittenWithoutReconstruction()
+            throws Exception {
+        RabbitTemplate template = ackingTemplate();
+        AgentConfirmedPublishRequest request = request(1, 64);
+        Map<String, Object> headers = new LinkedHashMap<>(AgentCommandAmqpContract.headers(request));
+        Map<String, Object> death = Map.of(
+                "count", 1L,
+                "reason", "rejected",
+                "queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE,
+                "time", new Date(1_700_000_000_000L),
+                "exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE,
+                "routing-keys", List.of(AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY));
+        headers.put("x-death", List.of(death));
+        headers.put("x-first-death-queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE);
+        headers.put("x-first-death-exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE);
+        headers.put("x-first-death-reason", "rejected");
+
+        AgentRabbitPublishResult result = publisher(template, ready(), allowedGate())
+                .publishPreservingHeaders(request, headers, 1000);
+
+        assertEquals(AgentRabbitPublishResult.Type.ACK, result.type());
+        ArgumentCaptor<Message> sent = ArgumentCaptor.forClass(Message.class);
+        verify(template).send(eq(request.destination()), eq(request.routingKey()),
+                sent.capture(), any(CorrelationData.class));
+        assertEquals(headers, sent.getValue().getMessageProperties().getHeaders());
+        assertTrue(sent.getValue().getMessageProperties().getHeaders().get("x-death")
+                instanceof List<?>);
+
+        Map<String, Object> unordered = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        Map<String, Object> retryDeath = Map.of(
+                "count", 1L,
+                "reason", "expired",
+                "queue", AgentRabbitTopologyManifest.RETRY_5S_QUEUE,
+                "time", new Date(1_800_000_000_000L),
+                "exchange", AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
+                "routing-keys", List.of(AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY));
+        unordered.put("x-death", List.of(death, retryDeath));
+        unordered.put("x-first-death-queue", AgentRabbitTopologyManifest.RETRY_5S_QUEUE);
+        unordered.put("x-first-death-exchange", AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE);
+        unordered.put("x-first-death-reason", "expired");
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, unordered, 1000).errorCode());
+
+        headers.put("authorization", "Bearer secret");
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, headers, 1000).errorCode());
     }
 
     @Test

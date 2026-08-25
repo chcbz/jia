@@ -209,6 +209,50 @@ public interface AgentCommandRecoveryMapper {
             @Param("lastError") String lastError,
             @Param("now") long now);
 
+
+    @Update("""
+            UPDATE agent_command_delivery
+            SET status='PENDING', attempt_count=attempt_count+1, next_retry_at=NULL,
+                lease_owner=NULL, lease_until=NULL, active_message_id=#{newMessageId},
+                active_attempt=active_attempt+1, last_error=#{lastError},
+                replay_parent_message_id=#{parentMessageId},
+                replay_requester_id=#{requestedBy}, replay_approver_id=#{approverId},
+                replay_reason=#{reason}, version=version+1, update_time=#{now}
+            WHERE id=#{delivery.id} AND version=#{delivery.version}
+              AND version<9223372036854775799
+              AND tenant_id=#{delivery.tenantId} AND client_id=#{delivery.clientId}
+              AND command_id=#{delivery.commandId} AND task_id=#{delivery.taskId}
+              AND target_agent_id=#{delivery.targetAgentId}
+              AND active_message_id=#{delivery.activeMessageId}
+              AND active_attempt=#{delivery.activeAttempt}
+              AND attempt_count=#{delivery.attemptCount}
+              AND next_retry_at IS NULL AND lease_owner IS NULL AND lease_until IS NULL
+              AND status=#{delivery.status}
+              AND CAST(tenant_id AS BINARY)=CAST(#{delivery.tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{delivery.tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{delivery.clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{delivery.clientId})
+              AND CAST(command_id AS BINARY)=CAST(#{delivery.commandId} AS BINARY)
+              AND OCTET_LENGTH(command_id)=OCTET_LENGTH(#{delivery.commandId})
+              AND CAST(task_id AS BINARY)=CAST(#{delivery.taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{delivery.taskId})
+              AND CAST(target_agent_id AS BINARY)=CAST(#{delivery.targetAgentId} AS BINARY)
+              AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{delivery.targetAgentId})
+              AND CAST(active_message_id AS BINARY)=CAST(#{delivery.activeMessageId} AS BINARY)
+              AND OCTET_LENGTH(active_message_id)=OCTET_LENGTH(#{delivery.activeMessageId})
+              AND CAST(status AS BINARY)=CAST(#{delivery.status} AS BINARY)
+              AND OCTET_LENGTH(status)=OCTET_LENGTH(#{delivery.status})
+            """)
+    int manualReissueDelivery(
+            @Param("delivery") AgentCommandDeliveryEntity delivery,
+            @Param("newMessageId") String newMessageId,
+            @Param("parentMessageId") String parentMessageId,
+            @Param("requestedBy") String requestedBy,
+            @Param("approverId") String approverId,
+            @Param("reason") String reason,
+            @Param("lastError") String lastError,
+            @Param("now") long now);
+
     @Update("""
             UPDATE agent_command_delivery
             SET status='EXPIRED', next_retry_at=NULL, lease_owner=NULL, lease_until=NULL,
