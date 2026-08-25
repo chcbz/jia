@@ -118,7 +118,7 @@ class AgentOutboxRelayServiceImplTest {
 
 
     @Test
-    void exactAutomaticReissueReplayProvenanceIsClaimableButManualOrPartialIsDead() {
+    void exactAutomaticReissueReplayProvenanceIsClaimableButManualOrPartialHasZeroMutation() {
         Fixture automatic = pending();
         automatic.delivery.setActiveMessageId("msg-2")
                 .setReplayParentMessageId("msg-1")
@@ -152,9 +152,7 @@ class AgentOutboxRelayServiceImplTest {
         arrange(manual);
         assertEquals(AgentOutboxClaim.Status.SKIPPED,
                 service.claim(candidate(1, NOW), "lease-a", NOW).status());
-        verify(dao).disposeOutbox(eq(manual.outbox), eq("DEAD"), isNull(), eq("NONE"),
-                isNull(), isNull(), eq("NONE"), isNull(), isNull(), isNull(), isNull(),
-                eq("UNSUPPORTED_REPLAY_PROVENANCE"), eq(NOW));
+        verifyNoRelayMutation();
 
         reset(dao);
         stubMutationSuccess();
@@ -165,7 +163,30 @@ class AgentOutboxRelayServiceImplTest {
         arrange(partial);
         assertEquals(AgentOutboxClaim.Status.SKIPPED,
                 service.claim(candidate(1, NOW), "lease-a", NOW).status());
-        verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+        verifyNoRelayMutation();
+    }
+
+    @Test
+    void automaticReplayRequesterReasonBindingRejectsEveryDisguisedLaneWithoutMutation() {
+        List<Fixture> invalid = List.of(
+                automaticReplay("operator", null,
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT),
+                automaticReplay("agent-other", null,
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT),
+                automaticReplay("agent-1", null,
+                        AgentCommandReissueServiceImpl.REASON_SCHEDULER),
+                automaticReplay("agent-1", "manual-approver",
+                        AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
+        for (Fixture fixture : invalid) {
+            reset(dao);
+            stubMutationSuccess();
+            arrange(fixture);
+
+            assertEquals(AgentOutboxClaim.Status.SKIPPED,
+                    service.claim(candidate(1, NOW), "lease-a", NOW).status());
+
+            verifyNoRelayMutation();
+        }
     }
 
     @Test
@@ -678,6 +699,16 @@ class AgentOutboxRelayServiceImplTest {
         when(dao.quarantineOutbox(any(), anyString(), anyLong())).thenReturn(1);
     }
 
+    private void verifyNoRelayMutation() {
+        verify(dao, never()).claimDelivery(any(), anyString(), anyLong(), any(), anyLong());
+        verify(dao, never()).claimOutbox(any(), anyString(), anyLong(), any(), anyLong());
+        verify(dao, never()).disposeDelivery(any(), anyString(), any(), any(), anyLong());
+        verify(dao, never()).disposeOutbox(any(), anyString(), any(), anyString(), any(), any(),
+                anyString(), any(), any(), any(), any(), any(), anyLong());
+        verify(dao, never()).quarantineDelivery(any(), anyString(), anyLong());
+        verify(dao, never()).quarantineOutbox(any(), anyString(), anyLong());
+    }
+
     private static AgentOutboxEventEntity poisonOutbox(AgentOutboxCandidate candidate) {
         AgentOutboxEventEntity outbox = pending().outbox;
         outbox.setId(candidate.outboxId());
@@ -721,6 +752,28 @@ class AgentOutboxRelayServiceImplTest {
                 .setVersion(0L);
         outbox.setTenantId("tenant-a"); outbox.setClientId("client-a");
         return new Fixture(delivery, outbox);
+    }
+
+    private static Fixture automaticReplay(
+            String requester, String approver, String reason) {
+        Fixture fixture = pending();
+        fixture.delivery.setActiveMessageId("msg-2")
+                .setReplayParentMessageId("msg-1")
+                .setReplayRequesterId(requester)
+                .setReplayApproverId(approver)
+                .setReplayReason(reason);
+        fixture.outbox.setMessageId("msg-2")
+                .setReplayParentMessageId("msg-1")
+                .setReplayRequesterId(requester)
+                .setReplayApproverId(approver)
+                .setReplayReason(reason);
+        byte[] rewritten = new String(wire(EXPIRES), StandardCharsets.UTF_8)
+                .replace("\"messageId\":\"msg-1\"",
+                        "\"messageId\":\"msg-2\"")
+                .getBytes(StandardCharsets.UTF_8);
+        fixture.outbox.setWirePayload(rewritten)
+                .setWirePayloadHash(AgentCommandAmqpContract.sha256(rewritten));
+        return fixture;
     }
 
     private static Fixture pendingWith(

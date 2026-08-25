@@ -1011,11 +1011,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         byte[] raw = java.util.Arrays.copyOf(rawWireBytes, rawWireBytes.length);
         int matchingSessions = 0;
         int sentSessions = 0;
-        for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
-            if (!entry.getValue().contains(targetAgentId)) {
+        for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(targetAgentId)
+                    || !registeredAgentIds(sessionId).contains(targetAgentId)) {
                 continue;
             }
-            WebSocketSession session = sessions.get(entry.getKey());
+            WebSocketSession session = sessions.get(sessionId);
             if (session == null || !session.isOpen()
                     || !targetAgentId.equals(sessionAgentId(session))
                     || !tenantId.equals(sessionJiacn(session))
@@ -1158,12 +1160,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return false;
         }
 
+        boolean commandDispatch = AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
+        Map<String, Set<String>> candidateSessionAgentIds = commandDispatch
+                ? successfullyRegisteredAgentIds : sessionAgentIds;
         boolean delivered = false;
-        for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
-            if (!entry.getValue().contains(agentId)) {
+        for (Map.Entry<String, Set<String>> entry : candidateSessionAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(agentId)
+                    || (commandDispatch && !registeredAgentIds(sessionId).contains(agentId))) {
                 continue;
             }
-            WebSocketSession session = sessions.get(entry.getKey());
+            WebSocketSession session = sessions.get(sessionId);
             if (session == null || !session.isOpen() || !agentId.equals(sessionAgentId(session))) {
                 continue;
             }

@@ -719,15 +719,47 @@ class AgentCommandInboxServiceImplTest {
                 () -> service(canonical, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
 
-        RecordingDao poison = new RecordingDao();
-        canonicalClaimed(poison, "PENDING");
-        poison.delivery.setReplayParentMessageId("msg-parent")
-                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
-        poison.outbox.setReplayParentMessageId("msg-other")
-                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
-        assertThrows(AgentInboxIdentityConflictException.class,
-                () -> service(poison, enabledGate())
+        RecordingDao scheduler = new RecordingDao();
+        canonicalClaimed(scheduler, "PENDING");
+        replayAudit(scheduler, AgentCommandReissueServiceImpl.REQUESTER_SCHEDULER, null,
+                AgentCommandReissueServiceImpl.REASON_SCHEDULER);
+        assertThrows(AgentInboxSourceNotSettledException.class,
+                () -> service(scheduler, enabledGate())
                         .claim(message(), "worker-a", NOW, LEASE));
+
+        List<RecordingDao> poison = new ArrayList<>();
+        poison.add(replayAudit(new RecordingDao(), "operator", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
+        poison.add(replayAudit(new RecordingDao(), "agent-other", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
+        poison.add(replayAudit(new RecordingDao(), "agent-1", null,
+                AgentCommandReissueServiceImpl.REASON_SCHEDULER));
+        poison.add(replayAudit(new RecordingDao(), "agent-1", "manual-approver",
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT));
+        RecordingDao partial = new RecordingDao();
+        partial.delivery.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
+        partial.outbox.setReplayParentMessageId("msg-other")
+                .setReplayRequesterId("agent-1").setReplayReason("AGENT_RECONNECT");
+        poison.add(partial);
+        for (RecordingDao invalid : poison) {
+            canonicalClaimed(invalid, "PENDING");
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(invalid, enabledGate())
+                            .claim(message(), "worker-a", NOW, LEASE));
+            assertEquals(List.of("delivery", "outbox", "inbox"), invalid.operations);
+        }
+    }
+
+    private static RecordingDao replayAudit(
+            RecordingDao dao, String requester, String approver, String reason) {
+        dao.delivery.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId(requester).setReplayApproverId(approver)
+                .setReplayReason(reason);
+        dao.outbox.setReplayParentMessageId("msg-parent")
+                .setReplayRequesterId(requester).setReplayApproverId(approver)
+                .setReplayReason(reason);
+        return dao;
     }
 
     private AgentRabbitSafetyGate offGate() {

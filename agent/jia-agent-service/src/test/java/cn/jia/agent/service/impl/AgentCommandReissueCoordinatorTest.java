@@ -65,6 +65,13 @@ class AgentCommandReissueCoordinatorTest {
                 service, new AgentCommandReissueSettings(1, 1, 1, 100), () -> 10L, false)) {
             assertFalse(coordinator.signalReconnect(new AgentCommandReconnectScope(
                     " tenant", "client", "agent", "agent", "AGENT_RECONNECT")));
+            assertFalse(coordinator.signalReconnect(new AgentCommandReconnectScope(
+                    "tenant", "client", "agent", "operator", "AGENT_RECONNECT")));
+            assertFalse(coordinator.signalReconnect(new AgentCommandReconnectScope(
+                    "tenant", "client", "agent", "other-agent", "AGENT_RECONNECT")));
+            assertFalse(coordinator.signalReconnect(new AgentCommandReconnectScope(
+                    "tenant", "client", "agent", "agent", "WAITING_AGENT_SCHEDULER")));
+            assertEquals(0, coordinator.queuedSignalCount());
             coordinator.runOnce();
             assertEquals(9, coordinator.schedulerCursor());
             coordinator.runOnce();

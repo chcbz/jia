@@ -187,6 +187,11 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             return AgentOutboxClaim.skipped();
         }
         String corruption = validateCommon(delivery, outbox);
+        if ("UNSUPPORTED_REPLAY_PROVENANCE".equals(corruption)) {
+            // Provenance is an authorization boundary, not a relay-owned state transition.
+            // Reject without claim, publish, quarantine, or terminal mutation.
+            return AgentOutboxClaim.skipped();
+        }
         if (corruption == null) {
             corruption = validateLane(delivery, outbox, now);
         }
@@ -660,39 +665,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 && MessageDigest.isEqual(AgentCommandCanonicalCodec.sha256(payload), storedHash);
     }
 
-    private static boolean hasReplayProvenance(AgentCommandDeliveryEntity delivery) {
-        return delivery.getReplayParentMessageId() != null
-                || delivery.getReplayRequesterId() != null
-                || delivery.getReplayApproverId() != null
-                || delivery.getReplayReason() != null;
-    }
-
-    private static boolean hasReplayProvenance(AgentOutboxEventEntity outbox) {
-        return outbox.getReplayParentMessageId() != null
-                || outbox.getReplayRequesterId() != null
-                || outbox.getReplayApproverId() != null
-                || outbox.getReplayReason() != null;
-    }
-
     /** D03 original publish and exact D06 automatic reissue are the only relay-admitted lanes. */
     private static boolean validAutomaticReplayProvenance(
             AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
-        boolean deliveryHasReplay = hasReplayProvenance(delivery);
-        boolean outboxHasReplay = hasReplayProvenance(outbox);
-        if (!deliveryHasReplay && !outboxHasReplay) return true;
-        if (!deliveryHasReplay || !outboxHasReplay) return false;
-        return validExact(delivery.getReplayParentMessageId(), 100)
-                && !delivery.getActiveMessageId().equals(delivery.getReplayParentMessageId())
-                && validExact(delivery.getReplayRequesterId(), 100)
-                && delivery.getReplayApproverId() == null
-                && Set.of(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT,
-                        AgentCommandReissueServiceImpl.REASON_SCHEDULER)
-                        .contains(delivery.getReplayReason())
-                && Objects.equals(delivery.getReplayParentMessageId(),
-                        outbox.getReplayParentMessageId())
-                && Objects.equals(delivery.getReplayRequesterId(), outbox.getReplayRequesterId())
-                && outbox.getReplayApproverId() == null
-                && Objects.equals(delivery.getReplayReason(), outbox.getReplayReason());
+        return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
+                delivery.getActiveMessageId(), delivery.getTargetAgentId(),
+                delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
+                delivery.getReplayApproverId(), delivery.getReplayReason(),
+                outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
+                outbox.getReplayApproverId(), outbox.getReplayReason());
     }
 
     private static boolean anyPublishDisposition(AgentOutboxEventEntity outbox) {

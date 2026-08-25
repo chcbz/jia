@@ -25,7 +25,6 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -35,8 +34,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     public static final String REASON_SCHEDULER = "WAITING_AGENT_SCHEDULER";
     public static final String REQUESTER_SCHEDULER = "SYSTEM_SCHEDULER";
     public static final String AGENT_OFFLINE = AgentCommandRabbitConsumer.AGENT_OFFLINE;
-    // Reserve: D06 reissue, D03 claim+settle, and D07 claim+complete.
-    private static final long MAX_SAFE_REISSUE_VERSION = Long.MAX_VALUE - 5;
+    // Reserve all remaining delivery mutations: D06 reissue, D03 claim+settle,
+    // D07 claim+complete, and A06 ACK RECEIVED+STARTED+terminal.
+    private static final long MAX_SAFE_REISSUE_VERSION = Long.MAX_VALUE - 8;
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandReissueServiceImpl.class);
 
     private final AgentCommandRecoveryDao dao;
@@ -135,7 +135,11 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             String reason,
             boolean requireDue,
             long now) {
-        if (!allows(candidate.tenantId(), candidate.clientId())) return false;
+        if (!allows(candidate.tenantId(), candidate.clientId())
+                || !AgentCommandAutomaticReplayProvenance.validRequesterBinding(
+                        candidate.targetAgentId(), requestedBy, null, reason)) {
+            return false;
+        }
         AgentCommandDeliveryEntity delivery = dao.lockDelivery(
                 candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
         if (delivery == null || !candidate.targetAgentId().equals(delivery.getTargetAgentId())) return false;
@@ -331,27 +335,12 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
 
     private boolean validReplayAudit(
             AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
-        boolean absent = delivery.getReplayParentMessageId() == null
-                && delivery.getReplayRequesterId() == null
-                && delivery.getReplayApproverId() == null
-                && delivery.getReplayReason() == null
-                && outbox.getReplayParentMessageId() == null
-                && outbox.getReplayRequesterId() == null
-                && outbox.getReplayApproverId() == null
-                && outbox.getReplayReason() == null;
-        if (absent) return true;
-        return exact(delivery.getReplayParentMessageId(), 100)
-                && !delivery.getActiveMessageId().equals(delivery.getReplayParentMessageId())
-                && exact(delivery.getReplayRequesterId(), 100)
-                && delivery.getReplayApproverId() == null
-                && Set.of(REASON_AGENT_RECONNECT, REASON_SCHEDULER)
-                        .contains(delivery.getReplayReason())
-                && Objects.equals(delivery.getReplayParentMessageId(),
-                        outbox.getReplayParentMessageId())
-                && Objects.equals(delivery.getReplayRequesterId(),
-                        outbox.getReplayRequesterId())
-                && outbox.getReplayApproverId() == null
-                && Objects.equals(delivery.getReplayReason(), outbox.getReplayReason());
+        return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
+                delivery.getActiveMessageId(), delivery.getTargetAgentId(),
+                delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
+                delivery.getReplayApproverId(), delivery.getReplayReason(),
+                outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
+                outbox.getReplayApproverId(), outbox.getReplayReason());
     }
 
     private void validateDraftMatches(AgentCommandDeliveryEntity delivery, AgentCommandDraft draft) {
@@ -378,8 +367,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
 
     private void validateScope(AgentCommandReconnectScope scope, String expectedReason) {
         if (scope == null || !exact(scope.tenantId(), 50) || !exact(scope.clientId(), 50)
-                || !exact(scope.targetAgentId(), 100) || !exact(scope.requestedBy(), 100)
-                || !expectedReason.equals(scope.reason())) {
+                || !expectedReason.equals(scope.reason())
+                || !AgentCommandAutomaticReplayProvenance.validRequesterBinding(
+                        scope.targetAgentId(), scope.requestedBy(), null, scope.reason())) {
             throw new IllegalArgumentException("reconnect scope is invalid");
         }
     }

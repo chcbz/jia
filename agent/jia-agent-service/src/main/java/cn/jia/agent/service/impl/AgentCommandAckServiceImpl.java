@@ -221,26 +221,12 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || inbox.getReplayReason() != null) {
             return false;
         }
-        boolean absent = delivery.getReplayParentMessageId() == null
-                && delivery.getReplayRequesterId() == null
-                && delivery.getReplayApproverId() == null
-                && delivery.getReplayReason() == null
-                && outbox.getReplayParentMessageId() == null
-                && outbox.getReplayRequesterId() == null
-                && outbox.getReplayApproverId() == null
-                && outbox.getReplayReason() == null;
-        if (absent) return true;
-        return exact(delivery.getReplayParentMessageId(), 100)
-                && !delivery.getActiveMessageId().equals(delivery.getReplayParentMessageId())
-                && exact(delivery.getReplayRequesterId(), 100)
-                && delivery.getReplayApproverId() == null
-                && Set.of(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT,
-                        AgentCommandReissueServiceImpl.REASON_SCHEDULER)
-                        .contains(delivery.getReplayReason())
-                && Objects.equals(delivery.getReplayParentMessageId(), outbox.getReplayParentMessageId())
-                && Objects.equals(delivery.getReplayRequesterId(), outbox.getReplayRequesterId())
-                && outbox.getReplayApproverId() == null
-                && Objects.equals(delivery.getReplayReason(), outbox.getReplayReason());
+        return AgentCommandAutomaticReplayProvenance.validOptionalAudit(
+                delivery.getActiveMessageId(), delivery.getTargetAgentId(),
+                delivery.getReplayParentMessageId(), delivery.getReplayRequesterId(),
+                delivery.getReplayApproverId(), delivery.getReplayReason(),
+                outbox.getReplayParentMessageId(), outbox.getReplayRequesterId(),
+                outbox.getReplayApproverId(), outbox.getReplayReason());
     }
 
     private String expectedNext(String current, String requested) {

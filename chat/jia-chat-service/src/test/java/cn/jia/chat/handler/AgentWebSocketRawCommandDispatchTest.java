@@ -2,6 +2,7 @@ package cn.jia.chat.handler;
 
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
+import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
@@ -17,10 +18,13 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -68,6 +72,82 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         verify(crossTenant, never()).sendMessage(any(TextMessage.class));
         verify(crossClient, never()).sendMessage(any(TextMessage.class));
         verify(otherAgent, never()).sendMessage(any(TextMessage.class));
+    }
+
+
+    @Test
+    void presenceBeforeRegisterIsOfflineForRawCommandAndRegisterMakesItReachable()
+            throws Exception {
+        WebSocketSession session = session(
+                "presence-before-register", "tenant-a", "client-a", "agent-1");
+        AgentRuntimeDTO presence = new AgentRuntimeDTO();
+        presence.setAgentId("agent-1");
+        presence.setStatus("online");
+        when(agentService.updateStatus(any(), any())).thenReturn(presence);
+        AgentWebSocketHandler handler = handler();
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-1",
+                 "agentId":"agent-1","sourceAgentId":"agent-1",
+                 "runtimeInstanceId":"runtime-1","status":"online"}
+                """));
+        org.mockito.Mockito.clearInvocations(session);
+        byte[] raw = wire("tenant-a", "client-a", "task-1", "agent-1");
+
+        AgentRawCommandDispatchResult beforeRegister = handler.dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", raw);
+
+        assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE, beforeRegister.status());
+        assertEquals(0, beforeRegister.matchingSessionCount());
+        verify(session, never()).sendMessage(any(TextMessage.class));
+
+        register(handler, session, "agent-1");
+        org.mockito.Mockito.clearInvocations(session);
+        AgentRawCommandDispatchResult afterRegister = handler.dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", raw);
+
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT, afterRegister.status());
+        assertEquals(1, afterRegister.matchingSessionCount());
+        assertEquals(1, afterRegister.sentSessionCount());
+        verify(session).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    void compatibilityCommandDispatchAlsoRequiresSuccessfulRegistration() throws Exception {
+        WebSocketSession session = session(
+                "direct-before-register", "tenant-a", "client-a", "agent-1");
+        AgentRuntimeDTO presence = new AgentRuntimeDTO();
+        presence.setAgentId("agent-1");
+        presence.setStatus("online");
+        when(agentService.updateStatus(any(), any())).thenReturn(presence);
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-1"))
+                .thenReturn(List.of("agent-1"));
+        AgentWebSocketHandler handler = handler();
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-direct",
+                 "agentId":"agent-1","sourceAgentId":"agent-1",
+                 "runtimeInstanceId":"runtime-1","status":"online"}
+                """));
+        org.mockito.Mockito.clearInvocations(session);
+        Map<String, Object> command = Map.of(
+                "schemaVersion", 1,
+                "messageType", "command.dispatch",
+                "messageId", "direct-message",
+                "commandId", "direct-command",
+                "tenantId", "tenant-a",
+                "clientId", "client-a",
+                "taskId", "task-1",
+                "targetAgentId", "agent-1",
+                "commandType", "TASK_INVITE");
+
+        assertFalse(handler.sendDirectMessageToAgent("agent-1", command));
+        verify(session, never()).sendMessage(any(TextMessage.class));
+
+        register(handler, session, "agent-1");
+        org.mockito.Mockito.clearInvocations(session);
+        assertTrue(handler.sendDirectMessageToAgent("agent-1", command));
+        verify(session).sendMessage(any(TextMessage.class));
     }
 
     @Test
@@ -157,6 +237,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         when(session.isOpen()).thenReturn(true);
         when(session.getAttributes()).thenReturn(new HashMap<>(Map.of(
                 "agentId", agentId,
+                "runtimeInstanceId", "runtime-1",
                 "jiacn", tenantId,
                 "clientId", clientId)));
         return session;

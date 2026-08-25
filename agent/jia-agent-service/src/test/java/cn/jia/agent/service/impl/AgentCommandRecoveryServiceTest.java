@@ -111,7 +111,7 @@ class AgentCommandRecoveryServiceTest {
                 dao -> dao.delivery.setExpiresAt(NOW),
                 dao -> dao.delivery.setActiveAttempt(Integer.MAX_VALUE)
                         .setAttemptCount(Integer.MAX_VALUE),
-                dao -> dao.delivery.setVersion(Long.MAX_VALUE - 4),
+                dao -> dao.delivery.setVersion(Long.MAX_VALUE - 7),
                 dao -> dao.delivery.setCommandPayloadHash(new byte[32]),
                 dao -> dao.outbox.setActiveAttempt(1),
                 dao -> dao.inbox.setActiveAttempt(2),
@@ -132,17 +132,57 @@ class AgentCommandRecoveryServiceTest {
 
 
     @Test
-    void reissueVersionBudgetAcceptsMaxMinusFiveAndRejectsAnythingHigher() {
+    void reissueVersionBudgetAcceptsMaxMinusEightAndRejectsAnythingHigher() {
         RecordingDao allowed = waitingDao();
-        allowed.delivery.setVersion(Long.MAX_VALUE - 5);
+        allowed.delivery.setVersion(Long.MAX_VALUE - 8);
         assertEquals(1, reissue(allowed, new PresenceDispatcher(true))
                 .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
 
         RecordingDao exhausted = waitingDao();
-        exhausted.delivery.setVersion(Long.MAX_VALUE - 4);
+        exhausted.delivery.setVersion(Long.MAX_VALUE - 7);
         assertEquals(0, reissue(exhausted, new PresenceDispatcher(true))
                 .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
         assertEquals(null, exhausted.inserted);
+    }
+
+    @Test
+    void reconnectRequesterReasonBindingRejectsImpersonationBeforeDiscoveryOrMutation() {
+        for (AgentCommandReconnectScope invalid : List.of(
+                new AgentCommandReconnectScope(
+                        "tenant-a", "client-a", "agent-a", "operator", "AGENT_RECONNECT"),
+                new AgentCommandReconnectScope(
+                        "tenant-a", "client-a", "agent-a", "agent-b", "AGENT_RECONNECT"),
+                new AgentCommandReconnectScope(
+                        "tenant-a", "client-a", "agent-a", "agent-a",
+                        "WAITING_AGENT_SCHEDULER"))) {
+            RecordingDao dao = waitingDao();
+            assertThrows(IllegalArgumentException.class, () -> reissue(
+                    dao, new PresenceDispatcher(true)).reissueForReconnect(invalid, 10, NOW));
+            assertEquals(0, dao.discoveryCalls);
+            assertEquals(List.of(), dao.operations);
+            assertEquals(null, dao.inserted);
+        }
+    }
+
+    @Test
+    void storedAutomaticReplayAuditRejectsRequesterReasonAndApproverDisguises() {
+        List<java.util.function.Consumer<RecordingDao>> poison = List.of(
+                dao -> replayAudit(dao, "operator", null, "AGENT_RECONNECT"),
+                dao -> replayAudit(dao, "agent-b", null, "AGENT_RECONNECT"),
+                dao -> replayAudit(dao, "agent-a", null, "WAITING_AGENT_SCHEDULER"),
+                dao -> replayAudit(dao, "agent-a", "operator", "AGENT_RECONNECT"));
+        for (var corrupt : poison) {
+            RecordingDao dao = waitingDao();
+            replayAudit(dao, "agent-a", null, "AGENT_RECONNECT");
+            corrupt.accept(dao);
+
+            AgentCommandReissueScanResult result = reissue(dao, new PresenceDispatcher(true))
+                    .reissueForReconnect(reconnectScope(), 10, NOW);
+
+            assertEquals(0, result.reissued());
+            assertFalse(dao.operations.contains("reissue"));
+            assertEquals(null, dao.inserted);
+        }
     }
 
     @Test
@@ -157,6 +197,22 @@ class AgentCommandRecoveryServiceTest {
         assertEquals(1, result.lastVisitedDeliveryId());
     }
 
+
+    @Test
+    void schedulerWinnerBindsSystemRequesterToSchedulerReason() {
+        RecordingDao dao = waitingDao();
+
+        AgentCommandReissueScanResult result = reissue(dao, new PresenceDispatcher(true))
+                .reissueDue(10, 0, NOW);
+
+        assertEquals(1, result.reissued());
+        assertEquals(AgentCommandReissueServiceImpl.REQUESTER_SCHEDULER, dao.requestedBy);
+        assertEquals(AgentCommandReissueServiceImpl.REASON_SCHEDULER, dao.reason);
+        assertEquals(AgentCommandReissueServiceImpl.REQUESTER_SCHEDULER,
+                dao.inserted.getReplayRequesterId());
+        assertEquals(AgentCommandReissueServiceImpl.REASON_SCHEDULER,
+                dao.inserted.getReplayReason());
+    }
 
     @Test
     void schedulerWithPresenceThatWasNotSuccessfullyRegisteredPerformsZeroMutation() {
@@ -278,6 +334,37 @@ class AgentCommandRecoveryServiceTest {
     }
 
     @Test
+    void ackReplayAuditUsesTheSameRequesterReasonBindingWithoutAdvancingPoison() {
+        for (List<String> valid : List.of(
+                List.of("agent-a", AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT),
+                List.of(AgentCommandReissueServiceImpl.REQUESTER_SCHEDULER,
+                        AgentCommandReissueServiceImpl.REASON_SCHEDULER))) {
+            RecordingDao dao = sentDao();
+            replayAudit(dao, valid.get(0), null, valid.get(1));
+            assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                    ackService(dao, enabledGate()).acknowledge(
+                            ack("ack-valid-" + valid.get(1), "RECEIVED", M1), NOW).kind());
+            assertEquals(1, dao.ackMutations);
+        }
+
+        List<java.util.function.Consumer<RecordingDao>> poison = List.of(
+                dao -> replayAudit(dao, "operator", null, "AGENT_RECONNECT"),
+                dao -> replayAudit(dao, "agent-b", null, "AGENT_RECONNECT"),
+                dao -> replayAudit(dao, "agent-a", null, "WAITING_AGENT_SCHEDULER"),
+                dao -> replayAudit(dao, "agent-a", "manual-approver", "AGENT_RECONNECT"),
+                dao -> dao.delivery.setReplayParentMessageId("parent-message")
+                        .setReplayRequesterId("agent-a").setReplayReason("AGENT_RECONNECT"));
+        for (var corrupt : poison) {
+            RecordingDao dao = sentDao();
+            corrupt.accept(dao);
+            assertThrows(AgentCommandAckRejectedException.class,
+                    () -> ackService(dao, enabledGate()).acknowledge(
+                            ack("ack-invalid", "RECEIVED", M1), NOW));
+            assertEquals(0, dao.ackMutations);
+        }
+    }
+
+    @Test
     void ackRejectsNonIndependentIdSourcePoisonAndDisabledGate() {
         RecordingDao sameMessage = sentDao();
         assertThrows(AgentCommandAckRejectedException.class,
@@ -373,6 +460,16 @@ class AgentCommandRecoveryServiceTest {
         inbox.setTenantId("tenant-a");
         inbox.setClientId("client-a");
         return new RecordingDao(delivery, outbox, inbox);
+    }
+
+    private static void replayAudit(
+            RecordingDao dao, String requester, String approver, String reason) {
+        dao.delivery.setReplayParentMessageId("parent-message")
+                .setReplayRequesterId(requester).setReplayApproverId(approver)
+                .setReplayReason(reason);
+        dao.outbox.setReplayParentMessageId("parent-message")
+                .setReplayRequesterId(requester).setReplayApproverId(approver)
+                .setReplayReason(reason);
     }
 
     private static AgentCommandDraft draft() {

@@ -131,8 +131,8 @@ class AgentCommandRecoveryRealTransactionTest {
 
 
     @Test
-    void maxMinusFiveCompletesReissueRelayAndInboxWithoutVersionWrap() {
-        jdbc.update("UPDATE agent_command_delivery SET version=? WHERE id=1", Long.MAX_VALUE - 5);
+    void maxMinusEightCompletesAllEightMutationsAtRejectedTerminalMaxVersion() {
+        jdbc.update("UPDATE agent_command_delivery SET version=? WHERE id=1", Long.MAX_VALUE - 8);
         assertEquals(1, reissueService(dao).reissueForReconnect(scope(), 10, NOW).reissued());
 
         AgentOutboxRelayServiceImpl relay = relayService();
@@ -154,7 +154,12 @@ class AgentCommandRecoveryRealTransactionTest {
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, inboxClaim.kind());
         inbox.complete(inboxClaim.token(), AgentInboxDisposition.sent(), NOW + 4);
 
-        assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+        ack.acknowledge(ack("ack-received", "RECEIVED", M2), NOW + 5);
+        ack.acknowledge(ack("ack-started", "STARTED", M2), NOW + 6);
+        ack.acknowledge(ack("ack-rejected", "REJECTED", M2), NOW + 7);
+
+        assertEquals("REJECTED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
         assertEquals(Long.MAX_VALUE,
                 jdbc.queryForObject("SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
         assertEquals("PUBLISHED", string(
@@ -168,8 +173,8 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     @Test
-    void maxMinusFourRejectsReissueBeforeCreatingAnUnfinishableMessage() {
-        jdbc.update("UPDATE agent_command_delivery SET version=? WHERE id=1", Long.MAX_VALUE - 4);
+    void maxMinusSevenRejectsReissueWithoutChangingDeliveryOrOutbox() {
+        jdbc.update("UPDATE agent_command_delivery SET version=? WHERE id=1", Long.MAX_VALUE - 7);
 
         assertEquals(0, reissueService(dao).reissueForReconnect(scope(), 10, NOW).reissued());
 
@@ -177,6 +182,8 @@ class AgentCommandRecoveryRealTransactionTest {
                 "SELECT status FROM agent_command_delivery WHERE id=1"));
         assertEquals(M1, string(
                 "SELECT active_message_id FROM agent_command_delivery WHERE id=1"));
+        assertEquals(Long.MAX_VALUE - 7,
+                jdbc.queryForObject("SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
         assertEquals(1, number("SELECT COUNT(*) FROM agent_outbox_event"));
     }
 
@@ -286,8 +293,13 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     private AgentCommandAck ack(String messageId, String status) {
-        return new AgentCommandAck("tenant-a", "client-a", "agent-a", messageId, M1,
-                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624", "task-1", null, status, NOW);
+        return ack(messageId, status, M1);
+    }
+
+    private AgentCommandAck ack(String messageId, String status, String correlationId) {
+        return new AgentCommandAck("tenant-a", "client-a", "agent-a", messageId, correlationId,
+                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                "task-1", null, status, NOW);
     }
 
     private void insertWaitingSource() {

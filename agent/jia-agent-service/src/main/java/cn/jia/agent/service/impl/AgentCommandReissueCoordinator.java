@@ -102,9 +102,9 @@ public final class AgentCommandReissueCoordinator implements AgentCommandReconne
         return scope != null
                 && exact(scope.tenantId(), 50)
                 && exact(scope.clientId(), 50)
-                && exact(scope.targetAgentId(), 100)
-                && exact(scope.requestedBy(), 100)
-                && AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT.equals(scope.reason());
+                && AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT.equals(scope.reason())
+                && AgentCommandAutomaticReplayProvenance.validRequesterBinding(
+                        scope.targetAgentId(), scope.requestedBy(), null, scope.reason());
     }
 
     private boolean exact(String value, int maxLength) {
