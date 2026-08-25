@@ -323,10 +323,9 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                     identity, delivery, "CONSUMED", completion.deliveryStatus(),
                     disposition.nextRetryAt(), disposition.errorCode(), now),
                     "completion delivery disposition", identity);
-        } else if (disposition.type() != AgentInboxDisposition.Type.SENT
-                || !"RECEIVED".equals(delivery.getStatus())) {
+        } else if (!validAckBeforeSentCompletion(token, disposition, delivery)) {
             throw new AgentInboxFenceException(
-                    "only a durably fast RECEIVED ACK may precede SENT completion");
+                    "only fenced in-flight ACK progress may precede SENT completion");
         }
         int inboxRows = dao.completeInbox(
                 token.inboxId(), token.tenantId(), token.clientId(),
@@ -656,11 +655,9 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 delivery, outbox, false, false, delivery.getExpiresAt()), inbox);
         boolean ordinaryCompletion = "CONSUMED".equals(delivery.getStatus())
                 && Objects.equals(delivery.getVersion(), token.deliveryVersion());
-        boolean fastReceivedCompletion = disposition.type() == AgentInboxDisposition.Type.SENT
-                && "RECEIVED".equals(delivery.getStatus())
-                && token.deliveryVersion() < Long.MAX_VALUE
-                && Objects.equals(delivery.getVersion(), token.deliveryVersion() + 1);
-        if ((!ordinaryCompletion && !fastReceivedCompletion)
+        boolean ackBeforeSentCompletion = validAckBeforeSentCompletion(
+                token, disposition, delivery);
+        if ((!ordinaryCompletion && !ackBeforeSentCompletion)
                 || !Objects.equals(delivery.getActiveMessageId(), token.messageId())
                 || !Objects.equals(delivery.getActiveAttempt(), token.deliveryActiveAttempt())
                 || !"PROCESSING".equals(inbox.getStatus())
@@ -672,6 +669,31 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
                 || !Objects.equals(inbox.getExpiresAt(), token.expiresAt())) {
             throw new AgentInboxFenceException("claim fence no longer matches durable rows");
         }
+    }
+
+    private boolean validAckBeforeSentCompletion(
+            AgentInboxClaimToken token,
+            AgentInboxDisposition disposition,
+            AgentCommandDeliveryEntity delivery) {
+        if (disposition.type() != AgentInboxDisposition.Type.SENT
+                || delivery.getVersion() == null) {
+            return false;
+        }
+        long versionDelta;
+        try {
+            versionDelta = Math.subtractExact(
+                    delivery.getVersion(), token.deliveryVersion());
+        } catch (ArithmeticException overflow) {
+            return false;
+        }
+        return switch (delivery.getStatus()) {
+            case "RECEIVED" -> versionDelta == 1;
+            case "STARTED" -> versionDelta == 2;
+            case "SUCCEEDED", "FAILED" -> versionDelta == 3
+                    || (versionDelta == 1 && token.deliveryActiveAttempt() > 1);
+            case "REJECTED" -> versionDelta >= 1 && versionDelta <= 3;
+            default -> false;
+        };
     }
 
     private ValidatedMessage tokenIdentity(

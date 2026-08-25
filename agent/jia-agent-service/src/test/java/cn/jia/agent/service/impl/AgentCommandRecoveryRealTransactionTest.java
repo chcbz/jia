@@ -17,6 +17,7 @@ import cn.jia.agent.dao.impl.AgentCommandRecoveryDaoImpl;
 import cn.jia.agent.dao.impl.AgentOutboxRelayDaoImpl;
 import cn.jia.agent.entity.AgentCommandAck;
 import cn.jia.agent.entity.AgentCommandAckRejectedException;
+import cn.jia.agent.entity.AgentCommandAckResult;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
@@ -133,7 +134,7 @@ class AgentCommandRecoveryRealTransactionTest {
 
 
     @Test
-    void fastReceivedAckBeforeSentCompletionIsDurableAndNeverRegresses() {
+    void receivedStartedAndTerminalBeforeSentCompletionNeverRegress() {
         jdbc.update("DELETE FROM agent_consumer_inbox");
         jdbc.update("UPDATE agent_command_delivery SET status='PUBLISHED',next_retry_at=NULL,"
                 + "last_error=NULL,version=7 WHERE id=1");
@@ -146,17 +147,70 @@ class AgentCommandRecoveryRealTransactionTest {
                 1L, wire), "fast-ack-worker", NOW, 10_000L);
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
         assertEquals("CONSUMED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
-        assertEquals("PROCESSING", string("SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+        assertEquals("PROCESSING", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
 
         AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
         assertEquals("RECEIVED", ack.acknowledge(
                 ack("fast-received", "RECEIVED", M1), NOW + 1).status());
-        assertEquals("RECEIVED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("STARTED", ack.acknowledge(
+                ack("fast-started", "STARTED", M1), NOW + 2).status());
+        assertEquals("SUCCEEDED", ack.acknowledge(
+                ack("fast-terminal", "SUCCEEDED", M1), NOW + 3).status());
+        assertEquals("SUCCEEDED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSING", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
 
-        inbox.complete(claim.token(), AgentInboxDisposition.sent(), NOW + 2);
-        assertEquals("RECEIVED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
-        assertEquals("PROCESSED", string("SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
-        assertEquals("SENT", string("SELECT result_status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+        inbox.complete(claim.token(), AgentInboxDisposition.sent(), NOW + 4);
+        assertEquals("SUCCEEDED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSED", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+        assertEquals("SENT", string(
+                "SELECT result_status FROM agent_consumer_inbox WHERE message_id='" + M1 + "'"));
+    }
+
+    @Test
+    void automaticReplayDirectTerminalBeforeSentCompletionIsIdempotentAndFenced() {
+        assertEquals(1, reissueService(dao).reissueForReconnect(scope(), 10, NOW).reissued());
+        AgentOutboxRelayServiceImpl relay = relayService();
+        AgentOutboxClaim relayClaim = relay.claim(
+                relay.discover(NOW + 1, 10).getFirst(), "relay-direct-terminal", NOW + 1);
+        assertEquals(AgentOutboxClaim.Status.ACQUIRED, relayClaim.status());
+        assertEquals(AgentOutboxSettleResult.PUBLISHED,
+                relay.settle(relayClaim.token(), AgentRabbitPublishResult.ack(), NOW + 2));
+
+        String eventId = string(
+                "SELECT event_id FROM agent_outbox_event WHERE message_id='" + M2 + "'");
+        byte[] wire = blob(
+                "SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M2 + "'");
+        AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
+        AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-a", "client-a", M2, eventId,
+                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                1L, wire), "direct-terminal-worker", NOW + 3, 10_000L);
+        assertEquals(AgentInboxClaim.Kind.ACQUIRED, inboxClaim.kind());
+        assertEquals("CONSUMED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+
+        AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                ack.acknowledge(ack("direct-terminal", "SUCCEEDED", M2), NOW + 4).kind());
+        assertEquals("SUCCEEDED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        inbox.complete(inboxClaim.token(), AgentInboxDisposition.sent(), NOW + 5);
+        assertEquals("SUCCEEDED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSED", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M2 + "'"));
+
+        long version = jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class);
+        assertEquals(AgentCommandAckResult.Kind.PRIOR,
+                ack.acknowledge(ack("direct-terminal-duplicate", "SUCCEEDED", M2), NOW + 6).kind());
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ack.acknowledge(
+                        ack("direct-terminal-stale", "SUCCEEDED", M1), NOW + 6));
+        assertEquals(version, jdbc.queryForObject(
+                "SELECT version FROM agent_command_delivery WHERE id=1", Long.class));
+        assertEquals(2, number("SELECT COUNT(*) FROM agent_outbox_event"));
     }
 
     @Test

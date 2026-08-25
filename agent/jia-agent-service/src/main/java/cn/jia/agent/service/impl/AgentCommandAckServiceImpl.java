@@ -79,7 +79,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
             return new AgentCommandAckResult(
                     AgentCommandAckResult.Kind.PRIOR, current, delivery.getVersion());
         }
-        String expected = expectedNext(current, ack.ackStatus());
+        String expected = expectedNext(delivery, ack.ackStatus());
         if (expected == null) throw rejected("ACK_TRANSITION_INVALID");
         validateVersionCapacity(current, delivery.getVersion());
         String lastError = switch (expected) {
@@ -152,15 +152,18 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
             List<AgentOutboxEventEntity> previousAttempts,
             AgentConsumerInboxEntity inbox,
             long now) {
-        boolean fastReceivedLane = Set.of("CONSUMED", "RECEIVED").contains(delivery.getStatus())
-                && "RECEIVED".equals(ack.ackStatus())
-                && inbox != null && "PROCESSING".equals(inbox.getStatus())
+        boolean processingAckLane = inbox != null
+                && Set.of("CONSUMED", "RECEIVED", "STARTED",
+                        "SUCCEEDED", "FAILED", "REJECTED").contains(delivery.getStatus())
+                && (ack.ackStatus().equals(delivery.getStatus())
+                    || expectedNext(delivery, ack.ackStatus()) != null)
+                && "PROCESSING".equals(inbox.getStatus())
                 && inbox.getResultStatus() == null
                 && inbox.getProcessedAt() == null
                 && exact(inbox.getLeaseOwner(), 100)
                 && inbox.getLeaseUntil() != null && inbox.getLeaseUntil() > now
                 && now < delivery.getExpiresAt()
-                && delivery.getNextRetryAt() == null && delivery.getLastError() == null
+                && delivery.getNextRetryAt() == null && validAckLastError(delivery)
                 && inbox.getNextRetryAt() == null && inbox.getLastError() == null;
         boolean settledSentLane = !"CONSUMED".equals(delivery.getStatus())
                 && inbox != null && "PROCESSED".equals(inbox.getStatus())
@@ -201,7 +204,7 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || !outbox.getEventId().equals(inbox.getEventId())
                 || !delivery.getCommandId().equals(inbox.getCommandId())
                 || !Objects.equals(delivery.getId(), inbox.getDeliveryId())
-                || (!fastReceivedLane && !settledSentLane)
+                || (!processingAckLane && !settledSentLane)
                 || inbox.getAttemptCount() == null || inbox.getAttemptCount() <= 0
                 || inbox.getActiveAttempt() == null
                 || !inbox.getActiveAttempt().equals(inbox.getAttemptCount())
@@ -238,6 +241,14 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
         }
     }
 
+    private boolean validAckLastError(AgentCommandDeliveryEntity delivery) {
+        return switch (delivery.getStatus()) {
+            case "FAILED" -> AGENT_REPORTED_FAILED.equals(delivery.getLastError());
+            case "REJECTED" -> AGENT_REPORTED_REJECTED.equals(delivery.getLastError());
+            default -> delivery.getLastError() == null;
+        };
+    }
+
     private boolean validReplayAudit(
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
@@ -263,11 +274,16 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 delivery.getActiveAttempt() - 1);
     }
 
-    private String expectedNext(String current, String requested) {
-        return switch (current) {
-            case "CONSUMED" -> "RECEIVED".equals(requested) ? requested : null;
-            case "SENT" -> Set.of("RECEIVED", "REJECTED").contains(requested) ? requested : null;
-            case "RECEIVED" -> Set.of("STARTED", "REJECTED").contains(requested) ? requested : null;
+    private String expectedNext(
+            AgentCommandDeliveryEntity delivery, String requested) {
+        boolean automaticReplay = delivery.getActiveAttempt() != null
+                && delivery.getActiveAttempt() > 1;
+        return switch (delivery.getStatus()) {
+            case "CONSUMED", "SENT" -> Set.of("RECEIVED", "REJECTED").contains(requested)
+                    || (automaticReplay && Set.of("SUCCEEDED", "FAILED").contains(requested))
+                    ? requested : null;
+            case "RECEIVED" -> Set.of("STARTED", "REJECTED").contains(requested)
+                    ? requested : null;
             case "STARTED" -> Set.of("SUCCEEDED", "FAILED", "REJECTED").contains(requested)
                     ? requested : null;
             default -> null;

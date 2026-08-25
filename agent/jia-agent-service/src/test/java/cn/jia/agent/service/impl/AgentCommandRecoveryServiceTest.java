@@ -522,20 +522,55 @@ class AgentCommandRecoveryServiceTest {
     }
 
     @Test
-    void fastReceivedAckAgainstProcessingInboxAdvancesOnlyDelivery() {
+    void automaticReplayAcceptsDirectTerminalAndRejectsOriginalAttemptOrStaleFence() {
+        for (String terminal : List.of("SUCCEEDED", "FAILED")) {
+            RecordingDao replay = sentDao();
+            setTransportAttempt(replay, 2);
+            replayAudit(replay, "agent-a", null,
+                    AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+            AgentCommandAckServiceImpl service = ackService(replay, enabledGate());
+
+            AgentCommandAckResult advanced = service.acknowledge(
+                    ack("ack-direct-" + terminal, terminal, M1), NOW);
+            assertEquals(AgentCommandAckResult.Kind.ADVANCED, advanced.kind());
+            assertEquals(terminal, replay.delivery.getStatus());
+            assertEquals(1, replay.ackMutations);
+            assertEquals(AgentCommandAckResult.Kind.PRIOR,
+                    service.acknowledge(
+                            ack("ack-direct-duplicate-" + terminal, terminal, M1), NOW).kind());
+            assertThrows(AgentCommandAckRejectedException.class,
+                    () -> service.acknowledge(
+                            ack("ack-direct-stale-" + terminal, terminal,
+                                    "parent-message"), NOW));
+            assertEquals(1, replay.ackMutations);
+        }
+
+        RecordingDao original = sentDao();
+        assertThrows(AgentCommandAckRejectedException.class,
+                () -> ackService(original, enabledGate()).acknowledge(
+                        ack("ack-original-skip", "SUCCEEDED", M1), NOW));
+        assertEquals(0, original.ackMutations);
+    }
+
+    @Test
+    void receivedStartedAndTerminalBeforeSentCompletionAdvanceOnlyDelivery() {
         RecordingDao dao = sourceDao();
         dao.delivery.setStatus("CONSUMED").setNextRetryAt(null).setLastError(null);
         dao.inbox.setStatus("PROCESSING").setResultStatus(null)
                 .setProcessedAt(null).setNextRetryAt(null).setLastError(null)
                 .setLeaseOwner("worker-a").setLeaseUntil(NOW + 10_000L);
+        AgentCommandAckServiceImpl service = ackService(dao, enabledGate());
 
-        AgentCommandAckResult result = ackService(dao, enabledGate()).acknowledge(
-                ack("ack-fast-received", "RECEIVED", M1), NOW);
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                service.acknowledge(ack("ack-fast-received", "RECEIVED", M1), NOW).kind());
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                service.acknowledge(ack("ack-fast-started", "STARTED", M1), NOW).kind());
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                service.acknowledge(ack("ack-fast-terminal", "SUCCEEDED", M1), NOW).kind());
 
-        assertEquals(AgentCommandAckResult.Kind.ADVANCED, result.kind());
-        assertEquals("RECEIVED", dao.delivery.getStatus());
+        assertEquals("SUCCEEDED", dao.delivery.getStatus());
         assertEquals("PROCESSING", dao.inbox.getStatus());
-        assertEquals(1, dao.ackMutations);
+        assertEquals(3, dao.ackMutations);
     }
 
     @Test
