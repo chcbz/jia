@@ -31,6 +31,8 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -76,13 +78,16 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     private static final int DEFAULT_AMQP_PORT = 5672;
     private static final int DEFAULT_DISTRIBUTION_PORT = 25672;
     private static final String FIXTURE_CONTRACT = """
-            d09-rabbit-redrive-integration/v2
+            d09-rabbit-redrive-integration/v3
             runtime=/home/isp/apps/rabbitmq/sbin/rabbitmq-server
             broker=rabbitmq-3.6.11-local-isolated-second-node
             lifecycle=junit-direct-child-exact-pid-start-marker-bounded-term-force
             network=loopback-random-amqp-distribution-never-default
             identity=unique-short-node-cookie-user-password-vhost
             storage=fresh-temp-mnesia-log-config-plugins-pid
+            resources=io-thread-pool-4-async-4-schedulers-2-dirty-cpu-1-dirty-io-1
+            readiness=90s-child-alive-amqp-listener-authenticated-probe-each-round
+            diagnostics=pre-cleanup-console-main-sasl-crash-existence-size-tail-64k-redacted
             plugins=none-amqp-only
             topology=d04-canonical-explicit-provision
             source=basic-get-no-auto-ack
@@ -93,7 +98,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             cleanup=exact-child-only-owned-temp-root
             """;
     private static final String FIXTURE_SHA256 =
-            "90b62adb08d5cb22f6bf8f5ee93652b8114c113545ceb32993010c7b47f8747d";
+            "f82d2e362e8e483b9777497bed8dd394d0c619168bf251768319cefa7401deff";
     private static final AgentRabbitTopologyManifest MANIFEST =
             AgentRabbitTopologyManifest.canonical();
     private static final AtomicInteger REQUEST_SEQUENCE = new AtomicInteger();
@@ -157,12 +162,15 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                     "D09_RABBIT_FIXTURE fixtureSha256=%s topologySha256=%s "
                             + "brokerVersion=%s node=%s childPid=%d childStart=%s "
                             + "runId=%s amqpPort=%d distributionPort=%d root=%s "
+                            + "ioThreadPool=%s additionalErlArgs=%s "
                             + "vhost=%s user=%s host5672Before=%s host25672Before=%s "
                             + "productionPid=%d productionPidStart=%s "
                             + "productionMnesiaSha256=%s productionLogSha256=%s%n",
                     FIXTURE_SHA256, MANIFEST.sha256(), broker.serverVersion(),
                     broker.nodeName(), broker.childPid(), broker.childStartMarker(), runId,
                     mappedAmqpPort, broker.distributionPort(), broker.root(),
+                    LocalRabbitBroker.IO_THREAD_POOL_SIZE,
+                    LocalRabbitBroker.LOW_RESOURCE_ERL_ARGS,
                     virtualHost, username, hostStateBefore.listener5672(),
                     hostStateBefore.listener25672(), PRODUCTION_RABBIT_PID,
                     hostStateBefore.productionProcess().startMarker(),
@@ -835,9 +843,13 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     }
 
     private static final class LocalRabbitBroker {
-        private static final long START_TIMEOUT_MILLIS = 45_000L;
+        private static final long START_TIMEOUT_MILLIS = 90_000L;
         private static final long TERM_TIMEOUT_MILLIS = 20_000L;
         private static final long FORCE_TIMEOUT_MILLIS = 10_000L;
+        private static final int DIAGNOSTIC_TAIL_LIMIT_BYTES = 64 * 1024;
+        private static final String IO_THREAD_POOL_SIZE = "4";
+        private static final String LOW_RESOURCE_ERL_ARGS =
+                "+S 2:2 +SDcpu 1:1 +SDio 1";
 
         private final String runId;
         private final String username;
@@ -854,6 +866,9 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         private final Path enabledPluginsFile;
         private final Path pidFile;
         private final Path consoleLog;
+        private final Path mainLog;
+        private final Path saslLog;
+        private final Path erlCrashDump;
         private final int amqpPort;
         private final int distributionPort;
 
@@ -887,6 +902,9 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             this.enabledPluginsFile = root.resolve("config/enabled_plugins");
             this.pidFile = root.resolve("run/rabbit.pid");
             this.consoleLog = logBase.resolve("console.log");
+            this.mainLog = logBase.resolve(nodeName + ".log");
+            this.saslLog = logBase.resolve(nodeName + "-sasl.log");
+            this.erlCrashDump = logBase.resolve("erl_crash.dump");
             this.amqpPort = ports.amqp();
             this.distributionPort = ports.distribution();
         }
@@ -945,12 +963,13 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             environment.put("RABBITMQ_NODE_IP_ADDRESS", "127.0.0.1");
             environment.put("RABBITMQ_NODE_PORT", Integer.toString(amqpPort));
             environment.put("RABBITMQ_DIST_PORT", Integer.toString(distributionPort));
+            environment.put("RABBITMQ_IO_THREAD_POOL_SIZE", IO_THREAD_POOL_SIZE);
+            environment.put("RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS", LOW_RESOURCE_ERL_ARGS);
             environment.put("RABBITMQ_MNESIA_BASE", mnesiaBase.toString());
             environment.put("RABBITMQ_MNESIA_DIR", mnesiaDirectory.toString());
             environment.put("RABBITMQ_LOG_BASE", logBase.toString());
-            environment.put("RABBITMQ_LOGS", logBase.resolve(nodeName + ".log").toString());
-            environment.put("RABBITMQ_SASL_LOGS",
-                    logBase.resolve(nodeName + "-sasl.log").toString());
+            environment.put("RABBITMQ_LOGS", mainLog.toString());
+            environment.put("RABBITMQ_SASL_LOGS", saslLog.toString());
             environment.put("RABBITMQ_CONFIG_FILE", configBase.toString());
             environment.put("RABBITMQ_CONF_ENV_FILE",
                     root.resolve("config/rabbitmq-env.conf").toString());
@@ -959,7 +978,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             environment.put("RABBITMQ_PLUGINS_EXPAND_DIR",
                     root.resolve("plugins-expand").toString());
             environment.put("RABBITMQ_PID_FILE", pidFile.toString());
-            environment.put("ERL_CRASH_DUMP", logBase.resolve("erl_crash.dump").toString());
+            environment.put("ERL_CRASH_DUMP", erlCrashDump.toString());
             process = builder.start();
             ProcessIdentity initialIdentity = processIdentity(process.pid());
             childStartMarker = initialIdentity.startMarker();
@@ -975,7 +994,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
         private void prepareOwnedRoot() throws IOException {
             for (Path path : List.of(mnesiaBase, mnesiaDirectory, logBase, configBase,
-                    enabledPluginsFile, pidFile, consoleLog)) {
+                    enabledPluginsFile, pidFile, consoleLog, mainLog, saslLog, erlCrashDump)) {
                 assertTrue(path.toAbsolutePath().normalize().startsWith(root),
                         "isolated Rabbit path escaped owned root: " + path);
                 assertTrue(!path.startsWith(PRODUCTION_MNESIA) && !path.startsWith(PRODUCTION_LOG),
@@ -1029,35 +1048,53 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             long deadline = System.nanoTime()
                     + TimeUnit.MILLISECONDS.toNanos(START_TIMEOUT_MILLIS);
             Throwable lastFailure = null;
+            boolean listenerObserved = false;
             while (System.nanoTime() < deadline) {
                 if (!process.isAlive()) {
-                    throw new AssertionError("isolated Rabbit child exited before readiness: "
-                            + redactedConsoleTail(), lastFailure);
+                    throw readinessFailure(
+                            "child exited before readiness", lastFailure, listenerObserved);
                 }
                 try {
-                    ConnectionFactory probe = new ConnectionFactory();
-                    probe.setHost("127.0.0.1");
-                    probe.setPort(amqpPort);
-                    probe.setUsername(username);
-                    probe.setPassword(password);
-                    probe.setVirtualHost(virtualHost);
-                    probe.setConnectionTimeout(1_000);
-                    probe.setHandshakeTimeout(2_000);
-                    probe.setAutomaticRecoveryEnabled(false);
-                    try (Connection connection = probe.newConnection(
-                            "D09-" + runId.substring(0, 16) + "-readiness")) {
-                        Object version = connection.getServerProperties().get("version");
-                        serverVersion = String.valueOf(version);
-                        assertEquals("3.6.11", serverVersion);
-                        return;
+                    listenerObserved = !hostListenerSnapshot(amqpPort).isEmpty();
+                } catch (Throwable failure) {
+                    throw readinessFailure(
+                            "AMQP listener inspection failed", failure, listenerObserved);
+                }
+                if (listenerObserved) {
+                    try {
+                        ConnectionFactory probe = new ConnectionFactory();
+                        probe.setHost("127.0.0.1");
+                        probe.setPort(amqpPort);
+                        probe.setUsername(username);
+                        probe.setPassword(password);
+                        probe.setVirtualHost(virtualHost);
+                        probe.setConnectionTimeout(1_000);
+                        probe.setHandshakeTimeout(2_000);
+                        probe.setAutomaticRecoveryEnabled(false);
+                        try (Connection connection = probe.newConnection(
+                                "D09-" + runId.substring(0, 16) + "-readiness")) {
+                            Object version = connection.getServerProperties().get("version");
+                            serverVersion = String.valueOf(version);
+                            if (!"3.6.11".equals(serverVersion)) {
+                                throw readinessFailure(
+                                        "unexpected broker version " + serverVersion, null, true);
+                            }
+                            return;
+                        }
+                    } catch (IOException | TimeoutException failure) {
+                        lastFailure = failure;
                     }
-                } catch (IOException | TimeoutException failure) {
-                    lastFailure = failure;
+                }
+                try {
                     Thread.sleep(100L);
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw readinessFailure(
+                            "readiness wait interrupted", failure, listenerObserved);
                 }
             }
-            throw new AssertionError("isolated Rabbit readiness timed out: "
-                    + redactedConsoleTail(), lastFailure);
+            throw readinessFailure("readiness timed out after " + START_TIMEOUT_MILLIS + "ms",
+                    lastFailure, listenerObserved);
         }
 
         void stopExactChildAndDeleteRoot() throws Exception {
@@ -1132,18 +1169,99 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                     "isolated Rabbit temp root must be removed");
         }
 
-        private String redactedConsoleTail() {
-            try {
-                if (!Files.exists(consoleLog)) return "<no console log>";
-                String log = Files.readString(consoleLog, StandardCharsets.UTF_8);
-                String tail = log.substring(Math.max(0, log.length() - 8_192));
-                return tail.replace(password, "<redacted-password>")
-                        .replace(cookie, "<redacted-cookie>")
-                        .replace(username, "<redacted-user>")
-                        .replace(virtualHost, "<redacted-vhost>");
-            } catch (IOException failure) {
-                return "<console log unreadable: " + failure.getClass().getSimpleName() + ">";
+        private AssertionError readinessFailure(
+                String reason, Throwable cause, boolean listenerObserved) {
+            RabbitDiagnosticCapture diagnostics = captureRabbitDiagnostics();
+            Throwable redactedCause = cause == null ? null : new IOException(
+                    "readiness probe " + cause.getClass().getSimpleName() + ": "
+                            + redact(String.valueOf(cause.getMessage())));
+            String message = "isolated Rabbit readiness failed: reason=" + redact(reason)
+                    + " childAlive=" + isAlive()
+                    + " amqpListener=" + listenerObserved
+                    + "\n" + diagnostics.report();
+            AssertionError failure = redactedCause == null
+                    ? new AssertionError(message)
+                    : new AssertionError(message, redactedCause);
+            diagnostics.failures().forEach(failure::addSuppressed);
+            return failure;
+        }
+
+        private RabbitDiagnosticCapture captureRabbitDiagnostics() {
+            StringBuilder report = new StringBuilder(
+                    "rabbitDiagnostics tailLimitBytes=" + DIAGNOSTIC_TAIL_LIMIT_BYTES);
+            List<Throwable> failures = new ArrayList<>();
+            for (RabbitDiagnosticFile diagnostic : List.of(
+                    new RabbitDiagnosticFile("console", consoleLog),
+                    new RabbitDiagnosticFile("main", mainLog),
+                    new RabbitDiagnosticFile("sasl", saslLog),
+                    new RabbitDiagnosticFile("erl_crash_dump", erlCrashDump))) {
+                appendRabbitDiagnostic(report, failures, diagnostic);
             }
+            return new RabbitDiagnosticCapture(redact(report.toString()), List.copyOf(failures));
+        }
+
+        private void appendRabbitDiagnostic(
+                StringBuilder report,
+                List<Throwable> failures,
+                RabbitDiagnosticFile diagnostic) {
+            report.append("\n[").append(diagnostic.label()).append("] ");
+            Path path = diagnostic.path();
+            try {
+                if (Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) {
+                    report.append("exists=false size=0 tailBytes=0 tail=<absent>");
+                    return;
+                }
+                BasicFileAttributes attributes = Files.readAttributes(
+                        path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                report.append("exists=true size=").append(attributes.size());
+                if (!attributes.isRegularFile()) {
+                    report.append(" tailBytes=0 tail=<non-regular>");
+                    return;
+                }
+                int requested = (int) Math.min(
+                        attributes.size(), DIAGNOSTIC_TAIL_LIMIT_BYTES);
+                byte[] tail = new byte[requested];
+                int readBytes;
+                try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+                    channel.position(Math.max(0L, attributes.size() - requested));
+                    ByteBuffer buffer = ByteBuffer.wrap(tail);
+                    while (buffer.hasRemaining()) {
+                        int read = channel.read(buffer);
+                        if (read <= 0) break;
+                    }
+                    readBytes = buffer.position();
+                }
+                report.append(" tailBytes=").append(readBytes).append(" tail=<<<")
+                        .append(new String(tail, 0, readBytes, StandardCharsets.UTF_8))
+                        .append(">>>");
+            } catch (Throwable failure) {
+                report.append("exists=unknown size=unknown tailBytes=0 tail=<unreadable:")
+                        .append(failure.getClass().getSimpleName()).append('>');
+                failures.add(new IOException(
+                        "Rabbit diagnostic " + diagnostic.label() + " read failed: "
+                                + failure.getClass().getName()));
+            }
+        }
+
+        private String redact(String value) {
+            String redacted = value;
+            redacted = replaceSensitive(redacted, password, "<redacted-password>");
+            redacted = replaceSensitive(redacted, cookie, "<redacted-cookie>");
+            redacted = replaceSensitive(redacted, username, "<redacted-user>");
+            redacted = replaceSensitive(redacted, virtualHost, "<redacted-vhost>");
+            redacted = replaceSensitive(redacted, nodeName, "<redacted-node>");
+            redacted = replaceSensitive(redacted, root.toString(), "<redacted-root>");
+            redacted = replaceSensitive(redacted, runId, "<redacted-run-id>");
+            redacted = replaceSensitive(
+                    redacted, runId.substring(0, 16), "<redacted-run-id-prefix>");
+            return redacted;
+        }
+
+        private static String replaceSensitive(
+                String value, String sensitive, String replacement) {
+            return sensitive == null || sensitive.isEmpty()
+                    ? value
+                    : value.replace(sensitive, replacement);
         }
 
         long pidFileValue() throws IOException {
@@ -1203,6 +1321,12 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
         int distributionPort() {
             return distributionPort;
+        }
+
+        private record RabbitDiagnosticFile(String label, Path path) {
+        }
+
+        private record RabbitDiagnosticCapture(String report, List<Throwable> failures) {
         }
     }
 
