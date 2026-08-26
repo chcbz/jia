@@ -61,6 +61,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -77,8 +78,14 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     private static final long PRODUCTION_RABBIT_PID = 8150L;
     private static final int DEFAULT_AMQP_PORT = 5672;
     private static final int DEFAULT_DISTRIBUTION_PORT = 25672;
+    private static final Set<String> SPRING_PUBLISH_TRANSPORT_HEADERS = Set.of(
+            "spring_listener_return_correlation",
+            "spring_returned_message_correlation");
+    private static final Map<String, String> SOURCE_SPRING_TRANSPORT_HEADERS = Map.of(
+            "spring_listener_return_correlation", "11111111-1111-1111-1111-111111111111",
+            "spring_returned_message_correlation", "22222222-2222-2222-2222-222222222222");
     private static final String FIXTURE_CONTRACT = """
-            d09-rabbit-redrive-integration/v3
+            d09-rabbit-redrive-integration/v4
             runtime=/home/isp/apps/rabbitmq/sbin/rabbitmq-server
             broker=rabbitmq-3.6.11-local-isolated-second-node
             lifecycle=junit-direct-child-exact-pid-start-marker-bounded-term-force
@@ -91,14 +98,15 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             plugins=none-amqp-only
             topology=d04-canonical-explicit-provision
             source=basic-get-no-auto-ack
-            settle=ack-only-after-confirmed-not-returned
+            settle=ack-only-after-confirmed-not-returned-same-channel-passive-declare-barrier
             failure=return-nack-exception-timeout-requeue
             scan=bounded-non-target-requeue
+            transport=spring-mandatory-correlated-source-pair-validated-stripped-fresh-pair
             host-guard=5672-25672-listeners-pid-8150-production-tree-before-after
             cleanup=exact-child-only-owned-temp-root
             """;
     private static final String FIXTURE_SHA256 =
-            "46dd3c466a1e04e9c89f54a5365040ec36081387d3348b7f027d765890800991";
+            "1491351afde5fe012fa17cf569747c956615766d8bbb1702f46b05983c4d9b76";
     private static final AgentRabbitTopologyManifest MANIFEST =
             AgentRabbitTopologyManifest.canonical();
     private static final AtomicInteger REQUEST_SEQUENCE = new AtomicInteger();
@@ -312,6 +320,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     void confirmedRedriveAcksSourceAndPreservesMessageIdRawBodyHashAndCanonicalHeaders()
             throws Exception {
         AgentConfirmedPublishRequest expected = request("confirmed");
+        assertSpringTransportHeaderDriftRejected(expected);
         Map<String, Object> sourceHeaders = seedDlq(expected);
 
         AgentRabbitPublishResult result = redriver(confirmedPublisher)
@@ -336,11 +345,14 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         assertEquals(Integer.valueOf(2), republished.getProps().getDeliveryMode());
         assertEquals(AgentCommandAmqpContract.MESSAGE_TYPE,
                 republished.getProps().getType());
-        assertCanonicalHeadersPreserved(sourceHeaders, republished.getProps().getHeaders());
+        assertCanonicalHeadersPreserved(sourceHeaders, republished.getProps().getHeaders(),
+                SPRING_PUBLISH_TRANSPORT_HEADERS);
+        assertFreshSpringTransportHeaders(republished.getProps().getHeaders());
         assertEquals(AgentCommandAmqpContract.hex(expected.wirePayloadHash()),
                 headerText(republished.getProps().getHeaders().get(
                         AgentCommandAmqpContract.HEADER_WIRE_SHA256)));
         assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+        assertEquals(0, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
     }
 
     @Test
@@ -495,6 +507,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         long before = queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE);
         Map<String, Object> headers = new LinkedHashMap<>(
                 AgentCommandAmqpContract.headers(request));
+        headers.putAll(SOURCE_SPRING_TRANSPORT_HEADERS);
         AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
                 .contentType(AgentCommandAmqpContract.CONTENT_TYPE)
                 .contentEncoding(AgentCommandAmqpContract.CONTENT_ENCODING)
@@ -513,7 +526,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         });
         assertEquals(before + 1,
                 queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
-        return Map.copyOf(headers);
+        return AgentCommandAmqpContract.headers(request);
     }
 
     private static void assertAndRemoveOnlyDlqMessage(
@@ -523,8 +536,14 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         assertNotNull(source);
         assertEquals(expected.messageId(), source.getProps().getMessageId());
         assertArrayEquals(expected.wirePayload(), source.getBody());
-        assertCanonicalHeadersExactly(
-                AgentCommandAmqpContract.headers(expected), source.getProps().getHeaders());
+        assertCanonicalHeadersPreserved(
+                AgentCommandAmqpContract.headers(expected), source.getProps().getHeaders(),
+                SPRING_PUBLISH_TRANSPORT_HEADERS);
+        for (Map.Entry<String, String> transport : SOURCE_SPRING_TRANSPORT_HEADERS.entrySet()) {
+            assertEquals(transport.getValue(),
+                    headerText(source.getProps().getHeaders().get(transport.getKey())),
+                    transport.getKey());
+        }
         assertEquals(0, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
         assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
     }
@@ -552,21 +571,22 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
     private static void assertCanonicalHeadersExactly(
             Map<String, Object> expected, Map<String, Object> actual) {
-        assertCanonicalHeadersPreserved(expected, actual);
+        assertCanonicalHeadersPreserved(expected, actual, Set.of());
         assertEquals(expected.keySet(), actual.keySet());
         assertEquals(13, actual.size());
     }
 
     private static void assertCanonicalHeadersPreserved(
-            Map<String, Object> expected, Map<String, Object> actual) {
+            Map<String, Object> expected,
+            Map<String, Object> actual,
+            Set<String> expectedTransportHeaders) {
         assertNotNull(actual);
         assertEquals(13, expected.size());
         assertTrue(actual.keySet().containsAll(expected.keySet()));
         Set<String> extraHeaders = new LinkedHashSet<>(actual.keySet());
         extraHeaders.removeAll(expected.keySet());
-        assertTrue(extraHeaders.isEmpty()
-                        || extraHeaders.equals(Set.of("spring_returned_message_correlation")),
-                "only Spring's publisher-return correlation header may be transport-added");
+        assertEquals(expectedTransportHeaders, extraHeaders,
+                "only the exact Spring mandatory/correlated transport headers may be added");
         for (Map.Entry<String, Object> entry : expected.entrySet()) {
             Object brokerValue = actual.get(entry.getKey());
             if (entry.getValue() instanceof Number number) {
@@ -576,11 +596,15 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                 assertEquals(entry.getValue(), headerText(brokerValue), entry.getKey());
             }
         }
+        Set<String> transportValues = new LinkedHashSet<>();
         for (String extraHeader : extraHeaders) {
             String extraValue = headerText(actual.get(extraHeader));
             assertTrue(extraValue.matches("[0-9a-f-]{36}"), extraHeader);
             assertFalseContainsSensitive(extraValue);
+            transportValues.add(extraValue);
         }
+        assertEquals(extraHeaders.size(), transportValues.size(),
+                "Spring transport correlations must remain independent");
     }
 
     private static void assertFalseContainsSensitive(String value) {
@@ -588,6 +612,33 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                         && !value.contains(password)
                         && !value.contains(virtualHost),
                 "transport-added header must not contain broker identity or credentials");
+    }
+
+    private static void assertFreshSpringTransportHeaders(Map<String, Object> headers) {
+        for (Map.Entry<String, String> source : SOURCE_SPRING_TRANSPORT_HEADERS.entrySet()) {
+            assertNotEquals(source.getValue(), headerText(headers.get(source.getKey())),
+                    source.getKey());
+        }
+    }
+
+    private static void assertSpringTransportHeaderDriftRejected(
+            AgentConfirmedPublishRequest request) {
+        Map<String, Object> partial = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        partial.put("spring_listener_return_correlation",
+                SOURCE_SPRING_TRANSPORT_HEADERS.get("spring_listener_return_correlation"));
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(request, partial));
+
+        Map<String, Object> duplicated = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        String repeated = SOURCE_SPRING_TRANSPORT_HEADERS.get(
+                "spring_listener_return_correlation");
+        duplicated.put("spring_listener_return_correlation", repeated);
+        duplicated.put("spring_returned_message_correlation", repeated);
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(
+                        request, duplicated));
     }
 
     private static long integral(Number value) {

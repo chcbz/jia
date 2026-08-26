@@ -182,6 +182,9 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
             "x-death", "x-first-death-exchange", "x-first-death-queue",
             "x-first-death-reason", "x-last-death-exchange", "x-last-death-queue",
             "x-last-death-reason");
+    private static final Set<String> SPRING_TRANSPORT_HEADERS = Set.of(
+            "spring_listener_return_correlation",
+            "spring_returned_message_correlation");
     private static final Set<String> DEATH_ENTRY_KEYS = Set.of(
             "count", "reason", "queue", "time", "exchange", "routing-keys",
             "original-expiration");
@@ -193,18 +196,23 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
         Objects.requireNonNull(candidate, "preservedHeaders");
         Map<String, Object> canonical = AgentCommandAmqpContract.headers(request);
         if (candidate.size() < canonical.size()
-                || candidate.size() > canonical.size() + DEAD_LETTER_HEADERS.size()) {
+                || candidate.size() > canonical.size() + DEAD_LETTER_HEADERS.size()
+                + SPRING_TRANSPORT_HEADERS.size()) {
             throw new IllegalArgumentException("DLQ header count is invalid");
         }
+        validateSpringTransportHeaders(candidate);
         LinkedHashMap<String, Object> preserved = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : candidate.entrySet()) {
             String name = entry.getKey();
             Object value = entry.getValue();
             if (name == null || value == null
-                    || (!canonical.containsKey(name) && !DEAD_LETTER_HEADERS.contains(name))) {
+                    || (!canonical.containsKey(name) && !DEAD_LETTER_HEADERS.contains(name)
+                    && !SPRING_TRANSPORT_HEADERS.contains(name))) {
                 throw new IllegalArgumentException("Unexpected DLQ header");
             }
-            preserved.put(name, value);
+            // RabbitTemplate regenerates its mandatory/confirm correlations for this send;
+            // stale source correlations are validated above but are not broker provenance.
+            if (!SPRING_TRANSPORT_HEADERS.contains(name)) preserved.put(name, value);
         }
         for (Map.Entry<String, Object> expected : canonical.entrySet()) {
             if (!headerEquals(expected.getValue(), candidate.get(expected.getKey()))) {
@@ -213,6 +221,30 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
         }
         validateDeathHeaders(candidate);
         return Collections.unmodifiableMap(preserved);
+    }
+
+    private static void validateSpringTransportHeaders(Map<String, Object> candidate) {
+        long present = SPRING_TRANSPORT_HEADERS.stream().filter(candidate::containsKey).count();
+        if (present != 0 && present != SPRING_TRANSPORT_HEADERS.size()) {
+            throw new IllegalArgumentException("Partial Spring transport correlation is invalid");
+        }
+        Set<String> values = new java.util.HashSet<>();
+        for (String name : SPRING_TRANSPORT_HEADERS) {
+            if (!candidate.containsKey(name)) continue;
+            String value = headerText(candidate.get(name));
+            try {
+                if (value == null || !UUID.fromString(value).toString().equals(value)) {
+                    throw new IllegalArgumentException("Spring transport correlation is invalid");
+                }
+            } catch (IllegalArgumentException invalid) {
+                throw new IllegalArgumentException(
+                        "Spring transport correlation is invalid", invalid);
+            }
+            values.add(value);
+        }
+        if (present != 0 && values.size() != SPRING_TRANSPORT_HEADERS.size()) {
+            throw new IllegalArgumentException("Spring transport correlations are not independent");
+        }
     }
 
     private static void validateDeathHeaders(Map<String, Object> candidate) {
