@@ -7,6 +7,7 @@ import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
+import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandManualReissueResult;
 import cn.jia.agent.entity.AgentCommandMetricCount;
@@ -692,7 +693,8 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         LinkedHashMap<String, Long> result = new LinkedHashMap<>();
         for (String label : allowlist) result.put(label, 0L);
         Set<String> seen = new HashSet<>();
-        for (AgentCommandMetricCount row : Objects.requireNonNullElse(rows, List.of())) {
+        List<AgentCommandMetricCount> safeRows = rows == null ? List.of() : rows;
+        for (AgentCommandMetricCount row : safeRows) {
             if (row == null || !result.containsKey(row.label()) || row.count() < 0
                     || !seen.add(row.label())) {
                 throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
@@ -710,7 +712,8 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
             }
         }
         Set<String> seen = new HashSet<>();
-        for (AgentCommandMetricCount row : Objects.requireNonNullElse(rows, List.of())) {
+        List<AgentCommandMetricCount> safeRows = rows == null ? List.of() : rows;
+        for (AgentCommandMetricCount row : safeRows) {
             if (row == null || !result.containsKey(row.label()) || row.count() < 0
                     || !seen.add(row.label())) {
                 throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
