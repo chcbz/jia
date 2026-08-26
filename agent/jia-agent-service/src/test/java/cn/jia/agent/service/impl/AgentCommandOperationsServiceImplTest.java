@@ -38,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -57,12 +58,12 @@ class AgentCommandOperationsServiceImplTest {
     void brokerRedriveCommitsRequestAuditBeforeTransactionFreeExactBrokerPublish() {
         Fixture fixture = fixture();
         List<String> order = new ArrayList<>();
-        when(fixture.dao.insertAudit(any())).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
             AgentCommandOperationAuditEntity audit = invocation.getArgument(0);
             audit.setId(fixture.ids.incrementAndGet());
             order.add("audit:" + audit.getPhase());
             return 1;
-        });
+        }).when(fixture.dao).insertAudit(any());
         AgentCommandDlqRedriver redriver = (request, timeout, scanLimit) -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             order.add("broker");
@@ -171,12 +172,12 @@ class AgentCommandOperationsServiceImplTest {
                     "33333333-3333-3333-3333-333333333333", 1, 2);
         });
         AtomicLong inserts = new AtomicLong();
-        when(fixture.dao.insertAudit(any())).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
             AgentCommandOperationAuditEntity row = invocation.getArgument(0);
             if (inserts.incrementAndGet() == 2) throw new IllegalStateException("db unavailable");
             row.setId(77L);
             return 1;
-        });
+        }).when(fixture.dao).insertAudit(any());
 
         AgentCommandOperationsException failure = assertThrows(
                 AgentCommandOperationsException.class,
@@ -235,12 +236,12 @@ class AgentCommandOperationsServiceImplTest {
 
         Fixture missingResult = fixture();
         AtomicLong inserts = new AtomicLong();
-        when(missingResult.dao.insertAudit(any())).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
             AgentCommandOperationAuditEntity row = invocation.getArgument(0);
             if (inserts.incrementAndGet() == 2) throw new IllegalStateException("db unavailable");
             row.setId(77L);
             return 1;
-        });
+        }).when(missingResult.dao).insertAudit(any());
         AgentCommandDlqRedriver ack = mock(AgentCommandDlqRedriver.class);
         when(ack.redrive(any(), anyLong(), anyInt())).thenReturn(AgentRabbitPublishResult.ack());
         AgentCommandOperationsException auditFailure = assertThrows(
@@ -396,11 +397,12 @@ class AgentCommandOperationsServiceImplTest {
                 .thenReturn(List.of(outbox));
         when(dao.lockInbox("tenant-a", "client-a", "agent-command-dispatch-v1", MESSAGE))
                 .thenReturn(null);
+        when(dao.oldestOutboxEpoch("tenant-a", "client-a")).thenReturn(null);
         AtomicLong ids = new AtomicLong(10);
-        when(dao.insertAudit(any())).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
             ((AgentCommandOperationAuditEntity) invocation.getArgument(0)).setId(ids.incrementAndGet());
             return 1;
-        });
+        }).when(dao).insertAudit(any());
         return new Fixture(dao, delivery, outbox, ids);
     }
 
