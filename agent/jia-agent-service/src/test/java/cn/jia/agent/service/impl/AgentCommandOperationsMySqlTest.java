@@ -10,6 +10,7 @@ import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.dao.impl.AgentCommandOperationsDaoImpl;
 import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationsException;
 import cn.jia.agent.entity.AgentHallCommandPayload;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,6 +39,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -51,7 +54,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.spy;
@@ -234,7 +236,34 @@ class AgentCommandOperationsMySqlTest {
                 TENANT, CLIENT, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, source.messageId());
         order.verify(orderedDao).lockActiveRedriveOperations(
                 TENANT, CLIENT, source.deliveryId(), source.messageId(), source.attempt());
-        order.verify(orderedDao).insertAudit(any());
+        ArgumentCaptor<AgentCommandOperationAuditEntity> auditCaptor =
+                ArgumentCaptor.forClass(AgentCommandOperationAuditEntity.class);
+        order.verify(orderedDao).insertAudit(auditCaptor.capture());
+        order.verify(orderedDao).insertAudit(auditCaptor.capture());
+        order.verifyNoMoreInteractions();
+
+        List<AgentCommandOperationAuditEntity> audits = auditCaptor.getAllValues();
+        assertEquals(2, audits.size());
+        AgentCommandOperationAuditEntity requestAudit = audits.getFirst();
+        AgentCommandOperationAuditEntity resultAudit = audits.getLast();
+        assertEquals("REQUEST", requestAudit.getPhase());
+        assertEquals("REQUESTED", requestAudit.getOutcome());
+        assertEquals("RESULT", resultAudit.getPhase());
+        assertEquals("SUCCEEDED", resultAudit.getOutcome());
+        assertEquals("90000000-0000-0000-0000-000000000001", requestAudit.getOperationId());
+        assertEquals(requestAudit.getOperationId(), resultAudit.getOperationId());
+        for (AgentCommandOperationAuditEntity audit : audits) {
+            assertEquals("BROKER_REDRIVE", audit.getOperationType());
+            assertEquals(source.deliveryId(), audit.getDeliveryId());
+            assertEquals(source.messageId(), audit.getSourceMessageId());
+            assertArrayEquals(AgentCommandCanonicalCodec.sha256(source.wire()), audit.getWireHash());
+        }
+        List<String> sensitiveAuditFields = List.of(
+                "payload", "header", "credential", "secret", "token", "lease");
+        assertTrue(Arrays.stream(AgentCommandOperationAuditEntity.class.getDeclaredFields())
+                .map(field -> field.getName().toLowerCase(Locale.ROOT))
+                .noneMatch(name -> sensitiveAuditFields.stream().anyMatch(name::contains)));
+
         assertEquals(2, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_command_operation_audit", Integer.class));
         assertTrue(jdbc.queryForList("""
