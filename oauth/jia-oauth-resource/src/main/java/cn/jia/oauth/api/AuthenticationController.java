@@ -1,12 +1,12 @@
 package cn.jia.oauth.api;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Collection;
 import java.util.List;
@@ -16,25 +16,33 @@ import java.util.TreeSet;
 public class AuthenticationController {
 
     @GetMapping("/resource")
-    public OAuthResourceIdentityDTO resource(Authentication authentication) {
-        if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication) ||
-                !authentication.isAuthenticated()) {
-            throw invalidTokenClaims();
-        }
+    public ResponseEntity<OAuthResourceIdentityDTO> resource(Authentication authentication) {
+        try {
+            if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication) ||
+                    !authentication.isAuthenticated()) {
+                throw InvalidIdentityClaimsException.INSTANCE;
+            }
 
-        Jwt jwt = jwtAuthentication.getToken();
-        return new OAuthResourceIdentityDTO(
-                requiredString(jwt, "sub"),
-                requiredString(jwt, "client_id"),
-                optionalString(jwt, "username"),
-                optionalString(jwt, "jiacn"),
-                scopes(jwt));
+            Jwt jwt = jwtAuthentication.getToken();
+            OAuthResourceIdentityDTO identity = new OAuthResourceIdentityDTO(
+                    requiredString(jwt, "sub"),
+                    requiredString(jwt, "client_id"),
+                    optionalString(jwt, "username"),
+                    optionalString(jwt, "jiacn"),
+                    scopes(jwt));
+            return ResponseEntity.ok(identity);
+        } catch (InvalidIdentityClaimsException ignored) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
     }
 
     private static String requiredString(Jwt jwt, String claimName) {
-        String value = optionalString(jwt, claimName);
-        if (value == null) {
-            throw invalidTokenClaims();
+        if (!jwt.getClaims().containsKey(claimName)) {
+            throw InvalidIdentityClaimsException.INSTANCE;
+        }
+        Object claim = jwt.getClaims().get(claimName);
+        if (!(claim instanceof String value) || value.isBlank()) {
+            throw InvalidIdentityClaimsException.INSTANCE;
         }
         return value;
     }
@@ -45,7 +53,7 @@ public class AuthenticationController {
         }
         Object claim = jwt.getClaims().get(claimName);
         if (!(claim instanceof String value) || value.isBlank()) {
-            throw invalidTokenClaims();
+            throw InvalidIdentityClaimsException.INSTANCE;
         }
         return value;
     }
@@ -59,25 +67,50 @@ public class AuthenticationController {
         TreeSet<String> scopes = new TreeSet<>();
         if (claim instanceof String value) {
             if (value.isBlank()) {
-                throw invalidTokenClaims();
+                throw InvalidIdentityClaimsException.INSTANCE;
             }
-            for (String scope : value.trim().split("\\s+")) {
+            for (String scope : value.strip().split("\\s+")) {
+                if (scope.isBlank()) {
+                    throw InvalidIdentityClaimsException.INSTANCE;
+                }
                 scopes.add(scope);
             }
         } else if (claim instanceof Collection<?> values) {
             for (Object value : values) {
-                if (!(value instanceof String scope) || scope.isBlank()) {
-                    throw invalidTokenClaims();
+                if (!(value instanceof String scope) || scope.isEmpty() || containsWhitespace(scope)) {
+                    throw InvalidIdentityClaimsException.INSTANCE;
                 }
-                scopes.add(scope.trim());
+                scopes.add(scope);
             }
         } else {
-            throw invalidTokenClaims();
+            throw InvalidIdentityClaimsException.INSTANCE;
         }
         return List.copyOf(scopes);
     }
 
-    private static ResponseStatusException invalidTokenClaims() {
-        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Bearer token identity claims are invalid");
+    private static boolean containsWhitespace(String value) {
+        return value.codePoints().anyMatch(AuthenticationController::isUnicodeWhiteSpace);
+    }
+
+    private static boolean isUnicodeWhiteSpace(int codePoint) {
+        return codePoint >= 0x0009 && codePoint <= 0x000D ||
+                codePoint == 0x0020 ||
+                codePoint == 0x0085 ||
+                codePoint == 0x00A0 ||
+                codePoint == 0x1680 ||
+                codePoint >= 0x2000 && codePoint <= 0x200A ||
+                codePoint == 0x2028 ||
+                codePoint == 0x2029 ||
+                codePoint == 0x202F ||
+                codePoint == 0x205F ||
+                codePoint == 0x3000;
+    }
+
+    private static final class InvalidIdentityClaimsException extends RuntimeException {
+        private static final InvalidIdentityClaimsException INSTANCE = new InvalidIdentityClaimsException();
+
+        private InvalidIdentityClaimsException() {
+            super(null, null, false, false);
+        }
     }
 }

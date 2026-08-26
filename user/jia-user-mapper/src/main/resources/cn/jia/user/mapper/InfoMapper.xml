@@ -7,7 +7,7 @@
         create_time,
         update_time,
         id, username, password, openid, weixinid, weiboid, githubid, jiacn, phone, email, sex, nickname, avatar, city, country, province,
-        latitude, longitude, point, referrer, birthday, tel, weixin, qq, position, status, remark, msg_type, subscribe
+        latitude, longitude, point, referrer, birthday, tel, weixin, qq, position, status, remark, msg_type, subscribe, account_state, auth_epoch
     </sql>
 
     <select id="selectByRole" parameterType="java.lang.Long" resultType="cn.jia.user.entity.UserEntity">
@@ -88,4 +88,26 @@
             or update_time = #{updateTime,jdbcType=BIGINT}
         </if>
     </select>
+    <select id="selectSecurityById" resultType="cn.jia.user.entity.UserEntity">
+        SELECT id, jiacn, account_state, auth_epoch
+        FROM user_info
+        WHERE id = #{userId,jdbcType=BIGINT}
+    </select>
+
+    <select id="selectSecurityByExactJiacn" resultType="cn.jia.user.entity.UserEntity">
+        SELECT id, jiacn, account_state, auth_epoch
+        FROM user_info
+        WHERE OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn,jdbcType=VARCHAR})
+          AND CAST(jiacn AS BINARY(128)) = CAST(#{jiacn,jdbcType=VARCHAR} AS BINARY(128))
+        LIMIT 2
+    </select>
+
+    <update id="incrementAuthEpoch">
+        UPDATE user_info
+        SET auth_epoch = auth_epoch + 1
+        WHERE id = #{userId,jdbcType=BIGINT}
+          AND auth_epoch = #{expectedEpoch,jdbcType=BIGINT}
+          AND account_state = _ascii'ACTIVE' COLLATE ascii_bin
+          AND auth_epoch &lt; 9223372036854775807
+    </update>
 </mapper>

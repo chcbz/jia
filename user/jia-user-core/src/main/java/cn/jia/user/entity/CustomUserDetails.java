@@ -3,30 +3,46 @@ package cn.jia.user.entity;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 
+import java.io.Serial;
 import java.util.Collection;
 
 /**
- * 自定义用户详情类，扩展Spring Security的UserDetails接口
- * 添加了jiacn等额外的用户属性，用于在认证过程中携带更多用户信息
+ * Immutable login-time account identity. The epoch is deliberately not refreshed after authentication.
  */
 public class CustomUserDetails extends User {
-    private final String jiacn;
+    @Serial
+    private static final long serialVersionUID = 1L;
 
-    /**
-     * 构造函数
-     *
-     * @param username 用户名
-     * @param password 密码
-     * @param jiacn Jia账号
-     * @param authorities 权限集合
-     */
-    public CustomUserDetails(String jiacn, String username, String password,
+    private final long userId;
+    private final String jiacn;
+    private final long loginAuthEpoch;
+
+    public CustomUserDetails(long userId, String jiacn, long loginAuthEpoch, String username, String password,
                              Collection<? extends GrantedAuthority> authorities) {
         super(username, password, authorities);
+        if (userId <= 0) {
+            throw new IllegalArgumentException("userId must be positive");
+        }
+        if (jiacn == null || jiacn.isBlank()) {
+            throw new IllegalArgumentException("jiacn must be nonblank");
+        }
+        if (loginAuthEpoch < 0) {
+            throw new IllegalArgumentException("loginAuthEpoch must be nonnegative");
+        }
+        this.userId = userId;
         this.jiacn = jiacn;
+        this.loginAuthEpoch = loginAuthEpoch;
+    }
+
+    public long getUserId() {
+        return userId;
     }
 
     public String getJiacn() {
         return jiacn;
+    }
+
+    public long getLoginAuthEpoch() {
+        return loginAuthEpoch;
     }
 }

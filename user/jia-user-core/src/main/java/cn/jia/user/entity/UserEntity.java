@@ -1,9 +1,12 @@
 package cn.jia.user.entity;
 
 import cn.jia.core.entity.BaseEntity;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -120,6 +123,16 @@ public class UserEntity extends BaseEntity {
 
     @Schema(description = "订阅内容（多个以逗号隔开）")
     private String subscribe;
+
+    @JsonIgnore
+    @Schema(hidden = true)
+    @TableField(insertStrategy = FieldStrategy.NEVER, updateStrategy = FieldStrategy.NEVER)
+    private String accountState;
+
+    @JsonIgnore
+    @Schema(hidden = true)
+    @TableField(insertStrategy = FieldStrategy.NEVER, updateStrategy = FieldStrategy.NEVER)
+    private Long authEpoch;
 
 
 }

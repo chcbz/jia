@@ -20,12 +20,21 @@ public class EsContextHolder {
     }
 
     public static EsContext getContext(HttpServletRequest request) {
+        EsContext fresh = new EsContext();
+        CONTEXT.set(fresh);
         for (Cookie cookie : Optional.ofNullable(request.getCookies()).orElse(new Cookie[0])) {
-            if ("CTX".equals(cookie.getName())) {
-                EsContext esContext = JsonUtil.fromJson(ThreeDesUtil.decrypt3Des(cookie.getValue()), EsContext.class);
-                CONTEXT.set(esContext);
-                return getContext();
+            if (!"CTX".equals(cookie.getName())) {
+                continue;
             }
+            try {
+                EsContext decoded = JsonUtil.fromJson(ThreeDesUtil.decrypt3Des(cookie.getValue()), EsContext.class);
+                if (decoded != null) {
+                    CONTEXT.set(decoded);
+                }
+            } catch (RuntimeException ignored) {
+                CONTEXT.set(fresh);
+            }
+            break;
         }
         return getContext();
     }
@@ -34,11 +43,17 @@ public class EsContextHolder {
         EsContext context = getContext();
         Cookie ctx = new Cookie("CTX", ThreeDesUtil.encrypt3Des(JsonUtil.toJson(context)));
         ctx.setHttpOnly(true);
+        ctx.setSecure(true);
         ctx.setPath("/");
+        ctx.setAttribute("SameSite", "Lax");
         return ctx;
     }
 
     public static void setContext(EsContext esContext) {
-    	CONTEXT.set(esContext);
+        CONTEXT.set(esContext);
+    }
+
+    public static void clearContext() {
+        CONTEXT.remove();
     }
 }

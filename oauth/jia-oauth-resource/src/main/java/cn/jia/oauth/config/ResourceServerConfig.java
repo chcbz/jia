@@ -1,5 +1,7 @@
 package cn.jia.oauth.config;
 
+import cn.jia.oauth.security.AccountSecurityJwtValidator;
+import cn.jia.user.security.AccountSecurityService;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
@@ -10,6 +12,7 @@ import lombok.Setter;
 import lombok.ToString;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -19,7 +22,9 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.resource.OAuth2ResourceServerConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.NullSecurityContextRepository;
@@ -81,11 +86,16 @@ public class ResourceServerConfig {
     @Bean
     @Order(3)
     public SecurityFilterChain resourceServerSecurityFilterChain(
-            HttpSecurity http, OauthResourceProperties resourceProperties) {
+            HttpSecurity http, OauthResourceProperties resourceProperties,
+            ObjectProvider<AccountSecurityService> accountSecurityServiceProvider) {
         List<String> resourceUris = resourceProperties.getUris();
         if (resourceUris.isEmpty()) {
             http.securityMatcher(request -> false);
         } else {
+            if (accountSecurityServiceProvider.getIfAvailable() == null) {
+                throw new IllegalStateException(
+                        "AccountSecurityService is required when oauth.resource.uris are configured");
+            }
             http.securityMatcher(resourceUris.toArray(new String[0]));
         }
         http
@@ -94,6 +104,10 @@ public class ResourceServerConfig {
                         .requestMatchers("/dwz/view/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .securityContext(context -> context
+                        .securityContextRepository(new NullSecurityContextRepository()))
+                .requestCache(cache -> cache.requestCache(new NullRequestCache()))
                 .csrf(AbstractHttpConfigurer::disable)
         ;
         return http.build();
@@ -130,7 +144,12 @@ public class ResourceServerConfig {
     }
 
     @Bean
-    public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource) {
-        return NimbusJwtDecoder.withJwkSource(jwkSource).build();
+    public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource,
+                                 ObjectProvider<AccountSecurityService> accountSecurityServiceProvider) {
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSource(jwkSource).build();
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                JwtValidators.createDefault(),
+                new AccountSecurityJwtValidator(accountSecurityServiceProvider.getIfAvailable())));
+        return decoder;
     }
 }

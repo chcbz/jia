@@ -1,4 +1,5 @@
 dependencies {
+    implementation project(':user:jia-user-api')
     implementation project(':common:jia-common-service')
     implementation(libs.spring.security.oauth2.resource.server)
     implementation(libs.spring.security.config)

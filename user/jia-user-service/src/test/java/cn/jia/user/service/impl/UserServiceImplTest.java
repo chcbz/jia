@@ -17,6 +17,7 @@ import com.github.pagehelper.PageInfo;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -187,7 +188,14 @@ class UserServiceImplTest extends BaseMockTest {
         UserEntity userEntity = new UserEntity();
         userEntity.setJiacn("jiacn");
         userEntity.setOpenid("openid");
+        userEntity.setAccountState("DISABLED");
+        userEntity.setAuthEpoch(0L);
         userServiceImpl.sync(Collections.singletonList(userEntity));
+
+        ArgumentCaptor<UserEntity> inserted = ArgumentCaptor.forClass(UserEntity.class);
+        verify(userInfoDao).insert(inserted.capture());
+        Assertions.assertNull(inserted.getValue().getAccountState());
+        Assertions.assertNull(inserted.getValue().getAuthEpoch());
     }
 
     @Test
@@ -277,5 +285,49 @@ class UserServiceImplTest extends BaseMockTest {
 
         userEntity.setPosition("2");
         userServiceImpl.setDefaultOrg(1L);
+    }
+
+    @Test
+    void genericUpdateStripsAccountSecurityMutationBeforeDao() {
+        when(userInfoDao.updateById(any())).thenReturn(1);
+        UserEntity requested = new UserEntity()
+                .setId(1L)
+                .setNickname("safe-change")
+                .setAccountState("ACTIVE")
+                .setAuthEpoch(0L);
+
+        UserEntity result = userServiceImpl.update(requested);
+
+        ArgumentCaptor<UserEntity> updated = ArgumentCaptor.forClass(UserEntity.class);
+        verify(userInfoDao).updateById(updated.capture());
+        Assertions.assertSame(requested, result);
+        Assertions.assertEquals("safe-change", updated.getValue().getNickname());
+        Assertions.assertNull(updated.getValue().getAccountState());
+        Assertions.assertNull(updated.getValue().getAuthEpoch());
+    }
+
+    @Test
+    void upsertExistingStripsAccountSecurityMutationBeforeGenericUpdate() {
+        UserEntity existing = new UserEntity()
+                .setId(1L)
+                .setJiacn("existing-jiacn")
+                .setUsername("existing-user")
+                .setSubscribe("vote");
+        when(userInfoDao.searchByExample(any())).thenReturn(List.of(existing));
+        when(userInfoDao.updateById(any())).thenReturn(1);
+        when(ldapUserService.findByUid("existing-jiacn")).thenReturn(null);
+
+        UserEntity requested = new UserEntity()
+                .setJiacn("incoming-jiacn")
+                .setNickname("safe-upsert")
+                .setAccountState("ACTIVE")
+                .setAuthEpoch(0L);
+        userServiceImpl.upsert(requested);
+
+        ArgumentCaptor<UserEntity> updated = ArgumentCaptor.forClass(UserEntity.class);
+        verify(userInfoDao).updateById(updated.capture());
+        Assertions.assertEquals("safe-upsert", updated.getValue().getNickname());
+        Assertions.assertNull(updated.getValue().getAccountState());
+        Assertions.assertNull(updated.getValue().getAuthEpoch());
     }
 }

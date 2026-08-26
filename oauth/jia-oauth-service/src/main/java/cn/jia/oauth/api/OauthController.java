@@ -23,7 +23,8 @@ import cn.jia.oauth.service.ClientService;
 import cn.jia.user.entity.PermsEntity;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
-import com.nimbusds.oauth2.sdk.AuthorizationRequest;
+import cn.jia.user.security.AccountSecurityService;
+import cn.jia.user.security.AccountSecuritySnapshot;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -62,11 +63,11 @@ import java.util.stream.Collectors;
 @Slf4j
 @Controller
 @RequestMapping("/oauth")
-@SessionAttributes("authorizationRequest")
 @RequiredArgsConstructor
 public class OauthController {
     private final ClientService clientService;
     private final UserService userService;
+    private final AccountSecurityService accountSecurityService;
     private final PermsService permsService;
     private final RestTemplate restTemplate;
     private final ThirdPartyLoginTransactionService thirdPartyLoginTransactionService;
@@ -454,15 +455,31 @@ public class OauthController {
         String clientId = HttpUtil.getUrlValue(redirectUrl, "client_id");
         EsContextHolder.getContext().setClientId(clientId);
         user = userService.upsert(user);
+        AccountSecuritySnapshot account;
+        try {
+            if (user.getId() == null || user.getId() <= 0) {
+                return thirdPartyLoginFailed("unknown");
+            }
+            String persistedJiacn = user.getJiacn();
+            account = accountSecurityService.findByUserId(user.getId())
+                    .filter(AccountSecuritySnapshot::isAuthenticatable)
+                    .filter(snapshot -> snapshot.jiacn().equals(persistedJiacn))
+                    .orElse(null);
+        } catch (RuntimeException exception) {
+            log.warn("第三方登录账户安全校验失败");
+            return thirdPartyLoginFailed("unknown");
+        }
+        if (account == null) {
+            log.warn("第三方登录账户不可认证");
+            return thirdPartyLoginFailed("unknown");
+        }
 
         Collection<? extends GrantedAuthority> authorities = new ArrayList<>();
-        if (user.getId() != null) {
-            List<PermsEntity> authList = permsService.findByUserId(user.getId());
-            if (CollectionUtil.isNotNullOrEmpty(authList)) {
-                authorities = authList.stream()
-                        .map(p -> new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc()))
-                        .collect(Collectors.toList());
-            }
+        List<PermsEntity> authList = permsService.findByUserId(account.userId());
+        if (CollectionUtil.isNotNullOrEmpty(authList)) {
+            authorities = authList.stream()
+                    .map(p -> new SimpleGrantedAuthority(p.getModule() + "-" + p.getFunc()))
+                    .collect(Collectors.toList());
         }
         String authUsername = StringUtil.firstNotEmpty(
                 user.getUsername(), user.getJiacn(), user.getOpenid(), user.getWeixinid(), user.getGithubid());
@@ -473,7 +490,8 @@ public class OauthController {
         if (StringUtil.isEmpty(user.getUsername())) {
             log.warn("第三方登录用户未配置 username，使用备用认证标识完成登录，userId: {}", user.getId());
         }
-        CustomUserDetails userDetails = new CustomUserDetails(user.getJiacn(), authUsername, null, authorities);
+        CustomUserDetails userDetails = new CustomUserDetails(account.userId(), account.jiacn(), account.authEpoch(),
+                authUsername, null, authorities);
         UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(userDetails, null, authorities);
         authToken.setDetails(new WebAuthenticationDetails(request));
         SecurityContextHolder.getContext().setAuthentication(authToken);
@@ -481,7 +499,7 @@ public class OauthController {
                 SecurityContextHolder.getContext());
         EsContext context = EsContextHolder.getContext();
         context.setUsername(authUsername);
-        context.setJiacn(user.getJiacn());
+        context.setJiacn(account.jiacn());
         if (StringUtil.isNotEmpty(state)) {
             thirdPartyLoginTransactionService.markCompleted(state, transaction);
         }
@@ -495,15 +513,24 @@ public class OauthController {
      * @param model   模型数据
      * @return 访问确认视图
      */
-    @RequestMapping("/confirm_access")
-    public ModelAndView getAccessConfirmation(Map<String, Object> model) {
+    @GetMapping("/confirm_access")
+    public ModelAndView getAccessConfirmation(
+            @RequestParam("client_id") String clientId,
+            @RequestParam("state") String state,
+            @RequestParam(name = "scope", required = false, defaultValue = "") String scope) {
         log.info("进入访问确认页面");
-        AuthorizationRequest authorizationRequest = (AuthorizationRequest) model.get("authorizationRequest");
-        ModelAndView view = new ModelAndView();
-        view.setViewName("oauth/authorize");
-        view.addObject("clientId", authorizationRequest.getClientID());
-        view.addObject("scopes", authorizationRequest.getScope());
-        log.debug("访问确认页面，客户端ID: {}, 作用域: {}", authorizationRequest.getClientID(), authorizationRequest.getScope());
+        List<String> scopes = Arrays.stream(scope.trim().split("\\s+"))
+                .filter(item -> !item.isBlank())
+                .distinct()
+                .toList();
+        if (clientId.isBlank() || state.isBlank() || scopes.isEmpty()) {
+            throw new EsRuntimeException(EsErrorConstants.PARAMETER_INCORRECT);
+        }
+        ModelAndView view = new ModelAndView("oauth/authorize");
+        view.addObject("clientId", clientId);
+        view.addObject("state", state);
+        view.addObject("scopes", scopes);
+        log.debug("访问确认页面，客户端ID: {}, 作用域数量: {}", clientId, scopes.size());
         return view;
     }
 

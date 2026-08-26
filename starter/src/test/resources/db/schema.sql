@@ -663,6 +663,8 @@ CREATE TABLE user_info
     update_time bigint                      null comment '最后更新时间',
     client_id   varchar(50)                 null comment '应用标识符',
     tenant_id   varchar(50)                 DEFAULT '0' COMMENT '租户ID',
+    account_state varchar(16) NOT NULL DEFAULT 'ACTIVE' COMMENT '账户生命周期状态',
+    auth_epoch bigint NOT NULL DEFAULT 0 COMMENT '认证会话版本',
     weixinid    varchar(32)                 null comment '微信平台用户ID',
     weiboid     varchar(32)                 null comment '微博平台用户ID',
     githubid    varchar(32)                 null comment 'Github平台用户ID',

@@ -8,7 +8,8 @@ import cn.jia.core.util.JsonUtil;
 import cn.jia.oauth.entity.OauthClientEntity;
 import cn.jia.oauth.service.ClientService;
 import cn.jia.oauth.vomapper.RegisteredClientMapper;
-import cn.jia.user.entity.CustomUserDetails;
+import cn.jia.oauth.security.AccountSecurityTokenCustomizer;
+import cn.jia.user.security.AccountSecurityService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +41,8 @@ import java.nio.charset.StandardCharsets;
 public class AuthorizationServerConfig {
     @Autowired
     private ClientService clientService;
+    @Autowired
+    private AccountSecurityService accountSecurityService;
 
     @Bean
     @Order(1)
@@ -64,7 +67,6 @@ public class AuthorizationServerConfig {
                             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                             response.setCharacterEncoding(StandardCharsets.UTF_8.toString());
                             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                            response.setHeader("Access-Control-Allow-Origin", "*");
                             PrintWriter out = response.getWriter();
                             out.print(JsonUtil.toJson(result));
                         }, matcher -> MediaType.APPLICATION_JSON_VALUE.equalsIgnoreCase(matcher.getContentType()))
@@ -117,19 +119,7 @@ public class AuthorizationServerConfig {
 
     @Bean
     public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer() {
-        return context -> {
-            String clientId = context.getRegisteredClient().getClientId();
-            context.getClaims().claim("client_id", clientId);
-            if (context.getPrincipal() != null) {
-                // 从CustomUserDetails中获取jiacn属性
-                if (context.getPrincipal().getPrincipal() instanceof CustomUserDetails customUserDetails) {
-                    if (customUserDetails.getJiacn() != null) {
-                        context.getClaims().claim("jiacn", customUserDetails.getJiacn());
-                        context.getClaims().claim("username", customUserDetails.getUsername());
-                    }
-                }
-            }
-        };
+        return new AccountSecurityTokenCustomizer(accountSecurityService);
     }
 
     static class CustomAuthenticationEntryPoint extends LoginUrlAuthenticationEntryPoint {

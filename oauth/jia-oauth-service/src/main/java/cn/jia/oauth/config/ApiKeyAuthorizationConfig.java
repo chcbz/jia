@@ -11,6 +11,8 @@ import cn.jia.core.util.StringUtil;
 import cn.jia.oauth.entity.ApiKeyAuthToken;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
+import cn.jia.user.security.AccountSecurityService;
+import cn.jia.user.security.AccountSecuritySnapshot;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -51,6 +53,7 @@ public class ApiKeyAuthorizationConfig {
     private static final String API_KEY_PARAM = "api_key";
 
     private final ApiKeyService apiKeyService;
+    private final AccountSecurityService accountSecurityService;
 
     @Bean
     @Order(99)
@@ -77,7 +80,6 @@ public class ApiKeyAuthorizationConfig {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setHeader("Access-Control-Allow-Origin", "*");
         PrintWriter out = response.getWriter();
         out.print(JsonUtil.toJson(result));
     }
@@ -113,7 +115,9 @@ public class ApiKeyAuthorizationConfig {
                 if (authResult.getPrincipal() instanceof OauthApiKeyEntity principal) {
                     EsContext context = EsContextHolder.getContext();
                     context.setClientId(principal.getClientId());
+                    context.setAppcn(null);
                     context.setJiacn(principal.getJiacn());
+                    context.setUsername(null);
                 }
                 SecurityContextHolder.getContext().setAuthentication(authResult);
                 chain.doFilter(request, response);
@@ -144,6 +148,22 @@ public class ApiKeyAuthorizationConfig {
                 if (apiKeyEntity.getExpireTime() != null &&
                         DateUtil.genDate(apiKeyEntity.getExpireTime()).before(new Date())) {
                     throw new BadCredentialsException("API Key已过期");
+                }
+                String ownerJiacn = apiKeyEntity.getJiacn();
+                if (ownerJiacn == null || ownerJiacn.isBlank()) {
+                    throw new BadCredentialsException("API Key认证失败");
+                }
+                try {
+                    AccountSecuritySnapshot owner = accountSecurityService.findUniqueByExactJiacn(ownerJiacn)
+                            .filter(AccountSecuritySnapshot::isAuthenticatable)
+                            .orElseThrow(() -> new BadCredentialsException("API Key认证失败"));
+                    if (!owner.jiacn().equals(ownerJiacn)) {
+                        throw new BadCredentialsException("API Key认证失败");
+                    }
+                } catch (BadCredentialsException exception) {
+                    throw exception;
+                } catch (RuntimeException exception) {
+                    throw new BadCredentialsException("API Key认证失败");
                 }
 
                 ApiKeyAuthToken result = new ApiKeyAuthToken(
