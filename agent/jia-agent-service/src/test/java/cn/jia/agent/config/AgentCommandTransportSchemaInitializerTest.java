@@ -219,35 +219,45 @@ class AgentCommandTransportSchemaInitializerTest {
 
     @Test
     void mysql80GeneratedExpressionCatalogFormsNormalizeToCanonicalDefinitions() {
-        assertEquals("if(outcome_state='pending',1,null)",
+        assertEquals("if(outcome_state='PENDING',1,null)",
                 AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
-                        "if((outcome_state=\\'pending\\'),1,null)"));
-        assertEquals("if(settlement_statein('source_requeued','not_acquired'),null,1)",
+                        "if((outcome_state=\\'PENDING\\'),1,NULL)"));
+        assertEquals("if(settlement_statein('SOURCE_REQUEUED','NOT_ACQUIRED'),null,1)",
                 AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
-                        "if((settlement_statein(\\'source_requeued\\',\\'not_acquired\\')),null,1)"));
+                        "if((settlement_statein(\\'SOURCE_REQUEUED\\',"
+                                + "\\'NOT_ACQUIRED\\')),NULL,1)"));
 
-        assertEquals("if(outcome_state='pending',1,null)",
+        assertEquals("if(outcome_state='PENDING',1,null)",
                 AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
                         " IF ( ( `OUTCOME_STATE` = _utf8mb4\\'PENDING\\' ) , 1 , NULL ) "));
-        assertEquals("if(settlement_statein('source_requeued','not_acquired'),null,1)",
+        assertEquals("if(settlement_statein('SOURCE_REQUEUED','NOT_ACQUIRED'),null,1)",
                 AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
                         "IF ((`SETTLEMENT_STATE` IN (_utf8mb4\\'SOURCE_REQUEUED\\', "
                                 + "_utf8mb4\\'NOT_ACQUIRED\\')), NULL, 1)"));
+        assertEquals("if(reason='MiXeD''Value',1,null)",
+                AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
+                        "IF (`reason` = _utf8mb4'MiXeD''Value', 1, NULL)"));
     }
 
     @Test
-    void generatedExpressionNormalizationPreservesSemanticDriftAndMeaningfulGrouping() {
-        String canonical = AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
-                "if(outcome_state='pending',1,null)");
-        assertFalse(canonical.equals(
+    void generatedExpressionNormalizationPreservesLiteralCaseAndSemanticGrouping() {
+        String disposition = AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
+                "if(outcome_state='PENDING',1,null)");
+        assertFalse(disposition.equals(
                 AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
-                        "if((outcome_state='succeeded'),1,null)")));
+                        "if((outcome_state='pending'),1,null)")));
+
+        String settlement = AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
+                "if(settlement_state in ('SOURCE_REQUEUED','NOT_ACQUIRED'),null,1)");
+        assertFalse(settlement.equals(
+                AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
+                        "if((settlement_state in ('source_requeued','not_acquired')),null,1)")));
 
         String grouped = AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
                 "IF ((outcome_state='PENDING' OR outcome_state='FAILED') "
                         + "AND settlement_state='PENDING', 1, NULL)");
-        assertEquals("if((outcome_state='pending'oroutcome_state='failed')"
-                + "andsettlement_state='pending',1,null)", grouped);
+        assertEquals("if((outcome_state='PENDING'oroutcome_state='FAILED')"
+                + "andsettlement_state='PENDING',1,null)", grouped);
         assertFalse(grouped.equals(
                 AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
                         "IF (outcome_state='PENDING' OR (outcome_state='FAILED' "
@@ -293,9 +303,9 @@ class AgentCommandTransportSchemaInitializerTest {
                         column -> column));
         assertEquals("enum('PENDING','SUCCEEDED','FAILED')",
                 columns.get("outcome_state").columnType());
-        assertEquals("if(outcome_state='pending',1,null)",
+        assertEquals("if(outcome_state='PENDING',1,null)",
                 columns.get("disposition_guard").generationExpression());
-        assertEquals("if(settlement_statein('source_requeued','not_acquired'),null,1)",
+        assertEquals("if(settlement_statein('SOURCE_REQUEUED','NOT_ACQUIRED'),null,1)",
                 columns.get("redrive_guard").generationExpression());
     }
 

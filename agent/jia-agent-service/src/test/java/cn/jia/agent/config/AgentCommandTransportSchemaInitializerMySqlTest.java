@@ -265,7 +265,7 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
                         WHERE table_schema=DATABASE()
                           AND table_name='agent_command_redrive_operation'
                           AND column_name='disposition_guard'
-                        """, String.class)).contains("outcome_state='failed'"));
+                        """, String.class)).contains("outcome_state='FAILED'"));
 
         JdbcTemplate index = newDatabase("redrive_index_drift");
         new AgentCommandTransportSchemaInitializer(index).afterPropertiesSet();
@@ -279,6 +279,34 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
                   AND table_name='agent_command_redrive_operation'
                   AND index_name='idx_redrive_operation_recovery'
                 """, Integer.class));
+    }
+
+    @Test
+    void generatedGuardLiteralCaseDriftFailsClosedWithoutRepair() {
+        JdbcTemplate jdbc = newDatabase("generated_literal_case_drift");
+        new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
+        jdbc.execute("ALTER TABLE agent_command_redrive_operation "
+                + "DROP INDEX idx_redrive_operation_disposition, "
+                + "DROP COLUMN disposition_guard, "
+                + "ADD COLUMN disposition_guard TINYINT "
+                + "GENERATED ALWAYS AS (IF(outcome_state='pending',1,NULL)) STORED AFTER version, "
+                + "ADD KEY idx_redrive_operation_disposition "
+                + "(tenant_id,client_id,delivery_id,source_message_id,source_attempt,disposition_guard)");
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
+
+        assertTrue(failure.getMessage().contains("agent_command_redrive_operation"),
+                failure.getMessage());
+        String actual = AgentCommandTransportSchemaInitializer.normalizeGeneratedExpression(
+                jdbc.queryForObject("""
+                        SELECT generation_expression FROM information_schema.columns
+                        WHERE table_schema=DATABASE()
+                          AND table_name='agent_command_redrive_operation'
+                          AND column_name='disposition_guard'
+                        """, String.class));
+        assertTrue(actual.contains("outcome_state='pending'"), actual);
+        assertFalse(actual.contains("outcome_state='PENDING'"), actual);
     }
 
     @Test

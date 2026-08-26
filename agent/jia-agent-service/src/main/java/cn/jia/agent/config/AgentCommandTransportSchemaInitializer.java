@@ -148,7 +148,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                     }
                 }
             }
-            normalized.append(Character.toLowerCase(character));
+            normalized.append(quoted ? character : Character.toLowerCase(character));
         }
         return normalized.toString();
     }
@@ -724,9 +724,9 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                                 "PENDING", "SOURCE_ACKED", "SOURCE_REQUEUED", "NOT_ACQUIRED", "UNKNOWN"),
                         varchar("error_code", 200, true, null), bigint("requested_at", false, null),
                         bigint("completed_at", true, null), bigint("version", false, "0"),
-                        generatedTinyint("disposition_guard", "if(outcome_state='pending',1,null)"),
+                        generatedTinyint("disposition_guard", "if(outcome_state='PENDING',1,null)"),
                         generatedTinyint("redrive_guard",
-                                "if(settlement_statein('source_requeued','not_acquired'),null,1)"),
+                                "if(settlement_statein('SOURCE_REQUEUED','NOT_ACQUIRED'),null,1)"),
                         varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
                         bigint("create_time", false, null), bigint("update_time", false, null)),
                 indexes(
