@@ -115,13 +115,210 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
 
     static String normalizeGeneratedExpression(String expression) {
         if (expression == null || expression.isBlank()) return "";
-        return expression.toLowerCase(Locale.ROOT)
-                .replace("`", "")
-                .replace("_utf8mb4", "")
-                .replaceAll("\\s+", "")
-                .replace("if((outcome_state='pending'),", "if(outcome_state='pending',")
-                .replace("if((settlement_statein('source_requeued','not_acquired')),",
-                        "if(settlement_statein('source_requeued','not_acquired'),");
+        return normalizeGeneratedSegment(normalizeGeneratedTokens(expression));
+    }
+
+    private static String normalizeGeneratedTokens(String expression) {
+        String rendered = normalizeCatalogQuoteDelimiters(expression);
+        StringBuilder normalized = new StringBuilder(rendered.length());
+        boolean quoted = false;
+        for (int index = 0; index < rendered.length(); index++) {
+            char character = rendered.charAt(index);
+            if (character == '\'') {
+                normalized.append(character);
+                if (quoted && index + 1 < rendered.length() && rendered.charAt(index + 1) == '\'') {
+                    normalized.append(rendered.charAt(++index));
+                } else {
+                    quoted = !quoted;
+                }
+                continue;
+            }
+            if (!quoted) {
+                if (Character.isWhitespace(character) || character == '`') {
+                    continue;
+                }
+                if (rendered.regionMatches(true, index, "_utf8mb4", 0, "_utf8mb4".length())) {
+                    int next = index + "_utf8mb4".length();
+                    while (next < rendered.length() && Character.isWhitespace(rendered.charAt(next))) {
+                        next++;
+                    }
+                    if (next < rendered.length() && rendered.charAt(next) == '\'') {
+                        index += "_utf8mb4".length() - 1;
+                        continue;
+                    }
+                }
+            }
+            normalized.append(Character.toLowerCase(character));
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeCatalogQuoteDelimiters(String expression) {
+        int escapedQuotes = 0;
+        int unescapedQuotes = 0;
+        for (int index = 0; index < expression.length(); index++) {
+            if (expression.charAt(index) != '\'') continue;
+            int slashes = 0;
+            for (int prior = index - 1; prior >= 0 && expression.charAt(prior) == '\\'; prior--) {
+                slashes++;
+            }
+            if ((slashes & 1) == 1) escapedQuotes++;
+            else unescapedQuotes++;
+        }
+        if (unescapedQuotes != 0 || escapedQuotes == 0 || (escapedQuotes & 1) == 1) {
+            return expression;
+        }
+        StringBuilder normalized = new StringBuilder(expression.length() - escapedQuotes);
+        for (int index = 0; index < expression.length(); index++) {
+            char character = expression.charAt(index);
+            if (character == '\\' && index + 1 < expression.length()
+                    && expression.charAt(index + 1) == '\'') {
+                normalized.append('\'');
+                index++;
+            } else {
+                normalized.append(character);
+            }
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeGeneratedSegment(String expression) {
+        String unwrapped = stripRedundantOuterParentheses(expression);
+        StringBuilder normalized = new StringBuilder(unwrapped.length());
+        for (int index = 0; index < unwrapped.length();) {
+            char character = unwrapped.charAt(index);
+            if (character == '\'') {
+                int end = quotedLiteralEnd(unwrapped, index);
+                normalized.append(unwrapped, index, end);
+                index = end;
+                continue;
+            }
+            if (isGeneratedIdentifierCharacter(character)) {
+                int identifierEnd = index + 1;
+                while (identifierEnd < unwrapped.length()
+                        && isGeneratedIdentifierCharacter(unwrapped.charAt(identifierEnd))) {
+                    identifierEnd++;
+                }
+                normalized.append(unwrapped, index, identifierEnd);
+                if (identifierEnd < unwrapped.length() && unwrapped.charAt(identifierEnd) == '(') {
+                    int close = matchingParenthesis(unwrapped, identifierEnd);
+                    if (close >= 0) {
+                        normalized.append('(');
+                        appendNormalizedArguments(normalized,
+                                unwrapped.substring(identifierEnd + 1, close));
+                        normalized.append(')');
+                        index = close + 1;
+                        continue;
+                    }
+                }
+                index = identifierEnd;
+                continue;
+            }
+            if (character == '(') {
+                int close = matchingParenthesis(unwrapped, index);
+                if (close >= 0) {
+                    normalized.append('(')
+                            .append(normalizeGeneratedSegment(unwrapped.substring(index + 1, close)))
+                            .append(')');
+                    index = close + 1;
+                    continue;
+                }
+            }
+            normalized.append(character);
+            index++;
+        }
+        return normalized.toString();
+    }
+
+    private static void appendNormalizedArguments(StringBuilder target, String arguments) {
+        int start = 0;
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = 0; index <= arguments.length(); index++) {
+            if (index == arguments.length()) {
+                target.append(normalizeGeneratedSegment(arguments.substring(start)));
+                return;
+            }
+            char character = arguments.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < arguments.length() && arguments.charAt(index + 1) == '\'') {
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (!quoted) {
+                if (character == '(') depth++;
+                else if (character == ')') depth--;
+                else if (character == ',' && depth == 0) {
+                    target.append(normalizeGeneratedSegment(arguments.substring(start, index))).append(',');
+                    start = index + 1;
+                }
+            }
+        }
+    }
+
+    private static String stripRedundantOuterParentheses(String expression) {
+        String normalized = expression;
+        while (normalized.length() >= 2 && normalized.charAt(0) == '(') {
+            int close = matchingParenthesis(normalized, 0);
+            if (close != normalized.length() - 1 || hasTopLevelComma(normalized, 1, close)) {
+                break;
+            }
+            normalized = normalized.substring(1, close);
+        }
+        return normalized;
+    }
+
+    private static boolean hasTopLevelComma(String expression, int start, int end) {
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = start; index < end; index++) {
+            char character = expression.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < end && expression.charAt(index + 1) == '\'') index++;
+                else quoted = !quoted;
+            } else if (!quoted) {
+                if (character == '(') depth++;
+                else if (character == ')') depth--;
+                else if (character == ',' && depth == 0) return true;
+            }
+        }
+        return false;
+    }
+
+    private static int matchingParenthesis(String expression, int open) {
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = open; index < expression.length(); index++) {
+            char character = expression.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < expression.length() && expression.charAt(index + 1) == '\'') {
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (!quoted) {
+                if (character == '(') depth++;
+                else if (character == ')' && --depth == 0) return index;
+            }
+        }
+        return -1;
+    }
+
+    private static int quotedLiteralEnd(String expression, int start) {
+        for (int index = start + 1; index < expression.length(); index++) {
+            if (expression.charAt(index) != '\'') continue;
+            if (index + 1 < expression.length() && expression.charAt(index + 1) == '\'') {
+                index++;
+            } else {
+                return index + 1;
+            }
+        }
+        return expression.length();
+    }
+
+    private static boolean isGeneratedIdentifierCharacter(char character) {
+        return Character.isLetterOrDigit(character) || character == '_';
     }
 
     private void validateTable(TableExpectation expected) {
