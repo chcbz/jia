@@ -43,6 +43,7 @@ import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.service.AgentHostedRuntimePublicationWorker;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
@@ -109,6 +110,7 @@ public class AgentServiceImpl implements AgentService {
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     private final ObjectProvider<AgentSceneService> sceneServiceProvider;
     private final AgentScopePublicationCoordinator scopePublicationCoordinator;
+    private final AgentHostedRuntimePublicationWorker runtimePublicationWorker;
     private final AgentSceneFeatureFlags sceneFeatureFlags;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter taskEventWriter;
@@ -137,8 +139,9 @@ public class AgentServiceImpl implements AgentService {
                 agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
                 agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
                 taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
-                scopePublicationCoordinator, sceneFeatureFlags, mutationTransaction,
-                taskEventWriter, AgentCommandTransportCapture.disabledForLegacyConstruction());
+                scopePublicationCoordinator, new AgentHostedRuntimePublicationWorker(agentRuntimeDao),
+                sceneFeatureFlags, mutationTransaction, taskEventWriter,
+                AgentCommandTransportCapture.disabledForLegacyConstruction());
     }
 
     @Autowired
@@ -157,6 +160,7 @@ public class AgentServiceImpl implements AgentService {
             ObjectProvider<ApiKeyService> apiKeyServiceProvider,
             ObjectProvider<AgentSceneService> sceneServiceProvider,
             AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentHostedRuntimePublicationWorker runtimePublicationWorker,
             AgentSceneFeatureFlags sceneFeatureFlags,
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter taskEventWriter,
@@ -175,6 +179,7 @@ public class AgentServiceImpl implements AgentService {
         this.apiKeyServiceProvider = apiKeyServiceProvider;
         this.sceneServiceProvider = sceneServiceProvider;
         this.scopePublicationCoordinator = scopePublicationCoordinator;
+        this.runtimePublicationWorker = runtimePublicationWorker;
         this.sceneFeatureFlags = sceneFeatureFlags;
         this.mutationTransaction = mutationTransaction;
         this.taskEventWriter = taskEventWriter;
@@ -224,7 +229,8 @@ public class AgentServiceImpl implements AgentService {
         } else {
             agentRuntimeDao.updateById(entity);
         }
-        publishAgentSnapshotAfterCommit("agent-register", clientId, jiacn, toRuntimeDTO(entity));
+        publishAgentSnapshotAfterCommit("agent-register", jiacn, clientId, jiacn,
+                entity.getAgentId(), requireBindingId(entity));
         return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());
     }
 
@@ -424,7 +430,8 @@ public class AgentServiceImpl implements AgentService {
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
         AgentRuntimeDTO dto = toRuntimeDTO(entity);
-        publishAgentSnapshotAfterCommit("agent-presence", clientId, jiacn, dto);
+        publishAgentSnapshotAfterCommit("agent-presence", jiacn, clientId, jiacn,
+                entity.getAgentId(), requireBindingId(entity));
         return dto;
     }
 
@@ -1252,6 +1259,11 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentRuntimeDTO toRuntimeDTO(AgentRuntimeEntity entity) {
+        return toRuntimeDTO(entity, resolveCurrentClientId(), resolveCurrentJiacn());
+    }
+
+    private AgentRuntimeDTO toRuntimeDTO(
+            AgentRuntimeEntity entity, String clientId, String ownerJiacn) {
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(entity.getAgentId());
         dto.setName(entity.getName());
@@ -1282,8 +1294,8 @@ public class AgentServiceImpl implements AgentService {
         dto.setLastSeenAt(entity.getLastSeenAt());
         dto.setErrorMessage(entity.getErrorMessage());
         dto.setBound(!StringUtil.isBlank(entity.getOwnerJiacn()));
-        dto.setBoundToMe(Objects.equals(resolveCurrentClientId(), entity.getClientId())
-                && Objects.equals(resolveCurrentJiacn(), entity.getOwnerJiacn()));
+        dto.setBoundToMe(Objects.equals(clientId, entity.getClientId())
+                && Objects.equals(ownerJiacn, entity.getOwnerJiacn()));
         dto.setCanBind(false);
         dto.setCanOperate(Boolean.TRUE.equals(dto.getBoundToMe()) && !Boolean.TRUE.equals(dto.getSystemAgent()));
         dto.setStats(buildStats(entity));
@@ -1991,9 +2003,21 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void publishAgentSnapshotAfterCommit(
-            String operation, String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
-        publishOptionalAfterCommit(operation,
-                () -> publishScopedAgentSnapshots(clientId, ownerJiacn, List.of(agent)));
+            String operation, String tenantId, String clientId, String ownerJiacn,
+            String agentId, long bindingId) {
+        publishOptionalAfterCommit(operation, () ->
+                scopePublicationCoordinator.execute(clientId, ownerJiacn, () -> {
+                    AgentHostedBindingTransaction.Scope scope =
+                            new AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
+                    AgentRuntimeEntity current = runtimePublicationWorker
+                            .revalidateForPublication(scope, agentId, bindingId);
+                    if (current == null) {
+                        return;
+                    }
+                    publishAgentSnapshots(clientId, ownerJiacn,
+                            List.of(toRuntimeDTO(current, clientId, ownerJiacn)),
+                            listCapabilities(clientId, ownerJiacn));
+                }));
     }
 
     private void publishScopedAgentSnapshots(

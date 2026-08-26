@@ -65,6 +65,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -312,7 +313,14 @@ class AgentServiceImplTest extends BaseMockTest {
             return identity;
         });
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
-        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(null);
+        AtomicReference<AgentRuntimeEntity> committedRuntime = new AtomicReference<>();
+        when(agentRuntimeDao.findByAgentId("agent-001"))
+                .thenAnswer(invocation -> committedRuntime.get());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            AgentRuntimeEntity inserted = invocation.getArgument(0);
+            committedRuntime.set(inserted);
+            return 1;
+        }).when(agentRuntimeDao).insert(any(AgentRuntimeEntity.class));
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
 
         AgentRegisterDTO request = new AgentRegisterDTO();
@@ -508,6 +516,114 @@ class AgentServiceImplTest extends BaseMockTest {
             TransactionSynchronizationManager.clearSynchronization();
             TransactionSynchronizationManager.setActualTransactionActive(false);
         }
+    }
+
+    @Test
+    void delayedPresenceCallbackPublishesCurrentOfflineInsideScopeInsteadOfCapturedOnline() {
+        AgentRuntimeEntity updating = ownedAgent(
+                "agent-001", "吴用", AgentConstants.STATUS_OFFLINE, "[\"planning\"]");
+        AgentRuntimeEntity committedOffline = ownedAgent(
+                "agent-001", "吴用", AgentConstants.STATUS_OFFLINE, "[\"current-offline\"]");
+        committedOffline.setEndpoint("offline-after-unbind");
+        AtomicReference<AgentRuntimeEntity> committedRuntime = new AtomicReference<>(updating);
+        AtomicBoolean insideScope = new AtomicBoolean(false);
+        AgentScopePublicationCoordinator coordinated = coordinatedPublication(insideScope);
+        agentService = newAgentService(coordinated, new AgentSceneFeatureFlags(true, true));
+        org.mockito.Mockito.doReturn(updating).when(agentRuntimeDao)
+                .findByAgentIdForUpdate("agent-001");
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenAnswer(invocation -> {
+            assertTrue(insideScope.get(), "committed reread must run inside the exact-scope lock");
+            return committedRuntime.get();
+        });
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+                .thenReturn(List.of(committedOffline));
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        AgentStatusDTO status = new AgentStatusDTO();
+        status.setStatus(AgentConstants.STATUS_ONLINE);
+        status.setAbilities(List.of("captured-online"));
+
+        List<TransactionSynchronization> delayedCallbacks;
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            AgentRuntimeDTO result = agentService.updateStatus("agent-001", status);
+            assertEquals(AgentConstants.STATUS_ONLINE, result.getStatus());
+            delayedCallbacks = List.copyOf(TransactionSynchronizationManager.getSynchronizations());
+            verify(agentRuntimeDao, never()).findByAgentId("agent-001");
+            verify(coordinated, never()).execute(any(), any(), any(Runnable.class));
+            verify(eventPublisher, never()).publishAgentStatus(any(), any(), any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+
+        committedRuntime.set(committedOffline);
+        AgentRuntimeDTO alreadyPublishedOffline = new AgentRuntimeDTO();
+        alreadyPublishedOffline.setAgentId("agent-001");
+        alreadyPublishedOffline.setStatus(AgentConstants.STATUS_OFFLINE);
+        alreadyPublishedOffline.setEndpoint("offline-after-unbind");
+        coordinated.execute("jia_client", "juyiting", () -> eventPublisher.publishAgentStatus(
+                "jia_client", "juyiting", alreadyPublishedOffline));
+        delayedCallbacks.forEach(TransactionSynchronization::afterCommit);
+
+        ArgumentCaptor<AgentRuntimeDTO> publications = ArgumentCaptor.forClass(AgentRuntimeDTO.class);
+        verify(eventPublisher, times(2)).publishAgentStatus(
+                eq("jia_client"), eq("juyiting"), publications.capture());
+        assertEquals(List.of(AgentConstants.STATUS_OFFLINE, AgentConstants.STATUS_OFFLINE),
+                publications.getAllValues().stream().map(AgentRuntimeDTO::getStatus).toList());
+        assertEquals("offline-after-unbind", publications.getAllValues().get(1).getEndpoint());
+        assertFalse(publications.getAllValues().stream()
+                .anyMatch(runtime -> AgentConstants.STATUS_ONLINE.equals(runtime.getStatus())));
+        verify(agentRuntimeDao).findByAgentId("agent-001");
+        verify(eventPublisher).publishCapabilityIndex(eq("jia_client"), eq("juyiting"), any());
+    }
+
+    @Test
+    void delayedRegisterCallbackRereadsInsideScopeAndSkipsMismatchedBinding() {
+        AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_PROVISIONED);
+        AgentRuntimeEntity replacedBinding = ownedAgent(
+                "agent-001", "吴用", AgentConstants.STATUS_OFFLINE, "[\"replacement\"]");
+        replacedBinding.setBindingId(2L);
+        AtomicBoolean insideScope = new AtomicBoolean(false);
+        AgentScopePublicationCoordinator coordinated = coordinatedPublication(insideScope);
+        agentService = newAgentService(coordinated, new AgentSceneFeatureFlags(true, true));
+        when(agentIdentityService.requireRegistrationIdentityInScope(
+                "juyiting", "jia_client", "juyiting", "agent-001")).thenReturn(identity);
+        when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
+        when(agentIdentityService.activateForFirstRegistration(identity)).thenReturn(identity);
+        when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona("wuyong", "吴用", "智多星"));
+        org.mockito.Mockito.doReturn(null).when(agentRuntimeDao)
+                .findByAgentIdForUpdate("agent-001");
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenAnswer(invocation -> {
+            assertTrue(insideScope.get(), "committed reread must run inside the exact-scope lock");
+            return replacedBinding;
+        });
+        org.mockito.Mockito.lenient().when(eventPublisherProvider.getIfAvailable())
+                .thenReturn(eventPublisher);
+        AgentRegisterDTO request = new AgentRegisterDTO();
+        request.setAgentId("agent-001");
+
+        List<TransactionSynchronization> delayedCallbacks;
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            AgentRegisterResultDTO result = agentService.register(request);
+            assertEquals(AgentConstants.STATUS_ONLINE, result.getStatus());
+            delayedCallbacks = List.copyOf(TransactionSynchronizationManager.getSynchronizations());
+            verify(agentRuntimeDao, never()).findByAgentId("agent-001");
+            verify(coordinated, never()).execute(any(), any(), any(Runnable.class));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+
+        delayedCallbacks.forEach(TransactionSynchronization::afterCommit);
+
+        verify(agentRuntimeDao).findByAgentId("agent-001");
+        verify(eventPublisher, never()).publishAgentStatus(any(), any(), any());
+        verify(eventPublisher, never()).publishCapabilityIndex(any(), any(), any());
+        verify(agentRuntimeDao, never()).findRosterByOwner(any(), any(), any(), any());
     }
 
     @Test
@@ -2376,6 +2492,32 @@ class AgentServiceImplTest extends BaseMockTest {
         member.setAgentId(agentId);
         member.setMemberStatus(status);
         return member;
+    }
+
+    private AgentServiceImpl newAgentService(
+            AgentScopePublicationCoordinator coordinator, AgentSceneFeatureFlags featureFlags) {
+        return new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao,
+                agentPersonaBindingDao, agentTaskMetaDao, agentTaskMemberDao,
+                legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao,
+                eventPublisherProvider, taskServiceProvider, apiKeyServiceProvider,
+                sceneServiceProvider, coordinator, featureFlags, mutationTransaction, taskEventWriter);
+    }
+
+    private AgentScopePublicationCoordinator coordinatedPublication(AtomicBoolean insideScope) {
+        AgentScopePublicationCoordinator coordinator =
+                org.mockito.Mockito.mock(AgentScopePublicationCoordinator.class);
+        doAnswer(invocation -> {
+            assertFalse(insideScope.get(), "scope publication must not reenter the same test lock");
+            insideScope.set(true);
+            try {
+                invocation.<Runnable>getArgument(2).run();
+            } finally {
+                insideScope.set(false);
+            }
+            return null;
+        }).when(coordinator).execute(
+                eq("jia_client"), eq("juyiting"), any(Runnable.class));
+        return coordinator;
     }
 
     private void markOwned(AgentRuntimeEntity agent) {
