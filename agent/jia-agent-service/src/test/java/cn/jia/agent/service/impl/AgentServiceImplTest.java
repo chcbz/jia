@@ -419,6 +419,7 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentPersonaDao.findByCode("wuyong")).thenReturn(persona);
         org.mockito.Mockito.doReturn(lockedCurrent).when(agentRuntimeDao)
                 .findByAgentIdForUpdate("agent-001");
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(lockedCurrent);
 
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId("agent-001");
@@ -426,13 +427,15 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("[\"current-skill\"]", lockedCurrent.getAbilities());
         assertEquals("[\"stale-skill\"]", stale.getAbilities());
-        verify(agentRuntimeDao, never()).findByAgentId("agent-001");
+        verify(agentRuntimeDao).findByAgentId("agent-001");
         verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
         verify(agentRuntimeDao).updateById(lockedCurrent);
         org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
                 agentIdentityService, agentRuntimeDao);
         lockOrder.verify(agentIdentityService).activateForFirstRegistration(identity);
         lockOrder.verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+        lockOrder.verify(agentRuntimeDao).updateById(lockedCurrent);
+        lockOrder.verify(agentRuntimeDao).findByAgentId("agent-001");
     }
 
     @Test
