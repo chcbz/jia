@@ -9,6 +9,7 @@ import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandManualReissueResult;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
@@ -46,6 +47,7 @@ import static org.mockito.Mockito.when;
 
 class AgentCommandOperationsServiceImplTest {
     private static final long NOW = 1_700_000_000_000L;
+    private static final long SERVICE_NOW = NOW + 500L;
     private static final long ISSUED = NOW - 1_000L;
     private static final long EXPIRES = ISSUED + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS;
     private static final String MESSAGE = "11111111-1111-1111-1111-111111111111";
@@ -87,6 +89,59 @@ class AgentCommandOperationsServiceImplTest {
         assertEquals(NOW, audits.getAllValues().getLast().getRequestedAt());
         assertEquals(NOW + 500L, audits.getAllValues().getLast().getCompletedAt());
         assertEquals("SUCCEEDED", audits.getAllValues().getLast().getOutcome());
+    }
+
+    @Test
+    void listedBrokerDlqCandidateIsDiscoverableAndRedriveable() {
+        Fixture fixture = fixture();
+        AgentCommandDlqEntry candidate = dlqEntry(1L);
+        when(fixture.dao.listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 10))
+                .thenReturn(List.of(candidate));
+        AgentCommandDlqRedriver redriver = (request, timeout, scanLimit) ->
+                AgentRabbitPublishResult.ack();
+        AgentCommandOperationsServiceImpl service = service(
+                fixture, redriver, null, true, false);
+
+        List<AgentCommandDlqEntry> listed = service.listDlq(
+                "tenant-a", "client-a", 0, 10);
+        var redriven = service.brokerRedrive(request(null), NOW);
+
+        assertEquals(List.of(candidate), listed);
+        assertEquals("PUBLISHED", listed.getFirst().deliveryStatus());
+        assertEquals("PUBLISHED", listed.getFirst().outboxStatus());
+        assertEquals(null, listed.getFirst().inboxStatus());
+        assertEquals(null, listed.getFirst().inboxResultStatus());
+        assertEquals("SUCCEEDED", redriven.outcome());
+        verify(fixture.dao).listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 10);
+    }
+
+    @Test
+    void terminalDisposedOrExpiredRowsCannotMasqueradeAsBrokerDlqCandidates() {
+        Fixture fixture = fixture();
+        AgentCommandOperationsServiceImpl service = service(
+                fixture, null, null, false, false);
+
+        when(fixture.dao.listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 1))
+                .thenReturn(List.of(dlqEntry(
+                        1L, "DEAD", "DEAD", null, null, null, EXPIRES)));
+        assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
+                assertThrows(AgentCommandOperationsException.class,
+                        () -> service.listDlq("tenant-a", "client-a", 0, 1)).reason());
+
+        when(fixture.dao.listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 1))
+                .thenReturn(List.of(dlqEntry(
+                        1L, "PUBLISHED", "PUBLISHED", "PROCESSED", "SENT",
+                        NOW - 5, EXPIRES)));
+        assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
+                assertThrows(AgentCommandOperationsException.class,
+                        () -> service.listDlq("tenant-a", "client-a", 0, 1)).reason());
+
+        when(fixture.dao.listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 1))
+                .thenReturn(List.of(dlqEntry(
+                        1L, "PUBLISHED", "PUBLISHED", null, null, null, SERVICE_NOW)));
+        assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
+                assertThrows(AgentCommandOperationsException.class,
+                        () -> service.listDlq("tenant-a", "client-a", 0, 1)).reason());
     }
 
     @Test
@@ -290,6 +345,7 @@ class AgentCommandOperationsServiceImplTest {
                 .get("BROKER_REDRIVE:REQUESTED"));
         assertTrue(metrics.operationsByTypeAndOutcome()
                 .containsKey("MANUAL_REISSUE:FAILED"));
+        verify(requested.dao).countDlq("tenant-a", "client-a", NOW);
     }
 
     @Test
@@ -299,18 +355,18 @@ class AgentCommandOperationsServiceImplTest {
         assertEquals(AgentCommandOperationsException.Reason.INVALID_REQUEST,
                 assertThrows(AgentCommandOperationsException.class,
                         () -> service.listDlq("tenant-\ud800", "client-a", 0, 1)).reason());
-        when(fixture.dao.listDlq("tenant-a", "client-a", 0, 1)).thenReturn(List.of(
+        when(fixture.dao.listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 1)).thenReturn(List.of(
                 dlqEntry(1L), dlqEntry(2L)));
         assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
                 assertThrows(AgentCommandOperationsException.class,
                         () -> service.listDlq("tenant-a", "client-a", 0, 1)).reason());
         ArrayList<cn.jia.agent.entity.AgentCommandDlqEntry> malformedPage = new ArrayList<>();
         malformedPage.add(null);
-        when(fixture.dao.listDlq("tenant-a", "client-a", 0, 1)).thenReturn(malformedPage);
+        when(fixture.dao.listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 1)).thenReturn(malformedPage);
         assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
                 assertThrows(AgentCommandOperationsException.class,
                         () -> service.listDlq("tenant-a", "client-a", 0, 1)).reason());
-        when(fixture.dao.listDlq("tenant-a", "client-a", 0, 1))
+        when(fixture.dao.listDlq("tenant-a", "client-a", 0, SERVICE_NOW, 1))
                 .thenReturn(List.of(dlqEntry(0L)));
         assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
                 assertThrows(AgentCommandOperationsException.class,
@@ -345,11 +401,22 @@ class AgentCommandOperationsServiceImplTest {
         verify(fixture.dao, never()).insertAudit(any());
     }
 
-    private cn.jia.agent.entity.AgentCommandDlqEntry dlqEntry(long id) {
-        return new cn.jia.agent.entity.AgentCommandDlqEntry(
+    private AgentCommandDlqEntry dlqEntry(long id) {
+        return dlqEntry(id, "PUBLISHED", "PUBLISHED", null, null, null, EXPIRES);
+    }
+
+    private AgentCommandDlqEntry dlqEntry(
+            long id,
+            String deliveryStatus,
+            String outboxStatus,
+            String inboxStatus,
+            String inboxResultStatus,
+            Long processedAt,
+            long expiresAt) {
+        return new AgentCommandDlqEntry(
                 id, COMMAND, "event-1", MESSAGE, "task-1", "agent-a",
-                "PUBLISHED", "PUBLISHED", null, null, 1, 1,
-                "00".repeat(32), NOW - 10, null, EXPIRES, NOW);
+                deliveryStatus, outboxStatus, inboxStatus, inboxResultStatus, 1, 1,
+                "00".repeat(32), NOW - 10, processedAt, expiresAt, NOW);
     }
 
     private AgentCommandOperationsServiceImpl service(
@@ -360,7 +427,7 @@ class AgentCommandOperationsServiceImplTest {
                 reissue, new AgentCommandOperationsProperties(
                         true, redriveEnabled, reissueEnabled, null, null, null, null),
                 transactionManager(), () -> UUID.fromString(
-                        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), () -> NOW + 500L);
+                        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), () -> SERVICE_NOW);
     }
 
     private Fixture fixture() {

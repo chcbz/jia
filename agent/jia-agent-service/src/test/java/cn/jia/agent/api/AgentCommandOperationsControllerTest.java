@@ -1,5 +1,6 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
 import cn.jia.agent.entity.AgentCommandOperationType;
@@ -43,14 +44,26 @@ class AgentCommandOperationsControllerTest {
 
     @Test
     void directJwtScopeAndDedicatedAuthorityAreSoleReadIdentity() throws Exception {
-        when(service.listDlq("tenant-a", "client-a", 0, 50)).thenReturn(List.of());
+        when(service.listDlq("tenant-a", "client-a", 0, 50)).thenReturn(List.of(
+                new AgentCommandDlqEntry(
+                        7L, "cmd-1", "event-1", "message-1", "task-1", "agent-a",
+                        "PUBLISHED", "PUBLISHED", null, null, 1, 1,
+                        "00".repeat(32), 1_700_000_000_000L, null,
+                        1_700_000_600_000L, 1_700_000_000_001L)));
 
         mvc.perform(get("/agent/internal/command-operations/dlq")
                         .principal(jwt("operator-a", "approver-b",
                                 AgentCommandOperationsController.AUTHORITY_READ)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(content().json("[]"));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"deliveryStatus\":\"PUBLISHED\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"outboxStatus\":\"PUBLISHED\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("wirePayload"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("commandPayload"))));
 
         verify(service).listDlq("tenant-a", "client-a", 0, 50);
     }

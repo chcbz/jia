@@ -45,6 +45,37 @@ class AgentCommandOperationsMapperContractTest {
     }
 
     @Test
+    void dlqCountAndPageExposeOnlyExactDurableBrokerRedriveCandidates() throws Exception {
+        for (String methodName : new String[] {"countDlq", "listDlq"}) {
+            String sql = select(methodName);
+            for (String predicate : new String[] {
+                    "d.status='published'", "d.next_retry_at is null",
+                    "d.active_attempt>0", "d.expires_at>#{now}", "d.lease_owner is null",
+                    "d.lease_until is null", "o.status='published'",
+                    "o.attempt_count>0", "o.next_retry_at is null",
+                    "o.lease_owner is null", "o.lease_until is null",
+                    "o.active_attempt=d.active_attempt", "o.expires_at=d.expires_at",
+                    "o.command_id=d.command_id", "o.aggregate_type='task'",
+                    "o.aggregate_id=d.task_id", "o.publisher_confirm_status='ack'",
+                    "o.confirmed_at is not null", "o.confirmed_at>0", "o.confirm_error is null",
+                    "o.mandatory_return_status='not_returned'", "o.returned_at is null",
+                    "o.return_reply_code is null", "o.return_reply_text is null",
+                    "o.published_at is not null", "o.published_at>0",
+                    "o.last_error is null", "i.id is null"}) {
+                assertTrue(sql.contains(predicate), methodName + ": " + predicate);
+            }
+            assertTrue(sql.contains("cast(d.tenant_id as binary)=cast(#{tenantid} as binary)"));
+            assertTrue(sql.contains("octet_length(d.tenant_id)=octet_length(#{tenantid})"));
+            assertTrue(sql.contains("cast(d.client_id as binary)=cast(#{clientid} as binary)"));
+            assertTrue(sql.contains("octet_length(d.client_id)=octet_length(#{clientid})"));
+            assertTrue(sql.contains("i.consumer_name='agent-command-dispatch-v1'"));
+            assertFalse(sql.contains("status in ('dead','failed')"), sql);
+            assertFalse(sql.contains("i.status='dead'"), sql);
+            assertFalse(sql.contains("i.result_status='dead'"), sql);
+        }
+    }
+
+    @Test
     void operationAuditMapperIsInsertOnlyAndContainsNoPayloadOrCredentialColumn() {
         for (Method method : AgentCommandOperationsMapper.class.getMethods()) {
             assertFalse(method.isAnnotationPresent(Update.class), method.getName());

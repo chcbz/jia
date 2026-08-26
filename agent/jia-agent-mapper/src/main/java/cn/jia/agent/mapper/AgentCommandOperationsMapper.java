@@ -21,6 +21,20 @@ public interface AgentCommandOperationsMapper {
             + "AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId}) "
             + "AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY) "
             + "AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId}) ";
+    String BROKER_REDRIVE_CANDIDATE = """
+              AND d.status='PUBLISHED' AND d.next_retry_at IS NULL
+              AND d.active_attempt>0 AND d.expires_at>#{now}
+              AND d.lease_owner IS NULL AND d.lease_until IS NULL
+              AND o.status='PUBLISHED' AND o.attempt_count>0 AND o.next_retry_at IS NULL
+              AND o.lease_owner IS NULL AND o.lease_until IS NULL
+              AND o.active_attempt=d.active_attempt AND o.expires_at=d.expires_at
+              AND o.command_id=d.command_id AND o.aggregate_type='task' AND o.aggregate_id=d.task_id
+              AND o.publisher_confirm_status='ACK' AND o.confirmed_at IS NOT NULL AND o.confirmed_at>0
+              AND o.confirm_error IS NULL AND o.mandatory_return_status='NOT_RETURNED'
+              AND o.returned_at IS NULL AND o.return_reply_code IS NULL AND o.return_reply_text IS NULL
+              AND o.published_at IS NOT NULL AND o.published_at>0 AND o.last_error IS NULL
+              AND i.id IS NULL
+            """;
 
     @Select("SELECT status AS label, COUNT(*) AS count FROM agent_command_delivery WHERE "
             + EXACT_SCOPE + " GROUP BY status ORDER BY status")
@@ -95,9 +109,10 @@ public interface AgentCommandOperationsMapper {
             + "AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId}) "
             + "AND CAST(d.client_id AS BINARY)=CAST(#{clientId} AS BINARY) "
             + "AND OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId}) "
-            + "AND (d.status IN ('DEAD','FAILED') OR o.status IN ('DEAD','FAILED') "
-            + "OR i.status='DEAD' OR i.result_status='DEAD')")
-    long countDlq(@Param("tenantId") String tenantId, @Param("clientId") String clientId);
+            + BROKER_REDRIVE_CANDIDATE)
+    long countDlq(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("now") long now);
 
     @Select("SELECT COUNT(*) FROM agent_command_delivery WHERE " + EXACT_SCOPE
             + " AND status='WAITING_AGENT' AND next_retry_at IS NOT NULL AND next_retry_at<=#{now}")
@@ -141,13 +156,13 @@ public interface AgentCommandOperationsMapper {
               AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId})
               AND CAST(d.client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId})
-              AND (d.status IN ('DEAD','FAILED') OR o.status IN ('DEAD','FAILED')
-                   OR i.status='DEAD' OR i.result_status='DEAD')
+            """ + BROKER_REDRIVE_CANDIDATE + """
             ORDER BY d.id ASC LIMIT #{limit}
             """)
     List<AgentCommandDlqEntry> listDlq(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
-            @Param("afterDeliveryId") long afterDeliveryId, @Param("limit") int limit);
+            @Param("afterDeliveryId") long afterDeliveryId, @Param("now") long now,
+            @Param("limit") int limit);
 
     @Select("""
             SELECT id,operation_id AS operationId,phase,operation_type AS operationType,

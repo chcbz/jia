@@ -20,13 +20,13 @@ public interface AgentCommandOperationsDao {
     long countOutboxBacklog(String tenantId, String clientId);
     Long oldestOutboxEpoch(String tenantId, String clientId);
     long countPublishFailures(String tenantId, String clientId);
-    long countDlq(String tenantId, String clientId);
+    long countDlq(String tenantId, String clientId, long now);
     long countWaitingDue(String tenantId, String clientId, long now);
     long countSentUnacknowledged(String tenantId, String clientId);
     long countReconnectQueueDepth(String tenantId, String clientId, long now);
     long countExpiryProximity(String tenantId, String clientId, long now, long before);
     List<AgentCommandDlqEntry> listDlq(
-            String tenantId, String clientId, long afterDeliveryId, int limit);
+            String tenantId, String clientId, long afterDeliveryId, long now, int limit);
     List<AgentCommandOperationAuditEntry> listAudit(
             String tenantId, String clientId, long afterId, int limit);
     AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId);

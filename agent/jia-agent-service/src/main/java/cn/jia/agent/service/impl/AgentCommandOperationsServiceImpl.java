@@ -135,7 +135,7 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
                 nonNegative(dao.countOutboxBacklog(tenantId, clientId)),
                 oldestAge,
                 nonNegative(dao.countPublishFailures(tenantId, clientId)),
-                nonNegative(dao.countDlq(tenantId, clientId)),
+                nonNegative(dao.countDlq(tenantId, clientId, now)),
                 nonNegative(dao.countWaitingDue(tenantId, clientId, now)),
                 nonNegative(dao.countSentUnacknowledged(tenantId, clientId)),
                 nonNegative(dao.countReconnectQueueDepth(tenantId, clientId, now)),
@@ -149,12 +149,14 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
             String tenantId, String clientId, long afterDeliveryId, int limit) {
         requireReadScope(tenantId, clientId);
         requirePage(afterDeliveryId, limit);
+        long now = clock.getAsLong();
+        requireNow(now);
         List<AgentCommandDlqEntry> rows = Objects.requireNonNullElse(
-                dao.listDlq(tenantId, clientId, afterDeliveryId, limit), List.of());
+                dao.listDlq(tenantId, clientId, afterDeliveryId, now, limit), List.of());
         if (rows.size() > limit || rows.stream().anyMatch(Objects::isNull)) {
             throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
         }
-        validateDlqPage(rows, afterDeliveryId);
+        validateDlqPage(rows, afterDeliveryId, now);
         return List.copyOf(rows);
     }
 
@@ -531,22 +533,21 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         }
     }
 
-    private void validateDlqPage(List<AgentCommandDlqEntry> rows, long afterDeliveryId) {
+    private void validateDlqPage(
+            List<AgentCommandDlqEntry> rows, long afterDeliveryId, long now) {
         long cursor = afterDeliveryId;
         for (AgentCommandDlqEntry row : rows) {
-            if (row.deliveryId() <= cursor || !exact(row.commandId(), 100)
+            boolean redriveCandidate = "PUBLISHED".equals(row.deliveryStatus())
+                    && "PUBLISHED".equals(row.outboxStatus())
+                    && row.inboxStatus() == null && row.inboxResultStatus() == null
+                    && row.publishAttemptCount() > 0 && row.publishedAt() != null
+                    && row.publishedAt() > 0 && row.processedAt() == null
+                    && row.expiresAt() > now;
+            if (!redriveCandidate || row.deliveryId() <= cursor || !exact(row.commandId(), 100)
                     || !exact(row.eventId(), 100) || !exact(row.messageId(), 100)
                     || !exact(row.taskId(), 100) || !exact(row.targetAgentId(), 100)
-                    || !DELIVERY_STATUSES.contains(row.deliveryStatus())
-                    || !OUTBOX_STATUSES.contains(row.outboxStatus())
-                    || (row.inboxStatus() != null && !INBOX_STATUSES.contains(row.inboxStatus()))
-                    || (row.inboxResultStatus() != null
-                        && !INBOX_RESULTS.contains(row.inboxResultStatus()))
-                    || row.activeAttempt() <= 0 || row.publishAttemptCount() < 0
-                    || !hexSha256(row.wireSha256())
-                    || (row.publishedAt() != null && row.publishedAt() <= 0)
-                    || (row.processedAt() != null && row.processedAt() <= 0)
-                    || row.expiresAt() <= 0 || row.updatedAt() <= 0) {
+                    || row.activeAttempt() <= 0 || !hexSha256(row.wireSha256())
+                    || row.updatedAt() <= 0) {
                 throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
             }
             cursor = row.deliveryId();
