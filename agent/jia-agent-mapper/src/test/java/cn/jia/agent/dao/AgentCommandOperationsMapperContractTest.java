@@ -21,63 +21,67 @@ import static org.mockito.Mockito.verify;
 
 class AgentCommandOperationsMapperContractTest {
     @Test
-    void readsAreByteExactBoundedStableAndPayloadRedacted() throws Exception {
-        for (String methodName : new String[] {"listDlq", "listAudit"}) {
-            Method method = Arrays.stream(AgentCommandOperationsMapper.class.getMethods())
-                    .filter(candidate -> candidate.getName().equals(methodName))
-                    .findFirst().orElseThrow();
-            Select select = method.getAnnotation(Select.class);
-            assertNotNull(select, methodName);
-            String sql = normalize(select.value());
-            if (methodName.equals("listDlq")) {
-                assertTrue(sql.contains("cast(d.tenant_id as binary)=cast(#{tenantid} as binary)"));
-                assertTrue(sql.contains("octet_length(d.tenant_id)=octet_length(#{tenantid})"));
-                assertTrue(sql.contains("cast(d.client_id as binary)=cast(#{clientid} as binary)"));
-                assertTrue(sql.contains("octet_length(d.client_id)=octet_length(#{clientid})"));
-            } else {
-                assertTrue(sql.contains("cast(tenant_id as binary)=cast(#{tenantid} as binary)"));
-                assertTrue(sql.contains("octet_length(tenant_id)=octet_length(#{tenantid})"));
-                assertTrue(sql.contains("cast(client_id as binary)=cast(#{clientid} as binary)"));
-                assertTrue(sql.contains("octet_length(client_id)=octet_length(#{clientid})"));
-            }
-            assertTrue(sql.contains("order by ") && sql.contains(" limit #{limit}"), sql);
-            for (String forbidden : new String[] {
-                    "wire_payload as", "command_payload as", "lease_owner as",
-                    "lease_until as", "return_reply_text as", "confirm_error as"}) {
-                assertFalse(sql.contains(forbidden), methodName + ": " + forbidden);
-            }
+    void auditReadIsByteExactBoundedStableAndPayloadRedacted() throws Exception {
+        String sql = select("listAudit");
+        assertTrue(sql.contains("cast(tenant_id as binary)=cast(#{tenantid} as binary)"));
+        assertTrue(sql.contains("octet_length(tenant_id)=octet_length(#{tenantid})"));
+        assertTrue(sql.contains("cast(client_id as binary)=cast(#{clientid} as binary)"));
+        assertTrue(sql.contains("octet_length(client_id)=octet_length(#{clientid})"));
+        assertTrue(sql.contains("order by id asc limit #{limit}"), sql);
+        for (String forbidden : new String[] {
+                "wire_payload as", "command_payload as", "lease_owner as",
+                "lease_until as", "return_reply_text as", "confirm_error as"}) {
+            assertFalse(sql.contains(forbidden), forbidden);
         }
     }
 
     @Test
-    void dlqCountAndPageExposeOnlyExactDurableBrokerRedriveCandidates() throws Exception {
-        for (String methodName : new String[] {"countDlq", "listDlq"}) {
-            String sql = select(methodName);
+    void dlqDiscoveryIsDeliveryOnlyBroadBoundedStableAndHasNoMinAuthorization() throws Exception {
+        String count = select("countDlqBroad");
+        String page = select("listDlqBroad");
+        for (String sql : new String[] {count, page}) {
+            assertTrue(sql.contains("from agent_command_delivery"), sql);
+            assertExactScope(sql);
             for (String predicate : new String[] {
-                    "d.status='published'", "d.next_retry_at is null",
-                    "d.active_attempt>0", "d.expires_at>#{now}", "d.lease_owner is null",
-                    "d.lease_until is null", "o.status='published'",
-                    "o.attempt_count>0", "o.next_retry_at is null",
-                    "o.lease_owner is null", "o.lease_until is null",
-                    "o.active_attempt=d.active_attempt", "o.expires_at=d.expires_at",
-                    "o.command_id=d.command_id", "o.aggregate_type='task'",
-                    "o.aggregate_id=d.task_id", "o.publisher_confirm_status='ack'",
-                    "o.confirmed_at is not null", "o.confirmed_at>0", "o.confirm_error is null",
-                    "o.mandatory_return_status='not_returned'", "o.returned_at is null",
-                    "o.return_reply_code is null", "o.return_reply_text is null",
-                    "o.published_at is not null", "o.published_at>0",
-                    "o.last_error is null", "i.id is null"}) {
-                assertTrue(sql.contains(predicate), methodName + ": " + predicate);
+                    "status='published'", "next_retry_at is null", "active_attempt>0",
+                    "expires_at>#{now}", "lease_owner is null", "lease_until is null"}) {
+                assertTrue(sql.contains(predicate), predicate + ": " + sql);
             }
-            assertTrue(sql.contains("cast(d.tenant_id as binary)=cast(#{tenantid} as binary)"));
-            assertTrue(sql.contains("octet_length(d.tenant_id)=octet_length(#{tenantid})"));
-            assertTrue(sql.contains("cast(d.client_id as binary)=cast(#{clientid} as binary)"));
-            assertTrue(sql.contains("octet_length(d.client_id)=octet_length(#{clientid})"));
-            assertTrue(sql.contains("i.consumer_name='agent-command-dispatch-v1'"));
-            assertFalse(sql.contains("status in ('dead','failed')"), sql);
-            assertFalse(sql.contains("i.status='dead'"), sql);
-            assertFalse(sql.contains("i.result_status='dead'"), sql);
+            assertFalse(sql.contains(" join "), sql);
+            assertFalse(sql.contains("min("), sql);
+            assertFalse(sql.contains("agent_outbox_event"), sql);
+            assertFalse(sql.contains("agent_consumer_inbox"), sql);
         }
+        assertTrue(page.contains("id>#{afterdeliveryid}"), page);
+        assertTrue(page.endsWith("order by id asc limit #{limit}"), page);
+    }
+
+    @Test
+    void bundleSelectorsAreExactScopedBoundedAndLockVariantsMatchFrozenOrder() throws Exception {
+        for (String methodName : new String[] {
+                "selectActiveOutboxes", "selectCurrentAttemptOutboxes",
+                "selectPreviousAttemptOutboxes", "selectActiveRedriveOperations"}) {
+            String sql = select(methodName);
+            assertExactScope(sql);
+            assertTrue(sql.endsWith("order by id asc limit 2"), methodName + ": " + sql);
+            assertFalse(sql.contains("for update"), methodName);
+        }
+        String inbox = select("selectInbox");
+        assertExactScope(inbox);
+        assertTrue(inbox.endsWith("limit 1"), inbox);
+        assertFalse(inbox.contains("for update"), inbox);
+
+        for (String methodName : new String[] {
+                "lockActiveOutboxes", "lockCurrentAttemptOutboxes",
+                "lockPreviousAttemptOutboxes", "lockActiveRedriveOperations"}) {
+            String sql = select(methodName);
+            assertExactScope(sql);
+            assertTrue(sql.endsWith("order by id asc limit 2 for update"),
+                    methodName + ": " + sql);
+        }
+        assertTrue(select("lockInbox").endsWith("limit 1 for update"));
+        assertTrue(select("selectActiveRedriveOperations").contains("redrive_guard=1"));
+        assertTrue(select("lockActiveRedriveOperations").contains("redrive_guard=1"));
     }
 
     @Test
@@ -129,7 +133,7 @@ class AgentCommandOperationsMapperContractTest {
         assertTrue(active.contains("source_attempt=#{sourceattempt}"));
         assertTrue(active.contains(
                 "cast(source_message_id as binary)=cast(#{sourcemessageid} as binary)"));
-        assertTrue(active.contains("disposition_guard=1"));
+        assertTrue(active.contains("redrive_guard=1"));
         assertTrue(active.endsWith("order by id asc limit 2 for update"), active);
 
         String recovery = select("lockPendingRedriveOperations");
@@ -185,13 +189,19 @@ class AgentCommandOperationsMapperContractTest {
     }
 
     @Test
-    void operationLocksFreezeDeliveryThenActiveOutboxThenInboxSelectors() throws Exception {
+    void operationLocksFreezeDeliveryThenActiveCurrentPreviousInboxAndBlockerSelectors() throws Exception {
         String delivery = select("lockDelivery");
-        String outbox = select("lockActiveOutboxes");
+        String active = select("lockActiveOutboxes");
+        String current = select("lockCurrentAttemptOutboxes");
+        String previous = select("lockPreviousAttemptOutboxes");
         String inbox = select("lockInbox");
+        String blocker = select("lockActiveRedriveOperations");
         assertTrue(delivery.contains("from agent_command_delivery") && delivery.endsWith("for update"));
-        assertTrue(outbox.contains("from agent_outbox_event") && outbox.endsWith("for update"));
+        assertTrue(active.contains("from agent_outbox_event") && active.endsWith("for update"));
+        assertTrue(current.contains("active_attempt=#{activeattempt}") && current.endsWith("for update"));
+        assertTrue(previous.contains("active_attempt=#{previousattempt}") && previous.endsWith("for update"));
         assertTrue(inbox.contains("from agent_consumer_inbox") && inbox.endsWith("for update"));
+        assertTrue(blocker.contains("redrive_guard=1") && blocker.endsWith("for update"));
     }
 
     @Test

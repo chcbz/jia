@@ -1,7 +1,6 @@
 package cn.jia.agent.dao;
 
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
-import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
@@ -22,18 +21,31 @@ public interface AgentCommandOperationsDao {
     long countOutboxBacklog(String tenantId, String clientId);
     Long oldestOutboxEpoch(String tenantId, String clientId);
     long countPublishFailures(String tenantId, String clientId);
-    long countDlq(String tenantId, String clientId, long now);
+    long countDlqBroad(String tenantId, String clientId, long now);
     long countWaitingDue(String tenantId, String clientId, long now);
     long countSentUnacknowledged(String tenantId, String clientId);
     long countReconnectQueueDepth(String tenantId, String clientId, long now);
     long countExpiryProximity(String tenantId, String clientId, long now, long before);
-    List<AgentCommandDlqEntry> listDlq(
+    List<AgentCommandDeliveryEntity> listDlqBroad(
             String tenantId, String clientId, long afterDeliveryId, long now, int limit);
+    List<AgentOutboxEventEntity> selectActiveOutboxes(
+            String tenantId, String clientId, long deliveryId, String messageId);
+    List<AgentOutboxEventEntity> selectCurrentAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int activeAttempt);
+    List<AgentOutboxEventEntity> selectPreviousAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int previousAttempt);
+    AgentConsumerInboxEntity selectInbox(
+            String tenantId, String clientId, String consumerName, String messageId);
+    List<AgentCommandRedriveOperationEntity> selectActiveRedriveOperations(
+            String tenantId, String clientId, long deliveryId, String sourceMessageId,
+            int sourceAttempt);
     List<AgentCommandOperationAuditEntry> listAudit(
             String tenantId, String clientId, long afterId, int limit);
     AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId);
     List<AgentOutboxEventEntity> lockActiveOutboxes(
             String tenantId, String clientId, long deliveryId, String messageId);
+    List<AgentOutboxEventEntity> lockCurrentAttemptOutboxes(
+            String tenantId, String clientId, long deliveryId, int activeAttempt);
     List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(
             String tenantId, String clientId, long deliveryId, int previousAttempt);
     AgentConsumerInboxEntity lockInbox(

@@ -9,10 +9,12 @@ import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandDlqEntry;
+import cn.jia.agent.entity.AgentCommandDlqPage;
 import cn.jia.agent.entity.AgentCommandManualReissueResult;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandOperationAuditPage;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
 import cn.jia.agent.entity.AgentCommandOperationType;
@@ -32,9 +34,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +69,8 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
     private final AgentCommandReissueService reissueService;
     private final AgentCommandOperationsProperties settings;
     private final TransactionTemplate requiresNew;
+    private final TransactionTemplate readSnapshot;
+    private final AgentCommandBrokerRedrivePolicy redrivePolicy;
     private final Supplier<UUID> operationIds;
     private final LongSupplier clock;
 
@@ -111,15 +117,29 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         this.settings = Objects.requireNonNull(settings, "settings");
         this.operationIds = Objects.requireNonNull(operationIds, "operationIds");
         this.clock = Objects.requireNonNull(clock, "clock");
-        this.requiresNew = new TransactionTemplate(
-                Objects.requireNonNull(transactionManager, "transactionManager"));
+        PlatformTransactionManager manager =
+                Objects.requireNonNull(transactionManager, "transactionManager");
+        this.requiresNew = new TransactionTemplate(manager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.readSnapshot = new TransactionTemplate(manager);
+        this.readSnapshot.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.readSnapshot.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        this.readSnapshot.setReadOnly(true);
+        this.redrivePolicy = new AgentCommandBrokerRedrivePolicy();
     }
 
     @Override
     public AgentCommandOpsMetrics metrics(String tenantId, String clientId, long now) {
         requireReadScope(tenantId, clientId);
         requireNow(now);
+        AgentCommandOpsMetrics metrics = readSnapshot.execute(
+                status -> metricsSnapshot(tenantId, clientId, now));
+        if (metrics == null) throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        return metrics;
+    }
+
+    private AgentCommandOpsMetrics metricsSnapshot(
+            String tenantId, String clientId, long now) {
         long before = Math.addExact(now, settings.expiryProximityMillis());
         Long oldest = dao.oldestOutboxEpoch(tenantId, clientId);
         if (oldest != null && (oldest <= 0 || oldest > now)) {
@@ -135,7 +155,7 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
                 nonNegative(dao.countOutboxBacklog(tenantId, clientId)),
                 oldestAge,
                 nonNegative(dao.countPublishFailures(tenantId, clientId)),
-                nonNegative(dao.countDlq(tenantId, clientId, now)),
+                exactDlqCount(tenantId, clientId, now),
                 nonNegative(dao.countWaitingDue(tenantId, clientId, now)),
                 nonNegative(dao.countSentUnacknowledged(tenantId, clientId)),
                 nonNegative(dao.countReconnectQueueDepth(tenantId, clientId, now)),
@@ -145,33 +165,64 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
     }
 
     @Override
-    public List<AgentCommandDlqEntry> listDlq(
+    public AgentCommandDlqPage listDlq(
             String tenantId, String clientId, long afterDeliveryId, int limit) {
         requireReadScope(tenantId, clientId);
         requirePage(afterDeliveryId, limit);
         long now = clock.getAsLong();
         requireNow(now);
-        List<AgentCommandDlqEntry> rows = Objects.requireNonNullElse(
-                dao.listDlq(tenantId, clientId, afterDeliveryId, now, limit), List.of());
-        if (rows.size() > limit || rows.stream().anyMatch(Objects::isNull)) {
+        AgentCommandDlqPage page = readSnapshot.execute(
+                status -> listDlqSnapshot(tenantId, clientId, afterDeliveryId, limit, now));
+        if (page == null) throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        return page;
+    }
+
+    private AgentCommandDlqPage listDlqSnapshot(
+            String tenantId, String clientId, long afterDeliveryId, int limit, long now) {
+        int budget = queryBudget();
+        List<AgentCommandDeliveryEntity> broad = Objects.requireNonNullElse(
+                dao.listDlqBroad(tenantId, clientId, afterDeliveryId, now, budget + 1), List.of());
+        if (broad.size() > budget + 1 || broad.stream().anyMatch(Objects::isNull)) {
             throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
         }
-        validateDlqPage(rows, afterDeliveryId, now);
-        return List.copyOf(rows);
+        ArrayList<AgentCommandDlqEntry> items = new ArrayList<>(limit);
+        long cursor = afterDeliveryId;
+        int examined = 0;
+        int available = Math.min(broad.size(), budget);
+        while (examined < available && items.size() < limit) {
+            AgentCommandDeliveryEntity delivery = broad.get(examined++);
+            validateBroadCandidate(delivery, tenantId, clientId, cursor, now);
+            cursor = delivery.getId();
+            AgentCommandBrokerRedrivePolicy.Evaluation evaluation = redrivePolicy.evaluate(
+                    readBundle(delivery), now, manifest.defaultCommandPublishRoute(),
+                    manifest.sha256(), null);
+            evaluation.legalSource().map(this::dlqEntry).ifPresent(items::add);
+        }
+        boolean hasMore = examined < broad.size();
+        Long next = examined == 0 ? null : cursor;
+        return new AgentCommandDlqPage(items, next, hasMore);
     }
 
     @Override
-    public List<AgentCommandOperationAuditEntry> listAudit(
+    public AgentCommandOperationAuditPage listAudit(
             String tenantId, String clientId, long afterId, int limit) {
         requireReadScope(tenantId, clientId);
         requirePage(afterId, limit);
-        List<AgentCommandOperationAuditEntry> rows = Objects.requireNonNullElse(
-                dao.listAudit(tenantId, clientId, afterId, limit), List.of());
-        if (rows.size() > limit || rows.stream().anyMatch(Objects::isNull)) {
-            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
-        }
-        validateAuditPage(rows, afterId);
-        return List.copyOf(rows);
+        AgentCommandOperationAuditPage page = readSnapshot.execute(status -> {
+            List<AgentCommandOperationAuditEntry> rows = Objects.requireNonNullElse(
+                    dao.listAudit(tenantId, clientId, afterId, limit + 1), List.of());
+            if (rows.size() > limit + 1 || rows.stream().anyMatch(Objects::isNull)) {
+                throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+            }
+            validateAuditPage(rows, afterId);
+            boolean hasMore = rows.size() > limit;
+            List<AgentCommandOperationAuditEntry> items = hasMore
+                    ? List.copyOf(rows.subList(0, limit)) : List.copyOf(rows);
+            Long next = items.isEmpty() ? null : items.getLast().id();
+            return new AgentCommandOperationAuditPage(items, next, hasMore);
+        });
+        if (page == null) throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        return page;
     }
 
     @Override
@@ -295,28 +346,58 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
                 || !request.sourceMessageId().equals(delivery.getActiveMessageId())) {
             throw failure(AgentCommandOperationsException.Reason.NOT_FOUND_OR_FORBIDDEN);
         }
-        List<AgentOutboxEventEntity> outboxes = dao.lockActiveOutboxes(
+        List<AgentOutboxEventEntity> activeOutboxes = dao.lockActiveOutboxes(
                 request.tenantId(), request.clientId(), request.deliveryId(),
                 request.sourceMessageId());
-        if (outboxes == null || outboxes.size() != 1) {
-            throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
+        Source source;
+        if (redrive) {
+            if (delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0) {
+                throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
+            }
+            List<AgentOutboxEventEntity> currentOutboxes = dao.lockCurrentAttemptOutboxes(
+                    request.tenantId(), request.clientId(), request.deliveryId(),
+                    delivery.getActiveAttempt());
+            List<AgentOutboxEventEntity> previousOutboxes = dao.lockPreviousAttemptOutboxes(
+                    request.tenantId(), request.clientId(), request.deliveryId(),
+                    delivery.getActiveAttempt() - 1);
+            AgentConsumerInboxEntity inbox = dao.lockInbox(
+                    request.tenantId(), request.clientId(),
+                    AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, request.sourceMessageId());
+            List<cn.jia.agent.entity.AgentCommandRedriveOperationEntity> blockers =
+                    dao.lockActiveRedriveOperations(
+                            request.tenantId(), request.clientId(), request.deliveryId(),
+                            request.sourceMessageId(), delivery.getActiveAttempt());
+            AgentCommandBrokerRedrivePolicy.Evaluation evaluation = redrivePolicy.evaluate(
+                    new AgentCommandBrokerRedrivePolicy.SourceBundle(
+                            request.tenantId(), request.clientId(), request.deliveryId(),
+                            request.taskId(), request.targetAgentId(), request.sourceMessageId(),
+                            delivery, activeOutboxes, currentOutboxes, previousOutboxes,
+                            inbox, blockers),
+                    now, manifest.defaultCommandPublishRoute(), manifest.sha256(), operationId);
+            AgentCommandBrokerRedrivePolicy.LegalSource legal = evaluation.legalSource()
+                    .orElseThrow(() -> failure(
+                            AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN));
+            source = source(legal);
+        } else {
+            if (activeOutboxes == null || activeOutboxes.size() != 1) {
+                throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
+            }
+            AgentConsumerInboxEntity inbox = dao.lockInbox(
+                    request.tenantId(), request.clientId(),
+                    AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, request.sourceMessageId());
+            source = validateManualSource(
+                    delivery, activeOutboxes.getFirst(), inbox, request, now);
         }
-        AgentOutboxEventEntity outbox = outboxes.getFirst();
-        AgentConsumerInboxEntity inbox = dao.lockInbox(
-                request.tenantId(), request.clientId(),
-                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, request.sourceMessageId());
-        Source source = validateSource(delivery, outbox, inbox, request, now, redrive);
         insertAudit(requestAudit(operationId, type, request, source, now));
         return source;
     }
 
-    private Source validateSource(
+    private Source validateManualSource(
             AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
             AgentConsumerInboxEntity inbox,
             AgentCommandOperationRequest request,
-            long now,
-            boolean redrive) {
+            long now) {
         AgentRabbitTopologyManifest.PublishRoute route = manifest.defaultCommandPublishRoute();
         if (delivery.getId() == null || delivery.getId() != request.deliveryId()
                 || !sameScope(delivery, outbox)
@@ -354,28 +435,9 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
                 || !delivery.getCommandType().equals(draft.commandType())
                 || !Objects.equals(delivery.getExpiresAt(), draft.expiresAt())
                 || !Arrays.equals(outbox.getWirePayload(), AgentCommandCanonicalCodec.wireBytes(
-                        draft, delivery.getActiveMessageId(), delivery.getActiveAttempt()))) {
-            throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
-        }
-        if (redrive) {
-            boolean exactPublished = "PUBLISHED".equals(delivery.getStatus())
-                    && delivery.getNextRetryAt() == null
-                    && "PUBLISHED".equals(outbox.getStatus())
-                    && outbox.getAttemptCount() != null && outbox.getAttemptCount() > 0
-                    && outbox.getNextRetryAt() == null
-                    && "ACK".equals(outbox.getPublisherConfirmStatus())
-                    && outbox.getConfirmedAt() != null && outbox.getConfirmedAt() > 0
-                    && outbox.getConfirmError() == null
-                    && "NOT_RETURNED".equals(outbox.getMandatoryReturnStatus())
-                    && outbox.getReturnedAt() == null && outbox.getReturnReplyCode() == null
-                    && outbox.getReturnReplyText() == null
-                    && outbox.getPublishedAt() != null && outbox.getPublishedAt() > 0
-                    && outbox.getLastError() == null;
-            if (!exactPublished || inbox != null) {
-                throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
-            }
-        } else if (!("DEAD".equals(delivery.getStatus())
-                || "FAILED".equals(delivery.getStatus()))) {
+                        draft, delivery.getActiveMessageId(), delivery.getActiveAttempt()))
+                || !("DEAD".equals(delivery.getStatus())
+                    || "FAILED".equals(delivery.getStatus()))) {
             throw failure(AgentCommandOperationsException.Reason.SOURCE_FORBIDDEN);
         }
         return new Source(delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
@@ -533,25 +595,95 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         }
     }
 
-    private void validateDlqPage(
-            List<AgentCommandDlqEntry> rows, long afterDeliveryId, long now) {
-        long cursor = afterDeliveryId;
-        for (AgentCommandDlqEntry row : rows) {
-            boolean redriveCandidate = "PUBLISHED".equals(row.deliveryStatus())
-                    && "PUBLISHED".equals(row.outboxStatus())
-                    && row.inboxStatus() == null && row.inboxResultStatus() == null
-                    && row.publishAttemptCount() > 0 && row.publishedAt() != null
-                    && row.publishedAt() > 0 && row.processedAt() == null
-                    && row.expiresAt() > now;
-            if (!redriveCandidate || row.deliveryId() <= cursor || !exact(row.commandId(), 100)
-                    || !exact(row.eventId(), 100) || !exact(row.messageId(), 100)
-                    || !exact(row.taskId(), 100) || !exact(row.targetAgentId(), 100)
-                    || row.activeAttempt() <= 0 || !hexSha256(row.wireSha256())
-                    || row.updatedAt() <= 0) {
-                throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
-            }
-            cursor = row.deliveryId();
+    private long exactDlqCount(String tenantId, String clientId, long now) {
+        int budget = queryBudget();
+        long broadCount = nonNegative(dao.countDlqBroad(tenantId, clientId, now));
+        if (broadCount > budget) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
         }
+        List<AgentCommandDeliveryEntity> broad = Objects.requireNonNullElse(
+                dao.listDlqBroad(tenantId, clientId, 0, now, budget + 1), List.of());
+        if (broad.size() != broadCount || broad.stream().anyMatch(Objects::isNull)) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+        long legal = 0;
+        long cursor = 0;
+        for (AgentCommandDeliveryEntity delivery : broad) {
+            validateBroadCandidate(delivery, tenantId, clientId, cursor, now);
+            cursor = delivery.getId();
+            if (redrivePolicy.evaluate(readBundle(delivery), now,
+                    manifest.defaultCommandPublishRoute(), manifest.sha256(), null).legal()) {
+                legal++;
+            }
+        }
+        return legal;
+    }
+
+    private AgentCommandBrokerRedrivePolicy.SourceBundle readBundle(
+            AgentCommandDeliveryEntity delivery) {
+        if (delivery.getId() == null || delivery.getActiveAttempt() == null
+                || delivery.getActiveAttempt() <= 0) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+        String tenantId = delivery.getTenantId();
+        String clientId = delivery.getClientId();
+        long deliveryId = delivery.getId();
+        String messageId = delivery.getActiveMessageId();
+        int attempt = delivery.getActiveAttempt();
+        return new AgentCommandBrokerRedrivePolicy.SourceBundle(
+                tenantId, clientId, deliveryId, delivery.getTaskId(),
+                delivery.getTargetAgentId(), messageId, delivery,
+                dao.selectActiveOutboxes(tenantId, clientId, deliveryId, messageId),
+                dao.selectCurrentAttemptOutboxes(tenantId, clientId, deliveryId, attempt),
+                dao.selectPreviousAttemptOutboxes(tenantId, clientId, deliveryId, attempt - 1),
+                dao.selectInbox(tenantId, clientId,
+                        AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, messageId),
+                dao.selectActiveRedriveOperations(
+                        tenantId, clientId, deliveryId, messageId, attempt));
+    }
+
+    private AgentCommandDlqEntry dlqEntry(
+            AgentCommandBrokerRedrivePolicy.LegalSource source) {
+        return new AgentCommandDlqEntry(
+                source.deliveryId(), source.commandId(), source.eventId(), source.messageId(),
+                source.taskId(), source.targetAgentId(), "PUBLISHED", "PUBLISHED",
+                null, null, source.activeAttempt(), source.publishAttemptCount(),
+                HexFormat.of().formatHex(source.wireHash()), source.publishedAt(), null,
+                source.expiresAt(), source.updatedAt());
+    }
+
+    private Source source(AgentCommandBrokerRedrivePolicy.LegalSource legal) {
+        return new Source(
+                legal.tenantId(), legal.clientId(), legal.deliveryId(), legal.commandId(),
+                legal.taskId(), legal.targetAgentId(), legal.commandType(), legal.eventId(),
+                legal.messageId(), legal.wirePayload(), legal.wireHash(), legal.activeAttempt(),
+                legal.expiresAt());
+    }
+
+    private void validateBroadCandidate(
+            AgentCommandDeliveryEntity delivery,
+            String tenantId,
+            String clientId,
+            long afterDeliveryId,
+            long now) {
+        if (delivery.getId() == null || delivery.getId() <= afterDeliveryId
+                || !Objects.equals(tenantId, delivery.getTenantId())
+                || !Objects.equals(clientId, delivery.getClientId())
+                || !"PUBLISHED".equals(delivery.getStatus())
+                || delivery.getNextRetryAt() != null
+                || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
+                || delivery.getExpiresAt() == null || delivery.getExpiresAt() <= now
+                || delivery.getLeaseOwner() != null || delivery.getLeaseUntil() != null) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+    }
+
+    private int queryBudget() {
+        int budget = Math.max(settings.maxPageSize(), settings.dlqScanLimit());
+        if (budget < 1 || budget > 500) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+        return budget;
     }
 
     private void validateAuditPage(List<AgentCommandOperationAuditEntry> rows, long afterId) {

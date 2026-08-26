@@ -1,6 +1,11 @@
 package cn.jia.agent.api;
 
+import cn.jia.agent.entity.AgentCommandDlqEntry;
+import cn.jia.agent.entity.AgentCommandDlqPage;
+import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandOperationAuditPage;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
+import cn.jia.agent.entity.AgentCommandOperationResult;
 import cn.jia.agent.entity.AgentCommandOperationsException;
 import cn.jia.agent.service.AgentCommandOperationsService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -30,6 +35,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -74,8 +80,8 @@ public class AgentCommandOperationsController {
             @RequestParam(defaultValue = "50") String limit,
             Authentication authentication) {
         Scope scope = requireScope(authentication, AUTHORITY_READ, false);
-        return ok(operationsService.listDlq(scope.tenantId(), scope.clientId(),
-                nonNegativeLong(afterDeliveryId), positiveInt(limit)));
+        return ok(dlqWire(operationsService.listDlq(scope.tenantId(), scope.clientId(),
+                nonNegativeLong(afterDeliveryId), positiveInt(limit))));
     }
 
     @GetMapping(value = "/audit", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -84,8 +90,8 @@ public class AgentCommandOperationsController {
             @RequestParam(defaultValue = "50") String limit,
             Authentication authentication) {
         Scope scope = requireScope(authentication, AUTHORITY_READ, false);
-        return ok(operationsService.listAudit(scope.tenantId(), scope.clientId(),
-                nonNegativeLong(afterId), positiveInt(limit)));
+        return ok(auditWire(operationsService.listAudit(scope.tenantId(), scope.clientId(),
+                nonNegativeLong(afterId), positiveInt(limit))));
     }
 
     @PostMapping(value = "/dlq/{deliveryId}/redrive",
@@ -96,8 +102,8 @@ public class AgentCommandOperationsController {
             Authentication authentication) {
         Scope scope = requireScope(authentication, AUTHORITY_REDRIVE, false);
         OperationBody body = requireBody(rawBody);
-        return ok(operationsService.brokerRedrive(command(
-                scope, positiveLong(deliveryId), body, null), now()));
+        return ok(resultWire(operationsService.brokerRedrive(command(
+                scope, positiveLong(deliveryId), body, null), now())));
     }
 
     @PostMapping(value = "/deliveries/{deliveryId}/reissue",
@@ -108,8 +114,8 @@ public class AgentCommandOperationsController {
             Authentication authentication) {
         Scope scope = requireScope(authentication, AUTHORITY_REISSUE, true);
         OperationBody body = requireBody(rawBody);
-        return ok(operationsService.manualReissue(command(
-                scope, positiveLong(deliveryId), body, scope.approverId()), now()));
+        return ok(resultWire(operationsService.manualReissue(command(
+                scope, positiveLong(deliveryId), body, scope.approverId()), now())));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
@@ -184,6 +190,52 @@ public class AgentCommandOperationsController {
             throw new AuthenticationFailure(true);
         }
         return text;
+    }
+
+    private DlqPageBody dlqWire(AgentCommandDlqPage page) {
+        if (page == null) throw new IllegalStateException("DLQ page unavailable");
+        return new DlqPageBody(
+                page.items().stream().map(this::dlqEntryWire).toList(),
+                decimal(page.nextAfterDeliveryId()), page.hasMore());
+    }
+
+    private DlqEntryBody dlqEntryWire(AgentCommandDlqEntry row) {
+        return new DlqEntryBody(
+                Long.toString(row.deliveryId()), row.commandId(), row.eventId(), row.messageId(),
+                row.taskId(), row.targetAgentId(), row.deliveryStatus(), row.outboxStatus(),
+                row.inboxStatus(), row.inboxResultStatus(), row.activeAttempt(),
+                row.publishAttemptCount(), row.wireSha256(), row.publishedAt(), row.processedAt(),
+                row.expiresAt(), row.updatedAt());
+    }
+
+    private AuditPageBody auditWire(AgentCommandOperationAuditPage page) {
+        if (page == null) throw new IllegalStateException("Audit page unavailable");
+        return new AuditPageBody(
+                page.items().stream().map(this::auditEntryWire).toList(),
+                decimal(page.nextAfterId()), page.hasMore());
+    }
+
+    private AuditEntryBody auditEntryWire(AgentCommandOperationAuditEntry row) {
+        return new AuditEntryBody(
+                Long.toString(row.id()), row.operationId(), row.phase(), row.operationType(),
+                row.taskId(), row.targetAgentId(), row.commandId(), row.sourceMessageId(),
+                row.newMessageId(), Long.toString(row.deliveryId()), row.sourceAttempt(),
+                row.newAttempt(), row.wireSha256(), row.requesterId(), row.approverId(),
+                row.reason(), row.ticketReference(), row.requestedAt(), row.completedAt(),
+                row.outcome(), row.errorCode(), row.createdBy(), row.createdAt());
+    }
+
+    private OperationResultBody resultWire(AgentCommandOperationResult result) {
+        if (result == null) throw new IllegalStateException("Operation result unavailable");
+        return new OperationResultBody(
+                result.operationId(), result.operationType().name(), result.outcome(),
+                Long.toString(result.deliveryId()), result.commandId(), result.sourceMessageId(),
+                result.newMessageId(), result.sourceAttempt(), result.newAttempt(),
+                result.errorCode(), result.completedAt());
+    }
+
+    private String decimal(Long value) {
+        return value == null ? null : Long.toString(value);
     }
 
     private AgentCommandOperationRequest command(
@@ -288,6 +340,74 @@ public class AgentCommandOperationsController {
             String sourceMessageId,
             String reason,
             String ticketReference) {
+    }
+
+    public record DlqPageBody(
+            List<DlqEntryBody> items, String nextAfterDeliveryId, boolean hasMore) {
+    }
+
+    public record DlqEntryBody(
+            String deliveryId,
+            String commandId,
+            String eventId,
+            String messageId,
+            String taskId,
+            String targetAgentId,
+            String deliveryStatus,
+            String outboxStatus,
+            String inboxStatus,
+            String inboxResultStatus,
+            int activeAttempt,
+            int publishAttemptCount,
+            String wireSha256,
+            Long publishedAt,
+            Long processedAt,
+            long expiresAt,
+            long updatedAt) {
+    }
+
+    public record AuditPageBody(
+            List<AuditEntryBody> items, String nextAfterId, boolean hasMore) {
+    }
+
+    public record AuditEntryBody(
+            String id,
+            String operationId,
+            String phase,
+            String operationType,
+            String taskId,
+            String targetAgentId,
+            String commandId,
+            String sourceMessageId,
+            String newMessageId,
+            String deliveryId,
+            Integer sourceAttempt,
+            Integer newAttempt,
+            String wireSha256,
+            String requesterId,
+            String approverId,
+            String reason,
+            String ticketReference,
+            long requestedAt,
+            Long completedAt,
+            String outcome,
+            String errorCode,
+            String createdBy,
+            long createdAt) {
+    }
+
+    public record OperationResultBody(
+            String operationId,
+            String operationType,
+            String outcome,
+            String deliveryId,
+            String commandId,
+            String sourceMessageId,
+            String newMessageId,
+            int sourceAttempt,
+            Integer newAttempt,
+            String errorCode,
+            long completedAt) {
     }
 
     public record ErrorBody(String code, String message) {

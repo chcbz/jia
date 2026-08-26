@@ -2,7 +2,6 @@ package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
-import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
@@ -31,15 +30,21 @@ public class AgentCommandOperationsDaoImpl implements AgentCommandOperationsDao 
     @Override public long countOutboxBacklog(String tenantId, String clientId) { return mapper.countOutboxBacklog(tenantId, clientId); }
     @Override public Long oldestOutboxEpoch(String tenantId, String clientId) { return mapper.oldestOutboxEpoch(tenantId, clientId); }
     @Override public long countPublishFailures(String tenantId, String clientId) { return mapper.countPublishFailures(tenantId, clientId); }
-    @Override public long countDlq(String tenantId, String clientId, long now) { return mapper.countDlq(tenantId, clientId, now); }
+    @Override public long countDlqBroad(String tenantId, String clientId, long now) { return mapper.countDlqBroad(tenantId, clientId, now); }
     @Override public long countWaitingDue(String tenantId, String clientId, long now) { return mapper.countWaitingDue(tenantId, clientId, now); }
     @Override public long countSentUnacknowledged(String tenantId, String clientId) { return mapper.countSentUnacknowledged(tenantId, clientId); }
     @Override public long countReconnectQueueDepth(String tenantId, String clientId, long now) { return mapper.countReconnectQueueDepth(tenantId, clientId, now); }
     @Override public long countExpiryProximity(String tenantId, String clientId, long now, long before) { return mapper.countExpiryProximity(tenantId, clientId, now, before); }
-    @Override public List<AgentCommandDlqEntry> listDlq(String tenantId, String clientId, long afterDeliveryId, long now, int limit) { return mapper.listDlq(tenantId, clientId, afterDeliveryId, now, limit); }
+    @Override public List<AgentCommandDeliveryEntity> listDlqBroad(String tenantId, String clientId, long afterDeliveryId, long now, int limit) { return mapper.listDlqBroad(tenantId, clientId, afterDeliveryId, now, limit); }
+    @Override public List<AgentOutboxEventEntity> selectActiveOutboxes(String tenantId, String clientId, long deliveryId, String messageId) { return mapper.selectActiveOutboxes(tenantId, clientId, deliveryId, messageId); }
+    @Override public List<AgentOutboxEventEntity> selectCurrentAttemptOutboxes(String tenantId, String clientId, long deliveryId, int activeAttempt) { return mapper.selectCurrentAttemptOutboxes(tenantId, clientId, deliveryId, activeAttempt); }
+    @Override public List<AgentOutboxEventEntity> selectPreviousAttemptOutboxes(String tenantId, String clientId, long deliveryId, int previousAttempt) { return mapper.selectPreviousAttemptOutboxes(tenantId, clientId, deliveryId, previousAttempt); }
+    @Override public AgentConsumerInboxEntity selectInbox(String tenantId, String clientId, String consumerName, String messageId) { return mapper.selectInbox(tenantId, clientId, consumerName, messageId); }
+    @Override public List<AgentCommandRedriveOperationEntity> selectActiveRedriveOperations(String tenantId, String clientId, long deliveryId, String sourceMessageId, int sourceAttempt) { return mapper.selectActiveRedriveOperations(tenantId, clientId, deliveryId, sourceMessageId, sourceAttempt); }
     @Override public List<AgentCommandOperationAuditEntry> listAudit(String tenantId, String clientId, long afterId, int limit) { return mapper.listAudit(tenantId, clientId, afterId, limit); }
     @Override public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId) { return mapper.lockDelivery(tenantId, clientId, deliveryId); }
     @Override public List<AgentOutboxEventEntity> lockActiveOutboxes(String tenantId, String clientId, long deliveryId, String messageId) { return mapper.lockActiveOutboxes(tenantId, clientId, deliveryId, messageId); }
+    @Override public List<AgentOutboxEventEntity> lockCurrentAttemptOutboxes(String tenantId, String clientId, long deliveryId, int activeAttempt) { return mapper.lockCurrentAttemptOutboxes(tenantId, clientId, deliveryId, activeAttempt); }
     @Override public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(String tenantId, String clientId, long deliveryId, int previousAttempt) { return mapper.lockPreviousAttemptOutboxes(tenantId, clientId, deliveryId, previousAttempt); }
     @Override public AgentConsumerInboxEntity lockInbox(String tenantId, String clientId, String consumerName, String messageId) { return mapper.lockInbox(tenantId, clientId, consumerName, messageId); }
     @Override public int insertPendingRedriveOperation(AgentCommandRedriveOperationEntity operation) { return mapper.insertPendingRedriveOperation(operation); }

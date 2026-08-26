@@ -1,7 +1,6 @@
 package cn.jia.agent.mapper;
 
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
-import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
@@ -33,19 +32,10 @@ public interface AgentCommandOperationsMapper {
             + "redrive_guard AS redriveGuard,tenant_id AS tenantId,client_id AS clientId,"
             + "create_time AS createTime,update_time AS updateTime";
 
-    String BROKER_REDRIVE_CANDIDATE = """
-              AND d.status='PUBLISHED' AND d.next_retry_at IS NULL
-              AND d.active_attempt>0 AND d.expires_at>#{now}
-              AND d.lease_owner IS NULL AND d.lease_until IS NULL
-              AND o.status='PUBLISHED' AND o.attempt_count>0 AND o.next_retry_at IS NULL
-              AND o.lease_owner IS NULL AND o.lease_until IS NULL
-              AND o.active_attempt=d.active_attempt AND o.expires_at=d.expires_at
-              AND o.command_id=d.command_id AND o.aggregate_type='task' AND o.aggregate_id=d.task_id
-              AND o.publisher_confirm_status='ACK' AND o.confirmed_at IS NOT NULL AND o.confirmed_at>0
-              AND o.confirm_error IS NULL AND o.mandatory_return_status='NOT_RETURNED'
-              AND o.returned_at IS NULL AND o.return_reply_code IS NULL AND o.return_reply_text IS NULL
-              AND o.published_at IS NOT NULL AND o.published_at>0 AND o.last_error IS NULL
-              AND i.id IS NULL
+    String BROKER_REDRIVE_BROAD = """
+              AND status='PUBLISHED' AND next_retry_at IS NULL
+              AND active_attempt>0 AND expires_at>#{now}
+              AND lease_owner IS NULL AND lease_until IS NULL
             """;
 
     @Select("SELECT status AS label, COUNT(*) AS count FROM agent_command_delivery WHERE "
@@ -107,22 +97,9 @@ public interface AgentCommandOperationsMapper {
             + "OR mandatory_return_status='RETURNED')")
     long countPublishFailures(@Param("tenantId") String tenantId, @Param("clientId") String clientId);
 
-    @Select("SELECT COUNT(DISTINCT d.id) FROM agent_command_delivery d "
-            + "JOIN agent_outbox_event o ON o.tenant_id=d.tenant_id AND o.client_id=d.client_id "
-            + "AND o.delivery_id=d.id AND o.message_id=d.active_message_id "
-            + "AND o.id=(SELECT MIN(o2.id) FROM agent_outbox_event o2 "
-            + "WHERE o2.tenant_id=d.tenant_id AND o2.client_id=d.client_id "
-            + "AND o2.delivery_id=d.id AND o2.message_id=d.active_message_id) "
-            + "LEFT JOIN agent_consumer_inbox i ON i.tenant_id=d.tenant_id AND i.client_id=d.client_id "
-            + "AND i.delivery_id=d.id AND i.message_id=d.active_message_id "
-            + "AND i.consumer_name='agent-command-dispatch-v1' "
-            + "WHERE d.tenant_id=#{tenantId} AND d.client_id=#{clientId} "
-            + "AND CAST(d.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) "
-            + "AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId}) "
-            + "AND CAST(d.client_id AS BINARY)=CAST(#{clientId} AS BINARY) "
-            + "AND OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId}) "
-            + BROKER_REDRIVE_CANDIDATE)
-    long countDlq(
+    @Select("SELECT COUNT(*) FROM agent_command_delivery WHERE " + EXACT_SCOPE
+            + BROKER_REDRIVE_BROAD)
+    long countDlqBroad(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("now") long now);
 
@@ -146,35 +123,64 @@ public interface AgentCommandOperationsMapper {
     long countExpiryProximity(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("now") long now, @Param("before") long before);
 
-    @Select("""
-            SELECT d.id AS deliveryId,d.command_id AS commandId,o.event_id AS eventId,
-                   o.message_id AS messageId,d.task_id AS taskId,d.target_agent_id AS targetAgentId,
-                   d.status AS deliveryStatus,o.status AS outboxStatus,i.status AS inboxStatus,
-                   i.result_status AS inboxResultStatus,d.active_attempt AS activeAttempt,
-                   o.attempt_count AS publishAttemptCount,LOWER(HEX(o.wire_payload_hash)) AS wireSha256,
-                   o.published_at AS publishedAt,i.processed_at AS processedAt,d.expires_at AS expiresAt,
-                   GREATEST(COALESCE(d.update_time,0),COALESCE(o.update_time,0),COALESCE(i.update_time,0)) AS updatedAt
-            FROM agent_command_delivery d
-            JOIN agent_outbox_event o ON o.tenant_id=d.tenant_id AND o.client_id=d.client_id
-              AND o.delivery_id=d.id AND o.message_id=d.active_message_id
-              AND o.id=(SELECT MIN(o2.id) FROM agent_outbox_event o2
-                        WHERE o2.tenant_id=d.tenant_id AND o2.client_id=d.client_id
-                          AND o2.delivery_id=d.id AND o2.message_id=d.active_message_id)
-            LEFT JOIN agent_consumer_inbox i ON i.tenant_id=d.tenant_id AND i.client_id=d.client_id
-              AND i.consumer_name='agent-command-dispatch-v1' AND i.delivery_id=d.id
-              AND i.message_id=d.active_message_id
-            WHERE d.tenant_id=#{tenantId} AND d.client_id=#{clientId} AND d.id>#{afterDeliveryId}
-              AND CAST(d.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId})
-              AND CAST(d.client_id AS BINARY)=CAST(#{clientId} AS BINARY)
-              AND OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId})
-            """ + BROKER_REDRIVE_CANDIDATE + """
-            ORDER BY d.id ASC LIMIT #{limit}
-            """)
-    List<AgentCommandDlqEntry> listDlq(
+    @Select("SELECT " + AgentCommandRecoveryMapper.DELIVERY_COLUMNS
+            + " FROM agent_command_delivery WHERE " + EXACT_SCOPE
+            + " AND id>#{afterDeliveryId} " + BROKER_REDRIVE_BROAD
+            + " ORDER BY id ASC LIMIT #{limit}")
+    List<AgentCommandDeliveryEntity> listDlqBroad(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("afterDeliveryId") long afterDeliveryId, @Param("now") long now,
             @Param("limit") int limit);
+
+    @Select("SELECT " + AgentCommandRecoveryMapper.OUTBOX_COLUMNS
+            + " FROM agent_outbox_event WHERE delivery_id=#{deliveryId} AND message_id=#{messageId} AND "
+            + EXACT_SCOPE + " AND CAST(message_id AS BINARY)=CAST(#{messageId} AS BINARY) "
+            + "AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{messageId}) ORDER BY id ASC LIMIT 2")
+    List<AgentOutboxEventEntity> selectActiveOutboxes(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId, @Param("messageId") String messageId);
+
+    @Select("SELECT " + AgentCommandRecoveryMapper.OUTBOX_COLUMNS
+            + " FROM agent_outbox_event WHERE delivery_id=#{deliveryId} AND active_attempt=#{activeAttempt} AND "
+            + EXACT_SCOPE + " ORDER BY id ASC LIMIT 2")
+    List<AgentOutboxEventEntity> selectCurrentAttemptOutboxes(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId, @Param("activeAttempt") int activeAttempt);
+
+    @Select("SELECT " + AgentCommandRecoveryMapper.OUTBOX_COLUMNS
+            + " FROM agent_outbox_event WHERE delivery_id=#{deliveryId} AND active_attempt=#{previousAttempt} AND "
+            + EXACT_SCOPE + " ORDER BY id ASC LIMIT 2")
+    List<AgentOutboxEventEntity> selectPreviousAttemptOutboxes(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId, @Param("previousAttempt") int previousAttempt);
+
+    @Select("""
+            SELECT id,consumer_name,message_id,event_id,command_id,delivery_id,wire_payload,
+                   wire_payload_hash,status,result_status,attempt_count,next_retry_at,lease_owner,
+                   lease_until,active_attempt,expires_at,processed_at,last_error,version,
+                   replay_parent_message_id,replay_requester_id,replay_approver_id,replay_reason,
+                   tenant_id,client_id,create_time,update_time
+            FROM agent_consumer_inbox
+            WHERE consumer_name=#{consumerName} AND message_id=#{messageId} AND
+            """ + EXACT_SCOPE + " AND CAST(consumer_name AS BINARY)=CAST(#{consumerName} AS BINARY) "
+            + "AND OCTET_LENGTH(consumer_name)=OCTET_LENGTH(#{consumerName}) "
+            + "AND CAST(message_id AS BINARY)=CAST(#{messageId} AS BINARY) "
+            + "AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{messageId}) LIMIT 1")
+    AgentConsumerInboxEntity selectInbox(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("consumerName") String consumerName, @Param("messageId") String messageId);
+
+    @Select("SELECT " + REDRIVE_OPERATION_COLUMNS
+            + " FROM agent_command_redrive_operation WHERE delivery_id=#{deliveryId} "
+            + "AND source_message_id=#{sourceMessageId} AND source_attempt=#{sourceAttempt} AND "
+            + EXACT_SCOPE
+            + " AND CAST(source_message_id AS BINARY)=CAST(#{sourceMessageId} AS BINARY) "
+            + "AND OCTET_LENGTH(source_message_id)=OCTET_LENGTH(#{sourceMessageId}) "
+            + "AND redrive_guard=1 ORDER BY id ASC LIMIT 2")
+    List<AgentCommandRedriveOperationEntity> selectActiveRedriveOperations(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId, @Param("sourceMessageId") String sourceMessageId,
+            @Param("sourceAttempt") int sourceAttempt);
 
     @Select("""
             SELECT id,operation_id AS operationId,phase,operation_type AS operationType,
@@ -211,6 +217,13 @@ public interface AgentCommandOperationsMapper {
     List<AgentOutboxEventEntity> lockActiveOutboxes(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("deliveryId") long deliveryId, @Param("messageId") String messageId);
+
+    @Select("SELECT " + AgentCommandRecoveryMapper.OUTBOX_COLUMNS
+            + " FROM agent_outbox_event WHERE delivery_id=#{deliveryId} AND active_attempt=#{activeAttempt} AND "
+            + EXACT_SCOPE + " ORDER BY id ASC LIMIT 2 FOR UPDATE")
+    List<AgentOutboxEventEntity> lockCurrentAttemptOutboxes(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId, @Param("activeAttempt") int activeAttempt);
 
     @Select("SELECT " + AgentCommandRecoveryMapper.OUTBOX_COLUMNS
             + " FROM agent_outbox_event WHERE delivery_id=#{deliveryId} AND active_attempt=#{previousAttempt} AND "
@@ -264,7 +277,7 @@ public interface AgentCommandOperationsMapper {
             + EXACT_SCOPE
             + " AND CAST(source_message_id AS BINARY)=CAST(#{sourceMessageId} AS BINARY) "
             + "AND OCTET_LENGTH(source_message_id)=OCTET_LENGTH(#{sourceMessageId}) "
-            + "AND disposition_guard=1 ORDER BY id ASC LIMIT 2 FOR UPDATE")
+            + "AND redrive_guard=1 ORDER BY id ASC LIMIT 2 FOR UPDATE")
     List<AgentCommandRedriveOperationEntity> lockActiveRedriveOperations(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("deliveryId") long deliveryId, @Param("sourceMessageId") String sourceMessageId,
