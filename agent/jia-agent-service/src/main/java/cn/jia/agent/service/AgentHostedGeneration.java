@@ -4,8 +4,21 @@ import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentHostedProfileState;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 
+import java.util.Set;
+
 /** Checked generation arithmetic shared by hosted preparation, repair, and publication. */
 final class AgentHostedGeneration {
+    private static final Set<HostedEdge> ALLOWED_EDGES = Set.of(
+            new HostedEdge(AgentHostedProfileState.PREPARED, AgentHostedProfileState.STAGED_DISABLED),
+            new HostedEdge(AgentHostedProfileState.STAGED_DISABLED, AgentHostedProfileState.FILE_ENABLED),
+            new HostedEdge(AgentHostedProfileState.FILE_ENABLED, AgentHostedProfileState.ACTIVE),
+            new HostedEdge(AgentHostedProfileState.ACTIVE, AgentHostedProfileState.SUSPENDING),
+            new HostedEdge(AgentHostedProfileState.SUSPENDING, AgentHostedProfileState.SUSPENDED));
+    private static final Set<HostedEdge> ADVANCING_EDGES = Set.of(
+            new HostedEdge(AgentHostedProfileState.PREPARED, AgentHostedProfileState.STAGED_DISABLED),
+            new HostedEdge(AgentHostedProfileState.STAGED_DISABLED, AgentHostedProfileState.FILE_ENABLED),
+            new HostedEdge(AgentHostedProfileState.SUSPENDING, AgentHostedProfileState.SUSPENDED));
+
     private AgentHostedGeneration() {
     }
 
@@ -40,12 +53,18 @@ final class AgentHostedGeneration {
     }
 
     static void requireTransition(String expectedState, long expectedGeneration,
-            long nextGeneration) {
-        requireAdvanceable(expectedState, expectedGeneration);
-        if (requiresSuccessor(expectedState)) {
-            requireSuccessor(expectedGeneration, nextGeneration);
-        } else if (nextGeneration != expectedGeneration) {
+            String nextState, long nextGeneration) {
+        HostedEdge edge = new HostedEdge(expectedState, nextState);
+        if (!ALLOWED_EDGES.contains(edge)) {
             fail();
+        }
+        if (ADVANCING_EDGES.contains(edge)) {
+            requireSuccessor(expectedGeneration, nextGeneration);
+        } else {
+            requireNonNegative(expectedGeneration);
+            if (nextGeneration != expectedGeneration) {
+                fail();
+            }
         }
     }
 
@@ -55,8 +74,11 @@ final class AgentHostedGeneration {
                 || AgentHostedProfileState.SUSPENDING.equals(checkpoint);
     }
 
+    private record HostedEdge(String expectedState, String nextState) {
+    }
+
     private static void fail() {
         throw new AgentBizException(AgentErrorConstants.AGENT_ERROR,
-                "Hosted profile generation is invalid or exhausted");
+                "Hosted profile lifecycle transition or generation is invalid or exhausted");
     }
 }

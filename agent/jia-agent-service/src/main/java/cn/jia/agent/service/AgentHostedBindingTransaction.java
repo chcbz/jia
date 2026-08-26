@@ -45,12 +45,14 @@ public class AgentHostedBindingTransaction {
     private final ObjectProvider<ApiKeyService> apiKeyProvider;
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
     private final AgentScopePublicationCoordinator scopePublicationCoordinator;
+    private final AgentHostedRuntimePublicationWorker runtimePublicationWorker;
 
     public AgentHostedBindingTransaction(AgentRuntimeDao runtimeDao, AgentIdentityService identityService,
             AgentPersonaDao personaDao, AgentPersonaBindingDao bindingDao,
             AgentHostedProfileDao hostedDao, ObjectProvider<ApiKeyService> apiKeyProvider,
             ObjectProvider<AgentEventPublisher> eventPublisherProvider,
-            AgentScopePublicationCoordinator scopePublicationCoordinator) {
+            AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentHostedRuntimePublicationWorker runtimePublicationWorker) {
         this.runtimeDao = runtimeDao;
         this.identityService = identityService;
         this.personaDao = personaDao;
@@ -59,6 +61,7 @@ public class AgentHostedBindingTransaction {
         this.apiKeyProvider = apiKeyProvider;
         this.eventPublisherProvider = eventPublisherProvider;
         this.scopePublicationCoordinator = scopePublicationCoordinator;
+        this.runtimePublicationWorker = runtimePublicationWorker;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -95,7 +98,8 @@ public class AgentHostedBindingTransaction {
                         "Legacy binding has no durable hosted profile; explicit migration is required");
             }
             requireExactHosted(scope, binding, hosted);
-            AgentHostedGeneration.requireAdvanceable(hosted.getLifecycleState(), hosted.getGeneration());
+            String checkpoint = requireEffectiveCheckpoint(hosted);
+            AgentHostedGeneration.requireAdvanceable(checkpoint, hosted.getGeneration());
             agent = existingRuntime(binding, identity.getCanonicalAgentId(), persona);
             return prepared(hosted, agent, persona, requireApiKey(hosted));
         }
@@ -142,12 +146,7 @@ public class AgentHostedBindingTransaction {
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), bindingId);
         if (hosted == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Hosted binding not found");
         requireExactHosted(scope, binding, hosted);
-        String checkpoint = AgentHostedProfileState.REPAIR_REQUIRED.equals(hosted.getLifecycleState())
-                ? hosted.getResumeState() : hosted.getLifecycleState();
-        if (checkpoint == null || !AgentHostedProfileState.VALUES.contains(checkpoint)
-                || AgentHostedProfileState.REPAIR_REQUIRED.equals(checkpoint)) {
-            fail(AgentErrorConstants.AGENT_ERROR, "Hosted repair checkpoint is invalid");
-        }
+        String checkpoint = requireEffectiveCheckpoint(hosted);
         AgentHostedGeneration.requireAdvanceable(checkpoint, hosted.getGeneration());
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(hosted.getCanonicalAgentId());
         boolean suspensionCheckpoint = AgentHostedProfileState.SUSPENDING.equals(checkpoint)
@@ -180,12 +179,15 @@ public class AgentHostedBindingTransaction {
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getId());
         if (hosted != null) requireExactHosted(scope, binding, hosted);
         if (hosted != null) {
-            String checkpoint = AgentHostedProfileState.REPAIR_REQUIRED.equals(hosted.getLifecycleState())
-                    ? hosted.getResumeState() : hosted.getLifecycleState();
-            AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
-            if (AgentHostedProfileState.ACTIVE.equals(checkpoint)
-                    || AgentHostedProfileState.SUSPENDING.equals(checkpoint)) {
-                AgentHostedGeneration.successor(hosted.getGeneration());
+            String checkpoint = requireEffectiveCheckpoint(hosted);
+            long generation = AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
+            if (AgentHostedProfileState.ACTIVE.equals(checkpoint)) {
+                AgentHostedGeneration.requireTransition(AgentHostedProfileState.ACTIVE, generation,
+                        AgentHostedProfileState.SUSPENDING, generation);
+                AgentHostedGeneration.successor(generation);
+            } else if (AgentHostedProfileState.SUSPENDING.equals(checkpoint)) {
+                AgentHostedGeneration.requireTransition(AgentHostedProfileState.SUSPENDING, generation,
+                        AgentHostedProfileState.SUSPENDED, AgentHostedGeneration.successor(generation));
             }
         }
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
@@ -219,7 +221,8 @@ public class AgentHostedBindingTransaction {
     @Transactional(rollbackFor = Exception.class)
     public AgentHostedProfileEntity completeUnbind(Scope scope, long bindingId,
             long expectedGeneration, long fileGeneration) {
-        AgentHostedGeneration.requireSuccessor(expectedGeneration, fileGeneration);
+        AgentHostedGeneration.requireTransition(AgentHostedProfileState.SUSPENDING,
+                expectedGeneration, AgentHostedProfileState.SUSPENDED, fileGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
         if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Binding not found");
         requireExactBinding(scope, binding);
@@ -267,7 +270,8 @@ public class AgentHostedBindingTransaction {
     @Transactional(rollbackFor = Exception.class)
     public AgentHostedProfileEntity transition(Scope scope, long bindingId, String expectedState,
             long expectedGeneration, String nextState, long nextGeneration, boolean desiredEnabled) {
-        AgentHostedGeneration.requireTransition(expectedState, expectedGeneration, nextGeneration);
+        AgentHostedGeneration.requireTransition(expectedState, expectedGeneration,
+                nextState, nextGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
         if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Hosted binding not found");
         requireExactBinding(scope, binding);
@@ -307,11 +311,16 @@ public class AgentHostedBindingTransaction {
 
     private void publishOfflineAfterCommit(Scope scope, AgentRuntimeEntity runtime) {
         if (runtime == null || eventPublisherProvider == null || scopePublicationCoordinator == null
+                || runtimePublicationWorker == null
                 || !TransactionSynchronizationManager.isActualTransactionActive()
                 || !TransactionSynchronizationManager.isSynchronizationActive()) {
             return;
         }
-        AgentRuntimeDTO snapshot = toDto(runtime);
+        String agentId = runtime.getAgentId();
+        Long bindingId = runtime.getBindingId();
+        if (StringUtil.isBlank(agentId) || bindingId == null || bindingId <= 0) {
+            return;
+        }
         try {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
@@ -319,8 +328,14 @@ public class AgentHostedBindingTransaction {
                     try {
                         scopePublicationCoordinator.execute(scope.clientId(), scope.ownerJiacn(), () -> {
                             AgentEventPublisher publisher = eventPublisherProvider.getIfAvailable();
-                            if (publisher != null) {
-                                publisher.publishAgentStatus(scope.clientId(), scope.ownerJiacn(), snapshot);
+                            if (publisher == null) {
+                                return;
+                            }
+                            AgentRuntimeEntity current = runtimePublicationWorker
+                                    .revalidateForPublication(scope, agentId, bindingId);
+                            if (current != null) {
+                                publisher.publishAgentStatus(
+                                        scope.clientId(), scope.ownerJiacn(), toDto(current));
                             }
                         });
                     } catch (RuntimeException ignored) {
@@ -331,6 +346,16 @@ public class AgentHostedBindingTransaction {
         } catch (RuntimeException ignored) {
             // Fail closed on registration; never publish before commit.
         }
+    }
+
+    private String requireEffectiveCheckpoint(AgentHostedProfileEntity hosted) {
+        String checkpoint = AgentHostedProfileState.REPAIR_REQUIRED.equals(hosted.getLifecycleState())
+                ? hosted.getResumeState() : hosted.getLifecycleState();
+        if (checkpoint == null || !AgentHostedProfileState.VALUES.contains(checkpoint)
+                || AgentHostedProfileState.REPAIR_REQUIRED.equals(checkpoint)) {
+            fail(AgentErrorConstants.AGENT_ERROR, "Hosted lifecycle checkpoint is invalid");
+        }
+        return checkpoint;
     }
 
     private Prepared prepared(AgentHostedProfileEntity h, AgentRuntimeDTO a, AgentPersonaEntity p, String key) {
