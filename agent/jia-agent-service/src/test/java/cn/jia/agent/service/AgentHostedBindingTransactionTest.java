@@ -14,6 +14,7 @@ import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
+import cn.jia.agent.service.impl.AgentServiceImpl;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import org.junit.jupiter.api.Test;
@@ -201,6 +202,97 @@ class AgentHostedBindingTransactionTest {
         order.verify(fixture.hostedDao).findExactForUpdate("owner-a", "client-a", "owner-a", 12L);
         order.verify(fixture.runtimeDao).findByAgentIdForUpdate(AGENT_ID);
         order.verify(fixture.hostedDao).resumeRepair(5L, AgentHostedProfileState.STAGED_DISABLED, 6L);
+    }
+
+    @Test
+    void existingPrepareRejectsExhaustedGenerationBeforeRuntimeOrHostedMutation() {
+        Fixture fixture = fixture();
+        AgentPersonaBindingEntity binding = binding();
+        AgentIdentityRegistryEntity identity = identity();
+        AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.PREPARED, Long.MAX_VALUE);
+        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
+                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+        when(fixture.identityService.requireRegistrationIdentityInScope(
+                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+        when(fixture.identityService.requireActiveBinding(identity, null)).thenReturn(binding);
+        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                .thenReturn(hosted);
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.prepareHosted(SCOPE, "wuyong"));
+
+        verifyNoInteractions(fixture.apiKeys);
+        verify(fixture.runtimeDao, never()).findByAgentId(any());
+        verify(fixture.runtimeDao, never()).insert(any());
+        verify(fixture.hostedDao, never()).insert(any());
+        verify(fixture.hostedDao, never()).transition(anyLong(), anyString(), anyLong(),
+                anyString(), anyLong(), anyBoolean());
+        verify(fixture.hostedDao, never()).markRepair(anyLong(), anyString(), any(), anyLong(),
+                anyString(), anyString());
+    }
+
+    @Test
+    void activeUnbindRejectsExhaustedGenerationBeforeRuntimeOrDatabaseMutation() {
+        Fixture fixture = fixture();
+        AgentPersonaBindingEntity binding = binding();
+        AgentIdentityRegistryEntity identity = identity();
+        AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.ACTIVE, Long.MAX_VALUE);
+        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
+                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+        when(fixture.identityService.requireRegistrationIdentityInScope(
+                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                .thenReturn(hosted);
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.prepareUnbind(SCOPE, "wuyong"));
+
+        verify(fixture.runtimeDao, never()).findByAgentIdForUpdate(any());
+        verify(fixture.hostedDao, never()).resumeRepair(anyLong(), anyString(), anyLong());
+        verify(fixture.hostedDao, never()).transition(anyLong(), anyString(), anyLong(),
+                anyString(), anyLong(), anyBoolean());
+        verify(fixture.bindingDao, never()).updateById(any());
+        verify(fixture.runtimeDao, never()).updateById(any());
+        verify(fixture.identityService, never()).suspendForBinding(anyString(), anyString(),
+                anyString(), anyLong());
+        verifyNoInteractions(fixture.apiKeys);
+    }
+
+    @Test
+    void directAdvanceTransitionRejectsExhaustedGenerationBeforeDatabaseLookup() {
+        Fixture fixture = fixture();
+
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> fixture.transaction.transition(
+                SCOPE, 12L, AgentHostedProfileState.PREPARED, Long.MAX_VALUE,
+                AgentHostedProfileState.STAGED_DISABLED, Long.MAX_VALUE, true));
+
+        verifyNoInteractions(fixture.bindingDao, fixture.hostedDao, fixture.runtimeDao,
+                fixture.apiKeys);
+    }
+
+    @Test
+    void exhaustedRepairCheckpointConvergesWithoutResumeFileOrDatabaseMutation() {
+        Fixture fixture = fixture();
+        AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.REPAIR_REQUIRED, Long.MAX_VALUE);
+        hosted.setResumeState(AgentHostedProfileState.PREPARED);
+        when(fixture.bindingDao.findByIdForUpdate(12L)).thenReturn(binding());
+        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                .thenReturn(hosted);
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.resumeRepair(SCOPE, 12L));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.resumeRepair(SCOPE, 12L));
+
+        assertEquals(AgentHostedProfileState.REPAIR_REQUIRED, hosted.getLifecycleState());
+        assertEquals(AgentHostedProfileState.PREPARED, hosted.getResumeState());
+        assertEquals(Long.MAX_VALUE, hosted.getGeneration());
+        verify(fixture.hostedDao, never()).resumeRepair(anyLong(), anyString(), anyLong());
+        verify(fixture.hostedDao, never()).transition(anyLong(), anyString(), anyLong(),
+                anyString(), anyLong(), anyBoolean());
+        verifyNoInteractions(fixture.runtimeDao, fixture.apiKeys);
     }
 
     @SuppressWarnings("unchecked")

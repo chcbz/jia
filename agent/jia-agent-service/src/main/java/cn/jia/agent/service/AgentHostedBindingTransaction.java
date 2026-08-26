@@ -69,6 +69,7 @@ public class AgentHostedBindingTransaction {
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), persona.getPersonaCode());
         boolean createdBinding = binding == null;
         AgentRuntimeDTO agent;
+        AgentHostedProfileEntity hosted;
         if (createdBinding) {
             binding = new AgentPersonaBindingEntity();
             binding.setTenantId(scope.tenantId());
@@ -87,17 +88,22 @@ public class AgentHostedBindingTransaction {
             AgentIdentityRegistryEntity identity = identityService.requireRegistrationIdentityInScope(
                     scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getAgentId());
             identityService.requireActiveBinding(identity, null);
+            hosted = hostedDao.findExactForUpdate(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getId());
+            if (hosted == null) {
+                fail(AgentErrorConstants.AGENT_ERROR,
+                        "Legacy binding has no durable hosted profile; explicit migration is required");
+            }
+            requireExactHosted(scope, binding, hosted);
+            AgentHostedGeneration.requireAdvanceable(hosted.getLifecycleState(), hosted.getGeneration());
             agent = existingRuntime(binding, identity.getCanonicalAgentId(), persona);
+            return prepared(hosted, agent, persona, requireApiKey(hosted));
         }
-        AgentHostedProfileEntity hosted = hostedDao.findExactForUpdate(
+        hosted = hostedDao.findExactForUpdate(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getId());
         if (hosted != null) {
             requireExactHosted(scope, binding, hosted);
             return prepared(hosted, agent, persona, requireApiKey(hosted));
-        }
-        // Existing bindings without a durable hosted row are ambiguous legacy state and are not adopted.
-        if (!createdBinding) {
-            fail(AgentErrorConstants.AGENT_ERROR, "Legacy binding has no durable hosted profile; explicit migration is required");
         }
         ApiKeyService apiKeys = requireApiKeyService();
         OauthApiKeyEntity key = new OauthApiKeyEntity();
@@ -142,6 +148,7 @@ public class AgentHostedBindingTransaction {
                 || AgentHostedProfileState.REPAIR_REQUIRED.equals(checkpoint)) {
             fail(AgentErrorConstants.AGENT_ERROR, "Hosted repair checkpoint is invalid");
         }
+        AgentHostedGeneration.requireAdvanceable(checkpoint, hosted.getGeneration());
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(hosted.getCanonicalAgentId());
         boolean suspensionCheckpoint = AgentHostedProfileState.SUSPENDING.equals(checkpoint)
                 || AgentHostedProfileState.SUSPENDED.equals(checkpoint);
@@ -172,6 +179,15 @@ public class AgentHostedBindingTransaction {
         AgentHostedProfileEntity hosted = hostedDao.findExactForUpdate(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getId());
         if (hosted != null) requireExactHosted(scope, binding, hosted);
+        if (hosted != null) {
+            String checkpoint = AgentHostedProfileState.REPAIR_REQUIRED.equals(hosted.getLifecycleState())
+                    ? hosted.getResumeState() : hosted.getLifecycleState();
+            AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
+            if (AgentHostedProfileState.ACTIVE.equals(checkpoint)
+                    || AgentHostedProfileState.SUSPENDING.equals(checkpoint)) {
+                AgentHostedGeneration.successor(hosted.getGeneration());
+            }
+        }
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
         if (hosted == null) {
             suspendDatabase(scope, binding, identity, runtime);
@@ -203,6 +219,7 @@ public class AgentHostedBindingTransaction {
     @Transactional(rollbackFor = Exception.class)
     public AgentHostedProfileEntity completeUnbind(Scope scope, long bindingId,
             long expectedGeneration, long fileGeneration) {
+        AgentHostedGeneration.requireSuccessor(expectedGeneration, fileGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
         if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Binding not found");
         requireExactBinding(scope, binding);
@@ -250,6 +267,7 @@ public class AgentHostedBindingTransaction {
     @Transactional(rollbackFor = Exception.class)
     public AgentHostedProfileEntity transition(Scope scope, long bindingId, String expectedState,
             long expectedGeneration, String nextState, long nextGeneration, boolean desiredEnabled) {
+        AgentHostedGeneration.requireTransition(expectedState, expectedGeneration, nextGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
         if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Hosted binding not found");
         requireExactBinding(scope, binding);
@@ -271,6 +289,7 @@ public class AgentHostedBindingTransaction {
     public void markRepair(Scope scope, long bindingId, String expectedState,
             String expectedResumeState, long expectedGeneration, String resumeState,
             RuntimeException failure) {
+        AgentHostedGeneration.requireAdvanceable(resumeState, expectedGeneration);
         AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
         if (binding == null) return;
         requireExactBinding(scope, binding);

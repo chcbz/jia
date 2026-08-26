@@ -25,6 +25,8 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class AgentHostedProfilePublisher {
@@ -43,6 +45,10 @@ public class AgentHostedProfilePublisher {
     private final Path clientsDir;
     static final String CAPABILITY_MANIFEST = "hosted-runtime-capabilities.properties";
     private static final String CAPABILITY_VERSION = "1";
+    private static final Pattern DEFAULT_HEADER = Pattern.compile(
+            "\\[(?:default|profile\\.default|agent\\.default)]");
+    private static final Pattern PROFILE_HEADER = Pattern.compile(
+            "\\[(agent|profile)\\.([^]]+)]");
     private static final List<String> CAPABILITY_KEYS = List.of(
             "contractVersion", "perProfileApiKey", "disabledStage",
             "hotReloadDisconnect", "runtimeSha256");
@@ -67,9 +73,7 @@ public class AgentHostedProfilePublisher {
     public PublishedPaths publish(AgentHostedProfileEntity hosted, AgentPersonaEntity persona,
             long expectedGeneration, long nextGeneration, boolean enabled, String apiKey) {
         requireExactHosted(hosted);
-        if (expectedGeneration < 0 || nextGeneration != expectedGeneration + 1) {
-            fail("Hosted profile publication generation is invalid");
-        }
+        AgentHostedGeneration.requireSuccessor(expectedGeneration, nextGeneration);
         if (!safeConfigValue(apiKey)) fail("Dedicated hosted API key is unavailable");
         if (persona == null || !safeConfigValue(persona.getName())
                 || (persona.getTitle() != null && !safeConfigValue(persona.getTitle()))) {
@@ -106,7 +110,7 @@ public class AgentHostedProfilePublisher {
 
     public PublishedPaths inspectExisting(AgentHostedProfileEntity hosted, long expectedGeneration) {
         requireExactHosted(hosted);
-        if (expectedGeneration < 0) fail("Hosted profile inspection generation is invalid");
+        AgentHostedGeneration.requireNonNegative(expectedGeneration);
         verifyRuntimeCapabilities();
         try {
             if (!Files.exists(profilesFile)) {
@@ -205,7 +209,6 @@ public class AgentHostedProfilePublisher {
         for (int index = 0; index < headers.size(); index++) {
             Header header = headers.get(index);
             int end = index + 1 < headers.size() ? headers.get(index + 1).start() : profiles.length();
-            if (header.family() == null) continue;
             Section section = new Section(header.start(), end, header.family(), header.key(),
                     assignments(profiles.substring(header.start(), end)));
             long agentIdCount = section.assignments().stream()
@@ -242,18 +245,13 @@ public class AgentHostedProfilePublisher {
             int newline = text.indexOf('\n', lineStart);
             int lineEnd = newline < 0 ? text.length() : newline;
             String line = trimRuntimeWhitespace(text.substring(lineStart, lineEnd));
-            if (line.length() >= 3 && line.startsWith("[") && line.endsWith("]")) {
-                String name = trimRuntimeWhitespace(line.substring(1, line.length() - 1));
-                String family = null;
-                String key = null;
-                if (name.startsWith("agent.") && name.length() > "agent.".length()) {
-                    family = "agent";
-                    key = name.substring("agent.".length());
-                } else if (name.startsWith("profile.") && name.length() > "profile.".length()) {
-                    family = "profile";
-                    key = name.substring("profile.".length());
+            if (DEFAULT_HEADER.matcher(line).matches()) {
+                result.add(new Header(lineStart, "default", null));
+            } else {
+                Matcher profile = PROFILE_HEADER.matcher(line);
+                if (profile.matches()) {
+                    result.add(new Header(lineStart, profile.group(1), profile.group(2)));
                 }
-                result.add(new Header(lineStart, family, key));
             }
             if (newline < 0) break;
             lineStart = newline + 1;
@@ -263,19 +261,21 @@ public class AgentHostedProfilePublisher {
 
     private List<Assignment> assignments(String section) {
         List<Assignment> result = new ArrayList<>();
-        boolean header = true;
-        for (String line : section.lines().toList()) {
-            if (header) {
-                header = false;
-                continue;
+        int lineStart = section.indexOf('\n') + 1;
+        while (lineStart > 0 && lineStart <= section.length()) {
+            int newline = section.indexOf('\n', lineStart);
+            int lineEnd = newline < 0 ? section.length() : newline;
+            String trimmed = trimRuntimeWhitespace(section.substring(lineStart, lineEnd));
+            if (!trimmed.isEmpty() && !trimmed.startsWith("#")) {
+                int separator = trimmed.indexOf('=');
+                if (separator >= 0) {
+                    result.add(new Assignment(
+                            trimRuntimeWhitespace(trimmed.substring(0, separator)),
+                            parseRuntimeScalar(trimmed.substring(separator + 1))));
+                }
             }
-            String trimmed = trimRuntimeWhitespace(line);
-            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
-            int separator = trimmed.indexOf('=');
-            if (separator < 0) continue;
-            result.add(new Assignment(
-                    trimRuntimeWhitespace(trimmed.substring(0, separator)),
-                    trimRuntimeWhitespace(trimmed.substring(separator + 1))));
+            if (newline < 0) break;
+            lineStart = newline + 1;
         }
         return result;
     }
@@ -412,16 +412,37 @@ public class AgentHostedProfilePublisher {
         int start = 0;
         while (start < value.length()) {
             int codePoint = value.codePointAt(start);
-            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) break;
+            if (!isEcmaScriptWhitespace(codePoint)) break;
             start += Character.charCount(codePoint);
         }
         int end = value.length();
         while (end > start) {
             int codePoint = value.codePointBefore(end);
-            if (!Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)) break;
+            if (!isEcmaScriptWhitespace(codePoint)) break;
             end -= Character.charCount(codePoint);
         }
         return value.substring(start, end);
+    }
+
+    private String parseRuntimeScalar(String rawValue) {
+        String value = trimRuntimeWhitespace(rawValue);
+        if (value.length() >= 2) {
+            char first = value.charAt(0);
+            char last = value.charAt(value.length() - 1);
+            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                return value.substring(1, value.length() - 1);
+            }
+        }
+        return value;
+    }
+
+    private boolean isEcmaScriptWhitespace(int codePoint) {
+        return codePoint == 0x0009 || codePoint == 0x000B || codePoint == 0x000C
+                || codePoint == 0x0020 || codePoint == 0x00A0 || codePoint == 0x1680
+                || (codePoint >= 0x2000 && codePoint <= 0x200A)
+                || codePoint == 0x202F || codePoint == 0x205F || codePoint == 0x3000
+                || codePoint == 0xFEFF || codePoint == 0x000A || codePoint == 0x000D
+                || codePoint == 0x2028 || codePoint == 0x2029;
     }
 
     private boolean blank(String value) {

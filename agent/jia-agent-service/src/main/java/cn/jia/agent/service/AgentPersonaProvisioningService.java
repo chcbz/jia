@@ -42,11 +42,12 @@ public class AgentPersonaProvisioningService {
         AgentHostedProfileEntity hosted = prepared.hosted();
         String expectedState = hosted.getLifecycleState();
         String expectedResumeState = hosted.getResumeState();
-        long generation = hosted.getGeneration();
+        long generation = AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
+        long nextGeneration = AgentHostedGeneration.successor(generation);
         try {
-            publisher.publish(hosted, prepared.persona(), generation, generation + 1,
+            publisher.publish(hosted, prepared.persona(), generation, nextGeneration,
                     false, prepared.apiKey());
-            transactions.completeUnbind(scope, hosted.getBindingId(), generation, generation + 1);
+            transactions.completeUnbind(scope, hosted.getBindingId(), generation, nextGeneration);
         } catch (RuntimeException failure) {
             markRepair(scope, hosted, expectedState, expectedResumeState, generation,
                     AgentHostedProfileState.SUSPENDING, failure);
@@ -64,12 +65,13 @@ public class AgentPersonaProvisioningService {
         if (AgentHostedProfileState.SUSPENDING.equals(hosted.getLifecycleState())) {
             String expectedState = hosted.getLifecycleState();
             String expectedResumeState = hosted.getResumeState();
-            long generation = hosted.getGeneration();
+            long generation = AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
+            long nextGeneration = AgentHostedGeneration.successor(generation);
             try {
                 AgentHostedProfilePublisher.PublishedPaths paths = publisher.publish(hosted, prepared.persona(),
-                        generation, generation + 1, false, prepared.apiKey());
+                        generation, nextGeneration, false, prepared.apiKey());
                 AgentHostedProfileEntity suspended = transactions.completeUnbind(
-                        scope, hosted.getBindingId(), generation, generation + 1);
+                        scope, hosted.getBindingId(), generation, nextGeneration);
                 return result(new Prepared(suspended, prepared.agent(), prepared.persona(), null), paths);
             } catch (RuntimeException failure) {
                 markRepair(scope, hosted, expectedState, expectedResumeState, generation,
@@ -86,18 +88,19 @@ public class AgentPersonaProvisioningService {
         while (true) {
             String state = hosted.getLifecycleState();
             String resumeState = hosted.getResumeState();
-            long generation = hosted.getGeneration();
+            long generation = AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
             if (AgentHostedProfileState.ACTIVE.equals(state)) {
                 AgentHostedProfilePublisher.PublishedPaths paths = published == null
                         ? publisher.inspectExisting(hosted, generation) : published;
                 return result(prepared, paths);
             }
             if (AgentHostedProfileState.PREPARED.equals(state)) {
+                long nextGeneration = AgentHostedGeneration.successor(generation);
                 try {
                     published = merge(published, publisher.publish(hosted, prepared.persona(),
-                            generation, generation + 1, false, prepared.apiKey()));
+                            generation, nextGeneration, false, prepared.apiKey()));
                     hosted = transactions.transition(scope, hosted.getBindingId(), state, generation,
-                            AgentHostedProfileState.STAGED_DISABLED, generation + 1, true);
+                            AgentHostedProfileState.STAGED_DISABLED, nextGeneration, true);
                     prepared = new Prepared(hosted, prepared.agent(), prepared.persona(), prepared.apiKey());
                     continue;
                 } catch (RuntimeException failure) {
@@ -106,11 +109,12 @@ public class AgentPersonaProvisioningService {
                 }
             }
             if (AgentHostedProfileState.STAGED_DISABLED.equals(state)) {
+                long nextGeneration = AgentHostedGeneration.successor(generation);
                 try {
                     published = merge(published, publisher.publish(hosted, prepared.persona(),
-                            generation, generation + 1, true, prepared.apiKey()));
+                            generation, nextGeneration, true, prepared.apiKey()));
                     hosted = transactions.transition(scope, hosted.getBindingId(), state, generation,
-                            AgentHostedProfileState.FILE_ENABLED, generation + 1, true);
+                            AgentHostedProfileState.FILE_ENABLED, nextGeneration, true);
                     prepared = new Prepared(hosted, prepared.agent(), prepared.persona(), prepared.apiKey());
                     continue;
                 } catch (RuntimeException failure) {
@@ -167,15 +171,13 @@ public class AgentPersonaProvisioningService {
         String agentName = StringUtil.isBlank(agent.getName()) ? personaCode : agent.getName();
         String personaName = !StringUtil.isBlank(agent.getTitle()) ? agent.getTitle()
                 : !StringUtil.isBlank(agent.getPersonaName()) ? agent.getPersonaName() : agentName;
-        String workdir = Path.of("$HOME/cyf-agent-clients").resolve(agent.getAgentId()).toString();
-        String codexHome = "$HOME/.codex-" + profileId;
+        String workdir = Path.of("/home/isp/apps/codex-ws-agent").toAbsolutePath().normalize().toString();
         AgentPersonaBindResultDTO result = new AgentPersonaBindResultDTO();
         result.setAgent(agent);
         result.setMode("local");
         result.setAgentId(agent.getAgentId());
         result.setProfileId(profileId);
         result.setWorkdir(workdir);
-        result.setCodexHome(codexHome);
         result.setMessage("已入名册；浏览器响应不提供凭证，请通过受信任的带外流程配置专用 API key");
         result.setEnvExample("WS_URL=wss://<service>/ws/agent/channel\nOPENCLAW_API_KEY=<key>"
                 + "\nDEFAULT_CODEX_PROFILE=" + profileId
@@ -186,10 +188,9 @@ public class AgentPersonaProvisioningService {
                 codexWorkdir=%s
                 agentName=%s
                 personaName=%s
-                codexHome=%s
                 isDefault=true
                 """.formatted(profileId, agent.getAgentId(), workdir,
-                agentName, personaName, codexHome).stripTrailing());
+                agentName, personaName).stripTrailing());
         result.setCommands(List.of("Install codex-ws-agent from the trusted package",
                 "Configure a dedicated key out of band"));
         return result;

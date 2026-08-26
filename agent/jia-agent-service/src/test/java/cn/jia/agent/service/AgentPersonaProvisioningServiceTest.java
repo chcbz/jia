@@ -8,6 +8,11 @@ import cn.jia.agent.service.AgentHostedBindingTransaction.Prepared;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -16,9 +21,10 @@ import static org.mockito.Mockito.*;
 class AgentPersonaProvisioningServiceTest {
     private static final Scope SCOPE = new Scope("owner-a", "client-a", "owner-a");
     private static final String AGENT_ID = "agt_0123456789abcdef0123456789abcdef";
+    @TempDir Path temp;
 
     @Test
-    void localBindUsesExplicitJwtScopeAndRestoresCredentialFreeProfileSection() {
+    void localBindUsesExplicitJwtScopeAndExecutableAbsoluteProfileSection() {
         AgentService agentService = mock(AgentService.class);
         AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
         AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
@@ -34,16 +40,63 @@ class AgentPersonaProvisioningServiceTest {
         assertEquals("local", result.getMode());
         assertTrue(result.getProfileExample().startsWith("[agent.wuyong]\n"));
         assertTrue(result.getProfileExample().contains("agentId=" + AGENT_ID));
-        assertTrue(result.getProfileExample().contains("codexWorkdir=$HOME/cyf-agent-clients/" + AGENT_ID));
+        assertEquals("/home/isp/apps/codex-ws-agent", result.getWorkdir());
+        assertTrue(result.getProfileExample().contains("codexWorkdir=/home/isp/apps/codex-ws-agent"));
         assertTrue(result.getProfileExample().contains("agentName=Wu Yong"));
         assertTrue(result.getProfileExample().contains("personaName=Strategist"));
-        assertTrue(result.getProfileExample().contains("codexHome=$HOME/.codex-wuyong"));
+        assertNull(result.getCodexHome());
+        assertFalse(result.getProfileExample().contains("codexHome="));
+        assertFalse(result.getProfileExample().contains("$HOME"));
         assertTrue(result.getProfileExample().contains("isDefault=true"));
         assertFalse(result.getProfileExample().contains("apiKey"));
         assertFalse(result.getProfileExample().contains("cdx_"));
         assertTrue(result.getEnvExample().contains("OPENCLAW_API_KEY=<key>"));
         verify(agentService).bindPersona("owner-a", "client-a", "owner-a", "wuyong");
         verifyNoInteractions(transactions, publisher);
+    }
+
+    @Test
+    void copiedLocalProfilePassesAuthoritativeRuntimeValidation() throws Exception {
+        Path runtimeSource = Path.of(
+                "/home/isp/wsps/chcbz/isp-install/conf/codex-ws-agent/agent-client.mjs");
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(runtimeSource));
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isExecutable(Path.of("/usr/bin/node")));
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(
+                Path.of("/home/isp/apps/codex-ws-agent")));
+
+        AgentService agentService = mock(AgentService.class);
+        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
+        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
+        AgentRuntimeDTO runtime = runtime();
+        runtime.setName("Wu Yong");
+        runtime.setTitle("Strategist");
+        when(agentService.bindPersona("owner-a", "client-a", "owner-a", "wuyong"))
+                .thenReturn(runtime);
+        var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
+                .bind(SCOPE, "wuyong", "local");
+        Path copiedProfile = temp.resolve("codex-profiles.conf");
+        Files.writeString(copiedProfile, result.getProfileExample() + "\n");
+
+        ProcessBuilder validation = new ProcessBuilder(
+                "/usr/bin/node", runtimeSource.toString(), "--validate");
+        validation.directory(temp.toFile()).redirectErrorStream(true);
+        validation.environment().remove("CODEX_PROFILES");
+        validation.environment().remove("CODEX_WORKSPACE_POLICIES_FILE");
+        validation.environment().put("CODEX_WORKSPACE_POLICIES", "");
+        validation.environment().put("CODEX_PROFILES_FILE", copiedProfile.toString());
+        validation.environment().put("DEFAULT_CODEX_PROFILE", result.getProfileId());
+        validation.environment().put("OPENCLAW_API_KEY", "test-only-key");
+        validation.environment().put("CODEX_SESSION_MAP_FILE",
+                temp.resolve("codex-session-map.json").toString());
+        Process validated = validation.start();
+        if (!validated.waitFor(15, TimeUnit.SECONDS)) {
+            validated.destroyForcibly();
+            fail("runtime validation timed out");
+        }
+        String output = new String(validated.getInputStream().readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(0, validated.exitValue(), output);
+        assertTrue(output.contains("configuration valid | profiles=1"), output);
     }
 
     @Test
@@ -164,6 +217,26 @@ class AgentPersonaProvisioningServiceTest {
 
         verify(transactions).markRepair(SCOPE, 19L, AgentHostedProfileState.PREPARED,
                 null, 0L, AgentHostedProfileState.PREPARED, conflict);
+    }
+
+    @Test
+    void exhaustedPreparedGenerationPerformsNoPublisherOrDurableMutationCalls() {
+        AgentService agentService = mock(AgentService.class);
+        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
+        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
+        AgentHostedProfileEntity exhausted = hosted(AgentHostedProfileState.PREPARED, Long.MAX_VALUE);
+        when(transactions.prepareHosted(SCOPE, "wuyong"))
+                .thenReturn(new Prepared(exhausted, runtime(), persona(), "dedicated-secret"));
+
+        assertThrows(AgentBizException.class, () ->
+                new AgentPersonaProvisioningService(agentService, transactions, publisher)
+                        .bind(SCOPE, "wuyong", "server"));
+
+        verifyNoInteractions(publisher);
+        verify(transactions, never()).transition(any(), anyLong(), anyString(), anyLong(),
+                anyString(), anyLong(), anyBoolean());
+        verify(transactions, never()).markRepair(any(), anyLong(), anyString(),
+                any(), anyLong(), anyString(), any());
     }
 
     private static AgentHostedProfilePublisher.PublishedPaths paths(

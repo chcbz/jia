@@ -107,6 +107,44 @@ class AgentHostedProfilePublisherTest {
     }
 
     @Test
+    void quotedUnknownSectionAndBomCanonicalCollisionsMatchRuntimeLexing() throws Exception {
+        Fixture fixture = fixture("runtime-lexing");
+        for (String colliding : List.of(
+                "[profile.quoted]\nagentId=\"" + fixture.hosted.getCanonicalAgentId() + "\"\n",
+                "[agent.shadow]\n[unknown.section]\nagentId='"
+                        + fixture.hosted.getCanonicalAgentId() + "'\n",
+                "\uFEFF[profile.bom]\uFEFF\n\uFEFFagentId\uFEFF=\uFEFF\""
+                        + fixture.hosted.getCanonicalAgentId() + "\"\uFEFF\n")) {
+            Files.writeString(fixture.profiles, colliding);
+            String stable = Files.readString(fixture.profiles);
+            assertThrows(AgentBizException.class, () -> fixture.publisher.publish(
+                    fixture.hosted, fixture.persona, 0, 1, false, "dedicated-secret"));
+            assertEquals(stable, Files.readString(fixture.profiles));
+        }
+    }
+
+    @Test
+    void recognizedDefaultAliasesBoundTargetReplacementLikeRuntimeSections() throws Exception {
+        int index = 0;
+        for (String defaultHeader : List.of("[default]", "[agent.default]", "[profile.default]")) {
+            Fixture fixture = fixture("default-boundary-" + index);
+            fixture.publisher.publish(fixture.hosted, fixture.persona,
+                    0, 1, false, "dedicated-secret");
+            String retained = "# retained-default-boundary-" + index;
+            Files.writeString(fixture.profiles, Files.readString(fixture.profiles)
+                    + "\n" + defaultHeader + "\ncodexApproval=never\n" + retained + "\n");
+
+            fixture.publisher.publish(fixture.hosted, fixture.persona,
+                    1, 2, true, "dedicated-secret");
+
+            String published = Files.readString(fixture.profiles);
+            assertTrue(published.contains("# cyfHostedGeneration=2"));
+            assertTrue(published.contains(defaultHeader + "\ncodexApproval=never\n" + retained));
+            index++;
+        }
+    }
+
+    @Test
     void duplicateAgentIdAndAmbiguousProfileTargetFailClosed() throws Exception {
         Fixture fixture = fixture("ambiguous");
         Files.writeString(fixture.profiles, """
@@ -143,6 +181,38 @@ class AgentHostedProfilePublisherTest {
         Files.delete(fixture.profiles);
         assertThrows(AgentBizException.class,
                 () -> fixture.publisher.inspectExisting(fixture.hosted, 2L));
+    }
+
+    @Test
+    void exhaustedGenerationFailsBeforeProfileBootstrapLockOrDirectoryMutation() throws Exception {
+        Fixture fixture = fixture("generation-exhausted");
+        String stable = """
+                [agent.%s]
+                # cyfHostedBindingId=%d
+                # cyfHostedCanonicalAgentId=%s
+                # cyfHostedGeneration=%d
+                agentId=%s
+                codexWorkdir=/stable/workdir
+                agentName=Wu Yong
+                personaName=Strategist
+                codexHome=/stable/home
+                enabled=false
+                apiKey=dedicated-secret
+                """.formatted(fixture.hosted.getProfileKey(), fixture.hosted.getBindingId(),
+                fixture.hosted.getCanonicalAgentId(), Long.MAX_VALUE,
+                fixture.hosted.getCanonicalAgentId());
+        Files.writeString(fixture.profiles, stable);
+        Path codexHome = fixture.runtime.resolve(".codex-hosted-" + fixture.hosted.getProfileKey());
+        Path lock = fixture.profiles.resolveSibling(fixture.profiles.getFileName() + ".lock");
+
+        assertThrows(AgentBizException.class, () -> fixture.publisher.publish(
+                fixture.hosted, fixture.persona, Long.MAX_VALUE, Long.MIN_VALUE,
+                false, "dedicated-secret"));
+
+        assertEquals(stable, Files.readString(fixture.profiles));
+        assertFalse(Files.exists(fixture.clients));
+        assertFalse(Files.exists(codexHome));
+        assertFalse(Files.exists(lock));
     }
 
     @Test
