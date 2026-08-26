@@ -1,5 +1,7 @@
 package cn.jia.agent.dao;
 
+import cn.jia.agent.dao.impl.AgentCommandOperationsDaoImpl;
+import cn.jia.agent.entity.AgentCommandRedriveOperationState;
 import cn.jia.agent.mapper.AgentCommandOperationsMapper;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Select;
@@ -12,7 +14,10 @@ import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class AgentCommandOperationsMapperContractTest {
     @Test
@@ -78,7 +83,11 @@ class AgentCommandOperationsMapperContractTest {
     @Test
     void operationAuditMapperIsInsertOnlyAndContainsNoPayloadOrCredentialColumn() {
         for (Method method : AgentCommandOperationsMapper.class.getMethods()) {
-            assertFalse(method.isAnnotationPresent(Update.class), method.getName());
+            Update update = method.getAnnotation(Update.class);
+            if (update != null) {
+                assertTrue(normalize(update.value()).startsWith(
+                        "update agent_command_redrive_operation"), method.getName());
+            }
         }
         Method insert = Arrays.stream(AgentCommandOperationsMapper.class.getMethods())
                 .filter(method -> method.getName().equals("insertAudit"))
@@ -90,6 +99,89 @@ class AgentCommandOperationsMapperContractTest {
                 "lease_owner", "lease_until"}) {
             assertFalse(sql.contains(forbidden), forbidden);
         }
+    }
+
+    @Test
+    void redriveReservationInsertIsPendingOnlyPayloadFreeAndGeneratedGuardFree() throws Exception {
+        Method method = method("insertPendingRedriveOperation");
+        String sql = normalize(method.getAnnotation(Insert.class).value());
+        assertTrue(sql.startsWith("insert into agent_command_redrive_operation"));
+        assertTrue(sql.contains("'pending','pending',null,#{requestedat},null,0"));
+        assertTrue(sql.endsWith(
+                "#{tenantid},#{clientid},#{requestedat},#{requestedat})"), sql);
+        for (String forbidden : new String[] {
+                "wire_payload", "command_payload", "headers", "disposition_guard,", "redrive_guard,"}) {
+            assertFalse(sql.contains(forbidden), forbidden);
+        }
+    }
+
+    @Test
+    void redriveLocksAreExactScopedStableBoundedAndForUpdate() throws Exception {
+        String byOperation = select("lockRedriveOperation");
+        assertExactScope(byOperation);
+        assertTrue(byOperation.contains(
+                "cast(operation_id as binary)=cast(#{operationid} as binary)"));
+        assertTrue(byOperation.endsWith("limit 1 for update"), byOperation);
+
+        String active = select("lockActiveRedriveOperations");
+        assertExactScope(active);
+        assertTrue(active.contains("delivery_id=#{deliveryid}"));
+        assertTrue(active.contains("source_attempt=#{sourceattempt}"));
+        assertTrue(active.contains(
+                "cast(source_message_id as binary)=cast(#{sourcemessageid} as binary)"));
+        assertTrue(active.contains("disposition_guard=1"));
+        assertTrue(active.endsWith("order by id asc limit 2 for update"), active);
+
+        String recovery = select("lockPendingRedriveOperations");
+        assertExactScope(recovery);
+        assertTrue(recovery.contains(
+                "outcome_state='pending' and settlement_state='pending'"));
+        assertTrue(recovery.contains("requested_at<=#{requestedbefore} and id>#{afterid}"));
+        assertTrue(recovery.endsWith("order by id asc limit #{limit} for update"), recovery);
+    }
+
+    @Test
+    void redriveTerminalCasRequiresPendingVersionAndExactLegalPairs() throws Exception {
+        Method method = method("compareAndSetRedriveOperationTerminal");
+        String sql = normalize(method.getAnnotation(Update.class).value());
+        assertTrue(sql.startsWith("update agent_command_redrive_operation"));
+        assertExactScope(sql);
+        assertTrue(sql.contains("outcome_state='pending' and settlement_state='pending'"));
+        assertTrue(sql.contains("version=#{expectedversion}"));
+        assertTrue(sql.contains("version=version+1"));
+        assertTrue(sql.contains(
+                "#{outcomestate}='succeeded' and #{settlementstate}='source_acked' and #{errorcode} is null"));
+        assertTrue(sql.contains(
+                "#{outcomestate}='failed' and #{settlementstate} in ('source_requeued','not_acquired','unknown')"));
+        assertTrue(sql.contains(
+                "#{errorcode} is not null and char_length(#{errorcode}) between 1 and 200"));
+        assertFalse(sql.contains("agent_command_operation_audit"));
+    }
+
+    @Test
+    void daoTerminalProjectionRejectsPendingAndPassesExactEnumNames() {
+        AgentCommandOperationsMapper mapper = mock(AgentCommandOperationsMapper.class);
+        AgentCommandOperationsDaoImpl dao = new AgentCommandOperationsDaoImpl(mapper);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.compareAndSetRedriveOperationTerminal(
+                        "tenant-a", "client-a", "operation-1",
+                        AgentCommandRedriveOperationState.PENDING, null, 10, 0));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.lockPendingRedriveOperations(
+                        "tenant-a", "client-a", 10, 0, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.lockPendingRedriveOperations(
+                        "tenant-a", "client-a", 10, 0, 101));
+
+        dao.compareAndSetRedriveOperationTerminal(
+                "tenant-a", "client-a", "operation-1",
+                AgentCommandRedriveOperationState.FAILED_UNKNOWN,
+                "SETTLEMENT_UNKNOWN", 10, 0);
+        verify(mapper).compareAndSetRedriveOperationTerminal(
+                "tenant-a", "client-a", "operation-1", "FAILED", "UNKNOWN",
+                "SETTLEMENT_UNKNOWN", 10, 0);
     }
 
     @Test
@@ -111,9 +203,19 @@ class AgentCommandOperationsMapperContractTest {
     }
 
     private String select(String name) throws Exception {
-        Method method = Arrays.stream(AgentCommandOperationsMapper.class.getMethods())
+        return normalize(method(name).getAnnotation(Select.class).value());
+    }
+
+    private Method method(String name) {
+        return Arrays.stream(AgentCommandOperationsMapper.class.getMethods())
                 .filter(candidate -> candidate.getName().equals(name)).findFirst().orElseThrow();
-        return normalize(method.getAnnotation(Select.class).value());
+    }
+
+    private void assertExactScope(String sql) {
+        assertTrue(sql.contains("cast(tenant_id as binary)=cast(#{tenantid} as binary)"), sql);
+        assertTrue(sql.contains("octet_length(tenant_id)=octet_length(#{tenantid})"), sql);
+        assertTrue(sql.contains("cast(client_id as binary)=cast(#{clientid} as binary)"), sql);
+        assertTrue(sql.contains("octet_length(client_id)=octet_length(#{clientid})"), sql);
     }
 
     private String normalize(String[] sql) {

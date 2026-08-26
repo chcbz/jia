@@ -77,7 +77,7 @@ class AgentCommandTransportSchemaInitializerTest {
                 .run(context -> {
                     Throwable failure = context.getStartupFailure();
                     assertNotNull(failure, spelling);
-                    assertTrue(failureChain(failure).contains("exact 0/4, legacy 3/4, or 4/4"),
+                    assertTrue(failureChain(failure).contains("exact 0/5, legacy 3/5, current 4/5, or 5/5"),
                             spelling + ": " + failureChain(failure));
                     assertEquals(List.of(), partial.executedSql, spelling);
                 });
@@ -116,7 +116,7 @@ class AgentCommandTransportSchemaInitializerTest {
     }
 
     @Test
-    void oneOrTwoOfFourFailClosedWithoutAutoCompletion() throws Exception {
+    void oneOrTwoOfFiveFailClosedWithoutAutoCompletion() throws Exception {
         for (List<String> present : List.of(
                 List.of("agent_command_delivery"),
                 List.of("agent_command_delivery", "agent_outbox_event"))) {
@@ -124,27 +124,70 @@ class AgentCommandTransportSchemaInitializerTest {
                     present.toArray(String[]::new));
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
-            assertTrue(failure.getMessage().contains(present.size() + "/4"), failure.getMessage());
+            assertTrue(failure.getMessage().contains(present.size() + "/5"), failure.getMessage());
             assertEquals(List.of(), jdbc.executedSql, present.toString());
         }
     }
 
     @Test
-    void exactLegacyThreeTableCatalogAddsOnlyAppendOnlyAuditTable() throws Exception {
+    void exactLegacyThreeTableCatalogAddsAuditAndRedriveControlTables() throws Exception {
         RecordingCatalogJdbcTemplate legacy = partialCatalog(
                 "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox");
-        IllegalStateException validation = assertThrows(IllegalStateException.class,
+        assertThrows(RuntimeException.class,
                 () -> new AgentCommandTransportSchemaInitializer(legacy).afterPropertiesSet());
-        assertEquals(1, legacy.executedSql.size());
-        assertTrue(legacy.executedSql.getFirst().toLowerCase(Locale.ROOT)
+        assertEquals(2, legacy.executedSql.size());
+        assertTrue(legacy.executedSql.get(0).toLowerCase(Locale.ROOT)
                 .contains("create table if not exists agent_command_operation_audit"));
-        assertTrue(validation.getMessage().contains("exact 4/4"), validation.getMessage());
+        assertTrue(legacy.executedSql.get(1).toLowerCase(Locale.ROOT)
+                .contains("create table if not exists agent_command_redrive_operation"));
     }
 
     @Test
-    void initializerDdlIsExactlyFourCreateStatementsAndContainsNoDataMutation() {
+    void freshAndCurrentFourTableCatalogsExecuteOnlyTheirExactMissingSuffix() throws Exception {
+        RecordingCatalogJdbcTemplate fresh = partialCatalog();
+        assertThrows(RuntimeException.class,
+                () -> new AgentCommandTransportSchemaInitializer(fresh).afterPropertiesSet());
+        assertEquals(5, fresh.executedSql.size());
+
+        RecordingCatalogJdbcTemplate current = partialCatalog(
+                "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox",
+                "agent_command_operation_audit");
+        assertThrows(RuntimeException.class,
+                () -> new AgentCommandTransportSchemaInitializer(current).afterPropertiesSet());
+        assertEquals(1, current.executedSql.size());
+        assertTrue(current.executedSql.getFirst().toLowerCase(Locale.ROOT)
+                .contains("create table if not exists agent_command_redrive_operation"));
+    }
+
+    @Test
+    void exactFiveTableCatalogRunsValidationWithoutDdl() throws Exception {
+        RecordingCatalogJdbcTemplate exact = partialCatalog(
+                "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox",
+                "agent_command_operation_audit", "agent_command_redrive_operation");
+        assertThrows(RuntimeException.class,
+                () -> new AgentCommandTransportSchemaInitializer(exact).afterPropertiesSet());
+        assertEquals(List.of(), exact.executedSql);
+    }
+
+    @Test
+    void wrongCompositionThreeAndFourOfFiveFailBeforeAnyDdl() throws Exception {
+        for (List<String> present : List.of(
+                List.of("agent_command_delivery", "agent_outbox_event",
+                        "agent_command_operation_audit"),
+                List.of("agent_command_delivery", "agent_outbox_event",
+                        "agent_consumer_inbox", "agent_command_redrive_operation"))) {
+            RecordingCatalogJdbcTemplate jdbc = partialCatalog(present.toArray(String[]::new));
+            IllegalStateException failure = assertThrows(IllegalStateException.class,
+                    () -> new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet());
+            assertTrue(failure.getMessage().contains(present.size() + "/5"), failure.getMessage());
+            assertEquals(List.of(), jdbc.executedSql);
+        }
+    }
+
+    @Test
+    void initializerDdlIsExactlyFiveCreateStatementsAndContainsNoDataMutation() {
         List<String> statements = AgentCommandTransportSchemaInitializer.ddlStatements();
-        assertEquals(4, statements.size());
+        assertEquals(5, statements.size());
         for (int index = 0; index < statements.size(); index++) {
             String normalized = statements.get(index)
                     .replaceAll("(?m)^\\s*--.*$", " ")
@@ -193,6 +236,26 @@ class AgentCommandTransportSchemaInitializerTest {
         assertEquals(new AgentCommandTransportSchemaInitializer.IndexDefinition(
                         true, List.of("tenant_id", "client_id", "consumer_name", "message_id")),
                 expected.get("agent_consumer_inbox").indexes().get("uk_consumer_message"));
+
+        AgentCommandTransportSchemaInitializer.TableExpectation redrive =
+                expected.get("agent_command_redrive_operation");
+        assertEquals(new AgentCommandTransportSchemaInitializer.IndexDefinition(
+                        true, List.of("tenant_id", "client_id", "operation_id")),
+                redrive.indexes().get("uk_redrive_operation_id"));
+        assertEquals(new AgentCommandTransportSchemaInitializer.IndexDefinition(
+                        true, List.of("tenant_id", "client_id", "delivery_id",
+                                "source_message_id", "source_attempt", "redrive_guard")),
+                redrive.indexes().get("uk_redrive_operation_guard"));
+        Map<String, AgentCommandTransportSchemaInitializer.ColumnDefinition> columns =
+                redrive.columns().stream().collect(java.util.stream.Collectors.toMap(
+                        AgentCommandTransportSchemaInitializer.ColumnDefinition::name,
+                        column -> column));
+        assertEquals("enum('PENDING','SUCCEEDED','FAILED')",
+                columns.get("outcome_state").columnType());
+        assertEquals("if(outcome_state='pending',1,null)",
+                columns.get("disposition_guard").generationExpression());
+        assertEquals("if(settlement_statein('source_requeued','not_acquired'),null,1)",
+                columns.get("redrive_guard").generationExpression());
     }
 
     private RecordingCatalogJdbcTemplate partialCatalog(String... tables) throws Exception {
@@ -237,14 +300,14 @@ class AgentCommandTransportSchemaInitializerTest {
 
         private RecordingCatalogJdbcTemplate(DataSource dataSource, List<String> present) {
             super(dataSource);
-            this.present = List.copyOf(present);
+            this.present = new ArrayList<>(present);
         }
 
         @Override
         @SuppressWarnings("unchecked")
         public <T> List<T> queryForList(String sql, Class<T> elementType) {
             if (sql.toLowerCase(Locale.ROOT).contains("information_schema.tables")) {
-                return (List<T>) present;
+                return (List<T>) present.stream().sorted().toList();
             }
             return List.of();
         }
@@ -252,6 +315,13 @@ class AgentCommandTransportSchemaInitializerTest {
         @Override
         public void execute(String sql) {
             executedSql.add(sql);
+            String normalized = sql.replaceAll("(?m)^\\s*--.*$", " ")
+                    .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+            String prefix = "create table if not exists ";
+            if (normalized.startsWith(prefix)) {
+                String table = normalized.substring(prefix.length()).split(" ", 2)[0];
+                if (!present.contains(table)) present.add(table);
+            }
         }
     }
 }

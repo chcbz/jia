@@ -6,6 +6,8 @@ import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
+import cn.jia.agent.entity.AgentCommandRedriveOperationState;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.mapper.AgentCommandOperationsMapper;
@@ -40,5 +42,30 @@ public class AgentCommandOperationsDaoImpl implements AgentCommandOperationsDao 
     @Override public List<AgentOutboxEventEntity> lockActiveOutboxes(String tenantId, String clientId, long deliveryId, String messageId) { return mapper.lockActiveOutboxes(tenantId, clientId, deliveryId, messageId); }
     @Override public List<AgentOutboxEventEntity> lockPreviousAttemptOutboxes(String tenantId, String clientId, long deliveryId, int previousAttempt) { return mapper.lockPreviousAttemptOutboxes(tenantId, clientId, deliveryId, previousAttempt); }
     @Override public AgentConsumerInboxEntity lockInbox(String tenantId, String clientId, String consumerName, String messageId) { return mapper.lockInbox(tenantId, clientId, consumerName, messageId); }
+    @Override public int insertPendingRedriveOperation(AgentCommandRedriveOperationEntity operation) { return mapper.insertPendingRedriveOperation(operation); }
+    @Override public AgentCommandRedriveOperationEntity lockRedriveOperation(String tenantId, String clientId, String operationId) { return mapper.lockRedriveOperation(tenantId, clientId, operationId); }
+    @Override public List<AgentCommandRedriveOperationEntity> lockActiveRedriveOperations(String tenantId, String clientId, long deliveryId, String sourceMessageId, int sourceAttempt) { return mapper.lockActiveRedriveOperations(tenantId, clientId, deliveryId, sourceMessageId, sourceAttempt); }
+    @Override public List<AgentCommandRedriveOperationEntity> lockPendingRedriveOperations(String tenantId, String clientId, long requestedBefore, long afterId, int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("Redrive recovery limit must be between 1 and 100");
+        }
+        return mapper.lockPendingRedriveOperations(tenantId, clientId, requestedBefore, afterId, limit);
+    }
+    @Override public int compareAndSetRedriveOperationTerminal(String tenantId, String clientId, String operationId, AgentCommandRedriveOperationState terminalState, String errorCode, long completedAt, long expectedVersion) {
+        Objects.requireNonNull(terminalState, "terminalState");
+        if (!terminalState.terminal()) {
+            throw new IllegalArgumentException("Redrive terminal CAS requires a terminal state");
+        }
+        if (AgentCommandRedriveOperationState.SUCCEEDED.equals(terminalState)) {
+            if (errorCode != null) {
+                throw new IllegalArgumentException("Successful redrive terminal state must not have an error code");
+            }
+        } else if (errorCode == null || errorCode.isBlank() || errorCode.codePointCount(0, errorCode.length()) > 200) {
+            throw new IllegalArgumentException("Failed redrive terminal state requires a bounded error code");
+        }
+        return mapper.compareAndSetRedriveOperationTerminal(
+                tenantId, clientId, operationId, terminalState.outcome().name(),
+                terminalState.settlement().name(), errorCode, completedAt, expectedVersion);
+    }
     @Override public int insertAudit(AgentCommandOperationAuditEntity audit) { return mapper.insertAudit(audit); }
 }

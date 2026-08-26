@@ -29,8 +29,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
     static final String DDL_RESOURCE = "db/agent-command-transport-schema.sql";
     static final List<String> TABLES = List.of(
             "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox",
-            "agent_command_operation_audit");
-    private static final Set<String> TABLE_SET = Set.copyOf(TABLES);
+            "agent_command_operation_audit", "agent_command_redrive_operation");
     private static final String BINARY_COLLATION = "utf8mb4_0900_bin";
     static final String AUDIT_UPDATE_TRIGGER = "trg_command_operation_audit_no_update";
     static final String AUDIT_DELETE_TRIGGER = "trg_command_operation_audit_no_delete";
@@ -46,19 +45,23 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
         requireMySql();
         List<String> present = inspectPresentTables();
         List<String> legacyTransport = TABLES.subList(0, 3);
+        List<String> currentTransportAndAudit = TABLES.subList(0, 4);
+        List<String> ddl = ddlStatements();
         if (present.isEmpty()) {
-            for (String statement : ddlStatements()) {
+            for (String statement : ddl) {
                 jdbcTemplate.execute(statement);
             }
-        } else if (present.size() == legacyTransport.size()
-                && Set.copyOf(present).equals(Set.copyOf(legacyTransport))) {
-            jdbcTemplate.execute(ddlStatements().get(3));
-        } else if (!TABLE_SET.equals(Set.copyOf(present))) {
+        } else if (sameTables(present, legacyTransport)) {
+            jdbcTemplate.execute(ddl.get(3));
+            jdbcTemplate.execute(ddl.get(4));
+        } else if (sameTables(present, currentTransportAndAudit)) {
+            jdbcTemplate.execute(ddl.get(4));
+        } else if (!sameTables(present, TABLES)) {
             throw partialSchema(present);
         }
         present = inspectPresentTables();
-        if (!TABLE_SET.equals(Set.copyOf(present))) {
-            throw new IllegalStateException("Agent command transport schema creation did not produce exact 4/4 tables: "
+        if (!sameTables(present, TABLES)) {
+            throw new IllegalStateException("Agent command transport schema creation did not produce exact 5/5 tables: "
                     + present);
         }
         validateSchema();
@@ -66,7 +69,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
 
     void validateSchema() {
         List<String> present = inspectPresentTables();
-        if (present.size() != TABLES.size() || !TABLE_SET.equals(Set.copyOf(present))) {
+        if (!sameTables(present, TABLES)) {
             throw partialSchema(present);
         }
         for (TableExpectation expected : expectedTables().values()) {
@@ -100,9 +103,25 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                   AND table_name IN ('agent_command_delivery',
                                      'agent_outbox_event',
                                      'agent_consumer_inbox',
-                                     'agent_command_operation_audit')
+                                     'agent_command_operation_audit',
+                                     'agent_command_redrive_operation')
                 ORDER BY table_name
                 """, String.class);
+    }
+
+    private static boolean sameTables(List<String> present, List<String> expected) {
+        return present.size() == expected.size() && Set.copyOf(present).equals(Set.copyOf(expected));
+    }
+
+    static String normalizeGeneratedExpression(String expression) {
+        if (expression == null || expression.isBlank()) return "";
+        return expression.toLowerCase(Locale.ROOT)
+                .replace("`", "")
+                .replace("_utf8mb4", "")
+                .replaceAll("\\s+", "")
+                .replace("if((outcome_state='pending'),", "if(outcome_state='pending',")
+                .replace("if((settlement_statein('source_requeued','not_acquired')),",
+                        "if(settlement_statein('source_requeued','not_acquired'),");
     }
 
     private void validateTable(TableExpectation expected) {
@@ -121,7 +140,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
 
         List<ColumnDefinition> columns = jdbcTemplate.query("""
                 SELECT column_name, data_type, column_type, is_nullable,
-                       column_default, collation_name, extra
+                       column_default, collation_name, extra, generation_expression
                 FROM information_schema.columns
                 WHERE table_schema = DATABASE() AND table_name = ?
                 ORDER BY ordinal_position
@@ -129,7 +148,8 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                 rs.getString("column_name"), rs.getString("data_type"),
                 rs.getString("column_type"), "YES".equalsIgnoreCase(rs.getString("is_nullable")),
                 rs.getString("column_default"), rs.getString("collation_name"),
-                rs.getString("extra")), expected.name());
+                rs.getString("extra"), normalizeGeneratedExpression(
+                        rs.getString("generation_expression"))), expected.name());
         if (!expected.columns().equals(columns)) {
             throw new IllegalStateException("D01 transport table " + expected.name()
                     + " has incompatible columns: " + columns);
@@ -203,7 +223,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
         List<String> migration = splitSql(sql);
         if (migration.size() != TABLES.size() + 4) {
             throw new IllegalStateException(
-                    "Agent command transport DDL must contain four tables and two exact trigger replacements");
+                    "Agent command transport DDL must contain five tables and two exact trigger replacements");
         }
         List<String> statements = migration.subList(0, TABLES.size());
         for (int index = 0; index < statements.size(); index++) {
@@ -488,36 +508,90 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                                 "delivery_id", "source_message_id", "id"),
                         index("idx_command_operation_outcome", false, "tenant_id", "client_id",
                                 "operation_type", "outcome", "created_at", "id"))));
+        tables.put("agent_command_redrive_operation", new TableExpectation(
+                "agent_command_redrive_operation",
+                List.of(
+                        id(), varchar("operation_id", 100, false, null),
+                        bigint("delivery_id", false, null), varchar("task_id", 100, false, null),
+                        varchar("target_agent_id", 100, false, null),
+                        varchar("command_id", 100, false, null),
+                        varchar("source_event_id", 100, false, null),
+                        varchar("source_message_id", 100, false, null),
+                        integer("source_attempt", false, null), binary32("wire_hash"),
+                        varchar("requester_id", 100, false, null),
+                        varchar("reason", 1000, false, null),
+                        varchar("ticket_reference", 200, false, null),
+                        enumeration("outcome_state", false, "PENDING",
+                                "PENDING", "SUCCEEDED", "FAILED"),
+                        enumeration("settlement_state", false, "PENDING",
+                                "PENDING", "SOURCE_ACKED", "SOURCE_REQUEUED", "NOT_ACQUIRED", "UNKNOWN"),
+                        varchar("error_code", 200, true, null), bigint("requested_at", false, null),
+                        bigint("completed_at", true, null), bigint("version", false, "0"),
+                        generatedTinyint("disposition_guard", "if(outcome_state='pending',1,null)"),
+                        generatedTinyint("redrive_guard",
+                                "if(settlement_statein('source_requeued','not_acquired'),null,1)"),
+                        varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                        bigint("create_time", false, null), bigint("update_time", false, null)),
+                indexes(
+                        index("PRIMARY", true, "id"),
+                        index("uk_redrive_operation_id", true,
+                                "tenant_id", "client_id", "operation_id"),
+                        index("uk_redrive_operation_guard", true, "tenant_id", "client_id",
+                                "delivery_id", "source_message_id", "source_attempt", "redrive_guard"),
+                        index("idx_redrive_operation_disposition", false, "tenant_id", "client_id",
+                                "delivery_id", "source_message_id", "source_attempt", "disposition_guard"),
+                        index("idx_redrive_operation_recovery", false, "tenant_id", "client_id",
+                                "outcome_state", "requested_at", "id"),
+                        index("idx_redrive_operation_scope", false,
+                                "tenant_id", "client_id", "id"))));
         return Map.copyOf(tables);
     }
 
     private static ColumnDefinition id() {
-        return new ColumnDefinition("id", "bigint", "bigint", false, null, null, "auto_increment");
+        return new ColumnDefinition("id", "bigint", "bigint", false, null, null,
+                "auto_increment", "");
     }
 
     private static ColumnDefinition varchar(String name, int length, boolean nullable, String defaultValue) {
         return new ColumnDefinition(name, "varchar", "varchar(" + length + ")", nullable,
-                defaultValue, BINARY_COLLATION, "");
+                defaultValue, BINARY_COLLATION, "", "");
     }
 
     private static ColumnDefinition bigint(String name, boolean nullable, String defaultValue) {
-        return new ColumnDefinition(name, "bigint", "bigint", nullable, defaultValue, null, "");
+        return new ColumnDefinition(name, "bigint", "bigint", nullable, defaultValue, null, "", "");
     }
 
     private static ColumnDefinition integer(String name, boolean nullable, String defaultValue) {
-        return new ColumnDefinition(name, "int", "int", nullable, defaultValue, null, "");
+        return new ColumnDefinition(name, "int", "int", nullable, defaultValue, null, "", "");
+    }
+
+    private static ColumnDefinition enumeration(
+            String name, boolean nullable, String defaultValue, String... values) {
+        StringBuilder columnType = new StringBuilder("enum(");
+        for (int index = 0; index < values.length; index++) {
+            if (index > 0) columnType.append(',');
+            columnType.append('\'').append(values[index]).append('\'');
+        }
+        columnType.append(')');
+        return new ColumnDefinition(name, "enum", columnType.toString(), nullable,
+                defaultValue, BINARY_COLLATION, "", "");
+    }
+
+    private static ColumnDefinition generatedTinyint(String name, String expression) {
+        return new ColumnDefinition(name, "tinyint", "tinyint", true, null, null,
+                "STORED GENERATED", normalizeGeneratedExpression(expression));
     }
 
     private static ColumnDefinition mediumblob(String name) {
-        return new ColumnDefinition(name, "mediumblob", "mediumblob", false, null, null, "");
+        return new ColumnDefinition(name, "mediumblob", "mediumblob", false, null, null, "", "");
     }
 
     private static ColumnDefinition binary32(String name) {
-        return new ColumnDefinition(name, "binary", "binary(32)", false, null, null, "");
+        return new ColumnDefinition(name, "binary", "binary(32)", false, null, null, "", "");
     }
 
     private static ColumnDefinition binary32Nullable(String name) {
-        return new ColumnDefinition(name, "binary", "binary(32)", true, null, null, "");
+        return new ColumnDefinition(name, "binary", "binary(32)", true, null, null, "", "");
     }
 
     private static Map<String, IndexDefinition> indexes(IndexEntry... entries) {
@@ -533,8 +607,8 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
     }
 
     private static IllegalStateException partialSchema(List<String> present) {
-        return new IllegalStateException("Agent command transport schema is partial; expected exact 0/4, legacy 3/4, or 4/4 tables, got "
-                + present.size() + "/4: " + present);
+        return new IllegalStateException("Agent command transport schema is partial; expected exact 0/5, legacy 3/5, current 4/5, or 5/5 tables, got "
+                + present.size() + "/5: " + present);
     }
 
     static record TableExpectation(
@@ -546,7 +620,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
 
     static record ColumnDefinition(
             String name, String dataType, String columnType, boolean nullable,
-            String defaultValue, String collation, String extra) {
+            String defaultValue, String collation, String extra, String generationExpression) {
     }
 
     static record IndexDefinition(boolean unique, List<String> columns) {

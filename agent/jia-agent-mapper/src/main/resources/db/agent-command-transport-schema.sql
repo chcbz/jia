@@ -1,6 +1,6 @@
 -- D01 command transport schema for reliable Agent command delivery.
--- Target: MySQL 8.0.21. Standalone execution is repeatable for the exact four-table schema.
--- The conditional AgentCommandTransportSchemaInitializer accepts fresh 0/4, legacy 3/4, or exact 4/4.
+-- Target: MySQL 8.0.21. Standalone execution is repeatable for the exact five-table schema.
+-- The conditional AgentCommandTransportSchemaInitializer accepts fresh 0/5, legacy 3/5, current 4/5, or exact 5/5.
 -- Historical backfill and all business DML are intentionally excluded.
 
 CREATE TABLE IF NOT EXISTS agent_command_delivery (
@@ -157,6 +157,41 @@ CREATE TABLE IF NOT EXISTS agent_command_operation_audit (
 -- is repeatable by replacing only the two D09-owned exact trigger definitions;
 -- the runtime initializer instead validates existing definitions before it
 -- creates a missing trigger and never overwrites drift.
+
+CREATE TABLE IF NOT EXISTS agent_command_redrive_operation (
+    id                          BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    operation_id                VARCHAR(100) NOT NULL COMMENT 'Stable privileged broker-redrive operation id',
+    delivery_id                 BIGINT NOT NULL COMMENT 'Reserved durable delivery row id',
+    task_id                     VARCHAR(100) NOT NULL COMMENT 'Exact scoped task id',
+    target_agent_id             VARCHAR(100) NOT NULL COMMENT 'Exact target Agent id',
+    command_id                  VARCHAR(100) NOT NULL COMMENT 'Validated durable business command id',
+    source_event_id             VARCHAR(100) NOT NULL COMMENT 'Validated source outbox event id',
+    source_message_id           VARCHAR(100) NOT NULL COMMENT 'Byte-exact source transport message id',
+    source_attempt              INT NOT NULL COMMENT 'Validated source transport attempt',
+    wire_hash                   BINARY(32) NOT NULL COMMENT 'Validated source wire SHA-256 only; no payload bytes',
+    requester_id                VARCHAR(100) NOT NULL COMMENT 'Trusted authenticated requester subject',
+    reason                      VARCHAR(1000) NOT NULL COMMENT 'Bounded operational reason',
+    ticket_reference            VARCHAR(200) NOT NULL COMMENT 'Bounded approval/change reference',
+    outcome_state               ENUM('PENDING','SUCCEEDED','FAILED') NOT NULL DEFAULT 'PENDING' COMMENT 'Exact pending-to-terminal operation outcome',
+    settlement_state            ENUM('PENDING','SOURCE_ACKED','SOURCE_REQUEUED','NOT_ACQUIRED','UNKNOWN') NOT NULL DEFAULT 'PENDING' COMMENT 'Exact source DLQ settlement proof',
+    error_code                  VARCHAR(200) DEFAULT NULL COMMENT 'Sanitized bounded terminal error code',
+    requested_at                BIGINT NOT NULL COMMENT 'Reservation epoch millis',
+    completed_at                BIGINT DEFAULT NULL COMMENT 'Terminal persistence epoch millis',
+    version                     BIGINT NOT NULL DEFAULT 0 COMMENT 'One-way terminal CAS version',
+    disposition_guard           TINYINT GENERATED ALWAYS AS (IF(outcome_state='PENDING',1,NULL)) STORED COMMENT 'Non-null while Inbox disposition must fail closed',
+    redrive_guard               TINYINT GENERATED ALWAYS AS (IF(settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED'),NULL,1)) STORED COMMENT 'Non-null after active, successful, or ambiguous redrive',
+    tenant_id                   VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+    client_id                   VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+    create_time                 BIGINT NOT NULL COMMENT 'Immutable reservation creation epoch millis',
+    update_time                 BIGINT NOT NULL COMMENT 'Last state CAS epoch millis',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_redrive_operation_id (tenant_id, client_id, operation_id),
+    UNIQUE KEY uk_redrive_operation_guard (tenant_id, client_id, delivery_id, source_message_id, source_attempt, redrive_guard),
+    KEY idx_redrive_operation_disposition (tenant_id, client_id, delivery_id, source_message_id, source_attempt, disposition_guard),
+    KEY idx_redrive_operation_recovery (tenant_id, client_id, outcome_state, requested_at, id),
+    KEY idx_redrive_operation_scope (tenant_id, client_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable privileged broker-redrive reservation and recovery state';
+
 DROP TRIGGER IF EXISTS trg_command_operation_audit_no_update;
 DROP TRIGGER IF EXISTS trg_command_operation_audit_no_delete;
 

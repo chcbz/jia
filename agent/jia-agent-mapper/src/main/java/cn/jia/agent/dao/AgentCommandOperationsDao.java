@@ -5,6 +5,8 @@ import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
+import cn.jia.agent.entity.AgentCommandRedriveOperationState;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 
@@ -36,5 +38,17 @@ public interface AgentCommandOperationsDao {
             String tenantId, String clientId, long deliveryId, int previousAttempt);
     AgentConsumerInboxEntity lockInbox(
             String tenantId, String clientId, String consumerName, String messageId);
+    int insertPendingRedriveOperation(AgentCommandRedriveOperationEntity operation);
+    AgentCommandRedriveOperationEntity lockRedriveOperation(
+            String tenantId, String clientId, String operationId);
+    List<AgentCommandRedriveOperationEntity> lockActiveRedriveOperations(
+            String tenantId, String clientId, long deliveryId, String sourceMessageId,
+            int sourceAttempt);
+    List<AgentCommandRedriveOperationEntity> lockPendingRedriveOperations(
+            String tenantId, String clientId, long requestedBefore, long afterId, int limit);
+    int compareAndSetRedriveOperationTerminal(
+            String tenantId, String clientId, String operationId,
+            AgentCommandRedriveOperationState terminalState, String errorCode,
+            long completedAt, long expectedVersion);
     int insertAudit(AgentCommandOperationAuditEntity audit);
 }

@@ -18,10 +18,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AgentCommandTransportSchemaTest {
     private static final List<String> TABLES = List.of(
             "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox",
-            "agent_command_operation_audit");
+            "agent_command_operation_audit", "agent_command_redrive_operation");
 
     @Test
-    void canonicalAndIndependentMigrationDeclareByteExactSameFourTables() throws IOException {
+    void canonicalAndIndependentMigrationDeclareByteExactSameFiveTables() throws IOException {
         String schema = read("db/schema.sql");
         String migration = read("db/agent-command-transport-schema.sql");
 
@@ -29,7 +29,7 @@ class AgentCommandTransportSchemaTest {
             assertEquals(compact(tableDefinition(schema, table)),
                     compact(tableDefinition(migration, table)), table);
         }
-        assertEquals(4, occurrences(migration, "create table if not exists agent_"));
+        assertEquals(5, occurrences(migration, "create table if not exists agent_"));
         for (String trigger : List.of(
                 "trg_command_operation_audit_no_update",
                 "trg_command_operation_audit_no_delete")) {
@@ -164,6 +164,31 @@ class AgentCommandTransportSchemaTest {
         assertTrue(compact(triggerDefinition(schema,
                 "trg_command_operation_audit_no_delete")).contains(
                 "before delete on agent_command_operation_audit for each row signal sqlstate '45000'"));
+    }
+
+    @Test
+    void redriveOperationHasExactStatesGeneratedGuardsAndPayloadFreeScopedIndexes()
+            throws IOException {
+        String operation = compact(tableDefinition(
+                read("db/schema.sql"), "agent_command_redrive_operation"));
+        for (String required : List.of(
+                "outcome_state enum('pending','succeeded','failed') not null default 'pending'",
+                "settlement_state enum('pending','source_acked','source_requeued','not_acquired','unknown') not null default 'pending'",
+                "disposition_guard tinyint generated always as (if(outcome_state='pending',1,null)) stored",
+                "redrive_guard tinyint generated always as (if(settlement_state in ('source_requeued','not_acquired'),null,1)) stored",
+                "unique key uk_redrive_operation_id (tenant_id, client_id, operation_id)",
+                "unique key uk_redrive_operation_guard (tenant_id, client_id, delivery_id, source_message_id, source_attempt, redrive_guard)",
+                "key idx_redrive_operation_disposition (tenant_id, client_id, delivery_id, source_message_id, source_attempt, disposition_guard)",
+                "key idx_redrive_operation_recovery (tenant_id, client_id, outcome_state, requested_at, id)",
+                "key idx_redrive_operation_scope (tenant_id, client_id, id)",
+                "charset=utf8mb4 collate=utf8mb4_0900_bin")) {
+            assertTrue(operation.contains(required), required);
+        }
+        for (String forbidden : List.of(
+                "wire_payload", "command_payload", "raw_payload", "headers ",
+                "credential ", "password ", "token ", "foreign key")) {
+            assertFalse(operation.contains(forbidden), forbidden);
+        }
     }
 
     @Test

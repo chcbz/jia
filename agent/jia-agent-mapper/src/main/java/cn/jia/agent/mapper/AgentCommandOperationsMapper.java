@@ -5,12 +5,14 @@ import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -21,6 +23,16 @@ public interface AgentCommandOperationsMapper {
             + "AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId}) "
             + "AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY) "
             + "AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId}) ";
+    String REDRIVE_OPERATION_COLUMNS = "id,operation_id AS operationId,delivery_id AS deliveryId,"
+            + "task_id AS taskId,target_agent_id AS targetAgentId,command_id AS commandId,"
+            + "source_event_id AS sourceEventId,source_message_id AS sourceMessageId,"
+            + "source_attempt AS sourceAttempt,wire_hash AS wireHash,requester_id AS requesterId,"
+            + "reason,ticket_reference AS ticketReference,outcome_state AS outcomeState,"
+            + "settlement_state AS settlementState,error_code AS errorCode,requested_at AS requestedAt,"
+            + "completed_at AS completedAt,version,disposition_guard AS dispositionGuard,"
+            + "redrive_guard AS redriveGuard,tenant_id AS tenantId,client_id AS clientId,"
+            + "create_time AS createTime,update_time AS updateTime";
+
     String BROKER_REDRIVE_CANDIDATE = """
               AND d.status='PUBLISHED' AND d.next_retry_at IS NULL
               AND d.active_attempt>0 AND d.expires_at>#{now}
@@ -222,6 +234,77 @@ public interface AgentCommandOperationsMapper {
     AgentConsumerInboxEntity lockInbox(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("consumerName") String consumerName, @Param("messageId") String messageId);
+
+    @Insert("""
+            INSERT INTO agent_command_redrive_operation(
+                operation_id,delivery_id,task_id,target_agent_id,command_id,source_event_id,
+                source_message_id,source_attempt,wire_hash,requester_id,reason,ticket_reference,
+                outcome_state,settlement_state,error_code,requested_at,completed_at,version,
+                tenant_id,client_id,create_time,update_time)
+            VALUES(#{operationId},#{deliveryId},#{taskId},#{targetAgentId},#{commandId},#{sourceEventId},
+                #{sourceMessageId},#{sourceAttempt},#{wireHash},#{requesterId},#{reason},#{ticketReference},
+                'PENDING','PENDING',NULL,#{requestedAt},NULL,0,
+                #{tenantId},#{clientId},#{requestedAt},#{requestedAt})
+            """)
+    @Options(useGeneratedKeys = true, keyProperty = "id")
+    int insertPendingRedriveOperation(AgentCommandRedriveOperationEntity operation);
+
+    @Select("SELECT " + REDRIVE_OPERATION_COLUMNS
+            + " FROM agent_command_redrive_operation WHERE operation_id=#{operationId} AND "
+            + EXACT_SCOPE
+            + " AND CAST(operation_id AS BINARY)=CAST(#{operationId} AS BINARY) "
+            + "AND OCTET_LENGTH(operation_id)=OCTET_LENGTH(#{operationId}) LIMIT 1 FOR UPDATE")
+    AgentCommandRedriveOperationEntity lockRedriveOperation(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("operationId") String operationId);
+
+    @Select("SELECT " + REDRIVE_OPERATION_COLUMNS
+            + " FROM agent_command_redrive_operation WHERE delivery_id=#{deliveryId} "
+            + "AND source_message_id=#{sourceMessageId} AND source_attempt=#{sourceAttempt} AND "
+            + EXACT_SCOPE
+            + " AND CAST(source_message_id AS BINARY)=CAST(#{sourceMessageId} AS BINARY) "
+            + "AND OCTET_LENGTH(source_message_id)=OCTET_LENGTH(#{sourceMessageId}) "
+            + "AND disposition_guard=1 ORDER BY id ASC LIMIT 2 FOR UPDATE")
+    List<AgentCommandRedriveOperationEntity> lockActiveRedriveOperations(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId, @Param("sourceMessageId") String sourceMessageId,
+            @Param("sourceAttempt") int sourceAttempt);
+
+    @Select("SELECT " + REDRIVE_OPERATION_COLUMNS
+            + " FROM agent_command_redrive_operation WHERE " + EXACT_SCOPE
+            + " AND outcome_state='PENDING' AND settlement_state='PENDING' "
+            + "AND requested_at<=#{requestedBefore} AND id>#{afterId} "
+            + "ORDER BY id ASC LIMIT #{limit} FOR UPDATE")
+    List<AgentCommandRedriveOperationEntity> lockPendingRedriveOperations(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("requestedBefore") long requestedBefore, @Param("afterId") long afterId,
+            @Param("limit") int limit);
+
+    @Update("""
+            UPDATE agent_command_redrive_operation
+            SET outcome_state=#{outcomeState},settlement_state=#{settlementState},
+                error_code=#{errorCode},completed_at=#{completedAt},version=version+1,
+                update_time=#{completedAt}
+            WHERE operation_id=#{operationId} AND
+            """ + EXACT_SCOPE + """
+              AND CAST(operation_id AS BINARY)=CAST(#{operationId} AS BINARY)
+              AND OCTET_LENGTH(operation_id)=OCTET_LENGTH(#{operationId})
+              AND outcome_state='PENDING' AND settlement_state='PENDING'
+              AND version=#{expectedVersion} AND #{completedAt}>=requested_at
+              AND ((#{outcomeState}='SUCCEEDED' AND #{settlementState}='SOURCE_ACKED'
+                    AND #{errorCode} IS NULL)
+                OR (#{outcomeState}='FAILED'
+                    AND #{settlementState} IN ('SOURCE_REQUEUED','NOT_ACQUIRED','UNKNOWN')
+                    AND #{errorCode} IS NOT NULL AND CHAR_LENGTH(#{errorCode}) BETWEEN 1 AND 200))
+            """)
+    int compareAndSetRedriveOperationTerminal(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("operationId") String operationId,
+            @Param("outcomeState") String outcomeState,
+            @Param("settlementState") String settlementState,
+            @Param("errorCode") String errorCode,
+            @Param("completedAt") long completedAt,
+            @Param("expectedVersion") long expectedVersion);
 
     @Insert("""
             INSERT INTO agent_command_operation_audit(
