@@ -51,6 +51,7 @@ public final class AgentCommandDlqRedriverImpl implements AgentCommandDlqRedrive
         List<Long> held = new ArrayList<>();
         Long targetTag = null;
         boolean targetSettled = false;
+        AgentRabbitPublishResult result = failure("DLQ_MESSAGE_NOT_FOUND");
         try {
             connection = connectionFactory.createConnection();
             channel = connection.createChannel(false);
@@ -64,54 +65,61 @@ public final class AgentCommandDlqRedriverImpl implements AgentCommandDlqRedrive
                         || !expected.messageId().equals(response.getProps().getMessageId())) continue;
                 targetTag = tag;
                 AgentConfirmedPublishRequest brokerExpected = brokerExpected(expected, response);
-                if (brokerExpected == null) return failure("DLQ_MESSAGE_PROVENANCE_INVALID");
-                AgentRabbitPublishResult invalid = validateBrokerMessage(brokerExpected, response);
-                if (invalid != null) return invalid;
-                Map<String, Object> preservedHeaders;
-                try {
-                    preservedHeaders = AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(
-                            brokerExpected, response.getProps().getHeaders());
-                } catch (RuntimeException headerDrift) {
-                    return failure("DLQ_MESSAGE_PROVENANCE_INVALID");
+                if (brokerExpected == null) {
+                    result = failure("DLQ_MESSAGE_PROVENANCE_INVALID");
+                    break;
                 }
-                AgentRabbitPublishResult result = publisher.publishPreservingHeaders(
-                        brokerExpected, preservedHeaders, confirmTimeoutMillis);
+                AgentRabbitPublishResult invalid = validateBrokerMessage(brokerExpected, response);
+                if (invalid != null) {
+                    result = invalid;
+                    break;
+                }
+                Map<String, Object> brokerHeaders = response.getProps().getHeaders();
+                try {
+                    AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(
+                            brokerExpected, brokerHeaders);
+                } catch (RuntimeException headerDrift) {
+                    result = failure("DLQ_MESSAGE_PROVENANCE_INVALID");
+                    break;
+                }
+                result = publisher.publishPreservingHeaders(
+                        brokerExpected, brokerHeaders, confirmTimeoutMillis);
                 if (result != null && result.type() == AgentRabbitPublishResult.Type.ACK) {
                     channel.basicAck(tag, false);
                     targetSettled = true;
                 }
-                return result == null ? failure("DLQ_REDRIVE_PUBLISH_FAILED") : result;
+                if (result == null) result = failure("DLQ_REDRIVE_PUBLISH_FAILED");
+                break;
             }
-            return failure("DLQ_MESSAGE_NOT_FOUND");
         } catch (Exception ignored) {
-            return failure("DLQ_BROKER_FAILURE");
-        } finally {
-            settleHeld(channel, held, targetTag, targetSettled);
-            closeChannel(channel);
-            closeConnection(connection);
+            result = failure("DLQ_BROKER_FAILURE");
         }
+
+        boolean settlementProven = settleHeld(channel, held, targetTag, targetSettled);
+        boolean channelClosed = closeChannel(channel);
+        closeConnection(connection);
+        if (!settlementProven || !channelClosed) return failure("DLQ_BROKER_FAILURE");
+        return result;
     }
 
-    private static void settleHeld(
+    private static boolean settleHeld(
             Channel channel, List<Long> held, Long targetTag, boolean targetSettled) {
-        if (channel == null || held.isEmpty()) return;
-        boolean settlementIssued = targetSettled;
+        if (channel == null || held.isEmpty()) return true;
         for (Long tag : held) {
             if (targetSettled && Objects.equals(tag, targetTag)) continue;
             try {
                 channel.basicNack(tag, false, true);
-                settlementIssued = true;
-            } catch (IOException | RuntimeException ignored) {
-                break;
+            } catch (IOException | RuntimeException settlementFailure) {
+                return false;
             }
         }
-        if (!settlementIssued) return;
         try {
-            // basicAck/basicNack are one-way methods. A same-channel RPC barrier makes their
-            // settlement visible before Spring may defer a cached publisher-channel close.
+            // basicAck/basicNack are one-way methods. A same-channel RPC barrier proves that all
+            // prior settlements reached the broker before a cached channel can be released.
             channel.queueDeclarePassive(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE);
-        } catch (IOException | RuntimeException ignored) {
-            // Closing the channel remains the final fail-closed requeue boundary.
+            return true;
+        } catch (IOException | RuntimeException settlementFailure) {
+            return false;
         }
     }
 
@@ -176,12 +184,13 @@ public final class AgentCommandDlqRedriverImpl implements AgentCommandDlqRedrive
         }
     }
 
-    private static void closeChannel(Channel channel) {
-        if (channel == null) return;
+    private static boolean closeChannel(Channel channel) {
+        if (channel == null) return true;
         try {
             channel.close();
-        } catch (Exception ignored) {
-            // Operation result is already sanitized and authoritative.
+            return true;
+        } catch (Exception closeFailure) {
+            return false;
         }
     }
 }

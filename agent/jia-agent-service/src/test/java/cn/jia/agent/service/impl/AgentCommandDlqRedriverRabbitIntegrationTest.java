@@ -27,6 +27,9 @@ import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.math.BigDecimal;
@@ -84,8 +87,9 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     private static final Map<String, String> SOURCE_SPRING_TRANSPORT_HEADERS = Map.of(
             "spring_listener_return_correlation", "11111111-1111-1111-1111-111111111111",
             "spring_returned_message_correlation", "22222222-2222-2222-2222-222222222222");
+    private enum ChannelFault { SETTLEMENT_BARRIER, CLOSE }
     private static final String FIXTURE_CONTRACT = """
-            d09-rabbit-redrive-integration/v4
+            d09-rabbit-redrive-integration/v5
             runtime=/home/isp/apps/rabbitmq/sbin/rabbitmq-server
             broker=rabbitmq-3.6.11-local-isolated-second-node
             lifecycle=junit-direct-child-exact-pid-start-marker-bounded-term-force
@@ -98,15 +102,15 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             plugins=none-amqp-only
             topology=d04-canonical-explicit-provision
             source=basic-get-no-auto-ack
-            settle=ack-only-after-confirmed-not-returned-same-channel-passive-declare-barrier
-            failure=return-nack-exception-timeout-requeue
+            settle=ack-only-after-confirmed-not-returned-barrier-and-close-fail-closed
+            failure=return-nack-exception-timeout-requeue-settlement-uncertainty-broker-failure
             scan=bounded-non-target-requeue
-            transport=spring-mandatory-correlated-source-pair-validated-stripped-fresh-pair
+            transport=spring-mandatory-complete-distinct-uuid-source-pair-validated-stripped-fresh-pair
             host-guard=5672-25672-listeners-pid-8150-production-tree-before-after
             cleanup=exact-child-only-owned-temp-root
             """;
     private static final String FIXTURE_SHA256 =
-            "1491351afde5fe012fa17cf569747c956615766d8bbb1702f46b05983c4d9b76";
+            "c5d7d7781ecf61c22aec58aefcc2955e112b64947333859bcf484cfef078f8b1";
     private static final AgentRabbitTopologyManifest MANIFEST =
             AgentRabbitTopologyManifest.canonical();
     private static final AtomicInteger REQUEST_SEQUENCE = new AtomicInteger();
@@ -356,6 +360,56 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     }
 
     @Test
+    void missingCanonicalSpringTransportPairIsRejectedAndSourceRequeued() throws Exception {
+        AgentConfirmedPublishRequest expected = request("missing-transport-pair");
+        seedDlq(expected, Map.of());
+
+        AgentRabbitPublishResult result = redriver(confirmedPublisher)
+                .redrive(expected, 5_000L, 1);
+
+        assertEquals(AgentRabbitPublishResult.Type.EXCEPTION, result.type());
+        assertEquals("DLQ_MESSAGE_PROVENANCE_INVALID", result.errorCode());
+        assertAndRemoveOnlyDlqMessage(expected, Map.of());
+    }
+
+    @Test
+    void settlementBarrierFailureCannotReturnAck() throws Exception {
+        AgentConfirmedPublishRequest expected = request("settlement-barrier-failure");
+        seedDlq(expected);
+        AtomicInteger barrierCalls = new AtomicInteger();
+        AgentRabbitPublishResult confirmed = AgentRabbitPublishResult.ack();
+
+        AgentRabbitPublishResult result = redriver(
+                settlementFailingConnectionFactory(
+                        ChannelFault.SETTLEMENT_BARRIER, barrierCalls),
+                assertingOutcomePublisher(expected, 5_000L, confirmed, null))
+                .redrive(expected, 5_000L, 1);
+
+        assertEquals(AgentRabbitPublishResult.Type.EXCEPTION, result.type());
+        assertEquals("DLQ_BROKER_FAILURE", result.errorCode());
+        assertEquals(1, barrierCalls.get());
+        assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+    }
+
+    @Test
+    void channelCloseFailureCannotReturnAck() throws Exception {
+        AgentConfirmedPublishRequest expected = request("channel-close-failure");
+        seedDlq(expected);
+        AtomicInteger closeCalls = new AtomicInteger();
+
+        AgentRabbitPublishResult result = redriver(
+                settlementFailingConnectionFactory(ChannelFault.CLOSE, closeCalls),
+                assertingOutcomePublisher(
+                        expected, 5_000L, AgentRabbitPublishResult.ack(), null))
+                .redrive(expected, 5_000L, 1);
+
+        assertEquals(AgentRabbitPublishResult.Type.EXCEPTION, result.type());
+        assertEquals("DLQ_BROKER_FAILURE", result.errorCode());
+        assertEquals(1, closeCalls.get());
+        assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+    }
+
+    @Test
     void mandatoryReturnDoesNotAckAndRequeuesSource() throws Exception {
         AgentConfirmedPublishRequest expected = request("returned");
         seedDlq(expected);
@@ -471,7 +525,79 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
     private static AgentCommandDlqRedriverImpl redriver(
             AgentConfirmedRabbitPublisher publisher) {
-        return new AgentCommandDlqRedriverImpl(connectionFactory, publisher);
+        return redriver(connectionFactory, publisher);
+    }
+
+    private static AgentCommandDlqRedriverImpl redriver(
+            org.springframework.amqp.rabbit.connection.ConnectionFactory factory,
+            AgentConfirmedRabbitPublisher publisher) {
+        return new AgentCommandDlqRedriverImpl(factory, publisher);
+    }
+
+    private static org.springframework.amqp.rabbit.connection.ConnectionFactory
+            settlementFailingConnectionFactory(
+                    ChannelFault fault, AtomicInteger faultCalls) {
+        Class<org.springframework.amqp.rabbit.connection.ConnectionFactory> factoryType =
+                org.springframework.amqp.rabbit.connection.ConnectionFactory.class;
+        return factoryType.cast(Proxy.newProxyInstance(
+                factoryType.getClassLoader(), new Class<?>[]{factoryType},
+                (proxy, method, args) -> {
+                    Object value = invokeDelegate(connectionFactory, method, args);
+                    if (value instanceof org.springframework.amqp.rabbit.connection.Connection
+                            connection) {
+                        return settlementFailingConnection(connection, fault, faultCalls);
+                    }
+                    return value;
+                }));
+    }
+
+    private static org.springframework.amqp.rabbit.connection.Connection
+            settlementFailingConnection(
+                    org.springframework.amqp.rabbit.connection.Connection delegate,
+                    ChannelFault fault,
+                    AtomicInteger faultCalls) {
+        Class<org.springframework.amqp.rabbit.connection.Connection> connectionType =
+                org.springframework.amqp.rabbit.connection.Connection.class;
+        return connectionType.cast(Proxy.newProxyInstance(
+                connectionType.getClassLoader(), new Class<?>[]{connectionType},
+                (proxy, method, args) -> {
+                    Object value = invokeDelegate(delegate, method, args);
+                    if (value instanceof Channel channel) {
+                        return settlementFailingChannel(channel, fault, faultCalls);
+                    }
+                    return value;
+                }));
+    }
+
+    private static Channel settlementFailingChannel(
+            Channel delegate, ChannelFault fault, AtomicInteger faultCalls) {
+        return (Channel) Proxy.newProxyInstance(
+                Channel.class.getClassLoader(), new Class<?>[]{Channel.class},
+                (proxy, method, args) -> {
+                    if (fault == ChannelFault.SETTLEMENT_BARRIER
+                            && "queueDeclarePassive".equals(method.getName())
+                            && args != null && args.length == 1
+                            && AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE.equals(args[0])) {
+                        faultCalls.incrementAndGet();
+                        throw new IOException("synthetic D09 settlement barrier failure");
+                    }
+                    if (fault == ChannelFault.CLOSE && "close".equals(method.getName())
+                            && (args == null || args.length == 0)) {
+                        Object value = invokeDelegate(delegate, method, args);
+                        faultCalls.incrementAndGet();
+                        throw new IOException("synthetic D09 channel close failure");
+                    }
+                    return invokeDelegate(delegate, method, args);
+                });
+    }
+
+    private static Object invokeDelegate(Object delegate, Method method, Object[] args)
+            throws Throwable {
+        try {
+            return method.invoke(delegate, args);
+        } catch (InvocationTargetException failure) {
+            throw failure.getCause();
+        }
     }
 
     private static AgentConfirmedRabbitPublisher assertingOutcomePublisher(
@@ -494,8 +620,13 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
                     long confirmTimeoutMillis) {
                 assertRequestIdentity(expected, request);
                 assertEquals(expectedTimeout, confirmTimeoutMillis);
+                Map<String, Object> sanitized =
+                        AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(
+                                request, preservedHeaders);
                 assertCanonicalHeadersExactly(
-                        AgentCommandAmqpContract.headers(expected), preservedHeaders);
+                        AgentCommandAmqpContract.headers(expected), sanitized);
+                assertSourceSpringTransportHeaders(preservedHeaders,
+                        SOURCE_SPRING_TRANSPORT_HEADERS);
                 if (thrown != null) throw thrown;
                 return outcome;
             }
@@ -504,10 +635,16 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
     private static Map<String, Object> seedDlq(AgentConfirmedPublishRequest request)
             throws Exception {
+        return seedDlq(request, SOURCE_SPRING_TRANSPORT_HEADERS);
+    }
+
+    private static Map<String, Object> seedDlq(
+            AgentConfirmedPublishRequest request, Map<String, String> transportHeaders)
+            throws Exception {
         long before = queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE);
         Map<String, Object> headers = new LinkedHashMap<>(
                 AgentCommandAmqpContract.headers(request));
-        headers.putAll(SOURCE_SPRING_TRANSPORT_HEADERS);
+        headers.putAll(transportHeaders);
         AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
                 .contentType(AgentCommandAmqpContract.CONTENT_TYPE)
                 .contentEncoding(AgentCommandAmqpContract.CONTENT_ENCODING)
@@ -531,6 +668,12 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
     private static void assertAndRemoveOnlyDlqMessage(
             AgentConfirmedPublishRequest expected) throws Exception {
+        assertAndRemoveOnlyDlqMessage(expected, SOURCE_SPRING_TRANSPORT_HEADERS);
+    }
+
+    private static void assertAndRemoveOnlyDlqMessage(
+            AgentConfirmedPublishRequest expected,
+            Map<String, String> expectedTransportHeaders) throws Exception {
         assertEquals(1, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
         GetResponse source = take(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, true);
         assertNotNull(source);
@@ -538,14 +681,19 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         assertArrayEquals(expected.wirePayload(), source.getBody());
         assertCanonicalHeadersPreserved(
                 AgentCommandAmqpContract.headers(expected), source.getProps().getHeaders(),
-                SPRING_PUBLISH_TRANSPORT_HEADERS);
-        for (Map.Entry<String, String> transport : SOURCE_SPRING_TRANSPORT_HEADERS.entrySet()) {
-            assertEquals(transport.getValue(),
-                    headerText(source.getProps().getHeaders().get(transport.getKey())),
-                    transport.getKey());
-        }
+                expectedTransportHeaders.keySet());
+        assertSourceSpringTransportHeaders(
+                source.getProps().getHeaders(), expectedTransportHeaders);
         assertEquals(0, queueCount(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE));
         assertNull(take(AgentRabbitTopologyManifest.DISPATCH_QUEUE, true));
+    }
+
+    private static void assertSourceSpringTransportHeaders(
+            Map<String, Object> actual, Map<String, String> expected) {
+        for (Map.Entry<String, String> transport : expected.entrySet()) {
+            assertEquals(transport.getValue(),
+                    headerText(actual.get(transport.getKey())), transport.getKey());
+        }
     }
 
     private static void assertRequestIdentity(
@@ -623,6 +771,11 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
 
     private static void assertSpringTransportHeaderDriftRejected(
             AgentConfirmedPublishRequest request) {
+        Map<String, Object> missing = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentConfirmedRabbitPublisherImpl.validatePreservedHeaders(request, missing));
+
         Map<String, Object> partial = new LinkedHashMap<>(
                 AgentCommandAmqpContract.headers(request));
         partial.put("spring_listener_return_correlation",

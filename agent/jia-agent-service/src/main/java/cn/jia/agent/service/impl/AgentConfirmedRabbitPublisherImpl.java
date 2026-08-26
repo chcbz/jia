@@ -225,12 +225,12 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
 
     private static void validateSpringTransportHeaders(Map<String, Object> candidate) {
         long present = SPRING_TRANSPORT_HEADERS.stream().filter(candidate::containsKey).count();
-        if (present != 0 && present != SPRING_TRANSPORT_HEADERS.size()) {
-            throw new IllegalArgumentException("Partial Spring transport correlation is invalid");
+        if (present != SPRING_TRANSPORT_HEADERS.size()) {
+            throw new IllegalArgumentException(
+                    "Complete Spring transport correlation pair is required");
         }
         Set<String> values = new java.util.HashSet<>();
         for (String name : SPRING_TRANSPORT_HEADERS) {
-            if (!candidate.containsKey(name)) continue;
             String value = headerText(candidate.get(name));
             try {
                 if (value == null || !UUID.fromString(value).toString().equals(value)) {
@@ -242,7 +242,7 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
             }
             values.add(value);
         }
-        if (present != 0 && values.size() != SPRING_TRANSPORT_HEADERS.size()) {
+        if (values.size() != SPRING_TRANSPORT_HEADERS.size()) {
             throw new IllegalArgumentException("Spring transport correlations are not independent");
         }
     }
