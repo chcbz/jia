@@ -184,13 +184,26 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
 
         assertTrue(failure.getMessage().contains(
                 AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER), failure.getMessage());
-        String statement = jdbc.queryForObject("""
-                SELECT action_statement
+        List<String> trigger = jdbc.queryForObject("""
+                SELECT trigger_name,event_object_table,action_timing,
+                    event_manipulation,action_statement
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE() AND trigger_name=?
-                """, String.class, AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER);
-        assertTrue(AgentCommandTransportSchemaInitializer.normalizeSql(statement)
-                .contains("message_text = 'weakened'"), statement);
+                """, (rs, rowNum) -> List.of(
+                        rs.getString("trigger_name"),
+                        rs.getString("event_object_table"),
+                        rs.getString("action_timing"),
+                        rs.getString("event_manipulation"),
+                        rs.getString("action_statement")),
+                AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER);
+        assertEquals(List.of(
+                AgentCommandTransportSchemaInitializer.AUDIT_UPDATE_TRIGGER,
+                "agent_command_operation_audit",
+                "BEFORE",
+                "UPDATE"), trigger.subList(0, 4));
+        assertEquals(normalizeTriggerOperatorWhitespace(
+                        "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='weakened'"),
+                normalizeTriggerOperatorWhitespace(trigger.get(4)), trigger.get(4));
     }
 
     @Test
@@ -355,15 +368,26 @@ class AgentCommandTransportSchemaInitializerMySqlTest {
                   AND table_name IN ('agent_command_delivery','agent_outbox_event','agent_consumer_inbox','agent_command_operation_audit')
                 ORDER BY table_name,index_name,seq_in_index
                 """, String.class));
-        result.addAll(jdbc.queryForList("""
-                SELECT CONCAT_WS('|',trigger_name,event_object_table,action_timing,
-                    event_manipulation,action_statement)
+        result.addAll(jdbc.query("""
+                SELECT trigger_name,event_object_table,action_timing,
+                    event_manipulation,action_statement
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE()
                   AND event_object_table='agent_command_operation_audit'
                 ORDER BY trigger_name
-                """, String.class));
+                """, (rs, rowNum) -> String.join("|",
+                        rs.getString("trigger_name"),
+                        rs.getString("event_object_table"),
+                        rs.getString("action_timing"),
+                        rs.getString("event_manipulation"),
+                        AgentCommandTransportSchemaInitializer.normalizeSql(
+                                rs.getString("action_statement")))));
         return List.copyOf(result);
+    }
+
+    private String normalizeTriggerOperatorWhitespace(String statement) {
+        return AgentCommandTransportSchemaInitializer.normalizeSql(statement)
+                .replaceAll("\\s*=\\s*", "=");
     }
 
     private List<String> legacyRows(JdbcTemplate jdbc) {
