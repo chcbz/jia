@@ -32,6 +32,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentCommandDlqRedriverImplTest {
+    private static final String SPRING_LISTENER_RETURN_CORRELATION =
+            "spring_listener_return_correlation";
+    private static final String SPRING_RETURNED_MESSAGE_CORRELATION =
+            "spring_returned_message_correlation";
+    private static final String LISTENER_RETURN_CORRELATION_ID =
+            "11111111-1111-1111-1111-111111111111";
+    private static final String RETURNED_MESSAGE_CORRELATION_ID =
+            "22222222-2222-2222-2222-222222222222";
+
     @Test
     void invalidBoundsFailBeforeBrokerAccess() {
         ConnectionFactory factory = mock(ConnectionFactory.class);
@@ -92,6 +101,44 @@ class AgentCommandDlqRedriverImplTest {
         verify(publisher, never()).publishPreservingHeaders(any(), any(), anyLong());
         verify(channel).basicNack(9L, false, true);
         verify(channel, never()).basicAck(9L, false);
+    }
+
+    @Test
+    void springTransportHeaderDriftNeverPublishesAndRequeuesBrokerMessage() throws Exception {
+        ConnectionFactory factory = mock(ConnectionFactory.class);
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        AgentConfirmedRabbitPublisher publisher = mock(AgentConfirmedRabbitPublisher.class);
+        AgentConfirmedPublishRequest expected = request();
+        when(factory.createConnection()).thenReturn(connection);
+        when(connection.createChannel(false)).thenReturn(channel);
+
+        GetResponse valid = response(14L, expected.messageId(), expected, false);
+        Map<String, Object> missing = new LinkedHashMap<>(valid.getProps().getHeaders());
+        missing.remove(SPRING_LISTENER_RETURN_CORRELATION);
+        Map<String, Object> partial = new LinkedHashMap<>(valid.getProps().getHeaders());
+        partial.remove(SPRING_RETURNED_MESSAGE_CORRELATION);
+        Map<String, Object> duplicate = new LinkedHashMap<>(valid.getProps().getHeaders());
+        duplicate.put(SPRING_RETURNED_MESSAGE_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
+        Map<String, Object> invalid = new LinkedHashMap<>(valid.getProps().getHeaders());
+        invalid.put(SPRING_LISTENER_RETURN_CORRELATION, "not-a-uuid");
+        Map<String, Object> unknown = new LinkedHashMap<>(valid.getProps().getHeaders());
+        unknown.put("x-unknown-header", "rejected");
+        when(channel.basicGet(AgentRabbitTopologyManifest.DEAD_LETTER_QUEUE, false))
+                .thenReturn(withHeaders(valid, 14L, missing))
+                .thenReturn(withHeaders(valid, 15L, partial))
+                .thenReturn(withHeaders(valid, 16L, duplicate))
+                .thenReturn(withHeaders(valid, 17L, invalid))
+                .thenReturn(withHeaders(valid, 18L, unknown));
+
+        for (long deliveryTag = 14L; deliveryTag <= 18L; deliveryTag++) {
+            assertEquals("DLQ_MESSAGE_PROVENANCE_INVALID",
+                    new AgentCommandDlqRedriverImpl(factory, publisher)
+                            .redrive(expected, 5_000L, 1).errorCode());
+            verify(channel).basicNack(deliveryTag, false, true);
+            verify(channel, never()).basicAck(deliveryTag, false);
+        }
+        verify(publisher, never()).publishPreservingHeaders(any(), any(), anyLong());
     }
 
     @Test
@@ -215,6 +262,8 @@ class AgentCommandDlqRedriverImplTest {
             long tag, String messageId, AgentConfirmedPublishRequest expected,
             boolean corrupt, boolean withDeath) {
         Map<String, Object> headers = new LinkedHashMap<>(AgentCommandAmqpContract.headers(expected));
+        headers.put(SPRING_LISTENER_RETURN_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
+        headers.put(SPRING_RETURNED_MESSAGE_CORRELATION, RETURNED_MESSAGE_CORRELATION_ID);
         if (withDeath) {
             headers.put("x-death", List.of(Map.of(
                     "reason", "rejected", "queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE,
@@ -234,6 +283,19 @@ class AgentCommandDlqRedriverImplTest {
         return new GetResponse(new Envelope(tag, false,
                 AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
                 AgentRabbitTopologyManifest.DEAD_ROUTING_KEY), properties, body, 0);
+    }
+
+    private GetResponse withHeaders(GetResponse original, long deliveryTag,
+            Map<String, Object> headers) {
+        AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
+                .contentType(original.getProps().getContentType())
+                .contentEncoding(original.getProps().getContentEncoding())
+                .deliveryMode(original.getProps().getDeliveryMode())
+                .messageId(original.getProps().getMessageId())
+                .type(original.getProps().getType()).headers(headers).build();
+        Envelope envelope = new Envelope(deliveryTag, false,
+                original.getEnvelope().getExchange(), original.getEnvelope().getRoutingKey());
+        return new GetResponse(envelope, properties, original.getBody(), original.getMessageCount());
     }
 
     private AgentConfirmedPublishRequest request() {
