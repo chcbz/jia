@@ -44,6 +44,14 @@ import static org.mockito.Mockito.verify;
 
 class AgentConfirmedRabbitPublisherImplTest {
     private static final AgentRabbitTopologyManifest MANIFEST = AgentRabbitTopologyManifest.canonical();
+    private static final String SPRING_LISTENER_RETURN_CORRELATION =
+            "spring_listener_return_correlation";
+    private static final String SPRING_RETURNED_MESSAGE_CORRELATION =
+            "spring_returned_message_correlation";
+    private static final String LISTENER_RETURN_CORRELATION_ID =
+            "11111111-1111-1111-1111-111111111111";
+    private static final String RETURNED_MESSAGE_CORRELATION_ID =
+            "22222222-2222-2222-2222-222222222222";
 
     @Test
     void exactPropertiesHeadersTypesAndRawBytesAreFrozenForD05() throws Exception {
@@ -266,6 +274,8 @@ class AgentConfirmedRabbitPublisherImplTest {
         headers.put("x-first-death-queue", AgentRabbitTopologyManifest.DISPATCH_QUEUE);
         headers.put("x-first-death-exchange", AgentRabbitTopologyManifest.MAIN_EXCHANGE);
         headers.put("x-first-death-reason", "rejected");
+        headers.put(SPRING_LISTENER_RETURN_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
+        headers.put(SPRING_RETURNED_MESSAGE_CORRELATION, RETURNED_MESSAGE_CORRELATION_ID);
 
         AgentRabbitPublishResult result = publisher(template, ready(), allowedGate())
                 .publishPreservingHeaders(request, headers, 1000);
@@ -274,9 +284,43 @@ class AgentConfirmedRabbitPublisherImplTest {
         ArgumentCaptor<Message> sent = ArgumentCaptor.forClass(Message.class);
         verify(template).send(eq(request.destination()), eq(request.routingKey()),
                 sent.capture(), any(CorrelationData.class));
-        assertEquals(headers, sent.getValue().getMessageProperties().getHeaders());
-        assertTrue(sent.getValue().getMessageProperties().getHeaders().get("x-death")
-                instanceof List<?>);
+        Map<String, Object> outbound = sent.getValue().getMessageProperties().getHeaders();
+        Map<String, Object> expectedPreserved = new LinkedHashMap<>(headers);
+        expectedPreserved.remove(SPRING_LISTENER_RETURN_CORRELATION);
+        expectedPreserved.remove(SPRING_RETURNED_MESSAGE_CORRELATION);
+        assertEquals(expectedPreserved, outbound);
+        assertFalse(outbound.containsKey(SPRING_LISTENER_RETURN_CORRELATION));
+        assertFalse(outbound.containsKey(SPRING_RETURNED_MESSAGE_CORRELATION));
+        assertTrue(outbound.get("x-death") instanceof List<?>);
+
+        Map<String, Object> zero = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, zero, 1000).errorCode());
+
+        Map<String, Object> partial = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        partial.put(SPRING_LISTENER_RETURN_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, partial, 1000).errorCode());
+
+        Map<String, Object> duplicate = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        duplicate.put(SPRING_LISTENER_RETURN_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
+        duplicate.put(SPRING_RETURNED_MESSAGE_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, duplicate, 1000).errorCode());
+
+        Map<String, Object> invalid = new LinkedHashMap<>(
+                AgentCommandAmqpContract.headers(request));
+        invalid.put(SPRING_LISTENER_RETURN_CORRELATION, "not-a-uuid");
+        invalid.put(SPRING_RETURNED_MESSAGE_CORRELATION, RETURNED_MESSAGE_CORRELATION_ID);
+        assertEquals("PRESERVED_HEADERS_INVALID",
+                publisher(mock(RabbitTemplate.class), ready(), allowedGate())
+                        .publishPreservingHeaders(request, invalid, 1000).errorCode());
 
         Map<String, Object> unordered = new LinkedHashMap<>(
                 AgentCommandAmqpContract.headers(request));
@@ -291,6 +335,8 @@ class AgentConfirmedRabbitPublisherImplTest {
         unordered.put("x-first-death-queue", AgentRabbitTopologyManifest.RETRY_5S_QUEUE);
         unordered.put("x-first-death-exchange", AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE);
         unordered.put("x-first-death-reason", "expired");
+        unordered.put(SPRING_LISTENER_RETURN_CORRELATION, LISTENER_RETURN_CORRELATION_ID);
+        unordered.put(SPRING_RETURNED_MESSAGE_CORRELATION, RETURNED_MESSAGE_CORRELATION_ID);
         assertEquals("PRESERVED_HEADERS_INVALID",
                 publisher(mock(RabbitTemplate.class), ready(), allowedGate())
                         .publishPreservingHeaders(request, unordered, 1000).errorCode());
