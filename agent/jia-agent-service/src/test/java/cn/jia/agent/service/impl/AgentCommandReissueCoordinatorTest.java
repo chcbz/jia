@@ -1,6 +1,8 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.AgentCommandReissueSettings;
+import cn.jia.agent.entity.AgentCommandManualReissueResult;
+import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentCommandReissueScanResult;
 import cn.jia.agent.service.AgentCommandReissueService;
@@ -90,6 +92,12 @@ class AgentCommandReissueCoordinatorTest {
         private final List<AgentCommandReissueScanResult> results = new ArrayList<>(List.of(
                 new AgentCommandReissueScanResult(3, 1, 7),
                 new AgentCommandReissueScanResult(3, 1, 11)));
+
+        @Override
+        public AgentCommandManualReissueResult reissueManually(
+                AgentCommandOperationRequest request, long now) {
+            throw new AssertionError("manual reissue is not used by the coordinator");
+        }
 
         @Override
         public AgentCommandReissueScanResult reissueForReconnect(

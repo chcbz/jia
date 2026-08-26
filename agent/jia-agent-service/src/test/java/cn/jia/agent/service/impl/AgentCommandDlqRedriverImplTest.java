@@ -10,6 +10,7 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Envelope;
 import com.rabbitmq.client.GetResponse;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.rabbit.connection.Connection;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 
@@ -142,8 +143,10 @@ class AgentCommandDlqRedriverImplTest {
 
         new AgentCommandDlqRedriverImpl(factory, publisher).redrive(expected, 5_000L, 1);
 
-        var requestCaptor = org.mockito.ArgumentCaptor.forClass(AgentConfirmedPublishRequest.class);
-        var headersCaptor = org.mockito.ArgumentCaptor.<Map<String, Object>>forClass(Map.class);
+        var requestCaptor = ArgumentCaptor.forClass(AgentConfirmedPublishRequest.class);
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        ArgumentCaptor<Map<String, Object>> headersCaptor =
+                (ArgumentCaptor) ArgumentCaptor.forClass(Map.class);
         verify(publisher).publishPreservingHeaders(
                 requestCaptor.capture(), headersCaptor.capture(), eq(5_000L));
         assertEquals(64, requestCaptor.getValue().sourceSettlementRetry());
