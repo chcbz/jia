@@ -24,9 +24,17 @@ class AgentCommandOperationsMapperContractTest {
             Select select = method.getAnnotation(Select.class);
             assertNotNull(select, methodName);
             String sql = normalize(select.value());
-            assertTrue(sql.contains("cast(tenant_id as binary)=cast(#{tenantid} as binary)"));
-            assertTrue(sql.contains("octet_length(tenant_id)=octet_length(#{tenantid})"));
-            assertTrue(sql.contains("cast(client_id as binary)=cast(#{clientid} as binary)"));
+            if (methodName.equals("listDlq")) {
+                assertTrue(sql.contains("cast(d.tenant_id as binary)=cast(#{tenantid} as binary)"));
+                assertTrue(sql.contains("octet_length(d.tenant_id)=octet_length(#{tenantid})"));
+                assertTrue(sql.contains("cast(d.client_id as binary)=cast(#{clientid} as binary)"));
+                assertTrue(sql.contains("octet_length(d.client_id)=octet_length(#{clientid})"));
+            } else {
+                assertTrue(sql.contains("cast(tenant_id as binary)=cast(#{tenantid} as binary)"));
+                assertTrue(sql.contains("octet_length(tenant_id)=octet_length(#{tenantid})"));
+                assertTrue(sql.contains("cast(client_id as binary)=cast(#{clientid} as binary)"));
+                assertTrue(sql.contains("octet_length(client_id)=octet_length(#{clientid})"));
+            }
             assertTrue(sql.contains("order by ") && sql.contains(" limit #{limit}"), sql);
             for (String forbidden : new String[] {
                     "wire_payload as", "command_payload as", "lease_owner as",
