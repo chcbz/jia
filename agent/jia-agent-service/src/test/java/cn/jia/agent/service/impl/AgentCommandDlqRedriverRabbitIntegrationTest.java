@@ -85,7 +85,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             network=loopback-random-amqp-distribution-never-default
             identity=unique-short-node-cookie-user-password-vhost
             storage=fresh-temp-mnesia-log-config-plugins-pid
-            resources=io-thread-pool-4-async-4-schedulers-2-dirty-cpu-1-dirty-io-1
+            resources=io-thread-pool-4-async-4-schedulers-2
             readiness=90s-child-alive-amqp-listener-authenticated-probe-each-round
             diagnostics=pre-cleanup-console-main-sasl-crash-existence-size-tail-64k-redacted
             plugins=none-amqp-only
@@ -98,7 +98,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
             cleanup=exact-child-only-owned-temp-root
             """;
     private static final String FIXTURE_SHA256 =
-            "f82d2e362e8e483b9777497bed8dd394d0c619168bf251768319cefa7401deff";
+            "46dd3c466a1e04e9c89f54a5365040ec36081387d3348b7f027d765890800991";
     private static final AgentRabbitTopologyManifest MANIFEST =
             AgentRabbitTopologyManifest.canonical();
     private static final AtomicInteger REQUEST_SEQUENCE = new AtomicInteger();
@@ -117,6 +117,8 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
     @BeforeAll
     static void startExactOwnedBroker() throws Exception {
         assertEquals(FIXTURE_SHA256, sha256(FIXTURE_CONTRACT));
+        assertEquals("4", LocalRabbitBroker.IO_THREAD_POOL_SIZE);
+        assertEquals("+S 2:2", LocalRabbitBroker.LOW_RESOURCE_ERL_ARGS);
         assertEquals("96fd7d32aba468eacbcf96dfa5d441fd938f0d0cb5c6dafcdcae9e797fb4110e",
                 MANIFEST.sha256());
         assertInstalledRabbitVersion();
@@ -849,7 +851,7 @@ class AgentCommandDlqRedriverRabbitIntegrationTest {
         private static final int DIAGNOSTIC_TAIL_LIMIT_BYTES = 64 * 1024;
         private static final String IO_THREAD_POOL_SIZE = "4";
         private static final String LOW_RESOURCE_ERL_ARGS =
-                "+S 2:2 +SDcpu 1:1 +SDio 1";
+                "+S 2:2";
 
         private final String runId;
         private final String username;
