@@ -34,6 +34,12 @@ require '--tests "$SELECTOR"'
 require '--general-log=OFF'
 require 'EXPECTED_TESTS=5'
 require 'LATEST_EVIDENCE_FILE=${D09_LATEST_EVIDENCE_FILE:-/tmp/cyf-d09-latest-evidence}'
+require 'result_xml="$ROOT/agent/jia-agent-service/build/test-results/test/TEST-$SELECTOR.xml"'
+require 'report_path="$ROOT/agent/jia-agent-service/build/reports/tests/test/index.html"'
+require 'rm -f -- "$result_xml" "$report_path"'
+require 'fresh_result_xml='
+require 'current_tree='
+require 'current_fixture_digest='
 
 if grep -Fq -- 'gradle D09 --heavy' "$RUNNER"; then
   fail "orchestrator gradle options must precede task_id D09"
@@ -120,3 +126,35 @@ grep -Fq 'Unsafe isolated MySQL port: 33060' "$TEST_ROOT/unsafe-output.log" || \
   fail "unsafe-port rejection was not explicit"
 
 printf '%s\n' 'D09 isolated MySQL initialize-failure/host-port contract: PASS'
+
+# A denied gate must not allow pre-existing task outputs to become evidence.
+STALE_RESULT_XML="$PWD/agent/jia-agent-service/build/test-results/test/TEST-cn.jia.agent.service.impl.AgentCommandOperationsMySqlTest.xml"
+STALE_REPORT="$PWD/agent/jia-agent-service/build/reports/tests/test/index.html"
+mkdir -p -- "$(dirname -- "$STALE_RESULT_XML")" "$(dirname -- "$STALE_REPORT")"
+printf '%s\n' '<testsuite tests="5" failures="0" errors="0" skipped="0"/>' > "$STALE_RESULT_XML"
+printf '%s\n' 'STALE_D09_REPORT' > "$STALE_REPORT"
+GATE_DENIED_ORCHESTRATOR="$TEST_ROOT/gate-denied-orchestrator"
+cat > "$GATE_DENIED_ORCHESTRATOR" <<'FAKE_ORCHESTRATOR'
+#!/usr/bin/env bash
+printf '%s\n' 'D09_GATE_DENIED'
+exit 77
+FAKE_ORCHESTRATOR
+chmod 0755 "$GATE_DENIED_ORCHESTRATOR"
+
+set +e
+D09_CONTRACT_GATE_DENIED=1 CYF_ORCHESTRATOR="$GATE_DENIED_ORCHESTRATOR" \
+  D09_EVIDENCE_DIR="$TEST_ROOT/gate-denied-evidence" \
+  D09_LATEST_EVIDENCE_FILE="$TEST_ROOT/gate-denied-latest" \
+  "$RUNNER" > "$TEST_ROOT/gate-denied-output.log" 2>&1
+gate_denied_status=$?
+set -e
+[[ "$gate_denied_status" == 77 ]] || fail "gate denial status was $gate_denied_status, expected 77"
+[[ ! -e "$STALE_RESULT_XML" ]] || fail "stale result XML was left in the task output path"
+[[ ! -e "$STALE_REPORT" ]] || fail "stale report was left in the task output path"
+GATE_SUMMARY="$TEST_ROOT/gate-denied-evidence/result-summary.txt"
+grep -Fqx 'gradle_started=no' "$GATE_SUMMARY" || fail "gate denial did not record gradle_started=no"
+grep -Fqx 'gradle_exit=77' "$GATE_SUMMARY" || fail "gate denial exit was not recorded"
+grep -Fqx 'fresh_result_xml=no' "$GATE_SUMMARY" || fail "stale result XML was marked fresh"
+[[ ! -e "$TEST_ROOT/gate-denied-evidence/test-counts.txt" ]] || fail "stale counts were published after gate denial"
+
+printf '%s\n' 'D09 isolated MySQL stale-output/gate-denial freshness contract: PASS'

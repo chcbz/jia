@@ -49,8 +49,48 @@ HOST_3306_BEFORE=$(ss -ltnp '( sport = :3306 )' 2>/dev/null || true)
 HOST_33060_BEFORE=$(ss -ltnp '( sport = :33060 )' 2>/dev/null || true)
 MYSQL_PID=''
 CLEANED=0
+TREE_SHA=$(git -C "$ROOT" rev-parse 'HEAD^{tree}')
+FIXTURE_DIGEST=$(
+  sha256sum \
+    "$ROOT/agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentCommandOperationsMySqlTest.java" \
+    "$ROOT/agent/jia-agent-service/src/test/scripts/run-d09-isolated-mysql.sh" \
+    "$ROOT/agent/jia-agent-service/src/test/scripts/test-run-d09-isolated-mysql-contract.sh" \
+    "$ROOT/agent/jia-agent-mapper/src/main/java/cn/jia/agent/mapper/AgentCommandOperationsMapper.java" \
+    "$ROOT/agent/jia-agent-mapper/src/main/resources/db/agent-command-transport-schema.sql" \
+    "$ROOT/agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentCommandOperationsServiceImpl.java" \
+    "$ROOT/agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentCommandBrokerRedrivePolicy.java" \
+    | sha256sum | awk '{print $1}'
+)
+result_xml="$ROOT/agent/jia-agent-service/build/test-results/test/TEST-$SELECTOR.xml"
+report_path="$ROOT/agent/jia-agent-service/build/reports/tests/test/index.html"
 
 mkdir -p "$EVIDENCE_DIR" "$DATA" "$RUN" "$TMP" "$LOG_DIR"
+# The result paths are defined before the gate/Gradle boundary. Removing only these
+# task outputs makes a denied gate or skipped test unable to publish stale evidence.
+rm -f -- "$result_xml" "$report_path"
+
+if [[ ${D09_CONTRACT_GATE_DENIED:-0} == 1 ]]; then
+  trap 'rm -rf -- "$BASE"' EXIT
+  set +e
+  "$ORCHESTRATOR" gate-denied > "$GRADLE_LOG" 2>&1
+  gradle_status=$?
+  set -e
+  {
+    echo "current_tree=$TREE_SHA"
+    echo "tree_sha=$TREE_SHA"
+    echo "current_fixture_digest=$FIXTURE_DIGEST"
+    echo "fixture_digest=$FIXTURE_DIGEST"
+    echo "gradle_started=no"
+    echo "gradle_exit=$gradle_status"
+    echo "fresh_result_xml=no"
+    echo "fresh_report=no"
+    echo "result_xml=$result_xml"
+    echo "report_path=$report_path"
+  } > "$EVIDENCE_DIR/result-summary.txt"
+  cat "$EVIDENCE_DIR/result-summary.txt"
+  echo "evidence_dir=$EVIDENCE_DIR"
+  exit "$gradle_status"
+fi
 printf '%s\n' "$OWNER_TOKEN" > "$BASE/.cyf-d09-owner"
 printf '%s\n' "$EVIDENCE_DIR" > "$LATEST_EVIDENCE_FILE"
 
@@ -229,19 +269,6 @@ $MYSQL --no-defaults -uroot -S "$SOCKET" -e \
   echo "pid_identity_verified=yes"
 } > "$EVIDENCE_DIR/mysql-instance.txt"
 
-TREE_SHA=$(git -C "$ROOT" rev-parse 'HEAD^{tree}')
-FIXTURE_DIGEST=$(
-  sha256sum \
-    "$ROOT/agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/AgentCommandOperationsMySqlTest.java" \
-    "$ROOT/agent/jia-agent-service/src/test/scripts/run-d09-isolated-mysql.sh" \
-    "$ROOT/agent/jia-agent-service/src/test/scripts/test-run-d09-isolated-mysql-contract.sh" \
-    "$ROOT/agent/jia-agent-mapper/src/main/java/cn/jia/agent/mapper/AgentCommandOperationsMapper.java" \
-    "$ROOT/agent/jia-agent-mapper/src/main/resources/db/agent-command-transport-schema.sql" \
-    "$ROOT/agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentCommandOperationsServiceImpl.java" \
-    "$ROOT/agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentCommandBrokerRedrivePolicy.java" \
-    | sha256sum | awk '{print $1}'
-)
-
 cd "$ROOT"
 set +e
 env \
@@ -264,11 +291,13 @@ env \
 gradle_status=$?
 set -e
 
-result_xml="$ROOT/agent/jia-agent-service/build/test-results/test/TEST-$SELECTOR.xml"
-report_path="$ROOT/agent/jia-agent-service/build/reports/tests/test/index.html"
+gradle_started=yes
 counts_status=1
+fresh_result_xml=no
+fresh_report=no
 if [[ -f "$result_xml" ]]; then
-  cp "$result_xml" "$EVIDENCE_DIR/"
+  fresh_result_xml=yes
+  cp -- "$result_xml" "$EVIDENCE_DIR/"
   python3 - "$result_xml" "$EXPECTED_TESTS" > "$EVIDENCE_DIR/test-counts.txt" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
@@ -281,13 +310,22 @@ raise SystemExit(0 if counts == {'tests': expected, 'failures': 0, 'errors': 0, 
 PY
   counts_status=$?
 fi
+if [[ -f "$report_path" ]]; then
+  fresh_report=yes
+  cp -- "$report_path" "$EVIDENCE_DIR/"
+fi
 if [[ $gradle_status == 0 && $counts_status != 0 ]]; then gradle_status=85; fi
 {
+  echo "current_tree=$TREE_SHA"
+  echo "tree_sha=$TREE_SHA"
+  echo "current_fixture_digest=$FIXTURE_DIGEST"
+  echo "fixture_digest=$FIXTURE_DIGEST"
+  echo "gradle_started=$gradle_started"
   echo "gradle_exit=$gradle_status"
   echo "gradle_selector=$SELECTOR"
   echo "orchestrator=$ORCHESTRATOR"
-  echo "tree_sha=$TREE_SHA"
-  echo "fixture_digest=$FIXTURE_DIGEST"
+  echo "fresh_result_xml=$fresh_result_xml"
+  echo "fresh_report=$fresh_report"
   echo "report_path=$report_path"
   echo "result_xml=$result_xml"
   [[ -f "$EVIDENCE_DIR/test-counts.txt" ]] && cat "$EVIDENCE_DIR/test-counts.txt"
