@@ -251,9 +251,11 @@ env \
   D09_MYSQL_EXPECTED_PORT="$PORT" \
   D09_MYSQL_EXPECTED_DATADIR="$DATA" \
   D09_MYSQL_EXPECTED_VERSION="$EXPECTED_VERSION" \
-  python3 "$ORCHESTRATOR" gradle D09 --heavy --cwd "$ROOT" \
+  python3 "$ORCHESTRATOR" gradle \
+    --heavy --cwd "$ROOT" \
     --tree-sha "$TREE_SHA" --selector "$SELECTOR" \
-    --fixture-digest "$FIXTURE_DIGEST" --artifact "$EVIDENCE_DIR" -- \
+    --fixture-digest "$FIXTURE_DIGEST" --artifact "$EVIDENCE_DIR" \
+    D09 -- \
     ./gradlew --no-daemon --max-workers=1 \
     -Dorg.gradle.jvmargs='-Xmx384m -XX:MaxMetaspaceSize=192m -Dfile.encoding=UTF-8' \
     -PrepoUsername=unused -PrepoPassword=unused \

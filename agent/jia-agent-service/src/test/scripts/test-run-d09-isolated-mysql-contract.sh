@@ -25,12 +25,28 @@ require 'refused_signal_unowned_pid'
 require 'refused_remove_unowned_base'
 require 'host_3306_listener_unchanged'
 require 'host_33060_listener_unchanged'
-require 'python3 "$ORCHESTRATOR" gradle D09 --heavy'
+require 'python3 "$ORCHESTRATOR" gradle \'
+require '    --heavy --cwd "$ROOT" \'
+require '    --fixture-digest "$FIXTURE_DIGEST" --artifact "$EVIDENCE_DIR" \'
+require '    D09 -- \'
 require ':agent:jia-agent-service:cleanTest :agent:jia-agent-service:test'
 require '--tests "$SELECTOR"'
 require '--general-log=OFF'
 require 'EXPECTED_TESTS=5'
 require 'LATEST_EVIDENCE_FILE=${D09_LATEST_EVIDENCE_FILE:-/tmp/cyf-d09-latest-evidence}'
+
+if grep -Fq -- 'gradle D09 --heavy' "$RUNNER"; then
+  fail "orchestrator gradle options must precede task_id D09"
+fi
+orchestrator_line=$(grep -nFm1 -- 'python3 "$ORCHESTRATOR" gradle \' "$RUNNER" | cut -d: -f1)
+heavy_line=$(grep -nFm1 -- '    --heavy --cwd "$ROOT" \' "$RUNNER" | cut -d: -f1)
+artifact_line=$(grep -nFm1 -- '    --fixture-digest "$FIXTURE_DIGEST" --artifact "$EVIDENCE_DIR" \' "$RUNNER" | cut -d: -f1)
+task_id_line=$(grep -nFm1 -- '    D09 -- \' "$RUNNER" | cut -d: -f1)
+gradlew_line=$(grep -nFm1 -- '    ./gradlew --no-daemon --max-workers=1 \' "$RUNNER" | cut -d: -f1)
+if [[ -z "$orchestrator_line" || -z "$heavy_line" || -z "$artifact_line" || -z "$task_id_line" || -z "$gradlew_line" ]] ||
+  ! ((orchestrator_line < heavy_line && heavy_line < artifact_line && artifact_line < task_id_line && task_id_line < gradlew_line)); then
+  fail "orchestrator CLI order must be: gradle, options, D09, --, Gradle command"
+fi
 
 if grep -Fq -- '--rerun-tasks' "$RUNNER"; then
   fail "runner must not use --rerun-tasks"
