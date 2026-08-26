@@ -12,11 +12,11 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
     @Select("""
             SELECT *
             FROM chat_message
-            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
+            WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND conversation_id = #{conversationId}
-              AND (CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY) OR tenant_id = '0')
-              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId}) OR tenant_id = '0')
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(conversation_id AS BINARY) = CAST(#{conversationId} AS BINARY)

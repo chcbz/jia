@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatMessageScopedQueryTest {
@@ -100,6 +101,8 @@ class ChatMessageScopedQueryTest {
                 String.class, String.class, String.class, int.class);
         String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
 
+        assertFalse(sql.contains("tenant_id = '0'"), sql);
+        assertFalse(sql.contains("or tenant_id = '0'"), sql);
         assertBefore(sql, "tenant_id = #{tenantid}",
                 "cast(tenant_id as binary) = cast(#{tenantid} as binary)");
         assertBefore(sql, "client_id = #{clientid}",
@@ -129,6 +132,7 @@ class ChatMessageScopedQueryTest {
         insert(207, TENANT + (char) 0, CLIENT, CONVERSATION, 1_006, "nul-tenant-leak");
         insert(208, TENANT, CLIENT + (char) 0, CONVERSATION, 1_007, "nul-client-leak");
         insert(209, TENANT, CLIENT, CONVERSATION + (char) 0, 1_008, "nul-conversation-leak");
+        insert(210, "0", CLIENT, CONVERSATION, 1_009, "tenant-zero-public-leak");
 
         List<ChatMessageEntity> mapperRows = mapper.findExactByConversationScope(
                 TENANT, CLIENT, CONVERSATION, 20);

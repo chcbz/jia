@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventPayload;
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
@@ -14,6 +16,8 @@ import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import cn.jia.agent.service.AgentWorkItemResultCommitService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.core.util.StringUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -32,24 +36,34 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
     private final AgentWorkItemLeaseService leaseService;
     private final AgentTaskArtifactService artifactService;
     private final AgentTaskWorkItemDao workItemDao;
+    private final AgentTaskMutationTransaction mutationTransaction;
+    private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
 
     @Inject
     public AgentWorkItemResultCommitServiceImpl(
-            AgentWorkItemLeaseService leaseService,
-            AgentTaskArtifactService artifactService,
-            AgentTaskWorkItemDao workItemDao) {
-        this(leaseService, artifactService, workItemDao, System::currentTimeMillis);
+            AgentWorkItemLeaseService leaseService, AgentTaskArtifactService artifactService,
+            AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter) {
+        this(leaseService, artifactService, workItemDao, mutationTransaction, eventWriter,
+                System::currentTimeMillis);
     }
 
     AgentWorkItemResultCommitServiceImpl(
-            AgentWorkItemLeaseService leaseService,
-            AgentTaskArtifactService artifactService,
-            AgentTaskWorkItemDao workItemDao,
-            LongSupplier clock) {
+            AgentWorkItemLeaseService leaseService, AgentTaskArtifactService artifactService,
+            AgentTaskWorkItemDao workItemDao, LongSupplier clock) {
+        this(leaseService, artifactService, workItemDao, directTransaction(), command -> null, clock);
+    }
+
+    AgentWorkItemResultCommitServiceImpl(
+            AgentWorkItemLeaseService leaseService, AgentTaskArtifactService artifactService,
+            AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter, LongSupplier clock) {
         this.leaseService = Objects.requireNonNull(leaseService, "leaseService");
         this.artifactService = Objects.requireNonNull(artifactService, "artifactService");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
+        this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
+        this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -68,6 +82,13 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
             throw invalid("Result artifact must reference the committed work item");
         }
 
+        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
+                taskRoot -> commitResultLocked(tenantId, clientId, taskId, actorAgentId, command));
+    }
+
+    private AgentWorkItemResultCommitViewDTO commitResultLocked(
+            String tenantId, String clientId, String taskId, String actorAgentId,
+            AgentWorkItemResultCommitDTO command) {
         AgentWorkItemLeaseCommandDTO leaseCommand = new AgentWorkItemLeaseCommandDTO();
         leaseCommand.setAgentId(actorAgentId);
         leaseCommand.setLeaseToken(command.getLeaseToken());
@@ -77,7 +98,7 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
         requireExactLeaseSnapshot(taskId, actorAgentId, command, lease);
 
         AgentTaskArtifactViewDTO published = artifactService.publish(
-                tenantId, clientId, taskId, actorAgentId, artifact);
+                tenantId, clientId, taskId, actorAgentId, command.getArtifact());
 
         AgentTaskWorkItemEntity current = workItemDao.findByTaskAndWorkItemId(
                 tenantId, clientId, taskId, command.getWorkItemId());
@@ -103,6 +124,9 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
             throw invalidPersisted("Result CAS affected an unexpected row count");
         }
 
+        appendSubmittedEvent(tenantId, clientId, taskId, actorAgentId, current,
+                lease.getVersion(), lease.getVersion() + 1, submittedAt, published.getArtifactId());
+
         AgentWorkItemResultCommitViewDTO result = new AgentWorkItemResultCommitViewDTO();
         result.setTaskId(taskId);
         result.setWorkItemId(command.getWorkItemId());
@@ -111,6 +135,22 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
         result.setSubmittedAt(submittedAt);
         result.setArtifact(published);
         return result;
+    }
+
+    private void appendSubmittedEvent(String tenantId, String clientId, String taskId,
+            String actorAgentId, AgentTaskWorkItemEntity current, long expectedVersion,
+            long resultVersion, long occurredAt, String artifactId) {
+        TaskEventPayload.Builder payload = TaskEventPayload.builder()
+                .put(TaskEventPayload.Key.WORK_ITEM_ID, current.getWorkItemId())
+                .put(TaskEventPayload.Key.ARTIFACT_ID, artifactId)
+                .put(TaskEventPayload.Key.FROM_STATUS, current.getStatus())
+                .put(TaskEventPayload.Key.TO_STATUS, "submitted")
+                .put(TaskEventPayload.Key.EXPECTED_VERSION, expectedVersion)
+                .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion);
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+                TaskEventType.WORK_ITEM_SUBMITTED, TaskEventType.ActorType.AGENT, actorAgentId,
+                TaskEventType.Aggregate.WORK_ITEM, current.getWorkItemId(), payload, occurredAt,
+                resultVersion));
     }
 
     private void requireCommand(String actorAgentId, AgentWorkItemResultCommitDTO command) {
@@ -185,6 +225,26 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
             throw invalidPersisted("Result commit clock returned a negative timestamp");
         }
         return value;
+    }
+
+    private static AgentTaskMutationTransaction directTransaction() {
+        return new AgentTaskMutationTransaction() {
+            @Override
+            public <T> T executeWithLockedTaskRoot(String tenantId, String clientId, String taskId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(null);
+            }
+            @Override
+            public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
+                    String workItemId, LockedTaskMutation<T> mutation) {
+                return mutation.apply(null);
+            }
+            @Override
+            public <T> T executeAfterTaskRootReservation(String tenantId, String clientId,
+                    String taskId, TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+                throw new UnsupportedOperationException();
+            }
+        };
     }
 
     private AgentTaskCollaborationException invalid(String message) {

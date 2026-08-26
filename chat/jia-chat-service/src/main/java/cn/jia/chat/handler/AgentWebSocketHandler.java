@@ -2,16 +2,23 @@ package cn.jia.chat.handler;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCapabilityDTO;
+import cn.jia.agent.entity.AgentCommandAck;
+import cn.jia.agent.entity.AgentCommandAckRejectedException;
+import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
+import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.service.AgentCommandAckService;
+import cn.jia.agent.service.AgentCommandReconnectSignal;
+import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -33,9 +40,17 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.core.StreamReadFeature;
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -59,10 +74,15 @@ import java.util.function.Supplier;
  */
 @Slf4j
 @Component
-public class AgentWebSocketHandler extends TextWebSocketHandler implements AgentEventPublisher {
+public class AgentWebSocketHandler extends TextWebSocketHandler
+        implements AgentEventPublisher, AgentRawCommandDispatcher {
     private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
+    private static final ObjectMapper STRICT_RAW_COMMAND_JSON = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
     private static final Set<String> TASK_SCOPED_OUTBOUND_TYPES = Set.of(
             AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
             AgentProtocolConstants.TYPE_COMMAND_ACK,
@@ -79,9 +99,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     private final ChatConversationEventBroker chatConversationEventBroker;
     private final HallAnnouncementService hallAnnouncementService;
     private final AgentProtocolMessageNormalizer protocolMessageNormalizer;
+    private final Supplier<AgentCommandReconnectSignal> reconnectSignalSupplier;
+    private final Supplier<AgentCommandAckService> commandAckServiceSupplier;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> successfullyRegisteredAgentIds = new ConcurrentHashMap<>();
     private final Map<String, String> sessionRuntimeInstanceIds = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
@@ -98,17 +121,53 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 new AgentProtocolMessageNormalizer());
     }
 
-    @Autowired
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
                                  ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
                                  HallAnnouncementService hallAnnouncementService,
                                  AgentProtocolMessageNormalizer protocolMessageNormalizer) {
+        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker,
+                hallAnnouncementService, protocolMessageNormalizer,
+                (AgentCommandReconnectSignal) null, (AgentCommandAckService) null);
+    }
+
+    @Autowired
+    public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+                                 ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
+                                 HallAnnouncementService hallAnnouncementService,
+                                 AgentProtocolMessageNormalizer protocolMessageNormalizer,
+                                 ObjectProvider<AgentCommandReconnectSignal> reconnectSignalProvider,
+                                 ObjectProvider<AgentCommandAckService> commandAckServiceProvider) {
+        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker,
+                hallAnnouncementService, protocolMessageNormalizer,
+                reconnectSignalProvider == null ? () -> null : reconnectSignalProvider::getIfAvailable,
+                commandAckServiceProvider == null ? () -> null : commandAckServiceProvider::getIfAvailable);
+    }
+
+    AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+                                 ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
+                                 HallAnnouncementService hallAnnouncementService,
+                                 AgentProtocolMessageNormalizer protocolMessageNormalizer,
+                                 AgentCommandReconnectSignal reconnectSignal,
+                                 AgentCommandAckService commandAckService) {
+        this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker,
+                hallAnnouncementService, protocolMessageNormalizer,
+                () -> reconnectSignal, () -> commandAckService);
+    }
+
+    private AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+                                 ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
+                                 HallAnnouncementService hallAnnouncementService,
+                                 AgentProtocolMessageNormalizer protocolMessageNormalizer,
+                                 Supplier<AgentCommandReconnectSignal> reconnectSignalSupplier,
+                                 Supplier<AgentCommandAckService> commandAckServiceSupplier) {
         this.chatClient = chatClient;
         this.agentServiceProvider = agentServiceProvider;
         this.chatMessageDao = chatMessageDao;
         this.chatConversationEventBroker = chatConversationEventBroker;
         this.hallAnnouncementService = hallAnnouncementService;
         this.protocolMessageNormalizer = protocolMessageNormalizer;
+        this.reconnectSignalSupplier = reconnectSignalSupplier;
+        this.commandAckServiceSupplier = commandAckServiceSupplier;
     }
 
     @Override
@@ -170,11 +229,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                     sendDeferredProtocolHandler(session, payload, normalized);
                 }
             }
+            case AgentProtocolConstants.TYPE_COMMAND_ACK -> handleCommandAck(session, payload);
             case AgentProtocolConstants.TYPE_WORK_PROGRESS,
                  AgentProtocolConstants.TYPE_WORK_HEARTBEAT,
                  AgentProtocolConstants.TYPE_HELP_REQUEST,
-                 AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
-                 AgentProtocolConstants.TYPE_COMMAND_ACK -> sendDeferredProtocolHandler(session, payload, normalized);
+                 AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH -> sendDeferredProtocolHandler(session, payload, normalized);
             case AgentProtocolConstants.TYPE_COMMAND_DISPATCH -> sendProtocolError(session, payload,
                     "MESSAGE_DIRECTION_INVALID", "command.dispatch is server-to-Agent only");
             case AgentProtocolConstants.TYPE_TASK_EVENT -> sendProtocolError(session, payload,
@@ -192,6 +251,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sessions.remove(session.getId());
         sessionAgentIds.remove(session.getId());
+        successfullyRegisteredAgentIds.remove(session.getId());
         sessionRuntimeInstanceIds.remove(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
@@ -338,17 +398,109 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 request.setAbilities(asStringList(payload.get("abilities")));
             }
             AgentRegisterResultDTO result = withSessionContext(session, () -> agentService.register(request));
+            if (result == null || !agentId.equals(result.getAgentId())) {
+                throw new IllegalStateException("Agent registration returned a mismatched canonical identity");
+            }
             rememberSessionAgent(session.getId(), result.getAgentId());
+            rememberSuccessfulRegistration(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
             putIfPresent(event, "runtimeInstanceId", sessionRuntimeInstanceId(session));
             event.put("status", result.getStatus());
             event.put("token", result.getToken());
             sendEvent(session, "agent_registered", event);
+            signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
             sendError(session, payload, errorCode(e), e.getMessage());
         }
+    }
+
+    private void signalRegisteredReconnect(WebSocketSession session, String agentId) {
+        AgentCommandReconnectSignal reconnectSignal = reconnectSignalSupplier.get();
+        if (reconnectSignal == null) return;
+        String tenantId = sessionJiacn(session);
+        String clientId = sessionClientId(session);
+        if (!validExactDispatchId(tenantId, 50) || !validExactDispatchId(clientId, 50)
+                || !validExactDispatchId(agentId, 100)
+                || !successfullyRegisteredAgentIds(session.getId()).contains(agentId)) {
+            return;
+        }
+        try {
+            reconnectSignal.signalReconnect(new AgentCommandReconnectScope(
+                    tenantId, clientId, agentId, agentId, "AGENT_RECONNECT"));
+        } catch (RuntimeException failure) {
+            log.warn("Agent reconnect signal was declined after successful registration");
+        }
+    }
+
+    private void handleCommandAck(WebSocketSession session, Map<String, Object> payload) {
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        if (agentId == null) return;
+        if (!successfullyRegisteredAgentIds(session.getId()).contains(agentId)) {
+            sendProtocolError(session, payload, "AGENT_NOT_REGISTERED",
+                    "Agent must successfully register before command ACK");
+            return;
+        }
+        AgentCommandAckService commandAckService = commandAckServiceSupplier.get();
+        if (commandAckService == null) {
+            sendProtocolError(session, payload, "PROTOCOL_HANDLER_NOT_AVAILABLE",
+                    "command.ack durable handling is unavailable");
+            return;
+        }
+        String tenantId = sessionJiacn(session);
+        String clientId = sessionClientId(session);
+        if (!validExactDispatchId(tenantId, 50) || !validExactDispatchId(clientId, 50)
+                || declaredScopeConflict(payload, "tenantId", tenantId)
+                || declaredScopeConflict(payload, "clientId", clientId)
+                || declaredScopeConflict(payload, "targetAgentId", agentId)
+                || declaredScopeConflict(payload, "receiverAgentId", agentId)
+                || hasHiddenAckPayload(payload)) {
+            sendCommandAckRejected(session, payload);
+            return;
+        }
+        Long ackAt = exactLong(payload.get("ackAt"));
+        try {
+            commandAckService.acknowledge(new AgentCommandAck(
+                    tenantId, clientId, agentId,
+                    strictString(payload.get("messageId")),
+                    strictString(payload.get("correlationId")),
+                    strictString(payload.get("commandId")),
+                    strictString(payload.get("taskId")),
+                    strictString(payload.get("workItemId")),
+                    strictString(payload.get("ackStatus")),
+                    ackAt == null ? 0L : ackAt), System.currentTimeMillis());
+        } catch (AgentCommandAckRejectedException rejected) {
+            sendCommandAckRejected(session, payload);
+        } catch (RuntimeException unavailable) {
+            sendProtocolError(session, payload, "COMMAND_ACK_UNAVAILABLE",
+                    "command ACK could not be persisted");
+        }
+    }
+
+    private void sendCommandAckRejected(WebSocketSession session, Map<String, Object> payload) {
+        Map<String, Object> safeTrace = new HashMap<>();
+        putIfPresent(safeTrace, "messageId", payload.get("messageId"));
+        sendProtocolError(session, safeTrace, AgentCommandAckRejectedException.CODE,
+                "command ACK was rejected");
+    }
+
+    private boolean declaredScopeConflict(Map<String, Object> payload, String field, String expected) {
+        return payload.containsKey(field)
+                && !expected.equals(strictString(payload.get(field)));
+    }
+
+    private boolean hasHiddenAckPayload(Map<String, Object> payload) {
+        Object nested = payload.get("payload");
+        return nested instanceof Map<?, ?> map && !map.isEmpty();
+    }
+
+    private Long exactLong(Object value) {
+        if (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long) {
+            return ((Number) value).longValue();
+        }
+        return null;
     }
 
     private void sendCapabilityIndex(WebSocketSession session, Map<String, Object> payload) {
@@ -839,6 +991,176 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
                 .forEach(session -> sendEvent(session, type, payload));
     }
 
+    @Override
+    public AgentRawCommandDispatchResult dispatchExactRawCommand(
+            String tenantId,
+            String clientId,
+            String taskId,
+            String targetAgentId,
+            byte[] rawWireBytes) {
+        if (!validExactDispatchId(tenantId, 50)
+                || !validExactDispatchId(clientId, 50)
+                || !validExactDispatchId(taskId, 100)
+                || !validExactDispatchId(targetAgentId, 100)
+                || !validRawCommandEnvelope(
+                        tenantId, clientId, taskId, targetAgentId, rawWireBytes)) {
+            log.warn("Refusing invalid exact-scope raw Agent command dispatch");
+            return AgentRawCommandDispatchResult.rejected();
+        }
+
+        byte[] raw = java.util.Arrays.copyOf(rawWireBytes, rawWireBytes.length);
+        int matchingSessions = 0;
+        int sentSessions = 0;
+        for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(targetAgentId)
+                    || !registeredAgentIds(sessionId).contains(targetAgentId)) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(sessionId);
+            if (session == null || !session.isOpen()
+                    || !targetAgentId.equals(sessionAgentId(session))
+                    || !tenantId.equals(sessionJiacn(session))
+                    || !clientId.equals(sessionClientId(session))) {
+                continue;
+            }
+            matchingSessions++;
+            try {
+                synchronized (session) {
+                    session.sendMessage(new TextMessage(raw));
+                }
+                sentSessions++;
+            } catch (Exception sendFailure) {
+                log.warn("Exact-scope raw Agent command WebSocket send failed");
+            }
+        }
+        if (matchingSessions == 0) {
+            return AgentRawCommandDispatchResult.offline();
+        }
+        if (sentSessions == 0) {
+            return AgentRawCommandDispatchResult.sendFailed(matchingSessions);
+        }
+        return AgentRawCommandDispatchResult.sent(matchingSessions, sentSessions);
+    }
+
+    private boolean validRawCommandEnvelope(
+            String tenantId,
+            String clientId,
+            String taskId,
+            String targetAgentId,
+            byte[] rawWireBytes) {
+        if (rawWireBytes == null || rawWireBytes.length == 0
+                || rawWireBytes.length > cn.jia.agent.common.AgentCommandAmqpContract.MAX_WIRE_BYTES
+                || !validUtf8(rawWireBytes)) {
+            return false;
+        }
+        try {
+            JsonNode root = STRICT_RAW_COMMAND_JSON.readTree(rawWireBytes);
+            if (root == null || !root.isObject()) return false;
+            String commandType = textJson(root, "commandType");
+            if (!integralJsonEquals(root, "schemaVersion", AgentProtocolConstants.VERSION_1)
+                    || !AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(textJson(root, "messageType"))
+                    || !tenantId.equals(textJson(root, "tenantId"))
+                    || !clientId.equals(textJson(root, "clientId"))
+                    || !taskId.equals(textJson(root, "taskId"))
+                    || !targetAgentId.equals(textJson(root, "targetAgentId"))
+                    || !validExactDispatchId(textJson(root, "messageId"), 100)
+                    || !validExactDispatchId(textJson(root, "commandId"), 100)
+                    || !validExactDispatchId(commandType, 64)
+                    || !positiveIntegralJson(root, "attempt")
+                    || !positiveIntegralJson(root, "expiresAt")
+                    || root.has("eventId") || root.has("deliveryId")
+                    || (root.has("agentId")
+                            && !targetAgentId.equals(textJson(root, "agentId")))
+                    || !validTaskInviteCompatibility(
+                            root, commandType, taskId, targetAgentId)) {
+                return false;
+            }
+            JsonNode payload = root.get("payload");
+            return nestedJsonMatches(payload, "tenantId", tenantId)
+                    && nestedJsonMatches(payload, "clientId", clientId)
+                    && nestedJsonMatches(payload, "taskId", taskId)
+                    && nestedJsonMatches(payload, "targetAgentId", targetAgentId)
+                    && nestedJsonMatches(payload, "agentId", targetAgentId);
+        } catch (Exception malformed) {
+            return false;
+        }
+    }
+
+    private boolean validTaskInviteCompatibility(
+            JsonNode root, String commandType, String taskId, String targetAgentId) {
+        boolean hallTaskInvite = AgentProtocolConstants.COMMAND_TASK_INVITE.equals(commandType)
+                && root.has("intentId");
+        boolean compatibilityDeclared = root.has("type") || root.has("actionType")
+                || root.has("content") || root.has("metadata");
+        if (!hallTaskInvite) {
+            return !root.has("type") && !root.has("actionType")
+                    && !root.has("content") && !root.has("metadata");
+        }
+        if (!compatibilityDeclared) return true;
+        JsonNode payload = root.get("payload");
+        JsonNode metadata = root.get("metadata");
+        return AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE.equals(textJson(root, "type"))
+                && targetAgentId.equals(textJson(root, "agentId"))
+                && payload != null && payload.isObject()
+                && java.util.Objects.equals(
+                        textJson(root, "actionType"), textJson(payload, "actionType"))
+                && java.util.Objects.equals(
+                        textJson(root, "content"), textJson(payload, "instruction"))
+                && metadata != null && metadata.isObject() && metadata.size() == 6
+                && taskId.equals(textJson(metadata, "taskId"))
+                && java.util.Objects.equals(metadata.get("reason"), payload.get("reason"))
+                && java.util.Objects.equals(
+                        metadata.get("autonomyLevel"), payload.get("autonomyLevel"))
+                && java.util.Objects.equals(
+                        metadata.get("requiresApproval"), payload.get("requiresApproval"))
+                && java.util.Objects.equals(metadata.get("context"), payload.get("context"))
+                && metadata.path("autonomy").isBoolean()
+                && metadata.path("autonomy").booleanValue();
+    }
+
+    private boolean validUtf8(byte[] rawWireBytes) {
+        try {
+            StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(rawWireBytes));
+            return true;
+        } catch (CharacterCodingException malformed) {
+            return false;
+        }
+    }
+
+    private boolean nestedJsonMatches(JsonNode payload, String field, String expected) {
+        if (payload == null || !payload.isObject() || !payload.has(field)) {
+            return true;
+        }
+        return expected.equals(textJson(payload, field));
+    }
+
+    private String textJson(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        return value != null && value.isTextual() ? value.textValue() : null;
+    }
+
+    private boolean integralJsonEquals(JsonNode root, String field, long expected) {
+        JsonNode value = root.get(field);
+        return value != null && value.isIntegralNumber() && value.canConvertToLong()
+                && value.longValue() == expected;
+    }
+
+    private boolean positiveIntegralJson(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        return value != null && value.isIntegralNumber() && value.canConvertToLong()
+                && value.longValue() > 0;
+    }
+
+    private boolean validExactDispatchId(String value, int maxLength) {
+        return value != null && !value.isEmpty() && value.length() <= maxLength
+                && value.equals(value.strip())
+                && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
     public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
         return sendDirectMessageToAgent(agentId, payload, null);
     }
@@ -873,12 +1195,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
             return false;
         }
 
+        boolean commandDispatch = AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
+        Map<String, Set<String>> candidateSessionAgentIds = commandDispatch
+                ? successfullyRegisteredAgentIds : sessionAgentIds;
         boolean delivered = false;
-        for (Map.Entry<String, Set<String>> entry : sessionAgentIds.entrySet()) {
-            if (!entry.getValue().contains(agentId)) {
+        for (Map.Entry<String, Set<String>> entry : candidateSessionAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(agentId)
+                    || (commandDispatch && !registeredAgentIds(sessionId).contains(agentId))) {
                 continue;
             }
-            WebSocketSession session = sessions.get(entry.getKey());
+            WebSocketSession session = sessions.get(sessionId);
             if (session == null || !session.isOpen() || !agentId.equals(sessionAgentId(session))) {
                 continue;
             }
@@ -1019,6 +1346,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
         return value == null || value.isBlank();
     }
 
+    @Override
+    public boolean isExactAgentConnected(String tenantId, String clientId, String targetAgentId) {
+        if (isBlank(tenantId) || isBlank(clientId) || isBlank(targetAgentId)) return false;
+        for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(targetAgentId)
+                    || !registeredAgentIds(sessionId).contains(targetAgentId)) {
+                continue;
+            }
+            WebSocketSession session = sessions.get(sessionId);
+            if (session != null && session.isOpen()
+                    && targetAgentId.equals(sessionAgentId(session))
+                    && tenantId.equals(sessionJiacn(session))
+                    && clientId.equals(sessionClientId(session))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean isAgentConnected(String tenantId, String clientId, String agentId) {
         if (isBlank(tenantId) || isBlank(clientId) || isBlank(agentId)) {
             return false;
@@ -1094,6 +1441,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler implements Agent
 
     private Set<String> registeredAgentIds(String sessionId) {
         return Optional.ofNullable(sessionAgentIds.get(sessionId)).orElseGet(Set::of);
+    }
+
+    private void rememberSuccessfulRegistration(String sessionId, String agentId) {
+        if (sessionId == null || sessionId.isBlank() || agentId == null || agentId.isBlank()) return;
+        successfullyRegisteredAgentIds.computeIfAbsent(
+                sessionId, key -> ConcurrentHashMap.newKeySet()).add(agentId);
+    }
+
+    private Set<String> successfullyRegisteredAgentIds(String sessionId) {
+        return Optional.ofNullable(successfullyRegisteredAgentIds.get(sessionId)).orElseGet(Set::of);
     }
 
     private void putIfPresent(Map<String, Object> target, String key, Object value) {

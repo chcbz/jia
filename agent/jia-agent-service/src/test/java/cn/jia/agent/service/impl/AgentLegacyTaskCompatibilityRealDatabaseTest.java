@@ -1,11 +1,15 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.entity.AgentTaskEventEntity;
+import cn.jia.agent.entity.AgentTaskEventWriteResult;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
@@ -13,6 +17,8 @@ import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
@@ -29,6 +35,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.util.List;
@@ -45,6 +52,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 
 /** H2/MyBatis/Spring transaction coverage for the B08 legacy compatibility adapter. */
 class AgentLegacyTaskCompatibilityRealDatabaseTest {
@@ -65,6 +77,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     private JdbcTemplate jdbc;
     private PlatformTransactionManager transactionManager;
     private AgentLegacyTaskCompatibilityService service;
+    private AgentTaskEventWriter eventWriter;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -175,19 +188,120 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                     throw new AgentTaskCollaborationException(
                             Reason.FORBIDDEN, "persisted identity not registered");
                 });
+        eventWriter = mock(AgentTaskEventWriter.class);
+        org.mockito.Mockito.lenient().when(eventWriter.append(any()))
+                .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
+        AgentTaskMutationTransaction mutationTransaction =
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
         AgentTaskAggregationService aggregationService = transactionalInterfaceProxy(
                 new AgentTaskAggregationServiceImpl(
-                        taskMetaDao, identityService,
+                        taskMetaDao, identityService, mutationTransaction, eventWriter,
                         new AgentTaskAggregationCalculator(), () -> 1_100L),
                 AgentTaskAggregationService.class);
         service = transactionalClassProxy(new AgentLegacyTaskCompatibilityService(
                 taskMetaDao, memberDao, workItemDao, aggregationService,
-                identityService, () -> 1_000L));
+                identityService, mutationTransaction, eventWriter, () -> 1_000L));
     }
 
     @AfterEach
     void tearDown() {
         jdbc.execute("DROP ALL OBJECTS");
+    }
+
+    @Test
+    void reportEventsAreMemberThenWorkItemThenChangedAggregateAndDuplicateIsZeroEvent() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+        reset(eventWriter);
+
+        service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null);
+
+        org.mockito.ArgumentCaptor<AgentTaskEventWriteCommand> events =
+                org.mockito.ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter, org.mockito.Mockito.times(3)).append(events.capture());
+        assertEquals(List.of(
+                        TaskEventType.MEMBER_WORKING,
+                        TaskEventType.WORK_ITEM_STARTED,
+                        TaskEventType.TASK_STARTED),
+                events.getAllValues().stream()
+                        .map(AgentTaskEventWriteCommand::getEventType).toList());
+
+        reset(eventWriter);
+        AgentLegacyTaskCompatibilityService.ReportOutcome duplicate =
+                service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null);
+        assertFalse(duplicate.changed());
+        verify(eventWriter, org.mockito.Mockito.never()).append(any());
+    }
+
+    @Test
+    void assignmentEventFailureRollsBackReservedRootMembersAndWorkItems() {
+        doAnswer(invocation -> {
+            AgentTaskEventWriteCommand command = invocation.getArgument(0);
+            if (TaskEventType.TASK_ASSIGNED.equals(command.getEventType())) {
+                throw new IllegalStateException("forced assignment event failure");
+            }
+            return null;
+        }).when(eventWriter).append(any());
+
+        assertThrows(IllegalStateException.class, () ->
+                service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false));
+        assertEquals(0, count("agent_task_meta"));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(0, count("agent_task_work_item"));
+    }
+
+    @Test
+    void reportEventFailureRollsBackMemberAndWorkItemMutations() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+        reset(eventWriter);
+        doAnswer(invocation -> {
+            AgentTaskEventWriteCommand command = invocation.getArgument(0);
+            if (TaskEventType.WORK_ITEM_STARTED.equals(command.getEventType())) {
+                throw new IllegalStateException("forced report event failure");
+            }
+            return null;
+        }).when(eventWriter).append(any());
+
+        assertThrows(IllegalStateException.class, () ->
+                service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null));
+        assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
+        assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
+        assertEquals("ready", value("SELECT status FROM agent_task_work_item"));
+        assertEquals(0L, number("SELECT version FROM agent_task_member"));
+        assertEquals(0L, number("SELECT version FROM agent_task_work_item"));
+    }
+
+    @Test
+    void outerRollbackRemovesAssignmentRootMembersAndWorkItems() {
+        TransactionTemplate outer = new TransactionTemplate(transactionManager);
+        outer.executeWithoutResult(status -> {
+            service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+            status.setRollbackOnly();
+        });
+        assertEquals(0, count("agent_task_meta"));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(0, count("agent_task_work_item"));
+    }
+
+    @Test
+    void outerRollbackRemovesReportMemberWorkItemAndAggregateMutations() {
+        insertTask(TASK, TENANT, "assigned", 0L);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+        reset(eventWriter);
+
+        TransactionTemplate outer = new TransactionTemplate(transactionManager);
+        outer.executeWithoutResult(status -> {
+            service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null);
+            status.setRollbackOnly();
+        });
+
+        assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
+        assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
+        assertEquals("ready", value("SELECT status FROM agent_task_work_item"));
+        assertEquals(0L, number("SELECT task_version FROM agent_task_meta"));
+        assertEquals(0L, number("SELECT version FROM agent_task_member"));
+        assertEquals(0L, number("SELECT version FROM agent_task_work_item"));
     }
 
     @Test
@@ -821,4 +935,12 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         }
         throw new NoSuchFieldException(name);
     }
+    private static AgentTaskEventWriteResult persisted(AgentTaskEventWriteCommand command) {
+        AgentTaskEventEntity event = new AgentTaskEventEntity();
+        event.setEventId(command.getEventId());
+        event.setEventType(command.getEventType());
+        event.setOccurredAt(command.getOccurredAt());
+        return new AgentTaskEventWriteResult().setEvent(event);
+    }
+
 }

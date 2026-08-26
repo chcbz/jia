@@ -1,11 +1,13 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskArtifactDao;
+import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskRequestDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.impl.AgentTaskArtifactDaoImpl;
+import cn.jia.agent.dao.impl.AgentTaskEventDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskRequestDaoImpl;
@@ -22,11 +24,16 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.mapper.AgentTaskArtifactMapper;
+import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskRequestMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskRequestService;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import cn.jia.agent.service.AgentWorkItemResultCommitService;
@@ -43,6 +50,7 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.interceptor.NameMatchTransactionAttributeSource;
 import org.springframework.transaction.interceptor.RuleBasedTransactionAttribute;
 import org.springframework.transaction.interceptor.RollbackRuleAttribute;
@@ -64,8 +72,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -82,10 +92,17 @@ class AgentTaskCollaborationServiceRealTransactionTest {
 
     private DataSource dataSource;
     private JdbcTemplate jdbc;
+    private PlatformTransactionManager transactionManager;
+    private AgentTaskMetaDao taskDao;
+    private AgentTaskMemberDao memberDao;
+    private AgentTaskRequestDao requestDao;
+    private AgentTaskArtifactDao artifactDao;
     private AgentTaskRequestService requestService;
     private AgentTaskArtifactService artifactService;
     private AgentTaskWorkItemDao workItemDao;
     private AgentWorkItemLeaseService leaseService;
+    private AgentTaskMutationTransaction mutationTransaction;
+    private AgentTaskEventWriter eventWriter;
     private AgentWorkItemResultCommitService resultService;
 
     @BeforeEach
@@ -97,33 +114,43 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         source.setPassword("");
         dataSource = source;
         jdbc = new JdbcTemplate(dataSource);
+        transactionManager = new DataSourceTransactionManager(dataSource);
         createTables();
 
         SqlSessionFactory factory = sqlSessionFactory(dataSource);
         SqlSessionTemplate template = new SqlSessionTemplate(factory);
-        AgentTaskMetaDao taskDao = new AgentTaskMetaDaoImpl();
+        taskDao = new AgentTaskMetaDaoImpl();
         setField(taskDao, "baseMapper", template.getMapper(AgentTaskMetaMapper.class));
-        AgentTaskMemberDao memberDao = new AgentTaskMemberDaoImpl(
-                template.getMapper(AgentTaskMemberMapper.class));
+        memberDao = new AgentTaskMemberDaoImpl(template.getMapper(AgentTaskMemberMapper.class));
         workItemDao = new AgentTaskWorkItemDaoImpl(
                 template.getMapper(AgentTaskWorkItemMapper.class));
-        AgentTaskRequestDao requestDao = new AgentTaskRequestDaoImpl(
-                template.getMapper(AgentTaskRequestMapper.class));
-        AgentTaskArtifactDao artifactDao = new AgentTaskArtifactDaoImpl(
-                template.getMapper(AgentTaskArtifactMapper.class));
+        requestDao = new AgentTaskRequestDaoImpl(template.getMapper(AgentTaskRequestMapper.class));
+        artifactDao = new AgentTaskArtifactDaoImpl(template.getMapper(AgentTaskArtifactMapper.class));
+        AgentTaskEventDaoImpl eventDao = new AgentTaskEventDaoImpl();
+        setField(eventDao, "baseMapper", template.getMapper(AgentTaskEventMapper.class));
+        eventWriter = new AgentTaskEventWriterImpl(eventDao, transactionManager,
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), transactionManager));
+        mutationTransaction = new AgentTaskMutationTransactionImpl(taskDao, transactionManager);
 
+        AtomicLong collaborationClock = new AtomicLong(LEASE_NOW);
         AgentTaskCollaborationServiceImpl raw = new AgentTaskCollaborationServiceImpl(
-                taskDao, memberDao, workItemDao, requestDao, artifactDao);
+                taskDao, memberDao, workItemDao, requestDao, artifactDao,
+                mutationTransaction, eventWriter, collaborationClock::incrementAndGet);
         Object proxy = transactionalProxy(raw, dataSource,
                 AgentTaskRequestService.class, AgentTaskArtifactService.class);
         requestService = (AgentTaskRequestService) proxy;
         artifactService = (AgentTaskArtifactService) proxy;
         AgentWorkItemLeaseServiceImpl rawLease = new AgentWorkItemLeaseServiceImpl(
-                memberDao, workItemDao, () -> LEASE_NOW, () -> "lease_generated", 1_000L);
+                memberDao, workItemDao,
+                mutationTransaction,
+                command -> new cn.jia.agent.entity.AgentTaskEventWriteResult(),
+                () -> LEASE_NOW, () -> "lease_generated", 1_000L);
         leaseService = (AgentWorkItemLeaseService) transactionalProxy(
                 rawLease, dataSource, AgentWorkItemLeaseService.class);
         AgentWorkItemResultCommitServiceImpl rawResult = new AgentWorkItemResultCommitServiceImpl(
-                leaseService, artifactService, workItemDao, () -> LEASE_NOW);
+                leaseService, artifactService, workItemDao, mutationTransaction, eventWriter,
+                () -> LEASE_NOW);
         resultService = (AgentWorkItemResultCommitService) transactionalProxy(
                 rawResult, dataSource, AgentWorkItemResultCommitService.class);
 
@@ -323,6 +350,8 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         assertEquals(null, row.get("LEASE_TOKEN"));
         assertEquals(null, row.get("LEASE_UNTIL"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_task_artifact WHERE artifact_id = 'artifact-result'"));
+        assertEquals(List.of("ARTIFACT_PUBLISHED", "WORK_ITEM_SUBMITTED"), jdbc.queryForList(
+                "SELECT event_type FROM agent_task_event ORDER BY event_version", String.class));
     }
 
     @Test
@@ -340,11 +369,11 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     }
 
     @Test
-    void heartbeatWinningAfterValidationRollsBackInsertedArtifact() throws Exception {
+    void resultRootLockMakesConcurrentHeartbeatWaitAndPreservesEventOrder() throws Exception {
         insertRunningWorkItem("work-result", 7L, "lease-current", 1_500L);
         CountDownLatch beforeResultCas = new CountDownLatch(1);
         CountDownLatch allowResultCas = new CountDownLatch(1);
-        AgentTaskWorkItemDao racingDao = (AgentTaskWorkItemDao) Proxy.newProxyInstance(
+        AgentTaskWorkItemDao pausingDao = (AgentTaskWorkItemDao) Proxy.newProxyInstance(
                 AgentTaskWorkItemDao.class.getClassLoader(),
                 new Class<?>[]{AgentTaskWorkItemDao.class},
                 (proxy, method, args) -> {
@@ -353,7 +382,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                             && "submitted".equals(update.getStatus())) {
                         beforeResultCas.countDown();
                         if (!allowResultCas.await(10, TimeUnit.SECONDS)) {
-                            throw new AssertionError("Timed out waiting for heartbeat winner");
+                            throw new AssertionError("Timed out waiting to release result CAS");
                         }
                     }
                     try {
@@ -362,48 +391,143 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                         throw e.getCause();
                     }
                 });
-        AgentWorkItemResultCommitService racingResult = (AgentWorkItemResultCommitService) transactionalProxy(
-                new AgentWorkItemResultCommitServiceImpl(
-                        leaseService, artifactService, racingDao, () -> LEASE_NOW),
-                dataSource, AgentWorkItemResultCommitService.class);
+        AgentWorkItemResultCommitService pausingResult =
+                (AgentWorkItemResultCommitService) transactionalProxy(
+                        new AgentWorkItemResultCommitServiceImpl(
+                                leaseService, artifactService, pausingDao,
+                                mutationTransaction, eventWriter, () -> LEASE_NOW),
+                        dataSource, AgentWorkItemResultCommitService.class);
 
-        ExecutorService executor = Executors.newSingleThreadExecutor();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            Future<Object> resultFuture = executor.submit(() -> {
+            Future<Object> resultFuture = executor.submit(() -> pausingResult.commitResult(
+                    TENANT, CLIENT, TASK, REQUESTER,
+                    resultCommand("work-result", "artifact-result", "lease-current", 7L)));
+            assertTrue(beforeResultCas.await(10, TimeUnit.SECONDS));
+
+            Future<Object> heartbeatFuture = executor.submit(() -> {
+                AgentWorkItemLeaseCommandDTO heartbeat = new AgentWorkItemLeaseCommandDTO();
+                heartbeat.setAgentId(REQUESTER);
+                heartbeat.setLeaseToken("lease-current");
+                heartbeat.setExpectedVersion(7L);
+                heartbeat.setLeaseDurationMillis(800L);
                 try {
-                    return racingResult.commitResult(TENANT, CLIENT, TASK, REQUESTER,
-                            resultCommand("work-result", "artifact-rolled-back",
-                                    "lease-current", 7L));
-                } catch (AgentTaskCollaborationException e) {
+                    return leaseService.heartbeat(TENANT, CLIENT, TASK, "work-result", heartbeat);
+                } catch (RuntimeException e) {
                     return e;
                 }
             });
-            assertTrue(beforeResultCas.await(10, TimeUnit.SECONDS));
-            AgentWorkItemLeaseCommandDTO heartbeat = new AgentWorkItemLeaseCommandDTO();
-            heartbeat.setAgentId(REQUESTER);
-            heartbeat.setLeaseToken("lease-current");
-            heartbeat.setExpectedVersion(7L);
-            heartbeat.setLeaseDurationMillis(800L);
-            leaseService.heartbeat(TENANT, CLIENT, TASK, "work-result", heartbeat);
+            Thread.sleep(250L);
+            assertFalse(heartbeatFuture.isDone(),
+                    "heartbeat must wait behind the result transaction's task-root lock");
             allowResultCas.countDown();
 
-            Object outcome = resultFuture.get(20, TimeUnit.SECONDS);
-            assertTrue(outcome instanceof AgentTaskCollaborationException);
-            assertEquals(Reason.VERSION_CONFLICT,
-                    ((AgentTaskCollaborationException) outcome).getReason());
-            assertEquals(0, count("SELECT COUNT(*) FROM agent_task_artifact"),
-                    "artifact insert must roll back when exact lease CAS loses");
-            Map<String, Object> row = jdbc.queryForMap(
-                    "SELECT status, lease_until, version, result_artifact_id"
-                            + " FROM agent_task_work_item WHERE work_item_id = 'work-result'");
-            assertEquals("running", row.get("STATUS"));
-            assertEquals(1_800L, ((Number) row.get("LEASE_UNTIL")).longValue());
-            assertEquals(8L, ((Number) row.get("VERSION")).longValue());
-            assertEquals(null, row.get("RESULT_ARTIFACT_ID"));
+            Object result = resultFuture.get(20, TimeUnit.SECONDS);
+            assertTrue(result instanceof cn.jia.agent.entity.AgentWorkItemResultCommitViewDTO);
+            Object heartbeat = heartbeatFuture.get(20, TimeUnit.SECONDS);
+            assertTrue(heartbeat instanceof AgentTaskStateException);
+            assertEquals(List.of("ARTIFACT_PUBLISHED", "WORK_ITEM_SUBMITTED"),
+                    jdbc.queryForList(
+                            "SELECT event_type FROM agent_task_event ORDER BY event_version",
+                            String.class));
+            assertEquals("submitted", jdbc.queryForObject(
+                    "SELECT status FROM agent_task_work_item WHERE work_item_id='work-result'",
+                    String.class));
+            assertEquals(1, count("SELECT COUNT(*) FROM agent_task_artifact"));
         } finally {
             allowResultCas.countDown();
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void submittedEventAppendFailureRollsBackArtifactWorkItemAndEarlierArtifactEvent() {
+        insertRunningWorkItem("work-result", 7L, "lease-current", 1_500L);
+        AgentWorkItemResultCommitService failing =
+                (AgentWorkItemResultCommitService) transactionalProxy(
+                        new AgentWorkItemResultCommitServiceImpl(
+                                leaseService, artifactService, workItemDao, mutationTransaction,
+                                command -> {
+                                    throw new IllegalStateException("submitted append failed");
+                                }, () -> LEASE_NOW),
+                        dataSource, AgentWorkItemResultCommitService.class);
+
+        assertThrows(IllegalStateException.class, () -> failing.commitResult(
+                TENANT, CLIENT, TASK, REQUESTER,
+                resultCommand("work-result", "artifact-rollback", "lease-current", 7L)));
+
+        Map<String, Object> work = jdbc.queryForMap(
+                "SELECT status, version, result_artifact_id FROM agent_task_work_item"
+                        + " WHERE work_item_id='work-result'");
+        assertEquals("running", work.get("STATUS"));
+        assertEquals(7L, ((Number) work.get("VERSION")).longValue());
+        assertEquals(null, work.get("RESULT_ARTIFACT_ID"));
+        assertEquals(0, count("SELECT COUNT(*) FROM agent_task_artifact"));
+        assertEquals(0, count("SELECT COUNT(*) FROM agent_task_event"));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
+                Long.class, TASK));
+    }
+
+    @Test
+    void legacyExternalArtifactWithoutLengthPersistsHashAndOmitsUnknownLengthAndUri() {
+        AgentTaskArtifactPublishDTO external = artifact("artifact-external", 1, 0);
+        external.setContent(null);
+        external.setStorageUri("s3://bucket/private/path/artifact.bin");
+        external.setContentByteLength(null);
+
+        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER, external);
+
+        String payload = jdbc.queryForObject(
+                "SELECT event_json FROM agent_task_event WHERE event_type='ARTIFACT_PUBLISHED'",
+                String.class);
+        assertTrue(payload.contains(external.getContentHash()));
+        assertFalse(payload.contains("contentByteLength"));
+        assertFalse(payload.contains(external.getStorageUri()));
+        assertEquals(external.getStorageUri(), jdbc.queryForObject(
+                "SELECT storage_uri FROM agent_task_artifact WHERE artifact_id='artifact-external'",
+                String.class));
+    }
+
+    @Test
+    void requestAndArtifactEventsPersistWithCanonicalTypesAndRedactedPayloads() {
+        requestService.create(TENANT, CLIENT, TASK, REQUESTER, createRequest("req-events"));
+        requestService.acknowledge(TENANT, CLIENT, TASK, TARGET, "req-events",
+                transition(0L, Map.of("ack", true)));
+        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER,
+                artifact("artifact-events", 1, 0));
+
+        assertEquals(List.of("REVIEW_REQUESTED", "REQUEST_ACKNOWLEDGED",
+                        "ARTIFACT_PUBLISHED"),
+                jdbc.queryForList("SELECT event_type FROM agent_task_event ORDER BY event_version",
+                        String.class));
+        String artifactJson = jdbc.queryForObject(
+                "SELECT event_json FROM agent_task_event WHERE event_type='ARTIFACT_PUBLISHED'",
+                String.class);
+        assertTrue(artifactJson.contains(sha256("artifact-events-v1")));
+        assertTrue(artifactJson.contains("contentByteLength"));
+        assertTrue(!artifactJson.contains("artifact-events-v1"));
+        assertTrue(!artifactJson.contains("metadata"));
+    }
+
+    @Test
+    void requestAppendFailureRollsBackBusinessRowAndEventVersion() {
+        AgentTaskRequestService failing = (AgentTaskRequestService) transactionalProxy(
+                new AgentTaskCollaborationServiceImpl(
+                        taskDao, memberDao, workItemDao, requestDao, artifactDao,
+                        mutationTransaction, command -> {
+                            throw new IllegalStateException("append failed");
+                        }, () -> LEASE_NOW),
+                dataSource, AgentTaskRequestService.class);
+
+        assertThrows(IllegalStateException.class, () -> failing.create(
+                TENANT, CLIENT, TASK, REQUESTER, createRequest("req-rollback")));
+
+        assertEquals(0, count("SELECT COUNT(*) FROM agent_task_request"));
+        assertEquals(0, count("SELECT COUNT(*) FROM agent_task_event"));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
+                Long.class, TASK));
     }
 
     private List<Outcome> runConcurrently(List<Callable<Outcome>> calls,
@@ -442,7 +566,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
 
     private Object transactionalProxy(Object raw, DataSource dataSource, Class<?>... interfaces) {
         TransactionInterceptor interceptor = new TransactionInterceptor();
-        interceptor.setTransactionManager(new DataSourceTransactionManager(dataSource));
+        interceptor.setTransactionManager(transactionManager);
         NameMatchTransactionAttributeSource source = new NameMatchTransactionAttributeSource();
         RuleBasedTransactionAttribute attribute = new RuleBasedTransactionAttribute();
         attribute.setRollbackRules(List.of(new RollbackRuleAttribute(Exception.class)));
@@ -462,6 +586,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         configuration.addMapper(AgentTaskWorkItemMapper.class);
         configuration.addMapper(AgentTaskRequestMapper.class);
         configuration.addMapper(AgentTaskArtifactMapper.class);
+        configuration.addMapper(AgentTaskEventMapper.class);
         GlobalConfig globalConfig = new GlobalConfig();
         globalConfig.setIdentifierGenerator(new DefaultIdentifierGenerator());
         MybatisSqlSessionFactoryBean bean = new MybatisSqlSessionFactoryBean();
@@ -490,6 +615,19 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                     create_time BIGINT,
                     update_time BIGINT,
                     UNIQUE (tenant_id, client_id, task_id)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    task_id VARCHAR(100) NOT NULL, event_version BIGINT NOT NULL,
+                    event_id VARCHAR(100) NOT NULL, event_type VARCHAR(64) NOT NULL,
+                    actor_type VARCHAR(20) NOT NULL, actor_id VARCHAR(100),
+                    aggregate_type VARCHAR(30) NOT NULL, aggregate_id VARCHAR(100) NOT NULL,
+                    event_json CLOB NOT NULL, occurred_at BIGINT NOT NULL,
+                    tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                    create_time BIGINT, update_time BIGINT,
+                    UNIQUE (tenant_id, client_id, task_id, event_version),
+                    UNIQUE (tenant_id, client_id, event_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_member (

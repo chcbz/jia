@@ -169,6 +169,11 @@ class AgentTaskCollaborationBackfillSchemaTest {
         assertTrue(schema.contains("unique key uk_task_backfill_manifest_row (report_sha256, manifest_row_key)"));
         assertTrue(schema.contains("unique key uk_task_backfill_run_id (run_id)"));
         assertTrue(compact(schema).contains("issue_row_count bigint not null default 0"));
+        for (String table : List.of("agent_task_backfill_issue", "agent_task_backfill_manifest")) {
+            String definition = compact(tableDefinition(schema, table));
+            assertTrue(definition.contains("tenant_id varchar(50) default null"), table);
+            assertFalse(definition.contains("tenant_id varchar(50) default '0'"), table);
+        }
     }
 
     @Test
@@ -230,7 +235,7 @@ class AgentTaskCollaborationBackfillSchemaTest {
     }
 
     private String tableDefinition(String sql, String table) {
-        int start = sql.indexOf("create table if not exists " + table);
+        int start = sql.indexOf("create table if not exists " + table + " (");
         assertTrue(start >= 0, table);
         int end = sql.indexOf(';', start);
         assertTrue(end > start, table);

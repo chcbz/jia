@@ -1,6 +1,11 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.entity.AgentTaskEventWriteCommand;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.service.AgentTaskEventWriter;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
@@ -21,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,6 +46,8 @@ class AgentWorkItemResultCommitServiceImplTest {
     private AgentWorkItemLeaseService leaseService;
     private AgentTaskArtifactService artifactService;
     private AgentTaskWorkItemDao workItemDao;
+    private AgentTaskMutationTransaction mutationTransaction;
+    private AgentTaskEventWriter eventWriter;
     private AgentWorkItemResultCommitServiceImpl service;
 
     @BeforeEach
@@ -47,8 +55,20 @@ class AgentWorkItemResultCommitServiceImplTest {
         leaseService = mock(AgentWorkItemLeaseService.class);
         artifactService = mock(AgentTaskArtifactService.class);
         workItemDao = mock(AgentTaskWorkItemDao.class);
+        mutationTransaction = mock(AgentTaskMutationTransaction.class);
+        eventWriter = mock(AgentTaskEventWriter.class);
+        when(mutationTransaction.executeWithLockedTaskRoot(
+                eq(TENANT), eq(CLIENT), eq(TASK), any())).thenAnswer(invocation -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+            AgentTaskMetaEntity root = new AgentTaskMetaEntity()
+                    .setTaskId(TASK).setTaskVersion(0L).setCurrentEventVersion(0L);
+            root.setTenantId(TENANT);
+            root.setClientId(CLIENT);
+            return mutation.apply(root);
+        });
         service = new AgentWorkItemResultCommitServiceImpl(
-                leaseService, artifactService, workItemDao, () -> NOW);
+                leaseService, artifactService, workItemDao,
+                mutationTransaction, eventWriter, () -> NOW);
     }
 
     @Test
@@ -122,6 +142,61 @@ class AgentWorkItemResultCommitServiceImplTest {
         assertEquals(Reason.INVALID_REQUEST, assertThrows(AgentTaskCollaborationException.class,
                 () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command)).getReason());
         verify(leaseService, never()).validateLeaseForResult(any(), any(), any(), any(), any());
+    }
+
+
+    @Test
+    void locksRootThenPublishesArtifactBeforeSubmittedEvent() {
+        AgentWorkItemResultCommitDTO command = command();
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+                .thenReturn(lease());
+        AgentTaskArtifactViewDTO artifact = new AgentTaskArtifactViewDTO();
+        artifact.setArtifactId("artifact-1");
+        when(artifactService.publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact()))
+                .thenReturn(artifact);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+                .thenReturn(workItem());
+        when(workItemDao.updateActiveLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any())).thenReturn(1);
+
+        service.commitResult(TENANT, CLIENT, TASK, AGENT, command);
+
+        var order = inOrder(mutationTransaction, leaseService, artifactService, workItemDao, eventWriter);
+        order.verify(mutationTransaction).executeWithLockedTaskRoot(
+                eq(TENANT), eq(CLIENT), eq(TASK), any());
+        order.verify(leaseService).validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any());
+        order.verify(artifactService).publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact());
+        order.verify(workItemDao).updateActiveLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any());
+        ArgumentCaptor<AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        order.verify(eventWriter).append(event.capture());
+        assertEquals(TaskEventType.WORK_ITEM_SUBMITTED, event.getValue().getEventType());
+        assertEquals("work-1", event.getValue().getAggregateId());
+        assertEquals(false, event.getValue().getEventJson().contains(TOKEN));
+    }
+
+    @Test
+    void resultCasLossDoesNotAppendSubmittedEvent() {
+        AgentWorkItemResultCommitDTO command = command();
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+                .thenReturn(lease());
+        AgentTaskArtifactViewDTO artifact = new AgentTaskArtifactViewDTO();
+        artifact.setArtifactId("artifact-1");
+        when(artifactService.publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact()))
+                .thenReturn(artifact);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+                .thenReturn(workItem());
+        when(workItemDao.updateActiveLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any())).thenReturn(0);
+
+        assertThrows(AgentTaskCollaborationException.class,
+                () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command));
+
+        verify(eventWriter, never()).append(any());
     }
 
     private AgentWorkItemResultCommitDTO command() {

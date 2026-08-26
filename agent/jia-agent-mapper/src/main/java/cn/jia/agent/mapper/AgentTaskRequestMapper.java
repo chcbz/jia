@@ -24,10 +24,18 @@ public interface AgentTaskRequestMapper extends BaseMapper<AgentTaskRequestEntit
                 resolved_at = #{request.resolvedAt},
                 update_time = #{updateTime},
                 version = version + 1
-            WHERE (tenant_id = #{tenantId} OR tenant_id = '0')
+            WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
               AND task_id = #{taskId}
               AND request_id = #{requestId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(request_id AS BINARY) = CAST(#{requestId} AS BINARY)
+              AND OCTET_LENGTH(request_id) = OCTET_LENGTH(#{requestId})
               AND version = #{expectedVersion}
             """)
     int updateByVersion(

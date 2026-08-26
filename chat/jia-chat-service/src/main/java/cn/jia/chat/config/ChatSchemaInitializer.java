@@ -53,7 +53,7 @@ public class ChatSchemaInitializer implements ApplicationRunner {
                         conversation_id         VARCHAR(100) NOT NULL COMMENT 'chat_conversation ID',
                         created_by_agent_id     VARCHAR(100) NOT NULL COMMENT 'Creating task member Agent ID',
                         status                  VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT 'active/closed',
-                        tenant_id               VARCHAR(50) NOT NULL DEFAULT '0' COMMENT 'Owner jiacn scope',
+                        tenant_id               VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
                         client_id               VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
                         create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
                         update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -101,7 +101,7 @@ public class ChatSchemaInitializer implements ApplicationRunner {
         expected.put("conversation_id", varchar(100, false));
         expected.put("created_by_agent_id", varchar(100, false));
         expected.put("status", new ColumnDefinition("varchar", 20L, false, "active", ""));
-        expected.put("tenant_id", new ColumnDefinition("varchar", 50L, false, "0", ""));
+        expected.put("tenant_id", varchar(50, false));
         expected.put("client_id", varchar(50, false));
         expected.put("create_time", new ColumnDefinition("bigint", null, true, null, ""));
         expected.put("update_time", new ColumnDefinition("bigint", null, true, null, ""));

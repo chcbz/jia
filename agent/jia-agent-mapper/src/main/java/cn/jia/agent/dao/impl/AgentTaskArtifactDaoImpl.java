@@ -41,11 +41,12 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
         requireVersion(artifactVersion);
-        return baseMapper.selectOne(scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getArtifactId, artifactId)
-                .eq(AgentTaskArtifactEntity::getArtifactVersion, artifactVersion)
-                .last("limit 1"));
+                .eq(AgentTaskArtifactEntity::getArtifactVersion, artifactVersion);
+        exactArtifact(wrapper, taskId, artifactId);
+        return baseMapper.selectOne(wrapper.last("limit 1"));
     }
 
     @Override
@@ -54,9 +55,11 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
-        return baseMapper.selectOne(scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
-                .eq(AgentTaskArtifactEntity::getArtifactId, artifactId)
+                .eq(AgentTaskArtifactEntity::getArtifactId, artifactId);
+        exactArtifact(wrapper, taskId, artifactId);
+        return baseMapper.selectOne(wrapper
                 .orderByDesc(AgentTaskArtifactEntity::getArtifactVersion)
                 .orderByDesc(AgentTaskArtifactEntity::getId)
                 .last("limit 1"));
@@ -77,9 +80,11 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
-        return baseMapper.selectList(scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
-                .eq(AgentTaskArtifactEntity::getArtifactId, artifactId)
+                .eq(AgentTaskArtifactEntity::getArtifactId, artifactId);
+        exactArtifact(wrapper, taskId, artifactId);
+        return baseMapper.selectList(wrapper
                 .orderByDesc(AgentTaskArtifactEntity::getArtifactVersion)
                 .orderByDesc(AgentTaskArtifactEntity::getId));
     }
@@ -89,8 +94,10 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
             String tenantId, String clientId, String taskId, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        return ordered(scope(tenantId, clientId)
-                .eq(AgentTaskArtifactEntity::getTaskId, taskId), limit);
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+                .eq(AgentTaskArtifactEntity::getTaskId, taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        return ordered(wrapper, limit);
     }
 
     @Override
@@ -104,14 +111,22 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .in(AgentTaskArtifactEntity::getVisibility,
                         "task_members", "reviewer", "private");
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        TaskCollaborationDaoSupport.exactAny(
+                wrapper, "visibility", List.of("task_members", "reviewer", "private"));
         if (!StringUtil.isBlank(workItemId)) {
             TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
             wrapper.eq(AgentTaskArtifactEntity::getWorkItemId, workItemId);
+            TaskCollaborationDaoSupport.exact(wrapper, "work_item_id", workItemId);
         }
         if (!coordinatorAccess) {
             wrapper.and(readable -> {
                 readable.eq(AgentTaskArtifactEntity::getVisibility, "task_members")
-                        .or().eq(AgentTaskArtifactEntity::getProducerAgentId, actorAgentId);
+                        .or(produced -> {
+                            produced.eq(AgentTaskArtifactEntity::getProducerAgentId, actorAgentId);
+                            TaskCollaborationDaoSupport.exact(
+                                    produced, "producer_agent_id", actorAgentId);
+                        });
                 if (reviewerAccess) {
                     readable.or().eq(AgentTaskArtifactEntity::getVisibility, "reviewer");
                 }
@@ -126,9 +141,12 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
-        return ordered(scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
-                .eq(AgentTaskArtifactEntity::getWorkItemId, workItemId), limit);
+                .eq(AgentTaskArtifactEntity::getWorkItemId, workItemId);
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "work_item_id", workItemId);
+        return ordered(wrapper, limit);
     }
 
     private List<AgentTaskArtifactEntity> ordered(
@@ -142,9 +160,19 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
     }
 
     private LambdaQueryWrapper<AgentTaskArtifactEntity> scope(String tenantId, String clientId) {
-        return new LambdaQueryWrapper<AgentTaskArtifactEntity>()
-                .eq(AgentTaskArtifactEntity::getTenantId, tenantId)
-                .eq(AgentTaskArtifactEntity::getClientId, clientId);
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper =
+                new LambdaQueryWrapper<AgentTaskArtifactEntity>()
+                        .eq(AgentTaskArtifactEntity::getTenantId, tenantId)
+                        .eq(AgentTaskArtifactEntity::getClientId, clientId);
+        TaskCollaborationDaoSupport.exact(wrapper, "tenant_id", tenantId);
+        return TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
+    }
+
+    private void exactArtifact(
+            LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper,
+            String taskId, String artifactId) {
+        TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
+        TaskCollaborationDaoSupport.exact(wrapper, "artifact_id", artifactId);
     }
 
     private void requireArtifact(AgentTaskArtifactDTO artifact) {

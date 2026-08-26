@@ -90,6 +90,31 @@ class AgentTaskCollaborationSchemaTest {
     }
 
     @Test
+    void blanketTenantDefaultMigrationExcludesCollaborationOwnedTables() throws IOException {
+        String migration = readResource("db/migration-tenant-default-zero.sql");
+        String normalizedMigration = compact(migration);
+        for (String table : List.of(
+                "agent_task_meta", "agent_task_member", "agent_task_work_item",
+                "agent_task_request", "agent_task_artifact", "agent_task_event",
+                "agent_task_thread", "agent_task_backfill_issue",
+                "agent_task_backfill_manifest_batch", "agent_task_backfill_manifest",
+                "agent_task_backfill_run", "agent_task_historical_event_manifest",
+                "agent_task_historical_event_batch", "agent_task_historical_event_run")) {
+            assertFalse(migration.contains("`" + table + "`"), table);
+        }
+        assertFalse(normalizedMigration.contains(
+                "update `chat_conversation` set tenant_id = '0'"));
+        assertFalse(normalizedMigration.contains(
+                "update `chat_message` set tenant_id = '0'"));
+        assertTrue(normalizedMigration.contains(
+                "alter table `chat_conversation` modify column tenant_id varchar(50) default '0'"));
+        assertTrue(normalizedMigration.contains(
+                "alter table `chat_message` modify column tenant_id varchar(50) default '0'"));
+        assertTrue(normalizedMigration.contains(
+                "any data normalization requires a separate audited migration"));
+    }
+
+    @Test
     void b01ResourcesDoNotCreateOutOfScopeCollaborationOrIdentityTables() throws IOException {
         String b01Sql = readResource("db/task-collaboration-schema.sql");
         for (String forbiddenTable : List.of(

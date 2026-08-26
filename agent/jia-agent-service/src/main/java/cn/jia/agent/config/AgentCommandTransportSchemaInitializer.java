@@ -1,0 +1,837 @@
+package cn.jia.agent.config;
+
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import javax.sql.DataSource;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.TreeMap;
+
+/**
+ * Conditional D01/D09 initializer for reliable Agent command transport and append-only operations audit.
+ *
+ * <p>The caller registers this bean only when {@code agent.command-outbox.enabled=true}.
+ * This initializer performs DDL and read-only catalog validation only: it never backfills or
+ * mutates application rows.</p>
+ */
+public final class AgentCommandTransportSchemaInitializer implements InitializingBean {
+    static final String DDL_RESOURCE = "db/agent-command-transport-schema.sql";
+    static final List<String> TABLES = List.of(
+            "agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox",
+            "agent_command_operation_audit", "agent_command_redrive_operation");
+    private static final String BINARY_COLLATION = "utf8mb4_0900_bin";
+    static final String AUDIT_UPDATE_TRIGGER = "trg_command_operation_audit_no_update";
+    static final String AUDIT_DELETE_TRIGGER = "trg_command_operation_audit_no_delete";
+
+    private final JdbcTemplate jdbcTemplate;
+
+    public AgentCommandTransportSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = Objects.requireNonNull(jdbcTemplate, "jdbcTemplate");
+    }
+
+    @Override
+    public void afterPropertiesSet() {
+        requireMySql();
+        List<String> present = inspectPresentTables();
+        List<String> legacyTransport = TABLES.subList(0, 3);
+        List<String> currentTransportAndAudit = TABLES.subList(0, 4);
+        List<String> ddl = ddlStatements();
+        if (present.isEmpty()) {
+            for (String statement : ddl) {
+                jdbcTemplate.execute(statement);
+            }
+        } else if (sameTables(present, legacyTransport)) {
+            jdbcTemplate.execute(ddl.get(3));
+            jdbcTemplate.execute(ddl.get(4));
+        } else if (sameTables(present, currentTransportAndAudit)) {
+            jdbcTemplate.execute(ddl.get(4));
+        } else if (!sameTables(present, TABLES)) {
+            throw partialSchema(present);
+        }
+        present = inspectPresentTables();
+        if (!sameTables(present, TABLES)) {
+            throw new IllegalStateException("Agent command transport schema creation did not produce exact 5/5 tables: "
+                    + present);
+        }
+        validateSchema();
+    }
+
+    void validateSchema() {
+        List<String> present = inspectPresentTables();
+        if (!sameTables(present, TABLES)) {
+            throw partialSchema(present);
+        }
+        for (TableExpectation expected : expectedTables().values()) {
+            validateTable(expected);
+        }
+        ensureAndValidateAuditTriggers();
+    }
+
+    private void requireMySql() {
+        DataSource dataSource = jdbcTemplate.getDataSource();
+        if (dataSource == null) {
+            throw new IllegalStateException("D01 command transport schema requires a JDBC DataSource");
+        }
+        try (Connection connection = dataSource.getConnection()) {
+            String product = connection.getMetaData().getDatabaseProductName();
+            if (product == null || !product.toLowerCase(Locale.ROOT).contains("mysql")) {
+                throw new IllegalStateException(
+                        "D01 command transport schema requires MySQL; isolated acceptance targets 8.0.21, got " + product);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "Unable to determine database dialect for D01 command transport schema", e);
+        }
+    }
+
+    private List<String> inspectPresentTables() {
+        return jdbcTemplate.queryForList("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE()
+                  AND table_name IN ('agent_command_delivery',
+                                     'agent_outbox_event',
+                                     'agent_consumer_inbox',
+                                     'agent_command_operation_audit',
+                                     'agent_command_redrive_operation')
+                ORDER BY table_name
+                """, String.class);
+    }
+
+    private static boolean sameTables(List<String> present, List<String> expected) {
+        return present.size() == expected.size() && Set.copyOf(present).equals(Set.copyOf(expected));
+    }
+
+    static String normalizeGeneratedExpression(String expression) {
+        if (expression == null || expression.isBlank()) return "";
+        return normalizeGeneratedSegment(normalizeGeneratedTokens(expression));
+    }
+
+    private static String normalizeGeneratedTokens(String expression) {
+        String rendered = normalizeCatalogQuoteDelimiters(expression);
+        StringBuilder normalized = new StringBuilder(rendered.length());
+        boolean quoted = false;
+        for (int index = 0; index < rendered.length(); index++) {
+            char character = rendered.charAt(index);
+            if (character == '\'') {
+                normalized.append(character);
+                if (quoted && index + 1 < rendered.length() && rendered.charAt(index + 1) == '\'') {
+                    normalized.append(rendered.charAt(++index));
+                } else {
+                    quoted = !quoted;
+                }
+                continue;
+            }
+            if (!quoted) {
+                if (Character.isWhitespace(character) || character == '`') {
+                    continue;
+                }
+                if (rendered.regionMatches(true, index, "_utf8mb4", 0, "_utf8mb4".length())) {
+                    int next = index + "_utf8mb4".length();
+                    while (next < rendered.length() && Character.isWhitespace(rendered.charAt(next))) {
+                        next++;
+                    }
+                    if (next < rendered.length() && rendered.charAt(next) == '\'') {
+                        index += "_utf8mb4".length() - 1;
+                        continue;
+                    }
+                }
+            }
+            normalized.append(quoted ? character : Character.toLowerCase(character));
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeCatalogQuoteDelimiters(String expression) {
+        int escapedQuotes = 0;
+        int unescapedQuotes = 0;
+        for (int index = 0; index < expression.length(); index++) {
+            if (expression.charAt(index) != '\'') continue;
+            int slashes = 0;
+            for (int prior = index - 1; prior >= 0 && expression.charAt(prior) == '\\'; prior--) {
+                slashes++;
+            }
+            if ((slashes & 1) == 1) escapedQuotes++;
+            else unescapedQuotes++;
+        }
+        if (unescapedQuotes != 0 || escapedQuotes == 0 || (escapedQuotes & 1) == 1) {
+            return expression;
+        }
+        StringBuilder normalized = new StringBuilder(expression.length() - escapedQuotes);
+        for (int index = 0; index < expression.length(); index++) {
+            char character = expression.charAt(index);
+            if (character == '\\' && index + 1 < expression.length()
+                    && expression.charAt(index + 1) == '\'') {
+                normalized.append('\'');
+                index++;
+            } else {
+                normalized.append(character);
+            }
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeGeneratedSegment(String expression) {
+        String unwrapped = stripRedundantOuterParentheses(expression);
+        StringBuilder normalized = new StringBuilder(unwrapped.length());
+        for (int index = 0; index < unwrapped.length();) {
+            char character = unwrapped.charAt(index);
+            if (character == '\'') {
+                int end = quotedLiteralEnd(unwrapped, index);
+                normalized.append(unwrapped, index, end);
+                index = end;
+                continue;
+            }
+            if (isGeneratedIdentifierCharacter(character)) {
+                int identifierEnd = index + 1;
+                while (identifierEnd < unwrapped.length()
+                        && isGeneratedIdentifierCharacter(unwrapped.charAt(identifierEnd))) {
+                    identifierEnd++;
+                }
+                normalized.append(unwrapped, index, identifierEnd);
+                if (identifierEnd < unwrapped.length() && unwrapped.charAt(identifierEnd) == '(') {
+                    int close = matchingParenthesis(unwrapped, identifierEnd);
+                    if (close >= 0) {
+                        normalized.append('(');
+                        appendNormalizedArguments(normalized,
+                                unwrapped.substring(identifierEnd + 1, close));
+                        normalized.append(')');
+                        index = close + 1;
+                        continue;
+                    }
+                }
+                index = identifierEnd;
+                continue;
+            }
+            if (character == '(') {
+                int close = matchingParenthesis(unwrapped, index);
+                if (close >= 0) {
+                    normalized.append('(')
+                            .append(normalizeGeneratedSegment(unwrapped.substring(index + 1, close)))
+                            .append(')');
+                    index = close + 1;
+                    continue;
+                }
+            }
+            normalized.append(character);
+            index++;
+        }
+        return normalized.toString();
+    }
+
+    private static void appendNormalizedArguments(StringBuilder target, String arguments) {
+        int start = 0;
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = 0; index <= arguments.length(); index++) {
+            if (index == arguments.length()) {
+                target.append(normalizeGeneratedSegment(arguments.substring(start)));
+                return;
+            }
+            char character = arguments.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < arguments.length() && arguments.charAt(index + 1) == '\'') {
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (!quoted) {
+                if (character == '(') depth++;
+                else if (character == ')') depth--;
+                else if (character == ',' && depth == 0) {
+                    target.append(normalizeGeneratedSegment(arguments.substring(start, index))).append(',');
+                    start = index + 1;
+                }
+            }
+        }
+    }
+
+    private static String stripRedundantOuterParentheses(String expression) {
+        String normalized = expression;
+        while (normalized.length() >= 2 && normalized.charAt(0) == '(') {
+            int close = matchingParenthesis(normalized, 0);
+            if (close != normalized.length() - 1 || hasTopLevelComma(normalized, 1, close)) {
+                break;
+            }
+            normalized = normalized.substring(1, close);
+        }
+        return normalized;
+    }
+
+    private static boolean hasTopLevelComma(String expression, int start, int end) {
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = start; index < end; index++) {
+            char character = expression.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < end && expression.charAt(index + 1) == '\'') index++;
+                else quoted = !quoted;
+            } else if (!quoted) {
+                if (character == '(') depth++;
+                else if (character == ')') depth--;
+                else if (character == ',' && depth == 0) return true;
+            }
+        }
+        return false;
+    }
+
+    private static int matchingParenthesis(String expression, int open) {
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = open; index < expression.length(); index++) {
+            char character = expression.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < expression.length() && expression.charAt(index + 1) == '\'') {
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (!quoted) {
+                if (character == '(') depth++;
+                else if (character == ')' && --depth == 0) return index;
+            }
+        }
+        return -1;
+    }
+
+    private static int quotedLiteralEnd(String expression, int start) {
+        for (int index = start + 1; index < expression.length(); index++) {
+            if (expression.charAt(index) != '\'') continue;
+            if (index + 1 < expression.length() && expression.charAt(index + 1) == '\'') {
+                index++;
+            } else {
+                return index + 1;
+            }
+        }
+        return expression.length();
+    }
+
+    private static boolean isGeneratedIdentifierCharacter(char character) {
+        return Character.isLetterOrDigit(character) || character == '_';
+    }
+
+    private void validateTable(TableExpectation expected) {
+        List<TableDefinition> tables = jdbcTemplate.query("""
+                SELECT engine, table_collation
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = ?
+                """, (rs, rowNum) -> new TableDefinition(
+                rs.getString("engine"), rs.getString("table_collation")), expected.name());
+        if (tables.size() != 1
+                || !"InnoDB".equalsIgnoreCase(tables.get(0).engine())
+                || !BINARY_COLLATION.equalsIgnoreCase(tables.get(0).collation())) {
+            throw new IllegalStateException("D01 transport table " + expected.name()
+                    + " must be exact InnoDB/" + BINARY_COLLATION + ", got " + tables);
+        }
+
+        List<ColumnDefinition> columns = jdbcTemplate.query("""
+                SELECT column_name, data_type, column_type, is_nullable,
+                       column_default, collation_name, extra, generation_expression
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE() AND table_name = ?
+                ORDER BY ordinal_position
+                """, (rs, rowNum) -> new ColumnDefinition(
+                rs.getString("column_name"), rs.getString("data_type"),
+                rs.getString("column_type"), "YES".equalsIgnoreCase(rs.getString("is_nullable")),
+                rs.getString("column_default"), rs.getString("collation_name"),
+                rs.getString("extra"), normalizeGeneratedExpression(
+                        rs.getString("generation_expression"))), expected.name());
+        if (!expected.columns().equals(columns)) {
+            throw new IllegalStateException("D01 transport table " + expected.name()
+                    + " has incompatible columns: " + columns);
+        }
+
+        Map<String, IndexDefinition> actualIndexes = inspectIndexes(expected.name());
+        if (!expected.indexes().equals(actualIndexes)) {
+            throw new IllegalStateException("D01 transport table " + expected.name()
+                    + " has incompatible indexes: " + actualIndexes);
+        }
+
+        Integer foreignKeys = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.referential_constraints
+                WHERE (constraint_schema = DATABASE() AND table_name = ?)
+                   OR (unique_constraint_schema = DATABASE() AND referenced_table_name = ?)
+                """, Integer.class, expected.name(), expected.name());
+        if (foreignKeys == null || foreignKeys != 0) {
+            throw new IllegalStateException("D01 transport table " + expected.name()
+                    + " must not participate in database foreign keys");
+        }
+    }
+
+    private Map<String, IndexDefinition> inspectIndexes(String table) {
+        List<IndexColumn> rows = jdbcTemplate.query("""
+                SELECT index_name, non_unique, seq_in_index, column_name,
+                       sub_part, index_type, is_visible
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE() AND table_name = ?
+                ORDER BY index_name, seq_in_index
+                """, (rs, rowNum) -> new IndexColumn(
+                rs.getString("index_name"), rs.getInt("non_unique") != 0,
+                rs.getInt("seq_in_index"), rs.getString("column_name"),
+                (Integer) rs.getObject("sub_part"), rs.getString("index_type"),
+                rs.getString("is_visible")), table);
+        Map<String, List<IndexColumn>> grouped = new TreeMap<>();
+        for (IndexColumn row : rows) {
+            if (row.subPart() != null
+                    || !"BTREE".equalsIgnoreCase(row.indexType())
+                    || !"YES".equalsIgnoreCase(row.visible())) {
+                throw new IllegalStateException("D01 transport table " + table
+                        + " has incompatible index component: " + row);
+            }
+            grouped.computeIfAbsent(row.name(), ignored -> new ArrayList<>()).add(row);
+        }
+        Map<String, IndexDefinition> result = new TreeMap<>();
+        for (Map.Entry<String, List<IndexColumn>> entry : grouped.entrySet()) {
+            List<IndexColumn> components = entry.getValue();
+            boolean nonUnique = components.get(0).nonUnique();
+            List<String> names = new ArrayList<>();
+            for (int index = 0; index < components.size(); index++) {
+                IndexColumn component = components.get(index);
+                if (component.sequence() != index + 1 || component.nonUnique() != nonUnique) {
+                    throw new IllegalStateException("D01 transport table " + table
+                            + " has incompatible index ordering: " + components);
+                }
+                names.add(component.column());
+            }
+            result.put(entry.getKey(), new IndexDefinition(!nonUnique, List.copyOf(names)));
+        }
+        return result;
+    }
+
+    static List<String> ddlStatements() {
+        String sql;
+        try {
+            sql = new ClassPathResource(DDL_RESOURCE).getContentAsString(StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("Missing D01 transport DDL resource " + DDL_RESOURCE, e);
+        }
+        List<String> migration = splitSql(sql);
+        if (migration.size() != TABLES.size() + 4) {
+            throw new IllegalStateException(
+                    "Agent command transport DDL must contain five tables and two exact trigger replacements");
+        }
+        List<String> statements = migration.subList(0, TABLES.size());
+        for (int index = 0; index < statements.size(); index++) {
+            String normalized = normalizeResourceSql(statements.get(index));
+            String requiredPrefix = "create table if not exists " + TABLES.get(index) + " ";
+            boolean containsDml = normalized.matches("(?s).*\\binsert\\s+into\\b.*")
+                    || normalized.matches("(?s).*\\bupdate\\s+[`a-z0-9_]+\\s+set\\b.*")
+                    || normalized.matches("(?s).*\\bdelete\\s+from\\b.*")
+                    || normalized.matches("(?s).*\\breplace\\s+into\\b.*")
+                    || normalized.matches("(?s).*\\bmerge\\s+into\\b.*");
+            if (!normalized.startsWith(requiredPrefix) || containsDml) {
+                throw new IllegalStateException("D01 transport DDL contains unsafe or reordered SQL");
+            }
+        }
+        List<String> expectedTriggerMigration = List.of(
+                "drop trigger if exists " + AUDIT_UPDATE_TRIGGER,
+                "drop trigger if exists " + AUDIT_DELETE_TRIGGER,
+                createTriggerSql(expectedAuditTriggers().get(AUDIT_UPDATE_TRIGGER)),
+                createTriggerSql(expectedAuditTriggers().get(AUDIT_DELETE_TRIGGER)));
+        for (int index = 0; index < expectedTriggerMigration.size(); index++) {
+            String actual = normalizeResourceSql(migration.get(TABLES.size() + index));
+            String expected = normalizeResourceSql(expectedTriggerMigration.get(index));
+            if (!expected.equals(actual)) {
+                throw new IllegalStateException("D09 operation audit trigger migration drift at statement "
+                        + (TABLES.size() + index + 1));
+            }
+        }
+        return List.copyOf(statements);
+    }
+
+    private static String normalizeResourceSql(String sql) {
+        return sql.replaceAll("(?m)^\\s*--.*$", " ")
+                    .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private void ensureAndValidateAuditTriggers() {
+        Map<String, TriggerDefinition> expected = expectedAuditTriggers();
+        Map<String, TriggerDefinition> actual = inspectAuditTriggers();
+        for (TriggerDefinition trigger : actual.values()) {
+            TriggerDefinition required = expected.get(trigger.name());
+            if (required == null || !triggerMatches(required, trigger)) {
+                throw new IllegalStateException("D09 operation audit trigger " + trigger.name()
+                        + " has an incompatible definition");
+            }
+        }
+        for (TriggerDefinition required : expected.values()) {
+            if (!actual.containsKey(required.name())) {
+                try {
+                    jdbcTemplate.execute(createTriggerSql(required));
+                } catch (RuntimeException concurrentOrFailedCreate) {
+                    TriggerDefinition raced = inspectAuditTriggers().get(required.name());
+                    if (raced == null || !triggerMatches(required, raced)) {
+                        throw concurrentOrFailedCreate;
+                    }
+                }
+            }
+        }
+        actual = inspectAuditTriggers();
+        if (actual.size() != expected.size()) {
+            throw new IllegalStateException("D09 requires two exact operation audit protection triggers");
+        }
+        for (TriggerDefinition required : expected.values()) {
+            TriggerDefinition trigger = actual.get(required.name());
+            if (trigger == null || !triggerMatches(required, trigger)) {
+                throw new IllegalStateException("D09 operation audit trigger " + required.name()
+                        + " has an incompatible definition");
+            }
+        }
+    }
+
+    private Map<String, TriggerDefinition> inspectAuditTriggers() {
+        List<TriggerDefinition> rows = jdbcTemplate.query("""
+                SELECT trigger_name,event_object_table,action_timing,event_manipulation,action_statement
+                FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE()
+                  AND (event_object_table='agent_command_operation_audit'
+                       OR trigger_name IN (?,?))
+                ORDER BY trigger_name
+                """, (rs, rowNum) -> new TriggerDefinition(
+                rs.getString("trigger_name"), rs.getString("event_object_table"),
+                rs.getString("action_timing"), rs.getString("event_manipulation"),
+                rs.getString("action_statement")), AUDIT_UPDATE_TRIGGER, AUDIT_DELETE_TRIGGER);
+        Map<String, TriggerDefinition> result = new TreeMap<>();
+        for (TriggerDefinition row : rows) {
+            if (row.name() == null || result.put(row.name(), row) != null) {
+                throw new IllegalStateException("D09 operation audit trigger catalog is ambiguous");
+            }
+        }
+        return Map.copyOf(result);
+    }
+
+    static Map<String, TriggerDefinition> expectedAuditTriggers() {
+        return Map.of(
+                AUDIT_UPDATE_TRIGGER, new TriggerDefinition(
+                        AUDIT_UPDATE_TRIGGER, "agent_command_operation_audit", "BEFORE", "UPDATE",
+                        "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
+                                + "'D09: operation audit rows are immutable after insert'"),
+                AUDIT_DELETE_TRIGGER, new TriggerDefinition(
+                        AUDIT_DELETE_TRIGGER, "agent_command_operation_audit", "BEFORE", "DELETE",
+                        "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
+                                + "'D09: physical delete of operation audit rows is forbidden'"));
+    }
+
+    private static String createTriggerSql(TriggerDefinition trigger) {
+        return "CREATE TRIGGER " + trigger.name() + " " + trigger.timing() + " "
+                + trigger.event() + " ON " + trigger.table() + " FOR EACH ROW "
+                + trigger.statement();
+    }
+
+    private boolean triggerMatches(TriggerDefinition expected, TriggerDefinition actual) {
+        return expected.table().equalsIgnoreCase(actual.table())
+                && expected.timing().equalsIgnoreCase(actual.timing())
+                && expected.event().equalsIgnoreCase(actual.event())
+                && normalizeSql(expected.statement()).equals(normalizeSql(actual.statement()));
+    }
+
+    static String normalizeSql(String sql) {
+        if (sql == null) return "";
+        return sql.toLowerCase(Locale.ROOT)
+                .replace("`", "")
+                .replace("_utf8mb4", "")
+                .replace("\\", "")
+                .replaceAll("\\s*\\(\\s*", "(")
+                .replaceAll("\\s*\\)\\s*", ")")
+                .replaceAll("\\s*,\\s*", ",")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    static List<String> splitSql(String sql) {
+        List<String> statements = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false;
+        boolean lineComment = false;
+        for (int index = 0; index < sql.length(); index++) {
+            char character = sql.charAt(index);
+            if (lineComment) {
+                if (character == '\n' || character == '\r') {
+                    lineComment = false;
+                    current.append(' ');
+                }
+                continue;
+            }
+            if (!quoted && character == '-' && index + 1 < sql.length()
+                    && sql.charAt(index + 1) == '-') {
+                lineComment = true;
+                index++;
+                continue;
+            }
+            if (character == '\'' && (index == 0 || sql.charAt(index - 1) != '\\')) {
+                quoted = !quoted;
+            }
+            if (character == ';' && !quoted) {
+                String statement = current.toString().trim();
+                if (!statement.isEmpty()) {
+                    statements.add(statement);
+                }
+                current.setLength(0);
+            } else {
+                current.append(character);
+            }
+        }
+        String tail = current.toString().trim();
+        if (!tail.isEmpty()) {
+            statements.add(tail);
+        }
+        return List.copyOf(statements);
+    }
+
+    static Map<String, TableExpectation> expectedTables() {
+        Map<String, TableExpectation> tables = new LinkedHashMap<>();
+        tables.put("agent_command_delivery", new TableExpectation(
+                "agent_command_delivery",
+                List.of(
+                        id(), varchar("command_id", 100, false, null),
+                        varchar("task_id", 100, false, null),
+                        varchar("work_item_id", 100, true, null),
+                        varchar("target_agent_id", 100, false, null),
+                        varchar("command_type", 64, false, null),
+                        mediumblob("command_payload"), binary32("command_payload_hash"),
+                        varchar("status", 32, false, "PENDING"), integer("attempt_count", false, "0"),
+                        bigint("next_retry_at", true, null), varchar("lease_owner", 100, true, null),
+                        bigint("lease_until", true, null), varchar("active_message_id", 100, true, null),
+                        integer("active_attempt", false, "0"), bigint("expires_at", false, null),
+                        varchar("last_error", 2000, true, null), bigint("version", false, "0"),
+                        varchar("replay_parent_message_id", 100, true, null),
+                        varchar("replay_requester_id", 100, true, null),
+                        varchar("replay_approver_id", 100, true, null),
+                        varchar("replay_reason", 1000, true, null),
+                        varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                        bigint("create_time", true, null), bigint("update_time", true, null)),
+                indexes(
+                        index("PRIMARY", true, "id"),
+                        index("uk_delivery_command", true, "tenant_id", "client_id", "command_id"),
+                        index("idx_delivery_retry", false, "status", "next_retry_at", "expires_at", "id"),
+                        index("idx_delivery_lease", false, "status", "lease_until", "id"),
+                        index("idx_delivery_agent", false, "tenant_id", "client_id", "target_agent_id",
+                                "status", "next_retry_at", "id"),
+                        index("idx_delivery_active_message", false, "tenant_id", "client_id",
+                                "active_message_id", "active_attempt"))));
+        tables.put("agent_outbox_event", new TableExpectation(
+                "agent_outbox_event",
+                List.of(
+                        id(), varchar("event_id", 100, false, null),
+                        varchar("message_id", 100, false, null), varchar("command_id", 100, false, null),
+                        bigint("delivery_id", false, null), varchar("aggregate_type", 30, false, null),
+                        varchar("aggregate_id", 100, false, null), varchar("destination", 100, false, null),
+                        varchar("routing_key", 100, false, null), mediumblob("wire_payload"),
+                        binary32("wire_payload_hash"), varchar("status", 32, false, "PENDING"),
+                        integer("attempt_count", false, "0"), bigint("next_retry_at", true, null),
+                        varchar("lease_owner", 100, true, null), bigint("lease_until", true, null),
+                        integer("active_attempt", false, "0"), bigint("expires_at", false, null),
+                        varchar("publisher_confirm_status", 20, false, "NONE"),
+                        bigint("confirmed_at", true, null), varchar("confirm_error", 2000, true, null),
+                        varchar("mandatory_return_status", 20, false, "NONE"),
+                        bigint("returned_at", true, null), integer("return_reply_code", true, null),
+                        varchar("return_reply_text", 1000, true, null), bigint("published_at", true, null),
+                        varchar("last_error", 2000, true, null), bigint("version", false, "0"),
+                        varchar("replay_parent_message_id", 100, true, null),
+                        varchar("replay_requester_id", 100, true, null),
+                        varchar("replay_approver_id", 100, true, null),
+                        varchar("replay_reason", 1000, true, null),
+                        varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                        bigint("create_time", true, null), bigint("update_time", true, null)),
+                indexes(
+                        index("PRIMARY", true, "id"),
+                        index("uk_outbox_event_id", true, "tenant_id", "client_id", "event_id"),
+                        index("idx_outbox_publish", false, "status", "next_retry_at", "expires_at", "id"),
+                        index("idx_outbox_lease", false, "status", "lease_until", "id"),
+                        index("idx_outbox_message", false, "tenant_id", "client_id", "message_id"),
+                        index("idx_outbox_delivery", false, "tenant_id", "client_id", "delivery_id", "status", "id"),
+                        index("idx_outbox_command", false, "tenant_id", "client_id", "command_id", "create_time", "id"))));
+        tables.put("agent_consumer_inbox", new TableExpectation(
+                "agent_consumer_inbox",
+                List.of(
+                        id(), varchar("consumer_name", 100, false, null),
+                        varchar("message_id", 100, false, null), varchar("event_id", 100, false, null),
+                        varchar("command_id", 100, false, null), bigint("delivery_id", false, null),
+                        mediumblob("wire_payload"), binary32("wire_payload_hash"),
+                        varchar("status", 32, false, "RECEIVED"),
+                        varchar("result_status", 32, true, null), integer("attempt_count", false, "0"),
+                        bigint("next_retry_at", true, null), varchar("lease_owner", 100, true, null),
+                        bigint("lease_until", true, null), integer("active_attempt", false, "0"),
+                        bigint("expires_at", false, null), bigint("processed_at", true, null),
+                        varchar("last_error", 2000, true, null), bigint("version", false, "0"),
+                        varchar("replay_parent_message_id", 100, true, null),
+                        varchar("replay_requester_id", 100, true, null),
+                        varchar("replay_approver_id", 100, true, null),
+                        varchar("replay_reason", 1000, true, null),
+                        varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                        bigint("create_time", true, null), bigint("update_time", true, null)),
+                indexes(
+                        index("PRIMARY", true, "id"),
+                        index("uk_consumer_message", true, "tenant_id", "client_id", "consumer_name", "message_id"),
+                        index("idx_inbox_retry", false, "status", "next_retry_at", "expires_at", "id"),
+                        index("idx_inbox_lease", false, "status", "lease_until", "id"),
+                        index("idx_inbox_command", false, "tenant_id", "client_id", "command_id", "status", "id"),
+                        index("idx_inbox_processed", false, "tenant_id", "client_id", "consumer_name",
+                                "result_status", "processed_at", "id"))));
+        tables.put("agent_command_operation_audit", new TableExpectation(
+                "agent_command_operation_audit",
+                List.of(
+                        id(), varchar("operation_id", 100, false, null),
+                        varchar("phase", 16, false, null), varchar("operation_type", 32, false, null),
+                        varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                        varchar("task_id", 100, false, null), varchar("target_agent_id", 100, false, null),
+                        varchar("command_id", 100, true, null),
+                        varchar("source_message_id", 100, false, null),
+                        varchar("new_message_id", 100, true, null), bigint("delivery_id", false, null),
+                        integer("source_attempt", true, null), integer("new_attempt", true, null),
+                        binary32Nullable("wire_hash"), varchar("requester_id", 100, false, null),
+                        varchar("approver_id", 100, true, null), varchar("reason", 1000, false, null),
+                        varchar("ticket_reference", 200, false, null),
+                        bigint("requested_at", false, null), bigint("completed_at", true, null),
+                        varchar("outcome", 32, false, null), varchar("error_code", 200, true, null),
+                        varchar("created_by", 100, false, null), bigint("created_at", false, null)),
+                indexes(
+                        index("PRIMARY", true, "id"),
+                        index("uk_command_operation_phase", true, "operation_id", "phase"),
+                        index("idx_command_operation_scope", false, "tenant_id", "client_id", "id"),
+                        index("idx_command_operation_source", false, "tenant_id", "client_id",
+                                "delivery_id", "source_message_id", "id"),
+                        index("idx_command_operation_outcome", false, "tenant_id", "client_id",
+                                "operation_type", "outcome", "created_at", "id"))));
+        tables.put("agent_command_redrive_operation", new TableExpectation(
+                "agent_command_redrive_operation",
+                List.of(
+                        id(), varchar("operation_id", 100, false, null),
+                        bigint("delivery_id", false, null), varchar("task_id", 100, false, null),
+                        varchar("target_agent_id", 100, false, null),
+                        varchar("command_id", 100, false, null),
+                        varchar("source_event_id", 100, false, null),
+                        varchar("source_message_id", 100, false, null),
+                        integer("source_attempt", false, null), binary32("wire_hash"),
+                        varchar("requester_id", 100, false, null),
+                        varchar("reason", 1000, false, null),
+                        varchar("ticket_reference", 200, false, null),
+                        enumeration("outcome_state", false, "PENDING",
+                                "PENDING", "SUCCEEDED", "FAILED"),
+                        enumeration("settlement_state", false, "PENDING",
+                                "PENDING", "SOURCE_ACKED", "SOURCE_REQUEUED", "NOT_ACQUIRED", "UNKNOWN"),
+                        varchar("error_code", 200, true, null), bigint("requested_at", false, null),
+                        bigint("completed_at", true, null), bigint("version", false, "0"),
+                        generatedTinyint("disposition_guard", "if(outcome_state='PENDING',1,null)"),
+                        generatedTinyint("redrive_guard",
+                                "if(settlement_statein('SOURCE_REQUEUED','NOT_ACQUIRED'),null,1)"),
+                        varchar("tenant_id", 50, false, null), varchar("client_id", 50, false, null),
+                        bigint("create_time", false, null), bigint("update_time", false, null)),
+                indexes(
+                        index("PRIMARY", true, "id"),
+                        index("uk_redrive_operation_id", true,
+                                "tenant_id", "client_id", "operation_id"),
+                        index("uk_redrive_operation_guard", true, "tenant_id", "client_id",
+                                "delivery_id", "source_message_id", "source_attempt", "redrive_guard"),
+                        index("idx_redrive_operation_disposition", false, "tenant_id", "client_id",
+                                "delivery_id", "source_message_id", "source_attempt", "disposition_guard"),
+                        index("idx_redrive_operation_recovery", false, "tenant_id", "client_id",
+                                "outcome_state", "requested_at", "id"),
+                        index("idx_redrive_operation_scope", false,
+                                "tenant_id", "client_id", "id"))));
+        return Map.copyOf(tables);
+    }
+
+    private static ColumnDefinition id() {
+        return new ColumnDefinition("id", "bigint", "bigint", false, null, null,
+                "auto_increment", "");
+    }
+
+    private static ColumnDefinition varchar(String name, int length, boolean nullable, String defaultValue) {
+        return new ColumnDefinition(name, "varchar", "varchar(" + length + ")", nullable,
+                defaultValue, BINARY_COLLATION, "", "");
+    }
+
+    private static ColumnDefinition bigint(String name, boolean nullable, String defaultValue) {
+        return new ColumnDefinition(name, "bigint", "bigint", nullable, defaultValue, null, "", "");
+    }
+
+    private static ColumnDefinition integer(String name, boolean nullable, String defaultValue) {
+        return new ColumnDefinition(name, "int", "int", nullable, defaultValue, null, "", "");
+    }
+
+    private static ColumnDefinition enumeration(
+            String name, boolean nullable, String defaultValue, String... values) {
+        StringBuilder columnType = new StringBuilder("enum(");
+        for (int index = 0; index < values.length; index++) {
+            if (index > 0) columnType.append(',');
+            columnType.append('\'').append(values[index]).append('\'');
+        }
+        columnType.append(')');
+        return new ColumnDefinition(name, "enum", columnType.toString(), nullable,
+                defaultValue, BINARY_COLLATION, "", "");
+    }
+
+    private static ColumnDefinition generatedTinyint(String name, String expression) {
+        return new ColumnDefinition(name, "tinyint", "tinyint", true, null, null,
+                "STORED GENERATED", normalizeGeneratedExpression(expression));
+    }
+
+    private static ColumnDefinition mediumblob(String name) {
+        return new ColumnDefinition(name, "mediumblob", "mediumblob", false, null, null, "", "");
+    }
+
+    private static ColumnDefinition binary32(String name) {
+        return new ColumnDefinition(name, "binary", "binary(32)", false, null, null, "", "");
+    }
+
+    private static ColumnDefinition binary32Nullable(String name) {
+        return new ColumnDefinition(name, "binary", "binary(32)", true, null, null, "", "");
+    }
+
+    private static Map<String, IndexDefinition> indexes(IndexEntry... entries) {
+        Map<String, IndexDefinition> result = new TreeMap<>();
+        for (IndexEntry entry : entries) {
+            result.put(entry.name(), entry.definition());
+        }
+        return Map.copyOf(result);
+    }
+
+    private static IndexEntry index(String name, boolean unique, String... columns) {
+        return new IndexEntry(name, new IndexDefinition(unique, List.of(columns)));
+    }
+
+    private static IllegalStateException partialSchema(List<String> present) {
+        return new IllegalStateException("Agent command transport schema is partial; expected exact 0/5, legacy 3/5, current 4/5, or 5/5 tables, got "
+                + present.size() + "/5: " + present);
+    }
+
+    static record TableExpectation(
+            String name, List<ColumnDefinition> columns, Map<String, IndexDefinition> indexes) {
+    }
+
+    static record TableDefinition(String engine, String collation) {
+    }
+
+    static record ColumnDefinition(
+            String name, String dataType, String columnType, boolean nullable,
+            String defaultValue, String collation, String extra, String generationExpression) {
+    }
+
+    static record IndexDefinition(boolean unique, List<String> columns) {
+    }
+
+    static record TriggerDefinition(
+            String name, String table, String timing, String event, String statement) {
+    }
+
+    private record IndexEntry(String name, IndexDefinition definition) {
+    }
+
+    private record IndexColumn(
+            String name, boolean nonUnique, int sequence, String column,
+            Integer subPart, String indexType, String visible) {
+    }
+}
