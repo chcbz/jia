@@ -40,6 +40,8 @@ require 'rm -f -- "$result_xml" "$report_path"'
 require 'fresh_result_xml='
 require 'current_tree='
 require 'current_fixture_digest='
+require 'D09_CONTRACT_FRESH_FAILING_XML'
+require 'if python3 - "$result_xml" "$EXPECTED_TESTS"'
 
 if grep -Fq -- 'gradle D09 --heavy' "$RUNNER"; then
   fail "orchestrator gradle options must precede task_id D09"
@@ -158,3 +160,32 @@ grep -Fqx 'fresh_result_xml=no' "$GATE_SUMMARY" || fail "stale result XML was ma
 [[ ! -e "$TEST_ROOT/gate-denied-evidence/test-counts.txt" ]] || fail "stale counts were published after gate denial"
 
 printf '%s\n' 'D09 isolated MySQL stale-output/gate-denial freshness contract: PASS'
+
+# A fresh failing XML must still be parsed and summarized without errexit
+# skipping the summary or replacing the test failure exit status.
+FAILING_EVIDENCE="$TEST_ROOT/failing-xml-evidence"
+set +e
+D09_CONTRACT_FRESH_FAILING_XML=1 D09_CONTRACT_GRADLE_EXIT=17 \
+  D09_EVIDENCE_DIR="$FAILING_EVIDENCE" \
+  D09_LATEST_EVIDENCE_FILE="$TEST_ROOT/failing-xml-latest" \
+  "$RUNNER" > "$TEST_ROOT/failing-xml-output.log" 2>&1
+failing_xml_status=$?
+set -e
+[[ "$failing_xml_status" == 17 ]] || \
+  fail "fresh failing XML exit was $failing_xml_status, expected 17"
+FAILING_SUMMARY="$FAILING_EVIDENCE/result-summary.txt"
+[[ -f "$FAILING_SUMMARY" ]] || fail "fresh failing XML summary was not written"
+grep -Fqx 'fresh_result_xml=yes' "$FAILING_SUMMARY" || \
+  fail "fresh failing XML was not marked fresh"
+grep -Fqx 'gradle_exit=17' "$FAILING_SUMMARY" || \
+  fail "fresh failing XML exit was not recorded"
+grep -Fqx 'tests=5' "$FAILING_SUMMARY" || \
+  fail "fresh failing XML test count was not recorded"
+grep -Fqx 'failures=1' "$FAILING_SUMMARY" || \
+  fail "fresh failing XML failure count was not recorded"
+grep -Fqx 'errors=0' "$FAILING_SUMMARY" || \
+  fail "fresh failing XML error count was not recorded"
+grep -Fqx 'skipped=0' "$FAILING_SUMMARY" || \
+  fail "fresh failing XML skipped count was not recorded"
+
+printf '%s\n' 'D09 isolated MySQL fresh-failing-XML summary contract: PASS'

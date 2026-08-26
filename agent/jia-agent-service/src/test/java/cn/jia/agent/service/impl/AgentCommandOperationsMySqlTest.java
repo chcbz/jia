@@ -57,6 +57,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 
 /**
  * D09 production mapper/DAO/service-policy operations matrix on an isolated MySQL 8.0.21.
@@ -238,8 +239,7 @@ class AgentCommandOperationsMySqlTest {
                 TENANT, CLIENT, source.deliveryId(), source.messageId(), source.attempt());
         ArgumentCaptor<AgentCommandOperationAuditEntity> auditCaptor =
                 ArgumentCaptor.forClass(AgentCommandOperationAuditEntity.class);
-        order.verify(orderedDao).insertAudit(auditCaptor.capture());
-        order.verify(orderedDao).insertAudit(auditCaptor.capture());
+        order.verify(orderedDao, times(2)).insertAudit(auditCaptor.capture());
         order.verifyNoMoreInteractions();
 
         List<AgentCommandOperationAuditEntity> audits = auditCaptor.getAllValues();

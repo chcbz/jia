@@ -69,6 +69,71 @@ mkdir -p "$EVIDENCE_DIR" "$DATA" "$RUN" "$TMP" "$LOG_DIR"
 # task outputs makes a denied gate or skipped test unable to publish stale evidence.
 rm -f -- "$result_xml" "$report_path"
 
+collect_result() {
+  local gradle_status=$1
+  local gradle_started=$2
+  local counts_status=1
+  local fresh_result_xml=no
+  local fresh_report=no
+  if [[ -f "$result_xml" ]]; then
+    fresh_result_xml=yes
+    cp -- "$result_xml" "$EVIDENCE_DIR/"
+    if python3 - "$result_xml" "$EXPECTED_TESTS" > "$EVIDENCE_DIR/test-counts.txt" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+counts = {name: int(root.attrib.get(name, '-1')) for name in ('tests', 'failures', 'errors', 'skipped')}
+for name, value in counts.items():
+    print(f'{name}={value}')
+expected = int(sys.argv[2])
+raise SystemExit(0 if counts == {'tests': expected, 'failures': 0, 'errors': 0, 'skipped': 0} else 1)
+PY
+    then
+      counts_status=0
+    else
+      counts_status=$?
+    fi
+  fi
+  if [[ -f "$report_path" ]]; then
+    fresh_report=yes
+    cp -- "$report_path" "$EVIDENCE_DIR/"
+  fi
+  if [[ $gradle_status == 0 && $counts_status != 0 ]]; then gradle_status=85; fi
+  {
+    echo "current_tree=$TREE_SHA"
+    echo "tree_sha=$TREE_SHA"
+    echo "current_fixture_digest=$FIXTURE_DIGEST"
+    echo "fixture_digest=$FIXTURE_DIGEST"
+    echo "gradle_started=$gradle_started"
+    echo "gradle_exit=$gradle_status"
+    echo "gradle_selector=$SELECTOR"
+    echo "orchestrator=$ORCHESTRATOR"
+    echo "fresh_result_xml=$fresh_result_xml"
+    echo "fresh_report=$fresh_report"
+    echo "report_path=$report_path"
+    echo "result_xml=$result_xml"
+    [[ -f "$EVIDENCE_DIR/test-counts.txt" ]] && cat "$EVIDENCE_DIR/test-counts.txt"
+  } > "$EVIDENCE_DIR/result-summary.txt"
+  [[ -f "$EVIDENCE_DIR/mysql-instance.txt" ]] && cat "$EVIDENCE_DIR/mysql-instance.txt"
+  cat "$EVIDENCE_DIR/result-summary.txt"
+  echo "evidence_dir=$EVIDENCE_DIR"
+  return "$gradle_status"
+}
+
+if [[ ${D09_CONTRACT_FRESH_FAILING_XML:-0} == 1 ]]; then
+  trap 'rm -rf -- "$BASE"' EXIT
+  mkdir -p -- "$(dirname -- "$result_xml")"
+  cat > "$result_xml" <<'XML'
+<testsuite tests="5" failures="1" errors="0" skipped="0"/>
+XML
+  if collect_result "${D09_CONTRACT_GRADLE_EXIT:-17}" yes; then
+    result_status=0
+  else
+    result_status=$?
+  fi
+  exit "$result_status"
+fi
+
 if [[ ${D09_CONTRACT_GATE_DENIED:-0} == 1 ]]; then
   trap 'rm -rf -- "$BASE"' EXIT
   set +e
@@ -91,6 +156,7 @@ if [[ ${D09_CONTRACT_GATE_DENIED:-0} == 1 ]]; then
   echo "evidence_dir=$EVIDENCE_DIR"
   exit "$gradle_status"
 fi
+
 printf '%s\n' "$OWNER_TOKEN" > "$BASE/.cyf-d09-owner"
 printf '%s\n' "$EVIDENCE_DIR" > "$LATEST_EVIDENCE_FILE"
 
@@ -291,46 +357,9 @@ env \
 gradle_status=$?
 set -e
 
-gradle_started=yes
-counts_status=1
-fresh_result_xml=no
-fresh_report=no
-if [[ -f "$result_xml" ]]; then
-  fresh_result_xml=yes
-  cp -- "$result_xml" "$EVIDENCE_DIR/"
-  python3 - "$result_xml" "$EXPECTED_TESTS" > "$EVIDENCE_DIR/test-counts.txt" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-root = ET.parse(sys.argv[1]).getroot()
-counts = {name: int(root.attrib.get(name, '-1')) for name in ('tests', 'failures', 'errors', 'skipped')}
-for name, value in counts.items():
-    print(f'{name}={value}')
-expected = int(sys.argv[2])
-raise SystemExit(0 if counts == {'tests': expected, 'failures': 0, 'errors': 0, 'skipped': 0} else 1)
-PY
-  counts_status=$?
+if collect_result "$gradle_status" yes; then
+  result_status=0
+else
+  result_status=$?
 fi
-if [[ -f "$report_path" ]]; then
-  fresh_report=yes
-  cp -- "$report_path" "$EVIDENCE_DIR/"
-fi
-if [[ $gradle_status == 0 && $counts_status != 0 ]]; then gradle_status=85; fi
-{
-  echo "current_tree=$TREE_SHA"
-  echo "tree_sha=$TREE_SHA"
-  echo "current_fixture_digest=$FIXTURE_DIGEST"
-  echo "fixture_digest=$FIXTURE_DIGEST"
-  echo "gradle_started=$gradle_started"
-  echo "gradle_exit=$gradle_status"
-  echo "gradle_selector=$SELECTOR"
-  echo "orchestrator=$ORCHESTRATOR"
-  echo "fresh_result_xml=$fresh_result_xml"
-  echo "fresh_report=$fresh_report"
-  echo "report_path=$report_path"
-  echo "result_xml=$result_xml"
-  [[ -f "$EVIDENCE_DIR/test-counts.txt" ]] && cat "$EVIDENCE_DIR/test-counts.txt"
-} > "$EVIDENCE_DIR/result-summary.txt"
-cat "$EVIDENCE_DIR/mysql-instance.txt"
-cat "$EVIDENCE_DIR/result-summary.txt"
-echo "evidence_dir=$EVIDENCE_DIR"
-exit "$gradle_status"
+exit "$result_status"
