@@ -453,23 +453,35 @@ public final class PublicArtifactVerifier {
     }
 
     private final TempOperations tempOperations;
+    private final long nestedJarLimit;
     private final long cumulativeNestedJarLimit;
 
     public PublicArtifactVerifier() {
-        this(new PosixTempOperations(TempMutationHook.NONE), CUMULATIVE_NESTED_JAR_LIMIT);
+        this(new PosixTempOperations(TempMutationHook.NONE),
+                NESTED_JAR_LIMIT, CUMULATIVE_NESTED_JAR_LIMIT);
     }
 
     PublicArtifactVerifier(TempOperations tempOperations) {
-        this(tempOperations, CUMULATIVE_NESTED_JAR_LIMIT);
+        this(tempOperations, NESTED_JAR_LIMIT, CUMULATIVE_NESTED_JAR_LIMIT);
     }
 
     /** Package-private test seam; production constructors always use the frozen 2 GiB ceiling. */
     PublicArtifactVerifier(TempOperations tempOperations, long cumulativeNestedJarLimit) {
-        if (cumulativeNestedJarLimit < 0
+        this(tempOperations, NESTED_JAR_LIMIT, cumulativeNestedJarLimit);
+    }
+
+    /** Package-private downward-only seams; production remains fixed at 256 MiB / 2 GiB. */
+    PublicArtifactVerifier(
+            TempOperations tempOperations,
+            long nestedJarLimit,
+            long cumulativeNestedJarLimit) {
+        if (nestedJarLimit < 0 || nestedJarLimit > NESTED_JAR_LIMIT
+                || cumulativeNestedJarLimit < 0
                 || cumulativeNestedJarLimit > CUMULATIVE_NESTED_JAR_LIMIT) {
-            throw new IllegalArgumentException("invalid-cumulative-nested-jar-limit");
+            throw new IllegalArgumentException("invalid-nested-jar-limit");
         }
         this.tempOperations = tempOperations;
+        this.nestedJarLimit = nestedJarLimit;
         this.cumulativeNestedJarLimit = cumulativeNestedJarLimit;
     }
 
@@ -510,7 +522,8 @@ public final class PublicArtifactVerifier {
         List<TempIdentity> residuals = new ArrayList<>();
         PrivateDirectory privateDirectory = null;
         String cleanupQualifier = NESTED_TEMP_QUALIFIER;
-        long remainingNestedBytes = cumulativeNestedJarLimit;
+        OccurrenceZipArchive.SharedOutputBudget cumulativeBudget =
+                new OccurrenceZipArchive.SharedOutputBudget(cumulativeNestedJarLimit);
         try (OccurrenceZipArchive outer = OccurrenceZipArchive.open(archive)) {
             for (OccurrenceZipArchive.Occurrence occurrence : outer.occurrences()) {
                 String memberName = occurrence.name();
@@ -528,16 +541,16 @@ public final class PublicArtifactVerifier {
                         && normalizedName.startsWith("boot-inf/lib/")
                         && normalizedName.endsWith(".jar")) {
                     cleanupQualifier = safeQualifier(memberName, NESTED_TEMP_QUALIFIER);
-                    if (occurrence.uncompressedSize() > NESTED_JAR_LIMIT) {
+                    if (occurrence.uncompressedSize() > nestedJarLimit) {
                         findings.add(failure(memberName, FailureCode.LIMIT_ERROR, occurrence.id()));
                         continue;
                     }
-                    if (occurrence.uncompressedSize() > remainingNestedBytes) {
+                    if (occurrence.uncompressedSize() > cumulativeBudget.remaining()) {
                         findings.add(failure(memberName, FailureCode.LIMIT_ERROR, occurrence.id()));
                         break;
                     }
-                    // Reserve by subtraction only after the comparison, avoiding cumulative addition overflow.
-                    remainingNestedBytes -= occurrence.uncompressedSize();
+                    OccurrenceZipArchive.OutputBudget occurrenceBudget =
+                            new OccurrenceZipArchive.OutputBudget(nestedJarLimit, cumulativeBudget);
                     if (privateDirectory == null) {
                         try {
                             privateDirectory = tempOperations.createPrivateDirectory(temporaryRoot);
@@ -545,12 +558,27 @@ public final class PublicArtifactVerifier {
                             findings.add(failure(memberName, FailureCode.TEMP_SECURITY_ERROR, occurrence.id()));
                             recordCreationCleanupFailure(
                                     failure, memberName, occurrence.id(), findings, residuals);
-                            outer.copyPayload(occurrence, OutputStream.nullOutputStream(), NESTED_JAR_LIMIT);
+                            try {
+                                outer.copyPayload(
+                                        occurrence, OutputStream.nullOutputStream(), occurrenceBudget);
+                            } catch (VerificationException payloadFailure) {
+                                if (payloadFailure.code() == FailureCode.LIMIT_ERROR
+                                        && occurrenceBudget.sharedLimitExceeded()) {
+                                    findings.add(failure(
+                                            memberName, FailureCode.LIMIT_ERROR, occurrence.id()));
+                                    break;
+                                }
+                                throw payloadFailure;
+                            }
                             continue;
                         }
                     }
                     scanNestedOccurrence(
-                            outer, occurrence, privateDirectory, memberName, findings, residuals);
+                            outer, occurrence, occurrenceBudget, privateDirectory,
+                            memberName, findings, residuals);
+                    if (occurrenceBudget.sharedLimitExceeded()) {
+                        break;
+                    }
                     continue;
                 }
                 outer.copyPayload(occurrence, OutputStream.nullOutputStream(), occurrence.uncompressedSize());
@@ -584,6 +612,7 @@ public final class PublicArtifactVerifier {
     private void scanNestedOccurrence(
             OccurrenceZipArchive outer,
             OccurrenceZipArchive.Occurrence outerOccurrence,
+            OccurrenceZipArchive.OutputBudget occurrenceBudget,
             PrivateDirectory privateDirectory,
             String outerMemberName,
             List<Finding> findings,
@@ -599,7 +628,7 @@ public final class PublicArtifactVerifier {
                 return;
             }
             try (OutputStream output = tempOperations.openForWrite(nestedFile)) {
-                outer.copyPayload(outerOccurrence, output, NESTED_JAR_LIMIT);
+                outer.copyPayload(outerOccurrence, output, occurrenceBudget);
             }
             try (OccurrenceZipArchive nested = tempOperations.openForRead(nestedFile)) {
                 for (OccurrenceZipArchive.Occurrence occurrence : nested.occurrences()) {
@@ -611,7 +640,7 @@ public final class PublicArtifactVerifier {
                             && ConfigurationSecurityClassifier.isConfigurationResource(occurrence.name())) {
                         classifyConfiguration(nested, occurrence, qualifiedName, findings);
                     } else {
-                        nested.copyPayload(occurrence, OutputStream.nullOutputStream(), NESTED_JAR_LIMIT);
+                        nested.copyPayload(occurrence, OutputStream.nullOutputStream(), nestedJarLimit);
                     }
                 }
             } catch (VerificationException failure) {

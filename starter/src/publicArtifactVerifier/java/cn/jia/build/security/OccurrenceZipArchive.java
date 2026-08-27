@@ -98,6 +98,70 @@ final class OccurrenceZipArchive implements Closeable {
         }
     }
 
+    /** Mutable actual-output ceiling shared across sequential occurrence copies. */
+    static final class SharedOutputBudget {
+        private long remaining;
+
+        SharedOutputBudget(long maximumBytes) {
+            if (maximumBytes < 0) {
+                throw new IllegalArgumentException("invalid-shared-output-budget");
+            }
+            remaining = maximumBytes;
+        }
+
+        long remaining() {
+            return remaining;
+        }
+    }
+
+    /** Per-copy ceiling whose charges are never rolled back after payload validation failures. */
+    static final class OutputBudget {
+        private final SharedOutputBudget shared;
+        private long memberRemaining;
+        private long produced;
+        private boolean sharedLimitExceeded;
+
+        OutputBudget(long memberMaximumBytes, SharedOutputBudget shared) {
+            if (memberMaximumBytes < 0 || shared == null) {
+                throw new IllegalArgumentException("invalid-output-budget");
+            }
+            memberRemaining = memberMaximumBytes;
+            this.shared = shared;
+        }
+
+        long produced() {
+            return produced;
+        }
+
+        boolean sharedLimitExceeded() {
+            return sharedLimitExceeded;
+        }
+
+        private boolean declaredSizeFits(long declaredSize) {
+            return declaredSize >= 0
+                    && declaredSize <= memberRemaining
+                    && declaredSize <= shared.remaining();
+        }
+
+        private int nextChunk(int requested) throws PublicArtifactVerifier.VerificationException {
+            long available = Math.min(memberRemaining, shared.remaining);
+            if (available == 0) {
+                sharedLimitExceeded = shared.remaining == 0;
+                throw failure(PublicArtifactVerifier.FailureCode.LIMIT_ERROR);
+            }
+            return (int) Math.min(requested, available);
+        }
+
+        private void charge(int count) {
+            if (count < 0 || count > memberRemaining || count > shared.remaining) {
+                throw new IllegalStateException("output-budget-overcharge");
+            }
+            memberRemaining -= count;
+            shared.remaining -= count;
+            produced += count;
+        }
+    }
+
     private final FileChannel channel;
     private final List<Occurrence> occurrences;
 
@@ -138,13 +202,19 @@ final class OccurrenceZipArchive implements Closeable {
 
     void copyPayload(Occurrence occurrence, OutputStream output, long maximumUncompressedBytes)
             throws IOException, PublicArtifactVerifier.VerificationException {
-        if (maximumUncompressedBytes < 0 || occurrence.uncompressedSize > maximumUncompressedBytes) {
+        SharedOutputBudget shared = new SharedOutputBudget(maximumUncompressedBytes);
+        copyPayload(occurrence, output, new OutputBudget(maximumUncompressedBytes, shared));
+    }
+
+    void copyPayload(Occurrence occurrence, OutputStream output, OutputBudget budget)
+            throws IOException, PublicArtifactVerifier.VerificationException {
+        if (!budget.declaredSizeFits(occurrence.uncompressedSize)) {
             throw failure(PublicArtifactVerifier.FailureCode.LIMIT_ERROR);
         }
         if (occurrence.method == STORED) {
-            copyStored(occurrence, output, maximumUncompressedBytes);
+            copyStored(occurrence, output, budget);
         } else if (occurrence.method == DEFLATED) {
-            copyDeflated(occurrence, output, maximumUncompressedBytes);
+            copyDeflated(occurrence, output, budget);
         } else {
             throw failure(PublicArtifactVerifier.FailureCode.UNSUPPORTED);
         }
@@ -155,7 +225,7 @@ final class OccurrenceZipArchive implements Closeable {
         channel.close();
     }
 
-    private void copyStored(Occurrence occurrence, OutputStream output, long maximumUncompressedBytes)
+    private void copyStored(Occurrence occurrence, OutputStream output, OutputBudget budget)
             throws IOException, PublicArtifactVerifier.VerificationException {
         if (occurrence.compressedSize != occurrence.uncompressedSize) {
             throw failure(PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
@@ -164,24 +234,21 @@ final class OccurrenceZipArchive implements Closeable {
         byte[] buffer = new byte[8192];
         long position = occurrence.dataOffset;
         long remaining = occurrence.compressedSize;
-        long produced = 0;
         while (remaining > 0) {
-            int count = (int) Math.min(buffer.length, remaining);
+            int requested = (int) Math.min(buffer.length, remaining);
+            int count = budget.nextChunk(requested);
             readFully(channel, position, buffer, 0, count,
                     PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
             position += count;
             remaining -= count;
-            produced += count;
-            if (produced > maximumUncompressedBytes) {
-                throw failure(PublicArtifactVerifier.FailureCode.LIMIT_ERROR);
-            }
+            budget.charge(count);
             crc.update(buffer, 0, count);
             output.write(buffer, 0, count);
         }
-        verifyPayload(occurrence, produced, crc.getValue(), position);
+        verifyPayload(occurrence, budget.produced(), crc.getValue(), position);
     }
 
-    private void copyDeflated(Occurrence occurrence, OutputStream output, long maximumUncompressedBytes)
+    private void copyDeflated(Occurrence occurrence, OutputStream output, OutputBudget budget)
             throws IOException, PublicArtifactVerifier.VerificationException {
         Inflater inflater = new Inflater(true);
         CRC32 crc = new CRC32();
@@ -190,9 +257,14 @@ final class OccurrenceZipArchive implements Closeable {
         long position = occurrence.dataOffset;
         long compressedRemaining = occurrence.compressedSize;
         long compressedFed = 0;
-        long produced = 0;
         try {
             while (true) {
+                if (inflater.finished()) {
+                    break;
+                }
+                if (inflater.needsDictionary()) {
+                    throw failure(PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
+                }
                 if (inflater.needsInput()) {
                     if (compressedRemaining == 0) {
                         break;
@@ -207,15 +279,12 @@ final class OccurrenceZipArchive implements Closeable {
                 }
                 int count;
                 try {
-                    count = inflater.inflate(decompressed);
+                    count = inflater.inflate(decompressed, 0, budget.nextChunk(decompressed.length));
                 } catch (DataFormatException ignored) {
                     throw failure(PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
                 }
                 if (count > 0) {
-                    produced += count;
-                    if (produced > maximumUncompressedBytes || produced > occurrence.uncompressedSize) {
-                        throw failure(PublicArtifactVerifier.FailureCode.LIMIT_ERROR);
-                    }
+                    budget.charge(count);
                     crc.update(decompressed, 0, count);
                     output.write(decompressed, 0, count);
                 } else if (inflater.finished()) {
@@ -233,7 +302,7 @@ final class OccurrenceZipArchive implements Closeable {
                     || consumed != occurrence.compressedSize || compressedRemaining != 0) {
                 throw failure(PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
             }
-            verifyPayload(occurrence, produced, crc.getValue(), occurrence.dataOffset + consumed);
+            verifyPayload(occurrence, budget.produced(), crc.getValue(), occurrence.dataOffset + consumed);
         } finally {
             inflater.end();
         }

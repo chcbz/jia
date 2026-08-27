@@ -124,6 +124,134 @@ class PublicArtifactVerifierTest {
     }
 
     @Test
+    void actualCumulativeChargeSurvivesUnderstatedSizeFailureAndStopsAtNextOccurrence() throws Exception {
+        byte[] nested = safeNestedJar();
+        ZipFixtureBuilder.BuiltZip built = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/understated.jar", nested)
+                        .deflated().declaredUncompressedSize(1))
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/over.jar", nested).stored())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/later-corrupt.jar", nested).stored())
+                .build();
+        ZipFixtureBuilder.Layout understated = built.layouts().get(0);
+        ZipFixtureBuilder.Layout over = built.layouts().get(1);
+        ZipFixtureBuilder.Layout later = built.layouts().get(2);
+        Path outer = write("actual-charge-survives-integrity.jar",
+                ZipFixtureBuilder.withByte(built.copy(), later.payloadOffset(), 0x00));
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("actual-charge-survives-integrity-root");
+
+        PublicArtifactVerifier.Result result = verifier(hook, nested.length + 1L).verify(outer, root);
+
+        assertEquals(List.of(
+                "BOOT-INF/lib/understated.jar: <nested-zip-payload-integrity-error>",
+                "BOOT-INF/lib/over.jar: <nested-zip-limit-error>"), diagnostics(result));
+        assertEquals(List.of(
+                PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR,
+                PublicArtifactVerifier.FailureCode.LIMIT_ERROR), codes(result));
+        assertEquals(new OccurrenceZipArchive.OccurrenceId(0, understated.localOffset()),
+                result.findings().get(0).occurrenceId());
+        assertEquals(new OccurrenceZipArchive.OccurrenceId(1, over.localOffset()),
+                result.findings().get(1).occurrenceId());
+        assertEquals(1, hook.fileCreations);
+        assertEquals(1, hook.writeAttempts);
+        assertEquals(0, hook.readAttempts);
+        assertEquals(List.of((long) nested.length), hook.fileSizesAtDelete);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void actualCumulativeExhaustionIsOccurrenceBoundAndNeverOpensLaterOccurrence() throws Exception {
+        byte[] nested = safeNestedJar();
+        long budget = nested.length - 1L;
+        ZipFixtureBuilder.BuiltZip built = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/exhausts.jar", nested)
+                        .deflated().declaredUncompressedSize(1))
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/later-corrupt.jar", nested).stored())
+                .build();
+        ZipFixtureBuilder.Layout exhausts = built.layouts().get(0);
+        ZipFixtureBuilder.Layout later = built.layouts().get(1);
+        Path outer = write("actual-cumulative-exhaustion.jar",
+                ZipFixtureBuilder.withByte(built.copy(), later.payloadOffset(), 0x00));
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("actual-cumulative-exhaustion-root");
+
+        PublicArtifactVerifier.Result result = verifier(hook, budget).verify(outer, root);
+
+        assertEquals(List.of("BOOT-INF/lib/exhausts.jar: <nested-zip-limit-error>"), diagnostics(result));
+        assertEquals(List.of(PublicArtifactVerifier.FailureCode.LIMIT_ERROR), codes(result));
+        assertEquals(new OccurrenceZipArchive.OccurrenceId(0, exhausts.localOffset()),
+                result.findings().get(0).occurrenceId());
+        assertEquals(1, hook.fileCreations);
+        assertEquals(1, hook.writeAttempts);
+        assertEquals(0, hook.readAttempts);
+        assertEquals(List.of(budget), hook.fileSizesAtDelete);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void nestedMember256MiBLimitBelowBoundaryUsesActualOutputThroughDownwardSeam() throws Exception {
+        byte[] nested = safeNestedJar();
+        long memberLimit = nested.length + 1L;
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("member-below-root");
+        Path outer = write("member-below.jar", new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/member.jar", nested).deflated())
+                .build().copy());
+
+        PublicArtifactVerifier.Result result = verifier(hook, memberLimit, memberLimit)
+                .verify(outer, root);
+
+        assertEquals(256L << 20, PublicArtifactVerifier.NESTED_JAR_LIMIT);
+        assertTrue(result.accepted());
+        assertEquals(1, hook.readAttempts);
+        assertEquals(List.of((long) nested.length), hook.fileSizesAtDelete);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void nestedMember256MiBLimitExactBoundaryUsesActualOutputThroughDownwardSeam() throws Exception {
+        byte[] nested = safeNestedJar();
+        long memberLimit = nested.length;
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("member-exact-root");
+        Path outer = write("member-exact.jar", new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/member.jar", nested).deflated())
+                .build().copy());
+
+        PublicArtifactVerifier.Result result = verifier(hook, memberLimit, memberLimit)
+                .verify(outer, root);
+
+        assertTrue(result.accepted());
+        assertEquals(1, hook.readAttempts);
+        assertEquals(List.of(memberLimit), hook.fileSizesAtDelete);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void nestedMember256MiBLimitOverBoundaryNeverInflatesPastRemainingActualBudget() throws Exception {
+        byte[] nested = safeNestedJar();
+        long memberLimit = nested.length - 1L;
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("member-over-root");
+        ZipFixtureBuilder.BuiltZip built = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/member.jar", nested)
+                        .deflated().declaredUncompressedSize(1))
+                .build();
+        ZipFixtureBuilder.Layout member = built.layouts().get(0);
+        Path outer = write("member-over.jar", built.copy());
+
+        PublicArtifactVerifier.Result result = verifier(hook, memberLimit, nested.length + 1L)
+                .verify(outer, root);
+
+        assertEquals(List.of("BOOT-INF/lib/member.jar: <nested-zip-limit-error>"), diagnostics(result));
+        assertEquals(new OccurrenceZipArchive.OccurrenceId(0, member.localOffset()),
+                result.findings().get(0).occurrenceId());
+        assertEquals(0, hook.readAttempts);
+        assertEquals(List.of(memberLimit), hook.fileSizesAtDelete);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
     void temp01RealPosixImplementationCreatesExactModesBeforeAnyNestedByte() throws Exception {
         Path outer = outerWithSafeNested("temp-modes.jar");
         RecordingModeHook hook = new RecordingModeHook();
@@ -480,6 +608,16 @@ class PublicArtifactVerifierTest {
                 PublicArtifactVerifier.posixTempOperations(hook), cumulativeNestedJarLimit);
     }
 
+    private PublicArtifactVerifier verifier(
+            PublicArtifactVerifier.TempMutationHook hook,
+            long nestedJarLimit,
+            long cumulativeNestedJarLimit) {
+        return new PublicArtifactVerifier(
+                PublicArtifactVerifier.posixTempOperations(hook),
+                nestedJarLimit,
+                cumulativeNestedJarLimit);
+    }
+
     private Path outerWithSafeNested(String name) throws IOException {
         return write(name, new ZipFixtureBuilder()
                 .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/library.jar", safeNestedJar()).stored())
@@ -512,6 +650,7 @@ class PublicArtifactVerifierTest {
         private int fileCreations;
         private int writeAttempts;
         private int readAttempts;
+        private final List<Long> fileSizesAtDelete = new ArrayList<>();
 
         @Override
         public void afterFileCreated(Path file) {
@@ -526,6 +665,13 @@ class PublicArtifactVerifierTest {
         @Override
         public void beforeFileRead(Path file) {
             readAttempts++;
+        }
+
+        @Override
+        public void beforeDelete(Path path) throws IOException {
+            if (path.getFileName().toString().startsWith("nested-")) {
+                fileSizesAtDelete.add(Files.size(path));
+            }
         }
     }
 
