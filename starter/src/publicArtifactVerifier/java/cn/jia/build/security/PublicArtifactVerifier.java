@@ -38,6 +38,8 @@ public final class PublicArtifactVerifier {
     static final long NESTED_JAR_LIMIT = 256L << 20;
     static final long CUMULATIVE_NESTED_JAR_LIMIT = 2L << 30;
 
+    private static final String PUBLIC_BOOTJAR_QUALIFIER = "public-bootjar";
+    private static final String NESTED_TEMP_QUALIFIER = "nested-temp";
     private static final Pattern SAFE_QUALIFIER = Pattern.compile(
             "(?:<public-bootjar>|<nested-temp>|[-A-Za-z0-9_./!]+)");
     private static final Pattern SAFE_API_KEY = Pattern.compile(
@@ -173,6 +175,10 @@ public final class PublicArtifactVerifier {
         }
     }
 
+    /*
+     * Threat boundary: same-UID build processes and trusted task-temp ancestry are TCB.
+     * Pathname checks are fail-closed snapshots, not atomic resistance to hostile same-UID mutation.
+     */
     static final class PosixTempOperations implements TempOperations {
         private static final int CREATE_ATTEMPTS = 32;
         private static final SecureRandom RANDOM = new SecureRandom();
@@ -346,17 +352,20 @@ public final class PublicArtifactVerifier {
 
         private void deleteExact(TempIdentity identity, boolean requireEmpty)
                 throws IOException, VerificationException {
-            verifyIdentity(identity);
+            Set<PosixFilePermission> expected = identity.directory()
+                    ? DIRECTORY_PERMISSIONS
+                    : FILE_PERMISSIONS;
+            verifySame(identity, expected);
             if (requireEmpty) {
                 try (var entries = Files.newDirectoryStream(identity.path())) {
                     if (entries.iterator().hasNext()) {
                         throw new IOException("residual-entry");
                     }
                 }
-                verifyIdentity(identity);
+                verifySame(identity, expected);
             }
             hook.beforeDelete(identity.path());
-            verifyIdentity(identity);
+            verifySame(identity, expected);
             Files.delete(identity.path());
         }
 
@@ -381,19 +390,6 @@ public final class PublicArtifactVerifier {
                     || attributes.fileKey() == null
                     || !attributes.fileKey().equals(identity.fileKey())
                     || !attributes.permissions().equals(expected)
-                    || !attributes.owner().equals(currentUser())) {
-                throw new VerificationException(FailureCode.TEMP_SECURITY_ERROR);
-            }
-        }
-
-        private static void verifyIdentity(TempIdentity identity)
-                throws IOException, VerificationException {
-            PosixFileAttributes attributes = readAttributes(identity.path());
-            if (attributes.isSymbolicLink()
-                    || identity.directory() && !attributes.isDirectory()
-                    || !identity.directory() && !attributes.isRegularFile()
-                    || attributes.fileKey() == null
-                    || !attributes.fileKey().equals(identity.fileKey())
                     || !attributes.owner().equals(currentUser())) {
                 throw new VerificationException(FailureCode.TEMP_SECURITY_ERROR);
             }
@@ -478,12 +474,16 @@ public final class PublicArtifactVerifier {
     }
 
     static int run(String[] args, PrintStream output) {
+        return run(args, output, new PublicArtifactVerifier());
+    }
+
+    static int run(String[] args, PrintStream output, PublicArtifactVerifier verifier) {
         try {
             if (args.length != 2) {
                 output.println(FailureCode.INTERNAL_ERROR.token());
                 return 1;
             }
-            Result result = new PublicArtifactVerifier().verify(Path.of(args[0]), Path.of(args[1]));
+            Result result = verifier.verify(Path.of(args[0]), Path.of(args[1]));
             for (Finding finding : result.findings()) {
                 output.println(finding.diagnostic());
             }
@@ -498,7 +498,7 @@ public final class PublicArtifactVerifier {
         List<Finding> findings = new ArrayList<>();
         List<TempIdentity> residuals = new ArrayList<>();
         PrivateDirectory privateDirectory = null;
-        String cleanupQualifier = "<nested-temp>";
+        String cleanupQualifier = NESTED_TEMP_QUALIFIER;
         long cumulativeNestedBytes = 0;
         try (OccurrenceZipArchive outer = OccurrenceZipArchive.open(archive)) {
             for (OccurrenceZipArchive.Occurrence occurrence : outer.occurrences()) {
@@ -516,7 +516,7 @@ public final class PublicArtifactVerifier {
                 if (!occurrence.directory()
                         && normalizedName.startsWith("boot-inf/lib/")
                         && normalizedName.endsWith(".jar")) {
-                    cleanupQualifier = memberName;
+                    cleanupQualifier = safeQualifier(memberName, NESTED_TEMP_QUALIFIER);
                     if (occurrence.uncompressedSize() > NESTED_JAR_LIMIT) {
                         findings.add(failure(memberName, FailureCode.LIMIT_ERROR, occurrence.id()));
                         continue;
@@ -654,47 +654,47 @@ public final class PublicArtifactVerifier {
             List<Finding> findings) throws VerificationException {
         ByteArrayOutputStream content = new ByteArrayOutputStream((int) Math.min(occurrence.uncompressedSize(), 8192));
         archive.copyPayload(occurrence, content, CONFIGURATION_LIMIT);
-        if (!isSafeQualifier(qualifiedName)) {
-            findings.add(internal(occurrence.id()));
-            return;
-        }
+        String diagnosticQualifier = safeQualifier(qualifiedName, PUBLIC_BOOTJAR_QUALIFIER);
         try {
             List<ConfigurationSecurityClassifier.Match> matches =
                     ConfigurationSecurityClassifier.classify(qualifiedName, content.toByteArray());
             for (ConfigurationSecurityClassifier.Match match : matches) {
                 if (!SAFE_API_KEY.matcher(match.key()).matches()) {
                     findings.add(failure(
-                            qualifiedName, FailureCode.CONFIGURATION_PARSE_ERROR, occurrence.id()));
+                            diagnosticQualifier, FailureCode.CONFIGURATION_PARSE_ERROR, occurrence.id()));
                     return;
                 }
                 findings.add(new Finding(
                         match.code(),
-                        qualifiedName + ": " + match.key(),
+                        diagnosticQualifier + ": " + match.key(),
                         occurrence.id()));
             }
         } catch (VerificationException failure) {
             if (failure.code() != FailureCode.CONFIGURATION_PARSE_ERROR) {
                 throw failure;
             }
-            findings.add(failure(qualifiedName, FailureCode.CONFIGURATION_PARSE_ERROR, occurrence.id()));
+            findings.add(failure(
+                    diagnosticQualifier, FailureCode.CONFIGURATION_PARSE_ERROR, occurrence.id()));
         }
     }
 
     private static Finding forbidden(
             String qualifier,
             OccurrenceZipArchive.OccurrenceId occurrenceId) {
-        return isSafeQualifier(qualifier)
-                ? new Finding(FailureCode.FORBIDDEN_MEMBER, qualifier, occurrenceId)
-                : internal(occurrenceId);
+        return new Finding(
+                FailureCode.FORBIDDEN_MEMBER,
+                safeQualifier(qualifier, PUBLIC_BOOTJAR_QUALIFIER),
+                occurrenceId);
     }
 
     private static Finding failure(
             String qualifier,
             FailureCode code,
             OccurrenceZipArchive.OccurrenceId occurrenceId) {
-        return isSafeQualifier(qualifier)
-                ? new Finding(code, qualifier + ": " + code.token(), occurrenceId)
-                : internal(occurrenceId);
+        String fallback = code == FailureCode.TEMP_SECURITY_ERROR || code == FailureCode.TEMP_CLEANUP_ERROR
+                ? NESTED_TEMP_QUALIFIER
+                : PUBLIC_BOOTJAR_QUALIFIER;
+        return new Finding(code, safeQualifier(qualifier, fallback) + ": " + code.token(), occurrenceId);
     }
 
     private static Finding internal(OccurrenceZipArchive.OccurrenceId occurrenceId) {
@@ -726,6 +726,10 @@ public final class PublicArtifactVerifier {
         return code == FailureCode.API_KEY_VIOLATION
                 ? SAFE_API_KEY.matcher(detail).matches()
                 : detail.equals(code.token());
+    }
+
+    private static String safeQualifier(String qualifier, String fallback) {
+        return isSafeQualifier(qualifier) ? qualifier : fallback;
     }
 
     private static boolean isSafeQualifier(String qualifier) {

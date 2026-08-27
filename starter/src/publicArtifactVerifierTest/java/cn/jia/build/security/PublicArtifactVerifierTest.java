@@ -91,11 +91,13 @@ class PublicArtifactVerifierTest {
     }
 
     @Test
-    void temp01PermissiveFileIsRolledBackBeforeNestedWrite() throws Exception {
+    void temp01PermissiveFileFailsClosedBeforeWriteAndRetainsCleanupFailure() throws Exception {
         Path outer = outerWithSafeNested("temp-permissive-file.jar");
+        Path[] widenedFile = new Path[1];
         RecordingModeHook hook = new RecordingModeHook() {
             @Override
             public void afterFileCreated(Path file) throws IOException {
+                widenedFile[0] = file;
                 Files.setPosixFilePermissions(file, MODE_0644);
             }
         };
@@ -103,9 +105,12 @@ class PublicArtifactVerifierTest {
 
         PublicArtifactVerifier.Result result = verifier(hook).verify(outer, root);
 
-        assertEquals(List.of("BOOT-INF/lib/library.jar: <nested-temp-security-error>"), diagnostics(result));
+        assertEquals(List.of(
+                "BOOT-INF/lib/library.jar: <nested-temp-security-error>",
+                "BOOT-INF/lib/library.jar: <nested-temp-cleanup-error>"), diagnostics(result));
         assertFalse(hook.fileWriteAttempted);
-        assertFalse(Files.exists(root));
+        assertTrue(Files.exists(root));
+        removeModeWidenedResidual(root, widenedFile[0]);
     }
 
     @Test
@@ -175,6 +180,101 @@ class PublicArtifactVerifierTest {
         assertTrue(hook.fileWasReopenableAtDelete);
         assertEquals(2, hook.fileDeleteAttempts);
         assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void temp02DeleteModeWideningFailsSecurityAndCleanupWithoutLeakingPayloadOrPath() throws Exception {
+        ZipFixtureBuilder.BuiltZip nested = new ZipFixtureBuilder()
+                .add("safe.txt", "delete-mode-secret-canary")
+                .build();
+        Path outer = write("temp-delete-mode.jar", new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/library.jar", nested.copy()).stored())
+                .build().copy());
+        DeleteModeWideningHook hook = new DeleteModeWideningHook();
+        Path root = temporaryDirectory.resolve("delete-mode-temp-path-canary");
+
+        PublicArtifactVerifier.Result result = verifier(hook).verify(outer, root);
+
+        assertFalse(result.accepted());
+        assertEquals(List.of(
+                PublicArtifactVerifier.FailureCode.TEMP_SECURITY_ERROR,
+                PublicArtifactVerifier.FailureCode.TEMP_CLEANUP_ERROR), codes(result));
+        assertEquals(List.of(
+                "BOOT-INF/lib/library.jar: <nested-temp-security-error>",
+                "BOOT-INF/lib/library.jar: <nested-temp-cleanup-error>"), diagnostics(result));
+        String output = String.join("\n", diagnostics(result));
+        for (String forbidden : List.of(
+                "delete-mode-secret-canary",
+                "delete-mode-temp-path-canary",
+                "Exception")) {
+            assertFalse(output.contains(forbidden));
+        }
+        assertEquals(MODE_0644, Files.getPosixFilePermissions(hook.widenedFile));
+        removeModeWidenedResidual(root, hook.widenedFile);
+    }
+
+    @Test
+    void validUnsafeMemberNamesPreserveCodesAndUseFixedQualifiersAtCliBoundary() throws Exception {
+        String configurationName = "BOOT-INF/classes/config/application prod.properties";
+        String forbiddenName = "BOOT-INF/classes/证书 client.key";
+        String nestedName = "BOOT-INF/lib/嵌套 temp.jar";
+        String secret = "valid-name-secret-canary";
+        String exception = "valid-name-delete-exception-canary";
+        ZipFixtureBuilder.BuiltZip nested = new ZipFixtureBuilder().add("safe.txt", "safe").build();
+        Path outer = write("valid-name.jar", new ZipFixtureBuilder()
+                .add(configurationName, "api-key=" + secret + "\n")
+                .add(forbiddenName, "synthetic-private-key")
+                .add(new ZipFixtureBuilder.EntrySpec(nestedName, nested.copy()).stored())
+                .build().copy());
+
+        Path resultRoot = temporaryDirectory.resolve("valid-name-result-temp-path-canary");
+        DeleteOnceHook resultHook = new DeleteOnceHook(exception);
+        PublicArtifactVerifier.Result result = verifier(resultHook).verify(outer, resultRoot);
+
+        assertFalse(result.accepted());
+        assertEquals(List.of(
+                PublicArtifactVerifier.FailureCode.API_KEY_VIOLATION,
+                PublicArtifactVerifier.FailureCode.FORBIDDEN_MEMBER,
+                PublicArtifactVerifier.FailureCode.TEMP_CLEANUP_ERROR), codes(result));
+        List<String> expectedDiagnostics = List.of(
+                "public-bootjar: api-key",
+                "public-bootjar",
+                "nested-temp: <nested-temp-cleanup-error>");
+        assertEquals(expectedDiagnostics, diagnostics(result));
+        assertTrue(resultHook.fileWasReopenableAtDelete);
+        assertEquals(2, resultHook.fileDeleteAttempts);
+        assertFalse(Files.exists(resultRoot));
+
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        Path cliRoot = temporaryDirectory.resolve("valid-name-cli-temp-path-canary");
+        DeleteOnceHook cliHook = new DeleteOnceHook(exception);
+        int exit;
+        try (PrintStream output = new PrintStream(bytes, true, StandardCharsets.UTF_8)) {
+            exit = PublicArtifactVerifier.run(
+                    new String[]{outer.toString(), cliRoot.toString()},
+                    output,
+                    verifier(cliHook));
+        }
+
+        assertEquals(1, exit);
+        assertEquals(String.join("\n", expectedDiagnostics) + "\n", bytes.toString(StandardCharsets.UTF_8));
+        assertTrue(cliHook.fileWasReopenableAtDelete);
+        assertEquals(2, cliHook.fileDeleteAttempts);
+        assertFalse(Files.exists(cliRoot));
+        String output = bytes.toString(StandardCharsets.UTF_8);
+        for (String forbidden : List.of(
+                configurationName,
+                forbiddenName,
+                nestedName,
+                secret,
+                "synthetic-private-key",
+                exception,
+                resultRoot.toString(),
+                cliRoot.toString(),
+                "Exception")) {
+            assertFalse(output.contains(forbidden));
+        }
+        assertFalse(output.chars().anyMatch(value -> value != '\n' && Character.isISOControl(value)));
     }
 
     @Test
@@ -340,14 +440,14 @@ class PublicArtifactVerifierTest {
         @Override
         public void afterDirectoryCreated(Path directory) throws IOException {
             if (directoryFailure) {
-                Files.setPosixFilePermissions(directory, MODE_0755);
+                throw new IOException("directory-create-security-canary");
             }
         }
 
         @Override
         public void afterFileCreated(Path file) throws IOException {
             if (!directoryFailure) {
-                Files.setPosixFilePermissions(file, MODE_0644);
+                throw new IOException("file-create-security-canary");
             }
         }
 
@@ -362,6 +462,26 @@ class PublicArtifactVerifierTest {
             if (!failed && file != directoryFailure) {
                 failed = true;
                 throw new IOException("rollback-delete-exception-canary");
+            }
+        }
+    }
+
+    private static void removeModeWidenedResidual(Path root, Path file) throws IOException {
+        Files.delete(file);
+        Files.delete(file.getParent());
+        Files.delete(root);
+    }
+
+    private static final class DeleteModeWideningHook implements PublicArtifactVerifier.TempMutationHook {
+        private Path widenedFile;
+        private boolean widened;
+
+        @Override
+        public void beforeDelete(Path path) throws IOException {
+            if (!widened && path.getFileName().toString().startsWith("nested-")) {
+                widened = true;
+                widenedFile = path;
+                Files.setPosixFilePermissions(path, MODE_0644);
             }
         }
     }
