@@ -209,21 +209,60 @@ class PublicArtifactVerifierTest {
     }
 
     @Test
-    void nestedMember256MiBLimitExactBoundaryUsesActualOutputThroughDownwardSeam() throws Exception {
-        byte[] nested = safeNestedJar();
+    void nestedMember256MiBExactBoundaryConsumesNextChunkEmptyFinalBlockAndContinuesThroughDownwardSeam()
+            throws Exception {
+        byte[] nested = safeNestedJarAtDeflateInputBoundary();
+        byte[] later = safeNestedJar();
         long memberLimit = nested.length;
         CountingNestedIoHook hook = new CountingNestedIoHook();
-        Path root = temporaryDirectory.resolve("member-exact-root");
-        Path outer = write("member-exact.jar", new ZipFixtureBuilder()
-                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/member.jar", nested).deflated())
-                .build().copy());
+        Path root = temporaryDirectory.resolve("member-exact-empty-final-root");
+        ZipFixtureBuilder.BuiltZip built = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/member.jar", nested)
+                        .deflatedWithFinalEmptyBlockAfterInputBoundary())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/later.jar", later).stored())
+                .build();
+        assertEmptyFinalBlockStartsInNextInputChunk(built, 0);
+        Path outer = write("member-exact-empty-final.jar", built.copy());
 
-        PublicArtifactVerifier.Result result = verifier(hook, memberLimit, memberLimit)
-                .verify(outer, root);
+        PublicArtifactVerifier.Result result = verifier(
+                hook, memberLimit, memberLimit + later.length).verify(outer, root);
 
         assertTrue(result.accepted());
+        assertEquals(2, hook.fileCreations);
+        assertEquals(2, hook.writeAttempts);
+        assertEquals(2, hook.readAttempts);
+        assertEquals(List.of(memberLimit, (long) later.length), hook.fileSizesAtDelete);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void cumulative2GiBExactBoundaryConsumesEmptyFinalBlockBeforeRejectingLaterOccurrenceThroughDownwardSeam()
+            throws Exception {
+        byte[] nested = safeNestedJarAtDeflateInputBoundary();
+        byte[] later = safeNestedJar();
+        long exactSharedLimit = nested.length;
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("shared-exact-empty-final-root");
+        ZipFixtureBuilder.BuiltZip built = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/exact.jar", nested)
+                        .deflatedWithFinalEmptyBlockAfterInputBoundary())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/later.jar", later).stored())
+                .build();
+        assertEmptyFinalBlockStartsInNextInputChunk(built, 0);
+        ZipFixtureBuilder.Layout laterLayout = built.layouts().get(1);
+        Path outer = write("shared-exact-empty-final.jar", built.copy());
+
+        PublicArtifactVerifier.Result result = verifier(hook, exactSharedLimit, exactSharedLimit)
+                .verify(outer, root);
+
+        assertEquals(List.of("BOOT-INF/lib/later.jar: <nested-zip-limit-error>"), diagnostics(result));
+        assertEquals(List.of(PublicArtifactVerifier.FailureCode.LIMIT_ERROR), codes(result));
+        assertEquals(new OccurrenceZipArchive.OccurrenceId(1, laterLayout.localOffset()),
+                result.findings().get(0).occurrenceId());
+        assertEquals(1, hook.fileCreations);
+        assertEquals(1, hook.writeAttempts);
         assertEquals(1, hook.readAttempts);
-        assertEquals(List.of(memberLimit), hook.fileSizesAtDelete);
+        assertEquals(List.of(exactSharedLimit), hook.fileSizesAtDelete);
         assertFalse(Files.exists(root));
     }
 
@@ -626,6 +665,41 @@ class PublicArtifactVerifierTest {
 
     private static byte[] safeNestedJar() {
         return new ZipFixtureBuilder().add("safe.txt", "safe").build().copy();
+    }
+
+    private static byte[] safeNestedJarAtDeflateInputBoundary() {
+        byte[] empty = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("safe.txt", new byte[0]).stored())
+                .build().copy();
+        int payloadSize = ZipFixtureBuilder.NON_FINAL_STORED_BLOCK_DATA_SIZE - empty.length;
+        if (payloadSize < 0) {
+            throw new IllegalStateException("nested-zip-overhead-exceeds-boundary-fixture");
+        }
+        byte[] nested = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("safe.txt", new byte[payloadSize]).stored())
+                .build().copy();
+        if (nested.length != ZipFixtureBuilder.NON_FINAL_STORED_BLOCK_DATA_SIZE) {
+            throw new IllegalStateException("nested-zip-boundary-fixture-size-mismatch");
+        }
+        return nested;
+    }
+
+    private static void assertEmptyFinalBlockStartsInNextInputChunk(
+            ZipFixtureBuilder.BuiltZip built,
+            int entryIndex) {
+        ZipFixtureBuilder.Layout layout = built.layouts().get(entryIndex);
+        byte[] bytes = built.copy();
+        int payload = layout.payloadOffset();
+        int finalBlock = payload + ZipFixtureBuilder.DEFLATE_INPUT_CHUNK_SIZE;
+        assertEquals(ZipFixtureBuilder.DEFLATE_INPUT_CHUNK_SIZE + 5, layout.compressedSize());
+        assertEquals(0x00, bytes[payload] & 0xff);
+        assertEquals(ZipFixtureBuilder.NON_FINAL_STORED_BLOCK_DATA_SIZE,
+                ZipFixtureBuilder.u16(bytes, payload + 1));
+        assertEquals(0xffff ^ ZipFixtureBuilder.NON_FINAL_STORED_BLOCK_DATA_SIZE,
+                ZipFixtureBuilder.u16(bytes, payload + 3));
+        assertEquals(0x01, bytes[finalBlock] & 0xff);
+        assertEquals(0, ZipFixtureBuilder.u16(bytes, finalBlock + 1));
+        assertEquals(0xffff, ZipFixtureBuilder.u16(bytes, finalBlock + 3));
     }
 
     private Path write(String name, byte[] bytes) throws IOException {

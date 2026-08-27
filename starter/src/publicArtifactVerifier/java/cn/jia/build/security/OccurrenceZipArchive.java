@@ -144,12 +144,20 @@ final class OccurrenceZipArchive implements Closeable {
         }
 
         private int nextChunk(int requested) throws PublicArtifactVerifier.VerificationException {
-            long available = Math.min(memberRemaining, shared.remaining);
-            if (available == 0) {
-                sharedLimitExceeded = shared.remaining == 0;
-                throw failure(PublicArtifactVerifier.FailureCode.LIMIT_ERROR);
+            int count = nextInflateChunk(requested);
+            if (count == 0) {
+                throw limitFailure();
             }
-            return (int) Math.min(requested, available);
+            return count;
+        }
+
+        private int nextInflateChunk(int requested) {
+            return (int) Math.min(requested, Math.min(memberRemaining, shared.remaining));
+        }
+
+        private PublicArtifactVerifier.VerificationException limitFailure() {
+            sharedLimitExceeded = shared.remaining == 0;
+            return failure(PublicArtifactVerifier.FailureCode.LIMIT_ERROR);
         }
 
         private void charge(int count) {
@@ -277,9 +285,10 @@ final class OccurrenceZipArchive implements Closeable {
                     compressedFed += count;
                     inflater.setInput(compressed, 0, count);
                 }
+                int outputCapacity = budget.nextInflateChunk(decompressed.length);
                 int count;
                 try {
-                    count = inflater.inflate(decompressed, 0, budget.nextChunk(decompressed.length));
+                    count = inflater.inflate(decompressed, 0, outputCapacity);
                 } catch (DataFormatException ignored) {
                     throw failure(PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
                 }
@@ -293,6 +302,11 @@ final class OccurrenceZipArchive implements Closeable {
                     continue;
                 } else if (inflater.needsDictionary() || (inflater.needsInput() && compressedRemaining == 0)) {
                     throw failure(PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
+                } else if (outputCapacity == 0) {
+                    // A zero-length inflate may consume a legal zero-output terminator. If it cannot
+                    // finish or request more input, output is pending and must be rejected before
+                    // granting even one byte of destination capacity.
+                    throw budget.limitFailure();
                 } else {
                     throw failure(PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
                 }

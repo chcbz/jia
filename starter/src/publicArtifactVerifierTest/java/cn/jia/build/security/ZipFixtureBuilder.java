@@ -17,6 +17,8 @@ final class ZipFixtureBuilder {
     static final String COLLIDING_SAFE_PROPERTIES =
             "api-key=${PUBLIC_API_KEY}\n# collision:Xi4KtUrL\n";
     static final long COLLIDING_CRC32 = 0x3fce2d7cL;
+    static final int DEFLATE_INPUT_CHUNK_SIZE = 8192;
+    static final int NON_FINAL_STORED_BLOCK_DATA_SIZE = DEFLATE_INPUT_CHUNK_SIZE - 5;
 
     enum Descriptor {
         NONE,
@@ -30,6 +32,7 @@ final class ZipFixtureBuilder {
         int method;
         int extraFlags;
         long declaredUncompressedSize = -1;
+        boolean finalEmptyBlockAfterInputBoundary;
         Descriptor descriptor = Descriptor.NONE;
 
         EntrySpec(String name, byte[] data) {
@@ -44,6 +47,12 @@ final class ZipFixtureBuilder {
 
         EntrySpec stored() {
             method = 0;
+            return this;
+        }
+
+        EntrySpec deflatedWithFinalEmptyBlockAfterInputBoundary() {
+            method = 8;
+            finalEmptyBlockAfterInputBoundary = true;
             return this;
         }
 
@@ -125,7 +134,14 @@ final class ZipFixtureBuilder {
             List<Pending> pending = new ArrayList<>();
             for (EntrySpec entry : entries) {
                 byte[] name = entry.name.getBytes(StandardCharsets.UTF_8);
-                byte[] compressed = entry.method == 8 ? deflate(entry.data) : entry.data.clone();
+                byte[] compressed;
+                if (entry.method == 8) {
+                    compressed = entry.finalEmptyBlockAfterInputBoundary
+                            ? deflateWithFinalEmptyBlockAfterInputBoundary(entry.data)
+                            : deflate(entry.data);
+                } else {
+                    compressed = entry.data.clone();
+                }
                 long declaredUncompressedSize = entry.declaredUncompressedSize >= 0
                         ? entry.declaredUncompressedSize
                         : entry.data.length;
@@ -267,6 +283,24 @@ final class ZipFixtureBuilder {
         bytes[offset + 1] = (byte) (value >>> 8);
         bytes[offset + 2] = (byte) (value >>> 16);
         bytes[offset + 3] = (byte) (value >>> 24);
+    }
+
+    private static byte[] deflateWithFinalEmptyBlockAfterInputBoundary(byte[] data) throws IOException {
+        if (data.length != NON_FINAL_STORED_BLOCK_DATA_SIZE) {
+            throw new IllegalArgumentException("invalid-input-boundary-deflate-size");
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream(DEFLATE_INPUT_CHUNK_SIZE + 5);
+        output.write(0x00); // non-final stored block, already byte-aligned
+        le16(output, data.length);
+        le16(output, ~data.length);
+        output.write(data);
+        if (output.size() != DEFLATE_INPUT_CHUNK_SIZE) {
+            throw new IllegalStateException("deflate-input-boundary-mismatch");
+        }
+        output.write(0x01); // final empty stored block starts in the next verifier input chunk
+        le16(output, 0);
+        le16(output, 0xffff);
+        return output.toByteArray();
     }
 
     private static byte[] deflate(byte[] data) {
