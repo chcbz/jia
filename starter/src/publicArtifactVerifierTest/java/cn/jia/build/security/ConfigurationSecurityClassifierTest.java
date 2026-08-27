@@ -83,6 +83,16 @@ class ConfigurationSecurityClassifierTest {
     }
 
     @Test
+    void yaml12TokenEventLimitAcceptsBoundaryAndRejectsNextCollectionEnd() throws Exception {
+        // Flow sequence accounting is two collection events plus scalar+entry per item.
+        int boundaryItems = (BoundedYamlParser.MAX_TOKENS - 2) / 2;
+        byte[] atLimit = flowSequence(boundaryItems).getBytes(StandardCharsets.UTF_8);
+        assertEquals(1, BoundedYamlParser.parse(atLimit).size());
+        assertParseFailure("application.yaml",
+                flowSequence(boundaryItems + 1).getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
     void prop01UnsafeDuplicateCannotBeOverwrittenByLaterSafeDuplicate() throws Exception {
         String properties = "api-key=live-secret\n"
                 + "api-key=${PUBLIC_API_KEY}\n"
@@ -110,6 +120,17 @@ class ConfigurationSecurityClassifierTest {
         List<String> keys = yaml("provider: {api-key: adversarial-secret-canary}\n");
         assertEquals(List.of("api-key"), keys);
         assertTrue(keys.stream().noneMatch(value -> value.contains("canary")));
+    }
+
+    private static String flowSequence(int items) {
+        StringBuilder yaml = new StringBuilder(items * 2 + 1).append('[');
+        for (int index = 0; index < items; index++) {
+            if (index > 0) {
+                yaml.append(',');
+            }
+            yaml.append('a');
+        }
+        return yaml.append(']').toString();
     }
 
     private static void assertYamlViolation(String yaml) throws Exception {

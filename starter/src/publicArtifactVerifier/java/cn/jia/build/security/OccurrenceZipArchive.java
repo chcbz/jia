@@ -107,7 +107,12 @@ final class OccurrenceZipArchive implements Closeable {
     }
 
     static OccurrenceZipArchive open(Path path) throws IOException, PublicArtifactVerifier.VerificationException {
-        FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
+        return open(FileChannel.open(path, StandardOpenOption.READ));
+    }
+
+    /** Takes ownership of an already identity-bound channel and closes it on every terminal path. */
+    static OccurrenceZipArchive open(FileChannel channel)
+            throws IOException, PublicArtifactVerifier.VerificationException {
         boolean accepted = false;
         try {
             long size = channel.size();

@@ -14,6 +14,7 @@ final class BoundedYamlParser {
     private static final int MAX_BYTES = 1 << 20;
     private static final int MAX_DEPTH = 64;
     private static final int MAX_NODES = 100_000;
+    static final int MAX_TOKENS = 100_000;
     private static final int MAX_LINES = 10_000;
     private static final Pattern BLOCK_SCALAR = Pattern.compile("[|>](?:[+-]?[1-9]?|[1-9][+-]?)");
 
@@ -71,6 +72,7 @@ final class BoundedYamlParser {
 
     private final String[] lines;
     private int nodes;
+    private int tokens;
 
     private BoundedYamlParser(String text) throws PublicArtifactVerifier.VerificationException {
         this.lines = text.split("\\r\\n|\\n|\\r", -1);
@@ -254,7 +256,7 @@ final class BoundedYamlParser {
                 throw failure();
             }
         }
-        return new PairParsed(new Pair(key, value), nextIndex);
+        return new PairParsed(pair(key, value), nextIndex);
     }
 
     private Parsed parseBlockSequence(int index, int indent, int depth)
@@ -283,21 +285,21 @@ final class BoundedYamlParser {
                 if (childIndex < lines.length && !isDocumentMarker(line(childIndex))
                         && line(childIndex).indent > indent) {
                     Parsed parsed = parseBlockNode(childIndex, line(childIndex).indent, depth + 1);
-                    items.add(parsed.node);
+                    addSequenceItem(items, parsed.node);
                     cursor = parsed.nextIndex;
                 } else {
-                    items.add(count(Node.nullNode(), depth + 1));
+                    addSequenceItem(items, count(Node.nullNode(), depth + 1));
                     cursor = significant + 1;
                 }
             } else if (findMappingColon(itemText) >= 0) {
                 Parsed parsed = parseCompactSequenceMapping(itemText, significant, indent, depth + 1);
-                items.add(parsed.node);
+                addSequenceItem(items, parsed.node);
                 cursor = parsed.nextIndex;
             } else {
                 rejectUnsupportedToken(itemText);
                 InlineCollected inline = collectInline(itemText, significant);
                 Node node = new FlowParser(inline.text, depth + 1).parseSingleNode();
-                items.add(node);
+                addSequenceItem(items, node);
                 cursor = inline.nextIndex;
                 int childIndex = nextSignificant(cursor);
                 if (childIndex < lines.length && !isDocumentMarker(line(childIndex))
@@ -711,13 +713,37 @@ final class BoundedYamlParser {
         throw failure();
     }
 
+    /**
+     * Token events are counted independently from nodes: scalar/null/block values count one;
+     * collection start and end count two; each mapping key plus entry counts two; and each
+     * sequence entry counts one. The 100,000th event is accepted and the next event rejects.
+     */
     private Node count(Node node, int depth) throws PublicArtifactVerifier.VerificationException {
         requireDepth(depth);
         nodes++;
         if (nodes > MAX_NODES) {
             throw failure();
         }
+        countTokens(node.kind == Kind.MAPPING || node.kind == Kind.SEQUENCE ? 2 : 1);
         return node;
+    }
+
+    private Pair pair(String key, Node value) throws PublicArtifactVerifier.VerificationException {
+        countTokens(2);
+        return new Pair(key, value);
+    }
+
+    private void addSequenceItem(List<Node> items, Node value)
+            throws PublicArtifactVerifier.VerificationException {
+        countTokens(1);
+        items.add(value);
+    }
+
+    private void countTokens(int amount) throws PublicArtifactVerifier.VerificationException {
+        if (tokens > MAX_TOKENS - amount) {
+            throw failure();
+        }
+        tokens += amount;
     }
 
     private static void requireDepth(int depth) throws PublicArtifactVerifier.VerificationException {
@@ -791,7 +817,7 @@ final class BoundedYamlParser {
                 } else {
                     value = parseNode(depth + 1);
                 }
-                pairs.add(new Pair(key, value));
+                pairs.add(pair(key, value));
                 skipWhitespace();
                 if (take('}')) {
                     break;
@@ -814,7 +840,7 @@ final class BoundedYamlParser {
             }
             while (true) {
                 skipWhitespace();
-                items.add(parseSequenceItem(depth + 1));
+                addSequenceItem(items, parseSequenceItem(depth + 1));
                 skipWhitespace();
                 if (take(']')) {
                     break;
@@ -849,7 +875,7 @@ final class BoundedYamlParser {
             Node value = peek(',') || peek(']')
                     ? count(Node.nullNode(), depth + 1)
                     : parseNode(depth + 1);
-            return count(Node.mapping(List.of(new Pair(possibleKey, value))), depth);
+            return count(Node.mapping(List.of(pair(possibleKey, value))), depth);
         }
 
         private String parseKey() throws PublicArtifactVerifier.VerificationException {

@@ -20,6 +20,8 @@ final class ConfigurationSecurityClassifier {
     private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{[A-Za-z_][A-Za-z0-9_.-]*:?\\}");
     private static final Pattern DUMMY = Pattern.compile(
             "(?i)(?:test-only-dummy|dummy|fake|mock|placeholder|example|changeme|not-a-real)(?:[-_.:].*)?");
+    private static final Pattern SAFE_DIAGNOSTIC_API_KEY = Pattern.compile(
+            "[-A-Za-z0-9_.]*api-key[-A-Za-z0-9_.]*");
 
     record Match(PublicArtifactVerifier.FailureCode code, String key) {
         Match {
@@ -80,7 +82,8 @@ final class ConfigurationSecurityClassifier {
         return List.copyOf(violations);
     }
 
-    private static void evaluateLogicalProperty(String logical, List<Match> violations) throws IOException {
+    private static void evaluateLogicalProperty(String logical, List<Match> violations)
+            throws IOException, PublicArtifactVerifier.VerificationException {
         Properties declaration = new Properties();
         declaration.load(new StringReader(logical));
         if (declaration.size() > 1) {
@@ -88,7 +91,7 @@ final class ConfigurationSecurityClassifier {
         }
         for (String key : declaration.stringPropertyNames()) {
             if (isApiKey(key) && !isAllowedValue(declaration.getProperty(key))) {
-                violations.add(new Match(PublicArtifactVerifier.FailureCode.API_KEY_VIOLATION, key.trim()));
+                addViolation(violations, key);
             }
         }
     }
@@ -118,7 +121,7 @@ final class ConfigurationSecurityClassifier {
         if (node.kind == BoundedYamlParser.Kind.MAPPING) {
             for (BoundedYamlParser.Pair pair : node.pairs) {
                 if (isApiKey(pair.key()) && !isAllowedNode(pair.value())) {
-                    violations.add(new Match(PublicArtifactVerifier.FailureCode.API_KEY_VIOLATION, canonicalKey(pair.key())));
+                    addViolation(violations, pair.key());
                 }
                 traverse(pair.value(), violations, depth + 1);
             }
@@ -127,6 +130,15 @@ final class ConfigurationSecurityClassifier {
                 traverse(item, violations, depth + 1);
             }
         }
+    }
+
+    private static void addViolation(List<Match> violations, String rawKey)
+            throws PublicArtifactVerifier.VerificationException {
+        String key = canonicalKey(rawKey);
+        if (!SAFE_DIAGNOSTIC_API_KEY.matcher(key).matches()) {
+            throw parseFailure();
+        }
+        violations.add(new Match(PublicArtifactVerifier.FailureCode.API_KEY_VIOLATION, key));
     }
 
     private static boolean isAllowedNode(BoundedYamlParser.Node node) {
