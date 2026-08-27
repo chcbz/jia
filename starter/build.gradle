@@ -1,5 +1,109 @@
+import org.gradle.api.GradleException
+
+import java.nio.charset.StandardCharsets
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
 plugins {
     id 'org.springframework.boot' version '4.0.1'
+}
+
+def forbiddenPublicBootJarExtensions = [
+        '.p12',
+        '.pfx',
+        '.jks',
+        '.keystore',
+        '.pem',
+        '.key'
+].asImmutable()
+
+def isForbiddenPublicBootJarMember = { String memberName ->
+    def normalizedName = memberName.replace('\\', '/').toLowerCase(Locale.ROOT)
+    def baseName = normalizedName.substring(normalizedName.lastIndexOf('/') + 1)
+    baseName in ['application-dev.properties', 'application-dev.yml', 'application-dev.yaml'] ||
+            forbiddenPublicBootJarExtensions.any { normalizedName.endsWith(it) }
+}
+
+def isApiKeyProperty = { String propertyName ->
+    propertyName.trim().toLowerCase(Locale.ROOT).replace('_', '-').contains('api-key')
+}
+
+def isAllowedPublicApiKeyValue = { String rawValue ->
+    def value = rawValue == null ? '' : rawValue.trim()
+    value.isEmpty() ||
+            value ==~ /(?s)ENC\(.+\)/ ||
+            value ==~ /\$\{[A-Za-z_][A-Za-z0-9_.-]*:?\}/ ||
+            value ==~ /(?i)(?:test-only-dummy|dummy|fake|mock|placeholder|example|changeme|not-a-real)(?:[-_.:].*)?/
+}
+
+def readLogicalPropertyBlocks = { Reader reader ->
+    def blocks = []
+    def block = new StringBuilder()
+    reader.eachLine { String line ->
+        block.append(line).append('\n')
+        int trailingBackslashes = 0
+        for (int index = line.length() - 1; index >= 0 && line.charAt(index) == '\\'; index--) {
+            trailingBackslashes++
+        }
+        if (trailingBackslashes % 2 == 0) {
+            blocks << block.toString()
+            block.setLength(0)
+        }
+    }
+    if (block.length() > 0) {
+        blocks << block.toString()
+    }
+    blocks
+}
+
+def publicBootJarSecurityViolations = { File archive ->
+    def violations = new LinkedHashSet<String>()
+    new ZipFile(archive).withCloseable { zip ->
+        Collections.list(zip.entries()).sort { left, right -> left.name <=> right.name }.each { entry ->
+            def memberName = entry.name
+            def normalizedName = memberName.replace('\\', '/').toLowerCase(Locale.ROOT)
+            if (isForbiddenPublicBootJarMember(memberName)) {
+                violations << memberName
+            }
+            if (!entry.directory &&
+                    normalizedName.startsWith('boot-inf/classes/') &&
+                    normalizedName.endsWith('.properties')) {
+                try {
+                    def blocks
+                    zip.getInputStream(entry).withCloseable { input ->
+                        new InputStreamReader(input, StandardCharsets.UTF_8).withCloseable { reader ->
+                            blocks = readLogicalPropertyBlocks(reader)
+                        }
+                    }
+                    blocks.each { block ->
+                        def properties = new Properties()
+                        properties.load(new StringReader(block))
+                        properties.stringPropertyNames().sort().each { propertyName ->
+                            if (isApiKeyProperty(propertyName) &&
+                                    !isAllowedPublicApiKeyValue(properties.getProperty(propertyName))) {
+                                violations << "${memberName}: ${propertyName}"
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                    violations << "${memberName}: <properties-parse-error>"
+                }
+            }
+        }
+    }
+    violations as List
+}
+
+def writePublicBootJarPolicyFixture = { File archive, Map<String, String> members ->
+    archive.parentFile.mkdirs()
+    new ZipOutputStream(new FileOutputStream(archive)).withCloseable { output ->
+        members.each { memberName, content ->
+            output.putNextEntry(new ZipEntry(memberName))
+            output.write(content.getBytes(StandardCharsets.UTF_8))
+            output.closeEntry()
+        }
+    }
 }
 
 dependencies {
@@ -63,4 +167,88 @@ bootJar {
     manifest {
         attributes 'Start-Class': 'cn.jia.JiaApplication'
     }
+    exclude { details -> isForbiddenPublicBootJarMember(details.path) }
+    doLast {
+        def violations = publicBootJarSecurityViolations(archiveFile.get().asFile)
+        if (!violations.empty) {
+            throw new GradleException('Public bootJar security policy violations:\n - ' +
+                    violations.join('\n - '))
+        }
+    }
+}
+
+tasks.register('publicBootJarSecurityPolicyTest') {
+    group = 'verification'
+    description = 'Runs offline adversarial tests for the public bootJar sensitive-material policy.'
+
+    doLast {
+        project.delete(temporaryDir)
+        temporaryDir.mkdirs()
+
+        def safeArchive = new File(temporaryDir, 'safe.jar')
+        writePublicBootJarPolicyFixture(safeArchive, [
+                'BOOT-INF/classes/application-prod.properties': '''spring.ai.enc.api-key=ENC(ciphertext)
+spring.ai.external.api-key=${PUBLIC_API_KEY}
+spring.ai.dummy.api-key=test-only-dummy-provider-api-key
+spring.ai.empty.api-key=
+'''
+        ])
+        def safeViolations = publicBootJarSecurityViolations(safeArchive)
+        if (!safeViolations.empty) {
+            throw new GradleException('Public bootJar security policy rejected the safe fixture:\n - ' +
+                    safeViolations.join('\n - '))
+        }
+
+        def forbiddenArchive = new File(temporaryDir, 'forbidden-members.jar')
+        def forbiddenMembers = [
+                'BOOT-INF/classes/application-dev.properties',
+                'BOOT-INF/classes/application-dev.yml',
+                'BOOT-INF/classes/application-dev.yaml',
+                'BOOT-INF/classes/localhost_ssl_cert.p12',
+                'BOOT-INF/classes/wxpay_apiclient_cert.p12',
+                'BOOT-INF/classes/client.PFX',
+                'BOOT-INF/classes/client.jks',
+                'BOOT-INF/classes/client.keystore',
+                'BOOT-INF/classes/client.pem',
+                'BOOT-INF/classes/client.key'
+        ]
+        writePublicBootJarPolicyFixture(forbiddenArchive,
+                forbiddenMembers.collectEntries { [(it): 'fixture'] })
+        def forbiddenViolations = publicBootJarSecurityViolations(forbiddenArchive)
+        forbiddenMembers.each { memberName ->
+            if (!forbiddenViolations.contains(memberName)) {
+                throw new GradleException("Public bootJar security policy missed member: ${memberName}")
+            }
+        }
+
+        def unsafeArchive = new File(temporaryDir, 'unsafe-properties.jar')
+        writePublicBootJarPolicyFixture(unsafeArchive, [
+                'BOOT-INF/classes/application-prod.properties':
+                        'spring.ai.duplicate.api-key=adversarial-secret-canary\n' +
+                        'spring.ai.duplicate.api-key=${PUBLIC_API_KEY}\n' +
+                        'spring.ai.escaped.api\\-key=adversarial-secret-canary\n' +
+                        'spring.ai.continued.api-key=adversarial-\\\n secret-canary\n' +
+                        'spring.ai.defaulted.api-key=${PUBLIC_API_KEY:embedded-value}\n'
+        ])
+        def unsafeViolations = publicBootJarSecurityViolations(unsafeArchive)
+        [
+                'spring.ai.duplicate.api-key',
+                'spring.ai.escaped.api-key',
+                'spring.ai.continued.api-key',
+                'spring.ai.defaulted.api-key'
+        ].each { propertyName ->
+            if (!unsafeViolations.contains("BOOT-INF/classes/application-prod.properties: ${propertyName}")) {
+                throw new GradleException("Public bootJar security policy missed property: ${propertyName}")
+            }
+        }
+        if (unsafeViolations.any {
+            it.contains('adversarial-secret-canary') || it.contains('embedded-value')
+        }) {
+            throw new GradleException('Public bootJar security policy exposed a property value in diagnostics')
+        }
+    }
+}
+
+tasks.named('bootJar') {
+    dependsOn tasks.named('publicBootJarSecurityPolicyTest')
 }
