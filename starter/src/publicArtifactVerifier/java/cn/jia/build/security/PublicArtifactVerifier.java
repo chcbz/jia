@@ -651,7 +651,7 @@ public final class PublicArtifactVerifier {
             OccurrenceZipArchive archive,
             OccurrenceZipArchive.Occurrence occurrence,
             String qualifiedName,
-            List<Finding> findings) throws VerificationException {
+            List<Finding> findings) throws IOException, VerificationException {
         ByteArrayOutputStream content = new ByteArrayOutputStream((int) Math.min(occurrence.uncompressedSize(), 8192));
         archive.copyPayload(occurrence, content, CONFIGURATION_LIMIT);
         String diagnosticQualifier = safeQualifier(qualifiedName, PUBLIC_BOOTJAR_QUALIFIER);
