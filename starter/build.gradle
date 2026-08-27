@@ -3,27 +3,14 @@ import org.gradle.api.GradleException
 import java.nio.charset.StandardCharsets
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 plugins {
     id 'org.springframework.boot' version '4.0.1'
 }
 
-def forbiddenPublicBootJarExtensions = [
-        '.p12',
-        '.pfx',
-        '.jks',
-        '.keystore',
-        '.pem',
-        '.key'
-].asImmutable()
-
-def isForbiddenPublicBootJarMember = { String memberName ->
-    def normalizedName = memberName.replace('\\', '/').toLowerCase(Locale.ROOT)
-    def baseName = normalizedName.substring(normalizedName.lastIndexOf('/') + 1)
-    baseName in ['application-dev.properties', 'application-dev.yml', 'application-dev.yaml'] ||
-            forbiddenPublicBootJarExtensions.any { normalizedName.endsWith(it) }
-}
+def isForbiddenPublicBootJarMember = rootProject.ext.isForbiddenPublicArtifactJarMember
 
 def isApiKeyProperty = { String propertyName ->
     propertyName.trim().toLowerCase(Locale.ROOT).replace('_', '-').contains('api-key')
@@ -57,6 +44,81 @@ def readLogicalPropertyBlocks = { Reader reader ->
     blocks
 }
 
+def isPublicApiKeyResource = { String memberName ->
+    def normalizedName = memberName.replace('\\', '/').toLowerCase(Locale.ROOT)
+    normalizedName.endsWith('.properties') ||
+            normalizedName.endsWith('.yml') ||
+            normalizedName.endsWith('.yaml')
+}
+
+def publicApiKeyResourceViolations = { String memberName, InputStream input ->
+    def violations = new LinkedHashSet<String>()
+    def normalizedName = memberName.replace('\\', '/').toLowerCase(Locale.ROOT)
+
+    if (normalizedName.endsWith('.properties')) {
+        new InputStreamReader(input, StandardCharsets.UTF_8).withCloseable { reader ->
+            readLogicalPropertyBlocks(reader).each { block ->
+                def properties = new Properties()
+                properties.load(new StringReader(block))
+                properties.stringPropertyNames().sort().each { propertyName ->
+                    if (isApiKeyProperty(propertyName) &&
+                            !isAllowedPublicApiKeyValue(properties.getProperty(propertyName))) {
+                        violations << "${memberName}: ${propertyName}"
+                    }
+                }
+            }
+        }
+    } else {
+        new InputStreamReader(input, StandardCharsets.UTF_8).withCloseable { reader ->
+            reader.eachLine { String line ->
+                def trimmedLine = line.trim()
+                if (!trimmedLine || trimmedLine.startsWith('#')) {
+                    return
+                }
+
+                def keyValue = trimmedLine =~ /^(?:-\s*)?(?:"([^"]+)"|'([^']+)'|([^:#][^:]*?))\s*:\s*(.*?)\s*$/
+                if (!keyValue.matches()) {
+                    return
+                }
+
+                def propertyName = keyValue.group(1) ?: keyValue.group(2) ?: keyValue.group(3)
+                if (!isApiKeyProperty(propertyName)) {
+                    return
+                }
+
+                def rawValue = keyValue.group(4).trim()
+                def commentIndex = rawValue.indexOf(' #')
+                if (commentIndex >= 0) {
+                    rawValue = rawValue.substring(0, commentIndex).trim()
+                }
+                if (rawValue.length() >= 2 &&
+                        ((rawValue.startsWith('"') && rawValue.endsWith('"')) ||
+                                (rawValue.startsWith("'") && rawValue.endsWith("'")))) {
+                    rawValue = rawValue.substring(1, rawValue.length() - 1).trim()
+                }
+                if (!isAllowedPublicApiKeyValue(rawValue)) {
+                    violations << "${memberName}: ${propertyName.trim()}"
+                }
+            }
+        }
+    }
+
+    violations
+}
+
+def validateNestedZipIntegrity = { File archive ->
+    new ZipInputStream(new BufferedInputStream(new FileInputStream(archive))).withCloseable { input ->
+        ZipEntry entry
+        byte[] buffer = new byte[8192]
+        while ((entry = input.nextEntry) != null) {
+            while (input.read(buffer) != -1) {
+                // Drain every member so malformed data and CRC mismatches fail closed.
+            }
+            input.closeEntry()
+        }
+    }
+}
+
 def publicBootJarSecurityViolations = { File archive ->
     def violations = new LinkedHashSet<String>()
     new ZipFile(archive).withCloseable { zip ->
@@ -68,26 +130,49 @@ def publicBootJarSecurityViolations = { File archive ->
             }
             if (!entry.directory &&
                     normalizedName.startsWith('boot-inf/classes/') &&
-                    normalizedName.endsWith('.properties')) {
+                    isPublicApiKeyResource(memberName)) {
                 try {
-                    def blocks
                     zip.getInputStream(entry).withCloseable { input ->
-                        new InputStreamReader(input, StandardCharsets.UTF_8).withCloseable { reader ->
-                            blocks = readLogicalPropertyBlocks(reader)
-                        }
+                        violations.addAll(publicApiKeyResourceViolations(memberName, input))
                     }
-                    blocks.each { block ->
-                        def properties = new Properties()
-                        properties.load(new StringReader(block))
-                        properties.stringPropertyNames().sort().each { propertyName ->
-                            if (isApiKeyProperty(propertyName) &&
-                                    !isAllowedPublicApiKeyValue(properties.getProperty(propertyName))) {
-                                violations << "${memberName}: ${propertyName}"
+                } catch (Exception ignored) {
+                    violations << "${memberName}: <configuration-parse-error>"
+                }
+            }
+            if (!entry.directory &&
+                    normalizedName.startsWith('boot-inf/lib/') &&
+                    normalizedName.endsWith('.jar')) {
+                File nestedArchive = null
+                try {
+                    nestedArchive = File.createTempFile('public-bootjar-nested-', '.jar', archive.parentFile)
+                    zip.getInputStream(entry).withCloseable { input ->
+                        nestedArchive.withOutputStream { output -> input.transferTo(output) }
+                    }
+                    validateNestedZipIntegrity(nestedArchive)
+                    new ZipFile(nestedArchive).withCloseable { nestedZip ->
+                        Collections.list(nestedZip.entries()).sort { left, right -> left.name <=> right.name }.each { nestedEntry ->
+                            def nestedMemberName = nestedEntry.name
+                            def qualifiedMemberName = "${memberName}!${nestedMemberName}"
+                            if (isForbiddenPublicBootJarMember(nestedMemberName)) {
+                                violations << qualifiedMemberName
+                            }
+                            if (!nestedEntry.directory && isPublicApiKeyResource(nestedMemberName)) {
+                                try {
+                                    nestedZip.getInputStream(nestedEntry).withCloseable { input ->
+                                        violations.addAll(publicApiKeyResourceViolations(qualifiedMemberName, input))
+                                    }
+                                } catch (Exception ignored) {
+                                    violations << "${qualifiedMemberName}: <configuration-parse-error>"
+                                }
                             }
                         }
                     }
                 } catch (Exception ignored) {
-                    violations << "${memberName}: <properties-parse-error>"
+                    violations << "${memberName}: <nested-zip-integrity-error>"
+                } finally {
+                    if (nestedArchive != null && nestedArchive.exists() && !nestedArchive.delete()) {
+                        nestedArchive.deleteOnExit()
+                    }
                 }
             }
         }
@@ -95,12 +180,15 @@ def publicBootJarSecurityViolations = { File archive ->
     violations as List
 }
 
-def writePublicBootJarPolicyFixture = { File archive, Map<String, String> members ->
+def writePublicBootJarPolicyFixture = { File archive, Map<String, ?> members ->
     archive.parentFile.mkdirs()
     new ZipOutputStream(new FileOutputStream(archive)).withCloseable { output ->
         members.each { memberName, content ->
             output.putNextEntry(new ZipEntry(memberName))
-            output.write(content.getBytes(StandardCharsets.UTF_8))
+            byte[] payload = content instanceof byte[]
+                    ? (byte[]) content
+                    : content.toString().getBytes(StandardCharsets.UTF_8)
+            output.write(payload)
             output.closeEntry()
         }
     }
@@ -245,6 +333,41 @@ spring.ai.empty.api-key=
             it.contains('adversarial-secret-canary') || it.contains('embedded-value')
         }) {
             throw new GradleException('Public bootJar security policy exposed a property value in diagnostics')
+        }
+
+        def nestedUnsafeJar = new File(temporaryDir, 'nested-unsafe.jar')
+        writePublicBootJarPolicyFixture(nestedUnsafeJar, [
+                'application-dev.properties': 'fixture=true\n',
+                'certificates/client.p12': 'synthetic-pkcs12-fixture',
+                'config/application-prod.yaml': 'provider:\n  api-key: adversarial-secret-canary\n'
+        ])
+        def nestedContainerArchive = new File(temporaryDir, 'nested-container.jar')
+        def nestedLibraryMember = 'BOOT-INF/lib/adversarial-first-party.jar'
+        writePublicBootJarPolicyFixture(nestedContainerArchive, [
+                (nestedLibraryMember): nestedUnsafeJar.bytes
+        ])
+        def nestedViolations = publicBootJarSecurityViolations(nestedContainerArchive)
+        [
+                "${nestedLibraryMember}!application-dev.properties",
+                "${nestedLibraryMember}!certificates/client.p12",
+                "${nestedLibraryMember}!config/application-prod.yaml: api-key"
+        ].each { violation ->
+            if (!nestedViolations.contains(violation)) {
+                throw new GradleException("Public bootJar security policy missed nested classification: ${violation}")
+            }
+        }
+        if (nestedViolations.any { it.contains('adversarial-secret-canary') }) {
+            throw new GradleException('Public bootJar security policy exposed a nested property value in diagnostics')
+        }
+
+        def corruptNestedArchive = new File(temporaryDir, 'corrupt-nested-container.jar')
+        def corruptNestedMember = 'BOOT-INF/lib/corrupt-first-party.jar'
+        writePublicBootJarPolicyFixture(corruptNestedArchive, [
+                (corruptNestedMember): 'not-a-zip-fixture'
+        ])
+        def corruptNestedViolations = publicBootJarSecurityViolations(corruptNestedArchive)
+        if (!corruptNestedViolations.contains("${corruptNestedMember}: <nested-zip-integrity-error>")) {
+            throw new GradleException('Public bootJar security policy missed nested ZIP integrity failure')
         }
     }
 }

@@ -1,5 +1,25 @@
+ext.forbiddenPublicArtifactJarExtensions = [
+        '.p12',
+        '.pfx',
+        '.jks',
+        '.keystore',
+        '.pem',
+        '.key'
+].asImmutable()
+
+ext.isForbiddenPublicArtifactJarMember = { String memberName ->
+    def normalizedName = memberName.replace('\\', '/').toLowerCase(Locale.ROOT)
+    def baseName = normalizedName.substring(normalizedName.lastIndexOf('/') + 1)
+    baseName in ['application-dev.properties', 'application-dev.yml', 'application-dev.yaml'] ||
+            rootProject.ext.forbiddenPublicArtifactJarExtensions.any { normalizedName.endsWith(it) }
+}
+
 allprojects {
     group = 'cn.jia'
+
+    tasks.withType(org.gradle.api.tasks.bundling.Jar).configureEach {
+        exclude { details -> rootProject.ext.isForbiddenPublicArtifactJarMember.call(details.path) }
+    }
 }
 subprojects {
     apply plugin: 'java-library'
