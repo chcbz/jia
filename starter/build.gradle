@@ -140,11 +140,11 @@ bootJar {
             def diagnostics = outputLines.findAll { line ->
                 def tokenSeparator = line.lastIndexOf(': ')
                 if (tokenSeparator >= 0 && fixedTokens.contains(line.substring(tokenSeparator + 2))) {
-                    return line.substring(0, tokenSeparator) ==~ /(?:<public-bootjar>|<nested-temp>|[-A-Za-z0-9_./!]+)/
+                    return line.substring(0, tokenSeparator) ==~ /(?:<public-bootjar>|<nested-temp>|[-A-Za-z0-9_.\/!]+)/
                 }
                 line == '<public-artifact-verifier-error>' ||
-                        line ==~ /[-A-Za-z0-9_./!]+/ ||
-                        line ==~ /[-A-Za-z0-9_./!]+: [-A-Za-z0-9_.]*api-key[-A-Za-z0-9_.]*/
+                        line ==~ /[-A-Za-z0-9_.\/!]+/ ||
+                        line ==~ /[-A-Za-z0-9_.\/!]+: [-A-Za-z0-9_.]*api-key[-A-Za-z0-9_.]*/
             }
             if (diagnostics.empty || diagnostics.size() != outputLines.size()) {
                 diagnostics = ['<public-artifact-verifier-error>']
