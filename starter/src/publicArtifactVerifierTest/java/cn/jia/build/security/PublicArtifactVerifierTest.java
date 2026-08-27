@@ -32,6 +32,98 @@ class PublicArtifactVerifierTest {
     Path temporaryDirectory;
 
     @Test
+    void cumulativeLimitBelowBoundaryScansEveryNestedOccurrence() throws Exception {
+        byte[] nested = safeNestedJar();
+        long budget = nested.length * 2L + 1;
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("below-boundary-root");
+        Path outer = write("below-boundary.jar", new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/first.jar", nested).stored())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/second.jar", nested).stored())
+                .build().copy());
+
+        PublicArtifactVerifier.Result result = verifier(hook, budget).verify(outer, root);
+
+        assertTrue(result.accepted());
+        assertEquals(2, hook.fileCreations);
+        assertEquals(2, hook.writeAttempts);
+        assertEquals(2, hook.readAttempts);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void cumulativeLimitExactBoundaryScansEveryNestedOccurrence() throws Exception {
+        byte[] nested = safeNestedJar();
+        long budget = nested.length * 2L;
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("exact-boundary-root");
+        Path outer = write("exact-boundary.jar", new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/first.jar", nested).stored())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/second.jar", nested).stored())
+                .build().copy());
+
+        PublicArtifactVerifier.Result result = verifier(hook, budget).verify(outer, root);
+
+        assertTrue(result.accepted());
+        assertEquals(2, hook.fileCreations);
+        assertEquals(2, hook.writeAttempts);
+        assertEquals(2, hook.readAttempts);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void cumulativeLimitFirstOverBoundaryFailsClosedWithoutCopyingThatOccurrence() throws Exception {
+        byte[] nested = safeNestedJar();
+        ZipFixtureBuilder.BuiltZip built = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/first.jar", nested).stored())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/over.jar", nested).stored())
+                .build();
+        ZipFixtureBuilder.Layout over = built.layouts().get(1);
+        Path outer = write("first-over-boundary.jar",
+                ZipFixtureBuilder.withByte(built.copy(), over.payloadOffset(), 0x00));
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("first-over-boundary-root");
+
+        PublicArtifactVerifier.Result result = verifier(hook, nested.length).verify(outer, root);
+
+        assertEquals(List.of("BOOT-INF/lib/over.jar: <nested-zip-limit-error>"), diagnostics(result));
+        assertEquals(List.of(PublicArtifactVerifier.FailureCode.LIMIT_ERROR), codes(result));
+        assertEquals(new OccurrenceZipArchive.OccurrenceId(1, over.localOffset()),
+                result.findings().get(0).occurrenceId());
+        assertEquals(1, hook.fileCreations);
+        assertEquals(1, hook.writeAttempts);
+        assertEquals(1, hook.readAttempts);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void cumulativeLimitStopsBeforeOpeningOrDecompressingLaterOccurrences() throws Exception {
+        byte[] nested = safeNestedJar();
+        ZipFixtureBuilder.BuiltZip built = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/first.jar", nested).stored())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/over.jar", nested).stored())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/later-corrupt.jar", nested).stored())
+                .build();
+        ZipFixtureBuilder.Layout over = built.layouts().get(1);
+        ZipFixtureBuilder.Layout later = built.layouts().get(2);
+        Path outer = write("later-occurrence.jar",
+                ZipFixtureBuilder.withByte(built.copy(), later.payloadOffset(), 0x00));
+        CountingNestedIoHook hook = new CountingNestedIoHook();
+        Path root = temporaryDirectory.resolve("later-occurrence-root");
+
+        PublicArtifactVerifier.Result result = verifier(hook, nested.length).verify(outer, root);
+
+        assertEquals(List.of("BOOT-INF/lib/over.jar: <nested-zip-limit-error>"), diagnostics(result));
+        assertEquals(List.of(PublicArtifactVerifier.FailureCode.LIMIT_ERROR), codes(result));
+        assertEquals(new OccurrenceZipArchive.OccurrenceId(1, over.localOffset()),
+                result.findings().get(0).occurrenceId());
+        assertEquals(1, hook.fileCreations);
+        assertEquals(1, hook.writeAttempts);
+        assertEquals(1, hook.readAttempts);
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
     void temp01RealPosixImplementationCreatesExactModesBeforeAnyNestedByte() throws Exception {
         Path outer = outerWithSafeNested("temp-modes.jar");
         RecordingModeHook hook = new RecordingModeHook();
@@ -381,11 +473,21 @@ class PublicArtifactVerifierTest {
         return new PublicArtifactVerifier(PublicArtifactVerifier.posixTempOperations(hook));
     }
 
+    private PublicArtifactVerifier verifier(
+            PublicArtifactVerifier.TempMutationHook hook,
+            long cumulativeNestedJarLimit) {
+        return new PublicArtifactVerifier(
+                PublicArtifactVerifier.posixTempOperations(hook), cumulativeNestedJarLimit);
+    }
+
     private Path outerWithSafeNested(String name) throws IOException {
-        ZipFixtureBuilder.BuiltZip nested = new ZipFixtureBuilder().add("safe.txt", "safe").build();
         return write(name, new ZipFixtureBuilder()
-                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/library.jar", nested.copy()).stored())
+                .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/library.jar", safeNestedJar()).stored())
                 .build().copy());
+    }
+
+    private static byte[] safeNestedJar() {
+        return new ZipFixtureBuilder().add("safe.txt", "safe").build().copy();
     }
 
     private Path write(String name, byte[] bytes) throws IOException {
@@ -404,6 +506,27 @@ class PublicArtifactVerifierTest {
             values.add(finding.diagnostic());
         }
         return values;
+    }
+
+    private static final class CountingNestedIoHook implements PublicArtifactVerifier.TempMutationHook {
+        private int fileCreations;
+        private int writeAttempts;
+        private int readAttempts;
+
+        @Override
+        public void afterFileCreated(Path file) {
+            fileCreations++;
+        }
+
+        @Override
+        public void beforeFileWrite(Path file) {
+            writeAttempts++;
+        }
+
+        @Override
+        public void beforeFileRead(Path file) {
+            readAttempts++;
+        }
     }
 
     private static class RecordingModeHook implements PublicArtifactVerifier.TempMutationHook {

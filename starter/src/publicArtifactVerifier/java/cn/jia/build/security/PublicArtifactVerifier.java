@@ -453,13 +453,24 @@ public final class PublicArtifactVerifier {
     }
 
     private final TempOperations tempOperations;
+    private final long cumulativeNestedJarLimit;
 
     public PublicArtifactVerifier() {
-        this(new PosixTempOperations(TempMutationHook.NONE));
+        this(new PosixTempOperations(TempMutationHook.NONE), CUMULATIVE_NESTED_JAR_LIMIT);
     }
 
     PublicArtifactVerifier(TempOperations tempOperations) {
+        this(tempOperations, CUMULATIVE_NESTED_JAR_LIMIT);
+    }
+
+    /** Package-private test seam; production constructors always use the frozen 2 GiB ceiling. */
+    PublicArtifactVerifier(TempOperations tempOperations, long cumulativeNestedJarLimit) {
+        if (cumulativeNestedJarLimit < 0
+                || cumulativeNestedJarLimit > CUMULATIVE_NESTED_JAR_LIMIT) {
+            throw new IllegalArgumentException("invalid-cumulative-nested-jar-limit");
+        }
         this.tempOperations = tempOperations;
+        this.cumulativeNestedJarLimit = cumulativeNestedJarLimit;
     }
 
     static TempOperations posixTempOperations(TempMutationHook hook) {
@@ -499,7 +510,7 @@ public final class PublicArtifactVerifier {
         List<TempIdentity> residuals = new ArrayList<>();
         PrivateDirectory privateDirectory = null;
         String cleanupQualifier = NESTED_TEMP_QUALIFIER;
-        long cumulativeNestedBytes = 0;
+        long remainingNestedBytes = cumulativeNestedJarLimit;
         try (OccurrenceZipArchive outer = OccurrenceZipArchive.open(archive)) {
             for (OccurrenceZipArchive.Occurrence occurrence : outer.occurrences()) {
                 String memberName = occurrence.name();
@@ -521,12 +532,12 @@ public final class PublicArtifactVerifier {
                         findings.add(failure(memberName, FailureCode.LIMIT_ERROR, occurrence.id()));
                         continue;
                     }
-                    if (cumulativeNestedBytes > CUMULATIVE_NESTED_JAR_LIMIT - occurrence.uncompressedSize()) {
+                    if (occurrence.uncompressedSize() > remainingNestedBytes) {
                         findings.add(failure(memberName, FailureCode.LIMIT_ERROR, occurrence.id()));
-                        outer.copyPayload(occurrence, OutputStream.nullOutputStream(), NESTED_JAR_LIMIT);
-                        continue;
+                        break;
                     }
-                    cumulativeNestedBytes += occurrence.uncompressedSize();
+                    // Reserve by subtraction only after the comparison, avoiding cumulative addition overflow.
+                    remainingNestedBytes -= occurrence.uncompressedSize();
                     if (privateDirectory == null) {
                         try {
                             privateDirectory = tempOperations.createPrivateDirectory(temporaryRoot);
