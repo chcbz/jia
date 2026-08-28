@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 
 import javax.sql.DataSource;
@@ -701,8 +702,11 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_artifact_version"), error.getMessage());
+        // Regression: exact hosted validation must not replace the legacy target drift.
+        assertFalse(error.getMessage().contains("PWA-HOSTED-P0"), error.getMessage());
     }
 
     @Test
@@ -768,7 +772,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_identity_alias_active"), error.getMessage());
     }
 
@@ -880,7 +885,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_agent_scene_state_scope_agent"), error.getMessage());
     }
 
@@ -928,7 +934,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             }
         };
 
-        new AgentSchemaInitializer(template).afterPropertiesSet();
+        new AgentSchemaInitializer(withHostedProfileCatalog(template)).afterPropertiesSet();
 
         assertTrue(sceneTableCreated.get());
     }
@@ -969,7 +975,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_agent_scene_state_scope_agent"), error.getMessage());
     }
 
@@ -1003,7 +1010,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_agent_scene_state_scope_agent"), error.getMessage());
     }
 
@@ -1037,7 +1045,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_agent_scene_state_scope_agent"), error.getMessage());
     }
 
@@ -1099,7 +1108,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(b0Template).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(b0Template))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("binary collation"), error.getMessage());
         assertTrue(error.getMessage().contains("utf8mb4_0900_ai_ci"), error.getMessage());
     }
@@ -1130,7 +1140,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(partialTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(partialTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("identity schema is partial"), error.getMessage());
     }
 
@@ -1216,7 +1227,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     private JdbcTemplate identityCatalogTemplate(String fault) {
-        return new JdbcTemplate() {
+        return withHostedProfileCatalog(new JdbcTemplate() {
             @Override
             public void execute(String sql) {
                 // DDL is inert; this fixture exposes a complete existing MySQL identity catalog.
@@ -1276,7 +1287,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 }
                 return List.of();
             }
-        };
+        });
     }
 
     private List<AgentSchemaInitializer.CheckDefinition> identityChecks(boolean weakenedScope) {
@@ -1591,6 +1602,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 }
             }
             if (normalized.contains("from information_schema.columns") && args.length > 1) {
+                if ("agent_hosted_profile".equals(args[0])) {
+                    return List.of();
+                }
                 if ("agent_task_event".equals(args[0])) {
                     return List.of(taskEventColumn(String.valueOf(args[1])));
                 }
@@ -1598,6 +1612,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return List.of(historicalEventColumn(
                             historicalAudit, String.valueOf(args[0]), String.valueOf(args[1])));
                 }
+            }
+            if (isHostedProfileIndexQuery(normalized, args)) {
+                return hostedProfileIndex(args.length > 1 ? String.valueOf(args[1]) : "PRIMARY");
             }
             if (normalized.contains("from information_schema.statistics") && args.length > 1) {
                 if ("agent_task_event".equals(args[0])) {
@@ -1629,6 +1646,10 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             return List.of();
         }).when(template).query(anyString(), any(RowMapper.class));
         lenient().doAnswer(invocation -> {
+            emitHostedProfileRows(invocation.getArgument(0), invocation.getArgument(1));
+            return null;
+        }).when(template).query(anyString(), any(RowCallbackHandler.class));
+        lenient().doAnswer(invocation -> {
             String sql = invocation.getArgument(0);
             Object[] invocationArgs = invocation.getArguments();
             Object[] args = java.util.Arrays.copyOfRange(invocationArgs, 2, invocationArgs.length);
@@ -1641,6 +1662,13 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         }).when(template).queryForList(anyString(), any(Class.class), any(Object[].class));
         lenient().doAnswer(invocation -> {
             String sql = invocation.getArgument(0);
+            if (isHostedProfileIndexSetQuery(sql)) {
+                return hostedProfileIndexNames();
+            }
+            return List.of();
+        }).when(template).queryForList(anyString(), any(Class.class));
+        lenient().doAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
             Class<?> requiredType = invocation.getArgument(1);
             Object[] invocationArgs = invocation.getArguments();
             Object[] args = java.util.Arrays.copyOfRange(invocationArgs, 2, invocationArgs.length);
@@ -1649,7 +1677,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 return "InnoDB";
             }
             if (requiredType == String.class && sql.contains("TABLE_COLLATION")
-                    && args.length > 0 && ("agent_task_event".equals(args[0])
+                    && args.length > 0 && ("agent_hosted_profile".equals(args[0])
+                    || "agent_task_event".equals(args[0])
                     || historicalEventAuditTables().contains(String.valueOf(args[0])))) {
                 return "utf8mb4_0900_bin";
             }
@@ -1674,12 +1703,244 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         lenient().doAnswer(invocation -> {
             String sql = invocation.getArgument(0);
             Class<?> requiredType = invocation.getArgument(1);
+            if (requiredType == String.class && isHostedProfileEngineQuery(sql)) {
+                return "InnoDB";
+            }
+            if (requiredType == Integer.class && isHostedProfileCountQuery(sql)) {
+                return 0;
+            }
             if (requiredType == String.class && sql.contains("SELECT EXTRA")
                     && sql.contains("agent_task_event")) {
                 return "auto_increment";
             }
             return null;
         }).when(template).queryForObject(anyString(), any(Class.class));
+    }
+
+    private JdbcTemplate withHostedProfileCatalog(JdbcTemplate delegate) {
+        return new JdbcTemplate() {
+            @Override
+            public DataSource getDataSource() {
+                return delegate.getDataSource();
+            }
+
+            @Override
+            public void execute(String sql) {
+                delegate.execute(sql);
+            }
+
+            @Override
+            public int update(String sql, Object... args) {
+                return delegate.update(sql, args);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType) {
+                if (requiredType == String.class && isHostedProfileEngineQuery(sql)) {
+                    return (T) "InnoDB";
+                }
+                if (requiredType == Integer.class && isHostedProfileCountQuery(sql)) {
+                    return (T) Integer.valueOf(0);
+                }
+                return delegate.queryForObject(sql, requiredType);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(
+                    String sql, Class<T> requiredType, Object... args) {
+                if (requiredType == String.class && sql.contains("TABLE_COLLATION")
+                        && args.length > 0 && "agent_hosted_profile".equals(args[0])) {
+                    return (T) "utf8mb4_0900_bin";
+                }
+                return delegate.queryForObject(sql, requiredType, args);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> queryForList(String sql, Class<T> elementType) {
+                if (isHostedProfileIndexSetQuery(sql)) {
+                    return (List<T>) hostedProfileIndexNames();
+                }
+                return delegate.queryForList(sql, elementType);
+            }
+
+            @Override
+            public <T> List<T> queryForList(
+                    String sql, Class<T> elementType, Object... args) {
+                return delegate.queryForList(sql, elementType, args);
+            }
+
+            @Override
+            public <T> List<T> query(String sql, RowMapper<T> rowMapper) {
+                return delegate.query(sql, rowMapper);
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> List<T> query(
+                    String sql, RowMapper<T> rowMapper, Object... args) {
+                String normalized = normalizeCatalogSql(sql);
+                if (normalized.contains("from information_schema.columns")
+                        && args.length > 1 && "agent_hosted_profile".equals(args[0])) {
+                    return List.of();
+                }
+                if (isHostedProfileIndexQuery(normalized, args)) {
+                    return (List<T>) hostedProfileIndex(
+                            args.length > 1 ? String.valueOf(args[1]) : "PRIMARY");
+                }
+                return delegate.query(sql, rowMapper, args);
+            }
+
+            @Override
+            public void query(String sql, RowCallbackHandler rowCallbackHandler) {
+                if (!emitHostedProfileRows(sql, rowCallbackHandler)) {
+                    delegate.query(sql, rowCallbackHandler);
+                }
+            }
+        };
+    }
+
+    private boolean emitHostedProfileRows(String sql, RowCallbackHandler rowCallbackHandler) {
+        String normalized = normalizeCatalogSql(sql);
+        try {
+            if (normalized.contains("from information_schema.columns")
+                    && normalized.contains("table_name = 'agent_hosted_profile'")) {
+                for (Map.Entry<String, AgentSchemaInitializer.BackfillColumnDefinition> entry
+                        : hostedProfileColumns().entrySet()) {
+                    java.sql.ResultSet row = mock(java.sql.ResultSet.class);
+                    AgentSchemaInitializer.BackfillColumnDefinition definition = entry.getValue();
+                    when(row.getString("COLUMN_NAME")).thenReturn(entry.getKey());
+                    when(row.getString("DATA_TYPE")).thenReturn(definition.dataType());
+                    when(row.getString("COLUMN_TYPE")).thenReturn(definition.columnType());
+                    when(row.getString("IS_NULLABLE"))
+                            .thenReturn(definition.nullable() ? "YES" : "NO");
+                    when(row.getString("COLUMN_DEFAULT")).thenReturn(definition.defaultValue());
+                    when(row.getString("COLLATION_NAME")).thenReturn(definition.collation());
+                    when(row.getString("EXTRA")).thenReturn(definition.extra());
+                    rowCallbackHandler.processRow(row);
+                }
+                return true;
+            }
+            if (normalized.contains("join information_schema.check_constraints")
+                    && normalized.contains("table_name='agent_hosted_profile'")) {
+                for (Map.Entry<String, String> entry : hostedProfileChecks().entrySet()) {
+                    java.sql.ResultSet row = mock(java.sql.ResultSet.class);
+                    when(row.getString("CONSTRAINT_NAME")).thenReturn(entry.getKey());
+                    when(row.getString("CHECK_CLAUSE")).thenReturn(entry.getValue());
+                    rowCallbackHandler.processRow(row);
+                }
+                return true;
+            }
+            return false;
+        } catch (java.sql.SQLException e) {
+            throw new AssertionError("Unable to emit hosted profile catalog row", e);
+        }
+    }
+
+    private Map<String, AgentSchemaInitializer.BackfillColumnDefinition> hostedProfileColumns() {
+        Map<String, AgentSchemaInitializer.BackfillColumnDefinition> columns = new LinkedHashMap<>();
+        columns.put("id", hostedColumn("bigint", "bigint", false, null, null, "auto_increment"));
+        columns.put("binding_id", hostedColumn("bigint", "bigint", false, null, null, ""));
+        columns.put("owner_jiacn", hostedColumn(
+                "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin", ""));
+        columns.put("canonical_agent_id", hostedColumn(
+                "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin", ""));
+        columns.put("persona_code", hostedColumn(
+                "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin", ""));
+        columns.put("profile_key", hostedColumn(
+                "varchar", "varchar(160)", false, null, "utf8mb4_0900_bin", ""));
+        columns.put("api_key_id", hostedColumn(
+                "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin", ""));
+        columns.put("lifecycle_state", hostedColumn(
+                "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin", ""));
+        columns.put("resume_state", hostedColumn(
+                "varchar", "varchar(32)", true, null, "utf8mb4_0900_bin", ""));
+        columns.put("generation", hostedColumn("bigint", "bigint", false, "0", null, ""));
+        columns.put("desired_enabled", hostedColumn(
+                "tinyint", "tinyint(1)", false, "1", null, ""));
+        columns.put("last_error", hostedColumn(
+                "varchar", "varchar(1000)", true, null, "utf8mb4_0900_bin", ""));
+        columns.put("create_time", hostedColumn("bigint", "bigint", true, null, null, ""));
+        columns.put("update_time", hostedColumn("bigint", "bigint", true, null, null, ""));
+        columns.put("tenant_id", hostedColumn(
+                "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin", ""));
+        columns.put("client_id", hostedColumn(
+                "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin", ""));
+        return columns;
+    }
+
+    private AgentSchemaInitializer.BackfillColumnDefinition hostedColumn(
+            String dataType, String columnType, boolean nullable, String defaultValue,
+            String collation, String extra) {
+        return new AgentSchemaInitializer.BackfillColumnDefinition(
+                dataType, columnType, nullable, defaultValue, collation, extra);
+    }
+
+    private List<AgentSchemaInitializer.IndexColumn> hostedProfileIndex(String index) {
+        List<String> columns = switch (index) {
+            case "PRIMARY" -> List.of("id");
+            case "uk_hosted_binding" -> List.of("binding_id");
+            case "uk_hosted_profile_key" -> List.of("profile_key");
+            case "uk_hosted_api_key" -> List.of("api_key_id");
+            case "idx_hosted_scope_state" ->
+                    List.of("tenant_id", "client_id", "owner_jiacn", "lifecycle_state");
+            default -> List.of();
+        };
+        boolean unique = "PRIMARY".equals(index) || index.startsWith("uk_");
+        java.util.ArrayList<AgentSchemaInitializer.IndexColumn> result =
+                new java.util.ArrayList<>();
+        for (int i = 0; i < columns.size(); i++) {
+            result.add(new AgentSchemaInitializer.IndexColumn(
+                    unique ? 0 : 1, columns.get(i), i + 1, null));
+        }
+        return result;
+    }
+
+    private List<String> hostedProfileIndexNames() {
+        return List.of("PRIMARY", "idx_hosted_scope_state", "uk_hosted_api_key",
+                "uk_hosted_binding", "uk_hosted_profile_key");
+    }
+
+    private Map<String, String> hostedProfileChecks() {
+        return Map.of(
+                "chk_hosted_state",
+                "lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')",
+                "chk_hosted_generation", "generation >= 0",
+                "chk_hosted_repair",
+                "(lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR "
+                        + "(lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL)");
+    }
+
+    private boolean isHostedProfileIndexQuery(String normalizedSql, Object[] args) {
+        return args.length > 0 && "agent_hosted_profile".equals(args[0])
+                && (normalizedSql.contains("from information_schema.statistics")
+                || normalizedSql.contains("from information_schema.index_columns")
+                || normalizedSql.contains("join information_schema.key_column_usage"));
+    }
+
+    private boolean isHostedProfileEngineQuery(String sql) {
+        String normalized = normalizeCatalogSql(sql);
+        return normalized.contains("select engine from information_schema.tables")
+                && normalized.contains("table_name = 'agent_hosted_profile'");
+    }
+
+    private boolean isHostedProfileIndexSetQuery(String sql) {
+        String normalized = normalizeCatalogSql(sql);
+        return normalized.contains("select distinct index_name from information_schema.statistics")
+                && normalized.contains("table_name = 'agent_hosted_profile'");
+    }
+
+    private boolean isHostedProfileCountQuery(String sql) {
+        String normalized = normalizeCatalogSql(sql);
+        return normalized.contains("select count(*)")
+                && (normalized.contains("table_name='agent_hosted_profile'")
+                || normalized.contains("event_object_table='agent_hosted_profile'"));
+    }
+
+    private String normalizeCatalogSql(String sql) {
+        return sql.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
     }
 
     private Set<String> historicalEventAuditTables() {
@@ -1847,7 +2108,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
     private JdbcTemplate backfillColumnMismatchTemplate(
             AgentSchemaInitializer.BackfillColumnDefinition issueKeyDefinition) {
-        return new JdbcTemplate() {
+        return withHostedProfileCatalog(new JdbcTemplate() {
             @Override
             public void execute(String sql) {
                 // DDL intentionally inert so catalog evidence controls the result.
@@ -1885,7 +2146,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 }
                 return List.of();
             }
-        };
+        });
     }
 
     private String readResource(String resource) throws IOException {

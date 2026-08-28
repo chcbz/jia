@@ -130,7 +130,7 @@ class AgentIdentityRuntimeRealTransactionTest {
 
     @Test
     void newBindFirstRegisterAndRepeatedRegisterCompleteStableLifecycle() {
-        AgentRuntimeDTO bound = agentService.bindPersona("wuyong");
+        AgentRuntimeDTO bound = agentService.bindPersona("owner-a", "client-a", "owner-a", "wuyong");
         assertTrue(bound.getAgentId().matches("agt_[0-9a-f]{32}"));
         assertEquals(1, count("SELECT COUNT(*) FROM agent_persona_binding"));
         assertEquals("PROVISIONED", jdbc.queryForObject(
@@ -170,7 +170,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                 wire(new AgentPersonaDaoImpl(), mapper(AgentPersonaMapper.class)),
                 bindingDao, identityService);
 
-        assertThrows(IllegalStateException.class, () -> failing.bindPersona("wuyong"));
+        assertThrows(IllegalStateException.class, () -> failing.bindPersona("owner-a", "client-a", "owner-a", "wuyong"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_persona_binding"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_identity_registry"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_runtime"));
@@ -299,7 +299,7 @@ class AgentIdentityRuntimeRealTransactionTest {
             if (!start.await(10, TimeUnit.SECONDS)) {
                 return new AssertionError("barrier timeout");
             }
-            return agentService.bindPersona("wuyong");
+            return agentService.bindPersona("owner-a", "client-a", "owner-a", "wuyong");
         } catch (Throwable error) {
             return error;
         } finally {
@@ -398,12 +398,16 @@ class AgentIdentityRuntimeRealTransactionTest {
                 CREATE TABLE agent_persona_binding (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     jiacn VARCHAR_IGNORECASE(50) NOT NULL,
+                    owner_jiacn VARCHAR_IGNORECASE(50) GENERATED ALWAYS AS (jiacn),
                     persona_code VARCHAR_IGNORECASE(50) NOT NULL,
                     agent_id VARCHAR_IGNORECASE(100) NOT NULL,
                     bound_at BIGINT NOT NULL, status INT NOT NULL,
+                    active_persona_code VARCHAR_IGNORECASE(50) GENERATED ALWAYS AS
+                        (CASE WHEN status = 1 THEN persona_code ELSE NULL END),
                     create_time BIGINT, update_time BIGINT,
                     tenant_id VARCHAR_IGNORECASE(50), client_id VARCHAR_IGNORECASE(50),
-                    CONSTRAINT uk_a08_binding_persona UNIQUE (client_id, jiacn, persona_code)
+                    CONSTRAINT uk_a08_binding_persona
+                        UNIQUE (client_id, owner_jiacn, active_persona_code)
                 )
                 """);
         jdbc.execute("""

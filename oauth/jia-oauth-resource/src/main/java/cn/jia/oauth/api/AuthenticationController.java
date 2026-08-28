@@ -1,6 +1,5 @@
 package cn.jia.oauth.api;
 
-import cn.jia.core.entity.JsonResult;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -17,7 +16,7 @@ import java.util.TreeSet;
 public class AuthenticationController {
 
     @GetMapping("/resource")
-    public ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> resource(Authentication authentication) {
+    public ResponseEntity<OAuthResourceIdentityDTO> resource(Authentication authentication) {
         try {
             if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication) ||
                     !authentication.isAuthenticated()) {
@@ -31,7 +30,7 @@ public class AuthenticationController {
                     optionalString(jwt, "username"),
                     optionalString(jwt, "jiacn"),
                     scopes(jwt));
-            return ResponseEntity.ok(JsonResult.success(identity));
+            return ResponseEntity.ok(identity);
         } catch (InvalidIdentityClaimsException ignored) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }

@@ -13,6 +13,7 @@ dependencies {
     compileOnly(libs.spring.security.oauth2.client)
     implementation(libs.spring.redis)
     testImplementation project(':common:jia-common-test')
+    testImplementation(libs.spring.boot.starter.thymeleaf)
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

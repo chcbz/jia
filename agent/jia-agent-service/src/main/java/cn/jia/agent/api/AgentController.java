@@ -19,10 +19,12 @@ import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentPersonaProvisioningService;
+import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
-import cn.jia.core.security.AllowSensitiveOutput;
 import jakarta.servlet.http.HttpServletRequest;
 import com.github.pagehelper.PageInfo;
 import lombok.RequiredArgsConstructor;
@@ -37,8 +39,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @RestController
@@ -47,6 +52,7 @@ import java.util.List;
 public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
+    private final AgentPersonaProvisioningService personaProvisioningService;
 
     @PostMapping("/register")
     public Object register(@RequestBody AgentRegisterDTO request) {
@@ -78,19 +84,66 @@ public class AgentController {
     }
 
     @PostMapping("/personas/{personaCode}/bind")
-    @AllowSensitiveOutput(reason = "persona binding returns the codex-ws-agent API key needed for local setup")
     public Object bindPersona(@PathVariable String personaCode,
-            @RequestBody(required = false) AgentPersonaBindRequestDTO request) {
-        if (request == null || request.getMode() == null || request.getMode().isBlank()) {
-            return JsonResult.success(agentService.bindPersona(personaCode));
-        }
-        return JsonResult.success(agentService.bindPersona(personaCode, request.getMode()));
+            @RequestBody(required = false) AgentPersonaBindRequestDTO request,
+            Authentication authentication) {
+        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        String mode = request == null ? "local" : request.getMode();
+        return JsonResult.success(personaProvisioningService.bind(scope, personaCode, mode));
+    }
+
+    @PostMapping("/personas/bindings/{bindingId}/repair")
+    public Object repairPersonaBinding(@PathVariable long bindingId, Authentication authentication) {
+        return JsonResult.success(personaProvisioningService.repair(requireJwtScope(authentication), bindingId));
     }
 
     @DeleteMapping("/personas/{personaCode}/bind")
-    public Object unbindPersona(@PathVariable String personaCode) {
-        agentService.unbindPersona(personaCode);
+    public Object unbindPersona(@PathVariable String personaCode, Authentication authentication) {
+        personaProvisioningService.unbind(requireJwtScope(authentication), personaCode);
         return JsonResult.success();
+    }
+
+    static AgentHostedBindingTransaction.Scope requireJwtScope(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwt)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is required");
+        }
+        Map<String, Object> claims = jwt.getToken().getClaims();
+        Object rawJiacn = claims.get("jiacn");
+        Object rawClientId = claims.get("client_id");
+        if (!(rawJiacn instanceof String jiacn) || !(rawClientId instanceof String clientId)
+                || "0".equals(jiacn) || !validExactScopeComponent(jiacn)
+                || !validExactScopeComponent(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is invalid");
+        }
+        return new AgentHostedBindingTransaction.Scope(jiacn, clientId, jiacn);
+    }
+
+    private static boolean validExactScopeComponent(String value) {
+        return value != null && !hasUnpairedSurrogate(value)
+                && value.codePointCount(0, value.length()) <= 50
+                && !value.codePoints().allMatch(AgentController::isPadding)
+                && !isPadding(value.codePointAt(0))
+                && !isPadding(value.codePointBefore(value.length()))
+                && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) return true;
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
     @PostMapping("/roster")
