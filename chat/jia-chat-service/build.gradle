@@ -24,17 +24,19 @@ dependencies {
 	implementation libs.spring.ai.agent.utils
 	compileOnly libs.spring.boot.starter.websocket
 	compileOnly libs.spring.security.oauth2.client
-	compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
-	compileOnly 'org.springframework.security:spring-security-oauth2-jose'
-	testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
-	testImplementation 'org.springframework.security:spring-security-oauth2-jose'
+	compileOnly libs.spring.security.oauth2.resource.server
+	compileOnly libs.spring.security.oauth2.jose
 //	implementation 'org.springframework.retry:spring-retry'
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')
+	testImplementation project(':agent:jia-agent-service')
 	testImplementation project(':agent:jia-agent-mapper')
 	testImplementation libs.spring.ai.starter.mcp.client
 	testImplementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	testImplementation libs.spring.boot.starter.websocket
+	testImplementation libs.spring.security.oauth2.resource.server
+	testImplementation libs.spring.security.oauth2.jose
+	testRuntimeOnly libs.mysql
 }
 
 version = '1.1.2-SNAPSHOT'

@@ -1,0 +1,67 @@
+package cn.jia.chat.archive.service;
+
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+
+final class ArchiveWire {
+    static final long MAX_VERSION = Long.MAX_VALUE;
+    private ArchiveWire() { }
+
+    static long decimal(String value, String errorCode) {
+        if (value == null || !value.matches("0|[1-9][0-9]{0,18}")) invalid(errorCode);
+        try {
+            long parsed = Long.parseLong(value);
+            if (parsed < 0) invalid(errorCode);
+            return parsed;
+        } catch (NumberFormatException invalid) {
+            throw new ArchivePersonalDataException(422, errorCode, "Invalid canonical decimal value");
+        }
+    }
+
+    static String next(long current) {
+        return Long.toString(increment(current));
+    }
+
+    static long increment(long current) {
+        return increment(current, 1);
+    }
+
+    static long increment(long current, long amount) {
+        if (current < 0 || amount < 1 || current > MAX_VERSION - amount) {
+            throw new ArchivePersonalDataException(409, "VERSION_EXHAUSTED",
+                    "Resource version or sequence is exhausted", Long.toString(current));
+        }
+        return current + amount;
+    }
+
+    static boolean lowercaseUuid(String value) {
+        if (value == null || !value.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) return false;
+        try { return UUID.fromString(value).toString().equals(value); }
+        catch (IllegalArgumentException ignored) { return false; }
+    }
+
+    static boolean visibleAsciiPath(String value) {
+        if (value == null || value.isEmpty() || value.length() > 512) return false;
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (current < 0x21 || current > 0x7e) return false;
+        }
+        return true;
+    }
+
+    static boolean visibleAsciiKey(String value) {
+        if (value == null) return false;
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length < 1 || bytes.length > 128) return false;
+        for (byte b : bytes) if ((b & 0xff) < 0x21 || (b & 0xff) > 0x7e) return false;
+        return true;
+    }
+
+    static Long cursor(String value) {
+        return value == null ? null : decimal(value, "INVALID_CURSOR");
+    }
+
+    private static void invalid(String code) {
+        throw new ArchivePersonalDataException(422, code, "Invalid canonical decimal value");
+    }
+}
