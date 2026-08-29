@@ -9,15 +9,24 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -33,6 +42,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  */
 class ArchiveMySqlIntegrationTest {
     private JdbcTemplate jdbc;
+    private TrackingDataSource dataSource;
     private ArchiveSchemaInitializer schemaInitializer;
     private ArchiveContentImporter importer;
     private ArchiveManifestBundle bundle;
@@ -42,11 +52,12 @@ class ArchiveMySqlIntegrationTest {
         assumeTrue("true".equals(System.getenv("CYF_H02_MYSQL_ISOLATED")),
                 "requires explicit isolated-MySQL acknowledgement");
         ArchiveMySqlTestGuard.Target target = ArchiveMySqlTestGuard.requireDisposable(System.getenv());
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("com.mysql.cj.jdbc.Driver");
-        dataSource.setUrl(target.url());
-        dataSource.setUsername(System.getenv().getOrDefault("CYF_H02_MYSQL_USER", "root"));
-        dataSource.setPassword(System.getenv().getOrDefault("CYF_H02_MYSQL_PASSWORD", ""));
+        DriverManagerDataSource delegate = new DriverManagerDataSource();
+        delegate.setDriverClassName("com.mysql.cj.jdbc.Driver");
+        delegate.setUrl(target.url());
+        delegate.setUsername(System.getenv().getOrDefault("CYF_H02_MYSQL_USER", "root"));
+        delegate.setPassword(System.getenv().getOrDefault("CYF_H02_MYSQL_PASSWORD", ""));
+        dataSource = new TrackingDataSource(delegate);
         jdbc = new JdbcTemplate(dataSource);
         clean();
         schemaInitializer = new ArchiveSchemaInitializer(jdbc);
@@ -72,31 +83,85 @@ class ArchiveMySqlIntegrationTest {
         assertEquals(bundle.manifest().editionId(), jdbc.queryForObject(
                 "SELECT active_edition_id FROM archive_work WHERE work_id='shuihuzhuan'", String.class));
 
-        var pool = Executors.newFixedThreadPool(2);
-        CountDownLatch start = new CountDownLatch(1);
-        List<Throwable> failures = java.util.Collections.synchronizedList(new ArrayList<>());
-        for (int i = 0; i < 2; i++) pool.submit(() -> {
-            try {
-                start.await();
-                importer.importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
-            } catch (Throwable failure) {
-                failures.add(failure);
-            }
-        });
-        start.countDown();
-        pool.shutdown();
-        assertTrue(pool.awaitTermination(60, TimeUnit.SECONDS));
-        assertTrue(failures.isEmpty(), failures.toString());
+        var timestampsBeforeRestart = jdbc.queryForMap("""
+                SELECT w.updated_at, e.ready_at, e.activated_at
+                FROM archive_work w JOIN archive_edition e
+                  ON e.work_id = w.work_id AND e.edition_id = w.active_edition_id
+                WHERE w.work_id = 'shuihuzhuan'
+                """);
+        List<Future<Void>> successful = runConcurrentImports();
+        for (Future<Void> future : successful) {
+            assertTrue(future.isDone());
+            assertTrue(!future.isCancelled());
+            future.get();
+        }
+        assertEquals(timestampsBeforeRestart, jdbc.queryForMap("""
+                SELECT w.updated_at, e.ready_at, e.activated_at
+                FROM archive_work w JOIN archive_edition e
+                  ON e.work_id = w.work_id AND e.edition_id = w.active_edition_id
+                WHERE w.work_id = 'shuihuzhuan'
+                """), "validated READY restarts must be mutation-free");
+        assertImportResourcesReleased();
 
         String paragraphId = bundle.manifest().chapters().getFirst().paragraphs().getFirst().paragraphId();
         jdbc.update("UPDATE archive_paragraph SET text='tampered' WHERE paragraph_id=?", paragraphId);
         assertThrows(ArchiveImportException.class,
                 () -> importer.importAndActivate(bundle.manifest(), bundle.manifestFileSha256()));
+        List<Future<Void>> mismatches = runConcurrentImports();
+        for (Future<Void> future : mismatches) {
+            assertTrue(future.isDone());
+            assertTrue(!future.isCancelled());
+            ExecutionException failure = assertThrows(ExecutionException.class, future::get);
+            assertTrue(failure.getCause() instanceof ArchiveImportException, failure.toString());
+        }
+        assertImportResourcesReleased();
         assertEquals("tampered", jdbc.queryForObject(
                 "SELECT text FROM archive_paragraph WHERE paragraph_id=?", String.class, paragraphId));
 
         jdbc.execute("ALTER TABLE archive_paragraph MODIFY text LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL");
         assertThrows(IllegalStateException.class, schemaInitializer::initialize);
+    }
+
+    private List<Future<Void>> runConcurrentImports() throws InterruptedException {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Void>> futures = new ArrayList<>();
+        for (int index = 0; index < 2; index++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                importer.importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
+                return null;
+            }));
+        }
+        start.countDown();
+        pool.shutdown();
+        boolean terminated = pool.awaitTermination(60, TimeUnit.SECONDS);
+        if (!terminated) {
+            futures.forEach(future -> future.cancel(true));
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertTrue(terminated, () -> "archive import futures did not terminate: " + futureStates(futures));
+        return List.copyOf(futures);
+    }
+
+    private List<String> futureStates(List<? extends Future<?>> futures) {
+        return futures.stream().map(future -> "done=" + future.isDone()
+                + ",cancelled=" + future.isCancelled()).toList();
+    }
+
+    private void assertImportResourcesReleased() throws Exception {
+        assertEquals(0, dataSource.activeConnections(), "archive importer leaked a JDBC connection");
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            connection.setAutoCommit(false);
+            statement.execute("SET SESSION innodb_lock_wait_timeout=3");
+            statement.executeQuery("SELECT work_id FROM archive_work WHERE work_id='shuihuzhuan' FOR UPDATE").close();
+            statement.executeQuery("SELECT edition_id FROM archive_edition "
+                    + "WHERE edition_id='shuihuzhuan-zh-120-v1' FOR UPDATE").close();
+            connection.rollback();
+        }
+        assertEquals(0, dataSource.activeConnections(), "archive lock probe connection was not released");
     }
 
     private int count(String table, String predicate) {
@@ -118,5 +183,50 @@ class ArchiveMySqlIntegrationTest {
             }
             return null;
         });
+    }
+
+    private static final class TrackingDataSource extends AbstractDataSource {
+        private final DriverManagerDataSource delegate;
+        private final AtomicInteger activeConnections = new AtomicInteger();
+
+        private TrackingDataSource(DriverManagerDataSource delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Connection getConnection() throws java.sql.SQLException {
+            return track(delegate.getConnection());
+        }
+
+        @Override
+        public Connection getConnection(String username, String password) throws java.sql.SQLException {
+            return track(delegate.getConnection(username, password));
+        }
+
+        int activeConnections() {
+            return activeConnections.get();
+        }
+
+        private Connection track(Connection connection) {
+            activeConnections.incrementAndGet();
+            AtomicBoolean closed = new AtomicBoolean();
+            return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
+                    new Class<?>[]{Connection.class}, (proxy, method, args) -> {
+                        if ("close".equals(method.getName()) && closed.compareAndSet(false, true)) {
+                            try {
+                                return method.invoke(connection, args);
+                            } catch (InvocationTargetException failure) {
+                                throw failure.getCause();
+                            } finally {
+                                activeConnections.decrementAndGet();
+                            }
+                        }
+                        try {
+                            return method.invoke(connection, args);
+                        } catch (InvocationTargetException failure) {
+                            throw failure.getCause();
+                        }
+                    });
+        }
     }
 }

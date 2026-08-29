@@ -15,8 +15,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -33,9 +35,15 @@ class ArchiveContentImporterTest {
 
         importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
         int insertsAfterFirstRun = store.successfulInserts;
+        store.resetDiagnostics();
         importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
 
         assertEquals(insertsAfterFirstRun, store.successfulInserts);
+        assertEquals(0, store.insertAttempts,
+                "a READY restart must not probe every persisted row with duplicate inserts");
+        assertEquals(0, store.activationMutations,
+                "an already-active READY restart must be read-only after validation");
+        assertEquals(0, store.activeTransactions);
         assertEquals(manifest.editionId(), store.work.activeEditionId());
         assertEquals("READY", store.edition.importState());
         assertEquals(121, store.blocks.size());
@@ -49,6 +57,46 @@ class ArchiveContentImporterTest {
 
         assertThrows(ArchiveImportException.class,
                 () -> importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256));
+        assertEquals("tampered", store.paragraphs.get(paragraphId).text());
+    }
+
+    @Test
+    void concurrentReadyMismatchFuturesTerminatePropagateAndReleaseTransactions() throws Exception {
+        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        MemoryStore store = new MemoryStore();
+        ArchiveContentImporter importer = new ArchiveContentImporter(store, store, 100);
+        importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+
+        String paragraphId = manifest.chapters().getFirst().paragraphs().getFirst().paragraphId();
+        ArchiveParagraphRecord original = store.paragraphs.get(paragraphId);
+        store.paragraphs.put(paragraphId, new ArchiveParagraphRecord(
+                original.editionId(), original.blockId(), original.paragraphId(), original.ordinal(),
+                "tampered", original.utf8ByteLength(), original.sha256()));
+        store.resetDiagnostics();
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Void>> futures = new ArrayList<>();
+        for (int index = 0; index < 2; index++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256);
+                return null;
+            }));
+        }
+        start.countDown();
+        pool.shutdown();
+
+        assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS));
+        for (Future<Void> future : futures) {
+            assertTrue(future.isDone());
+            ExecutionException failure = assertThrows(ExecutionException.class, future::get);
+            assertTrue(failure.getCause() instanceof ArchiveImportException, failure.toString());
+        }
+        assertEquals(0, store.insertAttempts);
+        assertEquals(0, store.activationMutations);
+        assertEquals(0, store.activeTransactions,
+                "every exceptional READY validation transaction must release in finally");
         assertEquals("tampered", store.paragraphs.get(paragraphId).text());
     }
 
@@ -105,6 +153,7 @@ class ArchiveContentImporterTest {
         pool.shutdown();
         assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS));
         assertTrue(failures.isEmpty(), failures.toString());
+        assertEquals(0, store.activeTransactions);
         assertEquals("READY", store.edition.importState());
         assertEquals(manifest.editionId(), store.work.activeEditionId());
     }
@@ -119,21 +168,28 @@ class ArchiveContentImporterTest {
         private int failParagraphInsertAt = -1;
         private boolean failActivationAfterPointerWrite;
         private int lastRolledBackParagraphCount = -1;
+        private int insertAttempts;
+        private int activationMutations;
+        private int activeTransactions;
 
         @Override
         public synchronized <T> T required(java.util.function.Supplier<T> action) {
             Snapshot snapshot = snapshot();
+            activeTransactions++;
             try {
                 return action.get();
             } catch (RuntimeException failure) {
                 restore(snapshot);
                 lastRolledBackParagraphCount = snapshot.paragraphs.size();
                 throw failure;
+            } finally {
+                activeTransactions--;
             }
         }
 
         @Override
         public void insertWork(ArchiveWorkRecord candidate) {
+            insertAttempts++;
             if (work != null) throw new DuplicateKeyException("work");
             work = candidate;
             successfulInserts++;
@@ -146,6 +202,7 @@ class ArchiveContentImporterTest {
 
         @Override
         public void insertEdition(ArchiveEditionRecord candidate) {
+            insertAttempts++;
             if (edition != null) throw new DuplicateKeyException("edition");
             edition = candidate;
             successfulInserts++;
@@ -158,6 +215,7 @@ class ArchiveContentImporterTest {
 
         @Override
         public void insertBlock(ArchiveBlockRecord candidate) {
+            insertAttempts++;
             if (blocks.containsKey(candidate.blockId())) throw new DuplicateKeyException("block");
             blocks.put(candidate.blockId(), candidate);
             successfulInserts++;
@@ -170,6 +228,7 @@ class ArchiveContentImporterTest {
 
         @Override
         public void insertParagraph(ArchiveParagraphRecord candidate) {
+            insertAttempts++;
             paragraphInsertAttempts++;
             if (paragraphInsertAttempts == failParagraphInsertAt) {
                 throw new IllegalStateException("injected paragraph batch failure");
@@ -213,6 +272,7 @@ class ArchiveContentImporterTest {
 
         @Override
         public int switchActiveEdition(String workId, String editionId) {
+            activationMutations++;
             work = new ArchiveWorkRecord(work.workId(), work.title(), editionId);
             if (failActivationAfterPointerWrite) throw new IllegalStateException("injected activation failure");
             return 1;
@@ -220,7 +280,13 @@ class ArchiveContentImporterTest {
 
         @Override
         public int markActivated(String editionId) {
+            activationMutations++;
             return edition == null ? 0 : 1;
+        }
+
+        private void resetDiagnostics() {
+            insertAttempts = 0;
+            activationMutations = 0;
         }
 
         private Snapshot snapshot() {

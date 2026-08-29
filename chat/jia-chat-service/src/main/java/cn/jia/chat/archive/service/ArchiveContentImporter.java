@@ -42,6 +42,9 @@ public class ArchiveContentImporter {
         Objects.requireNonNull(manifest, "manifest");
         try {
             ArchiveEditionRecord expectedEdition = expectedEdition(manifest, manifestFileSha256);
+            if (activateExistingReady(manifest, expectedEdition)) {
+                return;
+            }
             transactions.required(() -> {
                 ensureWork(manifest);
                 ensureEdition(expectedEdition);
@@ -88,27 +91,66 @@ public class ArchiveContentImporter {
         }
     }
 
+    private boolean activateExistingReady(ArchiveManifest manifest, ArchiveEditionRecord expectedEdition) {
+        return transactions.required(() -> {
+            // Frozen parent-to-child lock order. A READY restart must validate under the same
+            // serialization boundary as activation, but must not replay thousands of duplicate
+            // insert attempts before it can terminate.
+            ArchiveWorkRecord work = store.lockWork(manifest.workId());
+            if (work == null) {
+                return false;
+            }
+            requireWorkMetadata(manifest, work, "ready restart work row");
+            ArchiveEditionRecord candidate = store.lockEdition(manifest.editionId());
+            if (candidate == null) {
+                return false;
+            }
+            requireEditionMetadata(expectedEdition, candidate);
+            if ("STAGING".equals(candidate.importState())) {
+                return false;
+            }
+            if (!"READY".equals(candidate.importState())) {
+                throw mismatch("ready restart candidate state");
+            }
+            verifyPersistedContent(manifest);
+            activateLocked(manifest, work, candidate);
+            return true;
+        });
+    }
+
     private void activate(ArchiveManifest manifest, ArchiveEditionRecord expectedEdition) {
         transactions.required(() -> {
             // Frozen lock order: work row first, then candidate edition row.
             ArchiveWorkRecord work = store.lockWork(manifest.workId());
-            if (work == null || !manifest.workId().equals(work.workId())
-                    || !manifest.title().equals(work.title())) {
-                throw mismatch("activation work row");
-            }
+            requireWorkMetadata(manifest, work, "activation work row");
             ArchiveEditionRecord candidate = store.lockEdition(manifest.editionId());
             requireEditionMetadata(expectedEdition, candidate);
-            if (!"READY".equals(candidate.importState())) {
-                throw mismatch("activation candidate state");
-            }
-            if (store.switchActiveEdition(manifest.workId(), manifest.editionId()) != 1) {
-                throw mismatch("active pointer switch");
-            }
-            if (store.markActivated(manifest.editionId()) != 1) {
-                throw mismatch("activation timestamp");
-            }
+            activateLocked(manifest, work, candidate);
             return null;
         });
+    }
+
+    private void activateLocked(ArchiveManifest manifest, ArchiveWorkRecord work,
+                                ArchiveEditionRecord candidate) {
+        if (!"READY".equals(candidate.importState())) {
+            throw mismatch("activation candidate state");
+        }
+        if (manifest.editionId().equals(work.activeEditionId())) {
+            return;
+        }
+        if (store.switchActiveEdition(manifest.workId(), manifest.editionId()) != 1) {
+            throw mismatch("active pointer switch");
+        }
+        if (store.markActivated(manifest.editionId()) != 1) {
+            throw mismatch("activation timestamp");
+        }
+    }
+
+    private void requireWorkMetadata(ArchiveManifest manifest, ArchiveWorkRecord work, String item) {
+        if (work == null || !manifest.workId().equals(work.workId())
+                || !manifest.title().equals(work.title())) {
+            throw mismatch(item);
+        }
     }
 
     private void ensureWork(ArchiveManifest manifest) {
