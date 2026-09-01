@@ -63,24 +63,40 @@ class OpenAiCompatibleVoiceProviderTest {
     @Test
     void synthesisRejectsDeclaredBodyAboveEightMiBWithoutRetryOrCaching() throws Exception {
         AtomicInteger calls = new AtomicInteger();
-        server = server();
-        server.createContext("/audio/speech", exchange -> {
-            calls.incrementAndGet();
-            exchange.sendResponseHeaders(200,
-                    OpenAiCompatibleSpeechSynthesisProvider.MAX_AUDIO_BYTES + 1L);
-            exchange.close();
-        });
-        server.start();
-        VoiceSpeechProperties properties = configured();
+        HttpClient client = mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(invocation -> {
+                    calls.incrementAndGet();
+                    HttpResponse.BodyHandler<byte[]> handler = invocation.getArgument(1);
+                    HttpResponse.ResponseInfo responseInfo = mock(HttpResponse.ResponseInfo.class);
+                    when(responseInfo.headers()).thenReturn(java.net.http.HttpHeaders.of(
+                            java.util.Map.of("Content-Length", java.util.List.of(String.valueOf(
+                                    OpenAiCompatibleSpeechSynthesisProvider.MAX_AUDIO_BYTES + 1L))),
+                            (name, value) -> true));
+                    HttpResponse.BodySubscriber<byte[]> subscriber = handler.apply(responseInfo);
+                    subscriber.onSubscribe(mock(java.util.concurrent.Flow.Subscription.class));
+                    try {
+                        subscriber.getBody().toCompletableFuture().join();
+                    } catch (java.util.concurrent.CompletionException exception) {
+                        throw new java.io.IOException(exception.getCause());
+                    }
+                    throw new AssertionError("declared oversized body was not rejected");
+                });
+        VoiceSpeechProperties properties = configured("https://voice-provider.invalid");
         OpenAiCompatibleSpeechSynthesisProvider provider =
-                new OpenAiCompatibleSpeechSynthesisProvider(properties, new ObjectMapper());
+                new OpenAiCompatibleSpeechSynthesisProvider(properties, new ObjectMapper(), client);
+        SpeechSynthesisRequest request = new SpeechSynthesisRequest(
+                "林冲领命。", "juyiting-default", "mp3");
 
-        SpeechProviderException error = assertThrows(SpeechProviderException.class,
-                () -> provider.synthesize(new SpeechSynthesisRequest(
-                        "林冲领命。", "juyiting-default", "mp3")));
+        for (int invocation = 0; invocation < 2; invocation++) {
+            SpeechProviderException error = assertThrows(SpeechProviderException.class,
+                    () -> provider.synthesize(request));
+            assertEquals(SpeechProviderException.FailureKind.KNOWN, error.failureKind());
+        }
 
-        assertEquals(SpeechProviderException.FailureKind.KNOWN, error.failureKind());
-        assertEquals(1, calls.get());
+        assertEquals(2, calls.get());
+        verify(client, times(2)).send(
+                any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
     }
 
     private HttpServer server() throws Exception {
