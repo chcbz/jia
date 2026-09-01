@@ -15,23 +15,37 @@ class AudioDurationInspectorTest {
     private static final String REQUEST_ID = "01JVOICEFIXTURE0001";
 
     @Test
-    void acceptsBoundedWebmOpusAndMp4AacFixtures() throws Exception {
+    void acceptsFinalizedWebmOpusMp4AacAndUnmodifiedChromiumWebm() throws Exception {
         assertEquals(1200, inspector.inspect(fixture("mediarecorder-valid.webm"),
+                "audio/webm", REQUEST_ID));
+        assertEquals(1240, inspector.inspect(fixture("mediarecorder-chromium-unmodified.webm"),
                 "audio/webm", REQUEST_ID));
         assertEquals(1200, inspector.inspect(fixture("mediarecorder-valid.mp4"),
                 "audio/mp4", REQUEST_ID));
     }
 
     @Test
-    void rejectsMissingDurationMalformedAndOverlongForBothContainers() throws Exception {
+    void rejectsUnknownMalformedAndOverlongDurationsForBothContainers() throws Exception {
         assertError("mediarecorder-missing-duration.webm", "audio/webm", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-malformed.webm", "audio/webm", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-overlong.webm", "audio/webm", VoiceErrorCode.TOO_LONG);
+        assertError("mediarecorder-derived-overlong.webm", "audio/webm", VoiceErrorCode.TOO_LONG);
         assertError("mediarecorder-missing-duration.mp4", "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-malformed.mp4", "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-overlong.mp4", "audio/mp4", VoiceErrorCode.TOO_LONG);
     }
 
+    @Test
+    void rejectsForgedTrackMetadataAndWrongContainerCodecs() throws Exception {
+        assertError("mediarecorder-forged-metadata.webm",
+                "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-wrong-codec.webm",
+                "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-forged-metadata.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-wrong-codec.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+    }
 
     @Test
     void declaredMimeCodecParametersAreStrictAndBrowserCompatible() {

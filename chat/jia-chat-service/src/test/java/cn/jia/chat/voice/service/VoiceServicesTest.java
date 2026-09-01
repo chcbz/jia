@@ -73,6 +73,67 @@ class VoiceServicesTest {
     }
 
     @Test
+    void serializedSttClientJsonAbove256KiBFailsClosedWithoutCaching() {
+        VoiceSpeechProperties properties = properties();
+        AtomicInteger calls = new AtomicInteger();
+        SpeechTranscriptionProvider provider = transcriptionProvider(calls,
+                new SpeechTranscriptionResult("\"".repeat(140_000), "zh"));
+        FakeCoordinator coordinator = new FakeCoordinator();
+        SpeechTranscriptionService service = transcriptionService(properties, provider, coordinator);
+
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> service.transcribe(IDENTITY, REQUEST_ID, "zh-CN", upload()));
+
+        assertEquals(VoiceErrorCode.PROVIDER_ERROR, error.error());
+        assertEquals("FAILED_KNOWN", coordinator.terminal);
+        assertEquals(null, coordinator.cached);
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void oversizedSttReplayFailsClosedBeforeProviderDispatch() {
+        VoiceSpeechProperties properties = properties();
+        AtomicInteger calls = new AtomicInteger();
+        FakeCoordinator coordinator = new FakeCoordinator();
+        coordinator.next = VoiceBeginResult.replay(new VoiceCachedResult(
+                new byte[SpeechTranscriptionService.MAX_CLIENT_JSON_BYTES + 1],
+                "application/json"));
+        SpeechTranscriptionService service = transcriptionService(properties,
+                transcriptionProvider(calls, new SpeechTranscriptionResult("unexpected", "zh")),
+                coordinator);
+
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> service.transcribe(IDENTITY, REQUEST_ID, "zh-CN", upload()));
+
+        assertEquals(VoiceErrorCode.UNAVAILABLE, error.error());
+        assertEquals(0, calls.get());
+    }
+
+    @Test
+    void successTerminalWriteFailureFallsBackUnknownAndReplayCannotRedispatch() {
+        VoiceSpeechProperties properties = properties();
+        AtomicInteger calls = new AtomicInteger();
+        FakeCoordinator coordinator = new FakeCoordinator();
+        coordinator.failSucceed = true;
+        SpeechTranscriptionService service = transcriptionService(properties,
+                transcriptionProvider(calls, new SpeechTranscriptionResult("林冲领命", "zh")),
+                coordinator);
+
+        VoiceException first = assertThrows(VoiceException.class,
+                () -> service.transcribe(IDENTITY, REQUEST_ID, "zh-CN", upload()));
+        assertEquals(VoiceErrorCode.RESULT_UNKNOWN, first.error());
+        assertEquals("FAILED_UNKNOWN", coordinator.terminal);
+        assertEquals(1, coordinator.releaseCalls);
+        assertEquals(1, calls.get());
+
+        coordinator.next = VoiceBeginResult.outcome(VoiceBeginResult.Outcome.RESULT_UNKNOWN);
+        VoiceException replay = assertThrows(VoiceException.class,
+                () -> service.transcribe(IDENTITY, REQUEST_ID, "zh-CN", upload()));
+        assertEquals(VoiceErrorCode.RESULT_UNKNOWN, replay.error());
+        assertEquals(1, calls.get());
+    }
+
+    @Test
     void timeoutIsPersistedUnknownWithoutRetryAndRetrySeesResultUnknown() {
         VoiceSpeechProperties properties = properties();
         AtomicInteger calls = new AtomicInteger();
@@ -229,6 +290,7 @@ class VoiceServicesTest {
         private int beginCalls;
         private int releaseCalls;
         private String terminal;
+        private boolean failSucceed;
 
         @Override
         public VoiceBeginResult begin(VoiceOperation operation, String scope, String requestId, String digest) {
@@ -240,6 +302,9 @@ class VoiceServicesTest {
 
         @Override
         public void succeed(VoiceReservation reservation, VoiceCachedResult result) {
+            if (failSucceed) {
+                throw new VoiceStateUnavailableException();
+            }
             terminal = "SUCCEEDED";
             cached = result;
         }

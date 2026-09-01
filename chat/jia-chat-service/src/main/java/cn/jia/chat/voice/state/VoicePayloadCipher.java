@@ -12,6 +12,8 @@ import java.util.Arrays;
 import java.util.Base64;
 
 public final class VoicePayloadCipher {
+    // V1 ciphertext has no AAD. Adding tuple AAD without a new version would make existing
+    // encrypted idempotency payloads unreadable; Redis keys and the CAS digest bind the tuple.
     private static final byte VERSION = 1;
     private static final int IV_BYTES = 12;
     private static final int TAG_BITS = 128;

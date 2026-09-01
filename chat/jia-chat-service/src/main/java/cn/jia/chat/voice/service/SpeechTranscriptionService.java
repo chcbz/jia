@@ -9,6 +9,7 @@ import cn.jia.chat.voice.api.VoiceErrorCode;
 import cn.jia.chat.voice.api.VoiceException;
 import cn.jia.chat.voice.api.VoiceTranscriptionResponse;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
+import cn.jia.core.entity.JsonResult;
 import cn.jia.chat.voice.state.VoiceBeginResult;
 import cn.jia.chat.voice.state.VoiceCachedResult;
 import cn.jia.chat.voice.state.VoiceDigests;
@@ -24,6 +25,7 @@ import java.io.IOException;
 
 @Slf4j
 public final class SpeechTranscriptionService {
+    public static final int MAX_CLIENT_JSON_BYTES = 256 * 1024;
     private final VoiceSpeechProperties properties;
     private final SpeechTranscriptionProvider provider;
     private final VoiceRequestCoordinator coordinator;
@@ -79,11 +81,15 @@ public final class SpeechTranscriptionService {
             VoiceTranscriptionResponse response = new VoiceTranscriptionResponse(
                     requestId, result.text(), result.detectedLanguage(), upload.durationMs());
             byte[] cached = objectMapper.writeValueAsBytes(response);
-            try {
-                coordinator.succeed(reservation, new VoiceCachedResult(cached, "application/json"));
-            } catch (VoiceStateUnavailableException exception) {
-                throw VoiceException.of(VoiceErrorCode.RESULT_UNKNOWN, requestId);
+            byte[] clientJson = objectMapper.writeValueAsBytes(JsonResult.success(response));
+            if (cached.length > MAX_CLIENT_JSON_BYTES
+                    || clientJson.length > MAX_CLIENT_JSON_BYTES) {
+                VoiceServiceSupport.transitionFailure(coordinator, reservation,
+                        SpeechProviderException.FailureKind.KNOWN, requestId);
+                throw VoiceException.of(VoiceErrorCode.PROVIDER_ERROR, requestId);
             }
+            VoiceServiceSupport.completeSuccess(coordinator, reservation,
+                    new VoiceCachedResult(cached, "application/json"), requestId);
             logSuccess(started, upload.size(), upload.durationMs(), upload.mediaType());
             return response;
         } catch (SpeechProviderException exception) {
@@ -102,9 +108,14 @@ public final class SpeechTranscriptionService {
     }
 
     private VoiceTranscriptionResponse decodeReplay(VoiceCachedResult replay, String requestId) {
+        byte[] payload = replay == null ? null : replay.payload();
+        if (payload == null || payload.length == 0 || payload.length > MAX_CLIENT_JSON_BYTES
+                || !"application/json".equals(replay.contentType())) {
+            throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
+        }
         try {
             VoiceTranscriptionResponse response = objectMapper.readValue(
-                    replay.payload(), VoiceTranscriptionResponse.class);
+                    payload, VoiceTranscriptionResponse.class);
             if (!requestId.equals(response.requestId()) || response.text() == null
                     || response.durationMs() <= 0) {
                 throw new IOException("invalid cached result");

@@ -30,6 +30,7 @@ dependencies {
 	compileOnly libs.spring.redis
 	testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
 	testImplementation 'org.springframework.security:spring-security-oauth2-jose'
+	testImplementation libs.spring.security.config
 //	implementation 'org.springframework.retry:spring-retry'
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')

@@ -2,14 +2,18 @@ package cn.jia.chat.voice.api;
 
 import cn.jia.core.entity.JsonResult;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 
 @Slf4j
+@Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice(assignableTypes = {
         SpeechTranscriptionController.class,
         SpeechSynthesisController.class
@@ -23,6 +27,11 @@ public class VoiceExceptionHandler {
                 error.message(), error.code(), error.status().value());
         log.warn("Voice request failed code={} status={}", error.code(), error.status().value());
         return ResponseEntity.status(error.status()).body(result);
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<JsonResult<VoiceErrorData>> unsupportedMedia() {
+        return response(VoiceErrorCode.UNSUPPORTED_MEDIA, null);
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

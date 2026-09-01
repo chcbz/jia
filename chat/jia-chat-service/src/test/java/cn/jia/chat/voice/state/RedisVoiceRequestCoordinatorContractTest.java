@@ -2,11 +2,14 @@ package cn.jia.chat.voice.state;
 
 import cn.jia.chat.voice.VoiceIdentity;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
+import com.github.microwww.redis.RedisServer;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.net.ServerSocket;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -20,6 +23,9 @@ class RedisVoiceRequestCoordinatorContractTest {
         assertTrue(script.contains("digest ~= ARGV[1]"));
         assertTrue(script.contains("state == 'SUCCEEDED'"));
         assertTrue(script.contains("state == 'FAILED_UNKNOWN'"));
+        assertTrue(script.contains("state', 'FAILED_UNKNOWN'"));
+        assertTrue(script.contains("ZSCORE', KEYS[4], lease"));
+        assertTrue(script.contains("PEXPIRE', KEYS[1], ARGV[8]"));
         assertTrue(script.contains("ZREMRANGEBYSCORE"));
         assertTrue(script.contains("ZCARD', KEYS[4]) >= 1"));
         assertTrue(script.contains("ZCARD', KEYS[5]) >= tonumber(ARGV[5])"));
@@ -34,10 +40,47 @@ class RedisVoiceRequestCoordinatorContractTest {
         assertTrue(terminal.contains("digest') ~= ARGV[1]"));
         assertTrue(terminal.contains("lease') ~= ARGV[2]"));
         assertTrue(release.contains("lease ~= ARGV[1]"));
+        assertTrue(release.contains("state') == 'IN_PROGRESS'"));
+        assertTrue(release.contains("state', 'FAILED_UNKNOWN'"));
+        assertTrue(release.indexOf("state', 'FAILED_UNKNOWN'")
+                < release.indexOf("ZREM', KEYS[2], ARGV[1]"));
+        assertTrue(release.contains("PEXPIRE', KEYS[1], ARGV[2]"));
         assertTrue(release.contains("ZREM', KEYS[2], ARGV[1]"));
         assertEquals(Duration.ofMinutes(10).toMillis(), RedisVoiceRequestCoordinator.SUCCEEDED_TTL_MS);
         assertEquals(Duration.ofMinutes(2).toMillis(), RedisVoiceRequestCoordinator.FAILED_KNOWN_TTL_MS);
         assertEquals(Duration.ofMinutes(10).toMillis(), RedisVoiceRequestCoordinator.FAILED_UNKNOWN_TTL_MS);
+    }
+
+    @Test
+    void realRedisReleaseAtomicallyTurnsUnterminatedReservationIntoResultUnknown() throws Exception {
+        int port;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            port = socket.getLocalPort();
+        }
+        try (RedisServer server = new RedisServer()) {
+            server.listener("127.0.0.1", port);
+            LettuceConnectionFactory factory = new LettuceConnectionFactory("127.0.0.1", port);
+            factory.afterPropertiesSet();
+            factory.start();
+            try {
+                VoiceSpeechProperties properties = new VoiceSpeechProperties();
+                properties.setCacheEncryptionKey(
+                        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+                RedisVoiceRequestCoordinator coordinator = new RedisVoiceRequestCoordinator(
+                        factory, properties, new VoicePayloadCipher(properties));
+                VoiceBeginResult first = coordinator.begin(
+                        VoiceOperation.TRANSCRIPTION, "scope", "request", "digest");
+                assertEquals(VoiceBeginResult.Outcome.RESERVED, first.outcome());
+
+                coordinator.release(first.reservation());
+
+                VoiceBeginResult replay = coordinator.begin(
+                        VoiceOperation.TRANSCRIPTION, "scope", "request", "digest");
+                assertEquals(VoiceBeginResult.Outcome.RESULT_UNKNOWN, replay.outcome());
+            } finally {
+                factory.destroy();
+            }
+        }
     }
 
     @Test

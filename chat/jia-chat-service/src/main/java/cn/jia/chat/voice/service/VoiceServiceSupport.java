@@ -48,6 +48,21 @@ final class VoiceServiceSupport {
         };
     }
 
+    static void completeSuccess(
+            VoiceRequestCoordinator coordinator, VoiceReservation reservation,
+            cn.jia.chat.voice.state.VoiceCachedResult result, String requestId) {
+        try {
+            coordinator.succeed(reservation, result);
+        } catch (VoiceStateUnavailableException exception) {
+            try {
+                coordinator.failUnknown(reservation);
+            } catch (VoiceStateUnavailableException fallbackFailure) {
+                log.warn("Voice success terminal fallback unavailable; atomic release will fail closed");
+            }
+            throw VoiceException.of(VoiceErrorCode.RESULT_UNKNOWN, requestId);
+        }
+    }
+
     static void transitionFailure(
             VoiceRequestCoordinator coordinator, VoiceReservation reservation,
             SpeechProviderException.FailureKind kind, String requestId) {

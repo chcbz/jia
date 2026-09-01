@@ -80,11 +80,8 @@ public final class SpeechSynthesisService {
                         SpeechProviderException.FailureKind.KNOWN, requestId);
                 throw VoiceException.of(VoiceErrorCode.PROVIDER_ERROR, requestId);
             }
-            try {
-                coordinator.succeed(reservation, new VoiceCachedResult(audio, "audio/mpeg"));
-            } catch (VoiceStateUnavailableException exception) {
-                throw VoiceException.of(VoiceErrorCode.RESULT_UNKNOWN, requestId);
-            }
+            VoiceServiceSupport.completeSuccess(coordinator, reservation,
+                    new VoiceCachedResult(audio, "audio/mpeg"), requestId);
             long latencyMs = (System.nanoTime() - started) / 1_000_000L;
             log.info("Voice TTS completed code=E0 latencyMs={} byteBucket={} provider={} mime=audio/mpeg",
                     latencyMs, audio.length <= 1024 * 1024 ? "lte1m" : "lte8m", provider.alias());

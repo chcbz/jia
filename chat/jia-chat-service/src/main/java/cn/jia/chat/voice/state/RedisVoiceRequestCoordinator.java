@@ -20,11 +20,30 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
     private static final long IN_PROGRESS_TTL_MS = Duration.ofMinutes(10).toMillis();
 
     private static final DefaultRedisScript<List> BEGIN_SCRIPT = new DefaultRedisScript<>("""
+            local time = redis.call('TIME')
+            local now = time[1] * 1000 + math.floor(time[2] / 1000)
             local digest = redis.call('HGET', KEYS[1], 'digest')
             if digest then
               if digest ~= ARGV[1] then return {'IDEMPOTENCY_CONFLICT'} end
               local state = redis.call('HGET', KEYS[1], 'state')
-              if state == 'IN_PROGRESS' then return {'IN_PROGRESS'} end
+              if state == 'IN_PROGRESS' then
+                local lease = redis.call('HGET', KEYS[1], 'lease')
+                local identityExpiry = lease and redis.call('ZSCORE', KEYS[4], lease) or false
+                local globalExpiry = lease and redis.call('ZSCORE', KEYS[5], lease) or false
+                local identityActive = identityExpiry and tonumber(identityExpiry) > now
+                local globalActive = globalExpiry and tonumber(globalExpiry) > now
+                if not identityActive and not globalActive then
+                  redis.call('HSET', KEYS[1], 'state', 'FAILED_UNKNOWN', 'payload', '',
+                             'contentType', '')
+                  redis.call('PEXPIRE', KEYS[1], ARGV[8])
+                  if lease then
+                    redis.call('ZREM', KEYS[4], lease)
+                    redis.call('ZREM', KEYS[5], lease)
+                  end
+                  return {'RESULT_UNKNOWN'}
+                end
+                return {'IN_PROGRESS'}
+              end
               if state == 'FAILED_UNKNOWN' then return {'RESULT_UNKNOWN'} end
               if state == 'FAILED_KNOWN' then return {'FAILED_KNOWN'} end
               if state == 'SUCCEEDED' then
@@ -33,8 +52,6 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
               end
               return {'RESULT_UNKNOWN'}
             end
-            local time = redis.call('TIME')
-            local now = time[1] * 1000 + math.floor(time[2] / 1000)
             redis.call('ZREMRANGEBYSCORE', KEYS[4], '-inf', now)
             redis.call('ZREMRANGEBYSCORE', KEYS[5], '-inf', now)
             local minute = tonumber(redis.call('GET', KEYS[2]) or '0')
@@ -75,6 +92,11 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
     private static final DefaultRedisScript<Long> RELEASE_SCRIPT = new DefaultRedisScript<>("""
             local lease = redis.call('HGET', KEYS[1], 'lease')
             if lease and lease ~= ARGV[1] then return 0 end
+            if lease == ARGV[1] and redis.call('HGET', KEYS[1], 'state') == 'IN_PROGRESS' then
+              redis.call('HSET', KEYS[1], 'state', 'FAILED_UNKNOWN', 'payload', '',
+                         'contentType', '')
+              redis.call('PEXPIRE', KEYS[1], ARGV[2])
+            end
             local removedIdentity = redis.call('ZREM', KEYS[2], ARGV[1])
             local removedGlobal = redis.call('ZREM', KEYS[3], ARGV[1])
             return removedIdentity + removedGlobal
@@ -116,7 +138,8 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
                     Integer.toString(properties.getPerHour()),
                     Integer.toString(properties.getGlobalConcurrency()),
                     Long.toString(leaseTtl),
-                    Long.toString(IN_PROGRESS_TTL_MS));
+                    Long.toString(IN_PROGRESS_TTL_MS),
+                    Long.toString(FAILED_UNKNOWN_TTL_MS));
             if (response == null || response.isEmpty()) {
                 throw new VoiceStateUnavailableException();
             }
@@ -165,7 +188,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
         try {
             redis.execute(RELEASE_SCRIPT,
                     List.of(keys.stateKey(), keys.identityLeases(), keys.globalLeases()),
-                    reservation.leaseToken());
+                    reservation.leaseToken(), Long.toString(FAILED_UNKNOWN_TTL_MS));
         } catch (RuntimeException exception) {
             throw new VoiceStateUnavailableException();
         }
