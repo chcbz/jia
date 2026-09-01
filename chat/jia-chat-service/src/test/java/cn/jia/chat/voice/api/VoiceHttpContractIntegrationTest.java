@@ -12,6 +12,7 @@ import cn.jia.chat.voice.validation.VoiceRequestValidator;
 import cn.jia.core.config.ExceptionHandlerAdvice;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.SpringBootConfiguration;
@@ -26,6 +27,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.tomcat.autoconfigure.servlet.TomcatServletWebServerAutoConfiguration;
 import org.springframework.boot.webmvc.autoconfigure.DispatcherServletAutoConfiguration;
 import org.springframework.boot.webmvc.autoconfigure.WebMvcAutoConfiguration;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
@@ -78,7 +80,8 @@ class VoiceHttpContractIntegrationTest {
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2))
             .build();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Test
     void realSecurityChainAndVoiceAdviceReturnFrozenErrorsWithoutSensitiveLogs(
@@ -257,6 +260,11 @@ class VoiceHttpContractIntegrationTest {
             NonVoiceController.class
     })
     static class TestApplication {
+        @Bean
+        ObjectMapper objectMapper() {
+            return JsonMapper.builder().build();
+        }
+
         @Bean
         VoiceSpeechProperties voiceSpeechProperties() {
             VoiceSpeechProperties properties = new VoiceSpeechProperties();
