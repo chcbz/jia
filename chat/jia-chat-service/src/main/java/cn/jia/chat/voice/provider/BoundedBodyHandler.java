@@ -79,7 +79,7 @@ final class BoundedBodyHandler implements HttpResponse.BodyHandler<byte[]> {
                     }
                     byte[] chunk = new byte[remaining];
                     buffer.get(chunk);
-                    output.write(chunk);
+                    output.write(chunk, 0, chunk.length);
                 }
             } catch (RuntimeException exception) {
                 subscription.cancel();
