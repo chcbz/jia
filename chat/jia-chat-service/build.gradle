@@ -31,6 +31,7 @@ dependencies {
 	testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
 	testImplementation 'org.springframework.security:spring-security-oauth2-jose'
 	testImplementation libs.spring.security.config
+	testRuntimeOnly('com.github.lansheng228:embedded-redis:7.4.1') { transitive = false }
 //	implementation 'org.springframework.retry:spring-retry'
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')
