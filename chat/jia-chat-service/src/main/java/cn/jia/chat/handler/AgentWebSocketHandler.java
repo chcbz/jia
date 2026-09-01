@@ -1,5 +1,7 @@
 package cn.jia.chat.handler;
 
+import cn.jia.chat.serialization.ExactWireIds;
+
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentCommandAck;
@@ -705,7 +707,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
         Map<String, Object> event = copyTrace(payload);
         event.put("type", "agent_message");
-        event.put("messageId", entity.getId());
+        event.put("messageId", ExactWireIds.decimal(entity.getId()));
         event.put("conversationId", conversationId);
         event.put("conversationType", conversationType);
         event.put("agentId", agentId);

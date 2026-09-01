@@ -1,5 +1,7 @@
 package cn.jia.chat.api;
 
+import cn.jia.chat.serialization.ExactWireIds;
+
 import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
@@ -313,7 +315,7 @@ public class ChatController {
         event.put("content", content);
         event.put("timestamp", System.currentTimeMillis());
         if (messageId != null) {
-            event.put("messageId", messageId);
+            event.put("messageId", ExactWireIds.decimal(messageId));
         }
         return event;
     }

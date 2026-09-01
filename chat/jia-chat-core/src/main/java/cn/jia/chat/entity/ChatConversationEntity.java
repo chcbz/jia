@@ -1,5 +1,7 @@
 package cn.jia.chat.entity;
 
+import cn.jia.chat.serialization.ExactLongIdSerializer;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import cn.jia.core.entity.BaseEntity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -31,6 +33,7 @@ public class ChatConversationEntity extends BaseEntity {
     private static final long serialVersionUID = 1L;
 
     @TableId(value = "id", type = IdType.AUTO)
+    @JsonSerialize(using = ExactLongIdSerializer.class)
     private Long id;
     @Schema(description = "会话标题")
     private String title;

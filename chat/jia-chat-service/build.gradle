@@ -26,6 +26,7 @@ dependencies {
 	compileOnly libs.spring.security.oauth2.client
 	compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
 	compileOnly 'org.springframework.security:spring-security-oauth2-jose'
+	compileOnly libs.spring.redis
 	testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
 	testImplementation 'org.springframework.security:spring-security-oauth2-jose'
 //	implementation 'org.springframework.retry:spring-retry'
