@@ -10,12 +10,21 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class OpenAiCompatibleVoiceProviderTest {
     private HttpServer server;
@@ -27,34 +36,25 @@ class OpenAiCompatibleVoiceProviderTest {
 
     @Test
     void transcriptionTimeoutDispatchesExactlyOnceAndReturnsAmbiguousTimeout() throws Exception {
-        AtomicInteger calls = new AtomicInteger();
-        server = server();
-        server.createContext("/audio/transcriptions", exchange -> {
-            calls.incrementAndGet();
-            try {
-                Thread.sleep(250);
-                byte[] body = "{\"text\":\"late\"}".getBytes();
-                exchange.sendResponseHeaders(200, body.length);
-                exchange.getResponseBody().write(body);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            } finally {
-                exchange.close();
-            }
-        });
-        server.start();
-        VoiceSpeechProperties properties = configured();
+        HttpClient client = mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenThrow(new HttpTimeoutException("timeout"));
+        VoiceSpeechProperties properties = configured("http://127.0.0.1:1");
         properties.setProviderDeadlineMillis(50);
         Path audio = Files.createTempFile("voice-provider-test", ".webm");
         Files.write(audio, new byte[]{1, 2, 3});
         try {
             OpenAiCompatibleSpeechTranscriptionProvider provider =
-                    new OpenAiCompatibleSpeechTranscriptionProvider(properties, new ObjectMapper());
+                    new OpenAiCompatibleSpeechTranscriptionProvider(
+                            properties, new ObjectMapper(), client);
             SpeechProviderException error = assertThrows(SpeechProviderException.class,
                     () -> provider.transcribe(new SpeechTranscriptionRequest(
                             audio, 3, "audio/webm", "zh-CN", 1200)));
             assertEquals(SpeechProviderException.FailureKind.TIMEOUT, error.failureKind());
-            assertEquals(1, calls.get());
+            var request = org.mockito.ArgumentCaptor.forClass(HttpRequest.class);
+            verify(client, times(1)).send(
+                    request.capture(), any(HttpResponse.BodyHandler.class));
+            assertEquals(50, request.getValue().timeout().orElseThrow().toMillis());
         } finally {
             Files.deleteIfExists(audio);
         }
@@ -88,10 +88,13 @@ class OpenAiCompatibleVoiceProviderTest {
     }
 
     private VoiceSpeechProperties configured() {
+        return configured("http://127.0.0.1:" + server.getAddress().getPort());
+    }
+
+    private VoiceSpeechProperties configured(String baseUrl) {
         VoiceSpeechProperties properties = new VoiceSpeechProperties();
         properties.setConnectTimeoutMillis(500);
         properties.setProviderDeadlineMillis(1000);
-        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
         properties.getTranscription().setBaseUrl(baseUrl);
         properties.getTranscription().setApiKey("stub-key");
         properties.getTranscription().setModel("stub-stt");

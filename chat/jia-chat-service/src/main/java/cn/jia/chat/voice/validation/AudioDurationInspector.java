@@ -239,7 +239,7 @@ public final class AudioDurationInspector {
             long marker = 1L << (7 * width);
             value |= marker;
         }
-        long unknownValue = width == 8 ? Long.MAX_VALUE : (1L << (7 * width)) - 1;
+        long unknownValue = (1L << (7 * width)) - 1;
         return new Vint(value, width, !id && value == unknownValue);
     }
 
