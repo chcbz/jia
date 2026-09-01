@@ -20,7 +20,7 @@ class AudioDurationInspectorTest {
                 "audio/webm", REQUEST_ID));
         assertEquals(1240, inspector.inspect(fixture("mediarecorder-chromium-unmodified.webm"),
                 "audio/webm", REQUEST_ID));
-        assertEquals(1200, inspector.inspect(fixture("mediarecorder-valid.mp4"),
+        assertEquals(1222, inspector.inspect(fixture("mediarecorder-valid.mp4"),
                 "audio/mp4", REQUEST_ID));
     }
 
@@ -44,6 +44,14 @@ class AudioDurationInspectorTest {
         assertError("mediarecorder-forged-metadata.mp4",
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-wrong-codec.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-forged-mp4a.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-no-esds.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-empty-media.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-invalid-media-extent.mp4",
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
     }
 

@@ -38,7 +38,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RedisVoiceRequestCoordinatorContractTest {
@@ -78,7 +80,7 @@ class RedisVoiceRequestCoordinatorContractTest {
     }
 
     @Test
-    void realRedisReleaseAtomicallyTurnsUnterminatedReservationIntoResultUnknown() throws Exception {
+    void realRedisExecutesAtomicTerminalReplayAndTokenMismatchContracts() throws Exception {
         try (OwnedRedisServer server = OwnedRedisServer.start()) {
             LettuceConnectionFactory factory = new LettuceConnectionFactory(server.host(), server.port());
             factory.afterPropertiesSet();
@@ -90,23 +92,108 @@ class RedisVoiceRequestCoordinatorContractTest {
                         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
                 RedisVoiceRequestCoordinator coordinator = new RedisVoiceRequestCoordinator(
                         factory, properties, new VoicePayloadCipher(properties));
-                VoiceBeginResult first = coordinator.begin(
-                        VoiceOperation.TRANSCRIPTION, "scope", "request", "digest");
-                assertEquals(VoiceBeginResult.Outcome.RESERVED, first.outcome());
-                assertScriptLoaded(factory, "BEGIN_SCRIPT");
 
-                coordinator.release(first.reservation());
-                assertScriptLoaded(factory, "RELEASE_SCRIPT");
-
-                VoiceBeginResult replay = coordinator.begin(
-                        VoiceOperation.TRANSCRIPTION, "scope", "request", "digest");
-                assertEquals(VoiceBeginResult.Outcome.RESULT_UNKNOWN, replay.outcome());
-
+                assertSucceededReplayAndConflicts(coordinator);
+                assertFailedKnownReplay(coordinator);
+                assertFailedUnknownReplay(coordinator);
+                assertTokenMismatchCannotTerminateOrRelease(coordinator);
                 assertConcurrentBeginIsAtomic(coordinator);
+
+                assertScriptLoaded(factory, "BEGIN_SCRIPT");
+                assertScriptLoaded(factory, "TERMINAL_SCRIPT");
+                assertScriptLoaded(factory, "RELEASE_SCRIPT");
             } finally {
                 factory.destroy();
             }
         }
+    }
+
+    private static void assertSucceededReplayAndConflicts(
+            RedisVoiceRequestCoordinator coordinator) {
+        VoiceBeginResult first = coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                "success-scope", "success-request", "success-digest");
+        assertEquals(VoiceBeginResult.Outcome.RESERVED, first.outcome());
+        VoiceReservation reservation = first.reservation();
+        VoiceCachedResult expected = new VoiceCachedResult(
+                new byte[]{1, 2, 3, 4}, "application/json");
+
+        coordinator.succeed(reservation, expected);
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.failKnown(reservation));
+        coordinator.release(reservation);
+
+        VoiceBeginResult replay = coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                "success-scope", "success-request", "success-digest");
+        assertEquals(VoiceBeginResult.Outcome.REPLAY, replay.outcome());
+        assertArrayEquals(expected.payload(), replay.replay().payload());
+        assertEquals(expected.contentType(), replay.replay().contentType());
+        assertEquals(VoiceBeginResult.Outcome.IDEMPOTENCY_CONFLICT,
+                coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                        "success-scope", "success-request", "different-digest").outcome());
+    }
+
+    private static void assertFailedKnownReplay(RedisVoiceRequestCoordinator coordinator) {
+        VoiceBeginResult first = coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                "known-scope", "known-request", "known-digest");
+        assertEquals(VoiceBeginResult.Outcome.RESERVED, first.outcome());
+        coordinator.failKnown(first.reservation());
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.failUnknown(first.reservation()));
+        coordinator.release(first.reservation());
+
+        assertEquals(VoiceBeginResult.Outcome.FAILED_KNOWN,
+                coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                        "known-scope", "known-request", "known-digest").outcome());
+        assertEquals(VoiceBeginResult.Outcome.IDEMPOTENCY_CONFLICT,
+                coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                        "known-scope", "known-request", "different-digest").outcome());
+    }
+
+    private static void assertFailedUnknownReplay(RedisVoiceRequestCoordinator coordinator) {
+        VoiceBeginResult first = coordinator.begin(VoiceOperation.SYNTHESIS,
+                "unknown-scope", "unknown-request", "unknown-digest");
+        assertEquals(VoiceBeginResult.Outcome.RESERVED, first.outcome());
+        coordinator.failUnknown(first.reservation());
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.succeed(first.reservation(),
+                        new VoiceCachedResult(new byte[]{9}, "audio/mpeg")));
+        coordinator.release(first.reservation());
+
+        assertEquals(VoiceBeginResult.Outcome.RESULT_UNKNOWN,
+                coordinator.begin(VoiceOperation.SYNTHESIS,
+                        "unknown-scope", "unknown-request", "unknown-digest").outcome());
+        assertEquals(VoiceBeginResult.Outcome.IDEMPOTENCY_CONFLICT,
+                coordinator.begin(VoiceOperation.SYNTHESIS,
+                        "unknown-scope", "unknown-request", "different-digest").outcome());
+    }
+
+    private static void assertTokenMismatchCannotTerminateOrRelease(
+            RedisVoiceRequestCoordinator coordinator) {
+        VoiceBeginResult first = coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                "token-scope", "token-request", "token-digest");
+        assertEquals(VoiceBeginResult.Outcome.RESERVED, first.outcome());
+        VoiceReservation original = first.reservation();
+        VoiceReservation forgedLease = new VoiceReservation(original.operation(),
+                original.identityScope(), original.requestId(), original.digest(), "forged-lease");
+        VoiceReservation forgedDigest = new VoiceReservation(original.operation(),
+                original.identityScope(), original.requestId(), "forged-digest",
+                original.leaseToken());
+
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.succeed(forgedLease,
+                        new VoiceCachedResult(new byte[]{7}, "application/json")));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.failKnown(forgedDigest));
+        coordinator.release(forgedLease);
+        assertEquals(VoiceBeginResult.Outcome.IN_PROGRESS,
+                coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                        "token-scope", "token-request", "token-digest").outcome());
+
+        coordinator.failUnknown(original);
+        coordinator.release(original);
+        assertEquals(VoiceBeginResult.Outcome.RESULT_UNKNOWN,
+                coordinator.begin(VoiceOperation.TRANSCRIPTION,
+                        "token-scope", "token-request", "token-digest").outcome());
     }
 
     @Test

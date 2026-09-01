@@ -8,6 +8,7 @@ import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.core.security.AllowSensitiveOutput;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.util.MultiValueMap;
@@ -47,6 +48,7 @@ public class SpeechTranscriptionController {
         this.service = service;
     }
 
+    @AllowSensitiveOutput(reason = "Voice transcript is an immutable pre-sized client wire payload")
     @PostMapping(path = "/transcriptions", consumes = "multipart/form-data", produces = "application/json")
     public ResponseEntity<JsonResult<VoiceTranscriptionResponse>> transcribe(
             HttpServletRequest servletRequest, Authentication authentication) {

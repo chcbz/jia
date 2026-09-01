@@ -354,7 +354,8 @@ public final class AudioDurationInspector {
         long size = channel.size();
         long cursor = 0;
         boolean ftyp = false;
-        Double durationMs = null;
+        Box moov = null;
+        List<MediaExtent> mediaExtents = new ArrayList<>();
         while (cursor < size) {
             Box box = readBox(channel, cursor, size, budget);
             if (cursor == 0 && box.type != fourCc("ftyp")) {
@@ -364,54 +365,87 @@ public final class AudioDurationInspector {
                 if (ftyp) {
                     throw new IOException("duplicate ftyp");
                 }
+                parseFtyp(channel, box, budget);
                 ftyp = true;
             } else if (box.type == fourCc("moov")) {
-                if (!ftyp || durationMs != null) {
+                if (!ftyp || moov != null) {
                     throw new IOException("invalid moov");
                 }
-                durationMs = inspectMoov(channel, box.dataOffset, box.end(), budget, 1);
+                moov = box;
+            } else if (box.type == fourCc("mdat")) {
+                if (box.dataOffset >= box.end()) {
+                    throw new IOException("empty media data");
+                }
+                mediaExtents.add(new MediaExtent(box.dataOffset, box.end()));
             }
             cursor = box.end();
         }
-        if (durationMs == null) {
-            throw new IOException("missing moov");
+        if (moov == null || mediaExtents.isEmpty()) {
+            throw new IOException("missing moov or media data");
         }
-        return durationMs;
+        Mp4Movie movie = inspectMoov(
+                channel, moov.dataOffset, moov.end(), budget, 1, List.copyOf(mediaExtents));
+        return Math.max(movie.movieDurationMs, movie.audioDurationMs);
     }
 
-    private double inspectMoov(
-            FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        if (depth > MAX_DEPTH) {
-            throw new IOException("MP4 depth exceeded");
+    private void parseFtyp(FileChannel channel, Box box, Budget budget) throws IOException {
+        long length = box.end() - box.dataOffset;
+        if (length < 8 || length > 128 || (length & 3) != 0) {
+            throw new IOException("invalid ftyp");
         }
-        Double durationMs = null;
-        int audioTracks = 0;
+        byte[] value = read(channel, box.dataOffset, Math.toIntExact(length), budget);
+        Set<Integer> compatible = Set.of(
+                fourCc("isom"), fourCc("iso2"), fourCc("mp41"), fourCc("mp42"),
+                fourCc("M4A "), fourCc("M4B "));
+        int major = ByteBuffer.wrap(value, 0, 4).getInt();
+        boolean supported = compatible.contains(major);
+        for (int offset = 8; offset < value.length; offset += 4) {
+            supported |= compatible.contains(ByteBuffer.wrap(value, offset, 4).getInt());
+        }
+        if (!supported) {
+            throw new IOException("unsupported MP4 brand");
+        }
+    }
+
+    private Mp4Movie inspectMoov(
+            FileChannel channel, long start, long end, Budget budget, int depth,
+            List<MediaExtent> mediaExtents) throws IOException {
+        requireDepth(depth);
+        Double movieDurationMs = null;
+        Double audioDurationMs = null;
+        int tracks = 0;
         long cursor = start;
         while (cursor < end) {
             Box box = readBox(channel, cursor, end, budget);
             if (box.type == fourCc("mvhd")) {
-                if (durationMs != null) {
+                if (movieDurationMs != null) {
                     throw new IOException("duplicate mvhd");
                 }
-                durationMs = parseMvhd(channel, box, budget);
+                movieDurationMs = parseMvhd(channel, box, budget);
             } else if (box.type == fourCc("trak")) {
-                if (inspectMp4Track(channel, box.dataOffset, box.end(), budget, depth + 1)) {
-                    audioTracks++;
+                tracks++;
+                MdiaInfo track = inspectMp4Track(
+                        channel, box.dataOffset, box.end(), budget, depth + 1, mediaExtents);
+                if (track.handler != fourCc("soun") || track.durationMs == null) {
+                    throw new IOException("non-audio or invalid MP4 track");
                 }
+                if (audioDurationMs != null) {
+                    throw new IOException("multiple audio tracks");
+                }
+                audioDurationMs = track.durationMs;
             }
             cursor = box.end();
         }
-        if (durationMs == null || audioTracks < 1) {
+        if (movieDurationMs == null || audioDurationMs == null || tracks != 1) {
             throw new IOException("missing AAC audio track or duration");
         }
-        return durationMs;
+        return new Mp4Movie(movieDurationMs, audioDurationMs);
     }
 
-    private boolean inspectMp4Track(
-            FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        if (depth > MAX_DEPTH) {
-            throw new IOException("MP4 depth exceeded");
-        }
+    private MdiaInfo inspectMp4Track(
+            FileChannel channel, long start, long end, Budget budget, int depth,
+            List<MediaExtent> mediaExtents) throws IOException {
+        requireDepth(depth);
         MdiaInfo mdia = null;
         long cursor = start;
         while (cursor < end) {
@@ -420,128 +454,331 @@ public final class AudioDurationInspector {
                 if (mdia != null) {
                     throw new IOException("duplicate mdia");
                 }
-                mdia = inspectMdia(channel, box.dataOffset, box.end(), budget, depth + 1);
+                mdia = inspectMdia(channel, box.dataOffset, box.end(), budget,
+                        depth + 1, mediaExtents);
             }
             cursor = box.end();
         }
-        if (mdia == null || mdia.handler == null) {
+        if (mdia == null) {
             throw new IOException("missing media handler");
         }
-        if (mdia.handler == fourCc("soun")) {
-            if (!mdia.hasMp4a || mdia.hasNonMp4a) {
-                throw new IOException("unsupported audio sample entry");
-            }
-            return true;
-        }
-        return false;
+        return mdia;
     }
 
     private MdiaInfo inspectMdia(
-            FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        if (depth > MAX_DEPTH) {
-            throw new IOException("MP4 depth exceeded");
-        }
+            FileChannel channel, long start, long end, Budget budget, int depth,
+            List<MediaExtent> mediaExtents) throws IOException {
+        requireDepth(depth);
         Integer handler = null;
-        SampleEntries entries = null;
+        MediaHeader mediaHeader = null;
+        SampleTable sampleTable = null;
         long cursor = start;
         while (cursor < end) {
             Box box = readBox(channel, cursor, end, budget);
-            if (box.type == fourCc("hdlr")) {
+            if (box.type == fourCc("mdhd")) {
+                if (mediaHeader != null) {
+                    throw new IOException("duplicate media header");
+                }
+                mediaHeader = parseMdhd(channel, box, budget);
+            } else if (box.type == fourCc("hdlr")) {
                 if (handler != null) {
                     throw new IOException("duplicate handler");
                 }
                 handler = parseHandler(channel, box, budget);
             } else if (box.type == fourCc("minf")) {
-                if (entries != null) {
+                if (sampleTable != null) {
                     throw new IOException("duplicate media info");
                 }
-                entries = inspectMinf(channel, box.dataOffset, box.end(), budget, depth + 1);
+                sampleTable = inspectMinf(
+                        channel, box.dataOffset, box.end(), budget, depth + 1);
             }
             cursor = box.end();
         }
+        if (handler == null) {
+            throw new IOException("missing media handler");
+        }
+        if (handler != fourCc("soun")) {
+            return new MdiaInfo(handler, null);
+        }
+        if (mediaHeader == null || sampleTable == null) {
+            throw new IOException("incomplete audio media metadata");
+        }
         return new MdiaInfo(handler,
-                entries != null && entries.hasMp4a,
-                entries != null && entries.hasNonMp4a);
+                validateAudioSampleTable(mediaHeader, sampleTable, mediaExtents));
     }
 
-    private SampleEntries inspectMinf(
+    private SampleTable inspectMinf(
             FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        if (depth > MAX_DEPTH) {
-            throw new IOException("MP4 depth exceeded");
-        }
-        SampleEntries entries = null;
+        requireDepth(depth);
+        SampleTable table = null;
         long cursor = start;
         while (cursor < end) {
             Box box = readBox(channel, cursor, end, budget);
             if (box.type == fourCc("stbl")) {
-                if (entries != null) {
+                if (table != null) {
                     throw new IOException("duplicate sample table");
                 }
-                entries = inspectStbl(channel, box.dataOffset, box.end(), budget, depth + 1);
+                table = inspectStbl(channel, box.dataOffset, box.end(), budget, depth + 1);
             }
             cursor = box.end();
         }
-        return entries == null ? new SampleEntries(false, false) : entries;
+        if (table == null) {
+            throw new IOException("missing sample table");
+        }
+        return table;
     }
 
-    private SampleEntries inspectStbl(
+    private SampleTable inspectStbl(
             FileChannel channel, long start, long end, Budget budget, int depth) throws IOException {
-        if (depth > MAX_DEPTH) {
-            throw new IOException("MP4 depth exceeded");
-        }
-        SampleEntries entries = null;
+        requireDepth(depth);
+        Mp4aInfo format = null;
+        TimeToSample timing = null;
+        List<SampleToChunk> sampleToChunks = null;
+        SampleSizes sampleSizes = null;
+        long[] chunkOffsets = null;
         long cursor = start;
         while (cursor < end) {
             Box box = readBox(channel, cursor, end, budget);
             if (box.type == fourCc("stsd")) {
-                if (entries != null) {
+                if (format != null) {
                     throw new IOException("duplicate sample description");
                 }
-                entries = parseStsd(channel, box, budget);
+                format = parseStsd(channel, box, budget);
+            } else if (box.type == fourCc("stts")) {
+                if (timing != null) {
+                    throw new IOException("duplicate time-to-sample table");
+                }
+                timing = parseStts(channel, box, budget);
+            } else if (box.type == fourCc("stsc")) {
+                if (sampleToChunks != null) {
+                    throw new IOException("duplicate sample-to-chunk table");
+                }
+                sampleToChunks = parseStsc(channel, box, budget);
+            } else if (box.type == fourCc("stsz")) {
+                if (sampleSizes != null) {
+                    throw new IOException("duplicate sample size table");
+                }
+                sampleSizes = parseStsz(channel, box, budget);
+            } else if (box.type == fourCc("stco") || box.type == fourCc("co64")) {
+                if (chunkOffsets != null) {
+                    throw new IOException("duplicate chunk offset table");
+                }
+                chunkOffsets = parseChunkOffsets(
+                        channel, box, budget, box.type == fourCc("co64") ? 8 : 4);
             }
             cursor = box.end();
         }
-        return entries == null ? new SampleEntries(false, false) : entries;
+        if (format == null || timing == null || sampleToChunks == null
+                || sampleSizes == null || chunkOffsets == null) {
+            throw new IOException("incomplete AAC sample table");
+        }
+        return new SampleTable(format, timing, sampleToChunks, sampleSizes, chunkOffsets);
     }
 
-    private SampleEntries parseStsd(FileChannel channel, Box box, Budget budget) throws IOException {
+    private Mp4aInfo parseStsd(FileChannel channel, Box box, Budget budget) throws IOException {
         if (box.end() - box.dataOffset < 8) {
             throw new IOException("invalid stsd");
         }
-        read(channel, box.dataOffset, 4, budget);
+        requireFullBoxZero(channel, box.dataOffset, budget);
         long entryCount = readUnsigned(channel, box.dataOffset + 4, 4, budget);
-        if (entryCount < 1 || entryCount > 16) {
-            throw new IOException("invalid sample entry count");
+        if (entryCount != 1) {
+            throw new IOException("invalid audio sample entry count");
         }
         long cursor = box.dataOffset + 8;
-        boolean mp4a = false;
-        boolean nonMp4a = false;
-        for (long index = 0; index < entryCount; index++) {
-            Box entry = readBox(channel, cursor, box.end(), budget);
-            if (entry.type == fourCc("mp4a")) {
-                mp4a = true;
-            } else {
-                nonMp4a = true;
+        Box entry = readBox(channel, cursor, box.end(), budget);
+        if (entry.type != fourCc("mp4a") || entry.end() != box.end()) {
+            throw new IOException("unsupported audio sample entry");
+        }
+        return parseMp4a(channel, entry, budget);
+    }
+
+    private Mp4aInfo parseMp4a(FileChannel channel, Box entry, Budget budget) throws IOException {
+        if (entry.end() - entry.dataOffset < 28) {
+            throw new IOException("short mp4a sample entry");
+        }
+        byte[] fixed = read(channel, entry.dataOffset, 28, budget);
+        for (int index = 0; index < 6; index++) {
+            if (fixed[index] != 0) {
+                throw new IOException("invalid mp4a reserved bytes");
             }
-            cursor = entry.end();
         }
-        if (cursor != box.end()) {
-            throw new IOException("trailing sample description data");
+        ByteBuffer value = ByteBuffer.wrap(fixed).order(ByteOrder.BIG_ENDIAN);
+        int dataReference = Short.toUnsignedInt(value.getShort(6));
+        int version = Short.toUnsignedInt(value.getShort(8));
+        int channels = Short.toUnsignedInt(value.getShort(16));
+        int sampleSize = Short.toUnsignedInt(value.getShort(18));
+        int compressionId = Short.toUnsignedInt(value.getShort(20));
+        int packetSize = Short.toUnsignedInt(value.getShort(22));
+        long fixedSampleRate = Integer.toUnsignedLong(value.getInt(24));
+        int sampleRate = (int) (fixedSampleRate >>> 16);
+        if (dataReference == 0 || version != 0 || channels < 1 || channels > 2
+                || sampleSize != 16 || compressionId != 0 || packetSize != 0
+                || (fixedSampleRate & 0xffffL) != 0
+                || sampleRate < 8_000 || sampleRate > 192_000) {
+            throw new IOException("invalid mp4a audio parameters");
         }
-        return new SampleEntries(mp4a, nonMp4a);
+        boolean esds = false;
+        long cursor = entry.dataOffset + 28;
+        while (cursor < entry.end()) {
+            Box child = readBox(channel, cursor, entry.end(), budget);
+            if (child.type == fourCc("esds")) {
+                if (esds) {
+                    throw new IOException("duplicate esds");
+                }
+                parseEsds(channel, child, budget, sampleRate, channels);
+                esds = true;
+            }
+            cursor = child.end();
+        }
+        if (!esds) {
+            throw new IOException("missing AAC esds");
+        }
+        return new Mp4aInfo(channels, sampleRate);
     }
 
-    private int parseHandler(FileChannel channel, Box box, Budget budget) throws IOException {
-        if (box.end() - box.dataOffset < 12) {
-            throw new IOException("invalid handler");
+    private void parseEsds(
+            FileChannel channel, Box box, Budget budget, int sampleRate, int channels)
+            throws IOException {
+        long length = box.end() - box.dataOffset;
+        if (length < 9 || length > 4_096) {
+            throw new IOException("invalid esds size");
         }
-        byte[] value = read(channel, box.dataOffset, 12, budget);
-        return ByteBuffer.wrap(value, 8, 4).getInt();
+        byte[] bytes = read(channel, box.dataOffset, Math.toIntExact(length), budget);
+        if (bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 0 || bytes[3] != 0) {
+            throw new IOException("unsupported esds full box");
+        }
+        Descriptor es = readDescriptor(bytes, 4, bytes.length);
+        if (es.tag != 0x03 || es.nextOffset != bytes.length || es.payloadEnd - es.payloadStart < 3) {
+            throw new IOException("missing ES descriptor");
+        }
+        int cursor = es.payloadStart + 2;
+        int flags = bytes[cursor++] & 0xff;
+        if ((flags & 0x80) != 0) {
+            cursor = checkedAdvance(cursor, 2, es.payloadEnd);
+        }
+        if ((flags & 0x40) != 0) {
+            cursor = checkedAdvance(cursor, 1, es.payloadEnd);
+            int urlLength = bytes[cursor - 1] & 0xff;
+            cursor = checkedAdvance(cursor, urlLength, es.payloadEnd);
+        }
+        if ((flags & 0x20) != 0) {
+            cursor = checkedAdvance(cursor, 2, es.payloadEnd);
+        }
+        Descriptor decoder = null;
+        while (cursor < es.payloadEnd) {
+            Descriptor child = readDescriptor(bytes, cursor, es.payloadEnd);
+            if (child.tag == 0x04) {
+                if (decoder != null) {
+                    throw new IOException("duplicate decoder config");
+                }
+                decoder = child;
+            }
+            cursor = child.nextOffset;
+        }
+        if (decoder == null || decoder.payloadEnd - decoder.payloadStart < 13) {
+            throw new IOException("missing AAC decoder config");
+        }
+        int decoderCursor = decoder.payloadStart;
+        int objectType = bytes[decoderCursor++] & 0xff;
+        int streamType = bytes[decoderCursor++] & 0xff;
+        if (objectType != 0x40 || ((streamType >>> 2) & 0x3f) != 5
+                || (streamType & 0x03) != 1) {
+            throw new IOException("esds is not MPEG-4 audio");
+        }
+        decoderCursor = checkedAdvance(decoderCursor, 11, decoder.payloadEnd);
+        Descriptor specific = null;
+        while (decoderCursor < decoder.payloadEnd) {
+            Descriptor child = readDescriptor(bytes, decoderCursor, decoder.payloadEnd);
+            if (child.tag == 0x05) {
+                if (specific != null) {
+                    throw new IOException("duplicate AudioSpecificConfig");
+                }
+                specific = child;
+            }
+            decoderCursor = child.nextOffset;
+        }
+        if (specific == null || specific.payloadEnd - specific.payloadStart > 64) {
+            throw new IOException("missing AudioSpecificConfig");
+        }
+        parseAudioSpecificConfig(
+                bytes, specific.payloadStart, specific.payloadEnd, sampleRate, channels);
     }
 
-    private double parseMvhd(FileChannel channel, Box box, Budget budget) throws IOException {
+    private Descriptor readDescriptor(byte[] bytes, int offset, int limit) throws IOException {
+        if (offset < 0 || offset >= limit) {
+            throw new IOException("missing descriptor");
+        }
+        int tag = bytes[offset++] & 0xff;
+        int length = 0;
+        boolean complete = false;
+        for (int index = 0; index < 4; index++) {
+            if (offset >= limit) {
+                throw new IOException("truncated descriptor length");
+            }
+            int item = bytes[offset++] & 0xff;
+            length = Math.addExact(Math.multiplyExact(length, 128), item & 0x7f);
+            if ((item & 0x80) == 0) {
+                complete = true;
+                break;
+            }
+        }
+        if (!complete) {
+            throw new IOException("descriptor length exceeds four bytes");
+        }
+        int end = Math.addExact(offset, length);
+        if (end > limit) {
+            throw new IOException("descriptor exceeds parent");
+        }
+        return new Descriptor(tag, offset, end, end);
+    }
+
+    private int checkedAdvance(int cursor, int count, int limit) throws IOException {
+        int next = Math.addExact(cursor, count);
+        if (count < 0 || next > limit) {
+            throw new IOException("descriptor field exceeds parent");
+        }
+        return next;
+    }
+
+    private void parseAudioSpecificConfig(
+            byte[] bytes, int start, int end, int sampleRate, int channels) throws IOException {
+        BitReader bits = new BitReader(bytes, start, end);
+        int audioObjectType = bits.read(5);
+        if (audioObjectType == 31) {
+            audioObjectType = 32 + bits.read(6);
+        }
+        int frequencyIndex = bits.read(4);
+        int declaredSampleRate;
+        if (frequencyIndex == 15) {
+            declaredSampleRate = bits.read(24);
+        } else {
+            int[] frequencies = {
+                    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000,
+                    22_050, 16_000, 12_000, 11_025, 8_000, 7_350
+            };
+            if (frequencyIndex >= frequencies.length) {
+                throw new IOException("reserved AAC frequency index");
+            }
+            declaredSampleRate = frequencies[frequencyIndex];
+        }
+        int channelConfiguration = bits.read(4);
+        int frameLengthFlag = bits.read(1);
+        int dependsOnCoreCoder = bits.read(1);
+        int extensionFlag = bits.read(1);
+        if (audioObjectType != 2 || declaredSampleRate != sampleRate
+                || channelConfiguration != channels || channelConfiguration < 1
+                || channelConfiguration > 2 || frameLengthFlag != 0
+                || dependsOnCoreCoder != 0 || extensionFlag != 0) {
+            throw new IOException("unsupported AAC AudioSpecificConfig");
+        }
+    }
+
+    private MediaHeader parseMdhd(FileChannel channel, Box box, Budget budget) throws IOException {
         byte[] versionAndFlags = read(channel, box.dataOffset, 4, budget);
         int version = versionAndFlags[0] & 0xff;
+        if (versionAndFlags[1] != 0 || versionAndFlags[2] != 0 || versionAndFlags[3] != 0) {
+            throw new IOException("invalid mdhd flags");
+        }
         long cursor = box.dataOffset + 4;
         long timescale;
         long duration;
@@ -555,9 +792,194 @@ public final class AudioDurationInspector {
             cursor += 16;
             timescale = readUnsigned(channel, cursor, 4, budget);
             duration = readUnsigned(channel, cursor + 4, 8, budget);
-            if (duration < 0) {
-                throw new IOException("unsigned duration overflow");
+        } else {
+            throw new IOException("unsupported mdhd version");
+        }
+        if (timescale < 8_000 || timescale > 192_000 || duration <= 0) {
+            throw new IOException("invalid media duration");
+        }
+        return new MediaHeader(timescale, duration);
+    }
+
+    private TimeToSample parseStts(FileChannel channel, Box box, Budget budget) throws IOException {
+        requireFullBoxZero(channel, box.dataOffset, budget);
+        int entries = boundedTableCount(
+                readUnsigned(channel, box.dataOffset + 4, 4, budget));
+        long cursor = box.dataOffset + 8;
+        long sampleCount = 0;
+        long durationTicks = 0;
+        for (int index = 0; index < entries; index++) {
+            long count = readUnsigned(channel, cursor, 4, budget);
+            long delta = readUnsigned(channel, cursor + 4, 4, budget);
+            cursor += 8;
+            if (count <= 0 || delta <= 0) {
+                throw new IOException("invalid time-to-sample entry");
             }
+            sampleCount = Math.addExact(sampleCount, count);
+            durationTicks = Math.addExact(durationTicks, Math.multiplyExact(count, delta));
+        }
+        if (cursor != box.end() || sampleCount <= 0 || sampleCount > 100_000) {
+            throw new IOException("invalid time-to-sample table");
+        }
+        return new TimeToSample(sampleCount, durationTicks);
+    }
+
+    private List<SampleToChunk> parseStsc(
+            FileChannel channel, Box box, Budget budget) throws IOException {
+        requireFullBoxZero(channel, box.dataOffset, budget);
+        int entries = boundedTableCount(
+                readUnsigned(channel, box.dataOffset + 4, 4, budget));
+        List<SampleToChunk> values = new ArrayList<>(entries);
+        long cursor = box.dataOffset + 8;
+        long previous = 0;
+        for (int index = 0; index < entries; index++) {
+            long firstChunk = readUnsigned(channel, cursor, 4, budget);
+            long samplesPerChunk = readUnsigned(channel, cursor + 4, 4, budget);
+            long sampleDescription = readUnsigned(channel, cursor + 8, 4, budget);
+            cursor += 12;
+            if (firstChunk <= previous || index == 0 && firstChunk != 1
+                    || samplesPerChunk <= 0 || samplesPerChunk > 100_000
+                    || sampleDescription != 1) {
+                throw new IOException("invalid sample-to-chunk entry");
+            }
+            values.add(new SampleToChunk(firstChunk, samplesPerChunk));
+            previous = firstChunk;
+        }
+        if (cursor != box.end()) {
+            throw new IOException("invalid sample-to-chunk table");
+        }
+        return List.copyOf(values);
+    }
+
+    private SampleSizes parseStsz(FileChannel channel, Box box, Budget budget) throws IOException {
+        requireFullBoxZero(channel, box.dataOffset, budget);
+        long defaultSize = readUnsigned(channel, box.dataOffset + 4, 4, budget);
+        int count = boundedSampleCount(
+                readUnsigned(channel, box.dataOffset + 8, 4, budget));
+        long cursor = box.dataOffset + 12;
+        if (defaultSize > Integer.MAX_VALUE) {
+            throw new IOException("sample size overflow");
+        }
+        int[] sizes = defaultSize == 0 ? new int[count] : null;
+        if (sizes != null) {
+            for (int index = 0; index < count; index++) {
+                long size = readUnsigned(channel, cursor, 4, budget);
+                cursor += 4;
+                if (size <= 0 || size > Integer.MAX_VALUE) {
+                    throw new IOException("invalid AAC sample size");
+                }
+                sizes[index] = (int) size;
+            }
+        } else if (defaultSize <= 0) {
+            throw new IOException("invalid default sample size");
+        }
+        if (cursor != box.end()) {
+            throw new IOException("invalid sample size table");
+        }
+        return new SampleSizes((int) defaultSize, sizes, count);
+    }
+
+    private long[] parseChunkOffsets(
+            FileChannel channel, Box box, Budget budget, int width) throws IOException {
+        requireFullBoxZero(channel, box.dataOffset, budget);
+        int count = boundedTableCount(
+                readUnsigned(channel, box.dataOffset + 4, 4, budget));
+        long[] offsets = new long[count];
+        long cursor = box.dataOffset + 8;
+        long previous = -1;
+        for (int index = 0; index < count; index++) {
+            long offset = readUnsigned(channel, cursor, width, budget);
+            cursor += width;
+            if (offset <= previous) {
+                throw new IOException("non-monotonic chunk offsets");
+            }
+            offsets[index] = offset;
+            previous = offset;
+        }
+        if (cursor != box.end()) {
+            throw new IOException("invalid chunk offset table");
+        }
+        return offsets;
+    }
+
+    private double validateAudioSampleTable(
+            MediaHeader header, SampleTable table, List<MediaExtent> mediaExtents)
+            throws IOException {
+        if (header.timescale != table.format.sampleRate
+                || header.duration != table.timing.durationTicks
+                || table.timing.sampleCount != table.sampleSizes.count) {
+            throw new IOException("inconsistent AAC timing metadata");
+        }
+        if (table.sampleToChunks.get(table.sampleToChunks.size() - 1).firstChunk
+                > table.chunkOffsets.length) {
+            throw new IOException("sample-to-chunk exceeds chunk table");
+        }
+        int sampleIndex = 0;
+        int mappingIndex = 0;
+        long previousChunkEnd = -1;
+        long totalBytes = 0;
+        for (int chunkIndex = 1; chunkIndex <= table.chunkOffsets.length; chunkIndex++) {
+            while (mappingIndex + 1 < table.sampleToChunks.size()
+                    && table.sampleToChunks.get(mappingIndex + 1).firstChunk <= chunkIndex) {
+                mappingIndex++;
+            }
+            SampleToChunk mapping = table.sampleToChunks.get(mappingIndex);
+            int nextSample = Math.toIntExact(Math.addExact(
+                    sampleIndex, mapping.samplesPerChunk));
+            if (nextSample > table.sampleSizes.count) {
+                throw new IOException("chunk references missing samples");
+            }
+            long chunkBytes = 0;
+            for (int index = sampleIndex; index < nextSample; index++) {
+                chunkBytes = Math.addExact(chunkBytes, table.sampleSizes.sizeAt(index));
+            }
+            long chunkStart = table.chunkOffsets[chunkIndex - 1];
+            long chunkEnd = Math.addExact(chunkStart, chunkBytes);
+            if (chunkBytes <= 0 || chunkStart < previousChunkEnd
+                    || mediaExtents.stream().noneMatch(extent -> extent.contains(chunkStart, chunkEnd))) {
+                throw new IOException("AAC sample extent is outside media data");
+            }
+            previousChunkEnd = chunkEnd;
+            totalBytes = Math.addExact(totalBytes, chunkBytes);
+            sampleIndex = nextSample;
+        }
+        if (sampleIndex != table.sampleSizes.count || totalBytes <= 0) {
+            throw new IOException("empty or incomplete AAC media");
+        }
+        double durationMs = ((double) table.timing.durationTicks * 1_000D) / header.timescale;
+        if (!Double.isFinite(durationMs) || durationMs <= 0) {
+            throw new IOException("AAC duration overflow");
+        }
+        return durationMs;
+    }
+
+    private int parseHandler(FileChannel channel, Box box, Budget budget) throws IOException {
+        if (box.end() - box.dataOffset < 12) {
+            throw new IOException("invalid handler");
+        }
+        byte[] value = read(channel, box.dataOffset, 12, budget);
+        return ByteBuffer.wrap(value, 8, 4).getInt();
+    }
+
+    private double parseMvhd(FileChannel channel, Box box, Budget budget) throws IOException {
+        byte[] versionAndFlags = read(channel, box.dataOffset, 4, budget);
+        int version = versionAndFlags[0] & 0xff;
+        if (versionAndFlags[1] != 0 || versionAndFlags[2] != 0 || versionAndFlags[3] != 0) {
+            throw new IOException("invalid mvhd flags");
+        }
+        long cursor = box.dataOffset + 4;
+        long timescale;
+        long duration;
+        if (version == 0) {
+            read(channel, cursor, 8, budget);
+            cursor += 8;
+            timescale = readUnsigned(channel, cursor, 4, budget);
+            duration = readUnsigned(channel, cursor + 4, 4, budget);
+        } else if (version == 1) {
+            read(channel, cursor, 16, budget);
+            cursor += 16;
+            timescale = readUnsigned(channel, cursor, 4, budget);
+            duration = readUnsigned(channel, cursor + 4, 8, budget);
         } else {
             throw new IOException("unsupported mvhd version");
         }
@@ -570,6 +992,35 @@ public final class AudioDurationInspector {
         }
         return durationMs;
     }
+
+    private void requireFullBoxZero(
+            FileChannel channel, long offset, Budget budget) throws IOException {
+        byte[] fullBox = read(channel, offset, 4, budget);
+        if (fullBox[0] != 0 || fullBox[1] != 0 || fullBox[2] != 0 || fullBox[3] != 0) {
+            throw new IOException("unsupported full box version or flags");
+        }
+    }
+
+    private int boundedTableCount(long count) throws IOException {
+        if (count < 1 || count > 100_000) {
+            throw new IOException("invalid MP4 table count");
+        }
+        return (int) count;
+    }
+
+    private int boundedSampleCount(long count) throws IOException {
+        if (count < 1 || count > 100_000) {
+            throw new IOException("invalid MP4 sample count");
+        }
+        return (int) count;
+    }
+
+    private void requireDepth(int depth) throws IOException {
+        if (depth > MAX_DEPTH) {
+            throw new IOException("MP4 depth exceeded");
+        }
+    }
+
 
     private Element readElement(
             FileChannel channel, long offset, long limit, Budget budget) throws IOException {
@@ -682,10 +1133,66 @@ public final class AudioDurationInspector {
     private record WebmTrack(long number, long type, String codecId) {
     }
 
-    private record MdiaInfo(Integer handler, boolean hasMp4a, boolean hasNonMp4a) {
+    private record Mp4Movie(double movieDurationMs, double audioDurationMs) {
     }
 
-    private record SampleEntries(boolean hasMp4a, boolean hasNonMp4a) {
+    private record MdiaInfo(int handler, Double durationMs) {
+    }
+
+    private record MediaHeader(long timescale, long duration) {
+    }
+
+    private record Mp4aInfo(int channels, int sampleRate) {
+    }
+
+    private record TimeToSample(long sampleCount, long durationTicks) {
+    }
+
+    private record SampleToChunk(long firstChunk, long samplesPerChunk) {
+    }
+
+    private record SampleTable(
+            Mp4aInfo format, TimeToSample timing, List<SampleToChunk> sampleToChunks,
+            SampleSizes sampleSizes, long[] chunkOffsets) {
+    }
+
+    private record SampleSizes(int defaultSize, int[] sizes, int count) {
+        long sizeAt(int index) {
+            return sizes == null ? defaultSize : sizes[index];
+        }
+    }
+
+    private record MediaExtent(long start, long end) {
+        boolean contains(long candidateStart, long candidateEnd) {
+            return candidateStart >= start && candidateEnd <= end && candidateEnd > candidateStart;
+        }
+    }
+
+    private record Descriptor(int tag, int payloadStart, int payloadEnd, int nextOffset) {
+    }
+
+    private static final class BitReader {
+        private final byte[] bytes;
+        private final int endBit;
+        private int bit;
+
+        private BitReader(byte[] bytes, int start, int end) {
+            this.bytes = bytes;
+            this.bit = Math.multiplyExact(start, 8);
+            this.endBit = Math.multiplyExact(end, 8);
+        }
+
+        int read(int count) throws IOException {
+            if (count < 1 || count > 24 || bit + count > endBit) {
+                throw new IOException("truncated AudioSpecificConfig");
+            }
+            int value = 0;
+            for (int index = 0; index < count; index++) {
+                value = (value << 1) | ((bytes[bit >>> 3] >>> (7 - (bit & 7))) & 1);
+                bit++;
+            }
+            return value;
+        }
     }
 
     private static final class TimestampBounds {

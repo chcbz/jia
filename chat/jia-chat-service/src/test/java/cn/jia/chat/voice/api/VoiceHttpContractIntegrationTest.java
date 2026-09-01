@@ -10,6 +10,8 @@ import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
 import cn.jia.core.config.ExceptionHandlerAdvice;
+import cn.jia.core.entity.JsonResult;
+import cn.jia.core.security.SensitiveResponseBodyAdvice;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -48,6 +50,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -73,6 +76,7 @@ class VoiceHttpContractIntegrationTest {
     private static final String TRANSCRIPT_SECRET = "voice-transcript-do-not-log";
     private static final String CLAIM_SECRET = "voice-claim-do-not-log";
     private static final String FILENAME_SECRET = "voice-filename-do-not-log.webm";
+    private static final String SENSITIVE_TRANSCRIPT = "password=x ".repeat(20_000);
 
     @LocalServerPort
     private int port;
@@ -107,6 +111,9 @@ class VoiceHttpContractIntegrationTest {
                         fixture("mediarecorder-chromium-unmodified.webm"))))), true);
         assertEquals(200, valid.status());
         assertEquals("E0", json(valid).path("code").asText());
+        assertEquals(SENSITIVE_TRANSCRIPT, json(valid).path("data").path("text").asText());
+        assertTrue(valid.body().getBytes(StandardCharsets.UTF_8).length
+                <= SpeechTranscriptionService.MAX_CLIENT_JSON_BYTES);
 
         String unknownBoundary = "voice-unknown-file-boundary";
         HttpResult unknownFile = send("/chat/speech/transcriptions",
@@ -162,6 +169,12 @@ class VoiceHttpContractIntegrationTest {
         HttpResult unsupported = send("/non-voice/json-only", "text/plain",
                 new byte[]{1}, false);
         assertFalse(json(unsupported).path("code").asText().startsWith("VOICE_"));
+
+        HttpResult sanitized = send("/non-voice/sensitive", "application/json",
+                new byte[0], false);
+        assertEquals(200, sanitized.status());
+        assertTrue(json(sanitized).path("data").path("password").isNull());
+        assertEquals("visible", json(sanitized).path("data").path("safe").asText());
     }
 
     private List<Part> baseParts(List<Part> files) {
@@ -262,6 +275,7 @@ class VoiceHttpContractIntegrationTest {
             VoiceEarlyExceptionResolver.class,
             VoiceSecurityConfiguration.class,
             ExceptionHandlerAdvice.class,
+            SensitiveResponseBodyAdvice.class,
             NonVoiceController.class
     })
     static class TestApplication {
@@ -301,7 +315,7 @@ class VoiceHttpContractIntegrationTest {
             SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
             when(service.transcribe(any(), any(), any(), any())).thenAnswer(invocation ->
                     new VoiceTranscriptionResponse(invocation.getArgument(1),
-                            "bounded transcript", "zh", 1240));
+                            SENSITIVE_TRANSCRIPT, "zh", 1240));
             return service;
         }
 
@@ -335,6 +349,11 @@ class VoiceHttpContractIntegrationTest {
 
         @PostMapping(path = "/non-voice/json-only", consumes = "application/json")
         void jsonOnly() {
+        }
+
+        @PostMapping(path = "/non-voice/sensitive", produces = "application/json")
+        JsonResult<Map<String, String>> sensitive() {
+            return JsonResult.success(Map.of("password", "raw-secret", "safe", "visible"));
         }
     }
 }
