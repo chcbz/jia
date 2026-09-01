@@ -101,8 +101,16 @@ final class BoundedBodyHandler implements HttpResponse.BodyHandler<byte[]> {
     }
 
     private static final class BodyLimitException extends IOException {
+        private static final long serialVersionUID = 1L;
+
         private BodyLimitException() {
-            super(null, null, false, false);
+            super((String) null);
+            initCause(null);
+        }
+
+        @Override
+        public synchronized Throwable fillInStackTrace() {
+            return this;
         }
     }
 }
