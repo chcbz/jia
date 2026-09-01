@@ -15,12 +15,20 @@ class AudioDurationInspectorTest {
     private static final String REQUEST_ID = "01JVOICEFIXTURE0001";
 
     @Test
-    void acceptsFinalizedWebmOpusMp4AacAndUnmodifiedChromiumWebm() throws Exception {
+    void acceptsClassicAndBrowserContainerVariants() throws Exception {
         assertEquals(1200, inspector.inspect(fixture("mediarecorder-valid.webm"),
                 "audio/webm", REQUEST_ID));
-        assertEquals(1240, inspector.inspect(fixture("mediarecorder-chromium-unmodified.webm"),
+        assertEquals(1180, inspector.inspect(fixture("mediarecorder-chromium-unmodified.webm"),
+                "audio/webm", REQUEST_ID));
+        assertEquals(32969, inspector.inspect(
+                fixture("mediarecorder-chromium-timesliced-multicluster.webm"),
                 "audio/webm", REQUEST_ID));
         assertEquals(1222, inspector.inspect(fixture("mediarecorder-valid.mp4"),
+                "audio/mp4", REQUEST_ID));
+        assertEquals(3222, inspector.inspect(fixture("mediarecorder-fragmented-valid.mp4"),
+                "audio/mp4", REQUEST_ID));
+        assertEquals(1122, inspector.inspect(
+                fixture("mediarecorder-fragmented-explicit-base.mp4"),
                 "audio/mp4", REQUEST_ID));
     }
 
@@ -45,6 +53,8 @@ class AudioDurationInspectorTest {
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-wrong-codec.mp4",
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-chromium-fragmented-opus.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-forged-mp4a.mp4",
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-no-esds.mp4",
@@ -52,6 +62,61 @@ class AudioDurationInspectorTest {
         assertError("mediarecorder-empty-media.mp4",
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-invalid-media-extent.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+    }
+
+
+    @Test
+    void rejectsMalformedUnknownSizedAndOverlongChromiumClusters() throws Exception {
+        assertError("mediarecorder-chromium-multicluster-nested-id.webm",
+                "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-chromium-multicluster-unknown-child.webm",
+                "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-chromium-multicluster-truncated.webm",
+                "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-chromium-multicluster-overlong.webm",
+                "audio/webm", VoiceErrorCode.TOO_LONG);
+    }
+
+    @Test
+    void rejectsMalformedOrUnboundedFragmentedMp4State() throws Exception {
+        assertError("mediarecorder-fragmented-missing-default.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-invalid-offset.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-negative-offset.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-backward-timeline.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-unsupported-flags.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-unsupported-version.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-excessive-samples.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-excessive-fragments.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-excessive-boxes.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-empty-media.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-no-esds.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-truncated.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-overlong.mp4",
+                "audio/mp4", VoiceErrorCode.TOO_LONG);
+    }
+
+    @Test
+    void rejectsLeafBoxesThatBorrowBytesFromSiblings() throws Exception {
+        assertError("mediarecorder-fragmented-short-mdhd.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-fragmented-short-mvhd.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-chromium-fragmented-short-v1-mdhd.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-chromium-fragmented-short-v1-mvhd.mp4",
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
     }
 

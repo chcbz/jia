@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>JVC browser MediaRecorder fixture capture</title>
+<body>CAPTURING<script>
+(async () => {
+  try {
+    const query = new URLSearchParams(location.search);
+    const requestedMime = query.get('mime') || 'audio/webm;codecs=opus';
+    const durationMs = Number(query.get('durationMs') || 33000);
+    const timesliceMs = Number(query.get('timesliceMs') || 400);
+    const context = new AudioContext({sampleRate: 48000});
+    const oscillator = new OscillatorNode(context, {frequency: 440, type: 'sine'});
+    const gain = new GainNode(context, {gain: 0.03});
+    const destination = new MediaStreamAudioDestinationNode(context);
+    oscillator.connect(gain).connect(destination);
+    oscillator.start();
+    await context.resume();
+    const recorder = new MediaRecorder(destination.stream, {
+      mimeType: requestedMime,
+      audioBitsPerSecond: 64000
+    });
+    const chunks = [];
+    const sizes = [];
+    recorder.ondataavailable = event => {
+      sizes.push(event.data.size);
+      if (event.data.size) chunks.push(event.data);
+    };
+    const stopped = new Promise((resolve, reject) => {
+      recorder.onstop = resolve;
+      recorder.onerror = event => reject(event.error || new Error('MediaRecorder error'));
+    });
+    recorder.start(timesliceMs);
+    await new Promise(resolve => setTimeout(resolve, durationMs));
+    recorder.stop();
+    await stopped;
+    oscillator.stop();
+    await context.close();
+    const bytes = new Uint8Array(await new Blob(chunks, {type: recorder.mimeType}).arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    document.body.textContent = [
+      'DONE', recorder.mimeType, chunks.length, sizes.join(','), bytes.length, btoa(binary)
+    ].join('|');
+  } catch (error) {
+    document.body.textContent = ['ERROR', error.name, error.message].join('|');
+  }
+})();
+</script>

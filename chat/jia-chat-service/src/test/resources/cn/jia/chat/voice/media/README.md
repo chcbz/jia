@@ -41,3 +41,83 @@ out-of-range sample extent negatives have SHA-256 values
 `3413c0783593ef28e85acf698ce899a769229f2c1e4d382bf579673e6a718a49`.
 The earlier forged-handler and wrong-codec slices remain negative-only probes.
 No fixture contains intelligible speech.
+
+## Fragmented browser-container remediation fixtures
+
+`mediarecorder-chromium-timesliced-multicluster.webm` is byte-exact output from
+`Chromium 133.0.6943.141 Fedora Project` using the committed
+`capture-mediarecorder.html` script with actual recorder MIME
+`audio/webm;codecs=opus`, `durationMs=33000`, and `timesliceMs=400`. The capture
+used an `AudioContext` oscillator routed to `MediaStreamDestination`; it
+contains no speech. Chromium emitted 34 non-empty `dataavailable` chunks. The
+concatenated 84,957-byte output has SHA-256
+`d6659aff33917d981280c37702fcb970c421a6e0fc64ec8e19459555c11febad` and the
+bounded inspector reports 32,969 ms from the final Opus packet end.
+
+The exact browser launch was:
+
+```
+/usr/bin/chromium-browser --headless --no-sandbox --disable-gpu \
+  --autoplay-policy=no-user-gesture-required --user-data-dir="$PROFILE" \
+  --remote-debugging-port=0 \
+  "file://$PWD/capture-mediarecorder.html?mime=audio/webm%3Bcodecs%3Dopus&durationMs=33000&timesliceMs=400"
+```
+
+A bounded CDP `Runtime.evaluate` poll read `document.body.textContent` only
+after its `DONE|...|base64` sentinel, then decoded the final field byte-for-byte.
+The structural probe found one unknown-sized Segment and two Clusters at byte
+offsets 146 and 78,095; both Clusters use the eight-byte unknown-size VINT
+`01ffffffffffffff`. Tracks declares audio track 1 with `A_OPUS`. The
+`nested-id`, `unknown-child`, `truncated`, and `overlong` WebM files are
+single-purpose deterministic byte mutations. The overlong mutation changes
+only the second Cluster Timecode from 30,023 ms to 47,000 ms.
+
+This Chromium build reported `MediaRecorder.isTypeSupported('audio/mp4') ==
+true`, but `audio/mp4;codecs=mp4a.40.2 == false`; constructing `audio/mp4`
+selected actual MIME `audio/mp4;codecs=opus`. It therefore cannot provide an
+AAC fixture and is not represented as doing so.
+
+`mediarecorder-chromium-fragmented-opus.mp4` preserves that actual 3.2-second,
+400 ms-timesliced Chromium result as a negative codec fixture. It is 6,984
+bytes with SHA-256
+`91bd2f4269403cc11d3fd69ca2831e20410db3e4a0b2b8b614af13594358b213`.
+Its structural probe reports `mvex=1`, `trex=1`, and three each of
+`moof/traf/tfhd/tfdt/trun/mdat`, with `Opus+dOps` and no `mp4a/esds`; the
+inspector must reject it as invalid MP4/AAC rather than trusting the MIME.
+
+`mediarecorder-fragmented-valid.mp4` and
+`mediarecorder-fragmented-explicit-base.mp4` are genuine playable fragmented
+ISO-BMFF/AAC-LC files generated with the same FFmpeg 6.0 static binary and
+binary digest documented above. The exact commands were:
+
+```
+ffmpeg -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=3.2' \
+  -c:a aac -profile:a aac_low -b:a 64k -ac 1 -ar 48000 \
+  -movflags +empty_moov+default_base_moof -frag_duration 400000 \
+  -y mediarecorder-fragmented-valid.mp4
+
+ffmpeg -f lavfi -i 'sine=frequency=523.25:sample_rate=48000:duration=1.1' \
+  -c:a aac -profile:a aac_low -b:a 64k -ac 1 -ar 48000 \
+  -movflags +empty_moov -frag_duration 400000 \
+  -y mediarecorder-fragmented-explicit-base.mp4
+```
+
+The 28,387-byte default-base fixture has SHA-256
+`87c33fc5bcaa57a2d95559c6da051612c00652b13118111334130823cc79f928`;
+its structural probe reports `mvex=1`, `trex=1`, `moof=8`, `traf=8`,
+`tfhd=8`, `tfdt=8`, `trun=8`, `mdat=8`, `mp4a=1`, and `esds=1`. The
+10,590-byte explicit-base fixture has SHA-256
+`21bcd98786f809b92df57f211e6f9ffb89c8c3246edc9f555a365ece6adc7d6e`
+and uses `base-data-offset-present` plus per-sample durations in its final run.
+Both decode to mono 48 kHz PCM with the documented FFmpeg binary.
+
+`mediarecorder-fragmented-overlong.mp4` was generated identically with a
+46.1-second sine, 250 ms fragments, and has SHA-256
+`1df6f0ab7167216bbf1ab4218e1e870116df092a60363aee1421b7c4c03f2b38`
+(`moof=181`, `mdat=181`). The remaining fragmented negatives independently
+cover missing effective duration defaults, negative/out-of-range data offsets,
+backward decode time, unsupported versions/flags, excessive box/fragment/sample counts,
+absent media,
+missing `esds`, truncation, and version-specific short version-0/version-1
+`mdhd`/`mvhd` boxes.
+They are mutations only and are not expected to decode.
