@@ -158,6 +158,10 @@ class VoiceHttpContractIntegrationTest {
         HttpResult response = send("/non-voice/error", null, new byte[0], false);
         assertEquals(200, response.status());
         assertFalse(json(response).path("code").asText().startsWith("VOICE_"));
+
+        HttpResult unsupported = send("/non-voice/json-only", "text/plain",
+                new byte[]{1}, false);
+        assertFalse(json(unsupported).path("code").asText().startsWith("VOICE_"));
     }
 
     private List<Part> baseParts(List<Part> files) {
@@ -255,6 +259,7 @@ class VoiceHttpContractIntegrationTest {
             SpeechTranscriptionController.class,
             SpeechSynthesisController.class,
             VoiceExceptionHandler.class,
+            VoiceEarlyExceptionResolver.class,
             VoiceSecurityConfiguration.class,
             ExceptionHandlerAdvice.class,
             NonVoiceController.class
@@ -326,6 +331,10 @@ class VoiceHttpContractIntegrationTest {
         @PostMapping("/non-voice/error")
         void fail() {
             throw new IllegalStateException("non-voice-probe");
+        }
+
+        @PostMapping(path = "/non-voice/json-only", consumes = "application/json")
+        void jsonOnly() {
         }
     }
 }
