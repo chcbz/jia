@@ -1,16 +1,15 @@
 package cn.jia.chat.serialization;
 
-import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.databind.JsonSerializer;
-import com.fasterxml.jackson.databind.SerializerProvider;
-
-import java.io.IOException;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.JsonGenerator;
+import tools.jackson.databind.SerializationContext;
+import tools.jackson.databind.ValueSerializer;
 
 /** Serializes database identifiers as decimal JSON strings before they enter JavaScript. */
-public final class ExactLongIdSerializer extends JsonSerializer<Long> {
+public final class ExactLongIdSerializer extends ValueSerializer<Long> {
     @Override
-    public void serialize(Long value, JsonGenerator generator, SerializerProvider serializers)
-            throws IOException {
+    public void serialize(Long value, JsonGenerator generator, SerializationContext context)
+            throws JacksonException {
         generator.writeString(value.toString());
     }
 }

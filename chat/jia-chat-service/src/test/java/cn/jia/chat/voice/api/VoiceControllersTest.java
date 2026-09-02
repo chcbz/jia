@@ -11,8 +11,8 @@ import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
 import cn.jia.core.entity.JsonResult;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.ResponseEntity;
@@ -143,7 +143,7 @@ class VoiceControllersTest {
             String json = "{\"requestId\":\"" + REQUEST_ID
                     + "\",\"text\":\"ok\",\"voice\":\"juyiting-default\",\"format\":\"mp3\",\""
                     + field + "\":\"forged\"}";
-            assertThrows(JsonMappingException.class,
+            assertThrows(JacksonException.class,
                     () -> mapper.readValue(json, VoiceSynthesisRequest.class));
         }
     }

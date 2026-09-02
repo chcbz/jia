@@ -29,11 +29,11 @@ class AudioDurationInspectorTest {
                 "audio/webm", REQUEST_ID));
         assertEquals(120, inspector.inspect(fixture("mediarecorder-webm-opushead-v2.webm"),
                 "audio/webm", REQUEST_ID));
-        assertEquals(1222, inspector.inspect(fixture("mediarecorder-valid.mp4"),
+        assertEquals(1238, inspector.inspect(fixture("mediarecorder-valid.mp4"),
                 "audio/mp4", REQUEST_ID));
         assertEquals(3222, inspector.inspect(fixture("mediarecorder-fragmented-valid.mp4"),
                 "audio/mp4", REQUEST_ID));
-        assertEquals(1122, inspector.inspect(
+        assertEquals(1131, inspector.inspect(
                 fixture("mediarecorder-fragmented-explicit-base.mp4"),
                 "audio/mp4", REQUEST_ID));
         assertEquals(3222, inspector.inspect(
@@ -56,6 +56,10 @@ class AudioDurationInspectorTest {
         assertError("mediarecorder-missing-duration.mp4", "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-malformed.mp4", "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-overlong.mp4", "audio/mp4", VoiceErrorCode.TOO_LONG);
+        assertError("mediarecorder-classic-forged-short-timing-overlong.mp4",
+                "audio/mp4", VoiceErrorCode.TOO_LONG);
+        assertError("mediarecorder-fragmented-forged-short-timing-overlong.mp4",
+                "audio/mp4", VoiceErrorCode.TOO_LONG);
     }
 
     @Test
@@ -158,12 +162,12 @@ class AudioDurationInspectorTest {
                 "audio/webm;codecs=opus", REQUEST_ID));
         assertEquals("audio/webm", VoiceAudioUploadFactory.canonicalMediaType(
                 "audio/webm; codecs=\"opus\"", REQUEST_ID));
-        assertEquals("audio/mp4", VoiceAudioUploadFactory.canonicalMediaType(
-                "audio/mp4;codecs=mp4a.40.2", REQUEST_ID));
-        VoiceException mismatch = assertThrows(VoiceException.class,
-                () -> VoiceAudioUploadFactory.canonicalMediaType(
-                        "audio/mp4;codecs=opus", REQUEST_ID));
-        assertEquals(VoiceErrorCode.UNSUPPORTED_MEDIA, mismatch.error());
+        for (String mediaType : new String[] {
+                "audio/mp4", "audio/mp4;codecs=mp4a.40.2", "audio/mp4;codecs=opus"}) {
+            VoiceException disabledMp4 = assertThrows(VoiceException.class,
+                    () -> VoiceAudioUploadFactory.canonicalMediaType(mediaType, REQUEST_ID));
+            assertEquals(VoiceErrorCode.UNSUPPORTED_MEDIA, disabledMp4.error());
+        }
     }
 
     private void assertError(String name, String mediaType, VoiceErrorCode expected) throws Exception {

@@ -148,3 +148,31 @@ initialization duration fields to `0xffffffff`; its fragment timeline and media
 bytes are otherwise unchanged. This deliberately exceeds the inspector's
 bounded initialization-placeholder policy and must fail closed. Its SHA-256 is
 `df07f0ec8cbb07837bfd2bc0fc8783f0795f09c71a9cb997e025ad13ee5a9b5c`.
+
+## R2 AAC duration evidence and V1 upload scope
+
+On September 2, 2026, the committed capture harness (SHA-256
+`baf2fb9ee760a534db8bed5c48b689be1748aa64bb70c0b564d7a8d930e001c7`)
+was probed with the only locally installed supported browser, `Chromium
+133.0.6943.141 Fedora Project`. `audio/webm;codecs=opus` recorded successfully.
+`audio/mp4` was reported as supported but selected actual recorder MIME
+`audio/mp4;codecs=opus`; `audio/mp4;codecs=mp4a.40.2` failed construction with
+`NotSupportedError`. No genuine browser MediaRecorder MP4/AAC fixture could be
+obtained, so none is claimed. V1 upload validation therefore accepts only
+WebM/Opus and rejects every MP4 declaration with `VOICE_UNSUPPORTED_MEDIA`.
+The bounded MP4/AAC parser remains covered as defensive, future-scope code.
+
+`mediarecorder-classic-forged-short-timing-overlong.mp4` is derived byte-for-byte
+from the 46.1-second classic AAC-LC fixture except that every `stts` sample delta
+is 1, `mdhd` duration is the resulting 2,162 ticks, and `mvhd` duration is 1.
+Its SHA-256 is
+`a5d11f85a9bc7e38cb026e0d570681cfa1053d3cd8a20794465dd3dab33f5021`.
+`mediarecorder-fragmented-forged-short-timing-overlong.mp4` is derived from the
+46.1-second fragmented fixture by setting each effective `tfhd`/`trun` sample
+duration to 1 and rewriting each `tfdt` to the cumulative sample count. Its
+SHA-256 is
+`f4948f3bd149c309db5fab1e1cd390ac786570b11720cb1358a630ce4d825559`.
+Both retain 2,162 AAC-LC access units and unchanged media bytes. With
+`frameLengthFlag=0`, the encoded lower bound is
+`2162 * 1024 / 48000 = 46.122666... seconds`; both must fail with
+`VOICE_TOO_LONG` even though all declared timing metadata is shortened.

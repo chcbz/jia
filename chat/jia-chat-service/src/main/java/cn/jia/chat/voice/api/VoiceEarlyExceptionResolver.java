@@ -1,7 +1,7 @@
 package cn.jia.chat.voice.api;
 
 import cn.jia.core.entity.JsonResult;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.Ordered;

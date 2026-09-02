@@ -5,8 +5,7 @@ import cn.jia.chat.voice.SpeechSynthesisProvider;
 import cn.jia.chat.voice.SpeechSynthesisRequest;
 import cn.jia.chat.voice.SpeechSynthesisResult;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.net.URI;
@@ -103,7 +102,7 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
                     .header("Accept", "audio/mpeg")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(json))
                     .build();
-        } catch (JsonProcessingException | RuntimeException exception) {
+        } catch (RuntimeException exception) {
             throw known();
         }
     }

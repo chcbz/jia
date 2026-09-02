@@ -3,7 +3,7 @@ package cn.jia.chat.voice.config;
 import cn.jia.chat.voice.api.VoiceErrorCode;
 import cn.jia.chat.voice.api.VoiceErrorData;
 import cn.jia.core.entity.JsonResult;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;

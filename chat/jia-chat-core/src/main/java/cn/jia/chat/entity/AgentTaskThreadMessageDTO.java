@@ -1,7 +1,7 @@
 package cn.jia.chat.entity;
 
 import cn.jia.chat.serialization.ExactLongIdSerializer;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import tools.jackson.databind.annotation.JsonSerialize;
 import lombok.Data;
 import lombok.experimental.Accessors;
 

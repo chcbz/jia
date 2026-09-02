@@ -72,7 +72,7 @@ public final class VoiceAudioUploadFactory {
         }
         String[] parts = declared.toLowerCase(Locale.ROOT).split(";", -1);
         String base = parts[0].strip();
-        if (!base.equals("audio/webm") && !base.equals("audio/mp4")) {
+        if (!base.equals("audio/webm")) {
             throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
         }
         for (int index = 1; index < parts.length; index++) {
@@ -88,10 +88,7 @@ public final class VoiceAudioUploadFactory {
             if (codec.length() >= 2 && codec.startsWith("\"") && codec.endsWith("\"")) {
                 codec = codec.substring(1, codec.length() - 1);
             }
-            boolean allowed = base.equals("audio/webm")
-                    ? codec.equals("opus")
-                    : codec.equals("aac") || codec.startsWith("mp4a.");
-            if (!allowed) {
+            if (!codec.equals("opus")) {
                 throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
             }
         }

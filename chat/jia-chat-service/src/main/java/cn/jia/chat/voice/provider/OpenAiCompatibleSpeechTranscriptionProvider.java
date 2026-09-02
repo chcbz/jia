@@ -5,8 +5,8 @@ import cn.jia.chat.voice.SpeechTranscriptionProvider;
 import cn.jia.chat.voice.SpeechTranscriptionRequest;
 import cn.jia.chat.voice.SpeechTranscriptionResult;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.net.URI;
@@ -81,7 +81,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
             return new SpeechTranscriptionResult(text, language);
         } catch (SpeechProviderException exception) {
             throw exception;
-        } catch (IOException | RuntimeException exception) {
+        } catch (RuntimeException exception) {
             throw known();
         }
     }

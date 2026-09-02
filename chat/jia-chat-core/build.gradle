@@ -2,7 +2,7 @@ dependencies {
     api project(':common:jia-common-core')
     api(libs.swagger.annotations)
     api(libs.mybatis.plus.annotation)
-    api 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    api libs.jackson.databind
     testImplementation libs.junit.jupiter
     testRuntimeOnly libs.mybatis.core
     testRuntimeOnly libs.junit.platform.launcher

@@ -18,10 +18,9 @@ import cn.jia.chat.voice.state.VoiceRequestCoordinator;
 import cn.jia.chat.voice.state.VoiceReservation;
 import cn.jia.chat.voice.state.VoiceStateUnavailableException;
 import cn.jia.chat.voice.validation.VoiceAudioUpload;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.IOException;
 
 @Slf4j
 public final class SpeechTranscriptionService {
@@ -98,7 +97,7 @@ public final class SpeechTranscriptionService {
             throw VoiceServiceSupport.providerError(exception, requestId);
         } catch (VoiceException exception) {
             throw exception;
-        } catch (IOException exception) {
+        } catch (RuntimeException exception) {
             VoiceServiceSupport.transitionFailure(coordinator, reservation,
                     SpeechProviderException.FailureKind.UNKNOWN, requestId);
             throw VoiceException.of(VoiceErrorCode.RESULT_UNKNOWN, requestId);
@@ -118,10 +117,10 @@ public final class SpeechTranscriptionService {
                     payload, VoiceTranscriptionResponse.class);
             if (!requestId.equals(response.requestId()) || response.text() == null
                     || response.durationMs() <= 0) {
-                throw new IOException("invalid cached result");
+                throw new IllegalArgumentException("invalid cached result");
             }
             return response;
-        } catch (IOException | RuntimeException exception) {
+        } catch (RuntimeException exception) {
             throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
         }
     }

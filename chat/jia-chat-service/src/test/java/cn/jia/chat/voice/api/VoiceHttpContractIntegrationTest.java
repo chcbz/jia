@@ -1,5 +1,6 @@
 package cn.jia.chat.voice.api;
 
+import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.voice.SpeechSynthesisResult;
 import cn.jia.chat.voice.config.VoiceSecurityConfiguration;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
@@ -11,10 +12,10 @@ import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
 import cn.jia.core.config.ExceptionHandlerAdvice;
 import cn.jia.core.entity.JsonResult;
+import cn.jia.core.security.AllowSensitiveOutput;
 import cn.jia.core.security.SensitiveResponseBodyAdvice;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.SpringBootConfiguration;
@@ -33,11 +34,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -54,6 +58,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -64,9 +69,9 @@ import static org.mockito.Mockito.when;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
                 "spring.main.web-application-type=servlet",
-                "spring.servlet.multipart.max-file-size=5242880B",
-                "spring.servlet.multipart.max-request-size=6291456B",
-                "server.tomcat.max-swallow-size=6291456B",
+                "spring.servlet.multipart.max-file-size=10485760B",
+                "spring.servlet.multipart.max-request-size=52428800B",
+                "server.tomcat.max-swallow-size=52428800B",
                 "logging.level.root=INFO"
         })
 @ExtendWith(OutputCaptureExtension.class)
@@ -86,6 +91,8 @@ class VoiceHttpContractIntegrationTest {
             .build();
     @Autowired
     private ObjectMapper objectMapper;
+    @Autowired
+    private RequestMappingHandlerAdapter handlerAdapter;
 
     @Test
     void realSecurityChainAndVoiceAdviceReturnFrozenErrorsWithoutSensitiveLogs(
@@ -114,6 +121,14 @@ class VoiceHttpContractIntegrationTest {
         assertEquals(SENSITIVE_TRANSCRIPT, json(valid).path("data").path("text").asText());
         assertTrue(valid.body().getBytes(StandardCharsets.UTF_8).length
                 <= SpeechTranscriptionService.MAX_CLIENT_JSON_BYTES);
+
+        String mp4Boundary = "voice-disabled-mp4-boundary";
+        HttpResult disabledMp4 = send("/chat/speech/transcriptions",
+                "multipart/form-data; boundary=" + mp4Boundary,
+                multipart(mp4Boundary, baseParts(List.of(new Part(
+                        "audio", "disabled.mp4", "audio/mp4;codecs=mp4a.40.2",
+                        fixture("mediarecorder-valid.mp4"))))), true);
+        assertError(disabledMp4, 415, "VOICE_UNSUPPORTED_MEDIA");
 
         String unknownBoundary = "voice-unknown-file-boundary";
         HttpResult unknownFile = send("/chat/speech/transcriptions",
@@ -175,6 +190,30 @@ class VoiceHttpContractIntegrationTest {
         assertEquals(200, sanitized.status());
         assertTrue(json(sanitized).path("data").path("password").isNull());
         assertEquals("visible", json(sanitized).path("data").path("safe").asText());
+
+        byte[] largerThanVoiceBudget = new byte[
+                (int) VoiceTranscriptionRequestBudgetFilter.MAX_REQUEST_BYTES + 1];
+        HttpResult nonVoiceUpload = send("/non-voice/upload", "application/octet-stream",
+                largerThanVoiceBudget, false);
+        assertEquals(200, nonVoiceUpload.status());
+        assertEquals(largerThanVoiceBudget.length,
+                json(nonVoiceUpload).path("data").asLong());
+    }
+
+    @Test
+    void bootJackson3MapperIsTheRealMvcConverterAndPreservesUnsafeLongIds() throws Exception {
+        JacksonJsonHttpMessageConverter converter = handlerAdapter.getMessageConverters().stream()
+                .filter(JacksonJsonHttpMessageConverter.class::isInstance)
+                .map(JacksonJsonHttpMessageConverter.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertSame(objectMapper, converter.getMapper());
+
+        HttpResult response = send("/non-voice/unsafe-id", null, new byte[0], false);
+        assertEquals(200, response.status());
+        JsonNode json = json(response);
+        assertTrue(json.path("id").isTextual());
+        assertEquals("9007199254740993", json.path("id").asText());
     }
 
     private List<Part> baseParts(List<Part> files) {
@@ -273,17 +312,13 @@ class VoiceHttpContractIntegrationTest {
             SpeechSynthesisController.class,
             VoiceExceptionHandler.class,
             VoiceEarlyExceptionResolver.class,
+            VoiceTranscriptionRequestBudgetFilter.class,
             VoiceSecurityConfiguration.class,
             ExceptionHandlerAdvice.class,
             SensitiveResponseBodyAdvice.class,
             NonVoiceController.class
     })
     static class TestApplication {
-        @Bean
-        ObjectMapper objectMapper() {
-            return JsonMapper.builder().build();
-        }
-
         @Bean
         VoiceSpeechProperties voiceSpeechProperties() {
             VoiceSpeechProperties properties = new VoiceSpeechProperties();
@@ -354,6 +389,18 @@ class VoiceHttpContractIntegrationTest {
         @PostMapping(path = "/non-voice/sensitive", produces = "application/json")
         JsonResult<Map<String, String>> sensitive() {
             return JsonResult.success(Map.of("password", "raw-secret", "safe", "visible"));
+        }
+
+        @PostMapping(path = "/non-voice/upload",
+                consumes = "application/octet-stream", produces = "application/json")
+        JsonResult<Long> upload(@RequestBody byte[] body) {
+            return JsonResult.success((long) body.length);
+        }
+
+        @AllowSensitiveOutput(reason = "Verify annotated exact Long IDs through the real MVC converter")
+        @PostMapping(path = "/non-voice/unsafe-id", produces = "application/json")
+        ChatConversationEntity unsafeId() {
+            return new ChatConversationEntity().setId(9_007_199_254_740_993L);
         }
     }
 }

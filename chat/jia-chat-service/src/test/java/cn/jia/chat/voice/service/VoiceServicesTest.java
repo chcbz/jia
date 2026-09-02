@@ -19,7 +19,7 @@ import cn.jia.chat.voice.state.VoiceRequestCoordinator;
 import cn.jia.chat.voice.state.VoiceReservation;
 import cn.jia.chat.voice.state.VoiceStateUnavailableException;
 import cn.jia.chat.voice.validation.VoiceAudioUpload;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;

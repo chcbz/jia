@@ -849,9 +849,11 @@ public final class AudioDurationInspector {
         if (!Double.isFinite(fragmentDurationMs) || fragmentDurationMs <= 0) {
             throw new IOException("fragment duration overflow");
         }
+        double encodedDurationMs = encodedAacDurationMs(
+                timeline.sampleCount, movie.audioTrack.sampleTable.format);
         validateInitializationDuration(movie.header.durationMs());
         validateInitializationDuration(movie.audioTrack.mediaHeader.durationMs());
-        return fragmentDurationMs;
+        return Math.max(fragmentDurationMs, encodedDurationMs);
     }
 
     private List<MediaExtent> fragmentMediaExtents(List<Box> topLevel, Box moof)
@@ -1480,26 +1482,26 @@ public final class AudioDurationInspector {
                 || sampleRate < 8_000 || sampleRate > 192_000) {
             throw new IOException("invalid mp4a audio parameters");
         }
-        boolean esds = false;
+        Integer samplesPerFrame = null;
         long cursor = entry.dataOffset + 28;
         while (cursor < entry.end()) {
             Box child = readBox(channel, cursor, entry.end(), budget);
             if (child.type == fourCc("esds")) {
-                if (esds) {
+                if (samplesPerFrame != null) {
                     throw new IOException("duplicate esds");
                 }
-                parseEsds(channel, child, budget, sampleRate, channels);
-                esds = true;
+                samplesPerFrame = parseEsds(
+                        channel, child, budget, sampleRate, channels);
             }
             cursor = child.end();
         }
-        if (!esds) {
+        if (samplesPerFrame == null) {
             throw new IOException("missing AAC esds");
         }
-        return new Mp4aInfo(channels, sampleRate);
+        return new Mp4aInfo(channels, sampleRate, samplesPerFrame);
     }
 
-    private void parseEsds(
+    private int parseEsds(
             FileChannel channel, Box box, Budget budget, int sampleRate, int channels)
             throws IOException {
         long length = box.end() - box.dataOffset;
@@ -1564,7 +1566,7 @@ public final class AudioDurationInspector {
         if (specific == null || specific.payloadEnd - specific.payloadStart > 64) {
             throw new IOException("missing AudioSpecificConfig");
         }
-        parseAudioSpecificConfig(
+        return parseAudioSpecificConfig(
                 bytes, specific.payloadStart, specific.payloadEnd, sampleRate, channels);
     }
 
@@ -1604,7 +1606,7 @@ public final class AudioDurationInspector {
         return next;
     }
 
-    private void parseAudioSpecificConfig(
+    private int parseAudioSpecificConfig(
             byte[] bytes, int start, int end, int sampleRate, int channels) throws IOException {
         BitReader bits = new BitReader(bytes, start, end);
         int audioObjectType = bits.read(5);
@@ -1635,6 +1637,7 @@ public final class AudioDurationInspector {
                 || dependsOnCoreCoder != 0 || extensionFlag != 0) {
             throw new IOException("unsupported AAC AudioSpecificConfig");
         }
+        return 1_024;
     }
 
     private MediaHeader parseMdhd(FileChannel channel, Box box, Budget budget)
@@ -1838,9 +1841,24 @@ public final class AudioDurationInspector {
         if (sampleIndex != table.sampleSizes.count || totalBytes <= 0) {
             throw new IOException("empty or incomplete AAC media");
         }
-        double durationMs = header.durationMs();
-        if (!Double.isFinite(durationMs) || durationMs <= 0) {
+        double declaredDurationMs = header.durationMs();
+        double encodedDurationMs = encodedAacDurationMs(
+                table.timing.sampleCount, table.format);
+        if (!Double.isFinite(declaredDurationMs) || declaredDurationMs <= 0) {
             throw new IOException("AAC duration overflow");
+        }
+        return Math.max(declaredDurationMs, encodedDurationMs);
+    }
+
+    private double encodedAacDurationMs(long sampleCount, Mp4aInfo format)
+            throws IOException {
+        if (sampleCount <= 0 || format.sampleRate <= 0 || format.samplesPerFrame != 1_024) {
+            throw new IOException("invalid AAC frame duration evidence");
+        }
+        double durationMs = ((double) sampleCount * format.samplesPerFrame * 1_000D)
+                / format.sampleRate;
+        if (!Double.isFinite(durationMs) || durationMs <= 0) {
+            throw new IOException("AAC encoded duration overflow");
         }
         return durationMs;
     }
@@ -2115,7 +2133,7 @@ public final class AudioDurationInspector {
         }
     }
 
-    private record Mp4aInfo(int channels, int sampleRate) {
+    private record Mp4aInfo(int channels, int sampleRate, int samplesPerFrame) {
     }
 
     private record TrexDefaults(

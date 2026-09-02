@@ -3,8 +3,8 @@ package cn.jia.chat.serialization;
 import cn.jia.chat.entity.AgentTaskThreadMessageDTO;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.Map;
 import org.junit.jupiter.api.Test;
