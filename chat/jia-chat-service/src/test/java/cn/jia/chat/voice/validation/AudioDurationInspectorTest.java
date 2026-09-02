@@ -157,16 +157,38 @@ class AudioDurationInspectorTest {
     }
 
     @Test
-    void declaredMimeCodecParametersAreStrictAndBrowserCompatible() {
-        assertEquals("audio/webm", VoiceAudioUploadFactory.canonicalMediaType(
-                "audio/webm;codecs=opus", REQUEST_ID));
-        assertEquals("audio/webm", VoiceAudioUploadFactory.canonicalMediaType(
-                "audio/webm; codecs=\"opus\"", REQUEST_ID));
+    void declaredMimeRequiresTheSoleSemanticWebmOpusProfile() {
         for (String mediaType : new String[] {
-                "audio/mp4", "audio/mp4;codecs=mp4a.40.2", "audio/mp4;codecs=opus"}) {
-            VoiceException disabledMp4 = assertThrows(VoiceException.class,
-                    () -> VoiceAudioUploadFactory.canonicalMediaType(mediaType, REQUEST_ID));
-            assertEquals(VoiceErrorCode.UNSUPPORTED_MEDIA, disabledMp4.error());
+                "audio/webm;codecs=opus",
+                "audio/webm; codecs=\"opus\"",
+                "Audio/WebM; Codecs=OpUs"}) {
+            assertEquals("audio/webm",
+                    VoiceAudioUploadFactory.canonicalMediaType(mediaType, REQUEST_ID));
+        }
+
+        for (String mediaType : new String[] {
+                null,
+                "audio/webm",
+                "audio/webm;",
+                "audio/webm;codecs=",
+                "audio/webm;codecs=vorbis",
+                "audio/webm;codecs=opus,vorbis",
+                "audio/webm;codecs=opus;codecs=opus",
+                "audio/webm;codecs=opus;channels=1",
+                "audio/webm;channels=1;codecs=opus",
+                "audio/mp4",
+                "audio/mp4;codecs=mp4a.40.2",
+                "audio/mp4;codecs=opus",
+                "audio/ogg;codecs=opus",
+                "audio/wav;codecs=opus",
+                "audio/mpeg;codecs=opus",
+                "video/webm;codecs=opus",
+                "application/octet-stream"}) {
+            VoiceException rejected = assertThrows(VoiceException.class,
+                    () -> VoiceAudioUploadFactory.canonicalMediaType(mediaType, REQUEST_ID),
+                    mediaType);
+            assertEquals(VoiceErrorCode.UNSUPPORTED_MEDIA, rejected.error(), mediaType);
+            assertEquals(REQUEST_ID, rejected.requestId(), mediaType);
         }
     }
 

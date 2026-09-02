@@ -41,8 +41,13 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.method.HandlerMethod;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
@@ -55,13 +60,16 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest(
@@ -88,11 +96,16 @@ class VoiceHttpContractIntegrationTest {
 
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2))
+            .version(HttpClient.Version.HTTP_1_1)
             .build();
     @Autowired
     private ObjectMapper objectMapper;
     @Autowired
     private RequestMappingHandlerAdapter handlerAdapter;
+    @Autowired
+    private SpeechTranscriptionService transcriptionService;
+    @Autowired
+    private ControllerInvocationProbe controllerInvocationProbe;
 
     @Test
     void realSecurityChainAndVoiceAdviceReturnFrozenErrorsWithoutSensitiveLogs(
@@ -134,7 +147,7 @@ class VoiceHttpContractIntegrationTest {
         HttpResult unknownFile = send("/chat/speech/transcriptions",
                 "multipart/form-data; boundary=" + unknownBoundary,
                 multipart(unknownBoundary, baseParts(List.of(
-                        new Part("audio", FILENAME_SECRET, "audio/webm",
+                        new Part("audio", FILENAME_SECRET, "audio/webm;codecs=opus",
                                 fixture("mediarecorder-chromium-unmodified.webm")),
                         new Part("attachment", "unknown.bin", "application/octet-stream",
                                 new byte[]{1})))), true);
@@ -144,9 +157,9 @@ class VoiceHttpContractIntegrationTest {
         HttpResult multipleFiles = send("/chat/speech/transcriptions",
                 "multipart/form-data; boundary=" + multipleBoundary,
                 multipart(multipleBoundary, baseParts(List.of(
-                        new Part("audio", "one.webm", "audio/webm",
+                        new Part("audio", "one.webm", "audio/webm;codecs=opus",
                                 fixture("mediarecorder-chromium-unmodified.webm")),
-                        new Part("audio", "two.webm", "audio/webm",
+                        new Part("audio", "two.webm", "audio/webm;codecs=opus",
                                 fixture("mediarecorder-chromium-unmodified.webm"))))), true);
         assertError(multipleFiles, 400, "VOICE_INVALID_REQUEST");
 
@@ -154,7 +167,7 @@ class VoiceHttpContractIntegrationTest {
         HttpResult fileLimit = send("/chat/speech/transcriptions",
                 "multipart/form-data; boundary=" + fileLimitBoundary,
                 multipart(fileLimitBoundary, baseParts(List.of(new Part(
-                        "audio", FILENAME_SECRET, "audio/webm",
+                        "audio", FILENAME_SECRET, "audio/webm;codecs=opus",
                         new byte[(int) VoiceAudioUploadFactory.MAX_AUDIO_BYTES + 1])))), true);
         assertError(fileLimit, 413, "VOICE_TOO_LARGE");
 
@@ -173,6 +186,23 @@ class VoiceHttpContractIntegrationTest {
         assertFalse(logs.contains(CLAIM_SECRET));
         assertFalse(logs.contains(FILENAME_SECRET));
         assertFalse(logs.contains(TOKEN));
+    }
+
+    @Test
+    void chunkedUnknownLengthMultipartFailsBeforeControllerAndProviderDispatch() throws Exception {
+        clearInvocations(transcriptionService);
+        controllerInvocationProbe.reset();
+        String boundary = "voice-chunked-unknown-length-boundary";
+        byte[] body = multipart(boundary, baseParts(List.of(new Part(
+                "audio", FILENAME_SECRET, "audio/webm;codecs=opus",
+                fixture("mediarecorder-chromium-unmodified.webm")))));
+
+        HttpResult response = sendUnknownLength("/chat/speech/transcriptions",
+                "multipart/form-data; boundary=" + boundary, body, true);
+
+        assertError(response, 413, "VOICE_TOO_LARGE");
+        assertEquals(0, controllerInvocationProbe.invocations());
+        verifyNoInteractions(transcriptionService);
     }
 
     @Test
@@ -249,10 +279,26 @@ class VoiceHttpContractIntegrationTest {
 
     private HttpResult send(String path, String contentType, byte[] body, boolean authenticated)
             throws Exception {
+        return send(path, contentType, HttpRequest.BodyPublishers.ofByteArray(body), authenticated);
+    }
+
+    private HttpResult sendUnknownLength(
+            String path, String contentType, byte[] body, boolean authenticated) throws Exception {
+        HttpRequest.BodyPublisher publisher = HttpRequest.BodyPublishers.ofInputStream(
+                () -> new ByteArrayInputStream(body));
+        assertEquals(-1, publisher.contentLength());
+        return send(path, contentType, publisher, authenticated);
+    }
+
+    private HttpResult send(
+            String path,
+            String contentType,
+            HttpRequest.BodyPublisher body,
+            boolean authenticated) throws Exception {
         HttpRequest.Builder request = HttpRequest.newBuilder(
                         URI.create("http://127.0.0.1:" + port + path))
                 .timeout(Duration.ofSeconds(10))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+                .POST(body);
         if (contentType != null) {
             request.header(HttpHeaders.CONTENT_TYPE, contentType);
         }
@@ -297,6 +343,31 @@ class VoiceHttpContractIntegrationTest {
     private record HttpResult(int status, String body) {
     }
 
+    private static final class ControllerInvocationProbe implements HandlerInterceptor {
+        private final AtomicInteger invocations = new AtomicInteger();
+
+        @Override
+        public boolean preHandle(
+                jakarta.servlet.http.HttpServletRequest request,
+                jakarta.servlet.http.HttpServletResponse response,
+                Object handler) {
+            if (handler instanceof HandlerMethod handlerMethod
+                    && SpeechTranscriptionController.class.isAssignableFrom(
+                    handlerMethod.getBeanType())) {
+                invocations.incrementAndGet();
+            }
+            return true;
+        }
+
+        private int invocations() {
+            return invocations.get();
+        }
+
+        private void reset() {
+            invocations.set(0);
+        }
+    }
+
     @SpringBootConfiguration(proxyBeanMethods = false)
     @EnableWebSecurity
     @ImportAutoConfiguration({
@@ -319,6 +390,21 @@ class VoiceHttpContractIntegrationTest {
             NonVoiceController.class
     })
     static class TestApplication {
+        @Bean
+        ControllerInvocationProbe controllerInvocationProbe() {
+            return new ControllerInvocationProbe();
+        }
+
+        @Bean
+        WebMvcConfigurer controllerInvocationProbeConfigurer(ControllerInvocationProbe probe) {
+            return new WebMvcConfigurer() {
+                @Override
+                public void addInterceptors(InterceptorRegistry registry) {
+                    registry.addInterceptor(probe);
+                }
+            };
+        }
+
         @Bean
         VoiceSpeechProperties voiceSpeechProperties() {
             VoiceSpeechProperties properties = new VoiceSpeechProperties();

@@ -55,7 +55,8 @@ class VoiceControllersTest {
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
                 new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
                 new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
-        MockMultipartHttpServletRequest request = validMultipart("mediarecorder-valid.webm", "audio/webm");
+        MockMultipartHttpServletRequest request = validMultipart(
+                "mediarecorder-valid.webm", "audio/webm;codecs=opus");
 
         ResponseEntity<JsonResult<VoiceTranscriptionResponse>> response = controller.transcribe(
                 request, jwt(" exact-tenant ", "client", "subject"));
@@ -68,13 +69,41 @@ class VoiceControllersTest {
     }
 
     @Test
+    void transcriptionRejectsNonUniqueMimeProfilesBeforeProviderDispatch() throws Exception {
+        VoiceSpeechProperties properties = properties();
+        SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
+        SpeechTranscriptionController controller = new SpeechTranscriptionController(
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
+                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+
+        for (String mediaType : List.of(
+                "audio/webm",
+                "audio/webm;codecs=vorbis",
+                "audio/webm;codecs=opus;codecs=opus",
+                "audio/webm;codecs=opus;channels=1",
+                "audio/mp4;codecs=mp4a.40.2",
+                "audio/ogg;codecs=opus")) {
+            MockMultipartHttpServletRequest request = validMultipart(
+                    "mediarecorder-valid.webm", mediaType);
+            VoiceException error = assertThrows(VoiceException.class,
+                    () -> controller.transcribe(request, jwt("tenant", "client", "subject")),
+                    mediaType);
+            assertEquals(VoiceErrorCode.UNSUPPORTED_MEDIA, error.error(), mediaType);
+            assertEquals(REQUEST_ID, error.requestId(), mediaType);
+        }
+
+        verify(service, never()).transcribe(any(), any(), any(), any());
+    }
+
+    @Test
     void transcriptionRejectsUnknownMultipartFieldsBeforeUploadOrProvider() throws Exception {
         VoiceSpeechProperties properties = properties();
         SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
                 new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
                 new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
-        MockMultipartHttpServletRequest request = validMultipart("mediarecorder-valid.webm", "audio/webm");
+        MockMultipartHttpServletRequest request = validMultipart(
+                "mediarecorder-valid.webm", "audio/webm;codecs=opus");
         request.addParameter("provider", "forged");
 
         VoiceException error = assertThrows(VoiceException.class,
@@ -111,7 +140,8 @@ class VoiceControllersTest {
 
         VoiceException error = assertThrows(VoiceException.class,
                 () -> factory.create(new MockMultipartFile(
-                        "audio", "private-name.webm", "audio/webm", tooLarge), REQUEST_ID));
+                        "audio", "private-name.webm", "audio/webm;codecs=opus", tooLarge),
+                        REQUEST_ID));
         assertEquals(VoiceErrorCode.TOO_LARGE, error.error());
     }
 

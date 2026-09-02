@@ -72,25 +72,20 @@ public final class VoiceAudioUploadFactory {
         }
         String[] parts = declared.toLowerCase(Locale.ROOT).split(";", -1);
         String base = parts[0].strip();
-        if (!base.equals("audio/webm")) {
+        if (!base.equals("audio/webm") || parts.length != 2) {
             throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
         }
-        for (int index = 1; index < parts.length; index++) {
-            String parameter = parts[index].strip();
-            if (parameter.isEmpty()) {
-                continue;
-            }
-            int separator = parameter.indexOf('=');
-            if (separator <= 0 || !"codecs".equals(parameter.substring(0, separator).strip())) {
-                throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
-            }
-            String codec = parameter.substring(separator + 1).strip();
-            if (codec.length() >= 2 && codec.startsWith("\"") && codec.endsWith("\"")) {
-                codec = codec.substring(1, codec.length() - 1);
-            }
-            if (!codec.equals("opus")) {
-                throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
-            }
+        String parameter = parts[1].strip();
+        int separator = parameter.indexOf('=');
+        if (separator <= 0 || !"codecs".equals(parameter.substring(0, separator).strip())) {
+            throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
+        }
+        String codec = parameter.substring(separator + 1).strip();
+        if (codec.length() >= 2 && codec.startsWith("\"") && codec.endsWith("\"")) {
+            codec = codec.substring(1, codec.length() - 1);
+        }
+        if (!codec.equals("opus")) {
+            throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
         }
         return base;
     }

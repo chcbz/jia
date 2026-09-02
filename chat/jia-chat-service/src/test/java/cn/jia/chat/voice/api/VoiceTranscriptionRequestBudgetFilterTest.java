@@ -2,12 +2,15 @@ package cn.jia.chat.voice.api;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.Part;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -52,30 +55,37 @@ class VoiceTranscriptionRequestBudgetFilterTest {
     }
 
     @Test
-    void rejectsActualStreamOneByteOverWhenLengthIsUnknown() throws Exception {
-        byte[] body = new byte[(int) VoiceTranscriptionRequestBudgetFilter.MAX_REQUEST_BYTES + 1];
-        HttpServletRequest unknownLength = new MockHttpServletRequest() {
+    void rejectsUnknownOrNegativeLengthBeforeChainAndMultipartParsing() throws Exception {
+        assertUnknownLengthRejected(-1);
+        assertUnknownLengthRejected(-7);
+    }
+
+    private void assertUnknownLengthRejected(long declaredLength) throws Exception {
+        AtomicBoolean partsRequested = new AtomicBoolean();
+        MockHttpServletRequest request = new MockHttpServletRequest() {
             @Override
             public long getContentLengthLong() {
-                return -1;
+                return declaredLength;
+            }
+
+            @Override
+            public Collection<Part> getParts() throws IOException, ServletException {
+                partsRequested.set(true);
+                return super.getParts();
             }
         };
-        ((MockHttpServletRequest) unknownLength).setMethod("POST");
-        ((MockHttpServletRequest) unknownLength).setRequestURI("/chat/speech/transcriptions");
-        ((MockHttpServletRequest) unknownLength).setContent(body);
+        request.setMethod("POST");
+        request.setRequestURI("/chat/speech/transcriptions");
         MockHttpServletResponse response = new MockHttpServletResponse();
-        AtomicBoolean fullyRead = new AtomicBoolean();
+        AtomicBoolean chainInvoked = new AtomicBoolean();
 
-        filter.doFilter(unknownLength, response, (boundedRequest, ignoredResponse) -> {
-            try {
-                boundedRequest.getInputStream().readAllBytes();
-                fullyRead.set(true);
-            } catch (IOException exception) {
-                throw exception;
-            }
+        filter.doFilter(request, response, (servletRequest, ignoredResponse) -> {
+            chainInvoked.set(true);
+            ((HttpServletRequest) servletRequest).getParts();
         });
 
-        assertFalse(fullyRead.get());
+        assertFalse(chainInvoked.get());
+        assertFalse(partsRequested.get());
         assertTooLarge(response);
     }
 
