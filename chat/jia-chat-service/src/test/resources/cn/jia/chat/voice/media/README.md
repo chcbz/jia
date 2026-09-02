@@ -121,3 +121,30 @@ absent media,
 missing `esds`, truncation, and version-specific short version-0/version-1
 `mdhd`/`mvhd` boxes.
 They are mutations only and are not expected to decode.
+
+## Opus packet and initialization-placeholder hardening fixtures
+
+The `mediarecorder-webm-*` fixtures added in the September 2, 2026 parser
+hardening pass are deterministic, synthetic WebM/Opus containers derived from
+the same bounded EBML and Opus packet structures accepted from Chromium. They
+contain no speech. Positive fixtures cover Xiph, fixed, and EBML lacing plus
+Chromium-compatible codec delay/preroll metadata and a forward-compatible
+`OpusHead` minor version 2 carrying one bounded extension byte. Negative
+fixtures isolate compressed/equal timelines, cumulative duration above 45
+seconds, missing or invalid `OpusHead`, incompatible `OpusHead` version 16,
+channel/track
+mismatches, invalid codec delay, and invalid 79 ms seek preroll. Their file
+names identify the single mutation under test.
+
+`mediarecorder-fragmented-init-placeholders.mp4` is a byte-exact mutation of
+`mediarecorder-fragmented-valid.mp4`: only the initialization `mvhd` duration
+changes from 0 to 1,234 ms and `mdhd` duration from 0 to 480,000 ticks
+(10,000 ms). Fragment `tfdt`/`trun` timing and media bytes are unchanged, so
+the authoritative duration remains 3,222 ms. The fixture SHA-256 is
+`961b02376e2654e1816fa6dfad687a0cdb70622fb57096f9fd3b8063495f129e`.
+
+`mediarecorder-fragmented-init-duration-garbage.mp4` changes both version-0
+initialization duration fields to `0xffffffff`; its fragment timeline and media
+bytes are otherwise unchanged. This deliberately exceeds the inspector's
+bounded initialization-placeholder policy and must fail closed. Its SHA-256 is
+`df07f0ec8cbb07837bfd2bc0fc8783f0795f09c71a9cb997e025ad13ee5a9b5c`.

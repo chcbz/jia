@@ -23,12 +23,21 @@ class AudioDurationInspectorTest {
         assertEquals(32969, inspector.inspect(
                 fixture("mediarecorder-chromium-timesliced-multicluster.webm"),
                 "audio/webm", REQUEST_ID));
+        assertEquals(720, inspector.inspect(fixture("mediarecorder-webm-lacing-short.webm"),
+                "audio/webm", REQUEST_ID));
+        assertEquals(240, inspector.inspect(fixture("mediarecorder-webm-opus-delay.webm"),
+                "audio/webm", REQUEST_ID));
+        assertEquals(120, inspector.inspect(fixture("mediarecorder-webm-opushead-v2.webm"),
+                "audio/webm", REQUEST_ID));
         assertEquals(1222, inspector.inspect(fixture("mediarecorder-valid.mp4"),
                 "audio/mp4", REQUEST_ID));
         assertEquals(3222, inspector.inspect(fixture("mediarecorder-fragmented-valid.mp4"),
                 "audio/mp4", REQUEST_ID));
         assertEquals(1122, inspector.inspect(
                 fixture("mediarecorder-fragmented-explicit-base.mp4"),
+                "audio/mp4", REQUEST_ID));
+        assertEquals(3222, inspector.inspect(
+                fixture("mediarecorder-fragmented-init-placeholders.mp4"),
                 "audio/mp4", REQUEST_ID));
     }
 
@@ -38,6 +47,12 @@ class AudioDurationInspectorTest {
         assertError("mediarecorder-malformed.webm", "audio/webm", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-overlong.webm", "audio/webm", VoiceErrorCode.TOO_LONG);
         assertError("mediarecorder-derived-overlong.webm", "audio/webm", VoiceErrorCode.TOO_LONG);
+        assertError("mediarecorder-webm-equal-timestamps-overlong.webm",
+                "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-webm-1ms-timestamps-overlong.webm",
+                "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        assertError("mediarecorder-webm-fixed-laced-overlong.webm",
+                "audio/webm", VoiceErrorCode.TOO_LONG);
         assertError("mediarecorder-missing-duration.mp4", "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-malformed.mp4", "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-overlong.mp4", "audio/mp4", VoiceErrorCode.TOO_LONG);
@@ -63,6 +78,21 @@ class AudioDurationInspectorTest {
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-invalid-media-extent.mp4",
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
+        for (String fixture : new String[] {
+                "mediarecorder-webm-missing-opushead.webm",
+                "mediarecorder-webm-short-opushead.webm",
+                "mediarecorder-webm-bad-opushead-magic.webm",
+                "mediarecorder-webm-bad-opushead-version.webm",
+                "mediarecorder-webm-bad-opushead-channels.webm",
+                "mediarecorder-webm-channel-mismatch.webm",
+                "mediarecorder-webm-bad-opushead-mapping.webm",
+                "mediarecorder-webm-multiple-tracks.webm",
+                "mediarecorder-webm-video-track.webm",
+                "mediarecorder-webm-zero-track-number.webm",
+                "mediarecorder-webm-bad-codec-delay.webm",
+                "mediarecorder-webm-bad-seek-preroll.webm"}) {
+            assertError(fixture, "audio/webm", VoiceErrorCode.INVALID_AUDIO);
+        }
     }
 
 
@@ -106,6 +136,8 @@ class AudioDurationInspectorTest {
                 "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
         assertError("mediarecorder-fragmented-overlong.mp4",
                 "audio/mp4", VoiceErrorCode.TOO_LONG);
+        assertError("mediarecorder-fragmented-init-duration-garbage.mp4",
+                "audio/mp4", VoiceErrorCode.INVALID_AUDIO);
     }
 
     @Test

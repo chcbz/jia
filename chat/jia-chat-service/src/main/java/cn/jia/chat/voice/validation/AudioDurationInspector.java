@@ -12,13 +12,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /** Bounded metadata-only WebM/Opus and MP4/AAC duration and codec inspector. */
 public final class AudioDurationInspector {
     public static final long MAX_DURATION_MS = 45_000;
+    private static final long MAX_FRAGMENT_INITIALIZATION_DURATION_MS = 86_400_000;
     private static final long MAX_METADATA_BYTES = 256L * 1024;
     // Unknown-sized live Clusters are walked once for boundaries and once for timing.
     private static final int MAX_ELEMENTS = 8_192;
@@ -27,7 +27,17 @@ public final class AudioDurationInspector {
     private static final int MAX_MP4_FRAGMENTS = 256;
     private static final int MAX_MP4_SAMPLES = 10_000;
     private static final int MAX_OPUS_PACKET_BYTES = 1_275;
-    private static final double MAX_OPUS_PACKET_DURATION_MS = 120D;
+    private static final int MAX_OPUS_LACE_PACKETS = 256;
+    private static final int MAX_OPUS_CHANNELS = 8;
+    private static final long MAX_WEBM_TRACK_NUMBER = 127;
+    private static final long MAX_OPUS_PACKET_DURATION_NS = 120_000_000L;
+    // Chromium timestamps are integer milliseconds sourced from a separate capture clock. The
+    // committed browser fixture exhibits at most 10 ms of local jitter; normalize only that
+    // bounded jitter, then require the authoritative packet intervals themselves not to overlap.
+    private static final long MAX_WEBM_TIMESTAMP_JITTER_NS = 10_000_000L;
+    private static final long OPUS_SEEK_PREROLL_NS = 80_000_000L;
+    private static final long MAX_OPUS_SEEK_PREROLL_NS = 120_000_000L;
+    private static final int MAX_OPUS_CODEC_PRIVATE_BYTES = 21 + 255;
 
     private static final long EBML = 0x1A45DFA3L;
     private static final long SEGMENT = 0x18538067L;
@@ -39,6 +49,13 @@ public final class AudioDurationInspector {
     private static final long TRACK_NUMBER = 0xD7L;
     private static final long TRACK_TYPE = 0x83L;
     private static final long CODEC_ID = 0x86L;
+    private static final long CODEC_PRIVATE = 0x63A2L;
+    private static final long CODEC_DELAY = 0x56AAL;
+    private static final long SEEK_PREROLL = 0x56BBL;
+    private static final long AUDIO = 0xE1L;
+    private static final long SAMPLING_FREQUENCY = 0xB5L;
+    private static final long OUTPUT_SAMPLING_FREQUENCY = 0x78B5L;
+    private static final long CHANNELS = 0x9FL;
     private static final long CLUSTER = 0x1F43B675L;
     private static final long CLUSTER_TIMECODE = 0xE7L;
     private static final long SIMPLE_BLOCK = 0xA3L;
@@ -103,7 +120,7 @@ public final class AudioDurationInspector {
     private double inspectWebmSegment(
             FileChannel channel, long start, long end, Budget budget) throws IOException {
         WebmInfo info = null;
-        Set<Long> audioTracks = null;
+        WebmTrack audioTrack = null;
         List<Element> clusters = new ArrayList<>();
         long cursor = start;
         while (cursor < end) {
@@ -114,10 +131,10 @@ public final class AudioDurationInspector {
                 }
                 info = parseWebmInfo(channel, element.dataOffset, element.end(), budget);
             } else if (element.id == TRACKS) {
-                if (audioTracks != null || element.unknownSize) {
+                if (audioTrack != null || element.unknownSize) {
                     throw new IOException("invalid tracks");
                 }
-                audioTracks = parseWebmTracks(channel, element.dataOffset, element.end(), budget);
+                audioTrack = parseWebmTracks(channel, element.dataOffset, element.end(), budget);
             } else if (element.id == CLUSTER) {
                 long clusterEnd = element.unknownSize
                         ? findUnknownClusterEnd(channel, element.dataOffset, end, budget)
@@ -135,26 +152,26 @@ public final class AudioDurationInspector {
             }
             cursor = element.end();
         }
-        if (info == null || audioTracks == null || audioTracks.isEmpty() || clusters.isEmpty()) {
+        if (info == null || audioTrack == null || clusters.isEmpty()) {
             throw new IOException("incomplete WebM metadata");
         }
-        TimestampBounds timestamps = new TimestampBounds();
-        double scaleMs = (double) info.timecodeScale / 1_000_000D;
+        TimestampBounds timestamps = new TimestampBounds(info.timecodeScale);
         for (Element cluster : clusters) {
             parseWebmCluster(channel, cluster.dataOffset, cluster.end(), budget,
-                    audioTracks, timestamps, scaleMs);
+                    audioTrack, timestamps);
         }
-        if (timestamps.count == 0 || !Double.isFinite(timestamps.maxEndMs)
-                || timestamps.maxEndMs <= 0) {
+        if (timestamps.count == 0 || timestamps.maxEndNanos <= 0
+                || timestamps.cumulativePacketNanos <= 0) {
             throw new IOException("missing or invalid audio blocks");
         }
-        if (info.durationMs != null) {
-            return Math.max(info.durationMs, timestamps.maxEndMs);
-        }
-        if (!timestamps.advanced) {
+        if (info.durationMs == null && !timestamps.advanced) {
             throw new IOException("insufficient timestamps for derived duration");
         }
-        return timestamps.maxEndMs;
+        double packetEvidenceMs = Math.max(
+                nanosToMillis(timestamps.maxEndNanos),
+                nanosToMillis(timestamps.cumulativePacketNanos));
+        return info.durationMs == null
+                ? packetEvidenceMs : Math.max(info.durationMs, packetEvidenceMs);
     }
 
     private long findUnknownClusterEnd(
@@ -260,35 +277,29 @@ public final class AudioDurationInspector {
         return new WebmInfo(timecodeScale, durationMs);
     }
 
-    private Set<Long> parseWebmTracks(
+    private WebmTrack parseWebmTracks(
             FileChannel channel, long start, long end, Budget budget) throws IOException {
-        Set<Long> audioTracks = new HashSet<>();
-        boolean sawAudio = false;
+        WebmTrack track = null;
+        int trackEntries = 0;
         long cursor = start;
         while (cursor < end) {
             Element element = readElement(channel, cursor, end, budget);
             if (element.id == TRACK_ENTRY) {
-                if (element.unknownSize) {
-                    throw new IOException("unknown track entry size");
+                if (element.unknownSize || ++trackEntries != 1) {
+                    throw new IOException("WebM must contain exactly one track entry");
                 }
-                WebmTrack track = parseWebmTrackEntry(
+                track = parseWebmTrackEntry(
                         channel, element.dataOffset, element.end(), budget);
-                if (track.type == 2) {
-                    sawAudio = true;
-                    if (!"A_OPUS".equals(track.codecId) || track.number <= 0
-                            || !audioTracks.add(track.number)) {
-                        throw new IOException("unsupported or duplicate audio track");
-                    }
-                }
             } else if (element.unknownSize) {
                 throw new IOException("unknown tracks child size");
             }
             cursor = element.end();
         }
-        if (!sawAudio || audioTracks.isEmpty()) {
-            throw new IOException("missing Opus audio track");
+        if (trackEntries != 1 || track == null || track.type != 2
+                || !"A_OPUS".equals(track.codecId)) {
+            throw new IOException("missing single Opus audio track");
         }
-        return Set.copyOf(audioTracks);
+        return track;
     }
 
     private WebmTrack parseWebmTrackEntry(
@@ -296,6 +307,10 @@ public final class AudioDurationInspector {
         Long number = null;
         Long type = null;
         String codecId = null;
+        byte[] codecPrivate = null;
+        Long codecDelay = null;
+        Long seekPreRoll = null;
+        WebmAudio audio = null;
         long cursor = start;
         while (cursor < end) {
             Element element = readElement(channel, cursor, end, budget);
@@ -318,18 +333,178 @@ public final class AudioDurationInspector {
                 }
                 codecId = new String(read(channel, element.dataOffset,
                         (int) element.size, budget), StandardCharsets.US_ASCII);
+            } else if (element.id == CODEC_PRIVATE) {
+                if (codecPrivate != null || element.size < 19
+                        || element.size > MAX_OPUS_CODEC_PRIVATE_BYTES) {
+                    throw new IOException("invalid Opus codec private data");
+                }
+                codecPrivate = read(channel, element.dataOffset, (int) element.size, budget);
+            } else if (element.id == CODEC_DELAY) {
+                if (codecDelay != null || element.size < 1 || element.size > 8) {
+                    throw new IOException("invalid codec delay");
+                }
+                codecDelay = readUnsigned(
+                        channel, element.dataOffset, (int) element.size, budget);
+            } else if (element.id == SEEK_PREROLL) {
+                if (seekPreRoll != null || element.size < 1 || element.size > 8) {
+                    throw new IOException("invalid seek preroll");
+                }
+                seekPreRoll = readUnsigned(
+                        channel, element.dataOffset, (int) element.size, budget);
+            } else if (element.id == AUDIO) {
+                if (audio != null) {
+                    throw new IOException("duplicate audio settings");
+                }
+                audio = parseWebmAudio(
+                        channel, element.dataOffset, element.end(), budget);
             }
             cursor = element.end();
         }
-        if (number == null || type == null || codecId == null) {
-            throw new IOException("incomplete track entry");
+        if (number == null || number <= 0 || number > MAX_WEBM_TRACK_NUMBER
+                || type == null || type != 2 || !"A_OPUS".equals(codecId)
+                || codecPrivate == null || audio == null) {
+            throw new IOException("incomplete or unsupported Opus track entry");
         }
-        return new WebmTrack(number, type, codecId);
+        OpusHead opusHead = parseOpusHead(codecPrivate);
+        validateOpusAudio(opusHead, audio, codecDelay, seekPreRoll);
+        return new WebmTrack(number, type, codecId, opusHead, audio,
+                codecDelay == null ? 0 : codecDelay,
+                seekPreRoll == null ? 0 : seekPreRoll);
+    }
+
+    private WebmAudio parseWebmAudio(
+            FileChannel channel, long start, long end, Budget budget) throws IOException {
+        Double samplingFrequency = null;
+        Double outputSamplingFrequency = null;
+        Long channels = null;
+        long cursor = start;
+        while (cursor < end) {
+            Element element = readElement(channel, cursor, end, budget);
+            if (element.unknownSize) {
+                throw new IOException("unknown audio child size");
+            }
+            if (element.id == SAMPLING_FREQUENCY) {
+                if (samplingFrequency != null) {
+                    throw new IOException("duplicate sampling frequency");
+                }
+                samplingFrequency = readEbmlFloat(channel, element, budget);
+            } else if (element.id == OUTPUT_SAMPLING_FREQUENCY) {
+                if (outputSamplingFrequency != null) {
+                    throw new IOException("duplicate output sampling frequency");
+                }
+                outputSamplingFrequency = readEbmlFloat(channel, element, budget);
+            } else if (element.id == CHANNELS) {
+                if (channels != null || element.size < 1 || element.size > 8) {
+                    throw new IOException("invalid audio channels");
+                }
+                channels = readUnsigned(
+                        channel, element.dataOffset, (int) element.size, budget);
+            }
+            cursor = element.end();
+        }
+        if (samplingFrequency == null || channels == null) {
+            throw new IOException("incomplete audio settings");
+        }
+        return new WebmAudio(samplingFrequency, outputSamplingFrequency, channels);
+    }
+
+    private double readEbmlFloat(FileChannel channel, Element element, Budget budget)
+            throws IOException {
+        double value;
+        if (element.size == 4) {
+            value = Float.intBitsToFloat((int) readUnsigned(
+                    channel, element.dataOffset, 4, budget));
+        } else if (element.size == 8) {
+            value = Double.longBitsToDouble(readUnsigned(
+                    channel, element.dataOffset, 8, budget));
+        } else {
+            throw new IOException("invalid EBML float size");
+        }
+        if (!Double.isFinite(value) || value <= 0) {
+            throw new IOException("invalid EBML float");
+        }
+        return value;
+    }
+
+    private OpusHead parseOpusHead(byte[] value) throws IOException {
+        if (value.length < 19 || value.length > MAX_OPUS_CODEC_PRIVATE_BYTES
+                || !"OpusHead".equals(new String(value, 0, 8, StandardCharsets.US_ASCII))) {
+            throw new IOException("invalid OpusHead magic or length");
+        }
+        int version = value[8] & 0xff;
+        int channels = value[9] & 0xff;
+        int preSkip = littleUnsignedShort(value, 10);
+        long inputSampleRate = littleUnsignedInt(value, 12);
+        int mappingFamily = value[18] & 0xff;
+        if (version < 1 || version > 15 || channels < 1 || channels > MAX_OPUS_CHANNELS
+                || inputSampleRate < 8_000 || inputSampleRate > 192_000) {
+            throw new IOException("unsupported OpusHead fields");
+        }
+        if (mappingFamily == 0) {
+            if ((version == 1 ? value.length != 19 : value.length < 19) || channels > 2) {
+                throw new IOException("invalid Opus mapping family 0");
+            }
+        } else if (mappingFamily == 1) {
+            int requiredLength = 21 + channels;
+            if (version == 1 ? value.length != requiredLength : value.length < requiredLength) {
+                throw new IOException("invalid Opus mapping family 1 length");
+            }
+            int streamCount = value[19] & 0xff;
+            int coupledCount = value[20] & 0xff;
+            if (streamCount < 1 || coupledCount > streamCount
+                    || streamCount + coupledCount != channels) {
+                throw new IOException("invalid Opus stream mapping counts");
+            }
+            boolean[] mapped = new boolean[channels];
+            for (int index = 0; index < channels; index++) {
+                int mapping = value[21 + index] & 0xff;
+                if (mapping >= channels || mapped[mapping]) {
+                    throw new IOException("invalid Opus channel mapping");
+                }
+                mapped[mapping] = true;
+            }
+        } else {
+            throw new IOException("unsupported Opus channel mapping family");
+        }
+        return new OpusHead(version, channels, preSkip, inputSampleRate, mappingFamily);
+    }
+
+    private void validateOpusAudio(
+            OpusHead opusHead, WebmAudio audio, Long codecDelay, Long seekPreRoll)
+            throws IOException {
+        if (audio.channels != opusHead.channels
+                || Math.rint(audio.samplingFrequency) != audio.samplingFrequency
+                || (long) audio.samplingFrequency != opusHead.inputSampleRate
+                || audio.outputSamplingFrequency != null
+                && Double.compare(audio.outputSamplingFrequency, audio.samplingFrequency) != 0) {
+            throw new IOException("inconsistent Opus audio settings");
+        }
+        if ((codecDelay == null) != (seekPreRoll == null)) {
+            throw new IOException("partial Opus delay metadata");
+        }
+        if (codecDelay != null) {
+            long expectedDelay = Math.round(
+                    (double) opusHead.preSkip * 1_000_000_000D / 48_000D);
+            if (codecDelay < 0 || Math.abs(codecDelay - expectedDelay) > 1
+                    || seekPreRoll < OPUS_SEEK_PREROLL_NS
+                    || seekPreRoll > MAX_OPUS_SEEK_PREROLL_NS) {
+                throw new IOException("invalid Opus delay or preroll");
+            }
+        }
+    }
+
+    private int littleUnsignedShort(byte[] value, int offset) {
+        return (value[offset] & 0xff) | (value[offset + 1] & 0xff) << 8;
+    }
+
+    private long littleUnsignedInt(byte[] value, int offset) {
+        return Integer.toUnsignedLong(ByteBuffer.wrap(value, offset, 4)
+                .order(ByteOrder.LITTLE_ENDIAN).getInt());
     }
 
     private void parseWebmCluster(
             FileChannel channel, long start, long end, Budget budget,
-            Set<Long> audioTracks, TimestampBounds timestamps, double scaleMs) throws IOException {
+            WebmTrack audioTrack, TimestampBounds timestamps) throws IOException {
         Long clusterTimecode = null;
         long cursor = start;
         while (cursor < end) {
@@ -351,13 +526,13 @@ public final class AudioDurationInspector {
                     throw new IOException("block before cluster timecode");
                 }
                 parseWebmBlock(channel, element, clusterTimecode, budget,
-                        audioTracks, timestamps, scaleMs);
+                        audioTrack, timestamps);
             } else if (element.id == BLOCK_GROUP) {
                 if (clusterTimecode == null) {
                     throw new IOException("block group before cluster timecode");
                 }
                 parseWebmBlockGroup(channel, element, clusterTimecode,
-                        budget, audioTracks, timestamps, scaleMs);
+                        budget, audioTrack, timestamps);
             } else if (!isClusterChild(element.id)) {
                 throw new IOException("unsupported cluster child");
             }
@@ -367,7 +542,7 @@ public final class AudioDurationInspector {
 
     private void parseWebmBlockGroup(
             FileChannel channel, Element group, long clusterTimecode, Budget budget,
-            Set<Long> audioTracks, TimestampBounds timestamps, double scaleMs) throws IOException {
+            WebmTrack audioTrack, TimestampBounds timestamps) throws IOException {
         long cursor = group.dataOffset;
         boolean blockSeen = false;
         while (cursor < group.end()) {
@@ -381,7 +556,7 @@ public final class AudioDurationInspector {
                 }
                 blockSeen = true;
                 parseWebmBlock(channel, child, clusterTimecode, budget,
-                        audioTracks, timestamps, scaleMs);
+                        audioTrack, timestamps);
             }
             cursor = child.end();
         }
@@ -392,32 +567,115 @@ public final class AudioDurationInspector {
 
     private void parseWebmBlock(
             FileChannel channel, Element block, long clusterTimecode, Budget budget,
-            Set<Long> audioTracks, TimestampBounds timestamps, double scaleMs) throws IOException {
+            WebmTrack audioTrack, TimestampBounds timestamps) throws IOException {
         Vint track = readVint(channel, block.dataOffset, false, budget);
         long headerBytes = Math.addExact(track.width, 3);
-        if (track.unknown || track.value <= 0 || block.size < headerBytes) {
-            throw new IOException("invalid block header");
+        if (track.unknown || track.value != audioTrack.number || block.size <= headerBytes) {
+            throw new IOException("invalid or unexpected block track");
         }
         byte[] timingAndFlags = read(channel, block.dataOffset + track.width, 3, budget);
         int relative = (short) (((timingAndFlags[0] & 0xff) << 8)
                 | (timingAndFlags[1] & 0xff));
-        if ((timingAndFlags[2] & 0x06) != 0) {
-            throw new IOException("laced Opus block is not inspected");
+        long absolute = Math.addExact(clusterTimecode, relative);
+        if (absolute < 0) {
+            throw new IOException("negative block timestamp");
         }
-        if (audioTracks.contains(track.value)) {
-            long absolute = Math.addExact(clusterTimecode, relative);
-            if (absolute < 0) {
-                throw new IOException("negative block timestamp");
-            }
-            long payloadOffset = Math.addExact(block.dataOffset, headerBytes);
-            long payloadLength = block.end() - payloadOffset;
-            double packetDurationMs = opusPacketDurationMs(
-                    channel, payloadOffset, payloadLength, budget);
-            timestamps.add(absolute, packetDurationMs, scaleMs);
+        long payloadOffset = Math.addExact(block.dataOffset, headerBytes);
+        List<PacketSlice> packets = parseWebmLacing(
+                channel, payloadOffset, block.end(), timingAndFlags[2] & 0x06, budget);
+        long packetStartNanos = Math.multiplyExact(absolute, timestamps.timecodeScaleNanos);
+        for (PacketSlice packet : packets) {
+            long packetDurationNanos = opusPacketDurationNanos(
+                    channel, packet.offset, packet.length, budget);
+            timestamps.add(packetStartNanos, packetDurationNanos);
+            packetStartNanos = Math.addExact(packetStartNanos, packetDurationNanos);
         }
     }
 
-    private double opusPacketDurationMs(
+    private List<PacketSlice> parseWebmLacing(
+            FileChannel channel, long start, long end, int laceBits, Budget budget)
+            throws IOException {
+        if (end <= start) {
+            throw new IOException("empty block payload");
+        }
+        if (laceBits == 0) {
+            return List.of(new PacketSlice(start, end - start));
+        }
+        int packetCountMinusOne = readWithin(channel, start, 1, end, budget)[0] & 0xff;
+        int packetCount = packetCountMinusOne + 1;
+        if (packetCount < 2 || packetCount > MAX_OPUS_LACE_PACKETS) {
+            throw new IOException("invalid lace packet count");
+        }
+        long cursor = start + 1;
+        long[] lengths = new long[packetCount];
+        if (laceBits == 0x02) {
+            long declared = 0;
+            for (int index = 0; index < packetCount - 1; index++) {
+                long length = 0;
+                int value;
+                do {
+                    value = readWithin(channel, cursor, 1, end, budget)[0] & 0xff;
+                    cursor++;
+                    length = Math.addExact(length, value);
+                } while (value == 255);
+                if (length <= 0 || length > MAX_OPUS_PACKET_BYTES) {
+                    throw new IOException("invalid Xiph lace size");
+                }
+                lengths[index] = length;
+                declared = Math.addExact(declared, length);
+            }
+            lengths[packetCount - 1] = Math.subtractExact(end - cursor, declared);
+        } else if (laceBits == 0x04) {
+            long payload = end - cursor;
+            if (payload <= 0 || payload % packetCount != 0) {
+                throw new IOException("invalid fixed lace size");
+            }
+            long length = payload / packetCount;
+            for (int index = 0; index < packetCount; index++) {
+                lengths[index] = length;
+            }
+        } else if (laceBits == 0x06) {
+            Vint first = readVint(channel, cursor, false, budget);
+            if (first.unknown || first.value <= 0 || first.value > MAX_OPUS_PACKET_BYTES) {
+                throw new IOException("invalid first EBML lace size");
+            }
+            cursor = Math.addExact(cursor, first.width);
+            lengths[0] = first.value;
+            long declared = first.value;
+            for (int index = 1; index < packetCount - 1; index++) {
+                Vint difference = readVint(channel, cursor, false, budget);
+                if (difference.unknown) {
+                    throw new IOException("unknown EBML lace difference");
+                }
+                cursor = Math.addExact(cursor, difference.width);
+                long bias = Math.subtractExact(1L << (7 * difference.width - 1), 1L);
+                long signedDifference = Math.subtractExact(difference.value, bias);
+                lengths[index] = Math.addExact(lengths[index - 1], signedDifference);
+                if (lengths[index] <= 0 || lengths[index] > MAX_OPUS_PACKET_BYTES) {
+                    throw new IOException("invalid EBML lace size");
+                }
+                declared = Math.addExact(declared, lengths[index]);
+            }
+            lengths[packetCount - 1] = Math.subtractExact(end - cursor, declared);
+        } else {
+            throw new IOException("invalid lace mode");
+        }
+        List<PacketSlice> packets = new ArrayList<>(packetCount);
+        for (long length : lengths) {
+            if (length <= 0 || length > MAX_OPUS_PACKET_BYTES
+                    || Math.addExact(cursor, length) > end) {
+                throw new IOException("invalid lace packet extent");
+            }
+            packets.add(new PacketSlice(cursor, length));
+            cursor = Math.addExact(cursor, length);
+        }
+        if (cursor != end) {
+            throw new IOException("lace sizes do not consume block payload");
+        }
+        return List.copyOf(packets);
+    }
+
+    private long opusPacketDurationNanos(
             FileChannel channel, long offset, long length, Budget budget) throws IOException {
         if (length < 2 || length > MAX_OPUS_PACKET_BYTES) {
             throw new IOException("invalid Opus packet length");
@@ -425,13 +683,15 @@ public final class AudioDurationInspector {
         long limit = Math.addExact(offset, length);
         int toc = readWithin(channel, offset, 1, limit, budget)[0] & 0xff;
         int config = toc >>> 3;
-        double frameMs;
+        long frameNanos;
         if (config < 12) {
-            frameMs = new double[] {10D, 20D, 40D, 60D}[config & 3];
+            frameNanos = new long[] {
+                    10_000_000L, 20_000_000L, 40_000_000L, 60_000_000L}[config & 3];
         } else if (config < 16) {
-            frameMs = (config & 1) == 0 ? 10D : 20D;
+            frameNanos = (config & 1) == 0 ? 10_000_000L : 20_000_000L;
         } else {
-            frameMs = new double[] {2.5D, 5D, 10D, 20D}[config & 3];
+            frameNanos = new long[] {
+                    2_500_000L, 5_000_000L, 10_000_000L, 20_000_000L}[config & 3];
         }
         int code = toc & 3;
         int frames;
@@ -491,12 +751,11 @@ public final class AudioDurationInspector {
                 }
             }
         }
-        double durationMs = frameMs * frames;
-        if (!Double.isFinite(durationMs) || durationMs <= 0
-                || durationMs > MAX_OPUS_PACKET_DURATION_MS) {
+        long durationNanos = Math.multiplyExact(frameNanos, frames);
+        if (durationNanos <= 0 || durationNanos > MAX_OPUS_PACKET_DURATION_NS) {
             throw new IOException("invalid Opus packet duration");
         }
-        return durationMs;
+        return durationNanos;
     }
 
     private FrameLength readOpusFrameLength(
@@ -507,6 +766,10 @@ public final class AudioDurationInspector {
         }
         int second = readWithin(channel, offset + 1, 1, limit, budget)[0] & 0xff;
         return new FrameLength(Math.addExact(first, Math.multiplyExact(second, 4)), offset + 2);
+    }
+
+    private double nanosToMillis(long nanos) {
+        return (double) nanos / 1_000_000D;
     }
 
     private double inspectMp4(FileChannel channel, Budget budget) throws IOException {
@@ -586,9 +849,8 @@ public final class AudioDurationInspector {
         if (!Double.isFinite(fragmentDurationMs) || fragmentDurationMs <= 0) {
             throw new IOException("fragment duration overflow");
         }
-        validateDeclaredFragmentDuration(movie.header.durationMs(), fragmentDurationMs);
-        validateDeclaredFragmentDuration(
-                movie.audioTrack.mediaHeader.durationMs(), fragmentDurationMs);
+        validateInitializationDuration(movie.header.durationMs());
+        validateInitializationDuration(movie.audioTrack.mediaHeader.durationMs());
         return fragmentDurationMs;
     }
 
@@ -617,13 +879,10 @@ public final class AudioDurationInspector {
         return List.copyOf(extents);
     }
 
-    private void validateDeclaredFragmentDuration(double declaredMs, double observedMs)
-            throws IOException {
-        if (declaredMs < 0 || !Double.isFinite(declaredMs)) {
-            throw new IOException("invalid declared fragment duration");
-        }
-        if (declaredMs > 0 && Math.abs(declaredMs - observedMs) > 1D) {
-            throw new IOException("inconsistent declared fragment duration");
+    private void validateInitializationDuration(double declaredMs) throws IOException {
+        if (declaredMs < 0 || !Double.isFinite(declaredMs)
+                || declaredMs > MAX_FRAGMENT_INITIALIZATION_DURATION_MS) {
+            throw new IOException("invalid fragmented initialization duration");
         }
     }
 
@@ -1812,7 +2071,20 @@ public final class AudioDurationInspector {
     private record WebmInfo(long timecodeScale, Double durationMs) {
     }
 
-    private record WebmTrack(long number, long type, String codecId) {
+    private record WebmTrack(
+            long number, long type, String codecId, OpusHead opusHead, WebmAudio audio,
+            long codecDelayNanos, long seekPreRollNanos) {
+    }
+
+    private record WebmAudio(
+            double samplingFrequency, Double outputSamplingFrequency, long channels) {
+    }
+
+    private record OpusHead(
+            int version, int channels, int preSkip, long inputSampleRate, int mappingFamily) {
+    }
+
+    private record PacketSlice(long offset, long length) {
     }
 
     private record FullBox(int version, int flags) {
@@ -1966,25 +2238,47 @@ public final class AudioDurationInspector {
     }
 
     private static final class TimestampBounds {
-        private long last = -1;
+        private final long timecodeScaleNanos;
+        private long lastDeclaredStartNanos = -1;
+        private long lastNormalizedStartNanos = -1;
+        private long normalizedEndNanos = -1;
         private int count;
         private boolean advanced;
-        private double maxEndMs = -1D;
+        private long maxEndNanos = -1;
+        private long cumulativePacketNanos;
 
-        void add(long value, double packetDurationMs, double scaleMs) throws IOException {
-            if (last > value) {
-                throw new IOException("non-monotonic audio timestamp");
+        private TimestampBounds(long timecodeScaleNanos) throws IOException {
+            if (timecodeScaleNanos <= 0) {
+                throw new IOException("invalid timestamp scale");
             }
-            if (last >= 0 && value > last) {
+            this.timecodeScaleNanos = timecodeScaleNanos;
+        }
+
+        void add(long declaredStartNanos, long packetDurationNanos) throws IOException {
+            if (declaredStartNanos < 0 || packetDurationNanos <= 0
+                    || packetDurationNanos > MAX_OPUS_PACKET_DURATION_NS
+                    || lastDeclaredStartNanos > declaredStartNanos) {
+                throw new IOException("invalid or non-monotonic audio packet timestamp");
+            }
+            long normalizedStart = declaredStartNanos;
+            if (normalizedEndNanos >= 0 && declaredStartNanos < normalizedEndNanos) {
+                long overlap = Math.subtractExact(normalizedEndNanos, declaredStartNanos);
+                if (overlap > MAX_WEBM_TIMESTAMP_JITTER_NS) {
+                    throw new IOException("overlapping Opus packet intervals");
+                }
+                normalizedStart = normalizedEndNanos;
+            }
+            long endNanos = Math.addExact(normalizedStart, packetDurationNanos);
+            cumulativePacketNanos = Math.addExact(
+                    cumulativePacketNanos, packetDurationNanos);
+            if (lastNormalizedStartNanos >= 0 && normalizedStart > lastNormalizedStartNanos) {
                 advanced = true;
             }
-            double endMs = value * scaleMs + packetDurationMs;
-            if (!Double.isFinite(endMs) || endMs <= 0) {
-                throw new IOException("invalid audio block end");
-            }
-            last = value;
-            maxEndMs = Math.max(maxEndMs, endMs);
-            count++;
+            lastDeclaredStartNanos = declaredStartNanos;
+            lastNormalizedStartNanos = normalizedStart;
+            normalizedEndNanos = endNanos;
+            maxEndNanos = Math.max(maxEndNanos, endNanos);
+            count = Math.addExact(count, 1);
         }
     }
 
