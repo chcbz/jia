@@ -4,6 +4,7 @@ import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.entity.AgentHostedProfileEntity;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -56,6 +57,7 @@ public class AgentHostedProfilePublisher {
     private final Path runtimeSource;
     private final Path capabilityManifest;
 
+    @Autowired
     public AgentHostedProfilePublisher(
             @Value("${jia.agent.hosted.runtime-dir:/home/isp/apps/codex-ws-agent}") String runtimeDir,
             @Value("${jia.agent.hosted.clients-dir:/home/isp/hosts/cyf/agent-clients}") String clientsDir) {
