@@ -661,6 +661,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 .replace("\\", "")
                 .replaceAll("[()]", " ")
                 .replaceAll("\\s*,\\s*", ",")
+                .replaceAll("\\s*(<>|>=|<=|=|>|<)\\s*", "$1")
                 .replaceAll("\\s+", " ")
                 .trim();
     }
