@@ -71,7 +71,7 @@ public final class SpeechTranscriptionService {
         long started = System.nanoTime();
         try {
             SpeechTranscriptionResult result = provider.transcribe(new SpeechTranscriptionRequest(
-                    upload.path(), upload.size(), upload.mediaType(), language, upload.durationMs()));
+                    upload.channel(), upload.size(), upload.mediaType(), language, upload.durationMs()));
             if (result == null || result.text() == null || result.text().isBlank()) {
                 VoiceServiceSupport.transitionFailure(coordinator, reservation,
                         SpeechProviderException.FailureKind.KNOWN, requestId);

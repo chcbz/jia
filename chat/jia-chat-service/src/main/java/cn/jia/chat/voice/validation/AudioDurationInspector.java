@@ -75,9 +75,19 @@ public final class AudioDurationInspector {
 
     public long inspect(Path path, String mediaType, String requestId) {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            return inspect(channel, mediaType, requestId);
+        } catch (VoiceException exception) {
+            throw exception;
+        } catch (IOException | ArithmeticException exception) {
+            throw VoiceException.of(VoiceErrorCode.INVALID_AUDIO, requestId);
+        }
+    }
+
+    public long inspect(FileChannel channel, String mediaType, String requestId) {
+        try {
             Budget budget = new Budget();
             double durationMs = switch (mediaType) {
-                case "audio/webm" -> inspectWebm(channel, budget);
+                case "audio/webm", "audio/webm;codecs=opus" -> inspectWebm(channel, budget);
                 case "audio/mp4" -> inspectMp4(channel, budget);
                 default -> throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
             };

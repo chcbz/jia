@@ -162,7 +162,7 @@ class AudioDurationInspectorTest {
                 "audio/webm;codecs=opus",
                 "audio/webm; codecs=\"opus\"",
                 "Audio/WebM; Codecs=OpUs"}) {
-            assertEquals("audio/webm",
+            assertEquals("audio/webm;codecs=opus",
                     VoiceAudioUploadFactory.canonicalMediaType(mediaType, REQUEST_ID));
         }
 

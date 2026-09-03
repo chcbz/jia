@@ -146,6 +146,48 @@ class VoiceControllersTest {
     }
 
     @Test
+    void synthesisRejectsLoneHighSurrogateBeforeValidationAndDigest() {
+        VoiceRequestValidator validator = new VoiceRequestValidator();
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> validator.synthesis(new VoiceSynthesisRequest(
+                                REQUEST_ID, "林冲\uD83D", "juyiting-default", "mp3"),
+                        properties().getSynthesis()));
+
+        assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
+        assertEquals(REQUEST_ID, error.requestId());
+        assertSynthesisDigestRejects("林冲\uD83D");
+    }
+
+    @Test
+    void synthesisRejectsLoneLowSurrogateBeforeValidationAndDigest() {
+        VoiceRequestValidator validator = new VoiceRequestValidator();
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> validator.synthesis(new VoiceSynthesisRequest(
+                                REQUEST_ID, "林冲\uDE00", "juyiting-default", "mp3"),
+                        properties().getSynthesis()));
+
+        assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
+        assertEquals(REQUEST_ID, error.requestId());
+        assertSynthesisDigestRejects("林冲\uDE00");
+    }
+
+    @Test
+    void synthesisAcceptsValidSurrogatePairAndDigestKeepsExactUtf8() {
+        VoiceRequestValidator validator = new VoiceRequestValidator();
+        VoiceSynthesisRequest request = new VoiceSynthesisRequest(
+                REQUEST_ID, "林冲\uD83D\uDE00", "juyiting-default", "mp3");
+
+        assertEquals(request, validator.synthesis(request, properties().getSynthesis()));
+        VoiceSpeechProperties digestProperties = properties();
+        digestProperties.setIdentityHmacSecret("01234567890123456789012345678901");
+        String paired = new cn.jia.chat.voice.state.VoiceDigests(digestProperties)
+                .synthesis(request.text(), request.voice(), request.format());
+        String replaced = new cn.jia.chat.voice.state.VoiceDigests(digestProperties)
+                .synthesis("林冲?", request.voice(), request.format());
+        assertFalse(paired.equals(replaced));
+    }
+
+    @Test
     void synthesisReturnsBoundedNoStoreAudioWithExactHeaders() {
         VoiceSpeechProperties properties = properties();
         SpeechSynthesisService service = mock(SpeechSynthesisService.class);
@@ -240,6 +282,13 @@ class VoiceControllersTest {
                         || type.contains("taskservice") || type.contains("messagedao"), type);
             }
         }
+    }
+
+    private static void assertSynthesisDigestRejects(String text) {
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> new cn.jia.chat.voice.state.VoiceDigests(properties())
+                        .synthesis(text, "juyiting-default", "mp3"));
+        assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
     }
 
     private MockMultipartHttpServletRequest validMultipart(String fixture, String mediaType)

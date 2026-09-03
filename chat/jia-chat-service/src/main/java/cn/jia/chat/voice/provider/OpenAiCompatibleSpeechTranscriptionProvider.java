@@ -6,18 +6,26 @@ import cn.jia.chat.voice.SpeechTranscriptionRequest;
 import cn.jia.chat.voice.SpeechTranscriptionResult;
 import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
+import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class OpenAiCompatibleSpeechTranscriptionProvider implements SpeechTranscriptionProvider {
     public static final int MAX_RESPONSE_BYTES = 256 * 1024;
@@ -68,7 +76,8 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
         } catch (RuntimeException exception) {
             throw unknown("transcription provider transport failure");
         }
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        if (response.statusCode() < 200 || response.statusCode() >= 300
+                || !isJson(response.headers().firstValue("Content-Type").orElse(null))) {
             throw known();
         }
         try {
@@ -93,8 +102,18 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
         URI uri = endpoint(config.getBaseUrl(), "/audio/transcriptions");
         requireConfigured(uri, config.getApiKey(), config.getModel(),
                 VoiceActivationConfigurationValidator.TRANSCRIPTION_MODEL);
-        if (request == null || request.audioPath() == null || request.language() == null
-                || !"audio/webm;codecs=opus".equals(request.mediaType())) {
+        if (request == null || request.audioChannel() == null || request.language() == null
+                || request.audioBytes() <= 0
+                || request.audioBytes() > VoiceAudioUploadFactory.MAX_AUDIO_BYTES
+                || !VoiceAudioUploadFactory.WEBM_OPUS_MEDIA_TYPE.equals(request.mediaType())) {
+            throw known();
+        }
+        try {
+            if (!request.audioChannel().isOpen()
+                    || request.audioChannel().size() != request.audioBytes()) {
+                throw known();
+            }
+        } catch (IOException exception) {
             throw known();
         }
         String providerLanguage = providerLanguage(request.language());
@@ -104,7 +123,8 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
                     textPart(boundary, "model", config.getModel()),
                     textPart(boundary, "language", providerLanguage),
                     fileHeader(boundary, request.mediaType()),
-                    HttpRequest.BodyPublishers.ofFile(request.audioPath()),
+                    new ExactFileChannelBodyPublisher(
+                            request.audioChannel(), request.audioBytes()),
                     HttpRequest.BodyPublishers.ofByteArray(("\r\n--" + boundary + "--\r\n")
                             .getBytes(StandardCharsets.US_ASCII)));
             return HttpRequest.newBuilder(uri)
@@ -114,7 +134,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
                     .header("Accept", "application/json")
                     .POST(body)
                     .build();
-        } catch (IOException | RuntimeException exception) {
+        } catch (RuntimeException exception) {
             throw known();
         }
     }
@@ -171,6 +191,36 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
         throw known();
     }
 
+    private static boolean isJson(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
+        String[] parts = contentType.split(";", -1);
+        if (!"application/json".equals(parts[0].strip().toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+        if (parts.length == 1) {
+            return true;
+        }
+        if (parts.length != 2) {
+            return false;
+        }
+        String parameter = parts[1].strip();
+        int separator = parameter.indexOf('=');
+        if (separator <= 0 || separator != parameter.lastIndexOf('=')) {
+            return false;
+        }
+        if (!"charset".equals(parameter.substring(0, separator).strip()
+                .toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+        String charset = parameter.substring(separator + 1).strip();
+        if (charset.length() >= 2 && charset.startsWith("\"") && charset.endsWith("\"")) {
+            charset = charset.substring(1, charset.length() - 1);
+        }
+        return "utf-8".equals(charset.toLowerCase(Locale.ROOT));
+    }
+
     static SpeechProviderException known() {
         return new SpeechProviderException(SpeechProviderException.FailureKind.KNOWN,
                 "transcription provider rejected request");
@@ -178,5 +228,87 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
 
     private static SpeechProviderException unknown(String safeMessage) {
         return new SpeechProviderException(SpeechProviderException.FailureKind.UNKNOWN, safeMessage);
+    }
+
+    private static final class ExactFileChannelBodyPublisher implements HttpRequest.BodyPublisher {
+        private final HttpRequest.BodyPublisher delegate;
+        private final AtomicBoolean subscribed = new AtomicBoolean();
+        private final long length;
+
+        private ExactFileChannelBodyPublisher(FileChannel channel, long length) {
+            this.length = length;
+            this.delegate = HttpRequest.BodyPublishers.ofInputStream(
+                    () -> new ExactFileChannelInputStream(channel, length));
+        }
+
+        @Override
+        public long contentLength() {
+            return length;
+        }
+
+        @Override
+        public void subscribe(Flow.Subscriber<? super ByteBuffer> subscriber) {
+            if (!subscribed.compareAndSet(false, true)) {
+                subscriber.onSubscribe(new Flow.Subscription() {
+                    @Override
+                    public void request(long count) {
+                    }
+
+                    @Override
+                    public void cancel() {
+                    }
+                });
+                subscriber.onError(new IllegalStateException("voice body publisher is one-shot"));
+                return;
+            }
+            delegate.subscribe(subscriber);
+        }
+    }
+
+
+    private static final class ExactFileChannelInputStream extends InputStream {
+        private final FileChannel channel;
+        private final long length;
+        private long position;
+        private boolean closed;
+
+        private ExactFileChannelInputStream(FileChannel channel, long length) {
+            this.channel = channel;
+            this.length = length;
+        }
+
+        @Override
+        public int read() throws IOException {
+            byte[] single = new byte[1];
+            int read = read(single, 0, 1);
+            return read < 0 ? -1 : single[0] & 0xff;
+        }
+
+        @Override
+        public int read(byte[] bytes, int offset, int requested) throws IOException {
+            Objects.requireNonNull(bytes, "bytes");
+            Objects.checkFromIndexSize(offset, requested, bytes.length);
+            if (closed) {
+                throw new IOException("voice body stream closed");
+            }
+            if (requested == 0) {
+                return 0;
+            }
+            if (position == length) {
+                return -1;
+            }
+            int allowed = (int) Math.min(requested, length - position);
+            int read = channel.read(ByteBuffer.wrap(bytes, offset, allowed), position);
+            if (read <= 0) {
+                throw new IOException("voice body shorter than declared length");
+            }
+            position += read;
+            return read;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
     }
 }

@@ -29,6 +29,7 @@ public final class VoiceIdentityResolver {
     private static String requiredExact(Map<String, Object> claims, String name, int maxBytes) {
         Object raw = claims.get(name);
         if (!(raw instanceof String value)
+                || !VoiceUnicode.isWellFormedUtf16(value)
                 || value.getBytes(StandardCharsets.UTF_8).length > maxBytes
                 || value.codePoints().allMatch(VoiceIdentityResolver::isUnicodeWhitespace)) {
             throw VoiceException.of(VoiceErrorCode.UNAUTHORIZED, null);

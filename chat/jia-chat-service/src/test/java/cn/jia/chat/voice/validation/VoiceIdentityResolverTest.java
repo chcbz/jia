@@ -61,6 +61,35 @@ class VoiceIdentityResolverTest {
 
 
     @Test
+    void rejectsLoneHighSurrogateBeforeIdentityHmac() {
+        String malformed = "tenant-\uD83D";
+        assertUnauthorized(jwt(Map.of(
+                "jiacn", malformed, "client_id", "client", "sub", "subject")));
+        assertDigestUnauthorized(new VoiceIdentity(malformed, "client", "subject"));
+    }
+
+    @Test
+    void rejectsLoneLowSurrogateBeforeIdentityHmac() {
+        String malformed = "tenant-\uDE00";
+        assertUnauthorized(jwt(Map.of(
+                "jiacn", "tenant", "client_id", malformed, "sub", "subject")));
+        assertDigestUnauthorized(new VoiceIdentity("tenant", malformed, "subject"));
+    }
+
+    @Test
+    void acceptsValidSurrogatePairAsExactIdentityBytes() throws Exception {
+        VoiceIdentity identity = resolver.resolve(jwt(Map.of(
+                "jiacn", "tenant-\uD83D\uDE00",
+                "client_id", "client",
+                "sub", "subject")));
+        VoiceSpeechProperties properties = digestProperties();
+
+        assertEquals("tenant-\uD83D\uDE00", identity.jiacn());
+        assertEquals(expectedScope(properties.getIdentityHmacSecret(), identity),
+                new VoiceDigests(properties).identityScope(identity));
+    }
+
+    @Test
     void acceptsExactUtf8ByteLimits() {
         VoiceIdentity identity = resolver.resolve(jwt(Map.of(
                 "jiacn", "é".repeat(128),
@@ -87,6 +116,18 @@ class VoiceIdentityResolverTest {
     private void assertUnauthorized(org.springframework.security.core.Authentication authentication) {
         VoiceException error = assertThrows(VoiceException.class, () -> resolver.resolve(authentication));
         assertEquals(VoiceErrorCode.UNAUTHORIZED, error.error());
+    }
+
+    private static void assertDigestUnauthorized(VoiceIdentity identity) {
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> new VoiceDigests(digestProperties()).identityScope(identity));
+        assertEquals(VoiceErrorCode.UNAUTHORIZED, error.error());
+    }
+
+    private static VoiceSpeechProperties digestProperties() {
+        VoiceSpeechProperties properties = new VoiceSpeechProperties();
+        properties.setIdentityHmacSecret("01234567890123456789012345678901");
+        return properties;
     }
 
     private static JwtAuthenticationToken jwt(Map<String, Object> claims) {

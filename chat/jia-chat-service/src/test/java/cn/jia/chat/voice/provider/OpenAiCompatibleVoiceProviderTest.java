@@ -3,25 +3,46 @@ package cn.jia.chat.voice.provider;
 import cn.jia.chat.voice.SpeechProviderException;
 import cn.jia.chat.voice.SpeechSynthesisRequest;
 import cn.jia.chat.voice.SpeechTranscriptionRequest;
+import cn.jia.chat.voice.VoiceIdentity;
 import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
+import cn.jia.chat.voice.service.SpeechTranscriptionService;
+import cn.jia.chat.voice.state.VoiceBeginResult;
+import cn.jia.chat.voice.state.VoiceCachedResult;
+import cn.jia.chat.voice.state.VoiceDigests;
+import cn.jia.chat.voice.state.VoiceOperation;
+import cn.jia.chat.voice.state.VoiceRequestCoordinator;
+import cn.jia.chat.voice.state.VoiceReservation;
+import cn.jia.chat.voice.validation.AudioDurationInspector;
+import cn.jia.chat.voice.validation.VoiceAudioUpload;
+import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -34,6 +55,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class OpenAiCompatibleVoiceProviderTest {
+    private static final String REQUEST_ID = "01JVOICEPROVIDER001";
+
     @Test
     void transcriptionMapsClientZhCnToIsoZhInActualMultipartBodyAndDispatchesOnce()
             throws Exception {
@@ -45,13 +68,13 @@ class OpenAiCompatibleVoiceProviderTest {
         Path audio = Files.createTempFile("voice-provider-test", ".webm");
         byte[] audioBytes = {1, 2, 3, 4};
         Files.write(audio, audioBytes);
-        try {
+        try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
             OpenAiCompatibleSpeechTranscriptionProvider provider =
                     new OpenAiCompatibleSpeechTranscriptionProvider(
                             properties, new ObjectMapper(), client);
             SpeechProviderException error = assertThrows(SpeechProviderException.class,
                     () -> provider.transcribe(new SpeechTranscriptionRequest(
-                            audio, audioBytes.length, "audio/webm;codecs=opus", "zh-CN", 1200)));
+                            channel, audioBytes.length, "audio/webm;codecs=opus", "zh-CN", 1200)));
             assertEquals(SpeechProviderException.FailureKind.TIMEOUT, error.failureKind());
 
             var request = org.mockito.ArgumentCaptor.forClass(HttpRequest.class);
@@ -64,7 +87,9 @@ class OpenAiCompatibleVoiceProviderTest {
             assertEquals("Bearer sk-test-openai-voice-key",
                     captured.headers().firstValue("Authorization").orElseThrow());
 
-            byte[] bodyBytes = collect(captured.bodyPublisher().orElseThrow());
+            HttpRequest.BodyPublisher publisher = captured.bodyPublisher().orElseThrow();
+            byte[] bodyBytes = collect(publisher);
+            assertEquals(bodyBytes.length, publisher.contentLength());
             String body = new String(bodyBytes, StandardCharsets.ISO_8859_1);
             assertTrue(body.contains("name=\"model\"\r\n\r\nwhisper-1\r\n"));
             assertTrue(body.contains("name=\"language\"\r\n\r\nzh\r\n"));
@@ -78,11 +103,121 @@ class OpenAiCompatibleVoiceProviderTest {
     }
 
     @Test
+    void factoryServiceAndProviderPreserveCanonicalMimeAndSendHashedHandleNotReplacementPath()
+            throws Exception {
+        byte[] original;
+        try (InputStream input = getClass().getResourceAsStream(
+                "/cn/jia/chat/voice/media/mediarecorder-valid.webm")) {
+            original = input.readAllBytes();
+        }
+        VoiceAudioUploadFactory factory = new VoiceAudioUploadFactory(new AudioDurationInspector());
+        AtomicReference<byte[]> dispatchedBody = new AtomicReference<>();
+        HttpClient client = mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(invocation -> {
+                    HttpRequest request = invocation.getArgument(0);
+                    dispatchedBody.set(collect(request.bodyPublisher().orElseThrow()));
+                    return jsonResponse("application/json; charset=UTF-8");
+                });
+        VoiceSpeechProperties properties = configured();
+        properties.setEnabled(true);
+        properties.setIdentityHmacSecret("01234567890123456789012345678901");
+        properties.getTranscription().setEnabled(true);
+        properties.getTranscription().setProvider("openai-compatible");
+        OpenAiCompatibleSpeechTranscriptionProvider provider =
+                new OpenAiCompatibleSpeechTranscriptionProvider(
+                        properties, new ObjectMapper(), client);
+        SpeechTranscriptionService service = new SpeechTranscriptionService(
+                properties, provider, new PassingCoordinator(),
+                new VoiceDigests(properties), new ObjectMapper());
+        byte[] replacement = "R3-PATH-SUBSTITUTION-MUST-NOT-EGRESS"
+                .getBytes(StandardCharsets.US_ASCII);
+        Path replacementPath;
+        FileChannel retainedChannel;
+
+        try (VoiceAudioUpload upload = factory.create(new MockMultipartFile(
+                "audio", "private-name.webm", "Audio/WebM; Codecs=\"OpUs\"", original),
+                REQUEST_ID)) {
+            replacementPath = upload.path();
+            retainedChannel = upload.channel();
+            assertEquals("audio/webm;codecs=opus", upload.mediaType());
+            assertArrayEquals(MessageDigest.getInstance("SHA-256").digest(original),
+                    upload.audioDigest());
+            assertFalse(Files.exists(replacementPath));
+            Files.write(replacementPath, replacement);
+
+            var result = service.transcribe(
+                    new VoiceIdentity("tenant", "client", "subject"),
+                    REQUEST_ID, "zh-CN", upload);
+
+            assertEquals("林冲领命", result.text());
+            assertTrue(contains(dispatchedBody.get(), original));
+            assertFalse(contains(dispatchedBody.get(), replacement));
+        }
+        assertFalse(retainedChannel.isOpen());
+        assertFalse(Files.exists(replacementPath));
+        verify(client, times(1)).send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
+    }
+
+    @Test
+    void transcriptionAcceptsOnlyJsonWithOptionalUtf8CharsetOnSuccess() throws Exception {
+        Path audio = Files.createTempFile("voice-provider-test", ".webm");
+        Files.write(audio, new byte[]{1});
+        try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
+            for (String contentType : List.of(
+                    "application/json",
+                    "Application/JSON; Charset=UTF-8",
+                    "application/json;charset=\"utf-8\"")) {
+                HttpClient client = mock(HttpClient.class);
+                when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                        .thenAnswer(invocation -> jsonResponse(contentType));
+                var provider = new OpenAiCompatibleSpeechTranscriptionProvider(
+                        configured(), new ObjectMapper(), client);
+
+                assertEquals("林冲领命", provider.transcribe(new SpeechTranscriptionRequest(
+                        channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)).text(),
+                        contentType);
+            }
+        } finally {
+            Files.deleteIfExists(audio);
+        }
+    }
+
+    @Test
+    void transcriptionRejectsMissingWrongOrUnsafeJsonContentTypeOnSuccess() throws Exception {
+        Path audio = Files.createTempFile("voice-provider-test", ".webm");
+        Files.write(audio, new byte[]{1});
+        try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
+            for (String contentType : java.util.Arrays.asList(
+                    null,
+                    "text/plain",
+                    "application/problem+json",
+                    "application/json; charset=utf-16",
+                    "application/json; charset=utf-8; profile=x")) {
+                HttpClient client = mock(HttpClient.class);
+                when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                        .thenAnswer(invocation -> jsonResponse(contentType));
+                var provider = new OpenAiCompatibleSpeechTranscriptionProvider(
+                        configured(), new ObjectMapper(), client);
+
+                SpeechProviderException error = assertThrows(SpeechProviderException.class,
+                        () -> provider.transcribe(new SpeechTranscriptionRequest(
+                                channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)),
+                        String.valueOf(contentType));
+                assertEquals(SpeechProviderException.FailureKind.KNOWN,
+                        error.failureKind(), String.valueOf(contentType));
+            }
+        } finally {
+            Files.deleteIfExists(audio);
+        }
+    }
+
+    @Test
     void arbitraryEndpointAndControlCharacterCredentialFailBeforeDispatch() throws Exception {
         HttpClient client = mock(HttpClient.class);
         Path audio = Files.createTempFile("voice-provider-test", ".webm");
         Files.write(audio, new byte[]{1});
-        try {
+        try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
             VoiceSpeechProperties arbitraryHost = configured();
             arbitraryHost.getTranscription().setBaseUrl("https://attacker.example/v1");
             OpenAiCompatibleSpeechTranscriptionProvider hostPinned =
@@ -90,7 +225,7 @@ class OpenAiCompatibleVoiceProviderTest {
                             arbitraryHost, new ObjectMapper(), client);
             assertThrows(SpeechProviderException.class,
                     () -> hostPinned.transcribe(new SpeechTranscriptionRequest(
-                            audio, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
+                            channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
 
             VoiceSpeechProperties controlKey = configured();
             controlKey.getTranscription().setApiKey("sk-test\u0000key");
@@ -99,7 +234,7 @@ class OpenAiCompatibleVoiceProviderTest {
                             controlKey, new ObjectMapper(), client);
             assertThrows(SpeechProviderException.class,
                     () -> credentialPinned.transcribe(new SpeechTranscriptionRequest(
-                            audio, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
+                            channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
 
             verify(client, never()).send(
                     any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
@@ -117,12 +252,12 @@ class OpenAiCompatibleVoiceProviderTest {
                     calls.incrementAndGet();
                     HttpResponse.BodyHandler<byte[]> handler = invocation.getArgument(1);
                     HttpResponse.ResponseInfo responseInfo = mock(HttpResponse.ResponseInfo.class);
-                    when(responseInfo.headers()).thenReturn(java.net.http.HttpHeaders.of(
-                            java.util.Map.of("Content-Length", java.util.List.of(String.valueOf(
+                    when(responseInfo.headers()).thenReturn(HttpHeaders.of(
+                            Map.of("Content-Length", List.of(String.valueOf(
                                     OpenAiCompatibleSpeechSynthesisProvider.MAX_AUDIO_BYTES + 1L))),
                             (name, value) -> true));
                     HttpResponse.BodySubscriber<byte[]> subscriber = handler.apply(responseInfo);
-                    subscriber.onSubscribe(mock(java.util.concurrent.Flow.Subscription.class));
+                    subscriber.onSubscribe(mock(Flow.Subscription.class));
                     try {
                         subscriber.getBody().toCompletableFuture().join();
                     } catch (java.util.concurrent.CompletionException exception) {
@@ -166,6 +301,19 @@ class OpenAiCompatibleVoiceProviderTest {
         return properties;
     }
 
+    @SuppressWarnings("unchecked")
+    private static HttpResponse<byte[]> jsonResponse(String contentType) {
+        HttpResponse<byte[]> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(200);
+        Map<String, List<String>> headers = contentType == null
+                ? Map.of() : Map.of("Content-Type", List.of(contentType));
+        when(response.headers()).thenReturn(HttpHeaders.of(headers, (name, value) -> true));
+        when(response.body()).thenReturn(
+                "{\"text\":\"林冲领命\",\"language\":\"zh\"}"
+                        .getBytes(StandardCharsets.UTF_8));
+        return response;
+    }
+
     private static byte[] collect(HttpRequest.BodyPublisher publisher) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         CompletableFuture<byte[]> complete = new CompletableFuture<>();
@@ -196,6 +344,9 @@ class OpenAiCompatibleVoiceProviderTest {
     }
 
     private static boolean contains(byte[] haystack, byte[] needle) {
+        if (haystack == null || needle == null) {
+            return false;
+        }
         outer:
         for (int offset = 0; offset <= haystack.length - needle.length; offset++) {
             for (int index = 0; index < needle.length; index++) {
@@ -206,5 +357,30 @@ class OpenAiCompatibleVoiceProviderTest {
             return true;
         }
         return false;
+    }
+
+    private static final class PassingCoordinator implements VoiceRequestCoordinator {
+        @Override
+        public VoiceBeginResult begin(
+                VoiceOperation operation, String scope, String requestId, String digest) {
+            return VoiceBeginResult.reserved(new VoiceReservation(
+                    operation, scope, requestId, digest, "lease"));
+        }
+
+        @Override
+        public void succeed(VoiceReservation reservation, VoiceCachedResult result) {
+        }
+
+        @Override
+        public void failKnown(VoiceReservation reservation) {
+        }
+
+        @Override
+        public void failUnknown(VoiceReservation reservation) {
+        }
+
+        @Override
+        public void release(VoiceReservation reservation) {
+        }
     }
 }

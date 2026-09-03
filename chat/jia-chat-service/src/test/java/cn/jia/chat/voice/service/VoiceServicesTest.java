@@ -22,12 +22,14 @@ import cn.jia.chat.voice.validation.VoiceAudioUpload;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
 
 class VoiceServicesTest {
     private static final String REQUEST_ID = "01JVOICESERVICE0001";
@@ -259,8 +261,8 @@ class VoiceServicesTest {
     }
 
     private static VoiceAudioUpload upload() {
-        return new VoiceAudioUpload(Path.of("fixture.webm"), 128,
-                "audio/webm", new byte[32], 1200);
+        return new VoiceAudioUpload(Path.of("fixture.webm"), mock(FileChannel.class), 128,
+                "audio/webm;codecs=opus", new byte[32], 1200);
     }
 
     private static SpeechTranscriptionProvider transcriptionProvider(
