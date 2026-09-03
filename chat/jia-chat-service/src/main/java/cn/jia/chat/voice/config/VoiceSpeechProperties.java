@@ -29,7 +29,7 @@ public class VoiceSpeechProperties {
         private String provider = "disabled";
         private Set<String> languages = new LinkedHashSet<>(Set.of("zh-CN"));
         private String defaultLanguage = "zh-CN";
-        private String baseUrl;
+        private String baseUrl = "https://api.openai.com/v1";
         private String apiKey;
         private String model = "whisper-1";
     }
@@ -41,9 +41,9 @@ public class VoiceSpeechProperties {
         private String provider = "disabled";
         private Set<String> voices = new LinkedHashSet<>(Set.of("juyiting-default"));
         private Set<String> formats = new LinkedHashSet<>(Set.of("mp3"));
-        private String baseUrl;
+        private String baseUrl = "https://api.openai.com/v1";
         private String apiKey;
-        private String model = "tts-1";
+        private String model = "gpt-4o-mini-tts";
         private String providerVoice = "alloy";
     }
 
