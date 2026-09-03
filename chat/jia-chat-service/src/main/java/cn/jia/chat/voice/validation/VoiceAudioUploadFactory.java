@@ -6,7 +6,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -21,9 +20,16 @@ public final class VoiceAudioUploadFactory {
     public static final String WEBM_OPUS_MEDIA_TYPE = "audio/webm;codecs=opus";
     private static final int BUFFER_BYTES = 16 * 1024;
     private final AudioDurationInspector durationInspector;
+    private final UnlinkedFileCreator unlinkedFileCreator;
 
     public VoiceAudioUploadFactory(AudioDurationInspector durationInspector) {
+        this(durationInspector, VoiceAudioUploadFactory::createUnlinkedTempFile);
+    }
+
+    VoiceAudioUploadFactory(
+            AudioDurationInspector durationInspector, UnlinkedFileCreator unlinkedFileCreator) {
         this.durationInspector = durationInspector;
+        this.unlinkedFileCreator = unlinkedFileCreator;
     }
 
     public VoiceAudioUpload create(MultipartFile file, String requestId) {
@@ -34,23 +40,18 @@ public final class VoiceAudioUploadFactory {
             throw VoiceException.of(VoiceErrorCode.TOO_LARGE, requestId);
         }
         String mediaType = canonicalMediaType(file.getContentType(), requestId);
-        Path path = null;
         FileChannel channel = null;
         try {
-            path = Files.createTempFile("cyf-voice-", ".upload");
-            channel = FileChannel.open(path, StandardOpenOption.READ);
-            long total = spool(file, path, requestId);
-            Files.delete(path);
+            channel = unlinkedFileCreator.create();
+            long total = spool(file, channel, requestId);
             long durationMs = durationInspector.inspect(channel, mediaType, requestId);
             byte[] digest = digest(channel, total, requestId);
-            return new VoiceAudioUpload(path, channel, total, mediaType, digest, durationMs);
+            return new VoiceAudioUpload(channel, total, mediaType, digest, durationMs);
         } catch (VoiceException exception) {
             close(channel);
-            delete(path);
             throw exception;
         } catch (IOException | NoSuchAlgorithmException | ArithmeticException exception) {
             close(channel);
-            delete(path);
             throw VoiceException.of(VoiceErrorCode.INVALID_AUDIO, requestId);
         }
     }
@@ -79,11 +80,12 @@ public final class VoiceAudioUploadFactory {
         return WEBM_OPUS_MEDIA_TYPE;
     }
 
-    private static long spool(MultipartFile file, Path path, String requestId) throws IOException {
+    private static long spool(
+            MultipartFile file, FileChannel channel, String requestId) throws IOException {
         long total = 0;
-        try (InputStream input = file.getInputStream();
-             OutputStream output = Files.newOutputStream(
-                     path, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+        channel.truncate(0);
+        channel.position(0);
+        try (InputStream input = file.getInputStream()) {
             byte[] buffer = new byte[BUFFER_BYTES];
             int read;
             while ((read = input.read(buffer)) >= 0) {
@@ -94,10 +96,15 @@ public final class VoiceAudioUploadFactory {
                 if (total > MAX_AUDIO_BYTES) {
                     throw VoiceException.of(VoiceErrorCode.TOO_LARGE, requestId);
                 }
-                output.write(buffer, 0, read);
+                ByteBuffer bytes = ByteBuffer.wrap(buffer, 0, read);
+                while (bytes.hasRemaining()) {
+                    if (channel.write(bytes) <= 0) {
+                        throw new IOException("voice spool write made no progress");
+                    }
+                }
             }
         }
-        if (total == 0) {
+        if (total == 0 || channel.size() != total) {
             throw VoiceException.of(VoiceErrorCode.INVALID_AUDIO, requestId);
         }
         return total;
@@ -139,14 +146,30 @@ public final class VoiceAudioUploadFactory {
         }
     }
 
-    private static void delete(Path path) {
-        if (path == null) {
-            return;
-        }
+    private static FileChannel createUnlinkedTempFile() throws IOException {
+        Path path = null;
+        FileChannel channel = null;
         try {
-            Files.deleteIfExists(path);
-        } catch (IOException ignored) {
-            // The path and original filename are deliberately not logged.
+            path = Files.createTempFile("cyf-voice-", ".upload");
+            channel = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE);
+            Files.delete(path);
+            path = null;
+            return channel;
+        } catch (IOException exception) {
+            close(channel);
+            if (path != null) {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // Only a still-linked factory-created pathname is eligible for cleanup.
+                }
+            }
+            throw exception;
         }
+    }
+
+    @FunctionalInterface
+    interface UnlinkedFileCreator {
+        FileChannel create() throws IOException;
     }
 }

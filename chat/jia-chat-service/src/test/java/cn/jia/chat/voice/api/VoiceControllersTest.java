@@ -6,7 +6,6 @@ import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import cn.jia.chat.voice.service.SpeechSynthesisService;
 import cn.jia.chat.voice.service.SpeechTranscriptionService;
 import cn.jia.chat.voice.validation.AudioDurationInspector;
-import cn.jia.chat.voice.validation.VoiceAudioUpload;
 import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
@@ -53,8 +52,7 @@ class VoiceControllersTest {
         when(service.transcribe(any(), eq(REQUEST_ID), eq("zh-CN"), any()))
                 .thenReturn(new VoiceTranscriptionResponse(REQUEST_ID, "请林教头查看榜文", "zh", 1200));
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
         MockMultipartHttpServletRequest request = validMultipart(
                 "mediarecorder-valid.webm", "audio/webm;codecs=opus");
 
@@ -69,12 +67,10 @@ class VoiceControllersTest {
     }
 
     @Test
-    void transcriptionRejectsNonUniqueMimeProfilesBeforeProviderDispatch() throws Exception {
-        VoiceSpeechProperties properties = properties();
-        SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
-        SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+    void transcriptionUploadFactoryRejectsNonUniqueMimeProfilesBeforeReadingContent()
+            throws Exception {
+        VoiceAudioUploadFactory factory =
+                new VoiceAudioUploadFactory(new AudioDurationInspector());
 
         for (String mediaType : List.of(
                 "audio/webm",
@@ -86,13 +82,10 @@ class VoiceControllersTest {
             MockMultipartHttpServletRequest request = validMultipart(
                     "mediarecorder-valid.webm", mediaType);
             VoiceException error = assertThrows(VoiceException.class,
-                    () -> controller.transcribe(request, jwt("tenant", "client", "subject")),
-                    mediaType);
+                    () -> factory.create(request.getFile("audio"), REQUEST_ID), mediaType);
             assertEquals(VoiceErrorCode.UNSUPPORTED_MEDIA, error.error(), mediaType);
             assertEquals(REQUEST_ID, error.requestId(), mediaType);
         }
-
-        verify(service, never()).transcribe(any(), any(), any(), any());
     }
 
     @Test
@@ -100,8 +93,7 @@ class VoiceControllersTest {
         VoiceSpeechProperties properties = properties();
         SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
         MockMultipartHttpServletRequest request = validMultipart(
                 "mediarecorder-valid.webm", "audio/webm;codecs=opus");
         request.addParameter("provider", "forged");
@@ -119,8 +111,7 @@ class VoiceControllersTest {
         VoiceSpeechProperties properties = properties();
         SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
         MockMultipartHttpServletRequest request = validMultipart(
                 "mediarecorder-valid.webm", "audio/webm;codecs=opus");
         request.addParameter("audio", "not-a-file");

@@ -4,13 +4,10 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Arrays;
 
 @Slf4j
 public final class VoiceAudioUpload implements AutoCloseable {
-    private final Path path;
     private final FileChannel channel;
     private final long size;
     private final String mediaType;
@@ -18,23 +15,16 @@ public final class VoiceAudioUpload implements AutoCloseable {
     private final long durationMs;
 
     public VoiceAudioUpload(
-            Path path,
             FileChannel channel,
             long size,
             String mediaType,
             byte[] audioDigest,
             long durationMs) {
-        this.path = path;
         this.channel = channel;
         this.size = size;
         this.mediaType = mediaType;
         this.audioDigest = Arrays.copyOf(audioDigest, audioDigest.length);
         this.durationMs = durationMs;
-    }
-
-    /** The unlinked spool pathname is retained only for deterministic cleanup and security tests. */
-    public Path path() {
-        return path;
     }
 
     public FileChannel channel() {
@@ -59,21 +49,13 @@ public final class VoiceAudioUpload implements AutoCloseable {
 
     @Override
     public void close() {
-        boolean failed = false;
-        if (channel != null) {
-            try {
-                channel.close();
-            } catch (IOException exception) {
-                failed = true;
-            }
+        if (channel == null) {
+            return;
         }
         try {
-            Files.deleteIfExists(path);
+            channel.close();
         } catch (IOException exception) {
-            failed = true;
-        }
-        if (failed) {
-            log.warn("Voice temporary upload cleanup failed; payload details suppressed");
+            log.warn("Voice temporary upload handle cleanup failed; payload details suppressed");
         }
     }
 }

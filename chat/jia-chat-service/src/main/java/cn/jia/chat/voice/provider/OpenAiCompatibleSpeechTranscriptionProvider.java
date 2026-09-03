@@ -1,7 +1,6 @@
 package cn.jia.chat.voice.provider;
 
 import cn.jia.chat.voice.SpeechProviderException;
-import cn.jia.chat.voice.SpeechTranscriptionProvider;
 import cn.jia.chat.voice.SpeechTranscriptionRequest;
 import cn.jia.chat.voice.SpeechTranscriptionResult;
 import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
@@ -27,7 +26,8 @@ import java.util.UUID;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public final class OpenAiCompatibleSpeechTranscriptionProvider implements SpeechTranscriptionProvider {
+public final class OpenAiCompatibleSpeechTranscriptionProvider
+        implements FileChannelSpeechTranscriptionProvider {
     public static final int MAX_RESPONSE_BYTES = 256 * 1024;
     private final VoiceSpeechProperties properties;
     private final ObjectMapper objectMapper;
@@ -57,6 +57,12 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
     @Override
     public SpeechTranscriptionResult transcribe(SpeechTranscriptionRequest request)
             throws SpeechProviderException {
+        return FileChannelSpeechTranscriptionProvider.super.transcribe(request);
+    }
+
+    @Override
+    public SpeechTranscriptionResult transcribe(FileChannelSpeechTranscriptionRequest request)
+            throws SpeechProviderException {
         VoiceSpeechProperties.Transcription config = properties.getTranscription();
         HttpRequest httpRequest = prepareRequest(config, request);
         HttpResponse<byte[]> response;
@@ -77,7 +83,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
             throw unknown("transcription provider transport failure");
         }
         if (response.statusCode() < 200 || response.statusCode() >= 300
-                || !isJson(response.headers().firstValue("Content-Type").orElse(null))) {
+                || !hasUniqueJsonContentType(response.headers())) {
             throw known();
         }
         try {
@@ -97,7 +103,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
     }
 
     private HttpRequest prepareRequest(
-            VoiceSpeechProperties.Transcription config, SpeechTranscriptionRequest request)
+            VoiceSpeechProperties.Transcription config, FileChannelSpeechTranscriptionRequest request)
             throws SpeechProviderException {
         URI uri = endpoint(config.getBaseUrl(), "/audio/transcriptions");
         requireConfigured(uri, config.getApiKey(), config.getModel(),
@@ -189,6 +195,14 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
             return "zh";
         }
         throw known();
+    }
+
+    private static boolean hasUniqueJsonContentType(java.net.http.HttpHeaders headers) {
+        if (headers == null) {
+            return false;
+        }
+        java.util.List<String> values = headers.allValues("Content-Type");
+        return values.size() == 1 && isJson(values.get(0));
     }
 
     private static boolean isJson(String contentType) {

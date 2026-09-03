@@ -432,11 +432,16 @@ class VoiceHttpContractIntegrationTest {
         }
 
         @Bean
-        SpeechTranscriptionService speechTranscriptionService() {
+        SpeechTranscriptionService speechTranscriptionService(
+                VoiceAudioUploadFactory uploadFactory) {
             SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
-            when(service.transcribe(any(), any(), any(), any())).thenAnswer(invocation ->
-                    new VoiceTranscriptionResponse(invocation.getArgument(1),
-                            SENSITIVE_TRANSCRIPT, "zh", 1240));
+            when(service.transcribe(any(), any(), any(), any())).thenAnswer(invocation -> {
+                String requestId = invocation.getArgument(1);
+                try (var upload = uploadFactory.create(invocation.getArgument(3), requestId)) {
+                    return new VoiceTranscriptionResponse(
+                            requestId, SENSITIVE_TRANSCRIPT, "zh", upload.durationMs());
+                }
+            });
             return service;
         }
 

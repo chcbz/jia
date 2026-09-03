@@ -1,10 +1,10 @@
 package cn.jia.chat.voice;
 
-import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 
-/** Provider-neutral, validated transcription input backed by the hashed open file handle. */
+/** Provider-neutral, validated transcription input. */
 public record SpeechTranscriptionRequest(
-        FileChannel audioChannel,
+        Path audioPath,
         long audioBytes,
         String mediaType,
         String language,

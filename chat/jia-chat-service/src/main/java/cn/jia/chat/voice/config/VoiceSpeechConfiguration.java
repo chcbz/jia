@@ -111,8 +111,10 @@ public class VoiceSpeechConfiguration {
             SpeechTranscriptionProvider provider,
             VoiceRequestCoordinator coordinator,
             VoiceDigests digests,
-            ObjectMapper objectMapper) {
-        return new SpeechTranscriptionService(properties, provider, coordinator, digests, objectMapper);
+            ObjectMapper objectMapper,
+            VoiceAudioUploadFactory uploadFactory) {
+        return new SpeechTranscriptionService(
+                properties, provider, coordinator, digests, objectMapper, uploadFactory);
     }
 
     @Bean

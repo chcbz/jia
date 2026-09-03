@@ -4,6 +4,7 @@ import cn.jia.chat.voice.SpeechProviderException;
 import cn.jia.chat.voice.api.VoiceErrorCode;
 import cn.jia.chat.voice.api.VoiceException;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
+import cn.jia.chat.voice.state.VoiceAdmission;
 import cn.jia.chat.voice.state.VoiceBeginResult;
 import cn.jia.chat.voice.state.VoiceRequestCoordinator;
 import cn.jia.chat.voice.state.VoiceReservation;
@@ -77,13 +78,24 @@ final class VoiceServiceSupport {
         }
     }
 
+    static void release(VoiceRequestCoordinator coordinator, VoiceAdmission admission) {
+        if (admission == null) {
+            return;
+        }
+        try {
+            coordinator.release(admission);
+        } catch (RuntimeException exception) {
+            log.warn("Voice pre-admission lease release failed; lease will expire by deadline");
+        }
+    }
+
     static void release(VoiceRequestCoordinator coordinator, VoiceReservation reservation) {
         if (reservation == null) {
             return;
         }
         try {
             coordinator.release(reservation);
-        } catch (VoiceStateUnavailableException exception) {
+        } catch (RuntimeException exception) {
             log.warn("Voice concurrency lease release failed; lease will expire by deadline");
         }
     }
