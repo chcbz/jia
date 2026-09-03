@@ -4,6 +4,7 @@ import cn.jia.chat.voice.SpeechProviderException;
 import cn.jia.chat.voice.SpeechSynthesisProvider;
 import cn.jia.chat.voice.SpeechSynthesisRequest;
 import cn.jia.chat.voice.SpeechSynthesisResult;
+import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import tools.jackson.databind.ObjectMapper;
 
@@ -82,8 +83,10 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
         URI uri = OpenAiCompatibleSpeechTranscriptionProvider.endpoint(
                 config.getBaseUrl(), "/audio/speech");
         OpenAiCompatibleSpeechTranscriptionProvider.requireConfigured(
-                uri, config.getApiKey(), config.getModel());
-        if (config.getProviderVoice() == null || config.getProviderVoice().isBlank()
+                uri, config.getApiKey(), config.getModel(),
+                VoiceActivationConfigurationValidator.SYNTHESIS_MODEL);
+        if (!VoiceActivationConfigurationValidator.SYNTHESIS_VOICE.equals(
+                    config.getProviderVoice())
                 || request == null || request.text() == null || request.format() == null
                 || !"mp3".equals(request.format())) {
             throw known();
@@ -97,7 +100,7 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
             return HttpRequest.newBuilder(uri)
                     .timeout(Duration.ofMillis(Math.min(
                             Math.max(1, properties.getProviderDeadlineMillis()), 25_000)))
-                    .header("Authorization", "Bearer " + config.getApiKey())
+                    .header("Authorization", bearer(config.getApiKey()))
                     .header("Content-Type", "application/json")
                     .header("Accept", "audio/mpeg")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(json))
@@ -105,6 +108,13 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
         } catch (RuntimeException exception) {
             throw known();
         }
+    }
+
+    private static String bearer(String apiKey) throws SpeechProviderException {
+        if (!VoiceActivationConfigurationValidator.isValidApiKey(apiKey)) {
+            throw known();
+        }
+        return "Bearer " + apiKey;
     }
 
     private static boolean isMpeg(String contentType) {

@@ -6,8 +6,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.ReturnType;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
@@ -15,6 +19,7 @@ import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +29,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -98,6 +104,7 @@ class RedisVoiceRequestCoordinatorContractTest {
                 assertFailedUnknownReplay(coordinator);
                 assertTokenMismatchCannotTerminateOrRelease(coordinator);
                 assertConcurrentBeginIsAtomic(coordinator);
+                assertRedisReplayRejectsCiphertextTupleTransplants(factory, coordinator);
 
                 assertScriptLoaded(factory, "BEGIN_SCRIPT");
                 assertScriptLoaded(factory, "TERMINAL_SCRIPT");
@@ -197,17 +204,119 @@ class RedisVoiceRequestCoordinatorContractTest {
     }
 
     @Test
-    void encryptedPayloadRoundTripsAndTamperingFailsClosed() {
+    void encryptedPayloadBindsEveryReplayTupleFieldAndRejectsLegacyV1() throws Exception {
         VoiceSpeechProperties properties = new VoiceSpeechProperties();
         properties.setCacheEncryptionKey("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
         VoicePayloadCipher cipher = new VoicePayloadCipher(properties);
-        String encrypted = cipher.encrypt(new byte[]{1, 2, 3, 4});
+        byte[] payload = {1, 2, 3, 4};
+        String encrypted = cipher.encrypt(payload, VoiceOperation.TRANSCRIPTION,
+                "tenant-a", "request-a", "digest-a", "application/json");
         assertTrue(!encrypted.contains("AQIDBA=="));
-        assertEquals(4, cipher.decrypt(encrypted).length);
+        assertArrayEquals(payload, cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                "tenant-a", "request-a", "digest-a", "application/json"));
+
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-b", "request-a", "digest-a", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-b", "digest-a", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.SYNTHESIS,
+                        "tenant-a", "request-a", "digest-a", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-b", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-a", "audio/mpeg"));
+
         char replacement = encrypted.charAt(encrypted.length() - 1) == 'A' ? 'B' : 'A';
         String tampered = encrypted.substring(0, encrypted.length() - 1) + replacement;
-        org.junit.jupiter.api.Assertions.assertThrows(
-                VoiceStateUnavailableException.class, () -> cipher.decrypt(tampered));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(tampered, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-a", "application/json"));
+
+        String legacyV1 = encryptLegacyV1(properties.getCacheEncryptionKey(), payload);
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(legacyV1, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-a", "application/json"));
+    }
+
+    private static void assertRedisReplayRejectsCiphertextTupleTransplants(
+            LettuceConnectionFactory factory,
+            RedisVoiceRequestCoordinator coordinator) throws Exception {
+        VoiceOperation sourceOperation = VoiceOperation.TRANSCRIPTION;
+        String sourceScope = "cipher-source-scope";
+        String sourceRequest = "cipher-source-request";
+        String sourceDigest = "cipher-source-digest";
+        String sourceContentType = "application/json";
+        VoiceBeginResult source = coordinator.begin(
+                sourceOperation, sourceScope, sourceRequest, sourceDigest);
+        coordinator.succeed(source.reservation(),
+                new VoiceCachedResult(new byte[]{4, 3, 2, 1}, sourceContentType));
+        coordinator.release(source.reservation());
+
+        StringRedisTemplate redis = new StringRedisTemplate(factory);
+        redis.afterPropertiesSet();
+        String sourceKey = stateKey(sourceOperation, sourceScope, sourceRequest);
+        String encrypted = String.valueOf(redis.opsForHash().get(sourceKey, "payload"));
+
+        List<ReplayTuple> transplants = List.of(
+                new ReplayTuple(VoiceOperation.TRANSCRIPTION, "cipher-target-scope",
+                        sourceRequest, sourceDigest, sourceContentType),
+                new ReplayTuple(VoiceOperation.TRANSCRIPTION, sourceScope,
+                        "cipher-target-request", sourceDigest, sourceContentType),
+                new ReplayTuple(VoiceOperation.SYNTHESIS, sourceScope,
+                        sourceRequest, sourceDigest, sourceContentType),
+                new ReplayTuple(VoiceOperation.TRANSCRIPTION, sourceScope,
+                        "cipher-digest-request", "cipher-target-digest", sourceContentType));
+        for (ReplayTuple transplant : transplants) {
+            String targetKey = stateKey(
+                    transplant.operation(), transplant.identityScope(), transplant.requestId());
+            redis.opsForHash().putAll(targetKey, Map.of(
+                    "digest", transplant.digest(),
+                    "state", "SUCCEEDED",
+                    "payload", encrypted,
+                    "contentType", transplant.contentType()));
+            assertThrows(VoiceStateUnavailableException.class,
+                    () -> coordinator.begin(transplant.operation(), transplant.identityScope(),
+                            transplant.requestId(), transplant.digest()));
+            redis.delete(targetKey);
+        }
+
+        redis.opsForHash().put(sourceKey, "contentType", "audio/mpeg");
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.begin(
+                        sourceOperation, sourceScope, sourceRequest, sourceDigest));
+        redis.delete(sourceKey);
+    }
+
+    private static String encryptLegacyV1(String encodedKey, byte[] payload) throws Exception {
+        byte[] iv = new byte[12];
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE,
+                new SecretKeySpec(Base64.getDecoder().decode(encodedKey), "AES"),
+                new GCMParameterSpec(128, iv));
+        byte[] encrypted = cipher.doFinal(payload);
+        return Base64.getEncoder().encodeToString(ByteBuffer.allocate(1 + iv.length + encrypted.length)
+                .put((byte) 1).put(iv).put(encrypted).array());
+    }
+
+    private static String stateKey(
+            VoiceOperation operation, String identityScope, String requestId) throws Exception {
+        Method keysMethod = RedisVoiceRequestCoordinator.class.getDeclaredMethod(
+                "keys", VoiceOperation.class, String.class, String.class);
+        keysMethod.setAccessible(true);
+        return key(keysMethod.invoke(null, operation, identityScope, requestId), "stateKey");
+    }
+
+    private record ReplayTuple(
+            VoiceOperation operation,
+            String identityScope,
+            String requestId,
+            String digest,
+            String contentType) {
     }
 
     @Test

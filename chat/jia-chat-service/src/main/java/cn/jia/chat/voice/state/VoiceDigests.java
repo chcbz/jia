@@ -15,7 +15,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 public final class VoiceDigests {
-    private static final byte[] CONTRACT = "cyf-voice-v1".getBytes(StandardCharsets.UTF_8);
     private final byte[] identityHmacSecret;
 
     public VoiceDigests(VoiceSpeechProperties properties) {
@@ -45,7 +44,7 @@ public final class VoiceDigests {
 
     public String transcription(String language, String mediaType, byte[] audioDigest) {
         MessageDigest digest = sha256();
-        updateLengthPrefixed(digest, CONTRACT);
+        updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.TRANSCRIPTION.namespace().getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, language.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, mediaType.getBytes(StandardCharsets.UTF_8));
@@ -55,7 +54,7 @@ public final class VoiceDigests {
 
     public String synthesis(String text, String voice, String format) {
         MessageDigest digest = sha256();
-        updateLengthPrefixed(digest, CONTRACT);
+        updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.SYNTHESIS.namespace().getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, voice.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, format.getBytes(StandardCharsets.UTF_8));

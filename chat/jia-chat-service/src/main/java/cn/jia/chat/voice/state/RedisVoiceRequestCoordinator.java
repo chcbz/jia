@@ -147,8 +147,9 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             return switch (outcome) {
                 case "RESERVED" -> VoiceBeginResult.reserved(new VoiceReservation(
                         operation, identityScope, requestId, digest, leaseToken));
-                case "REPLAY" -> VoiceBeginResult.replay(new VoiceCachedResult(
-                        cipher.decrypt(stringAt(response, 1)), stringAt(response, 2)));
+                case "REPLAY" -> replay(
+                        operation, identityScope, requestId, digest,
+                        stringAt(response, 1), stringAt(response, 2));
                 case "IN_PROGRESS" -> VoiceBeginResult.outcome(VoiceBeginResult.Outcome.IN_PROGRESS);
                 case "IDEMPOTENCY_CONFLICT" -> VoiceBeginResult.outcome(
                         VoiceBeginResult.Outcome.IDEMPOTENCY_CONFLICT);
@@ -168,7 +169,13 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
 
     @Override
     public void succeed(VoiceReservation reservation, VoiceCachedResult result) {
-        transition(reservation, "SUCCEEDED", cipher.encrypt(result.payload()),
+        if (reservation == null || result == null
+                || !expectedContentType(reservation.operation()).equals(result.contentType())) {
+            throw new VoiceStateUnavailableException();
+        }
+        transition(reservation, "SUCCEEDED", cipher.encrypt(
+                        result.payload(), reservation.operation(), reservation.identityScope(),
+                        reservation.requestId(), reservation.digest(), result.contentType()),
                 result.contentType(), SUCCEEDED_TTL_MS);
     }
 
@@ -212,6 +219,31 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
         } catch (RuntimeException exception) {
             throw new VoiceStateUnavailableException();
         }
+    }
+
+    private VoiceBeginResult replay(
+            VoiceOperation operation,
+            String identityScope,
+            String requestId,
+            String digest,
+            String encryptedPayload,
+            String contentType) {
+        if (!expectedContentType(operation).equals(contentType)) {
+            throw new VoiceStateUnavailableException();
+        }
+        return VoiceBeginResult.replay(new VoiceCachedResult(
+                cipher.decrypt(encryptedPayload, operation, identityScope, requestId, digest, contentType),
+                contentType));
+    }
+
+    private static String expectedContentType(VoiceOperation operation) {
+        if (operation == null) {
+            throw new VoiceStateUnavailableException();
+        }
+        return switch (operation) {
+            case TRANSCRIPTION -> "application/json";
+            case SYNTHESIS -> "audio/mpeg";
+        };
     }
 
     private static String stringAt(List<?> values, int index) {

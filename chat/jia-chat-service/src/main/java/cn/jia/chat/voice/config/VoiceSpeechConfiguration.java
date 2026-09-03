@@ -29,6 +29,12 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 @EnableConfigurationProperties(VoiceSpeechProperties.class)
 public class VoiceSpeechConfiguration {
     @Bean
+    public VoiceActivationConfigurationValidator voiceActivationConfigurationValidator(
+            VoiceSpeechProperties properties) {
+        return new VoiceActivationConfigurationValidator(properties);
+    }
+
+    @Bean
     public VoiceIdentityResolver voiceIdentityResolver() {
         return new VoiceIdentityResolver();
     }
@@ -49,12 +55,16 @@ public class VoiceSpeechConfiguration {
     }
 
     @Bean
-    public VoicePayloadCipher voicePayloadCipher(VoiceSpeechProperties properties) {
+    public VoicePayloadCipher voicePayloadCipher(
+            VoiceSpeechProperties properties,
+            VoiceActivationConfigurationValidator activationValidator) {
         return new VoicePayloadCipher(properties);
     }
 
     @Bean
-    public VoiceDigests voiceDigests(VoiceSpeechProperties properties) {
+    public VoiceDigests voiceDigests(
+            VoiceSpeechProperties properties,
+            VoiceActivationConfigurationValidator activationValidator) {
         return new VoiceDigests(properties);
     }
 
@@ -62,7 +72,8 @@ public class VoiceSpeechConfiguration {
     public VoiceRequestCoordinator voiceRequestCoordinator(
             ObjectProvider<RedisConnectionFactory> connectionFactory,
             VoiceSpeechProperties properties,
-            VoicePayloadCipher cipher) {
+            VoicePayloadCipher cipher,
+            VoiceActivationConfigurationValidator activationValidator) {
         RedisConnectionFactory factory = connectionFactory.getIfAvailable();
         if (factory == null || !cipher.available()) {
             return new UnavailableVoiceRequestCoordinator();
@@ -73,7 +84,9 @@ public class VoiceSpeechConfiguration {
     @Bean
     @ConditionalOnMissingBean(SpeechTranscriptionProvider.class)
     public SpeechTranscriptionProvider speechTranscriptionProvider(
-            VoiceSpeechProperties properties, ObjectMapper objectMapper) {
+            VoiceSpeechProperties properties,
+            ObjectMapper objectMapper,
+            VoiceActivationConfigurationValidator activationValidator) {
         if ("openai-compatible".equals(properties.getTranscription().getProvider())) {
             return new OpenAiCompatibleSpeechTranscriptionProvider(properties, objectMapper);
         }
@@ -83,7 +96,9 @@ public class VoiceSpeechConfiguration {
     @Bean
     @ConditionalOnMissingBean(SpeechSynthesisProvider.class)
     public SpeechSynthesisProvider speechSynthesisProvider(
-            VoiceSpeechProperties properties, ObjectMapper objectMapper) {
+            VoiceSpeechProperties properties,
+            ObjectMapper objectMapper,
+            VoiceActivationConfigurationValidator activationValidator) {
         if ("openai-compatible".equals(properties.getSynthesis().getProvider())) {
             return new OpenAiCompatibleSpeechSynthesisProvider(properties, objectMapper);
         }

@@ -4,6 +4,7 @@ import cn.jia.chat.voice.SpeechProviderException;
 import cn.jia.chat.voice.SpeechTranscriptionProvider;
 import cn.jia.chat.voice.SpeechTranscriptionRequest;
 import cn.jia.chat.voice.SpeechTranscriptionResult;
+import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -90,16 +91,18 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
             VoiceSpeechProperties.Transcription config, SpeechTranscriptionRequest request)
             throws SpeechProviderException {
         URI uri = endpoint(config.getBaseUrl(), "/audio/transcriptions");
-        requireConfigured(uri, config.getApiKey(), config.getModel());
+        requireConfigured(uri, config.getApiKey(), config.getModel(),
+                VoiceActivationConfigurationValidator.TRANSCRIPTION_MODEL);
         if (request == null || request.audioPath() == null || request.language() == null
-                || request.mediaType() == null) {
+                || !"audio/webm;codecs=opus".equals(request.mediaType())) {
             throw known();
         }
+        String providerLanguage = providerLanguage(request.language());
         String boundary = "cyf-voice-" + UUID.randomUUID();
         try {
             HttpRequest.BodyPublisher body = HttpRequest.BodyPublishers.concat(
                     textPart(boundary, "model", config.getModel()),
-                    textPart(boundary, "language", request.language()),
+                    textPart(boundary, "language", providerLanguage),
                     fileHeader(boundary, request.mediaType()),
                     HttpRequest.BodyPublishers.ofFile(request.audioPath()),
                     HttpRequest.BodyPublishers.ofByteArray(("\r\n--" + boundary + "--\r\n")
@@ -123,10 +126,9 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
     }
 
     private HttpRequest.BodyPublisher fileHeader(String boundary, String mediaType) {
-        String extension = mediaType.equals("audio/mp4") ? "mp4" : "webm";
         String header = "--" + boundary
-                + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio."
-                + extension + "\"\r\nContent-Type: " + mediaType + "\r\n\r\n";
+                + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.webm\""
+                + "\r\nContent-Type: " + mediaType + "\r\n\r\n";
         return HttpRequest.BodyPublishers.ofByteArray(header.getBytes(StandardCharsets.US_ASCII));
     }
 
@@ -135,40 +137,38 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider implements Speech
     }
 
     static URI endpoint(String baseUrl, String path) throws SpeechProviderException {
-        if (baseUrl == null || baseUrl.isBlank()) {
+        if (!VoiceActivationConfigurationValidator.OPENAI_BASE_URL.equals(baseUrl)
+                || (!"/audio/transcriptions".equals(path) && !"/audio/speech".equals(path))) {
             throw known();
         }
         try {
-            String base = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-            URI uri = URI.create(base + path);
-            if ((!"https".equalsIgnoreCase(uri.getScheme())
-                    && !"http".equalsIgnoreCase(uri.getScheme()))
-                    || uri.getHost() == null || uri.getUserInfo() != null
-                    || uri.getQuery() != null || uri.getFragment() != null) {
-                throw known();
-            }
-            return uri;
+            return URI.create(VoiceActivationConfigurationValidator.OPENAI_BASE_URL + path);
         } catch (IllegalArgumentException exception) {
             throw known();
         }
     }
 
-    static void requireConfigured(URI uri, String apiKey, String model) throws SpeechProviderException {
-        if (uri == null || apiKey == null || apiKey.isBlank() || containsLineBreak(apiKey)
-                || model == null || model.isBlank()) {
+    static void requireConfigured(
+            URI uri, String apiKey, String model, String expectedModel)
+            throws SpeechProviderException {
+        if (uri == null || !VoiceActivationConfigurationValidator.isValidApiKey(apiKey)
+                || !expectedModel.equals(model)) {
             throw known();
         }
     }
 
     private static String bearer(String apiKey) throws SpeechProviderException {
-        if (containsLineBreak(apiKey)) {
+        if (!VoiceActivationConfigurationValidator.isValidApiKey(apiKey)) {
             throw known();
         }
         return "Bearer " + apiKey;
     }
 
-    private static boolean containsLineBreak(String value) {
-        return value != null && (value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0);
+    private static String providerLanguage(String clientLanguage) throws SpeechProviderException {
+        if ("zh-CN".equals(clientLanguage)) {
+            return "zh";
+        }
+        throw known();
     }
 
     static SpeechProviderException known() {
