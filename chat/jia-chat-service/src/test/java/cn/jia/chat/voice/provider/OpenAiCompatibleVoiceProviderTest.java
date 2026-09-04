@@ -239,12 +239,13 @@ class OpenAiCompatibleVoiceProviderTest {
         Path audio = Files.createTempFile("voice-provider-test", ".webm");
         Files.write(audio, new byte[]{1});
         try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
-            for (List<String> contentTypes : List.of(
+            List<List<String>> contentTypeCases = List.of(
                     List.of(),
                     List.of("application/json", "application/json"),
                     List.of("application/json", "text/plain"),
                     List.of("application/json, application/json"),
-                    List.of("application/json, text/plain"))) {
+                    List.of("application/json, text/plain"));
+            for (List<String> contentTypes : contentTypeCases) {
                 HttpClient client = mock(HttpClient.class);
                 when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                         .thenAnswer(invocation -> jsonResponse(contentTypes));
