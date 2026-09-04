@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -95,6 +96,22 @@ class EconomyPreviewConfigurationTest {
         assertFalse(EconomySchemaInitializer.normalizeCheckClause(mysqlCatalog)
                 .equals(EconomySchemaInitializer.normalizeCheckClause(mysqlCatalogCaseDrift)));
         assertEquals(5, EconomySchemaInitializer.tableDdlStatements().size());
+    }
+
+    @Test
+    void triggerNormalizationPreservesLiteralBytesWhileCanonicalizingOutsideFormatting() {
+        String literal = "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
+                + "'_utf8mb4 (  MiXeD = Value ) O''Brien'; END";
+        String changedLiteral = "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
+                + "'MiXeD=Value O''Brien'; END";
+        String canonical = "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='immutable'; END";
+        String formatted = " (( BEGIN\n SIGNAL SQLSTATE _utf8mb4 '45000' "
+                + "SET `MESSAGE_TEXT` = _UTF8MB4 'immutable'; END )) ";
+
+        assertNotEquals(EconomySchemaInitializer.normalizeTriggerSql(literal),
+                EconomySchemaInitializer.normalizeTriggerSql(changedLiteral));
+        assertEquals(EconomySchemaInitializer.normalizeTriggerSql(canonical),
+                EconomySchemaInitializer.normalizeTriggerSql(formatted));
     }
 
     @Test

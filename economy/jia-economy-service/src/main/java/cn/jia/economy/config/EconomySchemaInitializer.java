@@ -555,7 +555,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
 
     private static boolean isCharsetIntroducer(String value, int index) {
         String introducer = "_utf8mb4";
-        if (!value.regionMatches(index, introducer, 0, introducer.length())
+        if (!value.regionMatches(true, index, introducer, 0, introducer.length())
                 || index > 0 && isSqlWordCharacter(value.charAt(index - 1))) return false;
         int next = index + introducer.length();
         while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
@@ -665,10 +665,81 @@ public final class EconomySchemaInitializer implements InitializingBean {
     }
 
     static String normalizeTriggerSql(String sql) {
-        return normalizeSqlPreservingLiterals(sql).replace("_utf8mb4", "")
-                .replace("(", "").replace(")", "")
-                .replaceAll("\\s*=\\s*", "=")
-                .replaceAll("\\s+", " ").trim();
+        String value = stripOuterTriggerParentheses(sql);
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        boolean pendingSpace = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (quoted) {
+                normalized.append(character);
+                if (character == '\\' && index + 1 < value.length()) {
+                    normalized.append(value.charAt(++index));
+                } else if (character == '\'' && index + 1 < value.length()
+                        && value.charAt(index + 1) == '\'') {
+                    normalized.append(value.charAt(++index));
+                } else if (character == '\'') {
+                    quoted = false;
+                }
+            } else if (Character.isWhitespace(character)) {
+                pendingSpace = true;
+            } else if (isCharsetIntroducer(value, index)) {
+                index += "_utf8mb4".length() - 1;
+                while (index + 1 < value.length() && Character.isWhitespace(value.charAt(index + 1))) index++;
+            } else if (character == '`') {
+                continue;
+            } else if (character == '=') {
+                trimTrailingSpace(normalized);
+                normalized.append(character);
+                pendingSpace = false;
+            } else {
+                appendTriggerSpace(normalized, pendingSpace);
+                pendingSpace = false;
+                normalized.append(Character.toLowerCase(character));
+                if (character == '\'') quoted = true;
+            }
+        }
+        return normalized.toString().trim();
+    }
+
+    private static void appendTriggerSpace(StringBuilder normalized, boolean pendingSpace) {
+        if (pendingSpace && !normalized.isEmpty() && normalized.charAt(normalized.length() - 1) != '=') {
+            normalized.append(' ');
+        }
+    }
+
+    private static String stripOuterTriggerParentheses(String sql) {
+        String current = sql.trim();
+        while (current.startsWith("(") && current.endsWith(")")
+                && matchingTriggerParenthesis(current, 0) == current.length() - 1) {
+            current = current.substring(1, current.length() - 1).trim();
+        }
+        return current;
+    }
+
+    private static int matchingTriggerParenthesis(String value, int open) {
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = open; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (quoted) {
+                if (character == '\\' && index + 1 < value.length()) {
+                    index++;
+                } else if (character == '\'' && index + 1 < value.length()
+                        && value.charAt(index + 1) == '\'') {
+                    index++;
+                } else if (character == '\'') {
+                    quoted = false;
+                }
+            } else if (character == '\'') {
+                quoted = true;
+            } else if (character == '(') {
+                depth++;
+            } else if (character == ')' && --depth == 0) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private static boolean containsDml(String sql) {
