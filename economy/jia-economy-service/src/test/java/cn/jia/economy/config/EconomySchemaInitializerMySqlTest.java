@@ -192,13 +192,16 @@ class EconomySchemaInitializerMySqlTest {
             snapshot.add(jdbc.queryForObject("SHOW CREATE TABLE " + table,
                     (rs, rowNum) -> rs.getString(2)));
         }
-        snapshot.addAll(jdbc.queryForList("""
-                SELECT CONCAT(trigger_name,'|',event_object_table,'|',action_timing,'|',
-                              event_manipulation,'|',action_statement)
+        snapshot.addAll(jdbc.query("""
+                SELECT trigger_name,event_object_table,action_timing,event_manipulation,action_statement
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE() AND trigger_name LIKE 'trg_economy_%'
                 ORDER BY trigger_name
-                """, String.class));
+                """, (rs, rowNum) -> rs.getString("trigger_name") + "|"
+                + rs.getString("event_object_table") + "|"
+                + rs.getString("action_timing") + "|"
+                + rs.getString("event_manipulation") + "|"
+                + EconomySchemaInitializer.normalizeTriggerSql(rs.getString("action_statement"))));
         return List.copyOf(snapshot);
     }
 

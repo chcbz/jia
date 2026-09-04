@@ -664,7 +664,7 @@ public final class EconomySchemaInitializer implements InitializingBean {
         return -1;
     }
 
-    private static String normalizeTriggerSql(String sql) {
+    static String normalizeTriggerSql(String sql) {
         return normalizeSqlPreservingLiterals(sql).replace("_utf8mb4", "")
                 .replace("(", "").replace(")", "")
                 .replaceAll("\\s*=\\s*", "=")
