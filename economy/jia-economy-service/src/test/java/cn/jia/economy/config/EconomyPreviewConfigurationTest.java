@@ -100,14 +100,16 @@ class EconomyPreviewConfigurationTest {
 
     @Test
     void triggerNormalizationPreservesLiteralBytesWhileCanonicalizingOutsideFormatting() {
-        String literal = "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
-                + "'_utf8mb4 (  MiXeD = Value ) O''Brien'; END";
-        String changedLiteral = "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = "
-                + "'MiXeD=Value O''Brien'; END";
+        String literal = " (( BEGIN\n SIGNAL SQLSTATE _utf8mb4 '45000' "
+                + "SET `MESSAGE_TEXT` = _UTF8MB4 '_utf8mb4 MiXeD (A = B)  O''Brien\\'s'; END )) ";
+        String changedLiteral = " (( BEGIN\n SIGNAL SQLSTATE _utf8mb4 '45000' "
+                + "SET `MESSAGE_TEXT` = _UTF8MB4 '_utf8mb4 miXeD (A = B)  O''Brien\\'s'; END )) ";
         String canonical = "BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='immutable'; END";
         String formatted = " (( BEGIN\n SIGNAL SQLSTATE _utf8mb4 '45000' "
                 + "SET `MESSAGE_TEXT` = _UTF8MB4 'immutable'; END )) ";
 
+        assertEquals("begin signal sqlstate '45000' set message_text='_utf8mb4 MiXeD (A = B)  O''Brien\\'s'; end",
+                EconomySchemaInitializer.normalizeTriggerSql(literal));
         assertNotEquals(EconomySchemaInitializer.normalizeTriggerSql(literal),
                 EconomySchemaInitializer.normalizeTriggerSql(changedLiteral));
         assertEquals(EconomySchemaInitializer.normalizeTriggerSql(canonical),
