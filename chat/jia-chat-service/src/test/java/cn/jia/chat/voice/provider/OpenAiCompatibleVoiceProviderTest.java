@@ -4,6 +4,7 @@ import cn.jia.chat.voice.SpeechProviderException;
 import cn.jia.chat.voice.SpeechSynthesisRequest;
 import cn.jia.chat.voice.SpeechTranscriptionRequest;
 import cn.jia.chat.voice.VoiceIdentity;
+import cn.jia.chat.voice.config.SpringAiOpenAiVoiceFacade;
 import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import cn.jia.chat.voice.service.SpeechTranscriptionService;
@@ -19,6 +20,10 @@ import cn.jia.chat.voice.validation.VoiceAudioUpload;
 import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiCommonProperties;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -71,7 +76,7 @@ class OpenAiCompatibleVoiceProviderTest {
         try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
             OpenAiCompatibleSpeechTranscriptionProvider provider =
                     new OpenAiCompatibleSpeechTranscriptionProvider(
-                            properties, new ObjectMapper(), client);
+                            properties, facade(), new ObjectMapper(), client);
             SpeechProviderException error = assertThrows(SpeechProviderException.class,
                     () -> provider.transcribe(new FileChannelSpeechTranscriptionRequest(
                             channel, audioBytes.length, "audio/webm;codecs=opus", "zh-CN", 1200)));
@@ -137,7 +142,7 @@ class OpenAiCompatibleVoiceProviderTest {
         properties.getTranscription().setProvider("openai-compatible");
         OpenAiCompatibleSpeechTranscriptionProvider provider =
                 new OpenAiCompatibleSpeechTranscriptionProvider(
-                        properties, new ObjectMapper(), client);
+                        properties, facade(), new ObjectMapper(), client);
         SpeechTranscriptionService service = new SpeechTranscriptionService(
                 properties, provider, new PassingCoordinator(),
                 new VoiceDigests(properties), new ObjectMapper(), factory);
@@ -174,7 +179,7 @@ class OpenAiCompatibleVoiceProviderTest {
         HttpClient client = mock(HttpClient.class);
         OpenAiCompatibleSpeechTranscriptionProvider provider =
                 new OpenAiCompatibleSpeechTranscriptionProvider(
-                        configured(), new ObjectMapper(), client);
+                        configured(), facade(), new ObjectMapper(), client);
         SpeechProviderException error = assertThrows(
                 SpeechProviderException.class, () -> provider.transcribe(request));
         assertEquals(SpeechProviderException.FailureKind.KNOWN, error.failureKind());
@@ -194,7 +199,7 @@ class OpenAiCompatibleVoiceProviderTest {
                 when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                         .thenAnswer(invocation -> jsonResponse(contentType == null ? List.of() : List.of(contentType)));
                 var provider = new OpenAiCompatibleSpeechTranscriptionProvider(
-                        configured(), new ObjectMapper(), client);
+                        configured(), facade(), new ObjectMapper(), client);
 
                 assertEquals("林冲领命", provider.transcribe(new FileChannelSpeechTranscriptionRequest(
                         channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)).text(),
@@ -220,7 +225,7 @@ class OpenAiCompatibleVoiceProviderTest {
                 when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                         .thenAnswer(invocation -> jsonResponse(contentType == null ? List.of() : List.of(contentType)));
                 var provider = new OpenAiCompatibleSpeechTranscriptionProvider(
-                        configured(), new ObjectMapper(), client);
+                        configured(), facade(), new ObjectMapper(), client);
 
                 SpeechProviderException error = assertThrows(SpeechProviderException.class,
                         () -> provider.transcribe(new FileChannelSpeechTranscriptionRequest(
@@ -250,7 +255,7 @@ class OpenAiCompatibleVoiceProviderTest {
                 when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
                         .thenAnswer(invocation -> jsonResponse(contentTypes));
                 var provider = new OpenAiCompatibleSpeechTranscriptionProvider(
-                        configured(), new ObjectMapper(), client);
+                        configured(), facade(), new ObjectMapper(), client);
 
                 SpeechProviderException error = assertThrows(SpeechProviderException.class,
                         () -> provider.transcribe(new FileChannelSpeechTranscriptionRequest(
@@ -271,19 +276,17 @@ class OpenAiCompatibleVoiceProviderTest {
         Files.write(audio, new byte[]{1});
         try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
             VoiceSpeechProperties arbitraryHost = configured();
-            arbitraryHost.getTranscription().setBaseUrl("https://attacker.example/v1");
-            OpenAiCompatibleSpeechTranscriptionProvider hostPinned =
+                        OpenAiCompatibleSpeechTranscriptionProvider hostPinned =
                     new OpenAiCompatibleSpeechTranscriptionProvider(
-                            arbitraryHost, new ObjectMapper(), client);
+                            arbitraryHost, facade("https://attacker.example/v1", "sk-test-openai-voice-key"), new ObjectMapper(), client);
             assertThrows(SpeechProviderException.class,
                     () -> hostPinned.transcribe(new FileChannelSpeechTranscriptionRequest(
                             channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
 
             VoiceSpeechProperties controlKey = configured();
-            controlKey.getTranscription().setApiKey("sk-test\u0000key");
-            OpenAiCompatibleSpeechTranscriptionProvider credentialPinned =
+                        OpenAiCompatibleSpeechTranscriptionProvider credentialPinned =
                     new OpenAiCompatibleSpeechTranscriptionProvider(
-                            controlKey, new ObjectMapper(), client);
+                            controlKey, facade(VoiceActivationConfigurationValidator.OPENAI_BASE_URL, "sk-test\u0000key"), new ObjectMapper(), client);
             assertThrows(SpeechProviderException.class,
                     () -> credentialPinned.transcribe(new FileChannelSpeechTranscriptionRequest(
                             channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
@@ -319,7 +322,7 @@ class OpenAiCompatibleVoiceProviderTest {
                 });
         VoiceSpeechProperties properties = configured();
         OpenAiCompatibleSpeechSynthesisProvider provider =
-                new OpenAiCompatibleSpeechSynthesisProvider(properties, new ObjectMapper(), client);
+                new OpenAiCompatibleSpeechSynthesisProvider(properties, facade(), new ObjectMapper(), client);
         SpeechSynthesisRequest request = new SpeechSynthesisRequest(
                 "林冲领命。", "juyiting-default", "mp3");
 
@@ -334,18 +337,29 @@ class OpenAiCompatibleVoiceProviderTest {
                 any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
     }
 
+
+    private static SpringAiOpenAiVoiceFacade facade() {
+        return facade(VoiceActivationConfigurationValidator.OPENAI_BASE_URL,
+                "sk-test-openai-voice-key");
+    }
+
+    private static SpringAiOpenAiVoiceFacade facade(String baseUrl, String apiKey) {
+        OpenAiCommonProperties common = new OpenAiCommonProperties();
+        common.setBaseUrl(baseUrl);
+        common.setApiKey(apiKey);
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("spring.ai.openai.base-url", baseUrl);
+        return new SpringAiOpenAiVoiceFacade(common,
+                new OpenAiAudioTranscriptionProperties(),
+                new OpenAiAudioSpeechProperties(), environment);
+    }
+
     private static VoiceSpeechProperties configured() {
         VoiceSpeechProperties properties = new VoiceSpeechProperties();
         properties.setConnectTimeoutMillis(500);
         properties.setProviderDeadlineMillis(1000);
-        properties.getTranscription().setBaseUrl(
-                VoiceActivationConfigurationValidator.OPENAI_BASE_URL);
-        properties.getTranscription().setApiKey("sk-test-openai-voice-key");
         properties.getTranscription().setModel(
                 VoiceActivationConfigurationValidator.TRANSCRIPTION_MODEL);
-        properties.getSynthesis().setBaseUrl(
-                VoiceActivationConfigurationValidator.OPENAI_BASE_URL);
-        properties.getSynthesis().setApiKey("sk-test-openai-voice-key");
         properties.getSynthesis().setModel(
                 VoiceActivationConfigurationValidator.SYNTHESIS_MODEL);
         properties.getSynthesis().setProviderVoice(

@@ -4,6 +4,7 @@ import cn.jia.chat.voice.SpeechProviderException;
 import cn.jia.chat.voice.SpeechTranscriptionRequest;
 import cn.jia.chat.voice.SpeechTranscriptionResult;
 import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
+import cn.jia.chat.voice.config.SpringAiOpenAiVoiceFacade;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import tools.jackson.databind.JsonNode;
@@ -30,12 +31,13 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
         implements FileChannelSpeechTranscriptionProvider {
     public static final int MAX_RESPONSE_BYTES = 256 * 1024;
     private final VoiceSpeechProperties properties;
+    private final SpringAiOpenAiVoiceFacade openAi;
     private final ObjectMapper objectMapper;
     private final HttpClient client;
 
     public OpenAiCompatibleSpeechTranscriptionProvider(
-            VoiceSpeechProperties properties, ObjectMapper objectMapper) {
-        this(properties, objectMapper, HttpClient.newBuilder()
+            VoiceSpeechProperties properties, SpringAiOpenAiVoiceFacade openAi, ObjectMapper objectMapper) {
+        this(properties, openAi, objectMapper, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.min(
                         Math.max(1, properties.getConnectTimeoutMillis()), 3_000)))
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -43,8 +45,12 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
     }
 
     OpenAiCompatibleSpeechTranscriptionProvider(
-            VoiceSpeechProperties properties, ObjectMapper objectMapper, HttpClient client) {
+            VoiceSpeechProperties properties,
+            SpringAiOpenAiVoiceFacade openAi,
+            ObjectMapper objectMapper,
+            HttpClient client) {
         this.properties = properties;
+        this.openAi = openAi;
         this.objectMapper = objectMapper;
         this.client = client;
     }
@@ -64,7 +70,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
     public SpeechTranscriptionResult transcribe(FileChannelSpeechTranscriptionRequest request)
             throws SpeechProviderException {
         VoiceSpeechProperties.Transcription config = properties.getTranscription();
-        HttpRequest httpRequest = prepareRequest(config, request);
+        HttpRequest httpRequest = prepareRequest(config, openAi.transcription(), request);
         HttpResponse<byte[]> response;
         try {
             response = client.send(httpRequest, new BoundedBodyHandler(MAX_RESPONSE_BYTES));
@@ -103,10 +109,12 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
     }
 
     private HttpRequest prepareRequest(
-            VoiceSpeechProperties.Transcription config, FileChannelSpeechTranscriptionRequest request)
+            VoiceSpeechProperties.Transcription config,
+            SpringAiOpenAiVoiceFacade.Connection connection,
+            FileChannelSpeechTranscriptionRequest request)
             throws SpeechProviderException {
-        URI uri = endpoint(config.getBaseUrl(), "/audio/transcriptions");
-        requireConfigured(uri, config.getApiKey(), config.getModel(),
+        URI uri = endpoint(connection.baseUrl(), "/audio/transcriptions");
+        requireConfigured(uri, connection.apiKey(), config.getModel(),
                 VoiceActivationConfigurationValidator.TRANSCRIPTION_MODEL);
         if (request == null || request.audioChannel() == null || request.language() == null
                 || request.audioBytes() <= 0
@@ -135,7 +143,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
                             .getBytes(StandardCharsets.US_ASCII)));
             return HttpRequest.newBuilder(uri)
                     .timeout(deadline())
-                    .header("Authorization", bearer(config.getApiKey()))
+                    .header("Authorization", bearer(connection.apiKey()))
                     .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                     .header("Accept", "application/json")
                     .POST(body)

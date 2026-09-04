@@ -5,6 +5,7 @@ import cn.jia.chat.voice.SpeechSynthesisProvider;
 import cn.jia.chat.voice.SpeechSynthesisRequest;
 import cn.jia.chat.voice.SpeechSynthesisResult;
 import cn.jia.chat.voice.config.VoiceActivationConfigurationValidator;
+import cn.jia.chat.voice.config.SpringAiOpenAiVoiceFacade;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import tools.jackson.databind.ObjectMapper;
 
@@ -21,12 +22,13 @@ import java.util.Map;
 public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynthesisProvider {
     public static final int MAX_AUDIO_BYTES = 8 * 1024 * 1024;
     private final VoiceSpeechProperties properties;
+    private final SpringAiOpenAiVoiceFacade openAi;
     private final ObjectMapper objectMapper;
     private final HttpClient client;
 
     public OpenAiCompatibleSpeechSynthesisProvider(
-            VoiceSpeechProperties properties, ObjectMapper objectMapper) {
-        this(properties, objectMapper, HttpClient.newBuilder()
+            VoiceSpeechProperties properties, SpringAiOpenAiVoiceFacade openAi, ObjectMapper objectMapper) {
+        this(properties, openAi, objectMapper, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.min(
                         Math.max(1, properties.getConnectTimeoutMillis()), 3_000)))
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -34,8 +36,12 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
     }
 
     OpenAiCompatibleSpeechSynthesisProvider(
-            VoiceSpeechProperties properties, ObjectMapper objectMapper, HttpClient client) {
+            VoiceSpeechProperties properties,
+            SpringAiOpenAiVoiceFacade openAi,
+            ObjectMapper objectMapper,
+            HttpClient client) {
         this.properties = properties;
+        this.openAi = openAi;
         this.objectMapper = objectMapper;
         this.client = client;
     }
@@ -48,7 +54,8 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
     @Override
     public SpeechSynthesisResult synthesize(SpeechSynthesisRequest request)
             throws SpeechProviderException {
-        HttpRequest httpRequest = prepareRequest(properties.getSynthesis(), request);
+        HttpRequest httpRequest = prepareRequest(
+                properties.getSynthesis(), openAi.synthesis(), request);
         HttpResponse<byte[]> response;
         try {
             response = client.send(httpRequest, new BoundedBodyHandler(MAX_AUDIO_BYTES));
@@ -78,12 +85,14 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
     }
 
     private HttpRequest prepareRequest(
-            VoiceSpeechProperties.Synthesis config, SpeechSynthesisRequest request)
+            VoiceSpeechProperties.Synthesis config,
+            SpringAiOpenAiVoiceFacade.Connection connection,
+            SpeechSynthesisRequest request)
             throws SpeechProviderException {
         URI uri = OpenAiCompatibleSpeechTranscriptionProvider.endpoint(
-                config.getBaseUrl(), "/audio/speech");
+                connection.baseUrl(), "/audio/speech");
         OpenAiCompatibleSpeechTranscriptionProvider.requireConfigured(
-                uri, config.getApiKey(), config.getModel(),
+                uri, connection.apiKey(), config.getModel(),
                 VoiceActivationConfigurationValidator.SYNTHESIS_MODEL);
         if (!VoiceActivationConfigurationValidator.SYNTHESIS_VOICE.equals(
                     config.getProviderVoice())
@@ -100,7 +109,7 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
             return HttpRequest.newBuilder(uri)
                     .timeout(Duration.ofMillis(Math.min(
                             Math.max(1, properties.getProviderDeadlineMillis()), 25_000)))
-                    .header("Authorization", bearer(config.getApiKey()))
+                    .header("Authorization", bearer(connection.apiKey()))
                     .header("Content-Type", "application/json")
                     .header("Accept", "audio/mpeg")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(json))

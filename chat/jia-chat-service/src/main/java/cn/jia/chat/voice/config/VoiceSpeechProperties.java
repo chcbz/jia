@@ -19,6 +19,8 @@ public class VoiceSpeechProperties {
     private int globalConcurrency = 8;
     private long providerDeadlineMillis = 25_000;
     private long connectTimeoutMillis = 3_000;
+    private final Set<String> compatibilityGatewayAllowlist =
+            new LinkedHashSet<>(Set.of("https://api.openai.com/v1"));
     private final Transcription transcription = new Transcription();
     private final Synthesis synthesis = new Synthesis();
 
@@ -29,8 +31,6 @@ public class VoiceSpeechProperties {
         private String provider = "disabled";
         private Set<String> languages = new LinkedHashSet<>(Set.of("zh-CN"));
         private String defaultLanguage = "zh-CN";
-        private String baseUrl = "https://api.openai.com/v1";
-        private String apiKey;
         private String model = "whisper-1";
     }
 
@@ -41,8 +41,6 @@ public class VoiceSpeechProperties {
         private String provider = "disabled";
         private Set<String> voices = new LinkedHashSet<>(Set.of("juyiting-default"));
         private Set<String> formats = new LinkedHashSet<>(Set.of("mp3"));
-        private String baseUrl = "https://api.openai.com/v1";
-        private String apiKey;
         private String model = "gpt-4o-mini-tts";
         private String providerVoice = "alloy";
     }
@@ -51,6 +49,7 @@ public class VoiceSpeechProperties {
     public String toString() {
         return "VoiceSpeechProperties[enabled=" + enabled
                 + ", identityHmacSecret=<redacted>, cacheEncryptionKey=<redacted>"
+                + ", compatibilityGatewayAllowlist=" + compatibilityGatewayAllowlist
                 + ", transcription.provider=" + transcription.provider
                 + ", synthesis.provider=" + synthesis.provider + "]";
     }

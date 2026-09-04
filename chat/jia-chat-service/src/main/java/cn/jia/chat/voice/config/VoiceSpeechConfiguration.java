@@ -18,6 +18,10 @@ import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
 import tools.jackson.databind.ObjectMapper;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiCommonProperties;
+import org.springframework.core.env.Environment;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -26,12 +30,27 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(VoiceSpeechProperties.class)
+@EnableConfigurationProperties({
+        VoiceSpeechProperties.class,
+        OpenAiCommonProperties.class,
+        OpenAiAudioTranscriptionProperties.class,
+        OpenAiAudioSpeechProperties.class
+})
 public class VoiceSpeechConfiguration {
     @Bean
+    public SpringAiOpenAiVoiceFacade springAiOpenAiVoiceFacade(
+            OpenAiCommonProperties commonProperties,
+            OpenAiAudioTranscriptionProperties transcriptionProperties,
+            OpenAiAudioSpeechProperties synthesisProperties,
+            Environment environment) {
+        return new SpringAiOpenAiVoiceFacade(
+                commonProperties, transcriptionProperties, synthesisProperties, environment);
+    }
+
+    @Bean
     public VoiceActivationConfigurationValidator voiceActivationConfigurationValidator(
-            VoiceSpeechProperties properties) {
-        return new VoiceActivationConfigurationValidator(properties);
+            VoiceSpeechProperties properties, SpringAiOpenAiVoiceFacade openAi) {
+        return new VoiceActivationConfigurationValidator(properties, openAi);
     }
 
     @Bean
@@ -86,9 +105,10 @@ public class VoiceSpeechConfiguration {
     public SpeechTranscriptionProvider speechTranscriptionProvider(
             VoiceSpeechProperties properties,
             ObjectMapper objectMapper,
+            SpringAiOpenAiVoiceFacade openAi,
             VoiceActivationConfigurationValidator activationValidator) {
         if ("openai-compatible".equals(properties.getTranscription().getProvider())) {
-            return new OpenAiCompatibleSpeechTranscriptionProvider(properties, objectMapper);
+            return new OpenAiCompatibleSpeechTranscriptionProvider(properties, openAi, objectMapper);
         }
         return new DisabledSpeechTranscriptionProvider();
     }
@@ -98,9 +118,10 @@ public class VoiceSpeechConfiguration {
     public SpeechSynthesisProvider speechSynthesisProvider(
             VoiceSpeechProperties properties,
             ObjectMapper objectMapper,
+            SpringAiOpenAiVoiceFacade openAi,
             VoiceActivationConfigurationValidator activationValidator) {
         if ("openai-compatible".equals(properties.getSynthesis().getProvider())) {
-            return new OpenAiCompatibleSpeechSynthesisProvider(properties, objectMapper);
+            return new OpenAiCompatibleSpeechSynthesisProvider(properties, openAi, objectMapper);
         }
         return new DisabledSpeechSynthesisProvider();
     }

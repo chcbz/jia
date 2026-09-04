@@ -14,7 +14,7 @@ dependencies {
 	implementation libs.spring.boot.starter.webflux
 	implementation libs.spring.ai.starter.mcp.client
 	compileOnly libs.spring.ai.starter.model.deepseek
-	compileOnly "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
+	implementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	compileOnly libs.spring.ai.starter.model.ollama
 	compileOnly(libs.spring.boot.starter.elasticsearch)
 //	implementation libs.spring.ai.starter.vector.store.elasticsearch

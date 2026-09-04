@@ -1,10 +1,13 @@
 package cn.jia.chat.voice.config;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Set;
 
 /** Fail-fast trust-boundary validation for any attempted voice activation. */
 public final class VoiceActivationConfigurationValidator {
@@ -16,11 +19,12 @@ public final class VoiceActivationConfigurationValidator {
     private static final int MIN_HMAC_BYTES = 32;
     private static final int AES_256_BYTES = 32;
 
-    public VoiceActivationConfigurationValidator(VoiceSpeechProperties properties) {
-        validate(properties);
+    public VoiceActivationConfigurationValidator(
+            VoiceSpeechProperties properties, SpringAiOpenAiVoiceFacade openAi) {
+        validate(properties, openAi);
     }
 
-    static void validate(VoiceSpeechProperties properties) {
+    static void validate(VoiceSpeechProperties properties, SpringAiOpenAiVoiceFacade openAi) {
         if (properties == null || !activationRequested(properties)) {
             return;
         }
@@ -30,15 +34,15 @@ public final class VoiceActivationConfigurationValidator {
         VoiceSpeechProperties.Synthesis synthesis = properties.getSynthesis();
 
         requireExact(failures, "transcription.provider", transcription.getProvider(), PROVIDER);
-        requireExact(failures, "transcription.base-url", transcription.getBaseUrl(), OPENAI_BASE_URL);
         requireExact(failures, "transcription.model", transcription.getModel(), TRANSCRIPTION_MODEL);
-        requireApiKey(failures, "transcription.api-key", transcription.getApiKey());
+        validateConnection(failures, "transcription", openAi == null ? null : openAi.transcription(),
+                properties.getCompatibilityGatewayAllowlist());
 
         requireExact(failures, "synthesis.provider", synthesis.getProvider(), PROVIDER);
-        requireExact(failures, "synthesis.base-url", synthesis.getBaseUrl(), OPENAI_BASE_URL);
         requireExact(failures, "synthesis.model", synthesis.getModel(), SYNTHESIS_MODEL);
         requireExact(failures, "synthesis.provider-voice", synthesis.getProviderVoice(), SYNTHESIS_VOICE);
-        requireApiKey(failures, "synthesis.api-key", synthesis.getApiKey());
+        validateConnection(failures, "synthesis", openAi == null ? null : openAi.synthesis(),
+                properties.getCompatibilityGatewayAllowlist());
 
         byte[] hmacSecret = utf8(properties.getIdentityHmacSecret());
         if (hmacSecret == null || hmacSecret.length < MIN_HMAC_BYTES) {
@@ -50,11 +54,11 @@ public final class VoiceActivationConfigurationValidator {
             failures.add("cache-encryption-key must be Base64 encoding of exactly 32 bytes");
         }
 
-        if (hmacSecret != null && hmacSecret.length >= MIN_HMAC_BYTES) {
-            rejectSameSecret(failures, hmacSecret, utf8(transcription.getApiKey()),
-                    "identity-hmac-secret must differ from transcription.api-key");
-            rejectSameSecret(failures, hmacSecret, utf8(synthesis.getApiKey()),
-                    "identity-hmac-secret must differ from synthesis.api-key");
+        if (hmacSecret != null && hmacSecret.length >= MIN_HMAC_BYTES && openAi != null) {
+            rejectSameSecret(failures, hmacSecret, utf8(openAi.transcription().apiKey()),
+                    "identity-hmac-secret must differ from the resolved transcription API key");
+            rejectSameSecret(failures, hmacSecret, utf8(openAi.synthesis().apiKey()),
+                    "identity-hmac-secret must differ from the resolved synthesis API key");
             rejectSameSecret(failures, hmacSecret, cacheKey,
                     "identity-hmac-secret must differ from the decoded cache-encryption-key");
             rejectSameSecret(failures, hmacSecret, utf8(properties.getCacheEncryptionKey()),
@@ -84,6 +88,39 @@ public final class VoiceActivationConfigurationValidator {
         }
     }
 
+    private static void validateConnection(
+            List<String> failures,
+            String name,
+            SpringAiOpenAiVoiceFacade.Connection connection,
+            Set<String> allowlist) {
+        if (connection == null || !connection.hasExplicitGateway()) {
+            failures.add(name + " gateway must be explicitly configured through spring.ai.openai");
+            return;
+        }
+        if (!isAllowedHttpsGateway(connection.baseUrl(), allowlist)) {
+            failures.add(name + " gateway must be an allowed HTTPS compatibility gateway");
+        }
+        if (!isValidApiKey(connection.apiKey())) {
+            failures.add(name + " API key must be non-blank and contain no control characters");
+        }
+    }
+
+    private static boolean isAllowedHttpsGateway(String value, Set<String> allowlist) {
+        if (value == null || allowlist == null || !allowlist.contains(value)) {
+            return false;
+        }
+        try {
+            URI uri = new URI(value);
+            return "https".equalsIgnoreCase(uri.getScheme())
+                    && uri.getHost() != null
+                    && uri.getUserInfo() == null
+                    && uri.getQuery() == null
+                    && uri.getFragment() == null;
+        } catch (URISyntaxException exception) {
+            return false;
+        }
+    }
+
     private static boolean activationRequested(VoiceSpeechProperties properties) {
         return properties.isEnabled()
                 || properties.getTranscription().isEnabled()
@@ -97,20 +134,14 @@ public final class VoiceActivationConfigurationValidator {
         }
     }
 
-    private static void requireApiKey(List<String> failures, String name, String apiKey) {
-        if (!isValidApiKey(apiKey)) {
-            failures.add(name + " must be non-blank and contain no control characters");
-        }
-    }
-
-    private static byte[] utf8(String value) {
-        return value == null ? null : value.getBytes(StandardCharsets.UTF_8);
-    }
-
     private static void rejectSameSecret(
             List<String> failures, byte[] left, byte[] right, String message) {
         if (right != null && MessageDigest.isEqual(left, right)) {
             failures.add(message);
         }
+    }
+
+    private static byte[] utf8(String value) {
+        return value == null ? null : value.getBytes(StandardCharsets.UTF_8);
     }
 }

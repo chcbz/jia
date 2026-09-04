@@ -10,6 +10,10 @@ import cn.jia.chat.voice.provider.OpenAiCompatibleSpeechSynthesisProvider;
 import cn.jia.chat.voice.provider.OpenAiCompatibleSpeechTranscriptionProvider;
 import cn.jia.chat.voice.service.SpeechSynthesisService;
 import cn.jia.chat.voice.service.SpeechTranscriptionService;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiCommonProperties;
+import org.springframework.mock.env.MockEnvironment;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -32,6 +36,7 @@ class VoiceDefaultOffApplicationContextTest {
     private static final String IDENTITY_HMAC = "01234567890123456789012345678901";
     private static final String CACHE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
     private static final String API_KEY = "sk-test-openai-voice-key";
+    private static final String AUDIO_OVERRIDE_KEY = "sk-test-openai-audio-override-key";
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class))
@@ -48,10 +53,8 @@ class VoiceDefaultOffApplicationContextTest {
             assertFalse(properties.getTranscription().isEnabled());
             assertFalse(properties.getSynthesis().isEnabled());
             assertEquals("disabled", properties.getTranscription().getProvider());
-            assertEquals("https://api.openai.com/v1", properties.getTranscription().getBaseUrl());
             assertEquals("whisper-1", properties.getTranscription().getModel());
             assertEquals("disabled", properties.getSynthesis().getProvider());
-            assertEquals("https://api.openai.com/v1", properties.getSynthesis().getBaseUrl());
             assertEquals("gpt-4o-mini-tts", properties.getSynthesis().getModel());
             assertEquals("alloy", properties.getSynthesis().getProviderVoice());
             assertInstanceOf(DisabledSpeechTranscriptionProvider.class,
@@ -79,13 +82,9 @@ class VoiceDefaultOffApplicationContextTest {
             assertTrue(properties.isEnabled());
             assertTrue(properties.getTranscription().isEnabled());
             assertEquals("openai-compatible", properties.getTranscription().getProvider());
-            assertEquals("https://api.openai.com/v1", properties.getTranscription().getBaseUrl());
-            assertEquals(API_KEY, properties.getTranscription().getApiKey());
             assertEquals("whisper-1", properties.getTranscription().getModel());
             assertTrue(properties.getSynthesis().isEnabled());
             assertEquals("openai-compatible", properties.getSynthesis().getProvider());
-            assertEquals("https://api.openai.com/v1", properties.getSynthesis().getBaseUrl());
-            assertEquals(API_KEY, properties.getSynthesis().getApiKey());
             assertEquals("gpt-4o-mini-tts", properties.getSynthesis().getModel());
             assertEquals("alloy", properties.getSynthesis().getProviderVoice());
             assertInstanceOf(OpenAiCompatibleSpeechTranscriptionProvider.class,
@@ -93,11 +92,48 @@ class VoiceDefaultOffApplicationContextTest {
             assertInstanceOf(OpenAiCompatibleSpeechSynthesisProvider.class,
                     context.getBean(SpeechSynthesisProvider.class));
 
+            SpringAiOpenAiVoiceFacade facade = context.getBean(SpringAiOpenAiVoiceFacade.class);
+            assertEquals(API_KEY, facade.transcription().apiKey());
+            assertEquals(API_KEY, facade.synthesis().apiKey());
             String safeProperties = properties.toString();
             assertFalse(safeProperties.contains(API_KEY));
             assertFalse(safeProperties.contains(IDENTITY_HMAC));
             assertFalse(safeProperties.contains(CACHE_KEY));
+            assertFalse(facade.toString().contains(API_KEY));
+            assertFalse(facade.toString().contains(IDENTITY_HMAC));
+            assertFalse(facade.toString().contains(CACHE_KEY));
         });
+    }
+
+
+    @Test
+    void springAiCommonCredentialsAreInheritedAndAudioOverridesTakePrecedenceWithoutLeaking() {
+        runner.withPropertyValues(concat(validActivationProperties(),
+                "spring.ai.openai.audio.transcription.base-url=https://api.openai.com/v1",
+                "spring.ai.openai.audio.transcription.api-key=" + AUDIO_OVERRIDE_KEY))
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    SpringAiOpenAiVoiceFacade facade = context.getBean(SpringAiOpenAiVoiceFacade.class);
+                    assertEquals(AUDIO_OVERRIDE_KEY, facade.transcription().apiKey());
+                    assertEquals(API_KEY, facade.synthesis().apiKey());
+                    assertTrue(facade.transcription().hasExplicitGateway());
+                    assertTrue(facade.synthesis().hasExplicitGateway());
+                    assertFalse(facade.toString().contains(AUDIO_OVERRIDE_KEY));
+                    assertFalse(facade.toString().contains(API_KEY));
+                });
+    }
+
+    @Test
+    void rejectsImplicitOrUnallowlistedSpringAiGatewayBeforeProviderCreation() {
+        runner.withPropertyValues(concat(validActivationProperties(),
+                "spring.ai.openai.base-url=https://attacker.example/v1"))
+                .run(context -> assertNotNull(context.getStartupFailure()));
+
+        String[] noGateway = java.util.Arrays.stream(validActivationProperties())
+                .filter(value -> !value.startsWith("spring.ai.openai.base-url="))
+                .toArray(String[]::new);
+        runner.withPropertyValues(noGateway).run(context ->
+                assertNotNull(context.getStartupFailure()));
     }
 
     @Test
@@ -115,31 +151,11 @@ class VoiceDefaultOffApplicationContextTest {
     void activationValidationRejectsEveryUnpinnedOrUnsafeCredentialShape() {
         List<InvalidMutation> invalid = List.of(
                 invalid("stt provider", properties -> properties.getTranscription().setProvider("disabled")),
-                invalid("stt endpoint", properties -> properties.getTranscription()
-                        .setBaseUrl("https://attacker.example/v1")),
-                invalid("stt endpoint slash", properties -> properties.getTranscription()
-                        .setBaseUrl("https://api.openai.com/v1/")),
                 invalid("stt model", properties -> properties.getTranscription().setModel("whisper-test")),
-                invalid("stt key blank", properties -> properties.getTranscription().setApiKey(" ")),
-                invalid("stt key control", properties -> properties.getTranscription()
-                        .setApiKey("sk-test\u0000key")),
                 invalid("tts provider", properties -> properties.getSynthesis().setProvider("disabled")),
-                invalid("tts endpoint", properties -> properties.getSynthesis()
-                        .setBaseUrl("https://attacker.example/v1")),
                 invalid("tts model", properties -> properties.getSynthesis().setModel("tts-test")),
                 invalid("tts voice", properties -> properties.getSynthesis().setProviderVoice("nova")),
-                invalid("tts key blank", properties -> properties.getSynthesis().setApiKey("")),
-                invalid("tts key control", properties -> properties.getSynthesis()
-                        .setApiKey("sk-test\rkey")),
                 invalid("short hmac", properties -> properties.setIdentityHmacSecret("short")),
-                invalid("hmac equals stt api", properties -> {
-                    properties.setIdentityHmacSecret(IDENTITY_HMAC);
-                    properties.getTranscription().setApiKey(IDENTITY_HMAC);
-                }),
-                invalid("hmac equals tts api", properties -> {
-                    properties.setIdentityHmacSecret(IDENTITY_HMAC);
-                    properties.getSynthesis().setApiKey(IDENTITY_HMAC);
-                }),
                 invalid("cache malformed", properties -> properties.setCacheEncryptionKey("not-base64")),
                 invalid("cache 31 bytes", properties -> properties.setCacheEncryptionKey(
                         "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQ==")),
@@ -154,27 +170,43 @@ class VoiceDefaultOffApplicationContextTest {
             VoiceSpeechProperties properties = validProperties();
             invalidCase.mutation().accept(properties);
             IllegalStateException failure = assertThrows(IllegalStateException.class,
-                    () -> new VoiceActivationConfigurationValidator(properties), invalidCase.name());
+                    () -> new VoiceActivationConfigurationValidator(properties, facade()), invalidCase.name());
             assertFalse(failure.getMessage().contains(API_KEY), invalidCase.name());
             assertFalse(failure.getMessage().contains(IDENTITY_HMAC), invalidCase.name());
             assertFalse(failure.getMessage().contains(CACHE_KEY), invalidCase.name());
         }
     }
 
+
+    private static SpringAiOpenAiVoiceFacade facade() {
+        OpenAiCommonProperties common = new OpenAiCommonProperties();
+        common.setBaseUrl(VoiceActivationConfigurationValidator.OPENAI_BASE_URL);
+        common.setApiKey(API_KEY);
+        return new SpringAiOpenAiVoiceFacade(common,
+                new OpenAiAudioTranscriptionProperties(),
+                new OpenAiAudioSpeechProperties(),
+                new MockEnvironment().withProperty("spring.ai.openai.base-url",
+                        VoiceActivationConfigurationValidator.OPENAI_BASE_URL));
+    }
+
+    private static String[] concat(String[] values, String... additional) {
+        String[] result = java.util.Arrays.copyOf(values, values.length + additional.length);
+        System.arraycopy(additional, 0, result, values.length, additional.length);
+        return result;
+    }
+
     private static String[] validActivationProperties() {
         return new String[]{
+                "spring.ai.openai.base-url=https://api.openai.com/v1",
+                "spring.ai.openai.api-key=" + API_KEY,
                 "jia.chat.voice.enabled=true",
                 "jia.chat.voice.identity-hmac-secret=" + IDENTITY_HMAC,
                 "jia.chat.voice.cache-encryption-key=" + CACHE_KEY,
                 "jia.chat.voice.transcription.enabled=true",
                 "jia.chat.voice.transcription.provider=openai-compatible",
-                "jia.chat.voice.transcription.base-url=https://api.openai.com/v1",
-                "jia.chat.voice.transcription.api-key=" + API_KEY,
                 "jia.chat.voice.transcription.model=whisper-1",
                 "jia.chat.voice.synthesis.enabled=true",
                 "jia.chat.voice.synthesis.provider=openai-compatible",
-                "jia.chat.voice.synthesis.base-url=https://api.openai.com/v1",
-                "jia.chat.voice.synthesis.api-key=" + API_KEY,
                 "jia.chat.voice.synthesis.model=gpt-4o-mini-tts",
                 "jia.chat.voice.synthesis.provider-voice=alloy"
         };
@@ -187,10 +219,8 @@ class VoiceDefaultOffApplicationContextTest {
         properties.setCacheEncryptionKey(CACHE_KEY);
         properties.getTranscription().setEnabled(true);
         properties.getTranscription().setProvider("openai-compatible");
-        properties.getTranscription().setApiKey(API_KEY);
         properties.getSynthesis().setEnabled(true);
         properties.getSynthesis().setProvider("openai-compatible");
-        properties.getSynthesis().setApiKey(API_KEY);
         return properties;
     }
 
