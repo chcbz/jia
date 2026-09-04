@@ -407,8 +407,77 @@ public final class EconomySchemaInitializer implements InitializingBean {
 
     static String normalizeCheckClause(String sql) {
         if (sql == null) return null;
-        String normalized = normalizeCheckSpacing(normalizeSqlPreservingLiterals(sql));
+        String normalized = normalizeSqlPreservingLiterals(normalizeEscapedCheckStringDelimiters(sql));
+        normalized = normalizeCheckSpacing(normalizeBinaryLengthFunction(normalized));
         return normalizeCheckSpacing(removeRedundantCheckParentheses(normalized));
+    }
+
+    private static String normalizeEscapedCheckStringDelimiters(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        boolean escapedDelimiter = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (!quoted && character == '\\' && index + 1 < value.length()
+                    && value.charAt(index + 1) == '\'') {
+                normalized.append('\'');
+                quoted = true;
+                escapedDelimiter = true;
+                index++;
+            } else if (quoted && escapedDelimiter && character == '\\'
+                    && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                if (index + 3 < value.length() && value.charAt(index + 2) == '\\'
+                        && value.charAt(index + 3) == '\'') {
+                    normalized.append("''");
+                    index += 3;
+                } else {
+                    normalized.append('\'');
+                    quoted = false;
+                    escapedDelimiter = false;
+                    index++;
+                }
+            } else {
+                normalized.append(character);
+                if (character == '\'') {
+                    if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                        normalized.append(value.charAt(++index));
+                    } else {
+                        quoted = !quoted;
+                        escapedDelimiter = false;
+                    }
+                }
+            }
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeBinaryLengthFunction(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                normalized.append(character);
+                if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                    normalized.append(value.charAt(++index));
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (quoted || !isSqlWordCharacter(character)) {
+                normalized.append(character);
+            } else {
+                int end = index + 1;
+                while (end < value.length() && isSqlWordCharacter(value.charAt(end))) end++;
+                String word = value.substring(index, end);
+                int next = end;
+                while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
+                normalized.append(("length".equals(word) || "octet_length".equals(word))
+                        && next < value.length() && value.charAt(next) == '('
+                        ? "octet_length" : word);
+                index = end - 1;
+            }
+        }
+        return normalized.toString();
     }
 
     private static String normalizeCheckSpacing(String value) {

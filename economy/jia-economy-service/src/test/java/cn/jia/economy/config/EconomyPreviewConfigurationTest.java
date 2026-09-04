@@ -83,6 +83,17 @@ class EconomyPreviewConfigurationTest {
         assertEquals("label='A ( B, C <> D ) and O''Brien'",
                 EconomySchemaInitializer.normalizeCheckClause(
                         " ( label = _utf8mb4 'A ( B, C <> D ) and O''Brien' ) "));
+
+        String mysqlCatalog = "((`currency` = _utf8mb4\\'SILVER\\') AND "
+                + "(LENGTH(`request_hash`) = 32))";
+        String mysqlCatalogCaseDrift = "((`currency` = _utf8mb4\\'silver\\') AND "
+                + "(OCTET_LENGTH(`request_hash`) = 32))";
+        assertEquals("currency='SILVER' and octet_length(request_hash)=32",
+                EconomySchemaInitializer.normalizeCheckClause(mysqlCatalog));
+        assertEquals("label='O''Brien'", EconomySchemaInitializer.normalizeCheckClause(
+                "(`label` = _utf8mb4\\'O\\'\\'Brien\\')"));
+        assertFalse(EconomySchemaInitializer.normalizeCheckClause(mysqlCatalog)
+                .equals(EconomySchemaInitializer.normalizeCheckClause(mysqlCatalogCaseDrift)));
         assertEquals(5, EconomySchemaInitializer.tableDdlStatements().size());
     }
 
