@@ -13,6 +13,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -104,6 +105,11 @@ public final class EconomyWalletController {
     @ExceptionHandler(EconomyRequestException.class)
     public ResponseEntity<EconomyError> requestFailure(EconomyRequestException exception) {
         return error(exception.status, exception.code, exception.getMessage(), false);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<EconomyError> unreadableBody(HttpMessageNotReadableException ignored) {
+        return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid economy request", false);
     }
 
     @ExceptionHandler(EconomyPostingException.class)

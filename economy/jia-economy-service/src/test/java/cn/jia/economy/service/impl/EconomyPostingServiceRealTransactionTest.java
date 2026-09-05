@@ -9,6 +9,7 @@ import cn.jia.economy.api.EconomyWalletService;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.entity.EconomyEscrowFundingLotEntity;
+import cn.jia.economy.entity.EconomyWalletSnapshotRow;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.mapper.EconomyLedgerMapper;
 import cn.jia.economy.service.EconomyAccountKey;
@@ -49,10 +50,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** Real H2 transaction coverage using the production annotated mapper and posting service. */
 class EconomyPostingServiceRealTransactionTest {
@@ -173,6 +176,53 @@ class EconomyPostingServiceRealTransactionTest {
         assertEquals(100L, snapshot.availableMicro());
         assertEquals(50L, snapshot.heldMicro());
         assertEquals(1L, snapshot.version());
+    }
+
+    @Test
+    void missingWalletIsZeroWithoutProvisioningOrOtherWrites() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("test");
+        EconomyWalletService wallet = new EconomyWalletService(mapper, treasury, environment,
+                new EconomyPreviewGate(new EconomyPreviewProperties(true, true, List.of(
+                        new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))));
+
+        EconomyWalletService.WalletSnapshot snapshot = wallet.wallet(scope(), USER);
+
+        assertEquals(new EconomyWalletService.WalletSnapshot(0L, 0L, 0L), snapshot);
+        for (String table : List.of("economy_account", "economy_transaction", "economy_entry", "economy_escrow")) {
+            assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class), table);
+        }
+    }
+
+    @Test
+    void walletSnapshotDoesNotMixStateChangedImmediatelyAfterItsSingleSqlStatement() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("test");
+        EconomyPreviewGate gate = new EconomyPreviewGate(new EconomyPreviewProperties(true, true, List.of(
+                new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT))));
+        EconomyWalletService provisioningWallet = new EconomyWalletService(mapper, treasury, environment, gate);
+        provisioningWallet.issue(scope(), USER, "00000000-0000-0000-0000-000000000122",
+                HASH_ONE, 100, "preview");
+        String accountId = "wallet_" + walletHash(USER);
+        jdbc.update("""
+                INSERT INTO economy_escrow(escrow_id,business_type,business_id,payer_account_id,escrow_account_id,
+                    currency,gross_micro,captured_micro,refunded_micro,status,version,tenant_id,client_id,create_time,update_time)
+                VALUES('esc-interleave','BOUNTY','task-interleave',?,'escrow-account','SILVER',100,30,20,'ACTIVE',1,?,?,1,1)
+                """, accountId, TENANT, CLIENT);
+
+        EconomyLedgerMapper interleavingMapper = mock(EconomyLedgerMapper.class);
+        when(interleavingMapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenAnswer(ignored -> {
+            EconomyWalletSnapshotRow row = mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER);
+            jdbc.update("UPDATE economy_escrow SET gross_micro=200 WHERE escrow_id='esc-interleave'");
+            return row;
+        });
+        EconomyWalletService wallet = new EconomyWalletService(interleavingMapper, treasury, environment, gate);
+
+        EconomyWalletService.WalletSnapshot snapshot = wallet.wallet(scope(), USER);
+
+        assertEquals(new EconomyWalletService.WalletSnapshot(100L, 50L, 1L), snapshot);
+        assertEquals(150L, mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER).getHeldMicro());
+        verify(interleavingMapper).selectUserWalletSnapshot(TENANT, CLIENT, USER);
     }
 
     @Test

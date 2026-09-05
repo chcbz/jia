@@ -6,6 +6,7 @@ import cn.jia.economy.entity.EconomyEscrowEntity;
 import cn.jia.economy.entity.EconomyEscrowFundingLotEntity;
 import cn.jia.economy.entity.EconomyTransactionEntity;
 import cn.jia.economy.entity.EconomyWalletLedgerRow;
+import cn.jia.economy.entity.EconomyWalletSnapshotRow;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -112,34 +113,38 @@ public interface EconomyLedgerMapper {
             @Param("purpose") String purpose);
 
     @Select("""
-            SELECT id,account_id,owner_type,owner_id,purpose,currency,balance_micro,
-                   allow_negative,status,version,tenant_id,client_id,create_time,update_time
-            FROM economy_account
-            WHERE """ + EXACT_SCOPE + """
-              AND currency='SILVER' AND owner_type='USER' AND owner_id=#{ownerId} AND purpose='AVAILABLE'
-              AND OCTET_LENGTH(owner_id)=OCTET_LENGTH(#{ownerId})
+            SELECT COALESCE(wallet.balance_micro,0) AS available_micro,
+                   COALESCE(held.held_micro,0) AS held_micro,
+                   COALESCE(held.minimum_held_component_micro,0) AS minimum_held_component_micro,
+                   COALESCE(wallet.version,0) AS version
+            FROM (SELECT 1 AS singleton) snapshot_anchor
+            LEFT JOIN economy_account wallet
+              ON wallet.tenant_id=#{tenantId} AND wallet.client_id=#{clientId}
+             AND OCTET_LENGTH(wallet.tenant_id)=OCTET_LENGTH(#{tenantId})
+             AND OCTET_LENGTH(wallet.client_id)=OCTET_LENGTH(#{clientId})
+             AND wallet.currency='SILVER' AND wallet.owner_type='USER'
+             AND wallet.owner_id=#{ownerId} AND wallet.purpose='AVAILABLE'
+             AND OCTET_LENGTH(wallet.owner_id)=OCTET_LENGTH(#{ownerId})
+            LEFT JOIN (
+                SELECT SUM(e.gross_micro-e.captured_micro-e.refunded_micro) AS held_micro,
+                       MIN(e.gross_micro-e.captured_micro-e.refunded_micro) AS minimum_held_component_micro
+                FROM economy_escrow e
+                JOIN economy_account payer
+                  ON payer.tenant_id=e.tenant_id AND payer.client_id=e.client_id
+                 AND payer.account_id=e.payer_account_id
+                 AND OCTET_LENGTH(payer.tenant_id)=OCTET_LENGTH(e.tenant_id)
+                 AND OCTET_LENGTH(payer.client_id)=OCTET_LENGTH(e.client_id)
+                 AND OCTET_LENGTH(payer.account_id)=OCTET_LENGTH(e.payer_account_id)
+                WHERE e.tenant_id=#{tenantId} AND e.client_id=#{clientId}
+                  AND OCTET_LENGTH(e.tenant_id)=OCTET_LENGTH(#{tenantId})
+                  AND OCTET_LENGTH(e.client_id)=OCTET_LENGTH(#{clientId})
+                  AND payer.owner_type='USER' AND payer.owner_id=#{ownerId}
+                  AND payer.purpose='AVAILABLE'
+                  AND OCTET_LENGTH(payer.owner_id)=OCTET_LENGTH(#{ownerId})
+            ) held ON snapshot_anchor.singleton=1
             LIMIT 1
             """)
-    EconomyAccountEntity selectUserAvailableAccount(
-            @Param("tenantId") String tenantId,
-            @Param("clientId") String clientId,
-            @Param("ownerId") String ownerId);
-
-    @Select("""
-            SELECT gross_micro-captured_micro-refunded_micro
-            FROM economy_escrow e
-            JOIN economy_account a
-              ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id AND a.account_id=e.payer_account_id
-             AND OCTET_LENGTH(a.tenant_id)=OCTET_LENGTH(e.tenant_id)
-             AND OCTET_LENGTH(a.client_id)=OCTET_LENGTH(e.client_id)
-             AND OCTET_LENGTH(a.account_id)=OCTET_LENGTH(e.payer_account_id)
-            WHERE e.tenant_id=#{tenantId} AND e.client_id=#{clientId}
-              AND OCTET_LENGTH(e.tenant_id)=OCTET_LENGTH(#{tenantId})
-              AND OCTET_LENGTH(e.client_id)=OCTET_LENGTH(#{clientId})
-              AND a.owner_type='USER' AND a.owner_id=#{ownerId} AND a.purpose='AVAILABLE'
-              AND OCTET_LENGTH(a.owner_id)=OCTET_LENGTH(#{ownerId})
-            """)
-    List<Long> selectHeldMicroComponents(
+    EconomyWalletSnapshotRow selectUserWalletSnapshot(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("ownerId") String ownerId);

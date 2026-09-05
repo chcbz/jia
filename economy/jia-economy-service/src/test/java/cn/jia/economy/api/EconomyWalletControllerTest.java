@@ -2,8 +2,8 @@ package cn.jia.economy.api;
 
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
-import cn.jia.economy.entity.EconomyAccountEntity;
 import cn.jia.economy.entity.EconomyWalletLedgerRow;
+import cn.jia.economy.entity.EconomyWalletSnapshotRow;
 import cn.jia.economy.mapper.EconomyLedgerMapper;
 import cn.jia.economy.service.EconomyPostingCommand;
 import cn.jia.economy.service.EconomyPostingResult;
@@ -55,9 +55,8 @@ class EconomyWalletControllerTest {
 
     @Test
     void walletUsesJwtScopeOnlyAndReturnsExactStringWire() throws Exception {
-        when(mapper.selectUserAvailableAccount(TENANT, CLIENT, USER)).thenReturn(new EconomyAccountEntity()
-                .setBalanceMicro(1200000000L).setVersion(17L));
-        when(mapper.selectHeldMicroComponents(TENANT, CLIENT, USER)).thenReturn(List.of(300000000L));
+        when(mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenReturn(snapshot(
+                1200000000L, 300000000L, 17L));
 
         mvc.perform(get("/economy/wallet").principal(auth(TENANT, CLIENT, USER)))
                 .andExpect(status().isOk())
@@ -65,14 +64,23 @@ class EconomyWalletControllerTest {
                 .andExpect(jsonPath("$.availableMicro").value("1200000000"))
                 .andExpect(jsonPath("$.heldMicro").value("300000000"))
                 .andExpect(jsonPath("$.version").value("17"));
-        verify(mapper).selectUserAvailableAccount(TENANT, CLIENT, USER);
-        verify(mapper).selectHeldMicroComponents(TENANT, CLIENT, USER);
+        verify(mapper).selectUserWalletSnapshot(TENANT, CLIENT, USER);
+    }
+
+    @Test
+    void walletFailsClosedWhenAnyHeldComponentIsNegative() throws Exception {
+        when(mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenReturn(new EconomyWalletSnapshotRow()
+                .setAvailableMicro(100L).setHeldMicro(20L).setMinimumHeldComponentMicro(-1L).setVersion(1L));
+
+        mvc.perform(get("/economy/wallet").principal(auth(TENANT, CLIENT, USER)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("ECONOMY_UNAVAILABLE"));
+        verify(mapper).selectUserWalletSnapshot(TENANT, CLIENT, USER);
     }
 
     @Test
     void emptyWalletIsReadOnlyZeroAndDisabledOrPoisonedScopeDoesNotReachMapper() throws Exception {
-        when(mapper.selectUserAvailableAccount(TENANT, CLIENT, USER)).thenReturn(null);
-        when(mapper.selectHeldMicroComponents(TENANT, CLIENT, USER)).thenReturn(List.of());
+        when(mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenReturn(snapshot(0L, 0L, 0L));
         mvc.perform(get("/economy/wallet").principal(auth(TENANT, CLIENT, USER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.availableMicro").value("0"))
@@ -84,8 +92,7 @@ class EconomyWalletControllerTest {
                 .andExpect(jsonPath("$.code").value("ECONOMY_PREVIEW_DISABLED"));
         mvc.perform(get("/economy/wallet").principal(auth("Tenant-B", CLIENT, USER)))
                 .andExpect(status().isForbidden());
-        verify(mapper).selectUserAvailableAccount(TENANT, CLIENT, USER);
-        verify(mapper).selectHeldMicroComponents(TENANT, CLIENT, USER);
+        verify(mapper).selectUserWalletSnapshot(TENANT, CLIENT, USER);
     }
 
     @Test
@@ -101,6 +108,11 @@ class EconomyWalletControllerTest {
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         }
+        mvc.perform(post("/economy/preview/issuances").principal(auth(TENANT, CLIENT, USER))
+                        .header("Idempotency-Key", KEY).contentType(MediaType.APPLICATION_JSON)
+                        .content(new byte[0]))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         mvc.perform(post("/economy/preview/issuances").principal(auth(TENANT, CLIENT, USER))
                         .header("Idempotency-Key", KEY, KEY).contentType(MediaType.APPLICATION_JSON).content(valid))
                 .andExpect(status().isBadRequest());
@@ -169,6 +181,11 @@ class EconomyWalletControllerTest {
     private static EconomyPreviewGate gate(boolean enabled) {
         return new EconomyPreviewGate(new EconomyPreviewProperties(enabled, true,
                 List.of(new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT))));
+    }
+
+    private static EconomyWalletSnapshotRow snapshot(long available, long held, long version) {
+        return new EconomyWalletSnapshotRow().setAvailableMicro(available).setHeldMicro(held)
+                .setMinimumHeldComponentMicro(held == 0 ? 0L : held).setVersion(version);
     }
 
     private static EconomyWalletLedgerRow row(long id, String transactionId, String entryId,

@@ -8,6 +8,7 @@ import cn.jia.economy.common.EconomyJournalType;
 import cn.jia.economy.common.EconomyPrincipalType;
 import cn.jia.economy.entity.EconomyAccountEntity;
 import cn.jia.economy.entity.EconomyWalletLedgerRow;
+import cn.jia.economy.entity.EconomyWalletSnapshotRow;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.mapper.EconomyLedgerMapper;
 import cn.jia.economy.service.EconomyAccountKey;
@@ -47,24 +48,16 @@ public final class EconomyWalletService {
     }
 
     public WalletSnapshot wallet(EconomyScope scope, String actorId) {
-        EconomyAccountEntity account = mapper.selectUserAvailableAccount(
+        EconomyWalletSnapshotRow row = mapper.selectUserWalletSnapshot(
                 scope.tenantId(), scope.clientId(), actorId);
-        long available = account == null ? 0L : requiredNonNegative(account.getBalanceMicro(), "available balance");
-        long version = account == null ? 0L : requiredNonNegative(account.getVersion(), "wallet version");
-        List<Long> components = mapper.selectHeldMicroComponents(scope.tenantId(), scope.clientId(), actorId);
-        if (components == null) {
+        if (row == null) {
             throw new EconomyPostingException(EconomyPostingException.Reason.JOURNAL_CORRUPT,
-                    "held balance query returned no result");
+                    "wallet snapshot query returned no result");
         }
-        long held = 0L;
-        try {
-            for (Long component : components) {
-                held = Math.addExact(held, requiredNonNegative(component, "held balance"));
-            }
-        } catch (ArithmeticException exception) {
-            throw new EconomyPostingException(EconomyPostingException.Reason.AMOUNT_RANGE_EXCEEDED,
-                    "held balance exceeds signed BIGINT", exception);
-        }
+        long available = requiredNonNegative(row.getAvailableMicro(), "available balance");
+        long held = requiredNonNegative(row.getHeldMicro(), "held balance");
+        requiredNonNegative(row.getMinimumHeldComponentMicro(), "held balance component");
+        long version = requiredNonNegative(row.getVersion(), "wallet version");
         return new WalletSnapshot(available, held, version);
     }
 
