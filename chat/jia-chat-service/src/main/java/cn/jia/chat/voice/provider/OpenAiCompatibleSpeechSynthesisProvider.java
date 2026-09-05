@@ -16,7 +16,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
-import java.util.Locale;
 import java.util.Map;
 
 public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynthesisProvider {
@@ -74,7 +73,7 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
             throw unknown("synthesis provider transport failure");
         }
         if (response.statusCode() < 200 || response.statusCode() >= 300
-                || !isMpeg(response.headers().firstValue("Content-Type").orElse(null))) {
+                || !hasUniqueMpegContentType(response.headers())) {
             throw known();
         }
         byte[] audio = response.body();
@@ -90,7 +89,8 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
             SpeechSynthesisRequest request)
             throws SpeechProviderException {
         URI uri = OpenAiCompatibleSpeechTranscriptionProvider.endpoint(
-                connection.baseUrl(), "/audio/speech");
+                connection.baseUrl(), "/audio/speech",
+                properties.getCompatibilityGatewayAllowlist());
         OpenAiCompatibleSpeechTranscriptionProvider.requireConfigured(
                 uri, connection.apiKey(), config.getModel(),
                 VoiceActivationConfigurationValidator.SYNTHESIS_MODEL);
@@ -126,12 +126,12 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
         return "Bearer " + apiKey;
     }
 
-    private static boolean isMpeg(String contentType) {
-        if (contentType == null) {
+    private static boolean hasUniqueMpegContentType(java.net.http.HttpHeaders headers) {
+        if (headers == null) {
             return false;
         }
-        String base = contentType.split(";", 2)[0].strip().toLowerCase(Locale.ROOT);
-        return "audio/mpeg".equals(base) || "audio/mp3".equals(base);
+        java.util.List<String> values = headers.allValues("Content-Type");
+        return values.size() == 1 && "audio/mpeg".equalsIgnoreCase(values.get(0).strip());
     }
 
     private static SpeechProviderException known() {

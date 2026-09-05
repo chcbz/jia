@@ -61,6 +61,8 @@ import static org.mockito.Mockito.when;
 
 class OpenAiCompatibleVoiceProviderTest {
     private static final String REQUEST_ID = "01JVOICEPROVIDER001";
+    private static final String COMPATIBILITY_GATEWAY =
+            "https://voice-gateway.example/openai/v1";
 
     @Test
     void transcriptionMapsClientZhCnToIsoZhInActualMultipartBodyAndDispatchesOnce()
@@ -299,6 +301,139 @@ class OpenAiCompatibleVoiceProviderTest {
     }
 
     @Test
+    void exactAllowlistedHttpsCompatibilityGatewayDispatchesBothSafeAdapters() throws Exception {
+        HttpClient client = mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenThrow(new HttpTimeoutException("timeout"));
+        VoiceSpeechProperties properties = configured();
+        properties.getCompatibilityGatewayAllowlist().add(COMPATIBILITY_GATEWAY);
+        SpringAiOpenAiVoiceFacade gatewayFacade = facade(
+                COMPATIBILITY_GATEWAY, "sk-test-openai-voice-key");
+        Path audio = Files.createTempFile("voice-provider-gateway", ".webm");
+        Files.write(audio, new byte[]{1});
+        try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
+            var transcription = new OpenAiCompatibleSpeechTranscriptionProvider(
+                    properties, gatewayFacade, new ObjectMapper(), client);
+            SpeechProviderException transcriptionError = assertThrows(
+                    SpeechProviderException.class,
+                    () -> transcription.transcribe(new FileChannelSpeechTranscriptionRequest(
+                            channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
+            assertEquals(SpeechProviderException.FailureKind.TIMEOUT,
+                    transcriptionError.failureKind());
+
+            var synthesis = new OpenAiCompatibleSpeechSynthesisProvider(
+                    properties, gatewayFacade, new ObjectMapper(), client);
+            SpeechProviderException synthesisError = assertThrows(
+                    SpeechProviderException.class,
+                    () -> synthesis.synthesize(new SpeechSynthesisRequest(
+                            "林冲领命。", "juyiting-default", "mp3")));
+            assertEquals(SpeechProviderException.FailureKind.TIMEOUT,
+                    synthesisError.failureKind());
+        } finally {
+            Files.deleteIfExists(audio);
+        }
+
+        var requests = org.mockito.ArgumentCaptor.forClass(HttpRequest.class);
+        verify(client, times(2)).send(
+                requests.capture(), any(HttpResponse.BodyHandler.class));
+        assertEquals(List.of(
+                        COMPATIBILITY_GATEWAY + "/audio/transcriptions",
+                        COMPATIBILITY_GATEWAY + "/audio/speech"),
+                requests.getAllValues().stream()
+                        .map(request -> request.uri().toString())
+                        .toList());
+    }
+
+    @Test
+    void evenExactlyAllowlistedGatewayConfusionShapesFailBeforeDispatch() throws Exception {
+        HttpClient client = mock(HttpClient.class);
+        Path audio = Files.createTempFile("voice-provider-gateway-reject", ".webm");
+        Files.write(audio, new byte[]{1});
+        try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
+            for (String gateway : List.of(
+                    "https://voice-gateway.example/openai/v1?target=/audio/transcriptions",
+                    "https://voice-gateway.example/openai/v1#target",
+                    "https://voice-gateway.example/openai/v1/",
+                    "https://voice-gateway.example/openai/../v1",
+                    "https://voice-gateway.example/openai%2Fv1")) {
+                VoiceSpeechProperties properties = configured();
+                properties.getCompatibilityGatewayAllowlist().clear();
+                properties.getCompatibilityGatewayAllowlist().add(gateway);
+                var provider = new OpenAiCompatibleSpeechTranscriptionProvider(
+                        properties, facade(gateway, "sk-test-openai-voice-key"),
+                        new ObjectMapper(), client);
+
+                SpeechProviderException error = assertThrows(
+                        SpeechProviderException.class,
+                        () -> provider.transcribe(new FileChannelSpeechTranscriptionRequest(
+                                channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)),
+                        gateway);
+                assertEquals(SpeechProviderException.FailureKind.KNOWN,
+                        error.failureKind(), gateway);
+            }
+        } finally {
+            Files.deleteIfExists(audio);
+        }
+        verify(client, never()).send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
+    }
+
+    @Test
+    void synthesisAcceptsExactlyOneParameterlessAudioMpegContentType() throws Exception {
+        for (String contentType : List.of("audio/mpeg", " Audio/MPEG ")) {
+            HttpClient client = mock(HttpClient.class);
+            when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                    .thenAnswer(invocation -> audioResponse(List.of(contentType)));
+            var provider = new OpenAiCompatibleSpeechSynthesisProvider(
+                    configured(), facade(), new ObjectMapper(), client);
+
+            var result = provider.synthesize(new SpeechSynthesisRequest(
+                    "林冲领命。", "juyiting-default", "mp3"));
+
+            assertArrayEquals(new byte[]{1, 2, 3}, result.audio());
+            assertEquals("audio/mpeg", result.mediaType());
+            verify(client, times(1)).send(
+                    any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
+        }
+    }
+
+    @Test
+    void synthesisRejectsMissingDuplicateConflictingAndParameterizedContentTypes() throws Exception {
+        List<List<String>> contentTypeCases = List.of(
+                List.of(),
+                List.of("audio/mp3"),
+                List.of("application/octet-stream"),
+                List.of("audio/mpeg; charset=binary"),
+                List.of("audio/mpeg;"),
+                List.of("audio/mpeg; charset"),
+                List.of("audio/mpeg; =binary"),
+                List.of("audio/mpeg; profile=voice"),
+                List.of("audio/mpeg; charset=binary; charset=binary"),
+                List.of("audio/mpeg; charset=binary; profile=voice"),
+                List.of("audio/mpeg", "audio/mpeg"),
+                List.of("audio/mpeg", "text/plain"),
+                List.of("audio/mpeg, audio/mpeg"),
+                List.of("audio/mpeg, text/plain"));
+        for (List<String> contentTypes : contentTypeCases) {
+            HttpClient client = mock(HttpClient.class);
+            when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                    .thenAnswer(invocation -> audioResponse(contentTypes));
+            var provider = new OpenAiCompatibleSpeechSynthesisProvider(
+                    configured(), facade(), new ObjectMapper(), client);
+
+            SpeechProviderException error = assertThrows(
+                    SpeechProviderException.class,
+                    () -> provider.synthesize(new SpeechSynthesisRequest(
+                            "林冲领命。", "juyiting-default", "mp3")),
+                    contentTypes.toString());
+
+            assertEquals(SpeechProviderException.FailureKind.KNOWN,
+                    error.failureKind(), contentTypes.toString());
+            verify(client, times(1)).send(
+                    any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
+        }
+    }
+
+    @Test
     void synthesisRejectsDeclaredBodyAboveEightMiBWithoutRetryOrCaching() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         HttpClient client = mock(HttpClient.class);
@@ -377,6 +512,17 @@ class OpenAiCompatibleVoiceProviderTest {
         when(response.body()).thenReturn(
                 "{\"text\":\"林冲领命\",\"language\":\"zh\"}"
                         .getBytes(StandardCharsets.UTF_8));
+        return response;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static HttpResponse<byte[]> audioResponse(List<String> contentTypes) {
+        HttpResponse<byte[]> response = mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(200);
+        Map<String, List<String>> headers = contentTypes.isEmpty()
+                ? Map.of() : Map.of("Content-Type", contentTypes);
+        when(response.headers()).thenReturn(HttpHeaders.of(headers, (name, value) -> true));
+        when(response.body()).thenReturn(new byte[]{1, 2, 3});
         return response;
     }
 

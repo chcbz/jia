@@ -105,20 +105,38 @@ public final class VoiceActivationConfigurationValidator {
         }
     }
 
-    private static boolean isAllowedHttpsGateway(String value, Set<String> allowlist) {
+    public static boolean isAllowedHttpsGateway(String value, Set<String> allowlist) {
         if (value == null || allowlist == null || !allowlist.contains(value)) {
             return false;
         }
         try {
             URI uri = new URI(value);
-            return "https".equalsIgnoreCase(uri.getScheme())
+            String rawPath = uri.getRawPath();
+            return value.equals(uri.toASCIIString())
+                    && "https".equalsIgnoreCase(uri.getScheme())
                     && uri.getHost() != null
                     && uri.getUserInfo() == null
                     && uri.getQuery() == null
-                    && uri.getFragment() == null;
+                    && uri.getFragment() == null
+                    && isUnambiguousBasePath(rawPath);
         } catch (URISyntaxException exception) {
             return false;
         }
+    }
+
+    private static boolean isUnambiguousBasePath(String rawPath) {
+        if (rawPath == null || rawPath.length() < 2 || !rawPath.startsWith("/")
+                || rawPath.endsWith("/") || rawPath.contains("//")
+                || rawPath.contains("\\") || rawPath.contains("%")
+                || rawPath.contains(";")) {
+            return false;
+        }
+        for (String segment : rawPath.substring(1).split("/", -1)) {
+            if (segment.isEmpty() || ".".equals(segment) || "..".equals(segment)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean activationRequested(VoiceSpeechProperties properties) {

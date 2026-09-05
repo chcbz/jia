@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -113,7 +114,8 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
             SpringAiOpenAiVoiceFacade.Connection connection,
             FileChannelSpeechTranscriptionRequest request)
             throws SpeechProviderException {
-        URI uri = endpoint(connection.baseUrl(), "/audio/transcriptions");
+        URI uri = endpoint(connection.baseUrl(), "/audio/transcriptions",
+                properties.getCompatibilityGatewayAllowlist());
         requireConfigured(uri, connection.apiKey(), config.getModel(),
                 VoiceActivationConfigurationValidator.TRANSCRIPTION_MODEL);
         if (request == null || request.audioChannel() == null || request.language() == null
@@ -170,13 +172,25 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
         return Duration.ofMillis(Math.min(Math.max(1, properties.getProviderDeadlineMillis()), 25_000));
     }
 
-    static URI endpoint(String baseUrl, String path) throws SpeechProviderException {
-        if (!VoiceActivationConfigurationValidator.OPENAI_BASE_URL.equals(baseUrl)
-                || (!"/audio/transcriptions".equals(path) && !"/audio/speech".equals(path))) {
+    static URI endpoint(String baseUrl, String path, Set<String> allowlist)
+            throws SpeechProviderException {
+        if ((!"/audio/transcriptions".equals(path) && !"/audio/speech".equals(path))
+                || !VoiceActivationConfigurationValidator.isAllowedHttpsGateway(
+                        baseUrl, allowlist)) {
             throw known();
         }
         try {
-            return URI.create(VoiceActivationConfigurationValidator.OPENAI_BASE_URL + path);
+            URI base = URI.create(baseUrl);
+            URI endpoint = URI.create(baseUrl + path);
+            if (!"https".equalsIgnoreCase(endpoint.getScheme())
+                    || !Objects.equals(base.getRawAuthority(), endpoint.getRawAuthority())
+                    || !Objects.equals(base.getRawPath() + path, endpoint.getRawPath())
+                    || endpoint.getUserInfo() != null
+                    || endpoint.getRawQuery() != null
+                    || endpoint.getRawFragment() != null) {
+                throw known();
+            }
+            return endpoint;
         } catch (IllegalArgumentException exception) {
             throw known();
         }
