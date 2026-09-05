@@ -5,6 +5,7 @@ import cn.jia.economy.entity.EconomyEntryEntity;
 import cn.jia.economy.entity.EconomyEscrowEntity;
 import cn.jia.economy.entity.EconomyEscrowFundingLotEntity;
 import cn.jia.economy.entity.EconomyTransactionEntity;
+import cn.jia.economy.entity.EconomyWalletLedgerRow;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -109,6 +110,82 @@ public interface EconomyLedgerMapper {
             @Param("ownerType") String ownerType,
             @Param("ownerId") String ownerId,
             @Param("purpose") String purpose);
+
+    @Select("""
+            SELECT id,account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                   allow_negative,status,version,tenant_id,client_id,create_time,update_time
+            FROM economy_account
+            WHERE """ + EXACT_SCOPE + """
+              AND currency='SILVER' AND owner_type='USER' AND owner_id=#{ownerId} AND purpose='AVAILABLE'
+              AND OCTET_LENGTH(owner_id)=OCTET_LENGTH(#{ownerId})
+            LIMIT 1
+            """)
+    EconomyAccountEntity selectUserAvailableAccount(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerId") String ownerId);
+
+    @Select("""
+            SELECT gross_micro-captured_micro-refunded_micro
+            FROM economy_escrow e
+            JOIN economy_account a
+              ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id AND a.account_id=e.payer_account_id
+             AND OCTET_LENGTH(a.tenant_id)=OCTET_LENGTH(e.tenant_id)
+             AND OCTET_LENGTH(a.client_id)=OCTET_LENGTH(e.client_id)
+             AND OCTET_LENGTH(a.account_id)=OCTET_LENGTH(e.payer_account_id)
+            WHERE e.tenant_id=#{tenantId} AND e.client_id=#{clientId}
+              AND OCTET_LENGTH(e.tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND OCTET_LENGTH(e.client_id)=OCTET_LENGTH(#{clientId})
+              AND a.owner_type='USER' AND a.owner_id=#{ownerId} AND a.purpose='AVAILABLE'
+              AND OCTET_LENGTH(a.owner_id)=OCTET_LENGTH(#{ownerId})
+            """)
+    List<Long> selectHeldMicroComponents(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerId") String ownerId);
+
+    @Select("""
+            SELECT e.id AS row_id,e.transaction_id,e.entry_id,t.business_type,t.business_id AS business_ref,
+                   e.signed_amount_micro,e.status,e.posted_at
+            FROM economy_entry e
+            JOIN economy_account a
+              ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id AND a.account_id=e.account_id
+             AND OCTET_LENGTH(a.tenant_id)=OCTET_LENGTH(e.tenant_id)
+             AND OCTET_LENGTH(a.client_id)=OCTET_LENGTH(e.client_id)
+             AND OCTET_LENGTH(a.account_id)=OCTET_LENGTH(e.account_id)
+            JOIN economy_transaction t
+              ON t.tenant_id=e.tenant_id AND t.client_id=e.client_id AND t.transaction_id=e.transaction_id
+             AND OCTET_LENGTH(t.tenant_id)=OCTET_LENGTH(e.tenant_id)
+             AND OCTET_LENGTH(t.client_id)=OCTET_LENGTH(e.client_id)
+             AND OCTET_LENGTH(t.transaction_id)=OCTET_LENGTH(e.transaction_id)
+            WHERE e.tenant_id=#{tenantId} AND e.client_id=#{clientId}
+              AND OCTET_LENGTH(e.tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND OCTET_LENGTH(e.client_id)=OCTET_LENGTH(#{clientId})
+              AND a.owner_type='USER' AND a.owner_id=#{ownerId} AND a.purpose='AVAILABLE'
+              AND OCTET_LENGTH(a.owner_id)=OCTET_LENGTH(#{ownerId})
+              AND e.status='POSTED' AND t.status='POSTED'
+              AND (#{cursorPostedAt} IS NULL OR e.posted_at < #{cursorPostedAt}
+                   OR (e.posted_at=#{cursorPostedAt} AND e.id < #{cursorRowId}))
+            ORDER BY e.posted_at DESC,e.id DESC
+            LIMIT #{limit}
+            """)
+    List<EconomyWalletLedgerRow> selectUserAvailableLedger(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerId") String ownerId,
+            @Param("cursorPostedAt") Long cursorPostedAt,
+            @Param("cursorRowId") Long cursorRowId,
+            @Param("limit") int limit);
+
+    @Insert("""
+            INSERT IGNORE INTO economy_account(
+                account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                allow_negative,status,version,tenant_id,client_id,create_time,update_time)
+            VALUES(
+                #{accountId},#{ownerType},#{ownerId},#{purpose},#{currency},#{balanceMicro},
+                #{allowNegative},#{status},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
+            """)
+    int insertAccountIfAbsent(EconomyAccountEntity account);
 
     @Update("""
             UPDATE economy_account

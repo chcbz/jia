@@ -5,6 +5,7 @@ import cn.jia.economy.common.EconomyAccountPurpose;
 import cn.jia.economy.common.EconomyEscrowType;
 import cn.jia.economy.common.EconomyJournalType;
 import cn.jia.economy.common.EconomyPrincipalType;
+import cn.jia.economy.api.EconomyWalletService;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.entity.EconomyEscrowFundingLotEntity;
@@ -26,11 +27,19 @@ import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -82,7 +91,7 @@ class EconomyPostingServiceRealTransactionTest {
         if (factory == null) throw new IllegalStateException("SqlSessionFactory was not created");
         mapper = spy(new SqlSessionTemplate(factory).getMapper(EconomyLedgerMapper.class));
 
-        EconomyPreviewGate gate = new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
+        EconomyPreviewGate gate = new EconomyPreviewGate(new EconomyPreviewProperties(true, true, List.of(
                 new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT),
                 new EconomyPreviewProperties.AllowedScope(LOWER_TENANT, LOWER_CLIENT))));
         transactionSequence = new AtomicInteger();
@@ -96,6 +105,74 @@ class EconomyPostingServiceRealTransactionTest {
     @AfterEach
     void tearDown() {
         jdbc.execute("DROP ALL OBJECTS");
+    }
+
+    @Test
+    void issuanceProvisioningUsesTreasuryReplayAndOriginalReceiptAfterLaterWalletChanges() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("test");
+        EconomyWalletService wallet = new EconomyWalletService(mapper, treasury, environment,
+                new EconomyPreviewGate(new EconomyPreviewProperties(true, true, List.of(
+                        new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))));
+        String firstKey = "00000000-0000-0000-0000-000000000101";
+        EconomyPostingResult first = wallet.issue(scope(), USER, firstKey, HASH_ONE, 100, "preview-welcome");
+        EconomyPostingResult later = wallet.issue(scope(), USER,
+                "00000000-0000-0000-0000-000000000102", HASH_TWO, 50, "preview-welcome-2");
+        EconomyPostingResult replay = wallet.issue(scope(), USER, firstKey, HASH_ONE, 100, "preview-welcome");
+
+        assertEquals(first, replay);
+        assertEquals(100L, first.creditTotalMicro());
+        assertEquals(50L, later.creditTotalMicro());
+        assertEquals(150L, balance("wallet_" + walletHash(USER)));
+        assertEquals(-150L, balance("system_silver_issuance"));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
+    }
+
+    @Test
+    void concurrentIssuanceProvisioningCreatesOnlyTypedAccounts() throws Exception {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("test");
+        EconomyWalletService wallet = new EconomyWalletService(mapper, treasury, environment,
+                new EconomyPreviewGate(new EconomyPreviewProperties(true, true, List.of(
+                        new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))));
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<EconomyPostingResult>> results = List.of(
+                    executor.submit(issueAfter(start, wallet, USER, "00000000-0000-0000-0000-000000000111", HASH_ONE)),
+                    executor.submit(issueAfter(start, wallet, "user-2", "00000000-0000-0000-0000-000000000112", HASH_TWO)));
+            start.countDown();
+            for (Future<EconomyPostingResult> result : results) assertEquals("POSTED", result.get().status());
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+        }
+        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account", Integer.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE owner_type='USER' AND purpose='AVAILABLE' AND allow_negative=0 AND version=1", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE owner_type='SYSTEM' AND purpose='SILVER_ISSUANCE' AND allow_negative=1 AND version=2", Integer.class));
+        assertEquals(100L, balance("wallet_" + walletHash(USER)));
+        assertEquals(100L, balance("wallet_" + walletHash("user-2")));
+    }
+
+    @Test
+    void walletHeldBalanceIsExactRemainingEscrowOnly() {
+        MockEnvironment environment = new MockEnvironment();
+        environment.setActiveProfiles("test");
+        EconomyWalletService wallet = new EconomyWalletService(mapper, treasury, environment,
+                new EconomyPreviewGate(new EconomyPreviewProperties(true, true, List.of(
+                        new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))));
+        wallet.issue(scope(), USER, "00000000-0000-0000-0000-000000000121", HASH_ONE, 100, "preview");
+        String accountId = "wallet_" + walletHash(USER);
+        jdbc.update("""
+                INSERT INTO economy_escrow(escrow_id,business_type,business_id,payer_account_id,escrow_account_id,
+                    currency,gross_micro,captured_micro,refunded_micro,status,version,tenant_id,client_id,create_time,update_time)
+                VALUES('esc-held','BOUNTY','task-held',?,'escrow-account','SILVER',100,30,20,'ACTIVE',1,?,?,1,1)
+                """, accountId, TENANT, CLIENT);
+        EconomyWalletService.WalletSnapshot snapshot = wallet.wallet(scope(), USER);
+        assertEquals(100L, snapshot.availableMicro());
+        assertEquals(50L, snapshot.heldMicro());
+        assertEquals(1L, snapshot.version());
     }
 
     @Test
@@ -582,6 +659,32 @@ class EconomyPostingServiceRealTransactionTest {
                     UNIQUE(tenant_id,client_id,escrow_id,funding_sequence),
                     UNIQUE(tenant_id,client_id,reserve_transaction_id))
                 """);
+    }
+
+    private static Callable<EconomyPostingResult> issueAfter(
+            CountDownLatch start, EconomyWalletService wallet, String actor, String key, byte[] hash) {
+        return () -> {
+            if (!start.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("test start timed out");
+            return wallet.issue(scopeStatic(), actor, key, hash, 100, "preview-welcome");
+        };
+    }
+
+    private static EconomyScope scopeStatic() {
+        return new EconomyScope(TENANT, CLIENT);
+    }
+
+    private static String walletHash(String actor) {
+        try {
+            byte[] value = actor.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] framed = java.nio.ByteBuffer.allocate(Integer.BYTES + value.length)
+                    .putInt(value.length).put(value).array();
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(framed);
+            StringBuilder result = new StringBuilder();
+            for (byte unit : digest) result.append(String.format("%02x", unit));
+            return result.toString();
+        } catch (Exception exception) {
+            throw new AssertionError(exception);
+        }
     }
 
     private static byte[] hash(int marker) {

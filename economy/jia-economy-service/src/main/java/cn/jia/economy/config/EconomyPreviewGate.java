@@ -14,6 +14,7 @@ public final class EconomyPreviewGate {
     private static final int MAX_SCOPE_BYTES = 50;
 
     private final boolean enabled;
+    private final boolean testIssuanceEnabled;
     private final Set<Scope> allowedScopes;
 
     public EconomyPreviewGate(EconomyPreviewProperties properties) {
@@ -29,11 +30,16 @@ public final class EconomyPreviewGate {
         }
         if (properties.enabled() && validated.isEmpty()) throw invalidConfiguration();
         enabled = properties.enabled();
+        testIssuanceEnabled = properties.testIssuanceEnabled();
         allowedScopes = Collections.unmodifiableSet(validated);
     }
 
     public boolean allows(String tenantId, String clientId) {
         return enabled && allowedScopes.contains(new Scope(tenantId, clientId));
+    }
+
+    public boolean testIssuanceEnabled() {
+        return testIssuanceEnabled;
     }
 
     public void requireMutationAllowed(String tenantId, String clientId) {

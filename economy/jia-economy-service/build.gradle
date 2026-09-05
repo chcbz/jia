@@ -2,7 +2,10 @@ dependencies {
     api project(':economy:jia-economy-api')
     implementation project(':economy:jia-economy-mapper')
     implementation project(':common:jia-common-service')
+    compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
     testImplementation project(':common:jia-common-test')
+    testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
+    testImplementation 'org.springframework.security:spring-security-oauth2-jose'
     testRuntimeOnly libs.mysql
 }
 
