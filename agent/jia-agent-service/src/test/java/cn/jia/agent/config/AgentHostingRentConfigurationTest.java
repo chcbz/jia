@@ -21,6 +21,10 @@ class AgentHostingRentConfigurationTest {
             assertNull(context.getStartupFailure());
             AgentHostingRentProperties properties = context.getBean(AgentHostingRentProperties.class);
             assertFalse(properties.enabled());
+            assertTrue(properties.descriptorConfigured());
+            assertEquals("1", properties.planVersion());
+            assertEquals("1000000000", properties.amountMicro());
+            assertEquals("2592000", properties.periodSeconds());
             assertFalse(properties.configured());
             assertReason(context.getBean(HostingRentAdmissionService.class),
                     HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_CONFIGURED);
@@ -31,17 +35,17 @@ class AgentHostingRentConfigurationTest {
     void disabledOrIncompleteConfigurationCannotActivateAdmission() {
         RUNNER.withPropertyValues(
                         "agent.hosting-rent.enabled=false",
-                        "agent.hosting-rent.plan-version=rent-v1",
-                        "agent.hosting-rent.amount-micro=1000000",
-                        "agent.hosting-rent.period-seconds=86400")
+                        "agent.hosting-rent.plan-version=1",
+                        "agent.hosting-rent.amount-micro=1000000000",
+                        "agent.hosting-rent.period-seconds=2592000")
                 .run(context -> assertReason(context.getBean(HostingRentAdmissionService.class),
                         HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_CONFIGURED));
 
         RUNNER.withPropertyValues(
                         "agent.hosting-rent.enabled=true",
-                        "agent.hosting-rent.plan-version=rent-v1",
+                        "agent.hosting-rent.plan-version=1",
                         "agent.hosting-rent.amount-micro=01",
-                        "agent.hosting-rent.period-seconds=86400")
+                        "agent.hosting-rent.period-seconds=2592000")
                 .run(context -> assertReason(context.getBean(HostingRentAdmissionService.class),
                         HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_CONFIGURED));
     }
@@ -50,12 +54,16 @@ class AgentHostingRentConfigurationTest {
     void completeVersionedConfigurationStillCannotOpenLegacyFreeHosting() {
         RUNNER.withPropertyValues(
                         "agent.hosting-rent.enabled=true",
-                        "agent.hosting-rent.plan-version=rent-v1",
-                        "agent.hosting-rent.amount-micro=1000000",
-                        "agent.hosting-rent.period-seconds=86400")
+                        "agent.hosting-rent.plan-version=1",
+                        "agent.hosting-rent.amount-micro=1000000000",
+                        "agent.hosting-rent.period-seconds=2592000")
                 .run(context -> {
                     AgentHostingRentProperties properties = context.getBean(AgentHostingRentProperties.class);
+                    assertTrue(properties.descriptorConfigured());
                     assertTrue(properties.configured());
+                    assertEquals("1", properties.planVersion());
+                    assertEquals("1000000000", properties.amountMicro());
+                    assertEquals("2592000", properties.periodSeconds());
                     assertReason(context.getBean(HostingRentAdmissionService.class),
                             HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY);
                 });

@@ -104,7 +104,7 @@ class AgentHostingRentControllerTest {
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         }
-        mvc.perform(post(PATH + "?planVersion=rent-v1").principal(authentication)
+        mvc.perform(post(PATH + "?planVersion=1").principal(authentication)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
@@ -114,7 +114,7 @@ class AgentHostingRentControllerTest {
     @Test
     void configuredPlanStillReturnsNotReadyAndNeverInventsQuote() throws Exception {
         HostingRentAdmissionService configured = new HostingRentAdmissionService(
-                new AgentHostingRentProperties(true, "rent-v1", "1000000", "86400"));
+                new AgentHostingRentProperties(true, "1", "1000000000", "2592000"));
 
         mvc(configured).perform(post(PATH).principal(jwt("actor-1", "Tenant-A", "Client-A"))
                         .contentType(MediaType.APPLICATION_JSON).content(" { } "))

@@ -30,7 +30,18 @@ class EconomyPreviewConfigurationTest {
             assertNull(context.getStartupFailure());
             assertFalse(context.getBean(EconomyPreviewGate.class).allows("tenant-a", "client-a"));
             assertTrue(context.getBeansOfType(EconomySchemaInitializer.class).isEmpty());
+            assertTrue(context.getBeansOfType(EconomyHostingRentSchemaInitializer.class).isEmpty());
         });
+    }
+
+    @Test
+    void hostingSchemaRequiresItsOwnExplicitFlagAndNeverFollowsPreviewAlone() {
+        RUNNER.withPropertyValues(
+                        "economy.preview.enabled=true",
+                        "economy.preview.allowed-scopes[0].tenant-id=Tenant-A",
+                        "economy.preview.allowed-scopes[0].client-id=Client-A")
+                .run(context -> assertTrue(
+                        context.getBeansOfType(EconomyHostingRentSchemaInitializer.class).isEmpty()));
     }
 
     @Test

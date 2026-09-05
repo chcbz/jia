@@ -59,7 +59,7 @@ class AgentServiceHostingRentAdmissionTest {
     @Test
     void configuredRentStillRejectsServerBindBeforeAnyLegacyMutation() {
         HostingRentAdmissionService admission = new HostingRentAdmissionService(
-                new AgentHostingRentProperties(true, "rent-v1", "1000000", "86400"));
+                new AgentHostingRentProperties(true, "1", "1000000000", "2592000"));
         AgentServiceImpl service = service(admission);
 
         HostingRentAdmissionException failure = assertThrows(HostingRentAdmissionException.class,

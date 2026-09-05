@@ -4,20 +4,35 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.regex.Pattern;
 
-/** Startup-only hosting-rent plan. No values are enabled or defaulted by R00. */
+/**
+ * Startup-only preview hosting-rent descriptor. The approved V1 values are defaults, while
+ * charging remains disabled unless {@code enabled} is explicitly set.
+ */
 @ConfigurationProperties(prefix = "agent.hosting-rent")
 public record AgentHostingRentProperties(
         boolean enabled,
         String planVersion,
         String amountMicro,
         String periodSeconds) {
-    private static final Pattern PLAN_VERSION = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,63}");
+    public static final String PREVIEW_PLAN_VERSION = "1";
+    public static final String PREVIEW_AMOUNT_MICRO = "1000000000";
+    public static final String PREVIEW_PERIOD_SECONDS = "2592000";
+
     private static final Pattern POSITIVE_DECIMAL = Pattern.compile("[1-9][0-9]{0,18}");
 
-    /** A complete plan remains unavailable until the paid coordinator is implemented. */
+    public AgentHostingRentProperties {
+        planVersion = planVersion == null ? PREVIEW_PLAN_VERSION : planVersion;
+        amountMicro = amountMicro == null ? PREVIEW_AMOUNT_MICRO : amountMicro;
+        periodSeconds = periodSeconds == null ? PREVIEW_PERIOD_SECONDS : periodSeconds;
+    }
+
+    /** A complete descriptor is inert while the explicit charging switch is false. */
     public boolean configured() {
-        return enabled
-                && planVersion != null && PLAN_VERSION.matcher(planVersion).matches()
+        return enabled && descriptorConfigured();
+    }
+
+    public boolean descriptorConfigured() {
+        return canonicalPositiveLong(planVersion)
                 && canonicalPositiveLong(amountMicro)
                 && canonicalPositiveLong(periodSeconds);
     }

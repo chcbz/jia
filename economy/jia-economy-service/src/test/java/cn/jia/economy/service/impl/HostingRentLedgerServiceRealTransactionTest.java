@@ -1,0 +1,406 @@
+package cn.jia.economy.service.impl;
+
+import cn.jia.economy.common.EconomyAccountOwnerType;
+import cn.jia.economy.common.EconomyAccountPurpose;
+import cn.jia.economy.common.EconomyConstants;
+import cn.jia.economy.common.EconomyPrincipalType;
+import cn.jia.economy.config.EconomyPreviewGate;
+import cn.jia.economy.config.EconomyPreviewProperties;
+import cn.jia.economy.entity.EconomyAccountEntity;
+import cn.jia.economy.entity.EconomyHostingRentPlanEntity;
+import cn.jia.economy.exception.EconomyPostingException;
+import cn.jia.economy.hosting.HostingRentException;
+import cn.jia.economy.hosting.HostingRentMutationReceipt;
+import cn.jia.economy.hosting.HostingRentOutcomeCommand;
+import cn.jia.economy.hosting.HostingRentQuoteCommand;
+import cn.jia.economy.hosting.HostingRentQuotePurpose;
+import cn.jia.economy.hosting.HostingRentQuoteReceipt;
+import cn.jia.economy.hosting.HostingRentReserveCommand;
+import cn.jia.economy.hosting.HostingRentSettlementCommand;
+import cn.jia.economy.mapper.EconomyHostingRentMapper;
+import cn.jia.economy.mapper.EconomyLedgerMapper;
+import cn.jia.economy.service.EconomyPrincipal;
+import cn.jia.economy.service.EconomyScope;
+import org.apache.ibatis.session.SqlSessionFactory;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mybatis.spring.SqlSessionFactoryBean;
+import org.mybatis.spring.SqlSessionTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import java.security.MessageDigest;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+
+class HostingRentLedgerServiceRealTransactionTest {
+    private static final String TENANT = "Tenant-Rent";
+    private static final String CLIENT = "Client-Rent";
+    private static final String USER = "jwt-sub-user";
+    private static final long V1_AMOUNT_MICRO = 1_000_000_000L;
+    private static final long V1_PERIOD_SECONDS = 2_592_000L;
+    private static final long WALLET_BALANCE_MICRO = 2_000_000_000L;
+    private static final byte[] HASH_QUOTE = hash(1);
+    private static final byte[] HASH_RESERVE = hash(2);
+    private static final byte[] HASH_CAPTURE = hash(3);
+    private static final byte[] HASH_REFUND = hash(4);
+
+    private JdbcTemplate jdbc;
+    private EconomyLedgerMapper ledgerMapper;
+    private EconomyHostingRentMapper hostingMapper;
+    private HostingRentLedgerServiceImpl service;
+    private AtomicLong clock;
+    private AtomicInteger quoteIds;
+    private AtomicInteger leaseIds;
+    private AtomicInteger intentIds;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        DriverManagerDataSource dataSource = new DriverManagerDataSource();
+        dataSource.setDriverClassName("org.h2.Driver");
+        dataSource.setUrl("jdbc:h2:mem:eco_v0_r01;MODE=MYSQL;DB_CLOSE_DELAY=-1;CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000");
+        dataSource.setUsername("sa");
+        dataSource.setPassword("");
+        jdbc = new JdbcTemplate(dataSource);
+        clock = new AtomicLong(1_800_000_000_000L);
+        createTables();
+
+        SqlSessionFactoryBean factoryBean = new SqlSessionFactoryBean();
+        factoryBean.setDataSource(dataSource);
+        org.apache.ibatis.session.Configuration configuration = new org.apache.ibatis.session.Configuration();
+        configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(EconomyLedgerMapper.class);
+        configuration.addMapper(EconomyHostingRentMapper.class);
+        factoryBean.setConfiguration(configuration);
+        SqlSessionFactory factory = factoryBean.getObject();
+        if (factory == null) throw new IllegalStateException("missing SqlSessionFactory");
+        SqlSessionTemplate template = new SqlSessionTemplate(factory);
+        ledgerMapper = template.getMapper(EconomyLedgerMapper.class);
+        hostingMapper = spy(template.getMapper(EconomyHostingRentMapper.class));
+
+        EconomyPreviewGate gate = new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
+                new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT))));
+        DataSourceTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        AtomicInteger transactionIds = new AtomicInteger();
+        EconomyPostingServiceImpl posting = new EconomyPostingServiceImpl(
+                ledgerMapper, transactionManager, gate,
+                () -> "etx-rent-" + transactionIds.incrementAndGet(),
+                () -> "esc-rent-" + transactionIds.get(), this::tick);
+        quoteIds = new AtomicInteger();
+        leaseIds = new AtomicInteger();
+        intentIds = new AtomicInteger();
+        service = new HostingRentLedgerServiceImpl(hostingMapper, ledgerMapper, posting, transactionManager,
+                () -> "hrq-test-" + quoteIds.incrementAndGet(),
+                () -> "hrl-test-" + leaseIds.incrementAndGet(),
+                () -> "hri-test-" + intentIds.incrementAndGet(), this::tick);
+        seedPlan("plan-test", 1, V1_AMOUNT_MICRO, V1_PERIOD_SECONDS, 300);
+        insertAccount("wallet-user", EconomyAccountOwnerType.USER, USER,
+                EconomyAccountPurpose.AVAILABLE, WALLET_BALANCE_MICRO);
+    }
+
+    @AfterEach
+    void tearDown() {
+        jdbc.execute("DROP ALL OBJECTS");
+    }
+
+    @Test
+    void reserveCaptureAndAllReplaysRemainOriginalReceiptsAndBalanced() {
+        HostingRentQuoteReceipt quote = service.quote(initialQuote("agent-1", "persona-1", "plan-test", 1));
+        HostingRentQuoteReceipt quoteReplay = service.quote(initialQuote("agent-1", "persona-1", "plan-test", 1));
+        assertEquals(quote, quoteReplay);
+        assertEquals(1L, quote.planVersion());
+        assertEquals(V1_AMOUNT_MICRO, quote.amountMicro());
+        assertEquals(V1_PERIOD_SECONDS, quote.periodSeconds());
+
+        HostingRentReserveCommand reserveCommand = reserve(quote.quoteId(), "00000000-0000-0000-0000-000000000002");
+        HostingRentMutationReceipt reserved = service.reserve(reserveCommand);
+        HostingRentSettlementCommand capture = settlement(reserved.intentId(), 1,
+                "00000000-0000-0000-0000-000000000003", HASH_CAPTURE);
+        HostingRentMutationReceipt captured = service.capture(capture);
+
+        assertEquals(reserved, service.reserve(reserveCommand));
+        assertEquals(captured, service.capture(capture));
+        assertEquals("FUNDS_RESERVED", reserved.status());
+        assertEquals("ACTIVE", captured.status());
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+        assertEquals(0L, balanceLike("hosting_esc_%"));
+        assertEquals(V1_AMOUNT_MICRO, balance("system_hosting_rent"));
+        assertEquals(V1_AMOUNT_MICRO, jdbc.queryForObject("SELECT captured_micro FROM economy_escrow", Long.class));
+        assertEquals("ACTIVE", jdbc.queryForObject("SELECT status FROM economy_hosting_lease", String.class));
+        assertEquals("ACTIVE", jdbc.queryForObject(
+                "SELECT status FROM economy_hosting_provisioning_intent", String.class));
+        for (String table : List.of("economy_hosting_rent_plan", "economy_hosting_rent_quote",
+                "economy_hosting_lease", "economy_hosting_provisioning_intent")) {
+            assertEquals(V1_AMOUNT_MICRO, jdbc.queryForObject(
+                    "SELECT amount_micro FROM " + table + " LIMIT 1", Long.class), table);
+            assertEquals(V1_PERIOD_SECONDS, jdbc.queryForObject(
+                    "SELECT period_seconds FROM " + table + " LIMIT 1", Long.class), table);
+        }
+        assertEquals(2, count("economy_transaction"));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
+        assertTrue(jdbc.queryForObject("SELECT paid_through>paid_from FROM economy_hosting_lease", Boolean.class));
+    }
+
+    @Test
+    void unknownOutcomeCannotCaptureOrRefundUntilExplicitNoEffectThenRefundsExactlyOnce() {
+        HostingRentMutationReceipt reserved = service.reserve(reserve(
+                service.quote(initialQuote("agent-2", "persona-2", "plan-test", 1)).quoteId(),
+                "00000000-0000-0000-0000-000000000012"));
+        service.markProvisioningUnknown(new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 1, "probe-unknown-1"));
+
+        HostingRentException captureFailure = assertThrows(HostingRentException.class,
+                () -> service.capture(settlement(reserved.intentId(), 2,
+                        "00000000-0000-0000-0000-000000000013", HASH_CAPTURE)));
+        assertEquals(HostingRentException.Reason.PROVISIONING_OUTCOME_UNKNOWN, captureFailure.reason());
+        HostingRentException refundFailure = assertThrows(HostingRentException.class,
+                () -> service.refund(settlement(reserved.intentId(), 2,
+                        "00000000-0000-0000-0000-000000000014", HASH_REFUND)));
+        assertEquals(HostingRentException.Reason.REFUND_NOT_ALLOWED, refundFailure.reason());
+        assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+        assertEquals(1, count("economy_transaction"));
+
+        service.confirmProvisioningFailedNoEffect(new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 2, "probe-no-effect-1"));
+        HostingRentSettlementCommand refund = settlement(reserved.intentId(), 3,
+                "00000000-0000-0000-0000-000000000014", HASH_REFUND);
+        HostingRentMutationReceipt refunded = service.refund(refund);
+        assertEquals(refunded, service.refund(refund));
+        assertEquals("REFUNDED", refunded.status());
+        assertEquals(WALLET_BALANCE_MICRO, balance("wallet-user"));
+        assertEquals(0L, balanceLike("hosting_esc_%"));
+        assertEquals("REFUNDED", jdbc.queryForObject("SELECT status FROM economy_hosting_lease", String.class));
+        assertEquals(2, count("economy_transaction"));
+    }
+
+    @Test
+    void crossOwnerAndExpiredQuoteFailClosedWithoutPaidArtifacts() {
+        HostingRentQuoteReceipt quote = service.quote(initialQuote(
+                "agent-guarded", "persona-guarded", "plan-test", 1));
+        HostingRentReserveCommand crossOwner = new HostingRentReserveCommand(
+                scope(), new EconomyPrincipal(EconomyPrincipalType.USER, "other-jwt-sub"),
+                "00000000-0000-0000-0000-000000000018", HASH_RESERVE, quote.quoteId());
+
+        HostingRentException forbidden = assertThrows(HostingRentException.class,
+                () -> service.reserve(crossOwner));
+        assertEquals(HostingRentException.Reason.NOT_FOUND_OR_FORBIDDEN, forbidden.reason());
+        assertNoPaidArtifacts();
+
+        clock.set(quote.expiresAt());
+        HostingRentException expired = assertThrows(HostingRentException.class,
+                () -> service.reserve(reserve(quote.quoteId(),
+                        "00000000-0000-0000-0000-000000000019")));
+        assertEquals(HostingRentException.Reason.QUOTE_EXPIRED, expired.reason());
+        assertNoPaidArtifacts();
+        assertEquals(WALLET_BALANCE_MICRO, balance("wallet-user"));
+    }
+
+    @Test
+    void insufficientFundsAndLateIntentFailureRollbackLeaseIntentEscrowAccountsAndJournal() {
+        seedPlan("plan-expensive", 1, WALLET_BALANCE_MICRO + 1L, V1_PERIOD_SECONDS, 300);
+        HostingRentQuoteReceipt expensive = service.quote(initialQuote(
+                "agent-expensive", "persona-expensive", "plan-expensive", 1));
+        EconomyPostingException insufficient = assertThrows(EconomyPostingException.class,
+                () -> service.reserve(reserve(expensive.quoteId(),
+                        "00000000-0000-0000-0000-000000000022")));
+        assertEquals(EconomyPostingException.Reason.INSUFFICIENT_FUNDS, insufficient.reason());
+        assertNoPaidArtifacts();
+
+        HostingRentQuoteReceipt affordable = service.quote(initialQuote(
+                "agent-late", "persona-late", "plan-test", 1,
+                "00000000-0000-0000-0000-000000000021", hash(21)));
+        doThrow(new IllegalStateException("late intent failure")).when(hostingMapper).insertIntent(any());
+        assertThrows(IllegalStateException.class, () -> service.reserve(reserve(affordable.quoteId(),
+                "00000000-0000-0000-0000-000000000023")));
+        assertNoPaidArtifacts();
+        assertEquals(WALLET_BALANCE_MICRO, balance("wallet-user"));
+    }
+
+    @Test
+    void concurrentSameReserveReturnsOneImmutableReceiptAndDifferentBodyCannotConsumeQuote() throws Exception {
+        HostingRentQuoteReceipt quote = service.quote(initialQuote("agent-race", "persona-race", "plan-test", 1));
+        HostingRentReserveCommand command = reserve(quote.quoteId(),
+                "00000000-0000-0000-0000-000000000032");
+        List<Outcome> same = race(() -> reserveOutcome(command), () -> reserveOutcome(command));
+        assertTrue(same.stream().allMatch(Outcome::succeeded), same.toString());
+        assertEquals(same.get(0).receipt(), same.get(1).receipt());
+        assertEquals(1, count("economy_transaction"));
+        assertEquals(1, count("economy_hosting_lease"));
+        assertEquals(1, count("economy_hosting_provisioning_intent"));
+
+        HostingRentException conflict = assertThrows(HostingRentException.class,
+                () -> service.reserve(new HostingRentReserveCommand(scope(), principal(),
+                        "00000000-0000-0000-0000-000000000033", hash(33), quote.quoteId())));
+        assertEquals(HostingRentException.Reason.QUOTE_ALREADY_CONSUMED, conflict.reason());
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+    }
+
+    @Test
+    void quoteIdentityAndRenewalIntentAreExactAndCannotBeInferredFromEmptyInitialState() {
+        HostingRentQuoteReceipt initial = service.quote(initialQuote("Agent-A", "Persona-A", "plan-test", 1));
+        HostingRentException conflict = assertThrows(HostingRentException.class,
+                () -> service.quote(initialQuote("agent-a", "Persona-A", "plan-test", 1)));
+        assertEquals(HostingRentException.Reason.IDEMPOTENCY_CONFLICT, conflict.reason());
+        assertNotEquals("agent-a", initial.agentId());
+
+        HostingRentException invalidRenewal = assertThrows(HostingRentException.class,
+                () -> service.quote(new HostingRentQuoteCommand(scope(), principal(),
+                        "00000000-0000-0000-0000-000000000041", hash(41),
+                        HostingRentQuotePurpose.RENEWAL, "plan-test", 1,
+                        "Persona-A", "Agent-A", null, null)));
+        assertEquals(HostingRentException.Reason.INVALID_COMMAND, invalidRenewal.reason());
+    }
+
+    private void assertNoPaidArtifacts() {
+        for (String table : List.of("economy_transaction", "economy_entry", "economy_escrow",
+                "economy_escrow_funding_lot", "economy_hosting_lease",
+                "economy_hosting_provisioning_intent")) {
+            assertEquals(0, count(table), table);
+        }
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM economy_account WHERE owner_type='LEASE'", Integer.class));
+    }
+
+    private Outcome reserveOutcome(HostingRentReserveCommand command) {
+        try {
+            return new Outcome(service.reserve(command), null);
+        } catch (HostingRentException failure) {
+            return new Outcome(null, failure.reason());
+        }
+    }
+
+    private List<Outcome> race(Callable<Outcome> first, Callable<Outcome> second) throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            Future<Outcome> one = executor.submit(await(ready, start, first));
+            Future<Outcome> two = executor.submit(await(ready, start, second));
+            assertTrue(ready.await(10, TimeUnit.SECONDS));
+            start.countDown();
+            return List.of(one.get(30, TimeUnit.SECONDS), two.get(30, TimeUnit.SECONDS));
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+        }
+    }
+
+    private Callable<Outcome> await(CountDownLatch ready, CountDownLatch start, Callable<Outcome> task) {
+        return () -> {
+            ready.countDown();
+            assertTrue(start.await(10, TimeUnit.SECONDS));
+            return task.call();
+        };
+    }
+
+    private HostingRentQuoteCommand initialQuote(String agent, String persona, String plan, long version) {
+        return initialQuote(agent, persona, plan, version,
+                "00000000-0000-0000-0000-000000000001", HASH_QUOTE);
+    }
+
+    private HostingRentQuoteCommand initialQuote(
+            String agent, String persona, String plan, long version, String key, byte[] hash) {
+        return new HostingRentQuoteCommand(scope(), principal(), key, hash,
+                HostingRentQuotePurpose.INITIAL, plan, version, persona, agent, null, null);
+    }
+
+    private HostingRentReserveCommand reserve(String quoteId, String key) {
+        return new HostingRentReserveCommand(scope(), principal(), key, HASH_RESERVE, quoteId);
+    }
+
+    private HostingRentSettlementCommand settlement(
+            String intentId, long version, String key, byte[] hash) {
+        return new HostingRentSettlementCommand(scope(), principal(), key, hash, intentId, version);
+    }
+
+    private EconomyScope scope() {
+        return new EconomyScope(TENANT, CLIENT);
+    }
+
+    private EconomyPrincipal principal() {
+        return new EconomyPrincipal(EconomyPrincipalType.USER, USER);
+    }
+
+    private void seedPlan(String planId, long version, long amount, long period, long ttl) {
+        hostingMapper.insertPlanVersion(new EconomyHostingRentPlanEntity()
+                .setPlanId(planId).setPlanVersion(version).setAmountMicro(amount)
+                .setPeriodSeconds(period).setQuoteTtlSeconds(ttl)
+                .setCurrency(EconomyConstants.CURRENCY_SILVER).setStatus("ACTIVE")
+                .setTenantId(TENANT).setClientId(CLIENT).setCreateTime(tick()));
+    }
+
+    private void insertAccount(
+            String accountId, EconomyAccountOwnerType ownerType, String ownerId,
+            EconomyAccountPurpose purpose, long balance) {
+        ledgerMapper.insertAccountIfAbsent(new EconomyAccountEntity()
+                .setAccountId(accountId).setOwnerType(ownerType.name()).setOwnerId(ownerId)
+                .setPurpose(purpose.name()).setCurrency(EconomyConstants.CURRENCY_SILVER)
+                .setBalanceMicro(balance).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
+                .setTenantId(TENANT).setClientId(CLIENT).setCreateTime(tick()).setUpdateTime(tick()));
+    }
+
+    private long balance(String accountId) {
+        return jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id=?",
+                Long.class, accountId);
+    }
+
+    private long balanceLike(String pattern) {
+        Long value = jdbc.queryForObject(
+                "SELECT COALESCE(SUM(balance_micro),0) FROM economy_account WHERE account_id LIKE ?",
+                Long.class, pattern);
+        return value == null ? 0 : value;
+    }
+
+    private int count(String table) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+    }
+
+    private long tick() {
+        return clock.getAndIncrement();
+    }
+
+    private static byte[] hash(int marker) {
+        byte[] hash = new byte[32];
+        hash[31] = (byte) marker;
+        return hash;
+    }
+
+    private void createTables() {
+        for (String ddl : List.of(
+                "CREATE TABLE economy_account(id BIGINT AUTO_INCREMENT PRIMARY KEY,account_id VARCHAR(100),owner_type VARCHAR(20),owner_id VARCHAR(100),purpose VARCHAR(32),currency VARCHAR(16),balance_micro BIGINT,allow_negative TINYINT,status VARCHAR(16),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,account_id),UNIQUE(tenant_id,client_id,currency,owner_type,owner_id,purpose))",
+                "CREATE TABLE economy_transaction(id BIGINT AUTO_INCREMENT PRIMARY KEY,transaction_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),idempotency_key VARBINARY(36),request_hash BINARY(32),business_type VARCHAR(32),business_id VARCHAR(100),currency VARCHAR(16),status VARCHAR(16),entry_count INT,debit_total_micro BIGINT,credit_total_micro BIGINT,posted_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,transaction_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
+                "CREATE TABLE economy_entry(id BIGINT AUTO_INCREMENT PRIMARY KEY,entry_id VARCHAR(140),transaction_id VARCHAR(100),account_id VARCHAR(100),entry_sequence INT,signed_amount_micro BIGINT,balance_after_micro BIGINT,currency VARCHAR(16),status VARCHAR(16),posted_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,entry_id),UNIQUE(tenant_id,client_id,transaction_id,entry_sequence))",
+                "CREATE TABLE economy_escrow(id BIGINT AUTO_INCREMENT PRIMARY KEY,escrow_id VARCHAR(100),business_type VARCHAR(32),business_id VARCHAR(100),payer_account_id VARCHAR(100),escrow_account_id VARCHAR(100),currency VARCHAR(16),gross_micro BIGINT,captured_micro BIGINT,refunded_micro BIGINT,status VARCHAR(24),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,escrow_id),UNIQUE(tenant_id,client_id,business_type,business_id),UNIQUE(tenant_id,client_id,escrow_account_id))",
+                "CREATE TABLE economy_escrow_funding_lot(id BIGINT AUTO_INCREMENT PRIMARY KEY,escrow_id VARCHAR(100),funding_sequence INT,reserve_transaction_id VARCHAR(100),payer_account_id VARCHAR(100),amount_micro BIGINT,escrow_gross_after_micro BIGINT,escrow_version_after BIGINT,currency VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),created_at BIGINT,UNIQUE(tenant_id,client_id,escrow_id,funding_sequence),UNIQUE(tenant_id,client_id,reserve_transaction_id))",
+                "CREATE TABLE economy_hosting_rent_plan(id BIGINT AUTO_INCREMENT PRIMARY KEY,plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,quote_ttl_seconds BIGINT,currency VARCHAR(16),status VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,plan_id,plan_version))",
+                "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
+                "CREATE TABLE economy_hosting_lease(id BIGINT AUTO_INCREMENT PRIMARY KEY,lease_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),binding_id VARCHAR(100),plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(24),paid_from BIGINT,paid_through BIGINT,latest_intent_id VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,lease_id),UNIQUE(tenant_id,client_id,agent_id),UNIQUE(tenant_id,client_id,latest_intent_id))",
+                "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(32),reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,outcome_evidence_ref VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key))"
+        )) jdbc.execute(ddl);
+    }
+
+    private record Outcome(HostingRentMutationReceipt receipt, HostingRentException.Reason reason) {
+        private boolean succeeded() {
+            return receipt != null;
+        }
+    }
+}

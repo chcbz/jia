@@ -318,4 +318,25 @@ public interface EconomyLedgerMapper {
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("transactionId") String transactionId);
+
+    @Update("""
+            UPDATE economy_escrow
+            SET captured_micro=#{capturedAfter},refunded_micro=#{refundedAfter},
+                status=#{status},version=#{versionAfter},update_time=#{now}
+            WHERE id=#{escrow.id} AND """ + EXACT_SCOPE + """
+              AND escrow_id=#{escrow.escrowId} AND version=#{escrow.version}
+              AND gross_micro=#{escrow.grossMicro}
+              AND captured_micro=#{escrow.capturedMicro} AND refunded_micro=#{escrow.refundedMicro}
+              AND status=#{escrow.status}
+              AND OCTET_LENGTH(escrow_id)=OCTET_LENGTH(#{escrow.escrowId})
+            """)
+    int updateEscrowSettlement(
+            @Param("escrow") EconomyEscrowEntity escrow,
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("capturedAfter") long capturedAfter,
+            @Param("refundedAfter") long refundedAfter,
+            @Param("status") String status,
+            @Param("versionAfter") long versionAfter,
+            @Param("now") long now);
 }

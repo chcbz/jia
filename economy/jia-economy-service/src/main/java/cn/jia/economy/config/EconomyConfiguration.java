@@ -19,4 +19,10 @@ public class EconomyConfiguration {
     public EconomySchemaInitializer economySchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new EconomySchemaInitializer(jdbcTemplate);
     }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "economy.hosting-rent", name = "schema-enabled", havingValue = "true")
+    public EconomyHostingRentSchemaInitializer economyHostingRentSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        return new EconomyHostingRentSchemaInitializer(jdbcTemplate);
+    }
 }

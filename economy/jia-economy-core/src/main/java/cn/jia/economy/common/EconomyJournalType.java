@@ -11,9 +11,12 @@ public enum EconomyJournalType {
     CAPTURE_SKILL,
     RECORD_PROVIDER_VARIANCE,
     REFUND_SKILL,
+    RESERVE_HOSTING_RENT,
+    CAPTURE_HOSTING_RENT,
+    REFUND_HOSTING_RENT,
     REVERSE;
 
     public boolean requiresFundingLot() {
-        return this == RESERVE_BOUNTY || this == RESERVE_SKILL;
+        return this == RESERVE_BOUNTY || this == RESERVE_SKILL || this == RESERVE_HOSTING_RENT;
     }
 }
