@@ -115,10 +115,10 @@ public interface EconomyHostingRentMapper {
                    latest_intent_id,version,tenant_id,client_id,create_time,update_time
             FROM economy_hosting_lease
             WHERE """ + EXACT_SCOPE + """
-              AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})
+              AND live_slot=1 AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})
             LIMIT 1 FOR UPDATE
             """)
-    EconomyHostingLeaseEntity selectLeaseByAgentForUpdate(
+    EconomyHostingLeaseEntity selectLiveLeaseByAgentForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("agentId") String agentId);
@@ -129,7 +129,7 @@ public interface EconomyHostingRentMapper {
                 version=#{newVersion},update_time=#{now}
             WHERE id=#{lease.id} AND """ + EXACT_SCOPE + """
               AND lease_id=#{lease.leaseId} AND latest_intent_id=#{lease.latestIntentId}
-              AND status='PROVISIONING' AND paid_from IS NULL AND paid_through IS NULL
+              AND status='PROVISIONING' AND live_slot=1 AND paid_from IS NULL AND paid_through IS NULL
               AND version=#{lease.version}
               AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{lease.leaseId})
               AND OCTET_LENGTH(latest_intent_id)=OCTET_LENGTH(#{lease.latestIntentId})
@@ -145,10 +145,10 @@ public interface EconomyHostingRentMapper {
 
     @Update("""
             UPDATE economy_hosting_lease
-            SET status='REFUNDED',version=#{newVersion},update_time=#{now}
+            SET status='REFUNDED',live_slot=NULL,version=#{newVersion},update_time=#{now}
             WHERE id=#{lease.id} AND """ + EXACT_SCOPE + """
               AND lease_id=#{lease.leaseId} AND latest_intent_id=#{lease.latestIntentId}
-              AND status='PROVISIONING' AND paid_from IS NULL AND paid_through IS NULL
+              AND status='PROVISIONING' AND live_slot=1 AND paid_from IS NULL AND paid_through IS NULL
               AND version=#{lease.version}
               AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{lease.leaseId})
               AND OCTET_LENGTH(latest_intent_id)=OCTET_LENGTH(#{lease.latestIntentId})
@@ -167,13 +167,13 @@ public interface EconomyHostingRentMapper {
                 reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,
                 capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,
                 refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,
-                outcome_evidence_ref,version,tenant_id,client_id,create_time,update_time)
+                outcome_evidence_ref,service_ready_at,version,tenant_id,client_id,create_time,update_time)
             VALUES(#{intentId},#{leaseId},#{quoteId},#{quotePurpose},#{principalType},#{principalId},
                 #{personaCode},#{agentId},#{amountMicro},#{periodSeconds},#{status},
                 #{reserveIdempotencyKey},#{reserveRequestHash},#{reserveTransactionId},#{reservedAt},#{escrowVersion},
                 #{captureIdempotencyKey},#{captureRequestHash},#{captureTransactionId},#{capturedAt},
                 #{refundIdempotencyKey},#{refundRequestHash},#{refundTransactionId},#{refundedAt},
-                #{outcomeEvidenceRef},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
+                #{outcomeEvidenceRef},#{serviceReadyAt},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
     int insertIntent(EconomyHostingProvisioningIntentEntity intent);
 
@@ -182,7 +182,7 @@ public interface EconomyHostingRentMapper {
             + "reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,"
             + "capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,"
             + "refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,"
-            + "outcome_evidence_ref,version,tenant_id,client_id,create_time,update_time ";
+            + "outcome_evidence_ref,service_ready_at,version,tenant_id,client_id,create_time,update_time ";
 
     @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE "
             + EXACT_SCOPE + " AND quote_id=#{quoteId} AND OCTET_LENGTH(quote_id)=OCTET_LENGTH(#{quoteId})"
@@ -236,11 +236,29 @@ public interface EconomyHostingRentMapper {
 
     @Update("""
             UPDATE economy_hosting_provisioning_intent
+            SET status='SERVICE_READY',outcome_evidence_ref=#{evidenceRef},service_ready_at=#{now},
+                version=#{newVersion},update_time=#{now}
+            WHERE id=#{intent.id} AND """ + EXACT_SCOPE + """
+              AND intent_id=#{intent.intentId} AND status IN ('FUNDS_RESERVED','PROVISIONING_UNKNOWN')
+              AND version=#{intent.version} AND service_ready_at IS NULL
+              AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL
+              AND OCTET_LENGTH(intent_id)=OCTET_LENGTH(#{intent.intentId})
+            """)
+    int markIntentServiceReady(
+            @Param("intent") EconomyHostingProvisioningIntentEntity intent,
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("evidenceRef") String evidenceRef,
+            @Param("newVersion") long newVersion,
+            @Param("now") long now);
+
+    @Update("""
+            UPDATE economy_hosting_provisioning_intent
             SET status='ACTIVE',capture_idempotency_key=#{idempotencyKey},
                 capture_request_hash=#{requestHash},capture_transaction_id=#{transactionId},
                 captured_at=#{occurredAt},escrow_version=#{escrowVersion},version=#{newVersion},update_time=#{occurredAt}
             WHERE id=#{intent.id} AND """ + EXACT_SCOPE + """
-              AND intent_id=#{intent.intentId} AND status='FUNDS_RESERVED' AND version=#{intent.version}
+              AND intent_id=#{intent.intentId} AND status='SERVICE_READY' AND service_ready_at IS NOT NULL AND version=#{intent.version}
               AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL
               AND OCTET_LENGTH(intent_id)=OCTET_LENGTH(#{intent.intentId})
             """)

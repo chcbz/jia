@@ -3,6 +3,11 @@ package cn.jia.economy.config;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
+
+import cn.jia.economy.config.EconomySchemaInitializer.ColumnDefinition;
+import cn.jia.economy.config.EconomySchemaInitializer.IndexDefinition;
+import cn.jia.economy.config.EconomySchemaInitializer.CheckDefinition;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -17,7 +22,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.TreeMap;
 
 /** Separate additive initializer; it never modifies the accepted W02 five-table catalog. */
@@ -72,26 +76,22 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                     || !COLLATION.equalsIgnoreCase(meta.getFirst().collation())) {
                 throw new IllegalStateException("Invalid hosting-rent table engine/collation: " + table);
             }
-            List<String> columns = jdbc.queryForList("""
-                    SELECT column_name FROM information_schema.columns
+            List<ColumnDefinition> columns = jdbc.query("""
+                    SELECT column_name,data_type,column_type,is_nullable,column_default,collation_name,extra
+                    FROM information_schema.columns
                     WHERE table_schema=DATABASE() AND table_name=? ORDER BY ordinal_position
-                    """, String.class, table);
+                    """, (rs, row) -> new ColumnDefinition(rs.getString("column_name"),
+                    rs.getString("data_type"), rs.getString("column_type"),
+                    "YES".equalsIgnoreCase(rs.getString("is_nullable")), rs.getString("column_default"),
+                    rs.getString("collation_name"), rs.getString("extra")), table);
             if (!expected.columns().equals(columns)) {
                 throw new IllegalStateException("Invalid hosting-rent columns for " + table + ": " + columns);
             }
-            Map<String, List<String>> indexes = new TreeMap<>();
-            jdbc.query("""
-                    SELECT index_name,column_name FROM information_schema.statistics
-                    WHERE table_schema=DATABASE() AND table_name=? ORDER BY index_name,seq_in_index
-                    """, rs -> indexes.computeIfAbsent(rs.getString(1), ignored -> new ArrayList<>())
-                    .add(rs.getString(2)), table);
+            Map<String, IndexDefinition> indexes = inspectIndexes(table);
             if (!expected.indexes().equals(indexes)) {
                 throw new IllegalStateException("Invalid hosting-rent indexes for " + table + ": " + indexes);
             }
-            Set<String> checks = Set.copyOf(jdbc.queryForList("""
-                    SELECT constraint_name FROM information_schema.table_constraints
-                    WHERE constraint_schema=DATABASE() AND table_name=? AND constraint_type='CHECK'
-                    """, String.class, table));
+            Map<String, CheckDefinition> checks = inspectChecks(table);
             if (!expected.checks().equals(checks)) {
                 throw new IllegalStateException("Invalid hosting-rent checks for " + table + ": " + checks);
             }
@@ -106,8 +106,69 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
         }
     }
 
+    private Map<String, IndexDefinition> inspectIndexes(String table) {
+        Map<String, List<IndexPart>> grouped = new TreeMap<>();
+        // Explicit callback avoids JdbcTemplate's ResultSetExtractor/RowCallbackHandler ambiguity.
+        jdbc.query("""
+                SELECT index_name,non_unique,seq_in_index,column_name,sub_part,index_type,is_visible,collation
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name=? ORDER BY index_name,seq_in_index
+                """, (RowCallbackHandler) rs -> {
+            if (rs.getObject("sub_part") != null
+                    || !"BTREE".equalsIgnoreCase(rs.getString("index_type"))
+                    || !"YES".equalsIgnoreCase(rs.getString("is_visible"))
+                    || !"A".equalsIgnoreCase(rs.getString("collation"))) {
+                throw new IllegalStateException("Invalid hosting-rent index component for " + table);
+            }
+            grouped.computeIfAbsent(rs.getString("index_name"), ignored -> new ArrayList<>())
+                    .add(new IndexPart(rs.getInt("non_unique") == 0,
+                            rs.getInt("seq_in_index"), rs.getString("column_name")));
+        }, table);
+        Map<String, IndexDefinition> result = new TreeMap<>();
+        grouped.forEach((name, parts) -> {
+            boolean unique = parts.getFirst().unique();
+            List<String> columns = new ArrayList<>();
+            for (int index = 0; index < parts.size(); index++) {
+                IndexPart part = parts.get(index);
+                if (part.sequence() != index + 1 || part.unique() != unique || part.column() == null) {
+                    throw new IllegalStateException("Invalid hosting-rent index ordering for " + table);
+                }
+                columns.add(part.column());
+            }
+            result.put(name, new IndexDefinition(name, unique, List.copyOf(columns)));
+        });
+        return result;
+    }
+
+    private Map<String, CheckDefinition> inspectChecks(String table) {
+        List<CheckDefinition> rows = jdbc.query("""
+                SELECT tc.constraint_name,cc.check_clause,tc.enforced
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.constraint_catalog=tc.constraint_catalog
+                 AND cc.constraint_schema=tc.constraint_schema
+                 AND cc.constraint_name=tc.constraint_name
+                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'
+                ORDER BY tc.constraint_name
+                """, (rs, row) -> new CheckDefinition(rs.getString("constraint_name"),
+                EconomySchemaInitializer.normalizeCheckClause(rs.getString("check_clause")),
+                "YES".equalsIgnoreCase(rs.getString("enforced"))), table);
+        Map<String, CheckDefinition> result = new TreeMap<>();
+        for (CheckDefinition row : rows) {
+            if (result.put(row.name(), row) != null) {
+                throw new IllegalStateException("Ambiguous hosting-rent CHECK catalog for " + table);
+            }
+        }
+        return result;
+    }
+
     private void ensureImmutableTriggers() {
         Map<String, TriggerMeta> actual = inspectTriggers();
+        for (TriggerMeta found : actual.values()) {
+            if (TRIGGERS.stream().noneMatch(spec -> spec.matches(found))) {
+                throw new IllegalStateException("Invalid hosting-rent immutable trigger: " + found.name());
+            }
+        }
         for (TriggerSpec expected : TRIGGERS) {
             TriggerMeta found = actual.get(expected.name());
             if (found == null) {
@@ -118,9 +179,9 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 throw new IllegalStateException("Invalid hosting-rent immutable trigger: " + expected.name());
             }
         }
-        actual = inspectTriggers();
-        if (actual.size() != TRIGGERS.size()
-                || TRIGGERS.stream().anyMatch(spec -> !spec.matches(actual.get(spec.name())))) {
+        Map<String, TriggerMeta> verified = inspectTriggers();
+        if (verified.size() != TRIGGERS.size()
+                || TRIGGERS.stream().anyMatch(spec -> !spec.matches(verified.get(spec.name())))) {
             throw new IllegalStateException("Hosting-rent immutable trigger catalog is not exact");
         }
     }
@@ -131,10 +192,11 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 SELECT trigger_name,event_object_table,action_timing,event_manipulation,action_statement
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE()
-                  AND (event_object_table IN ('economy_hosting_rent_plan','economy_hosting_rent_quote')
+                  AND (event_object_table IN ('economy_hosting_rent_plan','economy_hosting_rent_quote',
+                                              'economy_hosting_lease','economy_hosting_provisioning_intent')
                        OR trigger_name LIKE 'trg_hosting_%')
                 ORDER BY trigger_name
-                """, rs -> {
+                """, (RowCallbackHandler) rs -> {
             TriggerMeta meta = new TriggerMeta(rs.getString(1), rs.getString(2), rs.getString(3),
                     rs.getString(4), EconomySchemaInitializer.normalizeTriggerSql(rs.getString(5)));
             if (result.put(meta.name(), meta) != null) {
@@ -219,65 +281,184 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
 
     private static Map<String, TableSpec> expectedTables() {
         Map<String, TableSpec> tables = new LinkedHashMap<>();
-        tables.put(TABLES.get(0), new TableSpec(List.of(
-                "id","plan_id","plan_version","amount_micro","period_seconds","quote_ttl_seconds",
-                "currency","status","tenant_id","client_id","create_time"), indexes(
-                "PRIMARY", "id",
-                "idx_hosting_plan_status", "tenant_id,client_id,status,plan_id,plan_version",
-                "uk_hosting_plan_version", "tenant_id,client_id,plan_id,plan_version"), Set.of(
-                "chk_hosting_plan_values","chk_hosting_plan_currency","chk_hosting_plan_status")));
-        tables.put(TABLES.get(1), new TableSpec(List.of(
-                "id","quote_id","quote_purpose","plan_id","plan_version","amount_micro","period_seconds",
-                "principal_type","principal_id","persona_code","agent_id","lease_id","expected_lease_version",
-                "idempotency_key","request_hash","expires_at","tenant_id","client_id","create_time"), indexes(
-                "PRIMARY", "id",
-                "idx_hosting_quote_agent", "tenant_id,client_id,agent_id,expires_at,quote_id",
-                "uk_hosting_quote_actor_key", "tenant_id,client_id,principal_type,principal_id,idempotency_key",
-                "uk_hosting_quote_id", "tenant_id,client_id,quote_id"), Set.of(
-                "chk_hosting_quote_values","chk_hosting_quote_key","chk_hosting_quote_hash",
-                "chk_hosting_quote_actor","chk_hosting_quote_purpose")));
-        tables.put(TABLES.get(2), new TableSpec(List.of(
-                "id","lease_id","principal_type","principal_id","persona_code","agent_id","binding_id",
-                "plan_id","plan_version","amount_micro","period_seconds","status","paid_from","paid_through",
-                "latest_intent_id","version","tenant_id","client_id","create_time","update_time"), indexes(
-                "PRIMARY", "id",
-                "idx_hosting_lease_actor", "tenant_id,client_id,principal_type,principal_id,status,lease_id",
-                "uk_hosting_lease_agent", "tenant_id,client_id,agent_id",
-                "uk_hosting_lease_id", "tenant_id,client_id,lease_id",
-                "uk_hosting_lease_intent", "tenant_id,client_id,latest_intent_id"), Set.of(
-                "chk_hosting_lease_values","chk_hosting_lease_actor","chk_hosting_lease_state")));
-        tables.put(TABLES.get(3), new TableSpec(List.of(
-                "id","intent_id","lease_id","quote_id","quote_purpose","principal_type","principal_id",
-                "persona_code","agent_id","amount_micro","period_seconds","status","reserve_idempotency_key",
-                "reserve_request_hash","reserve_transaction_id","reserved_at","escrow_version",
-                "capture_idempotency_key","capture_request_hash","capture_transaction_id","captured_at",
-                "refund_idempotency_key","refund_request_hash","refund_transaction_id","refunded_at",
-                "outcome_evidence_ref","version","tenant_id","client_id","create_time","update_time"), indexes(
-                "PRIMARY", "id",
-                "idx_hosting_intent_lease", "tenant_id,client_id,lease_id,version",
-                "idx_hosting_intent_status", "tenant_id,client_id,status,update_time,intent_id",
-                "uk_hosting_intent_id", "tenant_id,client_id,intent_id",
-                "uk_hosting_intent_quote", "tenant_id,client_id,quote_id",
-                "uk_hosting_intent_reserve_key", "tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key"), Set.of(
-                "chk_hosting_intent_values","chk_hosting_intent_actor","chk_hosting_intent_reserve_key",
-                "chk_hosting_intent_reserve_hash","chk_hosting_intent_capture_pair",
-                "chk_hosting_intent_refund_pair","chk_hosting_intent_state")));
-        return tables;
+        tables.put("economy_hosting_rent_plan", table(List.of(
+                column("id", "bigint", false, null, "auto_increment"),
+                column("plan_id", "varchar(100)", false, null, ""),
+                column("plan_version", "bigint", false, null, ""),
+                column("amount_micro", "bigint", false, null, ""),
+                column("period_seconds", "bigint", false, null, ""),
+                column("quote_ttl_seconds", "bigint", false, null, ""),
+                column("currency", "varchar(16)", false, null, ""),
+                column("status", "varchar(16)", false, null, ""),
+                column("tenant_id", "varchar(50)", false, null, ""),
+                column("client_id", "varchar(50)", false, null, ""),
+                column("create_time", "bigint", false, null, "")), List.of(
+                index("PRIMARY", true, "id"),
+                index("uk_hosting_plan_version", true, "tenant_id,client_id,plan_id,plan_version"),
+                index("idx_hosting_plan_status", false, "tenant_id,client_id,status,plan_id,plan_version")),
+                check("chk_hosting_plan_values", "plan_version > 0 AND amount_micro > 0 AND period_seconds > 0 AND quote_ttl_seconds > 0"),
+                check("chk_hosting_plan_currency", "currency = 'SILVER'"),
+                check("chk_hosting_plan_status", "status IN ('ACTIVE','DISABLED')")));
+        tables.put("economy_hosting_rent_quote", table(List.of(
+                column("id", "bigint", false, null, "auto_increment"),
+                column("quote_id", "varchar(100)", false, null, ""),
+                column("quote_purpose", "varchar(16)", false, null, ""),
+                column("plan_id", "varchar(100)", false, null, ""),
+                column("plan_version", "bigint", false, null, ""),
+                column("amount_micro", "bigint", false, null, ""),
+                column("period_seconds", "bigint", false, null, ""),
+                column("principal_type", "varchar(20)", false, null, ""),
+                column("principal_id", "varchar(100)", false, null, ""),
+                column("persona_code", "varchar(100)", false, null, ""),
+                column("agent_id", "varchar(100)", false, null, ""),
+                column("lease_id", "varchar(100)", true, null, ""),
+                column("expected_lease_version", "bigint", true, null, ""),
+                column("idempotency_key", "varbinary(36)", false, null, ""),
+                column("request_hash", "binary(32)", false, null, ""),
+                column("expires_at", "bigint", false, null, ""),
+                column("tenant_id", "varchar(50)", false, null, ""),
+                column("client_id", "varchar(50)", false, null, ""),
+                column("create_time", "bigint", false, null, "")), List.of(
+                index("PRIMARY", true, "id"),
+                index("uk_hosting_quote_id", true, "tenant_id,client_id,quote_id"),
+                index("uk_hosting_quote_actor_key", true, "tenant_id,client_id,principal_type,principal_id,idempotency_key"),
+                index("idx_hosting_quote_agent", false, "tenant_id,client_id,agent_id,expires_at,quote_id")),
+                check("chk_hosting_quote_values", "plan_version > 0 AND amount_micro > 0 AND period_seconds > 0 AND expires_at > create_time"),
+                check("chk_hosting_quote_key", "OCTET_LENGTH(idempotency_key) = 36"),
+                check("chk_hosting_quote_hash", "OCTET_LENGTH(request_hash) = 32"),
+                check("chk_hosting_quote_actor", "principal_type = 'USER'"),
+                check("chk_hosting_quote_purpose", "(quote_purpose = 'INITIAL' AND lease_id IS NULL AND expected_lease_version IS NULL) OR (quote_purpose = "
+                        + "'RENEWAL' AND lease_id IS NOT NULL AND expected_lease_version IS NOT NULL AND expected_lease_version > 0)")));
+        tables.put("economy_hosting_lease", table(List.of(
+                column("id", "bigint", false, null, "auto_increment"),
+                column("lease_id", "varchar(100)", false, null, ""),
+                column("principal_type", "varchar(20)", false, null, ""),
+                column("principal_id", "varchar(100)", false, null, ""),
+                column("persona_code", "varchar(100)", false, null, ""),
+                column("agent_id", "varchar(100)", false, null, ""),
+                column("binding_id", "varchar(100)", true, null, ""),
+                column("live_slot", "tinyint", true, "1", ""),
+                column("plan_id", "varchar(100)", false, null, ""),
+                column("plan_version", "bigint", false, null, ""),
+                column("amount_micro", "bigint", false, null, ""),
+                column("period_seconds", "bigint", false, null, ""),
+                column("status", "varchar(24)", false, null, ""),
+                column("paid_from", "bigint", true, null, ""),
+                column("paid_through", "bigint", true, null, ""),
+                column("latest_intent_id", "varchar(100)", false, null, ""),
+                column("version", "bigint", false, null, ""),
+                column("tenant_id", "varchar(50)", false, null, ""),
+                column("client_id", "varchar(50)", false, null, ""),
+                column("create_time", "bigint", false, null, ""),
+                column("update_time", "bigint", false, null, "")), List.of(
+                index("PRIMARY", true, "id"),
+                index("uk_hosting_lease_id", true, "tenant_id,client_id,lease_id"),
+                index("uk_hosting_lease_agent", true, "tenant_id,client_id,agent_id,live_slot"),
+                index("uk_hosting_lease_intent", true, "tenant_id,client_id,latest_intent_id"),
+                index("idx_hosting_lease_actor", false, "tenant_id,client_id,principal_type,principal_id,status,lease_id")),
+                check("chk_hosting_lease_values", "plan_version > 0 AND amount_micro > 0 AND period_seconds > 0 AND version > 0"),
+                check("chk_hosting_lease_actor", "principal_type = 'USER'"),
+                check("chk_hosting_lease_live_slot", "(status = 'REFUNDED' AND live_slot IS NULL) OR (status IN ('PROVISIONING','ACTIVE') AND live_slot IS NOT NULL "
+                        + "AND live_slot = 1)"),
+                check("chk_hosting_lease_state", "(status = 'PROVISIONING' AND paid_from IS NULL AND paid_through IS NULL) OR (status = 'ACTIVE' AND paid_from "
+                        + "IS NOT NULL AND paid_through IS NOT NULL AND paid_through > paid_from) OR (status = 'REFUNDED' AND paid_from "
+                        + "IS NULL AND paid_through IS NULL)")));
+        tables.put("economy_hosting_provisioning_intent", table(List.of(
+                column("id", "bigint", false, null, "auto_increment"),
+                column("intent_id", "varchar(100)", false, null, ""),
+                column("lease_id", "varchar(100)", false, null, ""),
+                column("quote_id", "varchar(100)", false, null, ""),
+                column("quote_purpose", "varchar(16)", false, null, ""),
+                column("principal_type", "varchar(20)", false, null, ""),
+                column("principal_id", "varchar(100)", false, null, ""),
+                column("persona_code", "varchar(100)", false, null, ""),
+                column("agent_id", "varchar(100)", false, null, ""),
+                column("amount_micro", "bigint", false, null, ""),
+                column("period_seconds", "bigint", false, null, ""),
+                column("status", "varchar(32)", false, null, ""),
+                column("reserve_idempotency_key", "varbinary(36)", false, null, ""),
+                column("reserve_request_hash", "binary(32)", false, null, ""),
+                column("reserve_transaction_id", "varchar(100)", false, null, ""),
+                column("reserved_at", "bigint", false, null, ""),
+                column("escrow_version", "bigint", false, null, ""),
+                column("capture_idempotency_key", "varbinary(36)", true, null, ""),
+                column("capture_request_hash", "binary(32)", true, null, ""),
+                column("capture_transaction_id", "varchar(100)", true, null, ""),
+                column("captured_at", "bigint", true, null, ""),
+                column("refund_idempotency_key", "varbinary(36)", true, null, ""),
+                column("refund_request_hash", "binary(32)", true, null, ""),
+                column("refund_transaction_id", "varchar(100)", true, null, ""),
+                column("refunded_at", "bigint", true, null, ""),
+                column("outcome_evidence_ref", "varchar(100)", true, null, ""),
+                column("service_ready_at", "bigint", true, null, ""),
+                column("version", "bigint", false, null, ""),
+                column("tenant_id", "varchar(50)", false, null, ""),
+                column("client_id", "varchar(50)", false, null, ""),
+                column("create_time", "bigint", false, null, ""),
+                column("update_time", "bigint", false, null, "")), List.of(
+                index("PRIMARY", true, "id"),
+                index("uk_hosting_intent_id", true, "tenant_id,client_id,intent_id"),
+                index("uk_hosting_intent_quote", true, "tenant_id,client_id,quote_id"),
+                index("uk_hosting_intent_reserve_key", true, "tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key"),
+                index("idx_hosting_intent_lease", false, "tenant_id,client_id,lease_id,version"),
+                index("idx_hosting_intent_status", false, "tenant_id,client_id,status,update_time,intent_id")),
+                check("chk_hosting_intent_values", "amount_micro > 0 AND period_seconds > 0 AND escrow_version > 0 AND version > 0"),
+                check("chk_hosting_intent_actor", "principal_type = 'USER'"),
+                check("chk_hosting_intent_reserve_key", "OCTET_LENGTH(reserve_idempotency_key) = 36"),
+                check("chk_hosting_intent_reserve_hash", "OCTET_LENGTH(reserve_request_hash) = 32"),
+                check("chk_hosting_intent_capture_pair", "(capture_idempotency_key IS NULL AND capture_request_hash IS NULL AND capture_transaction_id IS NULL AND "
+                        + "captured_at IS NULL) OR (capture_idempotency_key IS NOT NULL AND capture_request_hash IS NOT NULL AND "
+                        + "OCTET_LENGTH(capture_idempotency_key) = 36 AND OCTET_LENGTH(capture_request_hash) = 32 AND "
+                        + "capture_transaction_id IS NOT NULL AND captured_at IS NOT NULL)"),
+                check("chk_hosting_intent_refund_pair", "(refund_idempotency_key IS NULL AND refund_request_hash IS NULL AND refund_transaction_id IS NULL AND "
+                        + "refunded_at IS NULL) OR (refund_idempotency_key IS NOT NULL AND refund_request_hash IS NOT NULL AND "
+                        + "OCTET_LENGTH(refund_idempotency_key) = 36 AND OCTET_LENGTH(refund_request_hash) = 32 AND "
+                        + "refund_transaction_id IS NOT NULL AND refunded_at IS NOT NULL)"),
+                check("chk_hosting_intent_state", "(status = 'FUNDS_RESERVED' AND service_ready_at IS NULL AND capture_transaction_id IS NULL AND "
+                        + "refund_transaction_id IS NULL) OR (status IN ('PROVISIONING_UNKNOWN','FAILED_NO_EFFECT') AND service_ready_at "
+                        + "IS NULL AND outcome_evidence_ref IS NOT NULL AND capture_transaction_id IS NULL AND refund_transaction_id IS "
+                        + "NULL) OR (status = 'SERVICE_READY' AND service_ready_at IS NOT NULL AND service_ready_at >= reserved_at AND "
+                        + "outcome_evidence_ref IS NOT NULL AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL) OR "
+                        + "(status = 'ACTIVE' AND service_ready_at IS NOT NULL AND service_ready_at >= reserved_at AND "
+                        + "outcome_evidence_ref IS NOT NULL AND capture_transaction_id IS NOT NULL AND refund_transaction_id IS NULL) OR "
+                        + "(status = 'REFUNDED' AND service_ready_at IS NULL AND outcome_evidence_ref IS NOT NULL AND "
+                        + "capture_transaction_id IS NULL AND refund_transaction_id IS NOT NULL)")));
+        return Map.copyOf(tables);
     }
 
-    private static Map<String, List<String>> indexes(String... values) {
-        Map<String, List<String>> result = new TreeMap<>();
-        for (int index = 0; index < values.length; index += 2) {
-            result.put(values[index], List.of(values[index + 1].split(",")));
-        }
-        return result;
+    private static TableSpec table(List<ColumnDefinition> columns, List<IndexDefinition> indexes,
+                                   CheckDefinition... checks) {
+        Map<String, IndexDefinition> indexMap = new TreeMap<>();
+        indexes.forEach(index -> indexMap.put(index.name(), index));
+        Map<String, CheckDefinition> checkMap = new TreeMap<>();
+        for (CheckDefinition check : checks) checkMap.put(check.name(), check);
+        return new TableSpec(List.copyOf(columns), Map.copyOf(indexMap), Map.copyOf(checkMap));
+    }
+
+    private static ColumnDefinition column(String name, String type, boolean nullable,
+                                           String defaultValue, String extra) {
+        String dataType = type.contains("(") ? type.substring(0, type.indexOf('(')) : type;
+        return new ColumnDefinition(name, dataType, type, nullable, defaultValue,
+                dataType.equals("varchar") ? COLLATION : null, extra);
+    }
+
+    private static IndexDefinition index(String name, boolean unique, String columns) {
+        return new IndexDefinition(name, unique, List.of(columns.split(",")));
+    }
+
+    private static CheckDefinition check(String name, String clause) {
+        return new CheckDefinition(name, EconomySchemaInitializer.normalizeCheckClause(clause), true);
     }
 
     private static List<String> sorted(List<String> values) {
         return values.stream().sorted().toList();
     }
 
-    private record TableSpec(List<String> columns, Map<String, List<String>> indexes, Set<String> checks) {
+    private record TableSpec(List<ColumnDefinition> columns, Map<String, IndexDefinition> indexes,
+                             Map<String, CheckDefinition> checks) {
+    }
+
+    private record IndexPart(boolean unique, int sequence, String column) {
     }
 
     private record TableMeta(String engine, String collation) {

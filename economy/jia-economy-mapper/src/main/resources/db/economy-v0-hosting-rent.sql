@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS economy_hosting_rent_quote (
     CONSTRAINT chk_hosting_quote_purpose CHECK (
         (quote_purpose = 'INITIAL' AND lease_id IS NULL AND expected_lease_version IS NULL)
         OR
-        (quote_purpose = 'RENEWAL' AND lease_id IS NOT NULL AND expected_lease_version > 0)
+        (quote_purpose = 'RENEWAL' AND lease_id IS NOT NULL AND expected_lease_version IS NOT NULL AND expected_lease_version > 0)
     )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable actor/idempotency-scoped rent quotes bound to a canonical Agent';
 
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS economy_hosting_lease (
     persona_code       VARCHAR(100) NOT NULL,
     agent_id           VARCHAR(100) NOT NULL,
     binding_id         VARCHAR(100) DEFAULT NULL,
+    live_slot          TINYINT DEFAULT 1,
     plan_id            VARCHAR(100) NOT NULL,
     plan_version       BIGINT NOT NULL,
     amount_micro       BIGINT NOT NULL,
@@ -83,17 +84,21 @@ CREATE TABLE IF NOT EXISTS economy_hosting_lease (
     update_time        BIGINT NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_hosting_lease_id (tenant_id,client_id,lease_id),
-    UNIQUE KEY uk_hosting_lease_agent (tenant_id,client_id,agent_id),
+    UNIQUE KEY uk_hosting_lease_agent (tenant_id,client_id,agent_id,live_slot),
     UNIQUE KEY uk_hosting_lease_intent (tenant_id,client_id,latest_intent_id),
     KEY idx_hosting_lease_actor (tenant_id,client_id,principal_type,principal_id,status,lease_id),
     CONSTRAINT chk_hosting_lease_values CHECK (
         plan_version > 0 AND amount_micro > 0 AND period_seconds > 0 AND version > 0
     ),
     CONSTRAINT chk_hosting_lease_actor CHECK (principal_type = 'USER'),
+    CONSTRAINT chk_hosting_lease_live_slot CHECK (
+        (status = 'REFUNDED' AND live_slot IS NULL)
+        OR (status IN ('PROVISIONING','ACTIVE') AND live_slot IS NOT NULL AND live_slot = 1)
+    ),
     CONSTRAINT chk_hosting_lease_state CHECK (
         (status = 'PROVISIONING' AND paid_from IS NULL AND paid_through IS NULL)
         OR
-        (status = 'ACTIVE' AND paid_from IS NOT NULL AND paid_through > paid_from)
+        (status = 'ACTIVE' AND paid_from IS NOT NULL AND paid_through IS NOT NULL AND paid_through > paid_from)
         OR
         (status = 'REFUNDED' AND paid_from IS NULL AND paid_through IS NULL)
     )
@@ -126,6 +131,7 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
     refund_transaction_id    VARCHAR(100) DEFAULT NULL,
     refunded_at              BIGINT DEFAULT NULL,
     outcome_evidence_ref     VARCHAR(100) DEFAULT NULL,
+    service_ready_at         BIGINT DEFAULT NULL,
     version                  BIGINT NOT NULL,
     tenant_id                VARCHAR(50) NOT NULL,
     client_id                VARCHAR(50) NOT NULL,
@@ -144,21 +150,34 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
     CONSTRAINT chk_hosting_intent_capture_pair CHECK (
         (capture_idempotency_key IS NULL AND capture_request_hash IS NULL AND capture_transaction_id IS NULL AND captured_at IS NULL)
         OR
-        (OCTET_LENGTH(capture_idempotency_key) = 36 AND OCTET_LENGTH(capture_request_hash) = 32
+        (capture_idempotency_key IS NOT NULL AND capture_request_hash IS NOT NULL
+         AND OCTET_LENGTH(capture_idempotency_key) = 36 AND OCTET_LENGTH(capture_request_hash) = 32
          AND capture_transaction_id IS NOT NULL AND captured_at IS NOT NULL)
     ),
     CONSTRAINT chk_hosting_intent_refund_pair CHECK (
         (refund_idempotency_key IS NULL AND refund_request_hash IS NULL AND refund_transaction_id IS NULL AND refunded_at IS NULL)
         OR
-        (OCTET_LENGTH(refund_idempotency_key) = 36 AND OCTET_LENGTH(refund_request_hash) = 32
+        (refund_idempotency_key IS NOT NULL AND refund_request_hash IS NOT NULL
+         AND OCTET_LENGTH(refund_idempotency_key) = 36 AND OCTET_LENGTH(refund_request_hash) = 32
          AND refund_transaction_id IS NOT NULL AND refunded_at IS NOT NULL)
     ),
     CONSTRAINT chk_hosting_intent_state CHECK (
-        (status IN ('FUNDS_RESERVED','PROVISIONING_UNKNOWN','FAILED_NO_EFFECT')
+        (status = 'FUNDS_RESERVED' AND service_ready_at IS NULL
          AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL)
         OR
-        (status = 'ACTIVE' AND capture_transaction_id IS NOT NULL AND refund_transaction_id IS NULL)
+        (status IN ('PROVISIONING_UNKNOWN','FAILED_NO_EFFECT') AND service_ready_at IS NULL
+         AND outcome_evidence_ref IS NOT NULL
+         AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL)
         OR
-        (status = 'REFUNDED' AND capture_transaction_id IS NULL AND refund_transaction_id IS NOT NULL)
+        (status = 'SERVICE_READY' AND service_ready_at IS NOT NULL AND service_ready_at >= reserved_at
+         AND outcome_evidence_ref IS NOT NULL
+         AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL)
+        OR
+        (status = 'ACTIVE' AND service_ready_at IS NOT NULL AND service_ready_at >= reserved_at
+         AND outcome_evidence_ref IS NOT NULL
+         AND capture_transaction_id IS NOT NULL AND refund_transaction_id IS NULL)
+        OR
+        (status = 'REFUNDED' AND service_ready_at IS NULL AND outcome_evidence_ref IS NOT NULL
+         AND capture_transaction_id IS NULL AND refund_transaction_id IS NOT NULL)
     )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable source of truth for paid provisioning outcome and compensation';
