@@ -55,6 +55,7 @@ class HostingRentApplicationServiceTest {
         ObjectProvider<ManagedHostingProvisioner> providers = mock(ObjectProvider.class);
         when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
+        when(provider.availableFor(anyString(), anyString(), anyString())).thenAnswer(call -> provider.available());
         application = new HostingRentApplicationService(new AgentHostingRentProperties(true, null, null, null),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")))), owners, rent,
@@ -97,7 +98,7 @@ class HostingRentApplicationServiceTest {
         doAnswer(call -> { assertEquals(4, count()); return null; }).when(reconciler).wake();
         var result = application.bind(ACTOR, "wuyong", KEY, confirmation());
         assertEquals("1000000000", result.amountMicro());
-        assertEquals("2592000", result.periodSeconds());
+        assertEquals("2592000", ((HostingRentApplicationService.MutationView) result).periodSeconds());
         assertEquals("FUNDS_RESERVED", result.status());
         var order = inOrder(ledger, bindings, identities, runtimes, reconciler);
         order.verify(ledger).reserve(any()); order.verify(bindings).insert(any());

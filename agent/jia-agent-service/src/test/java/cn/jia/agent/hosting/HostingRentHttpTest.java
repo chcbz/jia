@@ -61,6 +61,24 @@ class HostingRentHttpTest {
     }
 
     @Test
+    void freeReprovisionHasFrozenZeroPriceReceiptNotPaidOrRenewalFields() throws Exception {
+        var free = new HostingRentApplicationService.ReprovisionView("hrr-test", AGENT, "hrl-test", "REPROVISION", "ACCEPTED",
+                "SILVER", "0", "5", "1802592000000", "1800000000000");
+        when(application.bind(eq(ACTOR), eq("wuyong"), eq(KEY), anyMap())).thenReturn(free);
+        mvc.perform(post(BIND).principal(jwt()).header("Idempotency-Key", KEY).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"server\",\"hostingAction\":\"REPROVISION\",\"agentId\":\"" + AGENT
+                                + "\",\"leaseId\":\"hrl-test\",\"expectedLeaseVersion\":\"4\"}"))
+                .andExpect(status().isAccepted()).andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(jsonPath("$.data.requestId").value("hrr-test"))
+                .andExpect(jsonPath("$.data.amountMicro").value("0"))
+                .andExpect(jsonPath("$.data.leaseVersion").value("5"))
+                .andExpect(jsonPath("$.data.paidThrough").value("1802592000000"))
+                .andExpect(jsonPath("$.data.transactionId").doesNotExist())
+                .andExpect(jsonPath("$.data.periodSeconds").doesNotExist());
+        verifyNoInteractions(agents);
+    }
+
+    @Test
     void leaseAndExplicitRenewalHaveSeparateRoutesAndPassVersionAsString() throws Exception {
         when(application.lookup(ACTOR, AGENT)).thenReturn(new HostingRentApplicationService.LeaseView(false, null, null, "NOT_MANAGED"));
         mvc.perform(get("/agent/" + AGENT + "/hosting-lease").principal(jwt()))

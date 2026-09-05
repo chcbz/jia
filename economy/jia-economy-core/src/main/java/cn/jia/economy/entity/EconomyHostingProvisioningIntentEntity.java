@@ -31,6 +31,8 @@ public class EconomyHostingProvisioningIntentEntity {
     private byte[] refundRequestHash;
     private String refundTransactionId;
     private Long refundedAt;
+    /** Existing OAuth key row reference; never a secret or a fallback identity. */
+    private String managedApiKeyId;
     private String outcomeEvidenceRef;
     private Long serviceReadyAt;
     private Long paidFrom;

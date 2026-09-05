@@ -405,15 +405,17 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             if ((ready && intent.getVersion() == readyVersion
                     || active && intent.getVersion() == checkedAdd(readyVersion, 1L))
                     && exact(intent.getOutcomeEvidenceRef(), validated.evidenceRef())
-                    && intent.getServiceReadyAt() != null) return;
+                    && intent.getServiceReadyAt() != null
+                    && (validated.serviceReadyAt() == null || validated.serviceReadyAt().equals(intent.getServiceReadyAt()))) return;
             if (intent.getVersion() != validated.expectedIntentVersion()
                     || !(HostingRentIntentStatus.FUNDS_RESERVED.name().equals(intent.getStatus())
                          || HostingRentIntentStatus.PROVISIONING_UNKNOWN.name().equals(intent.getStatus()))) {
                 throw new HostingRentException(INTENT_CONFLICT, "successful reconciliation is stale or terminal");
             }
-            long now = positiveNow();
-            if (intent.getReservedAt() == null || now < intent.getReservedAt()) {
-                throw new HostingRentException(INVALID_COMMAND, "service-ready clock predates reservation");
+            long observedNow = positiveNow();
+            long now = validated.serviceReadyAt() == null ? observedNow : validated.serviceReadyAt();
+            if (now > observedNow || intent.getReservedAt() == null || now < intent.getReservedAt()) {
+                throw new HostingRentException(INVALID_COMMAND, "service-ready clock is outside reservation/observation bounds");
             }
             requireOne(hostingMapper.markIntentServiceReady(intent, validated.scope().tenantId(),
                     validated.scope().clientId(), validated.evidenceRef(), readyVersion, now),
@@ -551,7 +553,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         requireExact(command.intentId(), "intentId", 100);
         requireExact(command.evidenceRef(), "evidenceRef", 100);
         return new ValidatedOutcome(command.scope(), command.principal(), command.intentId(),
-                command.expectedIntentVersion(), command.evidenceRef());
+                command.expectedIntentVersion(), command.evidenceRef(), command.serviceReadyAt());
     }
 
     private void requireScopeAndPrincipal(EconomyScope scope, EconomyPrincipal principal) {
@@ -848,6 +850,6 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             EconomyPrincipal principal,
             String intentId,
             long expectedIntentVersion,
-            String evidenceRef) {
+            String evidenceRef, Long serviceReadyAt) {
     }
 }

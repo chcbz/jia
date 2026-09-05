@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
 
 /** Registers the disabled-by-default R00 admission gate without enabling paid hosting. */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(AgentHostingRentProperties.class)
+@EnableConfigurationProperties({AgentHostingRentProperties.class, ManagedHostingAdapterProperties.class})
 public class AgentHostingRentConfiguration {
     @Bean
     public HostingRentAdmissionService hostingRentAdmissionService(

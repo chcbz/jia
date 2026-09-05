@@ -54,6 +54,18 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
     }
 
     @Test
+    void managedCredentialAndFullFreeCatalogDefinitionsAreFailClosed() {
+        assertIncompatibleCompleteCatalog(new CatalogChange("key_ref", "intent", "managed_api_key_id       VARCHAR(100) DEFAULT NULL",
+                "managed_api_key_id       VARCHAR(100) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL", "columns"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("free_time", "reprovision", "paid_through BIGINT NOT NULL",
+                "paid_through BIGINT DEFAULT NULL", "columns"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("free_live", "reprovision", "UNIQUE KEY uk_hosting_reprovision_live",
+                "KEY uk_hosting_reprovision_live", "indexes"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("free_check", "reprovision", "paid_through > requested_at",
+                "paid_through >= requested_at", "checks"));
+    }
+
+    @Test
     void fullCatalogWithSameColumnNamesButIncompatibleDefinitionsFailsWithoutRepair() {
         for (CatalogChange change : List.of(
                 new CatalogChange("type", "plan", "amount_micro       BIGINT NOT NULL",
@@ -167,6 +179,7 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
             String table = "economy_hosting_" + switch (change.tableSuffix()) {
                 case "lease" -> "lease";
                 case "intent" -> "provisioning_intent";
+                case "reprovision" -> "reprovision";
                 default -> "rent_" + change.tableSuffix();
             };
             if (ddl.startsWith("CREATE TABLE IF NOT EXISTS " + table + " (")) {
@@ -177,10 +190,10 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
             jdbc.execute(ddl); // Every malformed fixture must still be valid MySQL DDL.
         }
         assertTrue(replaced, change.toString());
-        assertEquals(4, jdbc.queryForObject("""
+        assertEquals(5, jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
                 WHERE table_schema=DATABASE() AND table_name IN ('economy_hosting_rent_plan',
-                    'economy_hosting_rent_quote','economy_hosting_lease','economy_hosting_provisioning_intent')
+                    'economy_hosting_rent_quote','economy_hosting_lease','economy_hosting_provisioning_intent','economy_hosting_reprovision')
                 """, Integer.class));
         List<String> before = tableDefinitions(jdbc);
         IllegalStateException failure = assertThrows(IllegalStateException.class,

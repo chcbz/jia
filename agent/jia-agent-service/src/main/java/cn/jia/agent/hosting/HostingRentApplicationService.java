@@ -12,6 +12,7 @@ import cn.jia.agent.mapper.AgentHostingRentBindingMapper;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.entity.EconomyHostingLeaseEntity;
+import cn.jia.economy.entity.EconomyHostingReprovisionEntity;
 import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.entity.EconomyHostingRentPlanEntity;
 import cn.jia.economy.entity.EconomyHostingRentQuoteEntity;
@@ -81,7 +82,7 @@ public final class HostingRentApplicationService {
             if (replay != null) return quoteView(ledger.quote(quoteCommand(actor, idempotencyKey, hash,
                     personaCode, replay.getAgentId(), replay.getPlanId(), replay.getPlanVersion(),
                     HostingRentQuotePurpose.INITIAL, null, null)));
-            requireProvisioner();
+            requireProvisioner(actor, owner);
             // Match the foundation quote lock order: plan before any lease/persona root.
             EconomyHostingRentPlanEntity plan = plan(actor);
             AgentPersonaEntity persona = persona(personaCode);
@@ -103,11 +104,11 @@ public final class HostingRentApplicationService {
         });
     }
 
-    public MutationView bind(Actor actor, String personaCode, String idempotencyKey, Map<String, String> body) {
+    public BindView bind(Actor actor, String personaCode, String idempotencyKey, Map<String, String> body) {
         requireEnabled(actor);
         key(idempotencyKey); exact(personaCode, 100);
         if (!"server".equals(body.get("mode"))) throw badRequest();
-        if ("REPROVISION".equals(body.get("hostingAction"))) return reprovision(actor, idempotencyKey, body);
+        if ("REPROVISION".equals(body.get("hostingAction"))) return reprovision(actor, personaCode, idempotencyKey, body);
         if (!"INITIAL".equals(body.get("hostingAction"))) throw badRequest();
         if (!Set.of("mode", "hostingAction", "agentId", "quoteId", "expectedPlanVersion",
                 "expectedAmountMicro", "expectedPeriodSeconds").containsAll(body.keySet())) throw badRequest();
@@ -121,7 +122,7 @@ public final class HostingRentApplicationService {
                     actor.tenantId(), actor.clientId(), quote.getQuoteId());
             if (prior != null) return mutationView(quote.getAgentId(), ledger.reserve(
                     new HostingRentReserveCommand(actor.scope(), actor.principal(), idempotencyKey, hash, quote.getQuoteId())));
-            requireProvisioner();
+            requireProvisioner(actor, owner);
             rent.selectLiveLeaseByAgentForUpdate(actor.tenantId(), actor.clientId(), quote.getAgentId());
             AgentPersonaEntity persona = persona(personaCode);
             AgentPersonaBindingEntity binding = currentBinding(actor, owner, personaCode);
@@ -219,18 +220,71 @@ public final class HostingRentApplicationService {
                     number(lease.getAmountMicro()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough())),
                     new IntentSnapshot(intent.getIntentId(), number(intent.getVersion()), intent.getStatus(),
                             number(intent.getServiceReadyAt()), intent.getReserveTransactionId(), intent.getCaptureTransactionId(),
-                            intent.getRefundTransactionId()), admission);
+                            intent.getRefundTransactionId()), admission, reprovisionSnapshot(rent.selectLatestReprovision(
+                            actor.tenantId(), actor.clientId(), lease.getLeaseId())));
         });
     }
 
-    private MutationView reprovision(Actor actor, String idempotencyKey, Map<String, String> body) {
-        // Fail closed until an immutable free-reprovision request + trusted managed adapter exists.
-        // Never turn this action into a renewal quote, reserve, or extension of paidThrough.
+    private ReprovisionView reprovision(Actor actor, String personaCode, String idempotencyKey, Map<String, String> body) {
         if (!Set.of("mode", "hostingAction", "agentId", "leaseId", "expectedLeaseVersion")
                 .containsAll(body.keySet())) throw badRequest();
-        owners.requireOwner(actor); key(idempotencyKey);
-        required(body, "agentId"); required(body, "leaseId"); positive(required(body, "expectedLeaseVersion"));
-        throw new HostingRentApplicationException(503, "HOSTING_RENT_REPROVISION_NOT_READY");
+        String agentId = required(body, "agentId"); requireCanonicalShape(agentId);
+        String leaseId = required(body, "leaseId");
+        long version = positive(required(body, "expectedLeaseVersion"));
+        byte[] requestHash = hash("REPROVISION:" + personaCode, body);
+        String owner = owners.requireOwner(actor);
+        byte[] keyBytes = idempotencyKey.getBytes(StandardCharsets.US_ASCII);
+        // Immutable receipt replay precedes provider availability, expiry and later lease versions.
+        var replay = rent.selectReprovisionReplay(actor.tenantId(), actor.clientId(), actor.actorId(), keyBytes);
+        if (replay != null) return reprovisionReceipt(replay, requestHash);
+        ManagedHostingProvisioner provider = provisioners.getIfAvailable();
+        if (provider == null || !provider.availableFor(actor.tenantId(), actor.clientId(), owner)) throw new HostingRentApplicationException(503, "HOSTING_RENT_REPROVISION_NOT_READY");
+        return transactions.execute(status -> {
+            if (!owner.equals(owners.requireOwner(actor))) throw forbidden();
+            var initial = rent.selectInitialIntent(actor.tenantId(), actor.clientId(), leaseId);
+            if (initial == null) throw forbidden();
+            // Same order as paid reconciliation: original intent -> lease -> canonical binding -> free request.
+            initial = rent.selectIntentForUpdate(actor.tenantId(), actor.clientId(), initial.getIntentId());
+            EconomyHostingLeaseEntity lease = ownedLease(actor, leaseId, agentId);
+            var prior = rent.selectReprovisionReplayForUpdate(actor.tenantId(), actor.clientId(), actor.actorId(), keyBytes);
+            if (prior != null) return reprovisionReceipt(prior, requestHash);
+            long now = System.currentTimeMillis();
+            if (initial == null || !"ACTIVE".equals(initial.getStatus()) || !"USER".equals(initial.getPrincipalType())
+                    || !actor.actorId().equals(initial.getPrincipalId()) || !agentId.equals(initial.getAgentId())
+                    || !"ACTIVE".equals(lease.getStatus()) || lease.getPaidThrough() == null || lease.getPaidThrough() <= now
+                    || lease.getVersion() != version || !personaCode.equals(lease.getPersonaCode())) {
+                throw conflict("HOSTING_RENT_LEASE_CONFLICT");
+            }
+            var identity = requireExisting(actor, owner, agentId, personaCode);
+            if (!Objects.equals(lease.getBindingId(), identity.getBindingId().toString())) throw forbidden();
+            if (rent.selectLiveReprovisionForUpdate(actor.tenantId(), actor.clientId(), leaseId) != null) {
+                throw conflict("HOSTING_RENT_INTENT_CONFLICT");
+            }
+            EconomyHostingReprovisionEntity request = new EconomyHostingReprovisionEntity()
+                    .setRequestId("hrr-" + UUID.randomUUID()).setLeaseId(leaseId).setIntentId(initial.getIntentId())
+                    .setAgentId(agentId).setPersonaCode(personaCode).setPrincipalId(actor.actorId())
+                    .setIdempotencyKey(keyBytes).setRequestHash(requestHash).setLeaseVersion(Math.addExact(version, 1))
+                    .setPaidThrough(lease.getPaidThrough()).setRequestedAt(now).setStatus("ACCEPTED").setVersion(1L)
+                    .setTenantId(actor.tenantId()).setClientId(actor.clientId());
+            if (rent.acceptReprovision(actor.tenantId(), actor.clientId(), leaseId, version, now) != 1
+                    || rent.insertReprovision(request) != 1) throw conflict("HOSTING_RENT_CONCURRENCY_CONFLICT");
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() { reconciler.wake(); }
+            });
+            // Deliberately NO ledger call, no profile I/O and no change to price/paid periods/latest paid intent.
+            return reprovisionReceipt(request, requestHash);
+        });
+    }
+
+    private static ReprovisionView reprovisionReceipt(EconomyHostingReprovisionEntity row, byte[] hash) {
+        if (!java.security.MessageDigest.isEqual(row.getRequestHash(), hash)) throw conflict("IDEMPOTENCY_CONFLICT");
+        return new ReprovisionView(row.getRequestId(), row.getAgentId(), row.getLeaseId(), "REPROVISION", "ACCEPTED",
+                "SILVER", "0", number(row.getLeaseVersion()), number(row.getPaidThrough()), number(row.getRequestedAt()));
+    }
+
+    private static ReprovisionSnapshot reprovisionSnapshot(EconomyHostingReprovisionEntity row) {
+        return row == null ? null : new ReprovisionSnapshot(row.getRequestId(), number(row.getVersion()), row.getStatus(),
+                number(row.getRequestedAt()), number(row.getServiceReadyAt()));
     }
 
     private void requireEnabled(Actor actor) {
@@ -239,9 +293,9 @@ public final class HostingRentApplicationService {
         preview.requireMutationAllowed(actor.tenantId(), actor.clientId());
     }
 
-    private void requireProvisioner() {
+    private void requireProvisioner(Actor actor, String owner) {
         ManagedHostingProvisioner provider = provisioners.getIfAvailable();
-        if (provider == null || !provider.available()) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
+        if (provider == null || !provider.availableFor(actor.tenantId(), actor.clientId(), owner)) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
     }
 
     private AgentPersonaEntity persona(String code) {
@@ -344,9 +398,20 @@ public final class HostingRentApplicationService {
     public record QuoteView(String quoteId, String purpose, String personaCode, String agentId, String leaseId,
                             String expectedLeaseVersion, String planId, String planVersion, String currency,
                             String amountMicro, String periodSeconds, String expiresAt) { }
+    public sealed interface BindView permits MutationView, ReprovisionView {
+        String status();
+        String amountMicro();
+    }
+    public record ReprovisionView(String requestId, String agentId, String leaseId, String operation, String status,
+                                 String currency, String amountMicro, String leaseVersion, String paidThrough, String occurredAt) implements BindView { }
+    public record ReprovisionSnapshot(String requestId, String version, String status, String requestedAt, String serviceReadyAt) { }
     public record MutationView(String agentId, String intentId, String leaseId, String quoteId, String transactionId,
-                               String status, String currency, String amountMicro, String periodSeconds, String occurredAt) { }
-    public record LeaseView(boolean managed, LeaseSnapshot lease, IntentSnapshot intent, String admission) { }
+                               String status, String currency, String amountMicro, String periodSeconds, String occurredAt) implements BindView { }
+    public record LeaseView(boolean managed, LeaseSnapshot lease, IntentSnapshot intent, String admission, ReprovisionSnapshot reprovision) {
+        public LeaseView(boolean managed, LeaseSnapshot lease, IntentSnapshot intent, String admission) {
+            this(managed, lease, intent, admission, null);
+        }
+    }
     public record LeaseSnapshot(String leaseId, String agentId, String personaCode, String bindingId, String version,
                                 String status, String planVersion, String amountMicro, String periodSeconds,
                                 String paidFrom, String paidThrough) { }

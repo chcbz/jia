@@ -4,6 +4,7 @@ import cn.jia.agent.config.AgentHostingRentProperties;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
+import cn.jia.economy.entity.EconomyHostingReprovisionEntity;
 import cn.jia.economy.hosting.HostingRentLedgerService;
 import cn.jia.economy.hosting.HostingRentOutcomeCommand;
 import cn.jia.economy.hosting.HostingRentSettlementCommand;
@@ -35,6 +36,7 @@ public final class HostingRentReconciler {
     private final boolean schemaEnabled;
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(HostingRentReconciler.class);
     private final AtomicBoolean wake = new AtomicBoolean();
+    private long freeScanAfterId;
     private long scanAfterId; // Fair bounded pages; resets on restart, never replaces durable intent state.
 
     public HostingRentReconciler(AgentHostingRentProperties properties, EconomyPreviewGate preview,
@@ -70,6 +72,15 @@ public final class HostingRentReconciler {
                         row.getIntentId(), unknown.getClass().getSimpleName());
             }
         }
+        var freePage = mapper.selectPendingReprovisions(freeScanAfterId);
+        freeScanAfterId = freePage.size() < 100 ? 0L : freePage.getLast().getId();
+        for (var row : freePage) {
+            if (!preview.allows(row.getTenantId(), row.getClientId())) continue;
+            try { reconcileFree(row, provider); }
+            catch (RuntimeException unknown) {
+                LOG.warn("Free hosting reconciliation deferred for request {} ({})", row.getRequestId(), unknown.getClass().getSimpleName());
+            }
+        }
     }
 
     void reconcileOne(EconomyHostingProvisioningIntentEntity row, ManagedHostingProvisioner provider) {
@@ -88,7 +99,8 @@ public final class HostingRentReconciler {
         if (observation == null || !snapshot.preparation().equals(observation.preparation())
                 || observation.outcome() == null || observation.outcome() == ManagedHostingProvisioner.Outcome.UNKNOWN) return;
         HostingRentHttp.exact(observation.evidenceRef(), 100);
-        HostingRentOutcomeCommand command = outcome(snapshot, version, observation.evidenceRef());
+        HostingRentOutcomeCommand command = new HostingRentOutcomeCommand(snapshot.actor().scope(), snapshot.actor().principal(),
+                snapshot.preparation().intentId(), version, observation.evidenceRef(), observation.serviceReadyAt());
         if (observation.outcome() == ManagedHostingProvisioner.Outcome.SERVICE_READY) {
             ledger.confirmProvisioningSucceeded(command);
             settle(new Snapshot(snapshot.actor(), snapshot.preparation(), "SERVICE_READY", version + 1), true);
@@ -97,6 +109,64 @@ public final class HostingRentReconciler {
             settle(new Snapshot(snapshot.actor(), snapshot.preparation(), "FAILED_NO_EFFECT", version + 1), false);
         }
     }
+
+    void reconcileFree(EconomyHostingReprovisionEntity row, ManagedHostingProvisioner provider) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) throw new IllegalStateException("rent I/O transaction boundary");
+        FreeSnapshot snapshot = transactions.execute(status -> freeSnapshot(row, true));
+        if (snapshot == null) return;
+        var observation = provider.prepareAndObserve(snapshot.preparation());
+        if (observation == null || !snapshot.preparation().equals(observation.preparation())
+                || observation.outcome() == null || observation.outcome() == ManagedHostingProvisioner.Outcome.UNKNOWN) return;
+        HostingRentHttp.exact(observation.evidenceRef(), 100);
+        Long readyAt = observation.serviceReadyAt();
+        if (observation.outcome() == ManagedHostingProvisioner.Outcome.SERVICE_READY
+                && (readyAt == null || readyAt < snapshot.preparation().requestedAt()
+                    || readyAt >= snapshot.preparation().validUntil() || readyAt > System.currentTimeMillis())) return;
+        transactions.executeWithoutResult(status -> {
+            FreeSnapshot current = freeSnapshot(row, false);
+            if (current == null || !current.preparation().equals(snapshot.preparation()) || current.version() != snapshot.version()) return;
+            String outcome = observation.outcome().name();
+            if (mapper.finishReprovision(row.getTenantId(), row.getClientId(), row.getRequestId(), current.version(),
+                    outcome, "SERVICE_READY".equals(outcome) ? readyAt : null, observation.evidenceRef()) != 1) {
+                throw new IllegalStateException("Free reprovision outcome CAS");
+            }
+            // No capture, reserve, refund or paid-period update exists on this path.
+        });
+    }
+
+    private FreeSnapshot freeSnapshot(EconomyHostingReprovisionEntity row, boolean markUnknown) {
+        var initial = mapper.selectIntentForUpdate(row.getTenantId(), row.getClientId(), row.getIntentId());
+        if (initial == null || !"INITIAL".equals(initial.getQuotePurpose()) || !"ACTIVE".equals(initial.getStatus())
+                || !"USER".equals(initial.getPrincipalType()) || !row.getPrincipalId().equals(initial.getPrincipalId())
+                || !row.getLeaseId().equals(initial.getLeaseId()) || !row.getAgentId().equals(initial.getAgentId())) return null;
+        var actor = new HostingRentHttp.Actor(initial.getPrincipalId(), row.getTenantId(), row.getClientId());
+        String owner = owners.requireOwner(actor);
+        var lease = mapper.selectLeaseForUpdate(actor.tenantId(), actor.clientId(), row.getLeaseId());
+        if (lease == null || !"ACTIVE".equals(lease.getStatus()) || !"USER".equals(lease.getPrincipalType())
+                || !actor.actorId().equals(lease.getPrincipalId()) || !row.getAgentId().equals(lease.getAgentId())
+                || lease.getBindingId() == null || !row.getPersonaCode().equals(lease.getPersonaCode())) return null;
+        var binding = bindings.findByIdForUpdate(Long.parseLong(lease.getBindingId()));
+        if (binding == null || !Integer.valueOf(1).equals(binding.getStatus()) || !owner.equals(binding.getJiacn())
+                || !actor.clientId().equals(binding.getClientId()) || !row.getAgentId().equals(binding.getAgentId())) return null;
+        var identity = identities.requireRegistrationIdentityInScope(actor.tenantId(), actor.clientId(), owner, row.getAgentId());
+        var canonicalBinding = identities.requireActiveBinding(identity, null);
+        if (!row.getAgentId().equals(identity.getCanonicalAgentId()) || !lease.getBindingId().equals(canonicalBinding.getId().toString())) return null;
+        var request = mapper.selectReprovisionForUpdate(actor.tenantId(), actor.clientId(), row.getRequestId());
+        if (request == null || !row.getIntentId().equals(request.getIntentId()) || !row.getLeaseId().equals(request.getLeaseId())
+                || !row.getAgentId().equals(request.getAgentId()) || !actor.actorId().equals(request.getPrincipalId())
+                || !("ACCEPTED".equals(request.getStatus()) || "PROVISIONING_UNKNOWN".equals(request.getStatus()))) return null;
+        long version = request.getVersion();
+        if ("ACCEPTED".equals(request.getStatus())) {
+            if (!markUnknown) return null;
+            if (mapper.markReprovisionUnknown(actor.tenantId(), actor.clientId(), request.getRequestId(), version) != 1) return null;
+            version = Math.addExact(version, 1);
+        }
+        return new FreeSnapshot(new ManagedHostingProvisioner.Preparation(actor.tenantId(), actor.clientId(), owner,
+                row.getAgentId(), initial.getIntentId(), lease.getLeaseId(), lease.getBindingId(), initial.getReservedAt(),
+                request.getRequestId(), request.getRequestedAt(), request.getPaidThrough()), version);
+    }
+
+    private record FreeSnapshot(ManagedHostingProvisioner.Preparation preparation, long version) { }
 
     private Snapshot snapshot(EconomyHostingProvisioningIntentEntity row) {
         var intent = mapper.selectIntentForUpdate(row.getTenantId(), row.getClientId(), row.getIntentId());

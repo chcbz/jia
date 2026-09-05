@@ -274,6 +274,28 @@ class HostingRentLedgerServiceRealTransactionTest {
     }
 
     @Test
+    void durableRunnerReadyTimeSurvivesDelayedReconciliationAndCannotBeRewritten() {
+        var reserved = service.reserve(reserve(service.quote(initialQuote("ready-time-agent", "ready-time-persona", "plan-test", 1)).quoteId(),
+                "00000000-0000-0000-0000-000000000091"));
+        service.markProvisioningUnknown(new HostingRentOutcomeCommand(scope(), principal(), reserved.intentId(), 1, "attempt"));
+        long readyAt = clock.getAndAdd(10000L);
+        assertEquals(HostingRentException.Reason.INVALID_COMMAND, assertThrows(HostingRentException.class,
+                () -> service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(), reserved.intentId(), 2,
+                        "ready-time", clock.get() + 100000L))).reason());
+        var proof = new HostingRentOutcomeCommand(scope(), principal(), reserved.intentId(), 2, "ready-time", readyAt);
+        service.confirmProvisioningSucceeded(proof);
+        service.capture(settlement(reserved.intentId(), 3, "00000000-0000-0000-0000-000000000092", HASH_CAPTURE));
+        service.confirmProvisioningSucceeded(proof);
+        assertEquals(readyAt, jdbc.queryForObject("SELECT service_ready_at FROM economy_hosting_provisioning_intent", Long.class));
+        assertEquals(readyAt, jdbc.queryForObject("SELECT paid_from FROM economy_hosting_lease", Long.class));
+        assertEquals(readyAt + V1_PERIOD_SECONDS * 1000, jdbc.queryForObject("SELECT paid_through FROM economy_hosting_lease", Long.class));
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT, assertThrows(HostingRentException.class,
+                () -> service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(), reserved.intentId(), 2,
+                        "ready-time", readyAt + 1))).reason());
+        assertEquals(2, count("economy_transaction"));
+    }
+
+    @Test
     void unknownSuccessRequiresTrustedProofAndKeepsEscrowUntilExactlyOneCapture() throws Exception {
         HostingRentMutationReceipt reserved = service.reserve(reserve(
                 service.quote(initialQuote("agent-ready", "persona-ready", "plan-test", 1)).quoteId(),
@@ -716,7 +738,7 @@ class HostingRentLedgerServiceRealTransactionTest {
                 "CREATE TABLE economy_hosting_rent_plan(id BIGINT AUTO_INCREMENT PRIMARY KEY,plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,quote_ttl_seconds BIGINT,currency VARCHAR(16),status VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,plan_id,plan_version))",
                 "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
                 "CREATE TABLE economy_hosting_lease(id BIGINT AUTO_INCREMENT PRIMARY KEY,lease_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),binding_id VARCHAR(100),live_slot TINYINT DEFAULT 1,plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(24),paid_from BIGINT,paid_through BIGINT,latest_intent_id VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,lease_id),UNIQUE(tenant_id,client_id,agent_id,live_slot),CHECK((status='REFUNDED' AND live_slot IS NULL) OR (status IN ('PROVISIONING','ACTIVE') AND live_slot IS NOT NULL AND live_slot=1)),UNIQUE(tenant_id,client_id,latest_intent_id))",
-                "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(32),reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,outcome_evidence_ref VARCHAR(100),service_ready_at BIGINT,paid_from BIGINT,paid_through BIGINT,version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key),CHECK((status='ACTIVE' AND paid_from IS NOT NULL AND paid_through IS NOT NULL AND paid_through>paid_from) OR (status<>'ACTIVE' AND paid_from IS NULL AND paid_through IS NULL)))"
+                "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(32),reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,managed_api_key_id VARCHAR(100),outcome_evidence_ref VARCHAR(100),service_ready_at BIGINT,paid_from BIGINT,paid_through BIGINT,version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key),CHECK((status='ACTIVE' AND paid_from IS NOT NULL AND paid_through IS NOT NULL AND paid_through>paid_from) OR (status<>'ACTIVE' AND paid_from IS NULL AND paid_through IS NULL)))"
         )) jdbc.execute(ddl);
     }
 

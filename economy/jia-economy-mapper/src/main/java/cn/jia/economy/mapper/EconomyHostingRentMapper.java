@@ -1,6 +1,7 @@
 package cn.jia.economy.mapper;
 
 import cn.jia.economy.entity.EconomyHostingLeaseEntity;
+import cn.jia.economy.entity.EconomyHostingReprovisionEntity;
 import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.entity.EconomyHostingRentPlanEntity;
 import cn.jia.economy.entity.EconomyHostingRentQuoteEntity;
@@ -182,7 +183,7 @@ public interface EconomyHostingRentMapper {
             + "reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,"
             + "capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,"
             + "refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,"
-            + "outcome_evidence_ref,service_ready_at,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time ";
+            + "managed_api_key_id,outcome_evidence_ref,service_ready_at,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time ";
 
     @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE "
             + EXACT_SCOPE + " AND quote_id=#{quoteId} AND OCTET_LENGTH(quote_id)=OCTET_LENGTH(#{quoteId})"
@@ -332,4 +333,74 @@ public interface EconomyHostingRentMapper {
             @Param("lease") EconomyHostingLeaseEntity lease, @Param("quote") EconomyHostingRentQuoteEntity quote,
             @Param("intentId") String intentId, @Param("paidFrom") long paidFrom,
             @Param("paidThrough") long paidThrough, @Param("now") long now);
+
+    @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE " + EXACT_SCOPE
+            + " AND lease_id=#{leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{leaseId})"
+            + " AND quote_purpose='INITIAL' LIMIT 1")
+    EconomyHostingProvisioningIntentEntity selectInitialIntent(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("leaseId") String leaseId);
+
+    @Update("UPDATE economy_hosting_provisioning_intent SET managed_api_key_id=#{keyId} WHERE " + EXACT_SCOPE
+            + " AND intent_id=#{intentId} AND OCTET_LENGTH(intent_id)=OCTET_LENGTH(#{intentId})"
+            + " AND quote_purpose='INITIAL' AND managed_api_key_id IS NULL AND status IN ('FUNDS_RESERVED','PROVISIONING_UNKNOWN','ACTIVE')")
+    int attachManagedKey(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("intentId") String intentId, @Param("keyId") String keyId);
+
+    @Select("SELECT * FROM economy_hosting_reprovision WHERE " + EXACT_SCOPE
+            + " AND principal_id=#{actor} AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{actor})"
+            + " AND idempotency_key=#{key} AND OCTET_LENGTH(idempotency_key)=OCTET_LENGTH(#{key}) LIMIT 1")
+    EconomyHostingReprovisionEntity selectReprovisionReplay(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("actor") String actor, @Param("key") byte[] key);
+
+    @Select("SELECT * FROM economy_hosting_reprovision WHERE " + EXACT_SCOPE
+            + " AND principal_id=#{actor} AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{actor})"
+            + " AND idempotency_key=#{key} AND OCTET_LENGTH(idempotency_key)=OCTET_LENGTH(#{key}) LIMIT 1 FOR UPDATE")
+    EconomyHostingReprovisionEntity selectReprovisionReplayForUpdate(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("actor") String actor, @Param("key") byte[] key);
+
+    @Select("SELECT * FROM economy_hosting_reprovision WHERE " + EXACT_SCOPE
+            + " AND lease_id=#{leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{leaseId}) AND live_slot=1 LIMIT 1 FOR UPDATE")
+    EconomyHostingReprovisionEntity selectLiveReprovisionForUpdate(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("leaseId") String leaseId);
+
+    @Select("SELECT * FROM economy_hosting_reprovision WHERE " + EXACT_SCOPE
+            + " AND request_id=#{requestId} AND OCTET_LENGTH(request_id)=OCTET_LENGTH(#{requestId}) LIMIT 1 FOR UPDATE")
+    EconomyHostingReprovisionEntity selectReprovisionForUpdate(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("requestId") String requestId);
+
+    @Select("SELECT * FROM economy_hosting_reprovision WHERE " + EXACT_SCOPE
+            + " AND lease_id=#{leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{leaseId}) ORDER BY id DESC LIMIT 1")
+    EconomyHostingReprovisionEntity selectLatestReprovision(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("leaseId") String leaseId);
+
+    @Select("SELECT * FROM economy_hosting_reprovision WHERE live_slot=1 AND id>#{afterId} ORDER BY id LIMIT 100")
+    java.util.List<EconomyHostingReprovisionEntity> selectPendingReprovisions(@Param("afterId") long afterId);
+
+    @Insert("""
+            INSERT INTO economy_hosting_reprovision(request_id,lease_id,intent_id,agent_id,persona_code,
+                principal_id,idempotency_key,request_hash,lease_version,paid_through,requested_at,status,version,tenant_id,client_id)
+            VALUES(#{requestId},#{leaseId},#{intentId},#{agentId},#{personaCode},#{principalId},#{idempotencyKey},#{requestHash},
+                #{leaseVersion},#{paidThrough},#{requestedAt},'ACCEPTED',1,#{tenantId},#{clientId})
+            """)
+    int insertReprovision(EconomyHostingReprovisionEntity request);
+
+    @Update("UPDATE economy_hosting_lease SET version=version+1,update_time=#{now} WHERE " + EXACT_SCOPE
+            + " AND lease_id=#{leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{leaseId})"
+            + " AND status='ACTIVE' AND live_slot=1 AND version=#{version} AND paid_through>#{now}")
+    int acceptReprovision(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("leaseId") String leaseId, @Param("version") long version, @Param("now") long now);
+
+    @Update("UPDATE economy_hosting_reprovision SET status='PROVISIONING_UNKNOWN',version=version+1 WHERE " + EXACT_SCOPE
+            + " AND request_id=#{requestId} AND OCTET_LENGTH(request_id)=OCTET_LENGTH(#{requestId})"
+            + " AND status='ACCEPTED' AND live_slot=1 AND version=#{version}")
+    int markReprovisionUnknown(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("requestId") String requestId, @Param("version") long version);
+
+    @Update("UPDATE economy_hosting_reprovision SET status=#{status},live_slot=NULL,version=version+1,"
+            + " service_ready_at=#{readyAt},evidence_ref=#{evidence} WHERE " + EXACT_SCOPE
+            + " AND request_id=#{requestId} AND OCTET_LENGTH(request_id)=OCTET_LENGTH(#{requestId})"
+            + " AND status='PROVISIONING_UNKNOWN' AND live_slot=1 AND version=#{version}")
+    int finishReprovision(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("requestId") String requestId, @Param("version") long version, @Param("status") String status,
+            @Param("readyAt") Long readyAt, @Param("evidence") String evidence);
 }

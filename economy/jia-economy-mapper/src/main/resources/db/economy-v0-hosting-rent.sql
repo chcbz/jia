@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
     refund_request_hash      BINARY(32) DEFAULT NULL,
     refund_transaction_id    VARCHAR(100) DEFAULT NULL,
     refunded_at              BIGINT DEFAULT NULL,
+    managed_api_key_id       VARCHAR(100) DEFAULT NULL,
     outcome_evidence_ref     VARCHAR(100) DEFAULT NULL,
     service_ready_at         BIGINT DEFAULT NULL,
     paid_from                BIGINT DEFAULT NULL,
@@ -187,3 +188,38 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
          AND capture_transaction_id IS NULL AND refund_transaction_id IS NOT NULL)
     )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable source of truth for paid provisioning outcome and compensation';
+
+-- Free reprovision is not a paid order. Original INITIAL intent remains the managed generation.
+CREATE TABLE IF NOT EXISTS economy_hosting_reprovision (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    request_id VARCHAR(100) NOT NULL,
+    lease_id VARCHAR(100) NOT NULL,
+    intent_id VARCHAR(100) NOT NULL,
+    agent_id VARCHAR(100) NOT NULL,
+    persona_code VARCHAR(100) NOT NULL,
+    principal_id VARCHAR(100) NOT NULL,
+    idempotency_key VARBINARY(36) NOT NULL,
+    request_hash BINARY(32) NOT NULL,
+    lease_version BIGINT NOT NULL,
+    paid_through BIGINT NOT NULL,
+    requested_at BIGINT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    live_slot TINYINT DEFAULT 1,
+    version BIGINT NOT NULL,
+    service_ready_at BIGINT DEFAULT NULL,
+    evidence_ref VARCHAR(100) DEFAULT NULL,
+    tenant_id VARCHAR(50) NOT NULL,
+    client_id VARCHAR(50) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_hosting_reprovision_id (tenant_id,client_id,request_id),
+    UNIQUE KEY uk_hosting_reprovision_key (tenant_id,client_id,principal_id,idempotency_key),
+    UNIQUE KEY uk_hosting_reprovision_live (tenant_id,client_id,lease_id,live_slot),
+    KEY idx_hosting_reprovision_pending (status,id),
+    CONSTRAINT chk_hosting_reprovision_values CHECK (lease_version > 0 AND version > 0 AND requested_at > 0 AND paid_through > requested_at),
+    CONSTRAINT chk_hosting_reprovision_key CHECK (OCTET_LENGTH(idempotency_key) = 36 AND OCTET_LENGTH(request_hash) = 32),
+    CONSTRAINT chk_hosting_reprovision_state CHECK (
+        (status IN ('ACCEPTED','PROVISIONING_UNKNOWN') AND live_slot IS NOT NULL AND live_slot = 1 AND service_ready_at IS NULL)
+        OR (status = 'SERVICE_READY' AND live_slot IS NULL AND service_ready_at IS NOT NULL AND service_ready_at >= requested_at AND evidence_ref IS NOT NULL)
+        OR (status = 'FAILED_NO_EFFECT' AND live_slot IS NULL AND service_ready_at IS NULL AND evidence_ref IS NOT NULL)
+    )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Free managed reprovision receipts; no posting and no paid period mutation';

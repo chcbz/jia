@@ -8,5 +8,10 @@ public record HostingRentOutcomeCommand(
         EconomyPrincipal principal,
         String intentId,
         long expectedIntentVersion,
-        String evidenceRef) {
+        String evidenceRef,
+        Long serviceReadyAt) {
+    public HostingRentOutcomeCommand(EconomyScope scope, EconomyPrincipal principal, String intentId,
+            long expectedIntentVersion, String evidenceRef) {
+        this(scope, principal, intentId, expectedIntentVersion, evidenceRef, null);
+    }
 }

@@ -8,6 +8,7 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.entity.EconomyHostingLeaseEntity;
+import cn.jia.economy.entity.EconomyHostingReprovisionEntity;
 import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.hosting.HostingRentLedgerService;
 import cn.jia.economy.hosting.HostingRentOutcomeCommand;
@@ -183,6 +184,37 @@ class HostingRentReconcilerTest {
         assertThrows(IllegalStateException.class, () -> new TransactionTemplate(manager).executeWithoutResult(
                 status -> worker.reconcilePending()));
         verify(provider, never()).prepareAndObserve(any()); verifyNoInteractions(mapper, ledger);
+    }
+
+    @Test
+    void freeUnknownThenTrustedSuccessFinishesOnceWithoutTouchingPaidLedgerOrRenewedPeriod() {
+        long requestedAt = System.currentTimeMillis() - 1000;
+        intent.setStatus("ACTIVE").setVersion(4L).setReservedAt(requestedAt - 1000);
+        lease.setStatus("ACTIVE").setPersonaCode("wuyong").setPaidThrough(requestedAt + 2592000000L)
+                .setLatestIntentId("new-renewal-intent"); // generation remains original INITIAL after renewals
+        var free = new EconomyHostingReprovisionEntity().setRequestId("hrr-free").setIntentId("hri-test")
+                .setLeaseId("hrl-test").setAgentId(AGENT).setPersonaCode("wuyong").setPrincipalId("Login-A")
+                .setTenantId("Tenant-A").setClientId("Client-A").setVersion(1L).setStatus("ACCEPTED")
+                .setRequestedAt(requestedAt).setPaidThrough(requestedAt + 2592000000L);
+        when(mapper.selectReprovisionForUpdate("Tenant-A", "Client-A", "hrr-free")).thenReturn(free);
+        when(mapper.markReprovisionUnknown("Tenant-A", "Client-A", "hrr-free", 1L)).thenAnswer(call -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive()); free.setStatus("PROVISIONING_UNKNOWN").setVersion(2L); return 1;
+        });
+        when(provider.prepareAndObserve(any())).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            assertEquals("PROVISIONING_UNKNOWN", free.getStatus());
+            return new ManagedHostingProvisioner.Observation(call.getArgument(0), ManagedHostingProvisioner.Outcome.UNKNOWN, null);
+        });
+        worker.reconcileFree(free, provider);
+        verify(mapper, never()).finishReprovision(anyString(), anyString(), anyString(), anyLong(), anyString(), any(), anyString());
+        when(provider.prepareAndObserve(any())).thenAnswer(call -> new ManagedHostingProvisioner.Observation(
+                call.getArgument(0), ManagedHostingProvisioner.Outcome.SERVICE_READY, "exact-free-proof", requestedAt + 1));
+        when(mapper.finishReprovision("Tenant-A", "Client-A", "hrr-free", 2L, "SERVICE_READY", requestedAt + 1, "exact-free-proof"))
+                .thenAnswer(call -> { free.setStatus("SERVICE_READY").setVersion(3L); return 1; });
+        worker.reconcileFree(free, provider); worker.reconcileFree(free, provider);
+        verify(mapper, times(1)).finishReprovision(anyString(), anyString(), anyString(), anyLong(), anyString(), any(), anyString());
+        verifyNoInteractions(ledger);
+        assertEquals("new-renewal-intent", lease.getLatestIntentId()); assertEquals(requestedAt + 2592000000L, lease.getPaidThrough());
     }
 
     private void transition(HostingRentOutcomeCommand command, String status) {

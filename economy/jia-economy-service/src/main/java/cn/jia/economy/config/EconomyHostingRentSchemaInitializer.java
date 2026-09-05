@@ -31,7 +31,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
             "economy_hosting_rent_plan",
             "economy_hosting_rent_quote",
             "economy_hosting_lease",
-            "economy_hosting_provisioning_intent");
+            "economy_hosting_provisioning_intent", "economy_hosting_reprovision");
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String LOCK = "cyf:economy-v0:hosting-rent-schema";
     private static final List<TriggerSpec> TRIGGERS = List.of(
@@ -63,7 +63,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
 
     void validateCatalog() {
         if (!presentTables().equals(sorted(TABLES))) {
-            throw new IllegalStateException("ECO-V0 hosting-rent schema must contain exact 4/4 tables");
+            throw new IllegalStateException("ECO-V0 hosting-rent schema must contain exact 5/5 tables");
         }
         for (Map.Entry<String, TableSpec> entry : expectedTables().entrySet()) {
             String table = entry.getKey();
@@ -193,7 +193,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE()
                   AND (event_object_table IN ('economy_hosting_rent_plan','economy_hosting_rent_quote',
-                                              'economy_hosting_lease','economy_hosting_provisioning_intent')
+                                              'economy_hosting_lease','economy_hosting_provisioning_intent','economy_hosting_reprovision')
                        OR trigger_name LIKE 'trg_hosting_%')
                 ORDER BY trigger_name
                 """, (RowCallbackHandler) rs -> {
@@ -211,7 +211,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema=DATABASE()
                   AND table_name IN ('economy_hosting_rent_plan','economy_hosting_rent_quote',
-                                     'economy_hosting_lease','economy_hosting_provisioning_intent')
+                                     'economy_hosting_lease','economy_hosting_provisioning_intent','economy_hosting_reprovision')
                 ORDER BY table_name
                 """, String.class);
     }
@@ -225,7 +225,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
         }
         List<String> statements = EconomySchemaInitializer.splitSql(sql);
         if (statements.size() != TABLES.size()) {
-            throw new IllegalStateException("Hosting-rent DDL must contain exactly four CREATE TABLE statements");
+            throw new IllegalStateException("Hosting-rent DDL must contain exactly five CREATE TABLE statements");
         }
         for (int index = 0; index < statements.size(); index++) {
             String normalized = statements.get(index).stripLeading().toLowerCase(Locale.ROOT);
@@ -389,6 +389,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("refund_request_hash", "binary(32)", true, null, ""),
                 column("refund_transaction_id", "varchar(100)", true, null, ""),
                 column("refunded_at", "bigint", true, null, ""),
+                column("managed_api_key_id", "varchar(100)", true, null, ""),
                 column("outcome_evidence_ref", "varchar(100)", true, null, ""),
                 column("service_ready_at", "bigint", true, null, ""),
                 column("paid_from", "bigint", true, null, ""),
@@ -426,6 +427,34 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                         + "outcome_evidence_ref IS NOT NULL AND capture_transaction_id IS NOT NULL AND refund_transaction_id IS NULL) OR "
                         + "(status = 'REFUNDED' AND service_ready_at IS NULL AND outcome_evidence_ref IS NOT NULL AND "
                         + "capture_transaction_id IS NULL AND refund_transaction_id IS NOT NULL)")));
+        tables.put("economy_hosting_reprovision", table(List.of(
+                column("id", "bigint", false, null, "auto_increment"),
+                column("request_id", "varchar(100)", false, null, ""),
+                column("lease_id", "varchar(100)", false, null, ""),
+                column("intent_id", "varchar(100)", false, null, ""),
+                column("agent_id", "varchar(100)", false, null, ""),
+                column("persona_code", "varchar(100)", false, null, ""),
+                column("principal_id", "varchar(100)", false, null, ""),
+                column("idempotency_key", "varbinary(36)", false, null, ""),
+                column("request_hash", "binary(32)", false, null, ""),
+                column("lease_version", "bigint", false, null, ""),
+                column("paid_through", "bigint", false, null, ""),
+                column("requested_at", "bigint", false, null, ""),
+                column("status", "varchar(32)", false, null, ""),
+                column("live_slot", "tinyint", true, "1", ""),
+                column("version", "bigint", false, null, ""),
+                column("service_ready_at", "bigint", true, null, ""),
+                column("evidence_ref", "varchar(100)", true, null, ""),
+                column("tenant_id", "varchar(50)", false, null, ""),
+                column("client_id", "varchar(50)", false, null, "")), List.of(
+                index("PRIMARY", true, "id"),
+                index("uk_hosting_reprovision_id", true, "tenant_id,client_id,request_id"),
+                index("uk_hosting_reprovision_key", true, "tenant_id,client_id,principal_id,idempotency_key"),
+                index("uk_hosting_reprovision_live", true, "tenant_id,client_id,lease_id,live_slot"),
+                index("idx_hosting_reprovision_pending", false, "status,id")),
+                check("chk_hosting_reprovision_values", "lease_version > 0 AND version > 0 AND requested_at > 0 AND paid_through > requested_at"),
+                check("chk_hosting_reprovision_key", "OCTET_LENGTH(idempotency_key) = 36 AND OCTET_LENGTH(request_hash) = 32"),
+                check("chk_hosting_reprovision_state", "(status IN ('ACCEPTED','PROVISIONING_UNKNOWN') AND live_slot IS NOT NULL AND live_slot = 1 AND service_ready_at IS NULL) OR (status = 'SERVICE_READY' AND live_slot IS NULL AND service_ready_at IS NOT NULL AND service_ready_at >= requested_at AND evidence_ref IS NOT NULL) OR (status = 'FAILED_NO_EFFECT' AND live_slot IS NULL AND service_ready_at IS NULL AND evidence_ref IS NOT NULL)")));
         return Map.copyOf(tables);
     }
 
