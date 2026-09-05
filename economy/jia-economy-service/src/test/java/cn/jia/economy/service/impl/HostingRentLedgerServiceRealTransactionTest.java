@@ -31,8 +31,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
-import java.security.MessageDigest;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -47,6 +47,8 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 
@@ -131,7 +133,9 @@ class HostingRentLedgerServiceRealTransactionTest {
 
         HostingRentReserveCommand reserveCommand = reserve(quote.quoteId(), "00000000-0000-0000-0000-000000000002");
         HostingRentMutationReceipt reserved = service.reserve(reserveCommand);
-        HostingRentSettlementCommand capture = settlement(reserved.intentId(), 1,
+        service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 1, "ready-agent-1"));
+        HostingRentSettlementCommand capture = settlement(reserved.intentId(), 2,
                 "00000000-0000-0000-0000-000000000003", HASH_CAPTURE);
         HostingRentMutationReceipt captured = service.capture(capture);
 
@@ -269,6 +273,230 @@ class HostingRentLedgerServiceRealTransactionTest {
         assertEquals(HostingRentException.Reason.INVALID_COMMAND, invalidRenewal.reason());
     }
 
+    @Test
+    void unknownSuccessRequiresTrustedProofAndKeepsEscrowUntilExactlyOneCapture() throws Exception {
+        HostingRentMutationReceipt reserved = service.reserve(reserve(
+                service.quote(initialQuote("agent-ready", "persona-ready", "plan-test", 1)).quoteId(),
+                "00000000-0000-0000-0000-000000000052"));
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT, assertThrows(HostingRentException.class,
+                () -> service.capture(settlement(reserved.intentId(), 1,
+                        "00000000-0000-0000-0000-000000000053", HASH_CAPTURE))).reason());
+        service.markProvisioningUnknown(new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 1, "unknown-ready"));
+        HostingRentOutcomeCommand proof = new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 2, "trusted-readiness-agent-ready");
+        assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        assertEquals(1, count("economy_transaction"));
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM economy_hosting_provisioning_intent WHERE service_ready_at IS NOT NULL
+                """, Integer.class));
+
+        for (HostingRentOutcomeCommand foreign : List.of(
+                new HostingRentOutcomeCommand(new EconomyScope("tenant-rent", CLIENT), principal(),
+                        reserved.intentId(), 2, proof.evidenceRef()),
+                new HostingRentOutcomeCommand(new EconomyScope(TENANT, "client-rent"), principal(),
+                        reserved.intentId(), 2, proof.evidenceRef()),
+                new HostingRentOutcomeCommand(scope(), new EconomyPrincipal(EconomyPrincipalType.USER,
+                        "JWT-sub-user"), reserved.intentId(), 2, proof.evidenceRef()))) {
+            assertEquals(HostingRentException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                    assertThrows(HostingRentException.class,
+                            () -> service.confirmProvisioningSucceeded(foreign)).reason());
+        }
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT, assertThrows(HostingRentException.class,
+                () -> service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(),
+                        reserved.intentId(), 1, proof.evidenceRef()))).reason());
+
+        List<Outcome> reports = race(() -> {
+            service.confirmProvisioningSucceeded(proof);
+            return new Outcome(reserved, null);
+        }, () -> {
+            service.confirmProvisioningSucceeded(proof);
+            return new Outcome(reserved, null);
+        });
+        assertTrue(reports.stream().allMatch(Outcome::succeeded));
+        long readyAt = jdbc.queryForObject(
+                "SELECT service_ready_at FROM economy_hosting_provisioning_intent", Long.class);
+        assertEquals(3L, jdbc.queryForObject("SELECT version FROM economy_hosting_provisioning_intent", Long.class));
+        assertEquals("SERVICE_READY", jdbc.queryForObject(
+                "SELECT status FROM economy_hosting_provisioning_intent", String.class));
+        assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        assertEquals(1, count("economy_transaction"));
+        assertEquals(HostingRentException.Reason.REFUND_NOT_ALLOWED, assertThrows(HostingRentException.class,
+                () -> service.refund(settlement(reserved.intentId(), 3,
+                        "00000000-0000-0000-0000-000000000054", HASH_REFUND))).reason());
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT, assertThrows(HostingRentException.class,
+                () -> service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(),
+                        reserved.intentId(), 2, "different-proof"))).reason());
+
+        clock.addAndGet(10_000L); // Capture may lag proof; the paid period must not move.
+        HostingRentSettlementCommand capture = settlement(reserved.intentId(), 3,
+                "00000000-0000-0000-0000-000000000053", HASH_CAPTURE);
+        List<Outcome> captures = race(() -> new Outcome(service.capture(capture), null),
+                () -> new Outcome(service.capture(capture), null));
+        assertEquals(captures.get(0).receipt(), captures.get(1).receipt());
+        service.confirmProvisioningSucceeded(proof); // Callback replay also works after capture.
+        assertEquals(captures.get(0).receipt(), service.capture(capture));
+        assertEquals(readyAt, jdbc.queryForObject("SELECT paid_from FROM economy_hosting_lease", Long.class));
+        assertEquals(readyAt + V1_PERIOD_SECONDS * 1_000L,
+                jdbc.queryForObject("SELECT paid_through FROM economy_hosting_lease", Long.class));
+        assertEquals(readyAt, jdbc.queryForObject(
+                "SELECT service_ready_at FROM economy_hosting_provisioning_intent", Long.class));
+        assertEquals(2, count("economy_transaction"));
+        assertEquals(V1_AMOUNT_MICRO, balance("system_hosting_rent"));
+        assertEquals(0L, balanceLike("hosting_esc_%"));
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
+    }
+
+    @Test
+    void refundedAgentCanReserveFreshIntentWithoutChangingHistoryOrAcceptingOldCallbacks() {
+        HostingRentQuoteReceipt firstQuote = service.quote(initialQuote("agent-retry", "persona-retry", "plan-test", 1));
+        HostingRentReserveCommand originalReserve = reserve(firstQuote.quoteId(),
+                "00000000-0000-0000-0000-000000000062");
+        HostingRentMutationReceipt first = service.reserve(originalReserve);
+        service.confirmProvisioningFailedNoEffect(new HostingRentOutcomeCommand(scope(), principal(),
+                first.intentId(), 1, "confirmed-no-effect"));
+        HostingRentSettlementCommand originalRefund = settlement(first.intentId(), 2,
+                "00000000-0000-0000-0000-000000000064", HASH_REFUND);
+        HostingRentMutationReceipt refunded = service.refund(originalRefund);
+        Map<String, Object> oldLease = leaseRow(first.leaseId());
+        Map<String, Object> oldIntent = intentRow(first.intentId());
+        assertEquals(WALLET_BALANCE_MICRO, balance("wallet-user"));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM economy_hosting_lease WHERE live_slot IS NOT NULL", Integer.class));
+
+        HostingRentQuoteReceipt retryQuote = service.quote(initialQuote(
+                "agent-retry", "persona-retry", "plan-test", 1,
+                "00000000-0000-0000-0000-000000000065", hash(65)));
+        HostingRentReserveCommand retryReserve = reserve(retryQuote.quoteId(),
+                "00000000-0000-0000-0000-000000000066");
+        HostingRentMutationReceipt retry = service.reserve(retryReserve);
+        assertNotEquals(first.intentId(), retry.intentId());
+        assertNotEquals(first.leaseId(), retry.leaseId());
+        assertNotEquals(first.quoteId(), retry.quoteId());
+        Map<String, Object> newLease = leaseRow(retry.leaseId());
+        Map<String, Object> newIntent = intentRow(retry.intentId());
+
+        assertEquals(first, service.reserve(originalReserve));
+        assertEquals(refunded, service.refund(originalRefund));
+        assertEquals(retry, service.reserve(retryReserve));
+        HostingRentOutcomeCommand late = new HostingRentOutcomeCommand(scope(), principal(),
+                first.intentId(), 3, "stale-old-intent");
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT,
+                assertThrows(HostingRentException.class, () -> service.confirmProvisioningSucceeded(late)).reason());
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT,
+                assertThrows(HostingRentException.class, () -> service.markProvisioningUnknown(late)).reason());
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT,
+                assertThrows(HostingRentException.class, () -> service.confirmProvisioningFailedNoEffect(late)).reason());
+        assertEquals(HostingRentException.Reason.INTENT_CONFLICT, assertThrows(HostingRentException.class,
+                () -> service.capture(settlement(first.intentId(), 3,
+                        "00000000-0000-0000-0000-000000000067", HASH_CAPTURE))).reason());
+
+        HostingRentQuoteReceipt thirdQuote = service.quote(initialQuote(
+                "agent-retry", "persona-retry", "plan-test", 1,
+                "00000000-0000-0000-0000-000000000068", hash(68)));
+        assertEquals(HostingRentException.Reason.LEASE_CONFLICT, assertThrows(HostingRentException.class,
+                () -> service.reserve(reserve(thirdQuote.quoteId(),
+                        "00000000-0000-0000-0000-000000000069"))).reason());
+        assertEquals(oldLease, leaseRow(first.leaseId()));
+        assertEquals(oldIntent, intentRow(first.intentId()));
+        assertEquals(newLease, leaseRow(retry.leaseId()));
+        assertEquals(newIntent, intentRow(retry.intentId()));
+        assertEquals(2, count("economy_hosting_lease"));
+        assertEquals(2, count("economy_hosting_provisioning_intent"));
+        assertEquals(2, count("economy_escrow"));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM economy_hosting_lease WHERE live_slot=1", Integer.class));
+        assertEquals(3, count("economy_transaction"));
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+        assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
+    }
+
+    @Test
+    void differentQuotesCompetingForSameAgentLeaveOnlyOneLiveLeaseAndPosting() throws Exception {
+        HostingRentQuoteReceipt one = service.quote(initialQuote("agent-slot", "persona-slot", "plan-test", 1));
+        HostingRentQuoteReceipt two = service.quote(initialQuote("agent-slot", "persona-slot", "plan-test", 1,
+                "00000000-0000-0000-0000-000000000071", hash(71)));
+        List<Outcome> results = race(
+                () -> reserveOutcome(reserve(one.quoteId(), "00000000-0000-0000-0000-000000000072")),
+                () -> reserveOutcome(reserve(two.quoteId(), "00000000-0000-0000-0000-000000000073")));
+        assertEquals(1, results.stream().filter(Outcome::succeeded).count(), results.toString());
+        assertEquals(HostingRentException.Reason.LEASE_CONFLICT,
+                results.stream().filter(result -> !result.succeeded()).findFirst().orElseThrow().reason());
+        assertEquals(1, count("economy_hosting_lease"));
+        assertEquals(1, count("economy_hosting_provisioning_intent"));
+        assertEquals(1, count("economy_escrow"));
+        assertEquals(1, count("economy_transaction"));
+        assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+    }
+
+    @Test
+    void lateCaptureFailureRollsBackJournalAndKeepsDurableReadyProofAndEscrow() {
+        HostingRentMutationReceipt reserved = service.reserve(reserve(
+                service.quote(initialQuote("agent-capture-rollback", "persona-rollback", "plan-test", 1)).quoteId(),
+                "00000000-0000-0000-0000-000000000082"));
+        service.markProvisioningUnknown(new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 1, "unknown-before-ready"));
+        service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 2, "durable-ready-before-capture"));
+        Map<String, Object> before = intentRow(reserved.intentId());
+        doThrow(new IllegalStateException("late capture projection failure")).when(hostingMapper)
+                .markLeaseActive(any(), anyString(), anyString(), anyLong(), anyLong(), anyLong(), anyLong());
+        assertThrows(IllegalStateException.class, () -> service.capture(settlement(reserved.intentId(), 3,
+                "00000000-0000-0000-0000-000000000083", HASH_CAPTURE)));
+        assertEquals(before, intentRow(reserved.intentId()));
+        assertEquals("PROVISIONING", leaseRow(reserved.leaseId()).get("STATUS"));
+        assertEquals(1, count("economy_transaction"));
+        assertEquals(0L, jdbc.queryForObject("SELECT captured_micro FROM economy_escrow", Long.class));
+        assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+    }
+
+    @Test
+    void lateRefundFailureCannotReleaseLiveSlotOrCreateRetryArtifacts() {
+        HostingRentMutationReceipt reserved = service.reserve(reserve(
+                service.quote(initialQuote("agent-refund-rollback", "persona-rollback", "plan-test", 1)).quoteId(),
+                "00000000-0000-0000-0000-000000000092"));
+        service.confirmProvisioningFailedNoEffect(new HostingRentOutcomeCommand(scope(), principal(),
+                reserved.intentId(), 1, "durable-no-effect-before-refund"));
+        Map<String, Object> before = intentRow(reserved.intentId());
+        doThrow(new IllegalStateException("late refund projection failure")).when(hostingMapper)
+                .markLeaseRefunded(any(), anyString(), anyString(), anyLong(), anyLong());
+        assertThrows(IllegalStateException.class, () -> service.refund(settlement(reserved.intentId(), 2,
+                "00000000-0000-0000-0000-000000000094", HASH_REFUND)));
+        assertEquals(before, intentRow(reserved.intentId()));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM economy_hosting_lease WHERE live_slot=1 AND status='PROVISIONING'", Integer.class));
+        HostingRentQuoteReceipt retry = service.quote(initialQuote(
+                "agent-refund-rollback", "persona-rollback", "plan-test", 1,
+                "00000000-0000-0000-0000-000000000095", hash(95)));
+        assertEquals(HostingRentException.Reason.LEASE_CONFLICT, assertThrows(HostingRentException.class,
+                () -> service.reserve(reserve(retry.quoteId(),
+                        "00000000-0000-0000-0000-000000000096"))).reason());
+        assertEquals(1, count("economy_transaction"));
+        assertEquals(1, count("economy_hosting_lease"));
+        assertEquals(1, count("economy_hosting_provisioning_intent"));
+        assertEquals(0L, jdbc.queryForObject("SELECT refunded_micro FROM economy_escrow", Long.class));
+        assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        assertEquals(WALLET_BALANCE_MICRO - V1_AMOUNT_MICRO, balance("wallet-user"));
+    }
+
+    private Map<String, Object> leaseRow(String leaseId) {
+        return jdbc.queryForMap("SELECT * FROM economy_hosting_lease WHERE lease_id=?", leaseId);
+    }
+
+    private Map<String, Object> intentRow(String intentId) {
+        // Binary JDBC values use array identity in Map.equals; project the immutable scalar history.
+        return jdbc.queryForMap("""
+                SELECT intent_id,lease_id,quote_id,status,version,reserve_transaction_id,reserved_at,
+                       capture_transaction_id,captured_at,refund_transaction_id,refunded_at,
+                       service_ready_at,outcome_evidence_ref,amount_micro,period_seconds,update_time
+                FROM economy_hosting_provisioning_intent WHERE intent_id=?
+                """, intentId);
+    }
+
     private void assertNoPaidArtifacts() {
         for (String table : List.of("economy_transaction", "economy_entry", "economy_escrow",
                 "economy_escrow_funding_lot", "economy_hosting_lease",
@@ -393,8 +621,8 @@ class HostingRentLedgerServiceRealTransactionTest {
                 "CREATE TABLE economy_escrow_funding_lot(id BIGINT AUTO_INCREMENT PRIMARY KEY,escrow_id VARCHAR(100),funding_sequence INT,reserve_transaction_id VARCHAR(100),payer_account_id VARCHAR(100),amount_micro BIGINT,escrow_gross_after_micro BIGINT,escrow_version_after BIGINT,currency VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),created_at BIGINT,UNIQUE(tenant_id,client_id,escrow_id,funding_sequence),UNIQUE(tenant_id,client_id,reserve_transaction_id))",
                 "CREATE TABLE economy_hosting_rent_plan(id BIGINT AUTO_INCREMENT PRIMARY KEY,plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,quote_ttl_seconds BIGINT,currency VARCHAR(16),status VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,plan_id,plan_version))",
                 "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
-                "CREATE TABLE economy_hosting_lease(id BIGINT AUTO_INCREMENT PRIMARY KEY,lease_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),binding_id VARCHAR(100),plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(24),paid_from BIGINT,paid_through BIGINT,latest_intent_id VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,lease_id),UNIQUE(tenant_id,client_id,agent_id),UNIQUE(tenant_id,client_id,latest_intent_id))",
-                "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(32),reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,outcome_evidence_ref VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key))"
+                "CREATE TABLE economy_hosting_lease(id BIGINT AUTO_INCREMENT PRIMARY KEY,lease_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),binding_id VARCHAR(100),live_slot TINYINT DEFAULT 1,plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(24),paid_from BIGINT,paid_through BIGINT,latest_intent_id VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,lease_id),UNIQUE(tenant_id,client_id,agent_id,live_slot),CHECK((status='REFUNDED' AND live_slot IS NULL) OR (status IN ('PROVISIONING','ACTIVE') AND live_slot IS NOT NULL AND live_slot=1)),UNIQUE(tenant_id,client_id,latest_intent_id))",
+                "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(32),reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,outcome_evidence_ref VARCHAR(100),service_ready_at BIGINT,version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key))"
         )) jdbc.execute(ddl);
     }
 

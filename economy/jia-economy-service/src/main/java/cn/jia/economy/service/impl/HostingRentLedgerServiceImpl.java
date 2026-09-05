@@ -196,11 +196,14 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             throw new HostingRentException(LEASE_CONFLICT,
                     "renewal reserve is intentionally deferred until renewal CAS DTOs are frozen");
         }
-        if (hostingMapper.selectLeaseByAgentForUpdate(
+        if (hostingMapper.selectLiveLeaseByAgentForUpdate(
                 validated.scope().tenantId(), validated.scope().clientId(), quote.getAgentId()) != null) {
             throw new HostingRentException(LEASE_CONFLICT, "canonical Agent already has a hosting lease");
         }
 
+        // A fully refunded lease stays as history. Only its live slot is released by the
+        // refund transaction; every retry uses fresh lease/intent/escrow IDs. The unique live
+        // slot arbitrates competing quotes, and a losing insert rolls back its REQUIRED posting.
         long now = positiveNow();
         String leaseId = requireGeneratedId(leaseIds.get(), "leaseId");
         String intentId = requireGeneratedId(intentIds.get(), "intentId");
@@ -260,7 +263,11 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setClientId(validated.scope().clientId())
                 .setCreateTime(now)
                 .setUpdateTime(now);
-        requireOne(hostingMapper.insertLease(lease), "lease insert");
+        try {
+            requireOne(hostingMapper.insertLease(lease), "lease insert");
+        } catch (DataIntegrityViolationException conflict) {
+            throw new HostingRentException(LEASE_CONFLICT, "hosting lease lifecycle conflict");
+        }
         requireOne(hostingMapper.insertIntent(intent), "provisioning intent insert");
         return reserveReceipt(intent);
     }
@@ -284,12 +291,14 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                     ? HostingRentIntentStatus.PROVISIONING_UNKNOWN.name()
                     : HostingRentIntentStatus.FAILED_NO_EFFECT.name();
             if (targetStatus.equals(intent.getStatus())) {
-                if (intent.getVersion() == validated.expectedIntentVersion() + 1
+                if (intent.getVersion() == checkedAdd(validated.expectedIntentVersion(), 1L)
                         && exact(intent.getOutcomeEvidenceRef(), validated.evidenceRef())) return;
                 throw new HostingRentException(INTENT_CONFLICT, "provisioning outcome replay conflict");
             }
-            if (intent.getVersion() != validated.expectedIntentVersion()) {
-                throw new HostingRentException(INTENT_CONFLICT, "provisioning intent version conflict");
+            if (intent.getVersion() != validated.expectedIntentVersion()
+                    || !(HostingRentIntentStatus.FUNDS_RESERVED.name().equals(intent.getStatus())
+                         || !unknown && HostingRentIntentStatus.PROVISIONING_UNKNOWN.name().equals(intent.getStatus()))) {
+                throw new HostingRentException(INTENT_CONFLICT, "provisioning intent version or state conflict");
             }
             long now = positiveNow();
             long nextVersion = checkedAdd(intent.getVersion(), 1L);
@@ -299,6 +308,35 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                     : hostingMapper.markIntentFailedNoEffect(intent, validated.scope().tenantId(),
                             validated.scope().clientId(), validated.evidenceRef(), nextVersion, now);
             requireOne(rows, "provisioning outcome CAS");
+        });
+    }
+
+    @Override
+    public void confirmProvisioningSucceeded(HostingRentOutcomeCommand command) {
+        ValidatedOutcome validated = validateOutcome(command);
+        transactions.executeWithoutResult(status -> {
+            EconomyHostingProvisioningIntentEntity intent = requireOwnedIntent(
+                    validated.scope(), validated.principal(), validated.intentId());
+            long readyVersion = checkedAdd(validated.expectedIntentVersion(), 1L);
+            boolean ready = HostingRentIntentStatus.SERVICE_READY.name().equals(intent.getStatus());
+            boolean active = HostingRentIntentStatus.ACTIVE.name().equals(intent.getStatus());
+            // A duplicate success report remains harmless even after capture; no timestamp reset.
+            if ((ready && intent.getVersion() == readyVersion
+                    || active && intent.getVersion() == checkedAdd(readyVersion, 1L))
+                    && exact(intent.getOutcomeEvidenceRef(), validated.evidenceRef())
+                    && intent.getServiceReadyAt() != null) return;
+            if (intent.getVersion() != validated.expectedIntentVersion()
+                    || !(HostingRentIntentStatus.FUNDS_RESERVED.name().equals(intent.getStatus())
+                         || HostingRentIntentStatus.PROVISIONING_UNKNOWN.name().equals(intent.getStatus()))) {
+                throw new HostingRentException(INTENT_CONFLICT, "successful reconciliation is stale or terminal");
+            }
+            long now = positiveNow();
+            if (intent.getReservedAt() == null || now < intent.getReservedAt()) {
+                throw new HostingRentException(INVALID_COMMAND, "service-ready clock predates reservation");
+            }
+            requireOne(hostingMapper.markIntentServiceReady(intent, validated.scope().tenantId(),
+                    validated.scope().clientId(), validated.evidenceRef(), readyVersion, now),
+                    "successful provisioning reconciliation CAS");
         });
     }
 
@@ -336,7 +374,8 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             throw new HostingRentException(PROVISIONING_OUTCOME_UNKNOWN,
                     "unknown provisioning outcome requires reconciliation before capture");
         }
-        if (capture && !HostingRentIntentStatus.FUNDS_RESERVED.name().equals(intent.getStatus())) {
+        if (capture && (!HostingRentIntentStatus.SERVICE_READY.name().equals(intent.getStatus())
+                || intent.getServiceReadyAt() == null || intent.getOutcomeEvidenceRef() == null)) {
             throw new HostingRentException(INTENT_CONFLICT, "only confirmed prepared intent may capture");
         }
         if (!capture && !HostingRentIntentStatus.FAILED_NO_EFFECT.name().equals(intent.getStatus())) {
@@ -365,7 +404,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         long nextLeaseVersion = checkedAdd(lease.getVersion(), 1L);
         long nextEscrowVersion = checkedAdd(intent.getEscrowVersion(), 1L);
         if (capture) {
-            long paidFrom = posting.postedAt();
+            long paidFrom = intent.getServiceReadyAt();
             long paidThrough = checkedAdd(paidFrom, checkedMultiply(intent.getPeriodSeconds(), 1_000L));
             requireOne(hostingMapper.markIntentActive(intent, validated.scope().tenantId(),
                     validated.scope().clientId(), validated.idempotencyKey(), command.requestHash(),

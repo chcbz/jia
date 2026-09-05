@@ -38,6 +38,11 @@ class EconomyHostingRentSchemaContractTest {
         assertTrue(hosting.contains("OCTET_LENGTH(reserve_idempotency_key) = 36"));
         assertTrue(hosting.contains("'PROVISIONING_UNKNOWN'"));
         assertTrue(hosting.contains("'FAILED_NO_EFFECT'"));
+        assertTrue(hosting.contains("'SERVICE_READY'"));
+        assertTrue(hosting.contains("service_ready_at >= reserved_at"));
+        assertTrue(hosting.contains("UNIQUE KEY uk_hosting_lease_agent (tenant_id,client_id,agent_id,live_slot)"));
+        assertTrue(hosting.contains("status = 'REFUNDED' AND live_slot IS NULL"));
+        assertTrue(hosting.contains("live_slot IS NOT NULL AND live_slot = 1"));
     }
 
     private static int occurrences(String text, String needle) {
