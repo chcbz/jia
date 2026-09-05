@@ -13,4 +13,10 @@ public class AgentTaskFundingSchemaConfiguration {
     public AgentTaskFundingSchemaInitializer agentTaskFundingSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new AgentTaskFundingSchemaInitializer(jdbcTemplate);
     }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "economy.preview", name = "enabled", havingValue = "true")
+    public AgentTaskBountyQuoteSchemaInitializer agentTaskBountyQuoteSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        return new AgentTaskBountyQuoteSchemaInitializer(jdbcTemplate);
+    }
 }

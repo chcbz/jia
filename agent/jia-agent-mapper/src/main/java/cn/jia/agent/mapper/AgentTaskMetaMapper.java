@@ -233,6 +233,35 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
 
     @Update("""
             UPDATE agent_task_meta
+            SET assigned_agent_id=#{assignedAgentId}, reward_status=#{rewardStatus},
+                assigned_at=#{assignedAt}, collaboration_mode=#{collaborationMode},
+                max_agents=#{maxAgents}, coordinator_agent_id=#{coordinatorAgentId},
+                task_version=#{resultVersion}, update_time=#{updateTime}
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND task_id=#{taskId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})
+              AND task_version=#{expectedVersion}
+            """)
+    int updateAssignmentByVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("resultVersion") long resultVersion,
+            @Param("assignedAgentId") String assignedAgentId,
+            @Param("rewardStatus") String rewardStatus,
+            @Param("assignedAt") Long assignedAt,
+            @Param("collaborationMode") String collaborationMode,
+            @Param("maxAgents") Integer maxAgents,
+            @Param("coordinatorAgentId") String coordinatorAgentId,
+            @Param("updateTime") long updateTime);
+
+    @Update("""
+            UPDATE agent_task_meta
             SET reward_status = #{rewardStatus},
                 started_at = #{startedAt},
                 completed_at = #{completedAt},

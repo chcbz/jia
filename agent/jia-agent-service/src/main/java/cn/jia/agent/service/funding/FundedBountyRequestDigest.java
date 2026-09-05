@@ -2,6 +2,8 @@ package cn.jia.agent.service.funding;
 
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.funding.AgentSkillRequirementDTO;
+import cn.jia.agent.entity.funding.AgentTaskClaimRequestDTO;
+import cn.jia.agent.entity.funding.AgentTaskQuoteRequestDTO;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -44,6 +46,41 @@ public final class FundedBountyRequestDigest {
             throw new IllegalStateException("Unable to hash funded bounty request", impossible);
         }
         return digest(bytes.toByteArray());
+    }
+
+
+    public static byte[] quote(String taskId, AgentTaskQuoteRequestDTO request) {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(bytes)) {
+            write(out, "funded-bounty-quote-v0");
+            write(out, taskId);
+            if (request == null) {
+                out.writeBoolean(false);
+            } else {
+                out.writeBoolean(true);
+                write(out, request.getAgentId());
+                write(out, request.getWorkItemId());
+                if (request.getModelPreference() == null) {
+                    out.writeBoolean(false);
+                } else {
+                    out.writeBoolean(true);
+                    write(out, request.getModelPreference().getProvider());
+                    write(out, request.getModelPreference().getModel());
+                }
+                write(out, request.getContextRevision());
+                write(out, request.getMinimumAcceptedPayoutMicro());
+            }
+        } catch (IOException impossible) {
+            throw new IllegalStateException("Unable to hash funded bounty quote request", impossible);
+        }
+        return digest(bytes.toByteArray());
+    }
+
+    public static byte[] claim(String taskId, AgentTaskClaimRequestDTO request) {
+        if (request == null) return digest(fields("funded-bounty-claim-v0", taskId, null));
+        return digest(fields("funded-bounty-claim-v0", taskId, request.getAgentId(),
+                request.getQuoteId(), request.getTaskVersion(),
+                request.getAllowQueue() == null ? null : request.getAllowQueue().toString()));
     }
 
     public static byte[] cancel(String taskId, String expectedTaskVersion) {

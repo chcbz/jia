@@ -12,6 +12,8 @@ import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.funding.AgentTaskFundingCancelDTO;
+import cn.jia.agent.entity.funding.AgentTaskClaimRequestDTO;
+import cn.jia.agent.entity.funding.AgentTaskQuoteRequestDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
@@ -25,6 +27,7 @@ import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
 import cn.jia.agent.service.funding.FundedBountyRequestDigest;
+import cn.jia.agent.service.funding.FundedBountyQuoteClaimService;
 import cn.jia.agent.service.funding.FundedBountyService;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
@@ -64,26 +67,38 @@ public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
     private final FundedBountyService fundedBountyService;
+    private final FundedBountyQuoteClaimService fundedBountyQuoteClaimService;
 
     /** Backward-compatible constructor for existing unfunded controller tests. */
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
         this.agentService = Objects.requireNonNull(agentService, "agentService");
         this.abilityEvaluationService = Objects.requireNonNull(abilityEvaluationService, "abilityEvaluationService");
         this.fundedBountyService = null;
+        this.fundedBountyQuoteClaimService = null;
     }
 
     @Autowired
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            ObjectProvider<FundedBountyService> fundedBountyServiceProvider) {
-        this(agentService, abilityEvaluationService, Objects.requireNonNull(
-                fundedBountyServiceProvider, "fundedBountyServiceProvider").getIfAvailable());
+            ObjectProvider<FundedBountyService> fundedBountyServiceProvider,
+            ObjectProvider<FundedBountyQuoteClaimService> fundedBountyQuoteClaimServiceProvider) {
+        this(agentService, abilityEvaluationService,
+                Objects.requireNonNull(fundedBountyServiceProvider, "fundedBountyServiceProvider").getIfAvailable(),
+                Objects.requireNonNull(fundedBountyQuoteClaimServiceProvider,
+                        "fundedBountyQuoteClaimServiceProvider").getIfAvailable());
     }
 
     AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
             FundedBountyService fundedBountyService) {
+        this(agentService, abilityEvaluationService, fundedBountyService, null);
+    }
+
+    AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
+            FundedBountyService fundedBountyService,
+            FundedBountyQuoteClaimService fundedBountyQuoteClaimService) {
         this.agentService = Objects.requireNonNull(agentService, "agentService");
         this.abilityEvaluationService = Objects.requireNonNull(abilityEvaluationService, "abilityEvaluationService");
         this.fundedBountyService = fundedBountyService;
+        this.fundedBountyQuoteClaimService = fundedBountyQuoteClaimService;
     }
 
     @PostMapping("/register")
@@ -214,6 +229,28 @@ public class AgentController {
                 FundedBountyRequestDigest.cancel(taskId, expected), taskId, expectedVersion));
     }
 
+    @PostMapping("/tasks/{taskId}/quotes")
+    public Object quoteTask(@PathVariable String taskId,
+            @RequestBody AgentTaskQuoteRequestDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            Authentication authentication) {
+        FundedBountyActor actor = requireMoneyActor(authentication);
+        FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
+        return JsonResult.success(service.quote(actor, idempotencyKey,
+                FundedBountyRequestDigest.quote(taskId, request), taskId, request));
+    }
+
+    @PostMapping("/tasks/{taskId}/claim")
+    public Object claimTask(@PathVariable String taskId,
+            @RequestBody AgentTaskClaimRequestDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            Authentication authentication) {
+        FundedBountyActor actor = requireMoneyActor(authentication);
+        FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
+        return JsonResult.success(service.claim(actor, idempotencyKey,
+                FundedBountyRequestDigest.claim(taskId, request), taskId, request));
+    }
+
     @PostMapping("/tasks/{taskId}/assign")
     public Object assignTask(@PathVariable String taskId, @RequestBody AgentTaskAssignDTO request) {
         return JsonResult.success(agentService.assignTask(taskId, request));
@@ -336,6 +373,14 @@ public class AgentController {
                     "ECONOMY_PREVIEW_DISABLED", "Funded bounty preview is unavailable");
         }
         return fundedBountyService;
+    }
+
+    private FundedBountyQuoteClaimService requireFundedBountyQuoteClaimService() {
+        if (fundedBountyQuoteClaimService == null) {
+            throw new FundedBountyException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "ECONOMY_PREVIEW_DISABLED", "Funded bounty quote/claim preview is unavailable");
+        }
+        return fundedBountyQuoteClaimService;
     }
 
     private static boolean hasFundingFields(AgentTaskCreateDTO request) {
