@@ -2,13 +2,14 @@ package cn.jia.agent.service.funding;
 
 import cn.jia.agent.entity.funding.AgentTaskFundingEntity;
 import cn.jia.agent.mapper.AgentTaskFundingMapper;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
 import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.Objects;
 
 /** Allows untouched legacy installations with no W04 table, but never ignores a persisted funded row. */
@@ -17,11 +18,11 @@ public final class PersistedFundedBountyLegacyGuard implements FundedBountyLegac
     private static final String TABLE = "agent_task_funding";
 
     private final AgentTaskFundingMapper mapper;
-    private final DataSource dataSource;
+    private final JdbcTemplate jdbc;
 
     public PersistedFundedBountyLegacyGuard(AgentTaskFundingMapper mapper, DataSource dataSource) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
-        this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.jdbc = new JdbcTemplate(Objects.requireNonNull(dataSource, "dataSource"));
     }
 
     @Override
@@ -55,16 +56,20 @@ public final class PersistedFundedBountyLegacyGuard implements FundedBountyLegac
     }
 
     private boolean fundingTableExists() {
-        try (Connection connection = dataSource.getConnection()) {
-            String catalog = connection.getCatalog();
-            try (ResultSet tables = connection.getMetaData().getTables(catalog, null, null,
-                    new String[]{"TABLE"})) {
-                while (tables.next()) {
-                    if (TABLE.equalsIgnoreCase(tables.getString("TABLE_NAME"))) return true;
+        try {
+            // Reuse the task-root transaction connection, including for metadata. Borrowing a
+            // second connection here deadlocks admission when every pool slot holds a root lock.
+            return Boolean.TRUE.equals(jdbc.execute((ConnectionCallback<Boolean>) connection -> {
+                String catalog = connection.getCatalog();
+                try (ResultSet tables = connection.getMetaData().getTables(catalog, null, null,
+                        new String[]{"TABLE"})) {
+                    while (tables.next()) {
+                        if (TABLE.equalsIgnoreCase(tables.getString("TABLE_NAME"))) return true;
+                    }
+                    return false;
                 }
-                return false;
-            }
-        } catch (SQLException failure) {
+            }));
+        } catch (DataAccessException failure) {
             throw new FundedBountyException(HttpStatus.SERVICE_UNAVAILABLE,
                     "FUNDED_BOUNTY_GUARD_UNAVAILABLE",
                     "Unable to inspect persisted funded-task admission state", true);

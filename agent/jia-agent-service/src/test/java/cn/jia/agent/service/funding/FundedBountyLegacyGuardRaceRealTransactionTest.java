@@ -1,7 +1,6 @@
 package cn.jia.agent.service.funding;
 
 import cn.jia.agent.dao.AgentTaskMemberDao;
-import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
@@ -24,24 +23,26 @@ import org.junit.jupiter.api.Test;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.h2.jdbcx.JdbcConnectionPool;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-/** Real task-root/funding-row lock regression for the preview-off legacy bypass race. */
+/** Real one-connection-pool/root-lock checks; concurrent create is covered by the service integration test. */
 class FundedBountyLegacyGuardRaceRealTransactionTest {
     private static final String TENANT = "Tenant-A";
     private static final String CLIENT = "Client-A";
     private static final String TASK = "task-funded-race";
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    private DriverManagerDataSource dataSource;
+    private JdbcConnectionPool dataSource;
+    private AgentTaskMutationTransaction mutation;
     private JdbcTemplate jdbc;
     private AgentTaskFundingMapper fundingMapper;
     private PersistedFundedBountyLegacyGuard guard;
@@ -53,12 +54,11 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("org.h2.Driver");
-        dataSource.setUrl("jdbc:h2:mem:w04_guard_race;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
-                + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000");
-        dataSource.setUsername("sa");
-        dataSource.setPassword("");
+        dataSource = JdbcConnectionPool.create(
+                "jdbc:h2:mem:w04_guard_pool_" + UUID.randomUUID() + ";MODE=MYSQL;DB_CLOSE_DELAY=-1;"
+                        + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000", "sa", "");
+        dataSource.setMaxConnections(1);
+        dataSource.setLoginTimeout(1); // Old guard fails promptly instead of hanging the verifier.
         jdbc = new JdbcTemplate(dataSource);
         jdbc.execute("DROP ALL OBJECTS");
         createRootAndLegacyTables();
@@ -83,7 +83,7 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         baseMapper.set(metaDao, template.getMapper(AgentTaskMetaMapper.class));
 
         DataSourceTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
-        AgentTaskMutationTransaction mutation = new AgentTaskMutationTransactionImpl(metaDao, transactionManager);
+        mutation = new AgentTaskMutationTransactionImpl(metaDao, transactionManager);
         guard = new PersistedFundedBountyLegacyGuard(fundingMapper, dataSource);
         identityService = mock(AgentIdentityService.class);
         memberDao = mock(AgentTaskMemberDao.class);
@@ -100,7 +100,12 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
 
     @AfterEach
     void tearDown() {
-        jdbc.execute("DROP ALL OBJECTS");
+        try {
+            assertEquals(0, dataSource.getActiveConnections(), "transaction connection leaked");
+            jdbc.execute("DROP ALL OBJECTS");
+        } finally {
+            dataSource.dispose();
+        }
     }
 
     @Test
@@ -110,6 +115,50 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         guard.requireAssignmentAllowed(TENANT, CLIENT, TASK, false, 1, false);
         guard.requireAssignmentAllowed(TENANT, CLIENT, TASK, true, 1, false);
         guard.requireLifecycleAllowed(TENANT, CLIENT, TASK, false);
+    }
+
+    @Test
+    void previewOffMissingSchemaReusesOnlyConnectionWhileTaskRootIsLocked() {
+        mutation.executeWithLockedTaskRoot(TENANT, CLIENT, TASK, root -> {
+            assertEquals(1, dataSource.getActiveConnections());
+            guard.requireAssignmentAllowed(TENANT, CLIENT, TASK, false, 1, true);
+            guard.requireAssignmentAllowed(TENANT, CLIENT, TASK, true, 2, true);
+            guard.requireLifecycleAllowed(TENANT, CLIENT, TASK, true);
+            // Metadata callback must neither borrow another connection nor close the bound one.
+            assertEquals("open", jdbc.queryForObject(
+                    "SELECT reward_status FROM agent_task_meta WHERE task_id=?", String.class, TASK));
+            assertEquals(1, dataSource.getActiveConnections());
+            return null;
+        });
+        assertEquals(0, dataSource.getActiveConnections());
+    }
+
+    @Test
+    void previewOffPresentSchemaUsesOnlyConnectionAndStillRejectsFundedRows() {
+        createFundingTable();
+        // Missing row remains legacy even with the schema present.
+        mutation.executeWithLockedTaskRoot(TENANT, CLIENT, TASK, root -> {
+            guard.requireLifecycleAllowed(TENANT, CLIENT, TASK, true);
+            assertEquals(1, dataSource.getActiveConnections());
+            return null;
+        });
+        insertHeldFunding();
+        for (boolean automatic : List.of(false, true)) {
+            FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
+                    mutation.executeWithLockedTaskRoot(TENANT, CLIENT, TASK, root -> {
+                        assertEquals(1, dataSource.getActiveConnections());
+                        guard.requireAssignmentAllowed(TENANT, CLIENT, TASK, automatic, 1, true);
+                        throw new AssertionError("funded assignment must not pass");
+                    }));
+            assertEquals(automatic ? "FUNDED_TEAM_NOT_SUPPORTED" : "QUOTE_REQUIRED", failure.code());
+            assertEquals(0, dataSource.getActiveConnections());
+        }
+        assertEquals("QUOTE_REQUIRED", assertThrows(FundedBountyException.class, () ->
+                mutation.executeWithLockedTaskRoot(TENANT, CLIENT, TASK, root -> {
+                    guard.requireLifecycleAllowed(TENANT, CLIENT, TASK, true);
+                    return null;
+                })).code());
+        assertEquals(0, dataSource.getActiveConnections());
     }
 
     @Test
@@ -128,10 +177,10 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
     }
 
     @Test
-    void fundingCommittedAfterUnlockedPrecheckIsRejectedUnderRootLockBeforeIdentityOrMutation() {
+    void lockedRecheckRejectsFundingAddedAfterEarlierPrecheck() {
         createFundingTable();
         guard.requireAssignmentAllowed(TENANT, CLIENT, TASK, false, 1, false);
-        insertHeldFunding(); // Represents funded create committing before legacy root acquisition.
+        insertHeldFunding(); // Sequential hook check only; not concurrency evidence.
 
         FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
                 compatibility.assignResolved(TENANT, CLIENT, TASK, List.of(AGENT), false,

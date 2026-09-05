@@ -13,6 +13,11 @@ dependencies {
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
+    // W04 integration sources exercise production task and economy collaborators.
+    testImplementation project(':task:jia-task-service')
+    testImplementation project(':task:jia-task-mapper')
+    testImplementation project(':economy:jia-economy-service')
+    testImplementation project(':economy:jia-economy-mapper')
     testImplementation project(':oauth:jia-oauth-api')
     testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
     testImplementation 'org.springframework.security:spring-security-oauth2-jose'
