@@ -2,6 +2,8 @@ package cn.jia.economy.config;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -19,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EconomyPreviewConfigurationTest {
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
             .withUserConfiguration(EconomyConfiguration.class);
+    private static final ApplicationContextRunner PROPERTIES_RUNNER = new ApplicationContextRunner()
+            .withUserConfiguration(PropertiesOnlyConfiguration.class);
 
     @Test
     void absentConfigurationStartsDisabledWithoutJdbcOrSchemaMutation() {
@@ -31,7 +35,7 @@ class EconomyPreviewConfigurationTest {
 
     @Test
     void applicationContextBindsCanonicalConstructorFields() {
-        RUNNER.withPropertyValues(
+        PROPERTIES_RUNNER.withPropertyValues(
                         "economy.preview.enabled=true",
                         "economy.preview.test-issuance-enabled=true",
                         "economy.preview.allowed-scopes[0].tenant-id=Tenant-A",
@@ -45,12 +49,15 @@ class EconomyPreviewConfigurationTest {
                             properties.allowedScopes());
                 });
 
-        RUNNER.withPropertyValues(
+        PROPERTIES_RUNNER.withPropertyValues(
                         "economy.preview.enabled=false",
                         "economy.preview.test-issuance-enabled=false")
                 .run(context -> {
                     assertNull(context.getStartupFailure());
-                    assertFalse(context.getBean(EconomyPreviewProperties.class).testIssuanceEnabled());
+                    EconomyPreviewProperties properties = context.getBean(EconomyPreviewProperties.class);
+                    assertFalse(properties.enabled());
+                    assertFalse(properties.testIssuanceEnabled());
+                    assertEquals(List.of(), properties.allowedScopes());
                 });
     }
 
@@ -152,6 +159,11 @@ class EconomyPreviewConfigurationTest {
                     .toList();
             assertEquals(List.of("economy.preview.enabled=false"), declarations, profile);
         }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(EconomyPreviewProperties.class)
+    static class PropertiesOnlyConfiguration {
     }
 
     private static String failureChain(Throwable failure) {
