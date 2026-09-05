@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -69,14 +70,18 @@ class EconomySkillSchemaContractTest {
     void immutableVersionsQuotesAndReceiptsExposeNoMutationOrDeleteMapperMethods() {
         for (Method method : EconomySkillMarketplaceMapper.class.getDeclaredMethods()) {
             assertFalse(method.isAnnotationPresent(Delete.class), method.toString());
-            if (method.isAnnotationPresent(Update.class)) {
+            Update update = method.getAnnotation(Update.class);
+            if (update != null) {
                 assertTrue(MUTABLE_METHODS.contains(method.getName()), method.toString());
+                String sql = String.join(" ", update.value());
+                // Publication mutates the product pointer, never the immutable version row.
+                assertFalse(Pattern.compile("(?i)\\bUPDATE\\s+economy_skill_"
+                        + "(?:product_version|purchase_quote|order_receipt)\\b").matcher(sql).find(), method.toString());
+                if (method.getName().equals("publishProductVersion")) {
+                    assertTrue(sql.stripLeading().startsWith("UPDATE economy_skill_product\n"), method.toString());
+                }
             }
-            String lower = method.getName().toLowerCase(Locale.ROOT);
-            if (lower.contains("productversion") || lower.contains("purchasequote") || lower.contains("receipt")) {
-                assertFalse(method.isAnnotationPresent(Update.class), method.toString());
-                assertFalse(lower.startsWith("delete"), method.toString());
-            }
+            assertFalse(method.getName().toLowerCase(Locale.ROOT).startsWith("delete"), method.toString());
         }
     }
 
@@ -91,8 +96,10 @@ class EconomySkillSchemaContractTest {
             if (sql == null) continue;
             assertTrue(sql.contains("tenant_id=#{tenantId}"), method.toString());
             assertTrue(sql.contains("client_id=#{clientId}"), method.toString());
-            assertTrue(sql.contains("OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})"), method.toString());
-            assertTrue(sql.contains("OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})"), method.toString());
+            assertTrue(Pattern.compile("OCTET_LENGTH\\((?:[a-zA-Z_][a-zA-Z0-9_]*\\.)?tenant_id\\)="
+                    + "OCTET_LENGTH\\(#\\{tenantId\\}\\)").matcher(sql).find(), method.toString());
+            assertTrue(Pattern.compile("OCTET_LENGTH\\((?:[a-zA-Z_][a-zA-Z0-9_]*\\.)?client_id\\)="
+                    + "OCTET_LENGTH\\(#\\{clientId\\}\\)").matcher(sql).find(), method.toString());
             if (update != null && !method.getName().equals("publishProductVersion")) {
                 assertTrue(sql.contains("version=#{expectedVersion}"), method.toString());
             }

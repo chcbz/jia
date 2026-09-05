@@ -178,6 +178,7 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
         List<ForeignKeyColumn> rows = jdbcTemplate.query("""
                 SELECT k.constraint_name,k.ordinal_position,k.column_name,
                        k.referenced_table_name,k.referenced_column_name,
+                       k.referenced_table_schema,DATABASE() AS current_schema_name,
                        r.update_rule,r.delete_rule
                 FROM information_schema.key_column_usage k
                 JOIN information_schema.referential_constraints r
@@ -190,10 +191,17 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
                 """, (rs, rowNum) -> new ForeignKeyColumn(
                 rs.getString("constraint_name"), rs.getInt("ordinal_position"),
                 rs.getString("column_name"), rs.getString("referenced_table_name"),
-                rs.getString("referenced_column_name"), normalizeReferentialRule(rs.getString("update_rule")),
+                rs.getString("referenced_column_name"), rs.getString("referenced_table_schema"),
+                rs.getString("current_schema_name"), normalizeReferentialRule(rs.getString("update_rule")),
                 normalizeReferentialRule(rs.getString("delete_rule"))), table);
         Map<String, List<ForeignKeyColumn>> grouped = new TreeMap<>();
-        for (ForeignKeyColumn row : rows) grouped.computeIfAbsent(row.name(), ignored -> new ArrayList<>()).add(row);
+        for (ForeignKeyColumn row : rows) {
+            if (row.currentSchema() == null || !row.currentSchema().equals(row.referencedSchema())) {
+                throw new IllegalStateException("ECO-V0 skill table " + table
+                        + " has a foreign key outside the current database: " + row.name());
+            }
+            grouped.computeIfAbsent(row.name(), ignored -> new ArrayList<>()).add(row);
+        }
         Map<String, ForeignKeySpec> result = new TreeMap<>();
         for (Map.Entry<String, List<ForeignKeyColumn>> entry : grouped.entrySet()) {
             List<ForeignKeyColumn> parts = entry.getValue();
@@ -273,7 +281,9 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
                 FROM information_schema.triggers
                 WHERE trigger_schema=DATABASE()
                   AND (event_object_table IN (
-                        'economy_skill_product_version','economy_skill_purchase_quote','economy_skill_order_receipt')
+                        'economy_skill_product','economy_skill_product_version','economy_skill_purchase_quote',
+                        'economy_skill_order','economy_skill_order_receipt','economy_skill_installation',
+                        'economy_skill_entitlement')
                        OR trigger_name LIKE 'trg_skill_market_%')
                 ORDER BY trigger_name
                 """, (rs, rowNum) -> new TriggerSpec(
@@ -583,7 +593,7 @@ public final class EconomySkillSchemaInitializer implements InitializingBean {
 
     record ForeignKeyColumn(
             String name, int position, String column, String referencedTable, String referencedColumn,
-            String updateRule, String deleteRule) {
+            String referencedSchema, String currentSchema, String updateRule, String deleteRule) {
     }
 
     record ForeignKeySpec(

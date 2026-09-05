@@ -5,6 +5,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.charset.StandardCharsets;
@@ -64,6 +65,10 @@ class EconomySkillSchemaInitializerMySqlTest {
     void partialSchemaAndCatalogDriftFailClosedWithoutRepair() {
         JdbcTemplate partial = fixture.newDatabase("partial").jdbc();
         partial.execute(firstDdlStatement());
+        assertEquals(List.of("economy_skill_product"), partial.queryForList("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema=DATABASE() ORDER BY table_name
+                """, String.class));
         IllegalStateException partialFailure = assertThrows(IllegalStateException.class,
                 () -> new EconomySkillSchemaInitializer(partial).afterPropertiesSet());
         assertTrue(partialFailure.getMessage().contains("Refusing automatic repair"), partialFailure.getMessage());
@@ -82,6 +87,47 @@ class EconomySkillSchemaInitializerMySqlTest {
                 SELECT COUNT(*) FROM information_schema.columns
                 WHERE table_schema=DATABASE() AND table_name='economy_skill_order' AND column_name='unsafe_extra'
                 """, Integer.class));
+    }
+
+    @Test
+    void arbitraryOrderTriggerFailsClosedWithoutRemovingOrReplacingIt() {
+        JdbcTemplate jdbc = fixture.newDatabase("order_hook").jdbc();
+        EconomySkillSchemaInitializer initializer = new EconomySkillSchemaInitializer(jdbc);
+        initializer.afterPropertiesSet();
+        jdbc.execute("""
+                CREATE TRIGGER unrelated_buyer_hook BEFORE INSERT ON economy_skill_order
+                FOR EACH ROW SET NEW.buyer_id = 'other-user'
+                """);
+        List<String> before = catalogSnapshot(jdbc);
+        IllegalStateException failure = assertThrows(IllegalStateException.class, initializer::afterPropertiesSet);
+        assertTrue(failure.getMessage().contains("unrelated_buyer_hook"), failure.getMessage());
+        assertEquals(before, catalogSnapshot(jdbc));
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE() AND trigger_name='unrelated_buyer_hook'
+                """, Integer.class));
+    }
+
+    @Test
+    void sameNamedForeignTableInAnotherDatabaseFailsClosedWithoutRepair() {
+        // Create the parent first so fixture cleanup removes the referencing database first.
+        EconomySkillMySqlTestFixture.Database foreign = fixture.newDatabase("foreign_parent");
+        foreign.jdbc().execute(firstDdlStatement());
+        JdbcTemplate jdbc = fixture.newDatabase("foreign_child").jdbc();
+        EconomySkillSchemaInitializer initializer = new EconomySkillSchemaInitializer(jdbc);
+        initializer.afterPropertiesSet();
+        jdbc.execute("ALTER TABLE economy_skill_product_version DROP FOREIGN KEY fk_skill_version_product, "
+                + "ADD CONSTRAINT fk_skill_version_product FOREIGN KEY (tenant_id,client_id,product_id) "
+                + "REFERENCES `" + foreign.name() + "`.economy_skill_product (tenant_id,client_id,product_id)");
+        List<String> before = catalogSnapshot(jdbc);
+        IllegalStateException failure = assertThrows(IllegalStateException.class, initializer::afterPropertiesSet);
+        assertTrue(failure.getMessage().contains("outside the current database"), failure.getMessage());
+        assertEquals(before, catalogSnapshot(jdbc));
+        assertEquals(foreign.name(), jdbc.queryForObject("""
+                SELECT referenced_table_schema FROM information_schema.key_column_usage
+                WHERE constraint_schema=DATABASE() AND table_name='economy_skill_product_version'
+                  AND constraint_name='fk_skill_version_product' AND ordinal_position=1
+                """, String.class));
     }
 
     @Test
@@ -219,15 +265,17 @@ class EconomySkillSchemaInitializerMySqlTest {
     private String firstDdlStatement() {
         String sql;
         try {
-            sql = new String(getClass().getClassLoader()
-                    .getResourceAsStream("db/economy-v0-skill-marketplace.sql").readAllBytes(),
-                    StandardCharsets.UTF_8);
+            sql = new ClassPathResource("db/economy-v0-skill-marketplace.sql")
+                    .getContentAsString(StandardCharsets.UTF_8);
         } catch (Exception exception) {
             throw new IllegalStateException(exception);
         }
-        int semicolon = sql.indexOf(';');
-        if (semicolon < 0) throw new IllegalStateException("W07 DDL contains no statement");
-        return sql.substring(0, semicolon);
+        // This frozen first CREATE has no internal semicolon; skip the header comments entirely.
+        int start = sql.indexOf("CREATE TABLE IF NOT EXISTS economy_skill_product (");
+        if (start < 0) throw new IllegalStateException("W07 DDL contains no product table statement");
+        int semicolon = sql.indexOf(';', start);
+        if (semicolon < 0) throw new IllegalStateException("W07 product table statement is unterminated");
+        return sql.substring(start, semicolon);
     }
 
     private List<String> catalogSnapshot(JdbcTemplate jdbc) {
@@ -241,7 +289,11 @@ class EconomySkillSchemaInitializerMySqlTest {
         snapshot.addAll(jdbc.query("""
                 SELECT trigger_name,event_object_table,action_timing,event_manipulation,action_statement
                 FROM information_schema.triggers
-                WHERE trigger_schema=DATABASE() AND trigger_name LIKE 'trg_skill_market_%'
+                WHERE trigger_schema=DATABASE()
+                  AND (event_object_table IN (
+                    'economy_skill_product','economy_skill_product_version','economy_skill_purchase_quote',
+                    'economy_skill_order','economy_skill_order_receipt','economy_skill_installation',
+                    'economy_skill_entitlement') OR trigger_name LIKE 'trg_skill_market_%')
                 ORDER BY trigger_name
                 """, (rs, rowNum) -> rs.getString("trigger_name") + "|"
                 + rs.getString("event_object_table") + "|" + rs.getString("action_timing") + "|"
