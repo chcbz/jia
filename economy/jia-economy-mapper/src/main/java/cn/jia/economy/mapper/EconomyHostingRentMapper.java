@@ -167,13 +167,13 @@ public interface EconomyHostingRentMapper {
                 reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,
                 capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,
                 refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,
-                outcome_evidence_ref,service_ready_at,version,tenant_id,client_id,create_time,update_time)
+                outcome_evidence_ref,service_ready_at,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time)
             VALUES(#{intentId},#{leaseId},#{quoteId},#{quotePurpose},#{principalType},#{principalId},
                 #{personaCode},#{agentId},#{amountMicro},#{periodSeconds},#{status},
                 #{reserveIdempotencyKey},#{reserveRequestHash},#{reserveTransactionId},#{reservedAt},#{escrowVersion},
                 #{captureIdempotencyKey},#{captureRequestHash},#{captureTransactionId},#{capturedAt},
                 #{refundIdempotencyKey},#{refundRequestHash},#{refundTransactionId},#{refundedAt},
-                #{outcomeEvidenceRef},#{serviceReadyAt},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
+                #{outcomeEvidenceRef},#{serviceReadyAt},#{paidFrom},#{paidThrough},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
     int insertIntent(EconomyHostingProvisioningIntentEntity intent);
 
@@ -182,7 +182,7 @@ public interface EconomyHostingRentMapper {
             + "reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,"
             + "capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,"
             + "refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,"
-            + "outcome_evidence_ref,service_ready_at,version,tenant_id,client_id,create_time,update_time ";
+            + "outcome_evidence_ref,service_ready_at,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time ";
 
     @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE "
             + EXACT_SCOPE + " AND quote_id=#{quoteId} AND OCTET_LENGTH(quote_id)=OCTET_LENGTH(#{quoteId})"
@@ -254,7 +254,8 @@ public interface EconomyHostingRentMapper {
 
     @Update("""
             UPDATE economy_hosting_provisioning_intent
-            SET status='ACTIVE',capture_idempotency_key=#{idempotencyKey},
+            SET status='ACTIVE',paid_from=#{intent.paidFrom},paid_through=#{intent.paidThrough},
+                capture_idempotency_key=#{idempotencyKey},
                 capture_request_hash=#{requestHash},capture_transaction_id=#{transactionId},
                 captured_at=#{occurredAt},escrow_version=#{escrowVersion},version=#{newVersion},update_time=#{occurredAt}
             WHERE id=#{intent.id} AND """ + EXACT_SCOPE + """
@@ -293,4 +294,42 @@ public interface EconomyHostingRentMapper {
             @Param("occurredAt") long occurredAt,
             @Param("escrowVersion") long escrowVersion,
             @Param("newVersion") long newVersion);
+
+    @Select("SELECT * FROM economy_hosting_lease WHERE " + EXACT_SCOPE
+            + " AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})"
+            + " ORDER BY id DESC LIMIT 1")
+    EconomyHostingLeaseEntity selectLatestLease(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("agentId") String agentId);
+
+    @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE " + EXACT_SCOPE
+            + " AND intent_id=#{intentId} AND OCTET_LENGTH(intent_id)=OCTET_LENGTH(#{intentId}) LIMIT 1")
+    EconomyHostingProvisioningIntentEntity selectIntent(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("intentId") String intentId);
+
+    @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent"
+            + " WHERE quote_purpose='INITIAL' AND status IN ('FUNDS_RESERVED','PROVISIONING_UNKNOWN','SERVICE_READY','FAILED_NO_EFFECT')"
+            + " AND id>#{afterId} ORDER BY id LIMIT 100")
+    java.util.List<EconomyHostingProvisioningIntentEntity> selectPendingIntents(@Param("afterId") long afterId);
+
+    @Update("UPDATE economy_hosting_lease SET binding_id=#{bindingId} WHERE " + EXACT_SCOPE
+            + " AND lease_id=#{leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{leaseId})"
+            + " AND status='PROVISIONING' AND binding_id IS NULL AND live_slot=1")
+    int attachBinding(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("leaseId") String leaseId, @Param("bindingId") String bindingId);
+
+    @Update("""
+            UPDATE economy_hosting_lease SET paid_from=#{paidFrom},paid_through=#{paidThrough},
+                latest_intent_id=#{intentId},plan_id=#{quote.planId},plan_version=#{quote.planVersion},
+                amount_micro=#{quote.amountMicro},period_seconds=#{quote.periodSeconds},
+                version=version+1,update_time=#{now}
+            WHERE """ + EXACT_SCOPE + """
+              AND id=#{lease.id} AND lease_id=#{lease.leaseId} AND status='ACTIVE' AND live_slot=1
+              AND version=#{lease.version} AND latest_intent_id=#{lease.latestIntentId}
+              AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{lease.leaseId})
+              AND OCTET_LENGTH(latest_intent_id)=OCTET_LENGTH(#{lease.latestIntentId})
+            """)
+    int renewLease(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("lease") EconomyHostingLeaseEntity lease, @Param("quote") EconomyHostingRentQuoteEntity quote,
+            @Param("intentId") String intentId, @Param("paidFrom") long paidFrom,
+            @Param("paidThrough") long paidThrough, @Param("now") long now);
 }

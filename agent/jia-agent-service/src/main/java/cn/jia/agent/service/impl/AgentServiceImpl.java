@@ -43,6 +43,7 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.AgentHostingWorkAdmission;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
@@ -127,6 +128,19 @@ public class AgentServiceImpl implements AgentService {
     private final AgentTaskEventWriter taskEventWriter;
     private final AgentCommandTransportCapture commandTransportCapture;
     private final HostingRentAdmissionService hostingRentAdmissionService;
+    // Direct legacy test construction has no managed leases. Spring requires the real gate bean.
+    private AgentHostingWorkAdmission hostingWorkAdmission = (tenant, client, agent) -> { };
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setHostingWorkAdmission(AgentHostingWorkAdmission admission) {
+        this.hostingWorkAdmission = Objects.requireNonNull(admission);
+    }
+
+    @Override
+    public void requireHostingNewWork(String tenantId, String clientId, String canonicalAgentId) {
+        hostingWorkAdmission.requireNewWork(tenantId, clientId, canonicalAgentId);
+    }
+
 
     /** Backward-compatible constructor used by existing focused tests with all M3 flags OFF. */
     public AgentServiceImpl(
@@ -837,6 +851,7 @@ public class AgentServiceImpl implements AgentService {
                                     .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
                                     .toList();
                             for (AgentRuntimeEntity agent : runtimes) {
+                                requireHostingNewWork(tenantId, clientId, agent.getAgentId());
                                 validateAssignableAgent(agent, allowQueue);
                                 validateAbility(agent, lockedTask);
                             }

@@ -76,6 +76,8 @@ public class JuyitingAgentRelayService {
         }
 
         Map<String, Object> payload = buildDirectAgentPayload(chatMessage, conversationId, selectedAgentId, scope);
+        String tenantId = EsContextHolder.getContext().getJiacn();
+        String clientId = EsContextHolder.getContext().getClientId();
         boolean delivered = agentWebSocketHandler.isAgentConnected(selectedAgentId);
         Flux<String> stream = delivered
                 ? Flux.create(emitter -> {
@@ -94,7 +96,15 @@ public class JuyitingAgentRelayService {
                             }, emitter::error);
                     subscriptionRef[0] = disposable;
 
-                    boolean sent = agentWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
+                    boolean sent;
+                    try {
+                        agentService.requireHostingNewWork(tenantId, clientId, selectedAgentId);
+                        sent = agentWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
+                    } catch (RuntimeException denied) {
+                        disposable.dispose();
+                        emitter.error(denied);
+                        return;
+                    }
                     emitter.next(buildAgentDeliveryEventJson(conversationId, selectedAgentId, sent));
 
                     if (!sent) {
@@ -120,6 +130,8 @@ public class JuyitingAgentRelayService {
             }
             try {
                 agentService.get(agentId);
+                agentService.requireHostingNewWork(EsContextHolder.getContext().getJiacn(),
+                        EsContextHolder.getContext().getClientId(), agentId);
             } catch (RuntimeException error) {
                 return Optional.of(agentId);
             }
@@ -131,6 +143,8 @@ public class JuyitingAgentRelayService {
         List<String> events = new ArrayList<>();
         boolean anyDelivered = false;
         for (String agentId : scope.targetAgentIds()) {
+            agentService.requireHostingNewWork(EsContextHolder.getContext().getJiacn(),
+                    EsContextHolder.getContext().getClientId(), agentId);
             Map<String, Object> payload = buildDirectAgentPayload(chatMessage, conversationId, agentId, scope);
             boolean delivered = agentWebSocketHandler.isAgentConnected(agentId)
                     && agentWebSocketHandler.sendDirectMessageToAgent(agentId, payload);

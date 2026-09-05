@@ -1,5 +1,9 @@
 dependencies {
     api project(':agent:jia-agent-api')
+    implementation project(':economy:jia-economy-api')
+    implementation project(':economy:jia-economy-mapper')
+    implementation project(':economy:jia-economy-service')
+    implementation project(':user:jia-user-api')
     implementation project(':agent:jia-agent-mapper')
     compileOnly project(':task:jia-task-core')
     compileOnly project(':task:jia-task-api')

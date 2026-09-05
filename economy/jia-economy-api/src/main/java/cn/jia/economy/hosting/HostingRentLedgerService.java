@@ -5,6 +5,9 @@ public interface HostingRentLedgerService {
 
     HostingRentMutationReceipt reserve(HostingRentReserveCommand command);
 
+    /** Explicit prepaid renewal; reserve, capture and lease version CAS commit atomically. */
+    HostingRentMutationReceipt renew(HostingRentReserveCommand command);
+
     void markProvisioningUnknown(HostingRentOutcomeCommand command);
 
     void confirmProvisioningFailedNoEffect(HostingRentOutcomeCommand command);

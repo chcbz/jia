@@ -132,6 +132,8 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
     refunded_at              BIGINT DEFAULT NULL,
     outcome_evidence_ref     VARCHAR(100) DEFAULT NULL,
     service_ready_at         BIGINT DEFAULT NULL,
+    paid_from                BIGINT DEFAULT NULL,
+    paid_through             BIGINT DEFAULT NULL,
     version                  BIGINT NOT NULL,
     tenant_id                VARCHAR(50) NOT NULL,
     client_id                VARCHAR(50) NOT NULL,
@@ -160,6 +162,10 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
         (refund_idempotency_key IS NOT NULL AND refund_request_hash IS NOT NULL
          AND OCTET_LENGTH(refund_idempotency_key) = 36 AND OCTET_LENGTH(refund_request_hash) = 32
          AND refund_transaction_id IS NOT NULL AND refunded_at IS NOT NULL)
+    ),
+    CONSTRAINT chk_hosting_intent_paid_period CHECK (
+        (status = 'ACTIVE' AND paid_from IS NOT NULL AND paid_through IS NOT NULL AND paid_through > paid_from)
+        OR (status <> 'ACTIVE' AND paid_from IS NULL AND paid_through IS NULL)
     ),
     CONSTRAINT chk_hosting_intent_state CHECK (
         (status = 'FUNDS_RESERVED' AND service_ready_at IS NULL

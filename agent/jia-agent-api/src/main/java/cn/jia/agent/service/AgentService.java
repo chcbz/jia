@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 
 public interface AgentService {
+    void requireHostingNewWork(String tenantId, String clientId, String canonicalAgentId);
+
     AgentRegisterResultDTO register(AgentRegisterDTO request);
 
     PageInfo<AgentRuntimeDTO> list(String status, String ability, int pageNum, int pageSize);

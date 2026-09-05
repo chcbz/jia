@@ -1800,6 +1800,28 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void expiredHostingRejectsAssignmentInLockedPreparationBeforeMutationOrDispatch() {
+        AgentRuntimeEntity agent = new AgentRuntimeEntity();
+        agent.setAgentId("agent-001"); agent.setStatus(AgentConstants.STATUS_ONLINE); markOwned(agent);
+        when(agentRuntimeDao.findByAgentId("agent-001")).thenReturn(agent);
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L); meta.setTaskId("task-001"); meta.setTenantId("juyiting"); meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN); meta.setTaskVersion(0L);
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001")).thenReturn(meta);
+        var gate = org.mockito.Mockito.mock(cn.jia.agent.service.AgentHostingWorkAdmission.class);
+        agentService.setHostingWorkAdmission(gate);
+        org.mockito.Mockito.doThrow(new cn.jia.agent.hosting.HostingRentApplicationException(409,
+                "HOSTING_RENT_RENEWAL_REQUIRED")).when(gate).requireNewWork("juyiting", "jia_client", "agent-001");
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO(); request.setAgentId("agent-001");
+        assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,
+                () -> agentService.assignTask("task-001", request));
+        verify(agentRuntimeDao).findByAgentIdForUpdate("agent-001");
+        verify(agentTaskMetaDao, never()).insert(any()); verify(agentTaskMetaDao, never()).updateById(any());
+        verify(agentRuntimeDao, never()).updateById(any());
+        org.mockito.Mockito.verifyNoInteractions(eventPublisher, taskEventWriter);
+    }
+
+    @Test
     void assignTaskRejectsOfflineAgent() {
         AgentRuntimeEntity agent = new AgentRuntimeEntity();
         agent.setAgentId("agent-001");

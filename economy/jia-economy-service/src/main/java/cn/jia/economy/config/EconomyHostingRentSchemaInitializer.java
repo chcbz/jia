@@ -391,6 +391,8 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("refunded_at", "bigint", true, null, ""),
                 column("outcome_evidence_ref", "varchar(100)", true, null, ""),
                 column("service_ready_at", "bigint", true, null, ""),
+                column("paid_from", "bigint", true, null, ""),
+                column("paid_through", "bigint", true, null, ""),
                 column("version", "bigint", false, null, ""),
                 column("tenant_id", "varchar(50)", false, null, ""),
                 column("client_id", "varchar(50)", false, null, ""),
@@ -414,6 +416,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                         + "refunded_at IS NULL) OR (refund_idempotency_key IS NOT NULL AND refund_request_hash IS NOT NULL AND "
                         + "OCTET_LENGTH(refund_idempotency_key) = 36 AND OCTET_LENGTH(refund_request_hash) = 32 AND "
                         + "refund_transaction_id IS NOT NULL AND refunded_at IS NOT NULL)"),
+                check("chk_hosting_intent_paid_period", "(status = 'ACTIVE' AND paid_from IS NOT NULL AND paid_through IS NOT NULL AND paid_through > paid_from) OR (status <> 'ACTIVE' AND paid_from IS NULL AND paid_through IS NULL)"),
                 check("chk_hosting_intent_state", "(status = 'FUNDS_RESERVED' AND service_ready_at IS NULL AND capture_transaction_id IS NULL AND "
                         + "refund_transaction_id IS NULL) OR (status IN ('PROVISIONING_UNKNOWN','FAILED_NO_EFFECT') AND service_ready_at "
                         + "IS NULL AND outcome_evidence_ref IS NOT NULL AND capture_transaction_id IS NULL AND refund_transaction_id IS "

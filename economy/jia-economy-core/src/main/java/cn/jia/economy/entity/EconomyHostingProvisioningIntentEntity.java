@@ -33,6 +33,8 @@ public class EconomyHostingProvisioningIntentEntity {
     private Long refundedAt;
     private String outcomeEvidenceRef;
     private Long serviceReadyAt;
+    private Long paidFrom;
+    private Long paidThrough;
     private Long version;
     private String tenantId;
     private String clientId;

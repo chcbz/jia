@@ -63,7 +63,7 @@ import static cn.jia.economy.hosting.HostingRentException.Reason.QUOTE_EXPIRED;
 import static cn.jia.economy.hosting.HostingRentException.Reason.REFUND_NOT_ALLOWED;
 
 /**
- * Initial paid-hosting domain foundation. It performs database work only: no filesystem,
+ * Paid-hosting reservation, readiness settlement and explicit manual-renewal domain. It performs database work only: no filesystem,
  * process, broker, profile, runtime, or Agent binding operation is invoked here.
  */
 @Service
@@ -77,6 +77,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
     private final Supplier<String> intentIds;
     private final LongSupplier clock;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public HostingRentLedgerServiceImpl(
             EconomyHostingRentMapper hostingMapper,
             EconomyLedgerMapper ledgerMapper,
@@ -194,7 +195,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         }
         if (!HostingRentQuotePurpose.INITIAL.name().equals(quote.getQuotePurpose())) {
             throw new HostingRentException(LEASE_CONFLICT,
-                    "renewal reserve is intentionally deferred until renewal CAS DTOs are frozen");
+                    "renewal requires the explicit atomic renewal operation");
         }
         if (hostingMapper.selectLiveLeaseByAgentForUpdate(
                 validated.scope().tenantId(), validated.scope().clientId(), quote.getAgentId()) != null) {
@@ -270,6 +271,86 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         }
         requireOne(hostingMapper.insertIntent(intent), "provisioning intent insert");
         return reserveReceipt(intent);
+    }
+
+    @Override
+    public HostingRentMutationReceipt renew(HostingRentReserveCommand command) {
+        if (command == null) throw new HostingRentException(INVALID_COMMAND, "renewal command is incomplete");
+        ValidatedMutation validated = validateMutation(command.scope(), command.principal(),
+                command.idempotencyKey(), command.requestHash(), command.quoteId(), "quoteId");
+        return transactions.execute(status -> {
+            EconomyHostingRentQuoteEntity quote = hostingMapper.selectQuoteForUpdate(
+                    validated.scope().tenantId(), validated.scope().clientId(), command.quoteId());
+            requireOwnedQuote(validated, quote);
+            if (!"RENEWAL".equals(quote.getQuotePurpose())) {
+                throw new HostingRentException(INVALID_COMMAND, "explicit renewal quote required");
+            }
+            EconomyHostingProvisioningIntentEntity old = hostingMapper.selectIntentByQuoteForUpdate(
+                    validated.scope().tenantId(), validated.scope().clientId(), quote.getQuoteId());
+            if (old != null) {
+                replayReserve(validated, old);
+                if (!"ACTIVE".equals(old.getStatus()) || old.getCaptureTransactionId() == null) {
+                    throw new HostingRentException(DATA_CORRUPT, "incomplete atomic renewal");
+                }
+                return new HostingRentMutationReceipt(old.getIntentId(), old.getLeaseId(), old.getQuoteId(),
+                        old.getCaptureTransactionId(), "ACTIVE", old.getAmountMicro(), old.getPeriodSeconds(), old.getCapturedAt());
+            }
+            if (quote.getExpiresAt() <= positiveNow()) throw new HostingRentException(QUOTE_EXPIRED, "renewal quote expired");
+            EconomyHostingLeaseEntity lease = hostingMapper.selectLeaseForUpdate(
+                    validated.scope().tenantId(), validated.scope().clientId(), quote.getLeaseId());
+            if (lease == null || !"ACTIVE".equals(lease.getStatus())
+                    || !exact(lease.getPrincipalId(), validated.principal().id())
+                    || !exact(lease.getPrincipalType(), "USER") || !exact(lease.getAgentId(), quote.getAgentId())
+                    || !exact(lease.getPersonaCode(), quote.getPersonaCode())
+                    || !Objects.equals(lease.getVersion(), quote.getExpectedLeaseVersion())
+                    || lease.getPaidThrough() == null || lease.getVersion() == Long.MAX_VALUE) {
+                throw new HostingRentException(LEASE_CONFLICT, "renewal lease ownership/version conflict");
+            }
+            // Each manual order has a fresh escrow business root; never reopen a captured escrow.
+            String intentId = requireGeneratedId(intentIds.get(), "intentId");
+            EconomyAccountKey held = leaseEscrow(intentId);
+            long now = positiveNow();
+            ensureAccount(validated.scope(), held, escrowAccountId(validated.scope(), intentId), now);
+            EconomyPostingResult reserved = postingService.post(new EconomyPostingCommand(
+                    validated.scope(), validated.principal(), command.idempotencyKey(), command.requestHash(),
+                    EconomyJournalType.RESERVE_HOSTING_RENT, intentId, List.of(
+                    new EconomyPostingLine(userAvailable(validated.principal().id()), -quote.getAmountMicro()),
+                    new EconomyPostingLine(held, quote.getAmountMicro())),
+                    new EconomyEscrowFunding(EconomyEscrowType.HOSTING_RENT,
+                            userAvailable(validated.principal().id()), held, quote.getAmountMicro(), null)));
+            EconomyHostingProvisioningIntentEntity intent = new EconomyHostingProvisioningIntentEntity()
+                    .setIntentId(intentId).setLeaseId(lease.getLeaseId()).setQuoteId(quote.getQuoteId())
+                    .setQuotePurpose("RENEWAL").setPrincipalType("USER").setPrincipalId(validated.principal().id())
+                    .setPersonaCode(quote.getPersonaCode()).setAgentId(quote.getAgentId())
+                    .setAmountMicro(quote.getAmountMicro()).setPeriodSeconds(quote.getPeriodSeconds())
+                    .setStatus("SERVICE_READY").setReserveIdempotencyKey(validated.idempotencyKey())
+                    .setReserveRequestHash(command.requestHash()).setReserveTransactionId(reserved.transactionId())
+                    .setReservedAt(reserved.postedAt()).setServiceReadyAt(reserved.postedAt())
+                    .setOutcomeEvidenceRef("manual-renewal:" + quote.getQuoteId()).setEscrowVersion(1L).setVersion(1L)
+                    .setTenantId(validated.scope().tenantId()).setClientId(validated.scope().clientId())
+                    .setCreateTime(now).setUpdateTime(now);
+            requireOne(hostingMapper.insertIntent(intent), "renewal intent insert");
+            ensureAccount(validated.scope(), hostingRevenue(), "system_hosting_rent", now);
+            String captureKey = UUID.nameUUIDFromBytes(("hosting-renewal-capture:" + intentId)
+                    .getBytes(StandardCharsets.UTF_8)).toString();
+            EconomyPostingResult captured = postingService.post(new EconomyPostingCommand(
+                    validated.scope(), validated.principal(), captureKey, command.requestHash(),
+                    EconomyJournalType.CAPTURE_HOSTING_RENT, intentId, List.of(
+                    new EconomyPostingLine(held, -quote.getAmountMicro()),
+                    new EconomyPostingLine(hostingRevenue(), quote.getAmountMicro())), null,
+                    new EconomyEscrowSettlement(EconomyEscrowType.HOSTING_RENT, held, hostingRevenue(),
+                            quote.getAmountMicro(), 1L, reserved.transactionId())));
+            long paidFrom = Math.max(captured.postedAt(), lease.getPaidThrough());
+            long paidThrough = checkedAdd(paidFrom, checkedMultiply(quote.getPeriodSeconds(), 1_000L));
+            intent.setPaidFrom(paidFrom).setPaidThrough(paidThrough);
+            requireOne(hostingMapper.markIntentActive(intent, validated.scope().tenantId(), validated.scope().clientId(),
+                    canonicalUuid(captureKey), command.requestHash(), captured.transactionId(), captured.postedAt(), 2L, 2L),
+                    "renewal capture CAS");
+            requireOne(hostingMapper.renewLease(validated.scope().tenantId(), validated.scope().clientId(),
+                    lease, quote, intentId, paidFrom, paidThrough, captured.postedAt()), "renewal lease CAS");
+            return new HostingRentMutationReceipt(intentId, lease.getLeaseId(), quote.getQuoteId(),
+                    captured.transactionId(), "ACTIVE", quote.getAmountMicro(), quote.getPeriodSeconds(), captured.postedAt());
+        });
     }
 
     @Override
@@ -406,6 +487,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         if (capture) {
             long paidFrom = intent.getServiceReadyAt();
             long paidThrough = checkedAdd(paidFrom, checkedMultiply(intent.getPeriodSeconds(), 1_000L));
+            intent.setPaidFrom(paidFrom).setPaidThrough(paidThrough);
             requireOne(hostingMapper.markIntentActive(intent, validated.scope().tenantId(),
                     validated.scope().clientId(), validated.idempotencyKey(), command.requestHash(),
                     posting.transactionId(), posting.postedAt(), nextEscrowVersion, nextIntentVersion),

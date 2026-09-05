@@ -75,6 +75,16 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
     }
 
     @Test
+    void applicationPaidPeriodSnapshotColumnsAndConstraintMustMatchExactly() {
+        assertIncompatibleCompleteCatalog(new CatalogChange("paid_period_type", "intent",
+                "paid_from                BIGINT DEFAULT NULL", "paid_from                DECIMAL(20,0) DEFAULT NULL", "columns"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("paid_period_default", "intent",
+                "paid_through             BIGINT DEFAULT NULL", "paid_through             BIGINT DEFAULT 1", "columns"));
+        assertIncompatibleCompleteCatalog(new CatalogChange("paid_period_check", "intent",
+                "paid_through > paid_from)", "paid_through >= paid_from)", "checks"));
+    }
+
+    @Test
     void fullCatalogWithSameIndexNamesButWrongUniquenessOrderPrefixTypeOrVisibilityFails() {
         for (CatalogChange change : List.of(
                 new CatalogChange("nonunique", "lease", "UNIQUE KEY uk_hosting_lease_agent",
@@ -154,8 +164,11 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
         JdbcTemplate jdbc = fixture.newDatabase(change.label()).jdbc();
         boolean replaced = false;
         for (String ddl : EconomyHostingRentSchemaInitializer.tableDdlStatements()) {
-            String table = "economy_hosting_" + (change.tableSuffix().equals("lease")
-                    ? "lease" : "rent_" + change.tableSuffix());
+            String table = "economy_hosting_" + switch (change.tableSuffix()) {
+                case "lease" -> "lease";
+                case "intent" -> "provisioning_intent";
+                default -> "rent_" + change.tableSuffix();
+            };
             if (ddl.startsWith("CREATE TABLE IF NOT EXISTS " + table + " (")) {
                 assertTrue(ddl.contains(change.before()), change.toString());
                 ddl = ddl.replace(change.before(), change.after());

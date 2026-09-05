@@ -1,6 +1,12 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.service.HostingRentAdmissionException;
+import cn.jia.agent.hosting.HostingRentApplicationService;
+import cn.jia.agent.hosting.HostingRentHttp;
+import cn.jia.agent.hosting.HostingRentErrors;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import java.util.Set;
 import cn.jia.agent.service.HostingRentAdmissionService;
 import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,9 +33,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
 
-/** Protected R00 quote admission endpoint. It deliberately emits no quote or capability response. */
+/** Paid hosting HTTP boundary. Legacy R00 construction remains fail-closed for focused compatibility tests. */
 @RestController
-@RequestMapping("/agent/personas/{personaCode}/hosting-rent")
+@RequestMapping("/agent")
 public final class AgentHostingRentController {
     private static final String CACHE_CONTROL = "private, no-store";
     private static final int MAX_BODY_BYTES = 1024;
@@ -39,22 +45,64 @@ public final class AgentHostingRentController {
             .build();
 
     private final HostingRentAdmissionService admissionService;
+    private final HostingRentApplicationService application;
+
+    @Autowired
+    public AgentHostingRentController(HostingRentApplicationService application) {
+        this.application = Objects.requireNonNull(application);
+        this.admissionService = null;
+    }
 
     public AgentHostingRentController(HostingRentAdmissionService admissionService) {
         this.admissionService = Objects.requireNonNull(admissionService, "admissionService");
+        this.application = null;
     }
 
-    @PostMapping(value = "/quotes", consumes = MediaType.APPLICATION_JSON_VALUE,
+    @PostMapping(value = "/personas/{personaCode}/hosting-rent/quotes", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public void quote(
+    public Object quote(
             @PathVariable String personaCode,
             Authentication authentication,
             HttpServletRequest request,
             @RequestBody(required = false) byte[] rawBody) {
         HostingRentAdmissionService.Principal principal = requirePrincipal(authentication);
         requireNoQuery(request);
-        requireEmptyObject(rawBody);
-        admissionService.requireQuoteAvailable(principal, personaCode);
+        if (application == null) {
+            requireEmptyObject(rawBody);
+            admissionService.requireQuoteAvailable(principal, personaCode);
+            return null;
+        }
+        return success(application.quote(HostingRentHttp.actor(authentication), personaCode,
+                HostingRentHttp.key(request), HostingRentHttp.body(rawBody, Set.of("purpose", "agentId"), Set.of("agentId"))));
+    }
+
+    @GetMapping("/{agentId}/hosting-lease")
+    public Object lease(@PathVariable String agentId, Authentication authentication, HttpServletRequest request) {
+        HostingRentHttp.noQuery(request);
+        return success(application.lookup(HostingRentHttp.actor(authentication), agentId));
+    }
+
+    @PostMapping(value = "/hosting-leases/{leaseId}/renewal-quotes", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Object renewalQuote(@PathVariable String leaseId, Authentication authentication,
+            HttpServletRequest request, @RequestBody byte[] body) {
+        return success(application.renewalQuote(HostingRentHttp.actor(authentication), leaseId,
+                HostingRentHttp.key(request), HostingRentHttp.body(body,
+                        Set.of("agentId", "expectedLeaseVersion"), Set.of())));
+    }
+
+    @PostMapping(value = "/hosting-leases/{leaseId}/renewals", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public Object renew(@PathVariable String leaseId, Authentication authentication,
+            HttpServletRequest request, @RequestBody byte[] body) {
+        return success(application.renew(HostingRentHttp.actor(authentication), leaseId,
+                HostingRentHttp.key(request), HostingRentHttp.body(body, Set.of("agentId", "quoteId",
+                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountMicro", "expectedPeriodSeconds"), Set.of())));
+    }
+
+    @ExceptionHandler(RuntimeException.class)
+    public Object rentFailure(RuntimeException failure) { return HostingRentErrors.response(failure); }
+
+    private Object success(Object data) {
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(JsonResult.success(data));
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
