@@ -20,6 +20,7 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.security.AllowSensitiveOutput;
@@ -27,6 +28,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import com.github.pagehelper.PageInfo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -220,6 +224,18 @@ public class AgentController {
     public Object deleteEvaluation(@PathVariable Long id) {
         abilityEvaluationService.delete(id);
         return JsonResult.success();
+    }
+
+    @ExceptionHandler(HostingRentAdmissionException.class)
+    public ResponseEntity<JsonResult<Void>> handleHostingRentUnavailable(
+            HostingRentAdmissionException e, HttpServletRequest request) {
+        log.warn("Agent hosting rent request rejected: uri={}, code={}",
+                request.getRequestURI(), e.code());
+        JsonResult<Void> result = JsonResult.failure(e.code(), e.getMessage());
+        result.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(result);
     }
 
     @ExceptionHandler(AgentBizException.class)
