@@ -20,12 +20,15 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.funding.FundedBountyLegacyGuard;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
 import cn.jia.core.util.StringUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -65,6 +68,8 @@ public class AgentLegacyTaskCompatibilityService {
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
+    private volatile FundedBountyLegacyGuard fundedBountyLegacyGuard =
+            FundedBountyLegacyGuard.unconfigured();
 
     @Inject
     public AgentLegacyTaskCompatibilityService(
@@ -107,6 +112,12 @@ public class AgentLegacyTaskCompatibilityService {
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
         this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    @Autowired
+    void configureFundedBountyLegacyGuard(ObjectProvider<FundedBountyLegacyGuard> provider) {
+        this.fundedBountyLegacyGuard = Objects.requireNonNull(provider, "provider")
+                .getIfAvailable(FundedBountyLegacyGuard::failClosed);
     }
 
     public String resolveAgentId(
@@ -177,6 +188,7 @@ public class AgentLegacyTaskCompatibilityService {
             boolean automatic, long changedAt, AgentTaskMetaEntity task,
             AssignmentPrecommitValidator precommitValidator) {
         validateLockedTask(task, tenantId, clientId, taskId);
+        precommitValidator.beforeIdentityLock(task, agentIds);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, agentIds);
         if (!agentIds.equals(lockedAgentIds)) {
@@ -246,6 +258,7 @@ public class AgentLegacyTaskCompatibilityService {
             String tenantId, String clientId, String taskId, String agentId,
             AgentTaskStatus reportStatus, String failureReason, AgentTaskMetaEntity task) {
         validateLockedTask(task, tenantId, clientId, taskId);
+        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, List.of(agentId));
         if (!List.of(agentId).equals(lockedAgentIds)) {
@@ -1193,6 +1206,10 @@ public class AgentLegacyTaskCompatibilityService {
 
     @FunctionalInterface
     public interface AssignmentPrecommitValidator {
+        /** Called with the task root locked, before any canonical identity/runtime lock. */
+        default void beforeIdentityLock(AgentTaskMetaEntity task, List<String> agentIds) {
+        }
+
         void validate(AgentTaskMetaEntity task, List<String> agentIds);
     }
 

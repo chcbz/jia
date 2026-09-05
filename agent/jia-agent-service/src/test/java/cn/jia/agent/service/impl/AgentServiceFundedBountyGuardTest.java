@@ -16,7 +16,7 @@ import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.funding.FundedBountyException;
-import cn.jia.agent.service.funding.FundedBountyService;
+import cn.jia.agent.service.funding.FundedBountyLegacyGuard;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
 import org.junit.jupiter.api.AfterEach;
@@ -45,9 +45,10 @@ class AgentServiceFundedBountyGuardTest {
     void manualSingleAndGroupAssignmentFailBeforeLegacyIdentityOrTaskMutation() {
         Fixture fixture = fixture();
         doThrow(new FundedBountyException(org.springframework.http.HttpStatus.CONFLICT,
-                "QUOTE_REQUIRED", "quote required")).when(fixture.funded)
-                .requireLegacyAssignmentAllowed(anyString(), anyString(), anyString(),
-                        org.mockito.ArgumentMatchers.eq(false), anyInt());
+                "QUOTE_REQUIRED", "quote required")).when(fixture.guard)
+                .requireAssignmentAllowed(anyString(), anyString(), anyString(),
+                        org.mockito.ArgumentMatchers.eq(false), anyInt(),
+                        org.mockito.ArgumentMatchers.eq(false));
         AgentTaskAssignDTO request = new AgentTaskAssignDTO();
         request.setAgentIds(List.of("agent-1"));
 
@@ -62,9 +63,10 @@ class AgentServiceFundedBountyGuardTest {
     void autoAssignmentFailsAsUnsupportedBeforeRecommendationOrMutation() {
         Fixture fixture = fixture();
         doThrow(new FundedBountyException(org.springframework.http.HttpStatus.CONFLICT,
-                "FUNDED_TEAM_NOT_SUPPORTED", "unsupported")).when(fixture.funded)
-                .requireLegacyAssignmentAllowed(anyString(), anyString(), anyString(),
-                        org.mockito.ArgumentMatchers.eq(true), anyInt());
+                "FUNDED_TEAM_NOT_SUPPORTED", "unsupported")).when(fixture.guard)
+                .requireAssignmentAllowed(anyString(), anyString(), anyString(),
+                        org.mockito.ArgumentMatchers.eq(true), anyInt(),
+                        org.mockito.ArgumentMatchers.eq(false));
 
         FundedBountyException failure = assertThrows(FundedBountyException.class,
                 () -> fixture.service.autoAssignTask("task-1", new AgentTaskAssignDTO()));
@@ -77,8 +79,9 @@ class AgentServiceFundedBountyGuardTest {
     void reportFailsBeforeResolvingOrMutatingAgent() {
         Fixture fixture = fixture();
         doThrow(new FundedBountyException(org.springframework.http.HttpStatus.CONFLICT,
-                "QUOTE_REQUIRED", "funded lifecycle")).when(fixture.funded)
-                .requireLegacyLifecycleAllowed(anyString(), anyString(), anyString());
+                "QUOTE_REQUIRED", "funded lifecycle")).when(fixture.guard)
+                .requireLifecycleAllowed(anyString(), anyString(), anyString(),
+                        org.mockito.ArgumentMatchers.eq(false));
         AgentTaskReportDTO request = new AgentTaskReportDTO();
         request.setAgentId("agent-1");
 
@@ -102,13 +105,13 @@ class AgentServiceFundedBountyGuardTest {
                 mock(DialogueTemplateDao.class), mock(ObjectProvider.class), tasks, keys, scenes,
                 new AgentScopePublicationCoordinator(), new AgentSceneFeatureFlags(false, false),
                 mutation, mock(AgentTaskEventWriter.class));
-        FundedBountyService funded = mock(FundedBountyService.class);
-        @SuppressWarnings("unchecked") ObjectProvider<FundedBountyService> provider = mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(funded);
-        service.configureFundedBountyService(provider);
-        return new Fixture(service, funded, legacy);
+        FundedBountyLegacyGuard guard = mock(FundedBountyLegacyGuard.class);
+        @SuppressWarnings("unchecked") ObjectProvider<FundedBountyLegacyGuard> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable(org.mockito.ArgumentMatchers.any())).thenReturn(guard);
+        service.configureFundedBountyLegacyGuard(provider);
+        return new Fixture(service, guard, legacy);
     }
 
-    private record Fixture(AgentServiceImpl service, FundedBountyService funded,
+    private record Fixture(AgentServiceImpl service, FundedBountyLegacyGuard guard,
             AgentLegacyTaskCompatibilityService legacy) { }
 }

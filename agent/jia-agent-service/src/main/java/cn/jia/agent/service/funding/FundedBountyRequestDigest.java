@@ -74,9 +74,24 @@ public final class FundedBountyRequestDigest {
             out.writeInt(-1);
             return;
         }
+        if (hasUnpairedSurrogate(value)) {
+            throw new IllegalArgumentException("Funded bounty idempotency input contains malformed Unicode");
+        }
         byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
         out.writeInt(encoded.length);
         out.write(encoded);
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) return true;
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static byte[] digest(byte[] value) {
