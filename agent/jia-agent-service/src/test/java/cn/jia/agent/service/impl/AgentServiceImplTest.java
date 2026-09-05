@@ -1281,6 +1281,23 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void blankModeRetainsLocalBindingWithoutEnteringHostingRentAdmission() {
+        AgentPersonaEntity persona = persona("linchong-local", "林冲", "豹子头");
+        OauthApiKeyEntity apiKey = new OauthApiKeyEntity();
+        apiKey.setApiKey("cdx_blank_local_key");
+        apiKey.setStatus(1);
+
+        when(agentPersonaDao.findByCode("linchong-local")).thenReturn(persona);
+        when(apiKeyServiceProvider.getIfAvailable()).thenReturn(apiKeyService);
+        when(apiKeyService.findList(any(OauthApiKeyEntity.class))).thenReturn(List.of(apiKey));
+
+        AgentPersonaBindResultDTO result = agentService.bindPersona("linchong-local", "   ");
+
+        assertEquals("local", result.getMode());
+        assertEquals("cdx_blank_local_key", result.getApiKey());
+    }
+
+    @Test
     void recommendTaskAssigneesRanksByAbilityAndAvailability() {
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setId(1L);

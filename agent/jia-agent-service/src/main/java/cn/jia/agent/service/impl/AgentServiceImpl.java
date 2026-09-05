@@ -47,6 +47,7 @@ import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.HostingRentAdmissionService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.service.AgentService;
@@ -125,6 +126,7 @@ public class AgentServiceImpl implements AgentService {
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter taskEventWriter;
     private final AgentCommandTransportCapture commandTransportCapture;
+    private final HostingRentAdmissionService hostingRentAdmissionService;
 
     /** Backward-compatible constructor used by existing focused tests with all M3 flags OFF. */
     public AgentServiceImpl(
@@ -153,7 +155,6 @@ public class AgentServiceImpl implements AgentService {
                 taskEventWriter, AgentCommandTransportCapture.disabledForLegacyConstruction());
     }
 
-    @Autowired
     public AgentServiceImpl(
             AgentRuntimeDao agentRuntimeDao,
             AgentIdentityService agentIdentityService,
@@ -173,6 +174,35 @@ public class AgentServiceImpl implements AgentService {
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter taskEventWriter,
             AgentCommandTransportCapture commandTransportCapture) {
+        this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
+                agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
+                taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
+                scopePublicationCoordinator, sceneFeatureFlags, mutationTransaction,
+                taskEventWriter, commandTransportCapture, HostingRentAdmissionService.unconfigured());
+    }
+
+    @Autowired
+    public AgentServiceImpl(
+            AgentRuntimeDao agentRuntimeDao,
+            AgentIdentityService agentIdentityService,
+            AgentPersonaDao agentPersonaDao,
+            AgentPersonaBindingDao agentPersonaBindingDao,
+            AgentTaskMetaDao agentTaskMetaDao,
+            AgentTaskMemberDao agentTaskMemberDao,
+            AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService,
+            AgentTaskNoteDao agentTaskNoteDao,
+            DialogueTemplateDao dialogueTemplateDao,
+            ObjectProvider<AgentEventPublisher> eventPublisherProvider,
+            ObjectProvider<TaskService> taskServiceProvider,
+            ObjectProvider<ApiKeyService> apiKeyServiceProvider,
+            ObjectProvider<AgentSceneService> sceneServiceProvider,
+            AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentSceneFeatureFlags sceneFeatureFlags,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter taskEventWriter,
+            AgentCommandTransportCapture commandTransportCapture,
+            HostingRentAdmissionService hostingRentAdmissionService) {
         this.agentRuntimeDao = agentRuntimeDao;
         this.agentIdentityService = agentIdentityService;
         this.agentPersonaDao = agentPersonaDao;
@@ -191,6 +221,8 @@ public class AgentServiceImpl implements AgentService {
         this.mutationTransaction = mutationTransaction;
         this.taskEventWriter = taskEventWriter;
         this.commandTransportCapture = commandTransportCapture;
+        this.hostingRentAdmissionService = Objects.requireNonNull(
+                hostingRentAdmissionService, "hostingRentAdmissionService");
     }
 
     @Override
@@ -341,16 +373,22 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentPersonaBindResultDTO bindPersona(String personaCode, String mode) {
+        String normalizedMode = normalizeBindMode(mode);
+        if (BIND_MODE_SERVER.equals(normalizedMode)) {
+            hostingRentAdmissionService.requireServerBindAvailable();
+        }
         AgentRuntimeDTO agent = bindPersona(personaCode);
         AgentPersonaEntity persona = requirePersona(personaCode);
-        String normalizedMode = StringUtil.isBlank(mode) ? BIND_MODE_LOCAL : mode.trim().toLowerCase();
-        if (BIND_MODE_SERVER.equals(normalizedMode)) {
-            return buildServerHostedBinding(agent, persona);
+        return buildLocalBindingGuide(agent, persona);
+    }
+
+    private String normalizeBindMode(String mode) {
+        String normalizedMode = StringUtil.isBlank(mode)
+                ? BIND_MODE_LOCAL : mode.trim().toLowerCase(Locale.ROOT);
+        if (!BIND_MODE_LOCAL.equals(normalizedMode) && !BIND_MODE_SERVER.equals(normalizedMode)) {
+            throw new IllegalArgumentException("Unsupported bind mode: " + mode);
         }
-        if (BIND_MODE_LOCAL.equals(normalizedMode)) {
-            return buildLocalBindingGuide(agent, persona);
-        }
-        throw new IllegalArgumentException("Unsupported bind mode: " + mode);
+        return normalizedMode;
     }
 
     @Override
