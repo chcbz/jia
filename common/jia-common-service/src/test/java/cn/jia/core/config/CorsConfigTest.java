@@ -12,9 +12,12 @@ import static org.junit.jupiter.api.Assertions.*;
 class CorsConfigTest {
     @Test
     void credentialedCorsUsesConfiguredExactOriginAndSecurityHeaders() {
-        CorsConfig config = configured(new String[]{"https://kit.chaoyoufan.cn"});
+        CorsConfig config = configured(new String[]{"https://kit.chaoyoufan.cn", "https://api.chaoyoufan.cn"});
         CorsConfiguration cors = config.buildConfig();
-        assertEquals(List.of("https://kit.chaoyoufan.cn"), cors.getAllowedOriginPatterns());
+        assertEquals(List.of("https://kit.chaoyoufan.cn", "https://api.chaoyoufan.cn"),
+                cors.getAllowedOriginPatterns());
+        assertEquals("https://api.chaoyoufan.cn", cors.checkOrigin("https://api.chaoyoufan.cn"));
+        assertNull(cors.checkOrigin("https://untrusted.example"));
         assertEquals(List.of("Authorization", "Content-Type", "X-API-Key"), cors.getAllowedHeaders());
         assertTrue(cors.getAllowedMethods().containsAll(List.of("POST", "OPTIONS")));
         assertEquals(Boolean.TRUE, cors.getAllowCredentials());
