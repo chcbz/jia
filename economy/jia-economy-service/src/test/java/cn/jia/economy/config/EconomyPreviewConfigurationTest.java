@@ -30,6 +30,31 @@ class EconomyPreviewConfigurationTest {
     }
 
     @Test
+    void applicationContextBindsCanonicalConstructorFields() {
+        RUNNER.withPropertyValues(
+                        "economy.preview.enabled=true",
+                        "economy.preview.test-issuance-enabled=true",
+                        "economy.preview.allowed-scopes[0].tenant-id=Tenant-A",
+                        "economy.preview.allowed-scopes[0].client-id=Client-A")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    EconomyPreviewProperties properties = context.getBean(EconomyPreviewProperties.class);
+                    assertTrue(properties.enabled());
+                    assertTrue(properties.testIssuanceEnabled());
+                    assertEquals(List.of(new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")),
+                            properties.allowedScopes());
+                });
+
+        RUNNER.withPropertyValues(
+                        "economy.preview.enabled=false",
+                        "economy.preview.test-issuance-enabled=false")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertFalse(context.getBean(EconomyPreviewProperties.class).testIssuanceEnabled());
+                });
+    }
+
+    @Test
     void exactAllowlistIsCaseSensitiveAndEnabledRequiresAtLeastOneScope() {
         EconomyPreviewGate gate = new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                 new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A"))));

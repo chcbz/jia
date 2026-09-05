@@ -1,6 +1,7 @@
 package cn.jia.economy.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 import java.util.List;
 
@@ -9,6 +10,7 @@ public record EconomyPreviewProperties(
         boolean enabled,
         boolean testIssuanceEnabled,
         List<AllowedScope> allowedScopes) {
+    @ConstructorBinding
     public EconomyPreviewProperties {
         allowedScopes = allowedScopes == null ? List.of() : List.copyOf(allowedScopes);
     }
