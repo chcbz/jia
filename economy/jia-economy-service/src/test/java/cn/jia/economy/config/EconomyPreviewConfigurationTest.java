@@ -65,16 +65,14 @@ class EconomyPreviewConfigurationTest {
 
     @Test
     void checkNormalizationPreservesBooleanMeaningAndCompoundTriggerDdlIsBounded() {
-        String canonical = "allow_negative in (0,1) "
-                + "and (owner_type<>'USER' or purpose<>'AVAILABLE')";
+        String canonical = "allow_negative in (0,1) and owner_type='SYSTEM'";
         String expected = EconomySchemaInitializer.normalizeCheckClause(
-                "allow_negative IN (0,1) AND (owner_type <> 'USER' OR purpose <> 'AVAILABLE')");
+                "allow_negative IN (0,1) AND owner_type = 'SYSTEM'");
         String mysql = EconomySchemaInitializer.normalizeCheckClause(
                 " ( ( `allow_negative` in ( 0 , 1 ) ) and "
-                        + "( ( `owner_type` <> _utf8mb4 'USER' ) or "
-                        + "( `purpose` <> _utf8mb4'AVAILABLE' ) ) ) ");
+                        + "( `owner_type` = _utf8mb4 'SYSTEM' ) ) ");
         String regrouped = EconomySchemaInitializer.normalizeCheckClause(
-                "(allow_negative IN (0,1) AND owner_type <> 'USER') OR purpose <> 'AVAILABLE'");
+                "(allow_negative IN (0,1) AND owner_type = 'SYSTEM') OR purpose = 'PROVIDER_VARIANCE'");
 
         assertEquals(canonical, expected);
         assertEquals(canonical, mysql);

@@ -17,6 +17,7 @@ import cn.jia.economy.service.EconomyPostingLine;
 import cn.jia.economy.service.EconomyPostingResult;
 import cn.jia.economy.service.EconomyPrincipal;
 import cn.jia.economy.service.EconomyScope;
+import cn.jia.economy.service.EconomyTreasuryPostingService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +58,7 @@ class EconomyPostingServiceRealTransactionTest {
     private JdbcTemplate jdbc;
     private EconomyLedgerMapper mapper;
     private EconomyPostingServiceImpl service;
+    private EconomyTreasuryPostingService treasury;
     private AtomicInteger transactionSequence;
 
     @BeforeEach
@@ -88,6 +90,7 @@ class EconomyPostingServiceRealTransactionTest {
                 mapper, new DataSourceTransactionManager(dataSource), gate,
                 () -> "etx-" + transactionSequence.incrementAndGet(),
                 () -> "esc-1", () -> 1_800_000_000_000L + transactionSequence.get());
+        treasury = new EconomyTreasuryPostingServiceImpl(service);
     }
 
     @AfterEach
@@ -104,10 +107,10 @@ class EconomyPostingServiceRealTransactionTest {
 
         EconomyPostingCommand firstCommand = issueCommand(
                 "00000000-0000-0000-0000-000000000001", HASH_ONE, 100);
-        EconomyPostingResult first = service.post(firstCommand);
-        EconomyPostingResult later = service.post(issueCommand(
+        EconomyPostingResult first = treasury.issue(firstCommand);
+        EconomyPostingResult later = treasury.issue(issueCommand(
                 "00000000-0000-0000-0000-000000000002", HASH_TWO, 50));
-        EconomyPostingResult replay = service.post(firstCommand);
+        EconomyPostingResult replay = treasury.issue(firstCommand);
 
         assertEquals(first, replay);
         assertEquals(100, first.debitTotalMicro());
@@ -130,6 +133,17 @@ class EconomyPostingServiceRealTransactionTest {
     }
 
     @Test
+    void genericPostingRejectsUserIssueBeforeAnyDml() {
+        EconomyPostingException failure = assertThrows(EconomyPostingException.class,
+                () -> service.post(issueCommand("00000000-0000-0000-0000-000000000015", HASH_ONE, 1)));
+
+        assertEquals(EconomyPostingException.Reason.INVALID_COMMAND, failure.reason());
+        verify(mapper, never()).insertTransaction(any());
+        verify(mapper, never()).selectAccountForUpdate(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
     void imbalanceIsRejectedBeforeAnyTransactionOrBalanceDml() {
         insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
                 EconomyAccountPurpose.AVAILABLE, 0, false);
@@ -142,7 +156,7 @@ class EconomyPostingServiceRealTransactionTest {
                 new EconomyPostingLine(issuance(), -99)), null);
 
         EconomyPostingException failure = assertThrows(EconomyPostingException.class,
-                () -> service.post(imbalanced));
+                () -> treasury.issue(imbalanced));
 
         assertEquals(EconomyPostingException.Reason.IMBALANCED_TRANSACTION, failure.reason());
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
@@ -181,7 +195,7 @@ class EconomyPostingServiceRealTransactionTest {
                 EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
 
         EconomyPostingException failure = assertThrows(EconomyPostingException.class,
-                () -> service.post(issueCommand(
+                () -> treasury.issue(issueCommand(
                         "00000000-0000-0000-0000-000000000005", HASH_ONE, 1)));
 
         assertEquals(EconomyPostingException.Reason.AMOUNT_RANGE_EXCEEDED, failure.reason());
@@ -281,6 +295,23 @@ class EconomyPostingServiceRealTransactionTest {
     }
 
     @Test
+    void nonSystemEscrowCannotBeMisprovisionedNegative() {
+        EconomyAccountKey held = new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
+                "task-1", EconomyAccountPurpose.ESCROW);
+        insertAccount("acct-user", EconomyAccountOwnerType.USER, USER,
+                EconomyAccountPurpose.AVAILABLE, 10, false);
+        insertAccount("acct-escrow", held.ownerType(), held.ownerId(), held.purpose(), 0, true);
+
+        EconomyPostingException failure = assertThrows(EconomyPostingException.class,
+                () -> service.post(reserveCommand("00000000-0000-0000-0000-000000000016", HASH_ONE,
+                        userAvailable(), held, 1, null)));
+
+        assertEquals(EconomyPostingException.Reason.JOURNAL_CORRUPT, failure.reason());
+        assertEquals(10L, balance("acct-user"));
+        assertEquals(0L, balance("acct-escrow"));
+    }
+
+    @Test
     void exactIdentitiesRejectControlNulAndUnpairedSurrogatesBeforeDml() {
         for (String invalid : List.of("user\u0000x", "user\u001fx", "user\ud800", "user\udc00")) {
             EconomyPostingCommand principalInvalid = new EconomyPostingCommand(
@@ -290,7 +321,7 @@ class EconomyPostingServiceRealTransactionTest {
                     new EconomyPostingLine(userAvailable(), 1),
                     new EconomyPostingLine(issuance(), -1)), null);
             EconomyPostingException principalFailure = assertThrows(EconomyPostingException.class,
-                    () -> service.post(principalInvalid), invalid);
+                    () -> treasury.issue(principalInvalid), invalid);
             assertEquals(EconomyPostingException.Reason.INVALID_COMMAND, principalFailure.reason());
 
             EconomyAccountKey invalidOwner = new EconomyAccountKey(
@@ -301,7 +332,7 @@ class EconomyPostingServiceRealTransactionTest {
                     new EconomyPostingLine(invalidOwner, 1),
                     new EconomyPostingLine(issuance(), -1)), null);
             EconomyPostingException ownerFailure = assertThrows(EconomyPostingException.class,
-                    () -> service.post(ownerInvalid), invalid);
+                    () -> treasury.issue(ownerInvalid), invalid);
             assertEquals(EconomyPostingException.Reason.INVALID_COMMAND, ownerFailure.reason());
         }
         verify(mapper, never()).insertTransaction(any());
@@ -330,13 +361,13 @@ class EconomyPostingServiceRealTransactionTest {
                 EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
         String key = "00000000-0000-0000-0000-000000000012";
         EconomyPostingCommand original = issueCommand(key, HASH_ONE, 100);
-        EconomyPostingResult first = service.post(original);
+        EconomyPostingResult first = treasury.issue(original);
 
         EconomyPostingException conflict = assertThrows(EconomyPostingException.class,
-                () -> service.post(issueCommand(key, HASH_TWO, 100)));
+                () -> treasury.issue(issueCommand(key, HASH_TWO, 100)));
 
         assertEquals(EconomyPostingException.Reason.IDEMPOTENCY_CONFLICT, conflict.reason());
-        assertEquals(first, service.post(original));
+        assertEquals(first, treasury.issue(original));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_entry", Integer.class));
         assertEquals(100L, balance("acct-user"));
@@ -354,8 +385,8 @@ class EconomyPostingServiceRealTransactionTest {
                 EconomyAccountPurpose.SILVER_ISSUANCE, 0, true);
         String key = "00000000-0000-0000-0000-000000000013";
 
-        service.post(issueCommand(new EconomyScope(TENANT, CLIENT), key, HASH_ONE, 100));
-        service.post(issueCommand(new EconomyScope(LOWER_TENANT, LOWER_CLIENT), key, HASH_ONE, 70));
+        treasury.issue(issueCommand(new EconomyScope(TENANT, CLIENT), key, HASH_ONE, 100));
+        treasury.issue(issueCommand(new EconomyScope(LOWER_TENANT, LOWER_CLIENT), key, HASH_ONE, 70));
 
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
         assertEquals(100L, balance(TENANT, CLIENT, "acct-user"));

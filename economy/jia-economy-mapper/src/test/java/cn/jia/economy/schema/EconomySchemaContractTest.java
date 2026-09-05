@@ -27,7 +27,7 @@ class EconomySchemaContractTest {
     }
 
     @Test
-    void schemaContainsExactFiveTablesSafetyConstraintsAndImmutableGuards() throws Exception {
+    void schemaContainsExactFiveTablesAndNonDestructiveBootstrapConstraints() throws Exception {
         String sql = Files.readString(Path.of("src/main/resources/db/schema.sql"), StandardCharsets.UTF_8);
         String normalized = sql.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
         for (String table : List.of("economy_account", "economy_transaction", "economy_entry",
@@ -38,17 +38,13 @@ class EconomySchemaContractTest {
         assertTrue(normalized.contains("request_hash binary(32) not null"));
         assertTrue(normalized.contains("signed_amount_micro bigint not null"));
         assertTrue(normalized.contains("captured_micro <= gross_micro - refunded_micro"));
-        assertTrue(normalized.contains("owner_type <> 'user' or purpose <> 'available' or allow_negative = 0"));
+        assertTrue(normalized.contains("owner_type = 'system'"));
+        assertTrue(normalized.contains("purpose in ('silver_issuance','provider_variance')"));
         assertTrue(normalized.contains("unique key uk_economy_transaction_idempotency (tenant_id, client_id, principal_type, principal_id, idempotency_key)"));
         assertTrue(normalized.contains("unique key uk_economy_escrow_business (tenant_id, client_id, business_type, business_id)"));
-        for (String trigger : List.of(
-                "trg_economy_transaction_posted_no_update",
-                "trg_economy_transaction_posted_no_delete",
-                "trg_economy_entry_no_update", "trg_economy_entry_no_delete",
-                "trg_economy_funding_lot_no_update", "trg_economy_funding_lot_no_delete")) {
-            assertEquals(2, occurrences(normalized, trigger), trigger + " drop/create parity");
-        }
-        assertEquals(6, occurrences(normalized, "signal sqlstate '45000'"));
+        assertFalse(normalized.contains("drop trigger"));
+        assertFalse(normalized.contains("create trigger"));
+        assertEquals(0, occurrences(normalized, "signal sqlstate '45000'"));
         assertFalse(normalized.contains("then null"));
         assertFalse(normalized.contains("set new.status"));
         assertFalse(normalized.contains("decimal("));

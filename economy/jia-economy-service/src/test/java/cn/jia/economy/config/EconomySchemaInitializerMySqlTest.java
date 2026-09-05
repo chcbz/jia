@@ -10,6 +10,11 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -93,17 +98,51 @@ class EconomySchemaInitializerMySqlTest {
     }
 
     @Test
-    void userAvailableSchemaInvariantRejectsNegativePermissionAndNegativeBalance() {
+    void negativePermissionIsLimitedToApprovedSystemContraAndVarianceAccounts() {
         JdbcTemplate jdbc = fixture.newDatabase("nonnegative").jdbc();
         new EconomySchemaInitializer(jdbc).afterPropertiesSet();
 
         assertThrows(RuntimeException.class, () -> insertAccount(jdbc, "acct-user-allow", 0, 1));
         assertThrows(RuntimeException.class, () -> insertAccount(jdbc, "acct-user-negative", -1, 0));
+        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-task", "TASK", "task-1", "ESCROW", 0, 1));
+        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-order", "ORDER", "order-1", "ESCROW", 0, 1));
+        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-agent", "AGENT", "agent-1", "EARNINGS", 0, 1));
+        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-system-other", "SYSTEM", "system", "MODEL_COST", 0, 1));
+        assertThrows(RuntimeException.class, () -> insertTypedAccount(jdbc, "acct-system-balance", "SYSTEM", "system",
+                "SILVER_ISSUANCE", -1, 0));
+        insertTypedAccount(jdbc, "acct-issuance", "SYSTEM", "silver", "SILVER_ISSUANCE", -1, 1);
+        insertTypedAccount(jdbc, "acct-variance", "SYSTEM", "variance", "PROVIDER_VARIANCE", -1, 1);
         insertAccount(jdbc, "acct-user-zero", 0, 0);
 
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account", Integer.class));
-        assertEquals(0L, jdbc.queryForObject(
-                "SELECT balance_micro FROM economy_account WHERE account_id='acct-user-zero'", Long.class));
+        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account", Integer.class));
+    }
+
+    @Test
+    void concurrentInitializersSerializeMissingTriggerCreationAndValidateExactCatalog() throws Exception {
+        EconomyMySqlTestFixture.Database database = fixture.newDatabase("trigger-race");
+        JdbcTemplate first = database.jdbc();
+        executeSql(first, readResource("db/economy-v0-foundation.sql"));
+        JdbcTemplate second = new JdbcTemplate(database.dataSource());
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Void> one = executor.submit(() -> initializeAtBarrier(first, ready, start));
+            Future<Void> two = executor.submit(() -> initializeAtBarrier(second, ready, start));
+            assertTrue(ready.await(10, TimeUnit.SECONDS), "initializers did not reach barrier");
+            start.countDown();
+            one.get(30, TimeUnit.SECONDS);
+            two.get(30, TimeUnit.SECONDS);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "initializer workers did not terminate");
+        }
+        new EconomySchemaInitializer(first).afterPropertiesSet();
+        assertEquals(6, first.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE() AND trigger_name LIKE 'trg_economy_%'
+                """, Integer.class));
     }
 
     @Test
@@ -162,14 +201,27 @@ class EconomySchemaInitializerMySqlTest {
                 """, Long.class));
     }
 
+    private Void initializeAtBarrier(
+            JdbcTemplate jdbc, CountDownLatch ready, CountDownLatch start) throws InterruptedException {
+        ready.countDown();
+        if (!start.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("initializer start was not released");
+        new EconomySchemaInitializer(jdbc).afterPropertiesSet();
+        return null;
+    }
+
     private void insertAccount(JdbcTemplate jdbc, String accountId, long balance, int allowNegative) {
+        insertTypedAccount(jdbc, accountId, "USER", "user-1", "AVAILABLE", balance, allowNegative);
+    }
+
+    private void insertTypedAccount(
+            JdbcTemplate jdbc, String accountId, String ownerType, String ownerId, String purpose,
+            long balance, int allowNegative) {
         jdbc.update("""
                 INSERT INTO economy_account(
                     account_id,owner_type,owner_id,purpose,currency,balance_micro,
                     allow_negative,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES(?, 'USER','user-1','AVAILABLE','SILVER',?,?,'ACTIVE',0,
-                       'Tenant-A','Client-A',1,1)
-                """, accountId, balance, allowNegative);
+                VALUES(?,?,?,?, 'SILVER',?,?,'ACTIVE',0,'Tenant-A','Client-A',1,1)
+                """, accountId, ownerType, ownerId, purpose, balance, allowNegative);
     }
 
     private void insertPostingTransaction(JdbcTemplate jdbc, String transactionId) {

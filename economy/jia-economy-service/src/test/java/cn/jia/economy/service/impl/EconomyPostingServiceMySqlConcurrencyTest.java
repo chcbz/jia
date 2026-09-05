@@ -18,6 +18,7 @@ import cn.jia.economy.service.EconomyPostingLine;
 import cn.jia.economy.service.EconomyPostingResult;
 import cn.jia.economy.service.EconomyPrincipal;
 import cn.jia.economy.service.EconomyScope;
+import cn.jia.economy.service.EconomyTreasuryPostingService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +29,7 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -57,6 +59,7 @@ class EconomyPostingServiceMySqlConcurrencyTest {
     private final EconomyMySqlTestFixture fixture = new EconomyMySqlTestFixture();
     private JdbcTemplate jdbc;
     private EconomyPostingServiceImpl service;
+    private EconomyTreasuryPostingService treasury;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -86,6 +89,7 @@ class EconomyPostingServiceMySqlConcurrencyTest {
                 () -> "etx-mysql-" + transactionIds.incrementAndGet(),
                 () -> "esc-mysql-" + escrowIds.incrementAndGet(),
                 () -> 1_800_000_000_000L + transactionIds.get());
+        treasury = new EconomyTreasuryPostingServiceImpl(service);
     }
 
     @AfterEach
@@ -102,14 +106,14 @@ class EconomyPostingServiceMySqlConcurrencyTest {
         String key = "10000000-0000-0000-0000-000000000001";
         EconomyPostingCommand command = issueCommand(scope(TENANT, CLIENT), key, HASH_ONE, 100);
 
-        List<Outcome> raced = race(() -> post(command), () -> post(command));
+        List<Outcome> raced = race(() -> postTreasury(command), () -> postTreasury(command));
 
         assertTrue(raced.stream().allMatch(Outcome::succeeded), raced.toString());
         assertEquals(raced.get(0).result(), raced.get(1).result());
-        EconomyPostingResult replay = service.post(command);
+        EconomyPostingResult replay = treasury.issue(command);
         assertEquals(raced.get(0).result(), replay);
         EconomyPostingException conflict = assertThrows(EconomyPostingException.class,
-                () -> service.post(issueCommand(scope(TENANT, CLIENT), key, HASH_TWO, 100)));
+                () -> treasury.issue(issueCommand(scope(TENANT, CLIENT), key, HASH_TWO, 100)));
         assertEquals(EconomyPostingException.Reason.IDEMPOTENCY_CONFLICT, conflict.reason());
         assertEquals(1, count("economy_transaction"));
         assertEquals(2, count("economy_entry"));
@@ -151,6 +155,53 @@ class EconomyPostingServiceMySqlConcurrencyTest {
     }
 
     @Test
+    void oneHundredConcurrentDebitsConserveLedgerBalancesAndEscrowWithoutOverdraft() throws Exception {
+        EconomyAccountKey payer = userAvailable();
+        insertAccount(TENANT, CLIENT, "acct-user", payer.ownerType(), payer.ownerId(), payer.purpose(),
+                60, false);
+        List<EconomyPostingCommand> commands = new ArrayList<>();
+        for (int index = 0; index < 100; index++) {
+            String taskId = "task-" + index;
+            EconomyAccountKey held = taskEscrow(taskId);
+            insertAccount(TENANT, CLIENT, "acct-escrow-" + index, held.ownerType(), held.ownerId(),
+                    held.purpose(), 0, false);
+            commands.add(reserveCommand(
+                    String.format("20000000-0000-0000-0000-%012d", index + 1),
+                    hash(index + 10), 1, null, taskId));
+        }
+
+        List<Outcome> outcomes = raceAll(commands.stream().<Callable<Outcome>>map(
+                command -> () -> post(command)).toList());
+        long successes = outcomes.stream().filter(Outcome::succeeded).count();
+        long insufficient = outcomes.stream().filter(outcome -> !outcome.succeeded()
+                && outcome.reason() == EconomyPostingException.Reason.INSUFFICIENT_FUNDS).count();
+        assertEquals(60, successes, outcomes.toString());
+        assertEquals(40, insufficient, outcomes.toString());
+        assertEquals(100, outcomes.size());
+        assertEquals(0L, balance(TENANT, CLIENT, "acct-user"));
+        assertEquals(60L, jdbc.queryForObject("SELECT version FROM economy_account WHERE account_id='acct-user'",
+                Long.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT MIN(balance_micro) FROM economy_account", Long.class));
+        assertEquals(60, count("economy_transaction"));
+        assertEquals(120, count("economy_entry"));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
+        assertEquals(-60L, jdbc.queryForObject("""
+                SELECT SUM(signed_amount_micro) FROM economy_entry e
+                JOIN economy_account a ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id
+                    AND a.account_id=e.account_id
+                WHERE a.owner_type='USER' AND a.purpose='AVAILABLE'
+                """, Long.class));
+        assertEquals(60L, jdbc.queryForObject("SELECT SUM(balance_micro) FROM economy_account "
+                + "WHERE owner_type='TASK' AND purpose='ESCROW'", Long.class));
+        assertEquals(60L, jdbc.queryForObject("SELECT SUM(version) FROM economy_account "
+                + "WHERE owner_type='TASK' AND purpose='ESCROW'", Long.class));
+        assertEquals(60, count("economy_escrow"));
+        assertEquals(60, count("economy_escrow_funding_lot"));
+        assertEquals(60L, jdbc.queryForObject("SELECT SUM(gross_micro) FROM economy_escrow", Long.class));
+        assertEquals(60L, jdbc.queryForObject("SELECT SUM(amount_micro) FROM economy_escrow_funding_lot", Long.class));
+    }
+
+    @Test
     void binaryScopeKeepsTenantAndClientCaseLookalikesIndependent() {
         for (EconomyScope scope : List.of(scope(TENANT, CLIENT), scope(LOWER_TENANT, LOWER_CLIENT))) {
             insertAccount(scope.tenantId(), scope.clientId(), "acct-user",
@@ -160,8 +211,8 @@ class EconomyPostingServiceMySqlConcurrencyTest {
         }
         String key = "10000000-0000-0000-0000-000000000006";
 
-        service.post(issueCommand(scope(TENANT, CLIENT), key, HASH_ONE, 100));
-        service.post(issueCommand(scope(LOWER_TENANT, LOWER_CLIENT), key, HASH_ONE, 70));
+        treasury.issue(issueCommand(scope(TENANT, CLIENT), key, HASH_ONE, 100));
+        treasury.issue(issueCommand(scope(LOWER_TENANT, LOWER_CLIENT), key, HASH_ONE, 70));
 
         assertEquals(2, count("economy_transaction"));
         assertEquals(100L, balance(TENANT, CLIENT, "acct-user"));
@@ -194,6 +245,14 @@ class EconomyPostingServiceMySqlConcurrencyTest {
         }
     }
 
+    private Outcome postTreasury(EconomyPostingCommand command) {
+        try {
+            return new Outcome(treasury.issue(command), null);
+        } catch (EconomyPostingException failure) {
+            return new Outcome(null, failure.reason());
+        }
+    }
+
     private Outcome post(EconomyPostingCommand command) {
         try {
             return new Outcome(service.post(command), null);
@@ -216,6 +275,25 @@ class EconomyPostingServiceMySqlConcurrencyTest {
             start.countDown();
             executor.shutdownNow();
             assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "race workers did not terminate");
+        }
+    }
+
+    private List<Outcome> raceAll(List<Callable<Outcome>> operations) throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(operations.size());
+        CountDownLatch ready = new CountDownLatch(operations.size());
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Outcome>> futures = new ArrayList<>();
+            for (Callable<Outcome> operation : operations) futures.add(executor.submit(awaitStart(ready, start, operation)));
+            assertTrue(ready.await(30, TimeUnit.SECONDS), "workers did not reach race barrier");
+            start.countDown();
+            List<Outcome> outcomes = new ArrayList<>();
+            for (Future<Outcome> future : futures) outcomes.add(future.get(60, TimeUnit.SECONDS));
+            return List.copyOf(outcomes);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(30, TimeUnit.SECONDS), "race workers did not terminate");
         }
     }
 
@@ -249,10 +327,15 @@ class EconomyPostingServiceMySqlConcurrencyTest {
 
     private EconomyPostingCommand reserveCommand(
             String key, byte[] hash, long amount, Long expectedVersion) {
+        return reserveCommand(key, hash, amount, expectedVersion, "task-1");
+    }
+
+    private EconomyPostingCommand reserveCommand(
+            String key, byte[] hash, long amount, Long expectedVersion, String taskId) {
         EconomyAccountKey payer = userAvailable();
-        EconomyAccountKey held = taskEscrow();
+        EconomyAccountKey held = taskEscrow(taskId);
         return new EconomyPostingCommand(scope(TENANT, CLIENT), principal(), key, hash,
-                EconomyJournalType.RESERVE_BOUNTY, "task-1", List.of(
+                EconomyJournalType.RESERVE_BOUNTY, taskId, List.of(
                 new EconomyPostingLine(payer, -amount),
                 new EconomyPostingLine(held, amount)),
                 new EconomyEscrowFunding(EconomyEscrowType.BOUNTY, payer, held, amount, expectedVersion));
@@ -277,8 +360,12 @@ class EconomyPostingServiceMySqlConcurrencyTest {
     }
 
     private EconomyAccountKey taskEscrow() {
+        return taskEscrow("task-1");
+    }
+
+    private EconomyAccountKey taskEscrow(String taskId) {
         return new EconomyAccountKey("SILVER", EconomyAccountOwnerType.TASK,
-                "task-1", EconomyAccountPurpose.ESCROW);
+                taskId, EconomyAccountPurpose.ESCROW);
     }
 
     private void insertAccount(String tenantId, String clientId, String accountId,

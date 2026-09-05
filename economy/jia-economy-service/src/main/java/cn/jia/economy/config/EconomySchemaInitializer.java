@@ -8,6 +8,8 @@ import javax.sql.DataSource;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,6 +27,8 @@ public final class EconomySchemaInitializer implements InitializingBean {
             "economy_account", "economy_transaction", "economy_entry",
             "economy_escrow", "economy_escrow_funding_lot");
     private static final String BINARY_COLLATION = "utf8mb4_0900_bin";
+    private static final String TRIGGER_INITIALIZATION_LOCK = "cyf:economy-v0:immutable-triggers";
+    private static final int TRIGGER_INITIALIZATION_LOCK_SECONDS = 10;
     static final List<String> TRIGGER_ORDER = List.of(
             "trg_economy_transaction_posted_no_update",
             "trg_economy_transaction_posted_no_delete",
@@ -199,18 +203,24 @@ public final class EconomySchemaInitializer implements InitializingBean {
     }
 
     private void ensureAndValidateTriggers() {
-        Map<String, TriggerDefinition> expected = expectedTriggers();
-        Map<String, TriggerDefinition> actual = inspectTriggers();
-        for (TriggerDefinition found : actual.values()) {
-            TriggerDefinition required = expected.get(found.name());
-            if (required == null || !triggerMatches(required, found)) {
-                throw new IllegalStateException("ECO-V0 trigger " + found.name() + " is incompatible");
+        withTriggerInitializationLock(() -> {
+            Map<String, TriggerDefinition> expected = expectedTriggers();
+            Map<String, TriggerDefinition> actual = inspectTriggers();
+            for (TriggerDefinition found : actual.values()) {
+                TriggerDefinition required = expected.get(found.name());
+                if (required == null || !triggerMatches(required, found)) {
+                    throw new IllegalStateException("ECO-V0 trigger " + found.name() + " is incompatible");
+                }
             }
-        }
-        for (TriggerDefinition required : expected.values()) {
-            if (!actual.containsKey(required.name())) jdbcTemplate.execute(createTriggerSql(required));
-        }
-        actual = inspectTriggers();
+            for (TriggerDefinition required : expected.values()) {
+                if (!actual.containsKey(required.name())) jdbcTemplate.execute(createTriggerSql(required));
+            }
+            validateExactTriggers(expected);
+        });
+    }
+
+    private void validateExactTriggers(Map<String, TriggerDefinition> expected) {
+        Map<String, TriggerDefinition> actual = inspectTriggers();
         if (actual.size() != expected.size()) {
             throw new IllegalStateException("ECO-V0 requires six exact immutable-row triggers");
         }
@@ -218,6 +228,44 @@ public final class EconomySchemaInitializer implements InitializingBean {
             TriggerDefinition found = actual.get(required.name());
             if (found == null || !triggerMatches(required, found)) {
                 throw new IllegalStateException("ECO-V0 trigger " + required.name() + " is incompatible");
+            }
+        }
+    }
+
+    private void withTriggerInitializationLock(Runnable action) {
+        DataSource dataSource = jdbcTemplate.getDataSource();
+        if (dataSource == null) throw new IllegalStateException("ECO-V0 schema requires a JDBC DataSource");
+        try (Connection connection = dataSource.getConnection()) {
+            if (!acquireAdvisoryLock(connection)) {
+                throw new IllegalStateException("Timed out acquiring ECO-V0 immutable-trigger initialization lock");
+            }
+            try {
+                action.run();
+            } finally {
+                releaseAdvisoryLock(connection);
+            }
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Unable to serialize ECO-V0 immutable-trigger initialization", exception);
+        }
+    }
+
+    private boolean acquireAdvisoryLock(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT GET_LOCK(?, ?)")) {
+            statement.setString(1, TRIGGER_INITIALIZATION_LOCK);
+            statement.setInt(2, TRIGGER_INITIALIZATION_LOCK_SECONDS);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() && result.getInt(1) == 1 && !result.wasNull();
+            }
+        }
+    }
+
+    private void releaseAdvisoryLock(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT RELEASE_LOCK(?)")) {
+            statement.setString(1, TRIGGER_INITIALIZATION_LOCK);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next() || result.getInt(1) != 1 || result.wasNull()) {
+                    throw new IllegalStateException("ECO-V0 immutable-trigger initialization lock was not held");
+                }
             }
         }
     }
@@ -245,30 +293,15 @@ public final class EconomySchemaInitializer implements InitializingBean {
 
     static List<String> tableDdlStatements() {
         List<String> all = allDdlStatements();
-        if (all.size() != TABLES.size() + 12) {
-            throw new IllegalStateException("ECO-V0 DDL must contain five tables and six trigger replacements");
+        if (all.size() != TABLES.size()) {
+            throw new IllegalStateException("ECO-V0 DDL must contain only the five additive tables");
         }
-        List<String> tables = all.subList(0, TABLES.size());
+        List<String> tables = all;
         for (int index = 0; index < tables.size(); index++) {
             String normalized = normalizeSql(tables.get(index));
             if (!normalized.startsWith("create table if not exists " + TABLES.get(index) + " ")
                     || containsDml(normalized)) {
                 throw new IllegalStateException("ECO-V0 DDL contains unsafe or reordered table SQL");
-            }
-        }
-        List<String> expectedTriggerMigration = new ArrayList<>();
-        for (String name : TRIGGER_ORDER) {
-            expectedTriggerMigration.add("DROP TRIGGER IF EXISTS " + name);
-        }
-        for (String name : TRIGGER_ORDER) {
-            expectedTriggerMigration.add(createTriggerSql(expectedTriggers().get(name)));
-        }
-        List<String> actualMigration = all.subList(TABLES.size(), all.size());
-        for (int index = 0; index < actualMigration.size(); index++) {
-            if (!normalizeTriggerSql(actualMigration.get(index))
-                    .equals(normalizeTriggerSql(expectedTriggerMigration.get(index)))) {
-                throw new IllegalStateException("ECO-V0 trigger migration drift at statement "
-                        + (TABLES.size() + index + 1));
             }
         }
         return List.copyOf(tables);
@@ -765,9 +798,10 @@ public final class EconomySchemaInitializer implements InitializingBean {
                 index("uk_economy_account_key", true, "tenant_id", "client_id", "currency", "owner_type", "owner_id", "purpose"),
                 index("idx_economy_account_owner", false, "tenant_id", "client_id", "owner_type", "owner_id", "currency", "purpose")),
                 check("chk_economy_account_currency", "currency = 'SILVER'"),
-                check("chk_economy_account_negative", "allow_negative IN (0,1) "
-                        + "AND (owner_type <> 'USER' OR purpose <> 'AVAILABLE' OR allow_negative = 0) "
-                        + "AND (allow_negative = 1 OR balance_micro >= 0)"),
+                check("chk_economy_account_negative", "allow_negative IN (0,1) AND "
+                        + "((allow_negative = 0 AND balance_micro >= 0) OR "
+                        + "(allow_negative = 1 AND owner_type = 'SYSTEM' "
+                        + "AND purpose IN ('SILVER_ISSUANCE','PROVIDER_VARIANCE')))"),
                 check("chk_economy_account_status", "status IN ('ACTIVE','FROZEN','CLOSED')"),
                 check("chk_economy_account_version", "version >= 0")));
         tables.put("economy_transaction", table("economy_transaction", List.of(

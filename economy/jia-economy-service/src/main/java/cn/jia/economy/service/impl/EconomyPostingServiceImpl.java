@@ -96,7 +96,16 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
 
     @Override
     public EconomyPostingResult post(EconomyPostingCommand command) {
-        ValidatedPosting validated = validate(command);
+        return post(command, false);
+    }
+
+    /** Package-owned path used only by {@link EconomyTreasuryPostingServiceImpl}. */
+    EconomyPostingResult postTreasuryIssue(EconomyPostingCommand command) {
+        return post(command, true);
+    }
+
+    private EconomyPostingResult post(EconomyPostingCommand command, boolean treasuryAuthority) {
+        ValidatedPosting validated = validate(command, treasuryAuthority);
         EconomyPostingResult result = transactions.execute(status -> postInTransaction(validated));
         if (result == null) throw new EconomyPostingException(JOURNAL_CORRUPT, "posting returned no result");
         return result;
@@ -140,8 +149,12 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     "unable to resolve idempotency reservation conflict", duplicate);
         }
 
+        // Frozen order: caller-held funding/allocation state -> sorted economy accounts -> escrow root.
+        // W02 owns no task/order funding root and performs no external I/O; its immutable funding
+        // request is resolved before account locks, while the escrow root remains last.
+        FundingState fundingState = resolveFundingState(posting);
         TreeMap<EconomyAccountKey, LockedAccount> accounts = lockAccounts(posting);
-        EscrowPlan escrow = planEscrow(posting, accounts, transactionId, now);
+        EscrowPlan escrow = planEscrow(posting, fundingState, accounts, transactionId, now);
 
         for (LockedAccount locked : accounts.values()) {
             requireOne(mapper.updateAccountBalance(
@@ -202,10 +215,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 throw new EconomyPostingException(ACCOUNT_NOT_ACTIVE, "economy account is not active");
             }
             long balanceAfter = checkedAdd(account.getBalanceMicro(), line.signedAmountMicro());
-            boolean userAvailable = key.ownerType() == EconomyAccountOwnerType.USER
-                    && key.purpose() == EconomyAccountPurpose.AVAILABLE;
+            boolean negativeCapable = isNegativeCapableSystemAccount(key);
             if (balanceAfter < 0
-                    && (userAvailable || !Integer.valueOf(1).equals(account.getAllowNegative()))) {
+                    && (!negativeCapable || !Integer.valueOf(1).equals(account.getAllowNegative()))) {
                 throw new EconomyPostingException(INSUFFICIENT_FUNDS, "insufficient SILVER balance");
             }
             long versionAfter = checkedAdd(account.getVersion(), 1L);
@@ -214,12 +226,19 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         return locked;
     }
 
+    private FundingState resolveFundingState(ValidatedPosting posting) {
+        EconomyEscrowFunding funding = posting.command().escrowFunding();
+        if (funding == null) return FundingState.none();
+        return new FundingState(funding);
+    }
+
     private EscrowPlan planEscrow(
             ValidatedPosting posting,
+            FundingState fundingState,
             TreeMap<EconomyAccountKey, LockedAccount> accounts,
             String transactionId,
             long now) {
-        EconomyEscrowFunding funding = posting.command().escrowFunding();
+        EconomyEscrowFunding funding = fundingState.funding();
         if (funding == null) return null;
         LockedAccount payer = accounts.get(funding.payerAccount());
         LockedAccount held = accounts.get(funding.escrowAccount());
@@ -368,7 +387,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 transaction.getCurrency(), transaction.getPostedAt(), debit, credit, lines, escrowResult);
     }
 
-    private ValidatedPosting validate(EconomyPostingCommand command) {
+    private ValidatedPosting validate(EconomyPostingCommand command, boolean treasuryAuthority) {
         if (command == null || command.scope() == null || command.principal() == null
                 || command.principal().type() == null || command.journalType() == null) {
             throw new EconomyPostingException(INVALID_COMMAND, "posting command is incomplete");
@@ -415,12 +434,19 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     "journal debits and credits must balance exactly");
         }
         List<EconomyPostingLine> lines = List.copyOf(sorted.values());
-        validateTemplate(command, lines);
+        validateTemplate(command, lines, treasuryAuthority);
         return new ValidatedPosting(command, idempotency, lines, debit, credit);
     }
 
-    private void validateTemplate(EconomyPostingCommand command, List<EconomyPostingLine> lines) {
+    private void validateTemplate(
+            EconomyPostingCommand command,
+            List<EconomyPostingLine> lines,
+            boolean treasuryAuthority) {
         if (command.journalType() == EconomyJournalType.ISSUE_SILVER) {
+            if (!treasuryAuthority) {
+                throw new EconomyPostingException(INVALID_COMMAND,
+                        "ISSUE_SILVER requires the internal treasury authority");
+            }
             if (command.escrowFunding() != null || lines.size() != 2
                     || !matches(lines, EconomyAccountOwnerType.SYSTEM,
                             EconomyAccountPurpose.SILVER_ISSUANCE, true)
@@ -488,17 +514,22 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || !key.purpose().name().equals(account.getPurpose())) {
             throw new EconomyPostingException(JOURNAL_CORRUPT, "locked account identity is inconsistent");
         }
-        if (key.ownerType() == EconomyAccountOwnerType.USER
-                && key.purpose() == EconomyAccountPurpose.AVAILABLE
-                && (!Integer.valueOf(0).equals(account.getAllowNegative())
-                || account.getBalanceMicro() < 0)) {
+        boolean negativeCapable = isNegativeCapableSystemAccount(key);
+        if (Integer.valueOf(1).equals(account.getAllowNegative()) && !negativeCapable) {
             throw new EconomyPostingException(JOURNAL_CORRUPT,
-                    "USER/AVAILABLE account violates the non-negative invariant");
+                    "only approved SYSTEM contra/variance accounts may allow negative balances");
         }
-        if (!Integer.valueOf(1).equals(account.getAllowNegative()) && account.getBalanceMicro() < 0) {
+        if ((!negativeCapable || !Integer.valueOf(1).equals(account.getAllowNegative()))
+                && account.getBalanceMicro() < 0) {
             throw new EconomyPostingException(JOURNAL_CORRUPT,
                     "non-negative economy account contains a negative balance");
         }
+    }
+
+    private boolean isNegativeCapableSystemAccount(EconomyAccountKey key) {
+        return key.ownerType() == EconomyAccountOwnerType.SYSTEM
+                && (key.purpose() == EconomyAccountPurpose.SILVER_ISSUANCE
+                || key.purpose() == EconomyAccountPurpose.PROVIDER_VARIANCE);
     }
 
     private void requireEscrowMatches(
@@ -630,6 +661,12 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             long signedAmount,
             long balanceAfter,
             long versionAfter) {
+    }
+
+    private record FundingState(EconomyEscrowFunding funding) {
+        private static FundingState none() {
+            return new FundingState(null);
+        }
     }
 
     private record EscrowPlan(

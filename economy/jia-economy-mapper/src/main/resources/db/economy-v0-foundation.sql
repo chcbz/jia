@@ -23,8 +23,13 @@ CREATE TABLE IF NOT EXISTS economy_account (
     CONSTRAINT chk_economy_account_currency CHECK (currency = 'SILVER'),
     CONSTRAINT chk_economy_account_negative CHECK (
         allow_negative IN (0,1)
-        AND (owner_type <> 'USER' OR purpose <> 'AVAILABLE' OR allow_negative = 0)
-        AND (allow_negative = 1 OR balance_micro >= 0)
+        AND (
+            (allow_negative = 0 AND balance_micro >= 0)
+            OR
+            (allow_negative = 1
+             AND owner_type = 'SYSTEM'
+             AND purpose IN ('SILVER_ISSUANCE','PROVIDER_VARIANCE'))
+        )
     ),
     CONSTRAINT chk_economy_account_status CHECK (status IN ('ACTIVE','FROZEN','CLOSED')),
     CONSTRAINT chk_economy_account_version CHECK (version >= 0)
@@ -142,60 +147,3 @@ CREATE TABLE IF NOT EXISTS economy_escrow_funding_lot (
     CONSTRAINT chk_economy_funding_version CHECK (escrow_version_after > 0),
     CONSTRAINT chk_economy_funding_currency CHECK (currency = 'SILVER')
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable initial and top-up escrow funding lots';
-
-DROP TRIGGER IF EXISTS trg_economy_transaction_posted_no_update;
-DROP TRIGGER IF EXISTS trg_economy_transaction_posted_no_delete;
-DROP TRIGGER IF EXISTS trg_economy_entry_no_update;
-DROP TRIGGER IF EXISTS trg_economy_entry_no_delete;
-DROP TRIGGER IF EXISTS trg_economy_funding_lot_no_update;
-DROP TRIGGER IF EXISTS trg_economy_funding_lot_no_delete;
-
-CREATE TRIGGER trg_economy_transaction_posted_no_update
-BEFORE UPDATE ON economy_transaction
-FOR EACH ROW
-BEGIN
-    IF OLD.status = 'POSTED' THEN
-        SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'ECO-V0: POSTED economy transactions are immutable';
-    END IF;
-END;
-
-CREATE TRIGGER trg_economy_transaction_posted_no_delete
-BEFORE DELETE ON economy_transaction
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'ECO-V0: economy transaction deletion is forbidden';
-END;
-
-CREATE TRIGGER trg_economy_entry_no_update
-BEFORE UPDATE ON economy_entry
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'ECO-V0: POSTED economy entries are immutable';
-END;
-
-CREATE TRIGGER trg_economy_entry_no_delete
-BEFORE DELETE ON economy_entry
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'ECO-V0: economy entry deletion is forbidden';
-END;
-
-CREATE TRIGGER trg_economy_funding_lot_no_update
-BEFORE UPDATE ON economy_escrow_funding_lot
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'ECO-V0: escrow funding lots are immutable';
-END;
-
-CREATE TRIGGER trg_economy_funding_lot_no_delete
-BEFORE DELETE ON economy_escrow_funding_lot
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'ECO-V0: escrow funding lot deletion is forbidden';
-END;
