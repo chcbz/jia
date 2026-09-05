@@ -119,7 +119,7 @@ class EconomySchemaInitializerMySqlTest {
 
     @Test
     void concurrentInitializersSerializeMissingTriggerCreationAndValidateExactCatalog() throws Exception {
-        EconomyMySqlTestFixture.Database database = fixture.newDatabase("trigger-race");
+        EconomyMySqlTestFixture.Database database = fixture.newDatabase("trigger_race");
         JdbcTemplate first = database.jdbc();
         executeSql(first, readResource("db/economy-v0-foundation.sql"));
         JdbcTemplate second = new JdbcTemplate(database.dataSource());
