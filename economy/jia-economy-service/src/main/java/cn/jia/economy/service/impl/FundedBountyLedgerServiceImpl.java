@@ -35,7 +35,7 @@ import java.util.Objects;
 /** W04-only account provisioning and exact reserve/refund templates. */
 @Service
 @ConditionalOnProperty(prefix = "economy.preview", name = "enabled", havingValue = "true")
-public final class FundedBountyLedgerServiceImpl implements FundedBountyLedgerService {
+public class FundedBountyLedgerServiceImpl implements FundedBountyLedgerService {
     private final EconomyLedgerMapper mapper;
     private final EconomyPostingService postingService;
 

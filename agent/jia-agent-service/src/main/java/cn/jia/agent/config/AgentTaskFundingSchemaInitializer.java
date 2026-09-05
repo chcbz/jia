@@ -3,6 +3,7 @@ package cn.jia.agent.config;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -71,39 +72,16 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
                 throw new IllegalStateException("Invalid funded-task columns for " + expected.name());
             }
 
-            Map<String, IndexSpec> indexes = new TreeMap<>();
-            for (Map<String, Object> row : jdbc.queryForList("""
-                    SELECT index_name,non_unique,column_name,seq_in_index
-                    FROM information_schema.statistics
-                    WHERE table_schema=DATABASE() AND table_name=? ORDER BY index_name,seq_in_index
-                    """, expected.name())) {
-                String name = text(row, "index_name");
-                IndexSpec current = indexes.get(name);
-                boolean unique = number(row, "non_unique").intValue() == 0;
-                if (current == null) current = new IndexSpec(unique, new ArrayList<>());
-                if (current.unique() != unique) throw new IllegalStateException("Inconsistent funded-task index");
-                current.columns().add(text(row, "column_name"));
-                indexes.put(name, current);
-            }
+            Map<String, IndexSpec> indexes = inspectIndexes(expected.name());
             if (!expected.indexes().equals(indexes)) {
-                throw new IllegalStateException("Invalid funded-task indexes for " + expected.name());
+                throw new IllegalStateException("Invalid funded-task indexes for " + expected.name()
+                        + ": " + indexes);
             }
 
-            Map<String, String> checks = new TreeMap<>();
-            for (Map<String, Object> row : jdbc.queryForList("""
-                    SELECT tc.constraint_name,cc.check_clause
-                    FROM information_schema.table_constraints tc
-                    JOIN information_schema.check_constraints cc
-                      ON cc.constraint_schema=tc.constraint_schema
-                     AND cc.constraint_name=tc.constraint_name
-                    WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
-                      AND tc.constraint_type='CHECK'
-                    ORDER BY tc.constraint_name
-                    """, expected.name())) {
-                checks.put(text(row, "constraint_name"), normalizeCheck(text(row, "check_clause")));
-            }
+            Map<String, CheckSpec> checks = inspectChecks(expected.name());
             if (!expected.checks().equals(checks)) {
-                throw new IllegalStateException("Invalid funded-task checks for " + expected.name());
+                throw new IllegalStateException("Invalid funded-task checks for " + expected.name()
+                        + ": " + checks);
             }
 
             Integer foreignKeys = jdbc.queryForObject("""
@@ -114,6 +92,78 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
             if (foreignKeys == null || foreignKeys != 0) {
                 throw new IllegalStateException("Funded-task tables must not use database foreign keys");
             }
+        }
+        rejectUnexpectedTriggers();
+    }
+
+    private Map<String, IndexSpec> inspectIndexes(String table) {
+        Map<String, List<IndexPart>> grouped = new TreeMap<>();
+        jdbc.query("""
+                SELECT index_name,non_unique,seq_in_index,column_name,sub_part,
+                       index_type,is_visible,collation
+                FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name=?
+                ORDER BY index_name,seq_in_index
+                """, (RowCallbackHandler) rs -> {
+            if (rs.getObject("sub_part") != null
+                    || !"BTREE".equalsIgnoreCase(rs.getString("index_type"))
+                    || !"YES".equalsIgnoreCase(rs.getString("is_visible"))
+                    || !"A".equalsIgnoreCase(rs.getString("collation"))) {
+                throw new IllegalStateException("Invalid funded-task index component for " + table);
+            }
+            grouped.computeIfAbsent(rs.getString("index_name"), ignored -> new ArrayList<>())
+                    .add(new IndexPart(rs.getInt("non_unique") == 0,
+                            rs.getInt("seq_in_index"), rs.getString("column_name")));
+        }, table);
+        Map<String, IndexSpec> result = new TreeMap<>();
+        grouped.forEach((name, parts) -> {
+            boolean unique = parts.getFirst().unique();
+            List<String> columns = new ArrayList<>();
+            for (int index = 0; index < parts.size(); index++) {
+                IndexPart part = parts.get(index);
+                if (part.sequence() != index + 1 || part.unique() != unique || part.column() == null) {
+                    throw new IllegalStateException("Invalid funded-task index ordering for " + table);
+                }
+                columns.add(part.column());
+            }
+            result.put(name, new IndexSpec(unique, List.copyOf(columns)));
+        });
+        return result;
+    }
+
+    private Map<String, CheckSpec> inspectChecks(String table) {
+        Map<String, CheckSpec> result = new TreeMap<>();
+        jdbc.query("""
+                SELECT tc.constraint_name,cc.check_clause,tc.enforced
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.constraint_catalog=tc.constraint_catalog
+                 AND cc.constraint_schema=tc.constraint_schema
+                 AND cc.constraint_name=tc.constraint_name
+                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
+                  AND tc.constraint_type='CHECK'
+                ORDER BY tc.constraint_name
+                """, (RowCallbackHandler) rs -> {
+            String name = rs.getString("constraint_name");
+            CheckSpec check = new CheckSpec(normalizeCheck(rs.getString("check_clause")),
+                    "YES".equalsIgnoreCase(rs.getString("enforced")));
+            if (result.put(name, check) != null) {
+                throw new IllegalStateException("Ambiguous funded-task CHECK catalog for " + table);
+            }
+        }, table);
+        return result;
+    }
+
+    private void rejectUnexpectedTriggers() {
+        List<String> triggers = jdbc.queryForList("""
+                SELECT trigger_name FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE()
+                  AND (event_object_table IN ('agent_task_funding_operation','agent_task_funding')
+                       OR trigger_name LIKE 'trg_agent_task_funding%')
+                ORDER BY trigger_name
+                """, String.class);
+        if (!triggers.isEmpty()) {
+            throw new IllegalStateException("Funded-task tables must not have triggers: " + triggers);
         }
     }
 
@@ -215,9 +265,9 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
                 "PRIMARY",true,"id",
                 "uk_task_funding_operation_actor_key",true,"tenant_id,client_id,principal_type,principal_id,idempotency_key",
                 "uk_task_funding_operation_task",true,"tenant_id,client_id,task_id"), Map.of(
-                "chk_task_funding_operation_hash", normalizeCheck("octet_length(request_hash)=32"),
-                "chk_task_funding_operation_key", normalizeCheck("octet_length(idempotency_key)=36"),
-                "chk_task_funding_operation_status", normalizeCheck("(status='POSTING' AND reserve_transaction_id IS NULL AND receipt_task_version IS NULL AND receipt_created_at IS NULL AND receipt_updated_at IS NULL) OR (status='COMPLETED' AND reserve_transaction_id IS NOT NULL AND receipt_task_version=0 AND receipt_created_at>0 AND receipt_updated_at>0)"))));
+                "chk_task_funding_operation_hash", check("octet_length(request_hash)=32"),
+                "chk_task_funding_operation_key", check("octet_length(idempotency_key)=36"),
+                "chk_task_funding_operation_status", check("(status='POSTING' AND reserve_transaction_id IS NULL AND receipt_task_version IS NULL AND receipt_created_at IS NULL AND receipt_updated_at IS NULL) OR (status='COMPLETED' AND reserve_transaction_id IS NOT NULL AND receipt_task_version IS NOT NULL AND receipt_task_version=0 AND receipt_created_at IS NOT NULL AND receipt_created_at>0 AND receipt_updated_at IS NOT NULL AND receipt_updated_at>0)"))));
         tables.put(TABLES.get(1), new TableSpec(TABLES.get(1), List.of(
                 c("id","bigint","NO",null,null,"auto_increment"), c("task_id","varchar(100)","NO",null,COLLATION,""),
                 c("funding_mode","varchar(32)","NO",null,COLLATION,""), c("funding_status","varchar(24)","NO",null,COLLATION,""),
@@ -234,10 +284,10 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
                 "PRIMARY",true,"id", "idx_agent_task_funding_payer",false,"tenant_id,client_id,payer_principal_type,payer_principal_id,funding_status,id",
                 "uk_agent_task_funding_escrow",true,"tenant_id,client_id,escrow_id",
                 "uk_agent_task_funding_task",true,"tenant_id,client_id,task_id"), Map.of(
-                "chk_agent_task_funding_amount", normalizeCheck("gross_bounty_amount_micro>0 AND remaining_micro>=0 AND remaining_micro<=gross_bounty_amount_micro"),
-                "chk_agent_task_funding_mode", normalizeCheck("funding_mode='FUNDED_SINGLE_AGENT'"),
-                "chk_agent_task_funding_policy", normalizeCheck("settlement_policy='GROSS_INCLUSIVE'"),
-                "chk_agent_task_funding_state", normalizeCheck("(funding_status='RESERVING' AND version=0 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NULL AND escrow_version IS NULL AND reserve_transaction_id IS NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='FUNDS_HELD' AND version>=1 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NOT NULL AND escrow_version>0 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='REFUNDED' AND version>=2 AND remaining_micro=0 AND escrow_id IS NOT NULL AND escrow_version>1 AND reserve_transaction_id IS NOT NULL AND octet_length(cancel_idempotency_key)=36 AND octet_length(cancel_request_hash)=32 AND refund_transaction_id IS NOT NULL AND cancel_refunded_micro>0 AND cancel_refunded_micro<=gross_bounty_amount_micro AND cancel_task_version>0 AND refunded_at>0)"))));
+                "chk_agent_task_funding_amount", check("gross_bounty_amount_micro>0 AND remaining_micro>=0 AND remaining_micro<=gross_bounty_amount_micro"),
+                "chk_agent_task_funding_mode", check("funding_mode='FUNDED_SINGLE_AGENT'"),
+                "chk_agent_task_funding_policy", check("settlement_policy='GROSS_INCLUSIVE'"),
+                "chk_agent_task_funding_state", check("(funding_status='RESERVING' AND version=0 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NULL AND escrow_version IS NULL AND reserve_transaction_id IS NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='FUNDS_HELD' AND version>=1 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version>0 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='REFUNDED' AND version>=2 AND remaining_micro=0 AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version>1 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NOT NULL AND octet_length(cancel_idempotency_key)=36 AND cancel_request_hash IS NOT NULL AND octet_length(cancel_request_hash)=32 AND refund_transaction_id IS NOT NULL AND cancel_refunded_micro IS NOT NULL AND cancel_refunded_micro>0 AND cancel_refunded_micro<=gross_bounty_amount_micro AND cancel_task_version IS NOT NULL AND cancel_task_version>0 AND refunded_at IS NOT NULL AND refunded_at>0)"))));
         return Map.copyOf(tables);
     }
 
@@ -263,33 +313,305 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
                 collation == null ? null : collation.toString(), text(row, "extra"));
     }
 
-    private static String normalizeCheck(String clause) {
-        String value = clause == null ? "" : clause.replace("`", "").replace("_utf8mb4", "");
-        StringBuilder result = new StringBuilder(value.length());
-        boolean quoted = false;
-        for (int i = 0; i < value.length(); i++) {
-            char ch = value.charAt(i);
-            if (ch == '\'') quoted = !quoted;
-            if (quoted || !Character.isWhitespace(ch)) result.append(quoted ? ch : Character.toLowerCase(ch));
-        }
-        String normalized = result.toString();
-        while (normalized.startsWith("(") && normalized.endsWith(")") && wrapsWholeExpression(normalized)) {
-            normalized = normalized.substring(1, normalized.length() - 1);
-        }
-        return normalized;
+    static String normalizeCheck(String clause) {
+        String normalized = normalizeEscapedCheckQuotes(clause == null ? "" : clause);
+        normalized = normalizeCheckIdentifiers(normalized);
+        normalized = normalizeCheckSpacing(normalizeBinaryLengthFunction(normalized));
+        return normalizeCheckSpacing(removeRedundantCheckParentheses(normalized));
     }
 
-    private static boolean wrapsWholeExpression(String value) {
+    private static String normalizeCheckIdentifiers(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        boolean pendingSpace = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                if (pendingSpace && !normalized.isEmpty() && normalized.charAt(normalized.length() - 1) != ' ') {
+                    normalized.append(' ');
+                }
+                pendingSpace = false;
+                normalized.append(character);
+                if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                    normalized.append(value.charAt(++index));
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (quoted) {
+                normalized.append(character);
+            } else if (character == '`') {
+                continue;
+            } else if (Character.isWhitespace(character)) {
+                pendingSpace = true;
+            } else {
+                if (pendingSpace && !normalized.isEmpty()
+                        && normalized.charAt(normalized.length() - 1) != ' ') normalized.append(' ');
+                pendingSpace = false;
+                normalized.append(Character.toLowerCase(character));
+            }
+        }
+        return normalized.toString().trim();
+    }
+
+    private static String normalizeEscapedCheckQuotes(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        boolean escapedDelimiter = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (!quoted && character == '\\' && index + 1 < value.length()
+                    && value.charAt(index + 1) == '\'') {
+                normalized.append('\'');
+                quoted = true;
+                escapedDelimiter = true;
+                index++;
+            } else if (quoted && escapedDelimiter && character == '\\'
+                    && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                if (index + 3 < value.length() && value.charAt(index + 2) == '\\'
+                        && value.charAt(index + 3) == '\'') {
+                    normalized.append("''");
+                    index += 3;
+                } else {
+                    normalized.append('\'');
+                    quoted = false;
+                    escapedDelimiter = false;
+                    index++;
+                }
+            } else {
+                normalized.append(character);
+                if (character == '\'') {
+                    if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                        normalized.append(value.charAt(++index));
+                    } else {
+                        quoted = !quoted;
+                        escapedDelimiter = false;
+                    }
+                }
+            }
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeBinaryLengthFunction(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                normalized.append(character);
+                if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                    normalized.append(value.charAt(++index));
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (quoted || !isSqlWordCharacter(character)) {
+                normalized.append(character);
+            } else {
+                int end = index + 1;
+                while (end < value.length() && isSqlWordCharacter(value.charAt(end))) end++;
+                String word = value.substring(index, end);
+                int next = end;
+                while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
+                normalized.append(("length".equals(word) || "octet_length".equals(word))
+                        && next < value.length() && value.charAt(next) == '('
+                        ? "octet_length" : word);
+                index = end - 1;
+            }
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeCheckSpacing(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean pendingSpace = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                appendCheckSpace(normalized, pendingSpace);
+                pendingSpace = false;
+                normalized.append(character);
+                while (++index < value.length()) {
+                    character = value.charAt(index);
+                    normalized.append(character);
+                    if (character == '\'' && index + 1 < value.length()
+                            && value.charAt(index + 1) == '\'') {
+                        normalized.append(value.charAt(++index));
+                    } else if (character == '\'') {
+                        break;
+                    }
+                }
+            } else if (Character.isWhitespace(character)) {
+                pendingSpace = true;
+            } else if (isCharsetIntroducer(value, index)) {
+                index += "_utf8mb4".length() - 1;
+                while (index + 1 < value.length() && Character.isWhitespace(value.charAt(index + 1))) index++;
+            } else if (character == '(') {
+                trimTrailingSpace(normalized);
+                if (requiresSpaceBeforeOpenParenthesis(normalized)) normalized.append(' ');
+                normalized.append(character);
+                pendingSpace = false;
+            } else if (character == ')' || character == ',') {
+                trimTrailingSpace(normalized);
+                normalized.append(character);
+                pendingSpace = false;
+            } else if (isComparisonOperator(character)) {
+                trimTrailingSpace(normalized);
+                normalized.append(character);
+                if (index + 1 < value.length() && isComparisonPair(character, value.charAt(index + 1))) {
+                    normalized.append(value.charAt(++index));
+                }
+                pendingSpace = false;
+            } else {
+                appendCheckSpace(normalized, pendingSpace);
+                pendingSpace = false;
+                if (!normalized.isEmpty() && normalized.charAt(normalized.length() - 1) == ')'
+                        && isSqlWordCharacter(character)) normalized.append(' ');
+                normalized.append(character);
+            }
+        }
+        return normalized.toString().trim();
+    }
+
+    private static void appendCheckSpace(StringBuilder normalized, boolean pendingSpace) {
+        if (!pendingSpace || normalized.isEmpty()) return;
+        char previous = normalized.charAt(normalized.length() - 1);
+        if (previous != '(' && previous != ',' && !isComparisonOperator(previous)) normalized.append(' ');
+    }
+
+    private static void trimTrailingSpace(StringBuilder value) {
+        while (!value.isEmpty() && Character.isWhitespace(value.charAt(value.length() - 1))) {
+            value.setLength(value.length() - 1);
+        }
+    }
+
+    private static boolean requiresSpaceBeforeOpenParenthesis(StringBuilder value) {
+        int end = value.length();
+        int start = end;
+        while (start > 0 && isSqlWordCharacter(value.charAt(start - 1))) start--;
+        if (start == end) return false;
+        String word = value.substring(start, end);
+        return "in".equals(word) || "and".equals(word) || "or".equals(word)
+                || "not".equals(word) || "exists".equals(word);
+    }
+
+    private static boolean isCharsetIntroducer(String value, int index) {
+        String introducer = "_utf8mb4";
+        if (!value.regionMatches(true, index, introducer, 0, introducer.length())
+                || index > 0 && isSqlWordCharacter(value.charAt(index - 1))) return false;
+        int next = index + introducer.length();
+        while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
+        return next < value.length() && value.charAt(next) == '\'';
+    }
+
+    private static boolean isSqlWordCharacter(char character) {
+        return Character.isLetterOrDigit(character) || character == '_';
+    }
+
+    private static boolean isComparisonOperator(char character) {
+        return character == '<' || character == '>' || character == '=' || character == '!';
+    }
+
+    private static boolean isComparisonPair(char first, char second) {
+        return second == '=' && (first == '<' || first == '>' || first == '!')
+                || first == '<' && second == '>';
+    }
+
+    private static String removeRedundantCheckParentheses(String value) {
+        String current = stripOuterParentheses(value);
+        boolean changed;
+        do {
+            changed = false;
+            StringBuilder next = new StringBuilder(current);
+            List<Integer> stack = new ArrayList<>();
+            boolean quoted = false;
+            for (int index = 0; index < current.length(); index++) {
+                char character = current.charAt(index);
+                if (character == '\'') {
+                    if (quoted && index + 1 < current.length() && current.charAt(index + 1) == '\'') {
+                        index++;
+                    } else {
+                        quoted = !quoted;
+                    }
+                } else if (!quoted && character == '(') {
+                    stack.add(index);
+                } else if (!quoted && character == ')' && !stack.isEmpty()) {
+                    int open = stack.removeLast();
+                    if (!isFunctionOrInParenthesis(current, open)
+                            && !containsTopLevelBoolean(current, open + 1, index)) {
+                        next.setCharAt(open, ' ');
+                        next.setCharAt(index, ' ');
+                        changed = true;
+                    }
+                }
+            }
+            current = stripOuterParentheses(normalizeCheckSpacing(next.toString()));
+        } while (changed);
+        return current;
+    }
+
+    private static boolean isFunctionOrInParenthesis(String value, int open) {
+        int cursor = open - 1;
+        while (cursor >= 0 && Character.isWhitespace(value.charAt(cursor))) cursor--;
+        int end = cursor + 1;
+        while (cursor >= 0 && isSqlWordCharacter(value.charAt(cursor))) cursor--;
+        if (end == cursor + 1) return false;
+        String word = value.substring(cursor + 1, end);
+        return "in".equals(word) || "octet_length".equals(word);
+    }
+
+    private static boolean containsTopLevelBoolean(String value, int start, int end) {
         int depth = 0;
         boolean quoted = false;
-        for (int i = 0; i < value.length(); i++) {
-            char ch = value.charAt(i);
-            if (ch == '\'') quoted = !quoted;
-            if (quoted) continue;
-            if (ch == '(') depth++;
-            else if (ch == ')' && --depth == 0 && i != value.length() - 1) return false;
+        for (int index = start; index < end; index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < end && value.charAt(index + 1) == '\'') {
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (!quoted && character == '(') {
+                depth++;
+            } else if (!quoted && character == ')') {
+                depth--;
+            } else if (!quoted && depth == 0 && Character.isLetter(character)) {
+                int wordStart = index;
+                while (index < end && Character.isLetter(value.charAt(index))) index++;
+                String word = value.substring(wordStart, index);
+                if ("and".equals(word) || "or".equals(word)) return true;
+                index--;
+            }
         }
-        return depth == 0;
+        return false;
+    }
+
+    private static String stripOuterParentheses(String value) {
+        String current = value.trim();
+        while (current.startsWith("(") && current.endsWith(")")
+                && matchingParenthesis(current, 0) == current.length() - 1) {
+            current = current.substring(1, current.length() - 1).trim();
+        }
+        return current;
+    }
+
+    private static int matchingParenthesis(String value, int open) {
+        int depth = 0;
+        boolean quoted = false;
+        for (int index = open; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (!quoted && character == '(') {
+                depth++;
+            } else if (!quoted && character == ')' && --depth == 0) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private static Object value(Map<String, Object> row, String key) {
@@ -304,15 +626,15 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
         return value == null ? "" : value.toString();
     }
 
-    private static Number number(Map<String, Object> row, String key) {
-        Object value = value(row, key);
-        if (value instanceof Number number) return number;
-        return Integer.valueOf(value.toString());
+    private static CheckSpec check(String clause) {
+        return new CheckSpec(normalizeCheck(clause), true);
     }
 
     private record TableSpec(String name, List<ColumnSpec> columns,
-            Map<String, IndexSpec> indexes, Map<String, String> checks) { }
+            Map<String, IndexSpec> indexes, Map<String, CheckSpec> checks) { }
     private record ColumnSpec(String name, String type, String nullable,
             String defaultValue, String collation, String extra) { }
     private record IndexSpec(boolean unique, List<String> columns) { }
+    private record IndexPart(boolean unique, int sequence, String column) { }
+    private record CheckSpec(String expression, boolean enforced) { }
 }
