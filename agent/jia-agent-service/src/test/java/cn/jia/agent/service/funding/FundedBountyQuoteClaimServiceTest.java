@@ -299,6 +299,11 @@ class FundedBountyQuoteClaimServiceTest {
         runtime.setAgentId(AGENT);
         runtime.setClientId("client");
         runtime.setOwnerJiacn("tenant");
+        runtime.setTenantId("tenant"); runtime.setBindingId(1L);
+        cn.jia.agent.entity.AgentIdentityRegistryEntity identityRow = new cn.jia.agent.entity.AgentIdentityRegistryEntity();
+        identityRow.setCanonicalAgentId(AGENT); identityRow.setBindingId(1L);
+        identityRow.setTenantId("tenant"); identityRow.setOwnerJiacn("tenant"); identityRow.setClientId("client");
+        when(identity.requireActiveIdentityForBinding("tenant", "client", "tenant", 1L, AGENT)).thenReturn(identityRow);
         runtime.setStatus(AgentConstants.STATUS_ONLINE);
         runtime.setAbilities("[]");
         when(runtimeDao.findByAgentIdForUpdate(AGENT)).thenReturn(runtime);

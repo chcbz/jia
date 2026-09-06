@@ -83,6 +83,10 @@ public final class FundedBountyRequestDigest {
                 request.getAllowQueue() == null ? null : request.getAllowQueue().toString()));
     }
 
+    public static byte[] complete(String taskId, String expectedTaskVersion, String actualComputeMicro) {
+        return digest(fields("funded-bounty-complete-v0", taskId, expectedTaskVersion, actualComputeMicro));
+    }
+
     public static byte[] cancel(String taskId, String expectedTaskVersion) {
         return digest(fields("funded-bounty-cancel-v0", taskId, expectedTaskVersion));
     }

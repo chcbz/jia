@@ -102,6 +102,46 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
                 "(?m)(  CONSTRAINT chk_bounty_claim_state CHECK \\(.*\\))(,?)$", "$1 NOT ENFORCED$2"));
     }
 
+    @Test
+    void fullColumnAndIndexPropertiesDriftFailClosed() {
+        assertCatalogDrift("col_type", 0, ddl -> ddl.replace("worst_compute_micro BIGINT", "worst_compute_micro INT"), "column");
+        assertCatalogDrift("col_null", 0, ddl -> ddl.replace("budget_covered TINYINT(1) NOT NULL", "budget_covered TINYINT(1) NULL"), "column");
+        assertCatalogDrift("col_default", 0, ddl -> ddl.replace("DEFAULT 'OPEN'", "DEFAULT 'CLAIMED'"), "column");
+        assertCatalogDrift("col_collation", 0, ddl -> ddl.replace("agent_id VARCHAR(100) COLLATE utf8mb4_0900_bin", "agent_id VARCHAR(100) COLLATE utf8mb4_0900_ai_ci"), "column");
+        assertCatalogDrift("nonunique", 0, ddl -> ddl.replace("UNIQUE KEY uk_bounty_quote_actor_key", "KEY uk_bounty_quote_actor_key"), "index");
+        assertCatalogDrift("prefix", 1, ddl -> ddl.replace("(tenant_id,client_id,quote_id)", "(tenant_id(10),client_id,quote_id)"), "index");
+        assertCatalogDrift("invisible", 1, ddl -> ddl.replace("(tenant_id,client_id,quote_id),", "(tenant_id,client_id,quote_id) INVISIBLE,"), "index");
+    }
+
+    @Test
+    void everyCheckExpressionAndEnforcementAreValidatedNotJustStateNames() {
+        List<List<String>> checks = List.of(List.of("chk_bounty_quote_hashes", "chk_bounty_quote_amounts",
+                "chk_bounty_quote_state", "chk_bounty_quote_recommendation", "chk_bounty_quote_expiry"),
+                List.of("chk_bounty_claim_hash", "chk_bounty_claim_state"));
+        for (int table = 0; table < checks.size(); table++) {
+            for (String check : checks.get(table)) {
+                assertCatalogDrift("expr_" + table + "_" + checks.get(table).indexOf(check), table, ddl -> ddl.replaceAll(
+                        "(?m)(  CONSTRAINT " + check + " CHECK )\\(.*\\)(,?)$", "$1(1=1)$2"));
+                assertCatalogDrift("off_" + table + "_" + checks.get(table).indexOf(check), table, ddl -> ddl.replaceAll(
+                        "(?m)(  CONSTRAINT " + check + " CHECK \\(.*\\))(,?)$", "$1 NOT ENFORCED$2"));
+            }
+        }
+    }
+
+    @Test
+    void arbitraryBudgetMutatingTriggerIsRejectedAndNotRemoved() {
+        JdbcTemplate jdbc = database("trigger");
+        AgentTaskBountyQuoteSchemaInitializer.tableDdlStatements().forEach(jdbc::execute);
+        jdbc.execute("CREATE TRIGGER unrelated_hook BEFORE INSERT ON agent_task_bounty_quote "
+                + "FOR EACH ROW SET NEW.budget_covered=1");
+        List<String> before = definitions(jdbc);
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new AgentTaskBountyQuoteSchemaInitializer(jdbc).afterPropertiesSet());
+        assertTrue(failure.getMessage().contains("trigger"));
+        assertEquals(before, definitions(jdbc));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()", Integer.class));
+    }
+
     private void assertCheckRejected(JdbcTemplate jdbc, String sql, String constraint) {
         DataAccessException failure = assertThrows(DataAccessException.class, () -> jdbc.update(sql));
         assertTrue(failure.getMostSpecificCause().getMessage().contains(constraint), failure.getMessage());
@@ -133,6 +173,10 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
     }
 
     private void assertCatalogDrift(String label, int tableIndex, UnaryOperator<String> mutation) {
+        assertCatalogDrift(label, tableIndex, mutation, "state CHECK");
+    }
+
+    private void assertCatalogDrift(String label, int tableIndex, UnaryOperator<String> mutation, String reason) {
         JdbcTemplate jdbc = database(label);
         List<String> statements = AgentTaskBountyQuoteSchemaInitializer.tableDdlStatements();
         String drifted = mutation.apply(statements.get(tableIndex));
@@ -143,7 +187,7 @@ class AgentTaskBountyQuoteSchemaInitializerMySqlTest {
         List<String> before = definitions(jdbc);
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> new AgentTaskBountyQuoteSchemaInitializer(jdbc).afterPropertiesSet());
-        assertTrue(failure.getMessage().contains("state CHECK"), failure.getMessage());
+        assertTrue(failure.getMessage().contains(reason), failure.getMessage());
         assertEquals(before, definitions(jdbc), "Catalog drift must fail closed, never auto-repair");
     }
 

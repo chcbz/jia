@@ -28,6 +28,9 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String LOCK = "cyf:agent-v0:task-funding-schema";
 
+    static final String LEGACY_FUNDING_STATE = "(funding_status='RESERVING' AND version=0 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NULL AND escrow_version IS NULL AND reserve_transaction_id IS NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='FUNDS_HELD' AND version>=1 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version>0 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='REFUNDED' AND version>=2 AND remaining_micro=0 AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version>1 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NOT NULL AND octet_length(cancel_idempotency_key)=36 AND cancel_request_hash IS NOT NULL AND octet_length(cancel_request_hash)=32 AND refund_transaction_id IS NOT NULL AND cancel_refunded_micro IS NOT NULL AND cancel_refunded_micro>0 AND cancel_refunded_micro<=gross_bounty_amount_micro AND cancel_task_version IS NOT NULL AND cancel_task_version>0 AND refunded_at IS NOT NULL AND refunded_at>0)";
+    static final String SETTLED_FUNDING_STATE = "(funding_status='SETTLED' AND version>=2 AND remaining_micro=0 AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version>1 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL)";
+
     private final JdbcTemplate jdbc;
 
     public AgentTaskFundingSchemaInitializer(JdbcTemplate jdbc) {
@@ -44,11 +47,21 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
             } else if (!Set.copyOf(present).equals(Set.copyOf(TABLES))) {
                 throw new IllegalStateException("Partial ECO-V0 funded-task schema: " + present);
             }
+            // Explicit W04-R3 -> W06 migration, NOT drift repair. Validate the entire exact
+            // accepted old catalog before atomically replacing its one state CHECK.
+            if (check(LEGACY_FUNDING_STATE).equals(inspectChecks("agent_task_funding").get("chk_agent_task_funding_state"))) {
+                validateCatalog(true);
+                jdbc.execute("ALTER TABLE agent_task_funding DROP CHECK chk_agent_task_funding_state, "
+                        + "ADD CONSTRAINT chk_agent_task_funding_state CHECK ("
+                        + LEGACY_FUNDING_STATE + " OR " + SETTLED_FUNDING_STATE + ")");
+            }
             validateCatalog();
         });
     }
 
-    void validateCatalog() {
+    void validateCatalog() { validateCatalog(false); }
+
+    private void validateCatalog(boolean legacyW04) {
         if (!Set.copyOf(presentTables()).equals(Set.copyOf(TABLES))) {
             throw new IllegalStateException("ECO-V0 funded-task schema must contain exact 2/2 tables");
         }
@@ -79,7 +92,11 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
             }
 
             Map<String, CheckSpec> checks = inspectChecks(expected.name());
-            if (!expected.checks().equals(checks)) {
+            Map<String, CheckSpec> expectedChecks = new TreeMap<>(expected.checks());
+            if (legacyW04 && "agent_task_funding".equals(expected.name())) {
+                expectedChecks.put("chk_agent_task_funding_state", check(LEGACY_FUNDING_STATE));
+            }
+            if (!expectedChecks.equals(checks)) {
                 throw new IllegalStateException("Invalid funded-task checks for " + expected.name()
                         + ": " + checks);
             }
@@ -287,7 +304,7 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
                 "chk_agent_task_funding_amount", check("gross_bounty_amount_micro>0 AND remaining_micro>=0 AND remaining_micro<=gross_bounty_amount_micro"),
                 "chk_agent_task_funding_mode", check("funding_mode='FUNDED_SINGLE_AGENT'"),
                 "chk_agent_task_funding_policy", check("settlement_policy='GROSS_INCLUSIVE'"),
-                "chk_agent_task_funding_state", check("(funding_status='RESERVING' AND version=0 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NULL AND escrow_version IS NULL AND reserve_transaction_id IS NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='FUNDS_HELD' AND version>=1 AND remaining_micro=gross_bounty_amount_micro AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version>0 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL AND cancel_task_version IS NULL AND refunded_at IS NULL) OR (funding_status='REFUNDED' AND version>=2 AND remaining_micro=0 AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version>1 AND reserve_transaction_id IS NOT NULL AND cancel_idempotency_key IS NOT NULL AND octet_length(cancel_idempotency_key)=36 AND cancel_request_hash IS NOT NULL AND octet_length(cancel_request_hash)=32 AND refund_transaction_id IS NOT NULL AND cancel_refunded_micro IS NOT NULL AND cancel_refunded_micro>0 AND cancel_refunded_micro<=gross_bounty_amount_micro AND cancel_task_version IS NOT NULL AND cancel_task_version>0 AND refunded_at IS NOT NULL AND refunded_at>0)"))));
+                "chk_agent_task_funding_state", check(LEGACY_FUNDING_STATE + " OR " + SETTLED_FUNDING_STATE))));
         return Map.copyOf(tables);
     }
 

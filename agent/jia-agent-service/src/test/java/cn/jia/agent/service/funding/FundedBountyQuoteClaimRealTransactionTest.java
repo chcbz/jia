@@ -142,9 +142,16 @@ class FundedBountyQuoteClaimRealTransactionTest {
         AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
                 new AgentRabbitSafetyGate(new AgentRabbitSafetyProperties(null, null, null, null, null, null)),
                 new StaticListableBeanFactory().getBeanProvider(AgentCommandTransportWriter.class));
-        service = new FundedBountyQuoteClaimServiceImpl(template.getMapper(AgentTaskBountyQuoteMapper.class),
-                rootTemplate.getMapper(AgentTaskFundingMapper.class), mutation, identity, runtime, assignment,
-                capture, new FailClosedFundedBountySkillEntitlementLookup(), tm);
+        context.registerBean(AgentTaskBountyQuoteMapper.class, () -> template.getMapper(AgentTaskBountyQuoteMapper.class));
+        context.registerBean(AgentTaskFundingMapper.class, () -> rootTemplate.getMapper(AgentTaskFundingMapper.class));
+        context.registerBean(cn.jia.agent.service.AgentTaskMutationTransaction.class, () -> mutation);
+        context.registerBean(cn.jia.agent.service.AgentIdentityService.class, () -> identity);
+        context.registerBean(cn.jia.agent.dao.AgentRuntimeDao.class, () -> runtime);
+        context.registerBean(AgentLegacyTaskCompatibilityService.class, () -> assignment);
+        context.registerBean(AgentCommandTransportCapture.class, () -> capture);
+        // Use actual production constructor selection and ObjectProvider fallback, not new(service).
+        context.registerBean(FundedBountyQuoteClaimServiceImpl.class);
+        service = context.getBean(FundedBountyQuoteClaimServiceImpl.class);
         seedAgent(1, AGENT_A);
         seedAgent(2, AGENT_B);
         jdbc.update("""
@@ -170,6 +177,52 @@ class FundedBountyQuoteClaimRealTransactionTest {
                 context.close();
             }
         }
+    }
+
+    @Test
+    void productionSpringConstructorCreatesRealQuoteClaimBean() {
+        assertEquals(service, context.getBean(FundedBountyQuoteClaimService.class));
+        assertTrue(quote(AGENT_A, 2).verifiedSkillMatch());
+    }
+
+    @Test
+    void nullStaleAndForeignRuntimeBindingCannotQuoteOrClaimAndLeaveNoRows() {
+        for (Long binding : java.util.Arrays.asList(null, 999L, 2L)) {
+            jdbc.update("UPDATE agent_runtime SET binding_id=? WHERE agent_id=?", binding, AGENT_A);
+            assertEquals("TASK_OR_COUNTERPARTY_NOT_FOUND", assertThrows(FundedBountyException.class,
+                    () -> quote(AGENT_A, 2)).code());
+            assertEquals(0, count("agent_task_bounty_quote"));
+            assertEquals(1, count("agent_task_event"));
+        }
+        jdbc.update("UPDATE agent_runtime SET binding_id=1 WHERE agent_id=?", AGENT_A);
+        AgentTaskQuoteDTO quote = quote(AGENT_A, 2);
+        AgentTaskClaimRequestDTO request = claimRequest(AGENT_A, quote.quoteId());
+        for (Long binding : java.util.Arrays.asList(null, 999L, 2L)) {
+            jdbc.update("UPDATE agent_runtime SET binding_id=? WHERE agent_id=?", binding, AGENT_A);
+            assertEquals("TASK_OR_COUNTERPARTY_NOT_FOUND", assertThrows(FundedBountyException.class, () ->
+                    service.claim(ACTOR, key(3), FundedBountyRequestDigest.claim(taskId, request), taskId, request)).code());
+            assertEquals(0, count("agent_task_bounty_claim_operation"));
+            assertEquals(0, count("agent_task_member")); assertEquals(0, count("agent_task_work_item"));
+            assertEquals(1, count("agent_task_event")); assertEquals(1, broker.wakeups.size());
+            assertEquals("OPEN", jdbc.queryForObject("SELECT status FROM agent_task_bounty_quote", String.class));
+            assertEquals(0L, jdbc.queryForObject("SELECT task_version FROM agent_task_meta", Long.class));
+        }
+        jdbc.update("UPDATE agent_runtime SET binding_id=1 WHERE agent_id=?", AGENT_A);
+        service.claim(ACTOR, key(3), FundedBountyRequestDigest.claim(taskId, request), taskId, request);
+        assertClaimedOnce(AGENT_A);
+    }
+
+    @Test
+    void refundedTaskKeepsOwnedImmutableQuoteReplayButRejectsNewQuote() {
+        AgentTaskQuoteDTO before = quote(AGENT_A, 2);
+        foundation.funding().cancel(ACTOR, key(3), FundedBountyRequestDigest.cancel(taskId, "0"), taskId, 0);
+        assertEquals(before, quote(AGENT_A, 2));
+        assertThrows(FundedBountyException.class, () -> quote(AGENT_A, 4));
+        AgentTaskQuoteRequestDTO request = quoteRequest(AGENT_A);
+        assertThrows(FundedBountyException.class, () -> service.quote(new FundedBountyActor(TENANT, CLIENT, "other"),
+                key(2), FundedBountyRequestDigest.quote(taskId, request), taskId, request));
+        assertEquals(1, count("agent_task_bounty_quote"));
+        assertEquals(2, count("economy_transaction"));
     }
 
     @Test
