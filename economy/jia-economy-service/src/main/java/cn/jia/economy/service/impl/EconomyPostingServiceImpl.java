@@ -62,7 +62,8 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             EconomyJournalType.RESERVE_SKILL,
             EconomyJournalType.RESERVE_HOSTING_RENT,
             EconomyJournalType.CAPTURE_HOSTING_RENT,
-            EconomyJournalType.REFUND_HOSTING_RENT);
+            EconomyJournalType.REFUND_HOSTING_RENT,
+            EconomyJournalType.REFUND_BOUNTY);
 
     private final EconomyLedgerMapper mapper;
     private final EconomyPreviewGate gate;
@@ -354,7 +355,8 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || !posting.command().businessId().equals(current.getBusinessId())
                 || !accounts.get(settlement.escrowAccount()).entity().getAccountId()
                         .equals(current.getEscrowAccountId())
-                || (posting.command().journalType() == EconomyJournalType.REFUND_HOSTING_RENT
+                || ((posting.command().journalType() == EconomyJournalType.REFUND_HOSTING_RENT
+                    || posting.command().journalType() == EconomyJournalType.REFUND_BOUNTY)
                     && !accounts.get(settlement.destinationAccount()).entity().getAccountId()
                             .equals(current.getPayerAccountId()))
                 || !"ACTIVE".equals(current.getStatus())
@@ -523,8 +525,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             return;
         }
         if (command.journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT
-                || command.journalType() == EconomyJournalType.REFUND_HOSTING_RENT) {
-            validateHostingSettlementTemplate(command, lines);
+                || command.journalType() == EconomyJournalType.REFUND_HOSTING_RENT
+                || command.journalType() == EconomyJournalType.REFUND_BOUNTY) {
+            validateSettlementTemplate(command, lines);
             return;
         }
         EconomyEscrowFunding funding = command.escrowFunding();
@@ -564,14 +567,13 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
     }
 
 
-    private void validateHostingSettlementTemplate(
+    private void validateSettlementTemplate(
             EconomyPostingCommand command, List<EconomyPostingLine> lines) {
         EconomyEscrowSettlement settlement = command.escrowSettlement();
         if (command.escrowFunding() != null || settlement == null || lines.size() != 2
-                || settlement.escrowType() != EconomyEscrowType.HOSTING_RENT
                 || settlement.escrowAccount() == null || settlement.destinationAccount() == null
                 || settlement.amountMicro() <= 0 || settlement.expectedEscrowVersion() <= 0) {
-            throw new EconomyPostingException(INVALID_COMMAND, "hosting-rent settlement data is incomplete");
+            throw new EconomyPostingException(INVALID_COMMAND, "escrow settlement data is incomplete");
         }
         requireExact(settlement.reserveTransactionId(), "reserveTransactionId", 100);
         validateAccountKey(settlement.escrowAccount());
@@ -579,6 +581,11 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         Map<EconomyAccountKey, Long> amounts = new HashMap<>();
         lines.forEach(line -> amounts.put(line.account(), line.signedAmountMicro()));
         boolean capture = command.journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT;
+        boolean bountyRefund = command.journalType() == EconomyJournalType.REFUND_BOUNTY;
+        EconomyEscrowType expectedEscrowType = bountyRefund
+                ? EconomyEscrowType.BOUNTY : EconomyEscrowType.HOSTING_RENT;
+        EconomyAccountOwnerType expectedEscrowOwner = bountyRefund
+                ? EconomyAccountOwnerType.TASK : EconomyAccountOwnerType.LEASE;
         boolean destinationMatches = capture
                 ? settlement.destinationAccount().ownerType() == EconomyAccountOwnerType.SYSTEM
                     && settlement.destinationAccount().purpose() == EconomyAccountPurpose.HOSTING_RENT
@@ -588,13 +595,14 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     && settlement.destinationAccount().purpose() == EconomyAccountPurpose.AVAILABLE
                     && exactIdentityEquals(settlement.destinationAccount().ownerId(), command.principal().id());
         if (command.principal().type() != EconomyPrincipalType.USER
-                || settlement.escrowAccount().ownerType() != EconomyAccountOwnerType.LEASE
+                || settlement.escrowType() != expectedEscrowType
+                || settlement.escrowAccount().ownerType() != expectedEscrowOwner
                 || settlement.escrowAccount().purpose() != EconomyAccountPurpose.ESCROW
                 || !settlement.escrowAccount().ownerId().equals(command.businessId())
                 || !destinationMatches
                 || !Long.valueOf(-settlement.amountMicro()).equals(amounts.get(settlement.escrowAccount()))
                 || !Long.valueOf(settlement.amountMicro()).equals(amounts.get(settlement.destinationAccount()))) {
-            throw new EconomyPostingException(INVALID_COMMAND, "hosting-rent settlement template mismatch");
+            throw new EconomyPostingException(INVALID_COMMAND, "escrow settlement template mismatch");
         }
     }
 

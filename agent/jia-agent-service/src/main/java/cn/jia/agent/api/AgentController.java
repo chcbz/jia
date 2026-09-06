@@ -11,6 +11,9 @@ import cn.jia.agent.entity.AgentRosterSearchDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
+import cn.jia.agent.entity.funding.AgentTaskFundingCancelDTO;
+import cn.jia.agent.entity.funding.AgentTaskClaimRequestDTO;
+import cn.jia.agent.entity.funding.AgentTaskQuoteRequestDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
@@ -21,43 +24,52 @@ import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.agent.service.HostingRentAdmissionException;
+import cn.jia.agent.service.funding.FundedBountyActor;
+import cn.jia.agent.service.funding.FundedBountyException;
+import cn.jia.agent.service.funding.FundedBountyRequestDigest;
+import cn.jia.agent.service.funding.FundedBountyQuoteClaimService;
+import cn.jia.agent.service.funding.FundedBountyService;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.security.AllowSensitiveOutput;
 import jakarta.servlet.http.HttpServletRequest;
 import com.github.pagehelper.PageInfo;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.Set;
-import java.nio.charset.StandardCharsets;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.Authentication;
 import cn.jia.agent.hosting.HostingRentApplicationService;
 import cn.jia.agent.hosting.HostingRentApplicationException;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.hosting.HostingRentErrors;
 import cn.jia.economy.hosting.HostingRentException;
 import cn.jia.economy.exception.EconomyPostingException;
+import java.util.Map;
+import java.util.Objects;
 
 @Slf4j
 @RestController
 @RequestMapping("/agent")
-@RequiredArgsConstructor
 public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
@@ -66,6 +78,40 @@ public class AgentController {
     @Autowired
     public void setHostingRent(HostingRentApplicationService hostingRent) {
         this.hostingRent = java.util.Objects.requireNonNull(hostingRent);
+    }
+    private final FundedBountyService fundedBountyService;
+    private final FundedBountyQuoteClaimService fundedBountyQuoteClaimService;
+
+    /** Backward-compatible constructor for existing unfunded controller tests. */
+    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
+        this.agentService = Objects.requireNonNull(agentService, "agentService");
+        this.abilityEvaluationService = Objects.requireNonNull(abilityEvaluationService, "abilityEvaluationService");
+        this.fundedBountyService = null;
+        this.fundedBountyQuoteClaimService = null;
+    }
+
+    @Autowired
+    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
+            ObjectProvider<FundedBountyService> fundedBountyServiceProvider,
+            ObjectProvider<FundedBountyQuoteClaimService> fundedBountyQuoteClaimServiceProvider) {
+        this(agentService, abilityEvaluationService,
+                Objects.requireNonNull(fundedBountyServiceProvider, "fundedBountyServiceProvider").getIfAvailable(),
+                Objects.requireNonNull(fundedBountyQuoteClaimServiceProvider,
+                        "fundedBountyQuoteClaimServiceProvider").getIfAvailable());
+    }
+
+    AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
+            FundedBountyService fundedBountyService) {
+        this(agentService, abilityEvaluationService, fundedBountyService, null);
+    }
+
+    AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
+            FundedBountyService fundedBountyService,
+            FundedBountyQuoteClaimService fundedBountyQuoteClaimService) {
+        this.agentService = Objects.requireNonNull(agentService, "agentService");
+        this.abilityEvaluationService = Objects.requireNonNull(abilityEvaluationService, "abilityEvaluationService");
+        this.fundedBountyService = fundedBountyService;
+        this.fundedBountyQuoteClaimService = fundedBountyQuoteClaimService;
     }
 
     @PostMapping("/register")
@@ -196,13 +242,56 @@ public class AgentController {
     }
 
     @PostMapping("/tasks")
-    public Object createTask(@RequestBody AgentTaskCreateDTO request) {
-        return JsonResult.success(agentService.createTask(request));
+    public Object createTask(@RequestBody AgentTaskCreateDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            Authentication authentication) {
+        if (!hasFundingFields(request)) {
+            return JsonResult.success(agentService.createTask(request));
+        }
+        FundedBountyActor actor = requireMoneyActor(authentication);
+        FundedBountyService service = requireFundedBountyService();
+        return JsonResult.success(service.create(actor, idempotencyKey,
+                FundedBountyRequestDigest.create(request), request));
     }
 
     @GetMapping("/tasks/{taskId}")
     public Object getTask(@PathVariable String taskId) {
         return JsonResult.success(agentService.getTask(taskId));
+    }
+
+    @PostMapping("/tasks/{taskId}/funding/cancel")
+    public Object cancelTaskFunding(@PathVariable String taskId,
+            @RequestBody AgentTaskFundingCancelDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            Authentication authentication) {
+        FundedBountyActor actor = requireMoneyActor(authentication);
+        FundedBountyService service = requireFundedBountyService();
+        String expected = request == null ? null : request.getExpectedTaskVersion();
+        long expectedVersion = parseCanonicalVersion(expected);
+        return JsonResult.success(service.cancel(actor, idempotencyKey,
+                FundedBountyRequestDigest.cancel(taskId, expected), taskId, expectedVersion));
+    }
+
+    @PostMapping("/tasks/{taskId}/quotes")
+    public Object quoteTask(@PathVariable String taskId,
+            @RequestBody AgentTaskQuoteRequestDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            Authentication authentication) {
+        FundedBountyActor actor = requireMoneyActor(authentication);
+        FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
+        return JsonResult.success(service.quote(actor, idempotencyKey,
+                FundedBountyRequestDigest.quote(taskId, request), taskId, request));
+    }
+
+    @PostMapping("/tasks/{taskId}/claim")
+    public Object claimTask(@PathVariable String taskId,
+            @RequestBody AgentTaskClaimRequestDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            Authentication authentication) {
+        FundedBountyActor actor = requireMoneyActor(authentication);
+        FundedBountyQuoteClaimService service = requireFundedBountyQuoteClaimService();
+        return JsonResult.success(service.claim(actor, idempotencyKey,
+                FundedBountyRequestDigest.claim(taskId, request), taskId, request));
     }
 
     @PostMapping("/tasks/{taskId}/assign")
@@ -272,6 +361,18 @@ public class AgentController {
         return JsonResult.success();
     }
 
+    @ExceptionHandler(FundedBountyException.class)
+    public ResponseEntity<JsonResult<Void>> handleFundedBountyException(
+            FundedBountyException exception, HttpServletRequest request) {
+        log.warn("Funded bounty request rejected: uri={}, code={}, retryable={}",
+                request.getRequestURI(), exception.code(), exception.retryable());
+        JsonResult<Void> result = JsonResult.failure(exception.code(), exception.getMessage());
+        result.setStatus(exception.status().value());
+        return ResponseEntity.status(exception.status())
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(result);
+    }
+
     @ExceptionHandler(HostingRentAdmissionException.class)
     public ResponseEntity<JsonResult<Void>> handleHostingRentUnavailable(
             HostingRentAdmissionException e, HttpServletRequest request) {
@@ -307,6 +408,90 @@ public class AgentController {
         JsonResult<Void> result = JsonResult.failure("AGENT_ERROR", e.getMessage());
         result.setStatus(500);
         return result;
+    }
+
+    private FundedBountyService requireFundedBountyService() {
+        if (fundedBountyService == null) {
+            throw new FundedBountyException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "ECONOMY_PREVIEW_DISABLED", "Funded bounty preview is unavailable");
+        }
+        return fundedBountyService;
+    }
+
+    private FundedBountyQuoteClaimService requireFundedBountyQuoteClaimService() {
+        if (fundedBountyQuoteClaimService == null) {
+            throw new FundedBountyException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "ECONOMY_PREVIEW_DISABLED", "Funded bounty quote/claim preview is unavailable");
+        }
+        return fundedBountyQuoteClaimService;
+    }
+
+    private static boolean hasFundingFields(AgentTaskCreateDTO request) {
+        return request != null && (request.getGrossBountyAmountMicro() != null
+                || request.getSettlementPolicy() != null
+                || request.getRequiredSkillRequirements() != null);
+    }
+
+    private static FundedBountyActor requireMoneyActor(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwt)) {
+            throw new FundedBountyException(HttpStatus.UNAUTHORIZED,
+                    "ECONOMY_UNAUTHENTICATED", "Authentication is required");
+        }
+        Map<String, Object> claims = jwt.getToken().getClaims();
+        String subject = requiredMoneyClaim(claims, "sub", 100);
+        if (!exact(authentication.getName(), subject)) {
+            throw new FundedBountyException(HttpStatus.FORBIDDEN,
+                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
+        }
+        return new FundedBountyActor(requiredMoneyClaim(claims, "jiacn", 50),
+                requiredMoneyClaim(claims, "client_id", 50), subject);
+    }
+
+    private static String requiredMoneyClaim(Map<String, Object> claims, String name, int maxBytes) {
+        Object value = claims.get(name);
+        if (!(value instanceof String text) || text.isEmpty() || hasUnpairedSurrogate(text)
+                || text.getBytes(StandardCharsets.UTF_8).length > maxBytes
+                || !text.equals(text.strip())
+                || text.codePoints().anyMatch(Character::isISOControl)) {
+            throw new FundedBountyException(HttpStatus.FORBIDDEN,
+                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
+        }
+        return text;
+    }
+
+    private static boolean exact(String left, String right) {
+        return left != null && right != null && MessageDigest.isEqual(
+                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) return true;
+            } else if (Character.isLowSurrogate(unit)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static long parseCanonicalVersion(String value) {
+        if (value == null || value.isEmpty()
+                || !(value.equals("0") || value.charAt(0) >= '1' && value.charAt(0) <= '9')
+                || value.chars().anyMatch(character -> character < '0' || character > '9')) {
+            throw new FundedBountyException(HttpStatus.BAD_REQUEST,
+                    "BAD_REQUEST", "expectedTaskVersion must be a canonical unsigned decimal string");
+        }
+        try {
+            long parsed = Long.parseLong(value);
+            if (parsed == Long.MAX_VALUE) throw new NumberFormatException();
+            return parsed;
+        } catch (NumberFormatException exception) {
+            throw new FundedBountyException(HttpStatus.BAD_REQUEST,
+                    "BAD_REQUEST", "expectedTaskVersion is outside the supported range");
+        }
     }
 
     private <T> JsonResultPage<T> page(PageInfo<T> pageInfo) {

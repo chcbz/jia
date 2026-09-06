@@ -20,12 +20,15 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.funding.FundedBountyLegacyGuard;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
 import cn.jia.core.util.StringUtil;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -65,6 +68,8 @@ public class AgentLegacyTaskCompatibilityService {
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
+    private volatile FundedBountyLegacyGuard fundedBountyLegacyGuard =
+            FundedBountyLegacyGuard.unconfigured();
 
     @Inject
     public AgentLegacyTaskCompatibilityService(
@@ -109,6 +114,12 @@ public class AgentLegacyTaskCompatibilityService {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
+    @Autowired
+    void configureFundedBountyLegacyGuard(ObjectProvider<FundedBountyLegacyGuard> provider) {
+        this.fundedBountyLegacyGuard = Objects.requireNonNull(provider, "provider")
+                .getIfAvailable(FundedBountyLegacyGuard::failClosed);
+    }
+
     public String resolveAgentId(
             String tenantId, String clientId, String ownerJiacn, String requestedAgentId) {
         requireScope(tenantId, clientId, ownerJiacn);
@@ -151,13 +162,31 @@ public class AgentLegacyTaskCompatibilityService {
     @Transactional(rollbackFor = Exception.class)
     public AssignOutcome assignResolved(String tenantId, String clientId, String taskId,
             List<String> canonicalAgentIds, boolean automatic) {
-        return assignResolved(tenantId, clientId, taskId, canonicalAgentIds, automatic,
-                (task, agentIds) -> { });
+        return assignResolvedInternal(tenantId, clientId, taskId, canonicalAgentIds, automatic,
+                null, (task, agentIds) -> { });
     }
 
     @Transactional(rollbackFor = Exception.class)
     public AssignOutcome assignResolved(String tenantId, String clientId, String taskId,
             List<String> canonicalAgentIds, boolean automatic,
+            AssignmentPrecommitValidator precommitValidator) {
+        return assignResolvedInternal(tenantId, clientId, taskId, canonicalAgentIds,
+                automatic, null, precommitValidator);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public AssignOutcome assignResolvedVersioned(String tenantId, String clientId, String taskId,
+            List<String> canonicalAgentIds, boolean automatic, long expectedTaskVersion,
+            AssignmentPrecommitValidator precommitValidator) {
+        if (expectedTaskVersion < 0 || expectedTaskVersion == Long.MAX_VALUE) {
+            throw invalid("Expected task version is invalid");
+        }
+        return assignResolvedInternal(tenantId, clientId, taskId, canonicalAgentIds,
+                automatic, expectedTaskVersion, precommitValidator);
+    }
+
+    private AssignOutcome assignResolvedInternal(String tenantId, String clientId, String taskId,
+            List<String> canonicalAgentIds, boolean automatic, Long expectedTaskVersion,
             AssignmentPrecommitValidator precommitValidator) {
         requireScope(tenantId, clientId, tenantId);
         requireExactText(taskId, "taskId", 100);
@@ -169,14 +198,15 @@ public class AgentLegacyTaskCompatibilityService {
                 () -> taskMetaDao.reserveOpenTaskRoot(tenantId, clientId, taskId, reservedAt),
                 (task, rootCreated) -> assignResolvedLocked(
                         tenantId, clientId, taskId, agentIds, automatic, reservedAt, task,
-                        precommitValidator));
+                        expectedTaskVersion, precommitValidator));
     }
 
     private AssignOutcome assignResolvedLocked(
             String tenantId, String clientId, String taskId, List<String> agentIds,
             boolean automatic, long changedAt, AgentTaskMetaEntity task,
-            AssignmentPrecommitValidator precommitValidator) {
+            Long expectedTaskVersion, AssignmentPrecommitValidator precommitValidator) {
         validateLockedTask(task, tenantId, clientId, taskId);
+        precommitValidator.beforeIdentityLock(task, agentIds);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, agentIds);
         if (!agentIds.equals(lockedAgentIds)) {
@@ -203,10 +233,22 @@ public class AgentLegacyTaskCompatibilityService {
             return new AssignOutcome(persistedAgentIds, false, null, null);
         }
 
+        if (expectedTaskVersion != null && !expectedTaskVersion.equals(task.getTaskVersion())) {
+            throw invalid("Task version changed before assignment");
+        }
         precommitValidator.validate(task, agentIds);
         String fromStatus = taskStatus.value();
         applyAssignmentMeta(task, agentIds, changedAt);
-        requireSingleMutation(taskMetaDao.updateById(task), "task assignment metadata");
+        if (expectedTaskVersion == null) {
+            requireSingleMutation(taskMetaDao.updateById(task), "task assignment metadata");
+        } else {
+            long resultVersion = expectedTaskVersion + 1;
+            requireSingleMutation(taskMetaDao.updateAssignmentByVersion(
+                    task, expectedTaskVersion, resultVersion, changedAt),
+                    "versioned task assignment metadata");
+            task.setTaskVersion(resultVersion);
+            task.setUpdateTime(changedAt);
+        }
 
         String source = automatic ? ASSIGNMENT_AUTO : ASSIGNMENT_MANUAL;
         for (int index = 0; index < agentIds.size(); index++) {
@@ -246,6 +288,7 @@ public class AgentLegacyTaskCompatibilityService {
             String tenantId, String clientId, String taskId, String agentId,
             AgentTaskStatus reportStatus, String failureReason, AgentTaskMetaEntity task) {
         validateLockedTask(task, tenantId, clientId, taskId);
+        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, List.of(agentId));
         if (!List.of(agentId).equals(lockedAgentIds)) {
@@ -1193,6 +1236,10 @@ public class AgentLegacyTaskCompatibilityService {
 
     @FunctionalInterface
     public interface AssignmentPrecommitValidator {
+        /** Called with the task root locked, before any canonical identity/runtime lock. */
+        default void beforeIdentityLock(AgentTaskMetaEntity task, List<String> agentIds) {
+        }
+
         void validate(AgentTaskMetaEntity task, List<String> agentIds);
     }
 

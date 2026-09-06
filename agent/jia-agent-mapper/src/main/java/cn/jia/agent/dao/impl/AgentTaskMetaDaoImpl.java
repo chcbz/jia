@@ -87,6 +87,22 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public int updateAssignmentByVersion(AgentTaskMetaEntity task, long expectedVersion,
+            long resultVersion, long updateTime) {
+        if (task == null) throw new IllegalArgumentException("task is required");
+        TaskCollaborationDaoSupport.requireScope(task.getTenantId(), task.getClientId());
+        requireExactId(task.getTaskId(), "taskId", 100);
+        TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
+        if (resultVersion != expectedVersion + 1 || updateTime <= 0) {
+            throw new IllegalArgumentException("assignment version transition is invalid");
+        }
+        return baseMapper.updateAssignmentByVersion(task.getTenantId(), task.getClientId(),
+                task.getTaskId(), expectedVersion, resultVersion, task.getAssignedAgentId(),
+                task.getRewardStatus(), task.getAssignedAt(), task.getCollaborationMode(),
+                task.getMaxAgents(), task.getCoordinatorAgentId(), updateTime);
+    }
+
+    @Override
     public int updateStatusByVersion(String tenantId, String clientId, String taskId,
             long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
             String failureReason) {
