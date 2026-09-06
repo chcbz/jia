@@ -31,6 +31,7 @@ public final class HostingRentReconciler {
     private final AgentIdentityService identities;
     private final HostingRentOwnerResolver owners;
     private final ObjectProvider<ManagedHostingProvisioner> providers;
+    private final ManagedHostingCredentials credentials;
     private final TransactionTemplate transactions;
     private final cn.jia.agent.dao.AgentPersonaBindingDao bindings;
     private final boolean schemaEnabled;
@@ -42,10 +43,12 @@ public final class HostingRentReconciler {
     public HostingRentReconciler(AgentHostingRentProperties properties, EconomyPreviewGate preview,
             EconomyHostingRentMapper mapper, HostingRentLedgerService ledger, AgentIdentityService identities,
             HostingRentOwnerResolver owners, ObjectProvider<ManagedHostingProvisioner> providers,
-            PlatformTransactionManager transactionManager, cn.jia.agent.dao.AgentPersonaBindingDao bindings,
+            ManagedHostingCredentials credentials, PlatformTransactionManager transactionManager,
+            cn.jia.agent.dao.AgentPersonaBindingDao bindings,
             @org.springframework.beans.factory.annotation.Value("${economy.hosting-rent.schema-enabled:false}") boolean schemaEnabled) {
         this.properties = properties; this.preview = preview; this.mapper = mapper; this.ledger = ledger;
         this.identities = identities; this.owners = owners; this.providers = providers;
+        this.credentials = credentials;
         this.transactions = new TransactionTemplate(transactionManager);
         this.bindings = bindings; this.schemaEnabled = schemaEnabled;
     }
@@ -211,7 +214,14 @@ public final class HostingRentReconciler {
             // Lock/revalidate the same canonical binding again after external observation, before posting.
             Snapshot checked = snapshot(current);
             if (checked == null || !checked.preparation().equals(snapshot.preparation())) return;
-            if (capture) ledger.capture(command); else ledger.refund(command);
+            if (capture) {
+                ledger.capture(command);
+            } else {
+                // The posting/projections and exact managed-key revocation share this REQUIRED transaction.
+                // A missing, stale, cross-scope or already-disabled association rolls back the refund.
+                ledger.refund(command);
+                credentials.disableForRefund(checked.preparation(), current);
+            }
         });
     }
     private record Snapshot(HostingRentHttp.Actor actor, ManagedHostingProvisioner.Preparation preparation,

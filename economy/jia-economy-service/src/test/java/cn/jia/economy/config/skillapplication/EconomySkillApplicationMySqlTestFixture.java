@@ -3,6 +3,8 @@ package cn.jia.economy.config.skillapplication;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -60,9 +62,10 @@ final class EconomySkillApplicationMySqlTestFixture implements AutoCloseable {
         if (database.length() > 64 || !database.startsWith(databasePrefix + "_")) {
             throw new IllegalStateException("unsafe MySQL fixture database name");
         }
+        // Register ownership before CREATE: a lost/ambiguous CREATE response must still be cleaned up.
+        databases.add(database);
         admin.execute("CREATE DATABASE `" + database
                 + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
-        databases.add(database);
         DriverManagerDataSource source = dataSource(databaseUrl(baseUrl, database));
         return new Database(database, source, new JdbcTemplate(source));
     }
@@ -70,24 +73,48 @@ final class EconomySkillApplicationMySqlTestFixture implements AutoCloseable {
     @Override
     public void close() {
         if (admin == null) return;
-        for (int index = databases.size() - 1; index >= 0; index--) {
+        while (!databases.isEmpty()) {
+            int index = databases.size() - 1;
             String database = databases.get(index);
             if (!database.startsWith(databasePrefix + "_")) {
                 throw new IllegalStateException("refusing to drop an unowned W09 MySQL database");
             }
             admin.execute("DROP DATABASE IF EXISTS `" + database + "`");
+            // Remove only after DROP returned successfully. A failed/unknown DROP remains owned for retry.
+            databases.remove(index);
         }
-        databases.clear();
         admin = null;
     }
 
     private DriverManagerDataSource dataSource(String url) {
         DriverManagerDataSource source = new DriverManagerDataSource();
         source.setDriverClassName("com.mysql.cj.jdbc.Driver");
-        source.setUrl(url);
+        source.setUrl(boundedJdbcUrl(url));
         source.setUsername(username);
         source.setPassword(password);
         return source;
+    }
+
+    static String boundedJdbcUrl(String url) {
+        int query = url.indexOf('?');
+        String prefix = query < 0 ? url : url.substring(0, query);
+        List<String> options = new ArrayList<>();
+        if (query >= 0) {
+            for (String option : url.substring(query + 1).split("&")) {
+                String key = URLDecoder.decode(option.split("=", 2)[0], StandardCharsets.UTF_8);
+                if (!option.isBlank() && !key.equalsIgnoreCase("connectTimeout")
+                        && !key.equalsIgnoreCase("socketTimeout")
+                        && !key.equalsIgnoreCase("autoReconnect")
+                        && !key.equalsIgnoreCase("autoReconnectForPools")) {
+                    options.add(option);
+                }
+            }
+        }
+        options.add("connectTimeout=10000");
+        options.add("socketTimeout=2400000");
+        options.add("autoReconnect=false");
+        options.add("autoReconnectForPools=false");
+        return prefix + "?" + String.join("&", options);
     }
 
     private String databaseUrl(String url, String database) {

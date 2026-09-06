@@ -29,15 +29,17 @@ class ManagedHostingCredentialsTest {
     private final ManagedHostingProvisioner.Preparation p = new ManagedHostingProvisioner.Preparation("Tenant-A", "Client-A", "Tenant-A",
             "agt_0123456789abcdef0123456789abcdef", "hri-original", "hrl-one", "17", 1000);
     private JdbcTemplate jdbc;
+    private DataSourceTransactionManager manager;
     private ManagedHostingCredentials service;
     private OauthApiKeyEntity saved;
     @BeforeEach void setUp() {
         var source = new DriverManagerDataSource("jdbc:h2:mem:managed_key_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
+        manager = new DataSourceTransactionManager(source);
         jdbc = new JdbcTemplate(source);
         jdbc.execute("CREATE TABLE association(id INT PRIMARY KEY,key_ref VARCHAR(100))"); jdbc.update("INSERT INTO association VALUES(1,NULL)");
         jdbc.execute("CREATE TABLE effects(name VARCHAR(100))");
         ObjectProvider<ApiKeyService> provider = mock(ObjectProvider.class); when(provider.getIfAvailable()).thenReturn(keys);
-        service = new ManagedHostingCredentials(provider, rent, owners, identities, bindings, new DataSourceTransactionManager(source));
+        service = new ManagedHostingCredentials(provider, rent, owners, identities, bindings, manager);
         when(rent.selectIntentForUpdate("Tenant-A", "Client-A", p.intentId())).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
             String ref = jdbc.queryForObject("SELECT key_ref FROM association WHERE id=1 FOR UPDATE", String.class);
@@ -83,5 +85,51 @@ class ManagedHostingCredentialsTest {
         service.credential(p); clearInvocations(keys);
         saved.setJiacn("wrong-owner");
         assertThrows(IllegalStateException.class, () -> service.credential(p)); verify(keys, never()).create(any());
+    }
+
+    @Test void failedNoEffectRefundDisablesOnlyTheExactIntentAssociatedManagedKey() {
+        EconomyHostingProvisioningIntentEntity failed = failedIntent();
+        when(keys.disableManagedKey("31", "Tenant-A", "Client-A", "Tenant-A", "hosting:hri-original"))
+                .thenAnswer(call -> {
+                    assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+                    return true;
+                });
+
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(
+                status -> service.disableForRefund(p, failed));
+
+        verify(keys).disableManagedKey("31", "Tenant-A", "Client-A", "Tenant-A", "hosting:hri-original");
+        verify(keys, never()).disableManagedKey(eq("other-key"), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test void missingOrMismatchedAssociationAndCasMissFailClosed() {
+        assertThrows(IllegalStateException.class, () -> service.disableForRefund(p, failedIntent()));
+        verify(keys, never()).disableManagedKey(anyString(), anyString(), anyString(), anyString(), anyString());
+
+        EconomyHostingProvisioningIntentEntity wrongIntent = failedIntent().setIntentId("different-intent");
+        EconomyHostingProvisioningIntentEntity wrongScope = failedIntent().setTenantId("tenant-a");
+        EconomyHostingProvisioningIntentEntity unknown = failedIntent().setStatus("PROVISIONING_UNKNOWN");
+        EconomyHostingProvisioningIntentEntity missingKey = failedIntent().setManagedApiKeyId(null);
+        for (EconomyHostingProvisioningIntentEntity invalid : java.util.List.of(
+                wrongIntent, wrongScope, unknown, missingKey)) {
+            assertThrows(IllegalStateException.class, () ->
+                    new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(
+                            status -> service.disableForRefund(p, invalid)));
+        }
+        verify(keys, never()).disableManagedKey(anyString(), anyString(), anyString(), anyString(), anyString());
+
+        when(keys.disableManagedKey("31", "Tenant-A", "Client-A", "Tenant-A", "hosting:hri-original"))
+                .thenReturn(false);
+        assertThrows(IllegalStateException.class, () ->
+                new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(
+                        status -> service.disableForRefund(p, failedIntent())));
+    }
+
+    private EconomyHostingProvisioningIntentEntity failedIntent() {
+        return new EconomyHostingProvisioningIntentEntity().setId(1L).setManagedApiKeyId("31")
+                .setTenantId("Tenant-A").setClientId("Client-A")
+                .setIntentId(p.intentId()).setLeaseId(p.leaseId()).setAgentId(p.agentId())
+                .setQuotePurpose("INITIAL").setPrincipalType("USER").setPrincipalId("login-sub-not-tenant")
+                .setReservedAt(p.reservedAt()).setStatus("FAILED_NO_EFFECT");
     }
 }

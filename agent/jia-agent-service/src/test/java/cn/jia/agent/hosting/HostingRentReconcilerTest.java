@@ -40,6 +40,7 @@ class HostingRentReconcilerTest {
     private final HostingRentOwnerResolver owners = mock(HostingRentOwnerResolver.class);
     private final AgentPersonaBindingDao bindings = mock(AgentPersonaBindingDao.class);
     private final ManagedHostingProvisioner provider = mock(ManagedHostingProvisioner.class);
+    private final ManagedHostingCredentials credentials = mock(ManagedHostingCredentials.class);
     private EconomyHostingProvisioningIntentEntity intent;
     private EconomyHostingLeaseEntity lease;
     private HostingRentReconciler worker;
@@ -57,10 +58,11 @@ class HostingRentReconcilerTest {
         worker = new HostingRentReconciler(new AgentHostingRentProperties(true, null, null, null),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")))), mapper, ledger, identities,
-                owners, providers, manager, bindings, true);
+                owners, providers, credentials, manager, bindings, true);
         intent = new EconomyHostingProvisioningIntentEntity().setId(1L).setTenantId("Tenant-A").setClientId("Client-A")
                 .setPrincipalType("USER").setPrincipalId("Login-A").setAgentId(AGENT).setPersonaCode("wuyong")
                 .setIntentId("hri-test").setLeaseId("hrl-test").setQuotePurpose("INITIAL")
+                .setManagedApiKeyId("managed-key-31")
                 .setVersion(1L).setStatus("FUNDS_RESERVED").setReservedAt(1800000000000L);
         lease = new EconomyHostingLeaseEntity().setLeaseId("hrl-test").setAgentId(AGENT)
                 .setPrincipalType("USER").setPrincipalId("Login-A").setBindingId("17")
@@ -131,6 +133,7 @@ class HostingRentReconcilerTest {
         verify(ledger, never()).confirmProvisioningSucceeded(any());
         verify(ledger, never()).confirmProvisioningFailedNoEffect(any());
         verify(ledger, never()).capture(any()); verify(ledger, never()).refund(any());
+        verifyNoInteractions(credentials);
     }
 
     @Test
@@ -143,7 +146,58 @@ class HostingRentReconcilerTest {
         verify(ledger).refund(command.capture());
         assertEquals(3L, command.getValue().expectedIntentVersion());
         assertEquals("hri-test", command.getValue().intentId());
+        verify(credentials).disableForRefund(any(), any());
         verify(ledger, never()).markProvisioningUnknown(any()); verify(ledger, never()).capture(any());
+    }
+
+    @Test
+    void keyDisableFailureRollsBackRefundThenRetryCommitsOnceAndTerminalReplayIsNoop() {
+        intent.setStatus("FAILED_NO_EFFECT").setVersion(3L);
+        jdbc.execute("CREATE TABLE refund_effect(id INT PRIMARY KEY,financial_refunds INT,key_status INT,other_key_status INT)");
+        jdbc.update("INSERT INTO refund_effect VALUES(1,0,1,1)");
+        when(ledger.refund(any())).thenAnswer(call -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            jdbc.update("UPDATE refund_effect SET financial_refunds=financial_refunds+1 WHERE id=1");
+            TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            intent.setStatus("REFUNDED").setVersion(4L);
+                            lease.setStatus("REFUNDED");
+                        }
+                    });
+            return null;
+        });
+        doAnswer(call -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            jdbc.update("UPDATE refund_effect SET key_status=0 WHERE id=1");
+            throw new IllegalStateException("fixture key CAS completion error");
+        }).when(credentials).disableForRefund(any(), any());
+
+        assertThrows(IllegalStateException.class, () -> worker.reconcileOne(intent, provider));
+        assertEquals(0, jdbc.queryForObject("SELECT financial_refunds FROM refund_effect", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT key_status FROM refund_effect", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT other_key_status FROM refund_effect", Integer.class));
+        assertEquals("FAILED_NO_EFFECT", intent.getStatus());
+
+        doAnswer(call -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            jdbc.update("UPDATE refund_effect SET key_status=0 WHERE id=1");
+            return null;
+        }).when(credentials).disableForRefund(any(), any());
+        worker.reconcileOne(intent, provider);
+        worker.reconcileOne(intent, provider);
+
+        assertEquals(1, jdbc.queryForObject("SELECT financial_refunds FROM refund_effect", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT key_status FROM refund_effect", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT other_key_status FROM refund_effect", Integer.class));
+        verify(ledger, times(2)).refund(any());
+        verify(credentials, times(2)).disableForRefund(any(), any());
+        org.mockito.InOrder order = inOrder(ledger, credentials);
+        order.verify(ledger).refund(any());
+        order.verify(credentials).disableForRefund(any(), any());
+        order.verify(ledger).refund(any());
+        order.verify(credentials).disableForRefund(any(), any());
     }
 
     @Test

@@ -32,6 +32,7 @@ dependencies {
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')
 	testImplementation project(':agent:jia-agent-mapper')
+	testImplementation project(':oauth:jia-oauth-api')
 	testImplementation libs.spring.ai.starter.mcp.client
 	testImplementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	testImplementation libs.spring.boot.starter.websocket

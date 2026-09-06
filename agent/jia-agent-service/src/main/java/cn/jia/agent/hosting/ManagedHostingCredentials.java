@@ -2,6 +2,7 @@ package cn.jia.agent.hosting;
 
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.mapper.EconomyHostingRentMapper;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
@@ -28,6 +29,7 @@ public final class ManagedHostingCredentials {
         this.bindings = bindings; this.transactions = new TransactionTemplate(manager);
     }
     public boolean available() { return keys.getIfAvailable() != null; }
+
     public String credential(ManagedHostingProvisioner.Preparation p) {
         return transactions.execute(status -> {
             var intent = rent.selectIntentForUpdate(p.tenantId(), p.clientId(), p.intentId());
@@ -57,7 +59,7 @@ public final class ManagedHostingCredentials {
             }
             ApiKeyService service = keys.getIfAvailable();
             if (service == null) throw unavailable();
-            String name = "hosting:" + p.intentId();
+            String name = managedKeyName(p.intentId());
             OauthApiKeyEntity key;
             if (intent.getManagedApiKeyId() == null) {
                 // Key + association reference commit together. Only existing OAuth DB service, never external I/O.
@@ -76,5 +78,33 @@ public final class ManagedHostingCredentials {
             return key.getApiKey();
         });
     }
+
+    void disableForRefund(
+            ManagedHostingProvisioner.Preparation preparation,
+            EconomyHostingProvisioningIntentEntity intent) {
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager
+                .isActualTransactionActive()) throw unavailable();
+        if (preparation == null || intent == null || intent.getId() == null
+                || !"FAILED_NO_EFFECT".equals(intent.getStatus())
+                || !"INITIAL".equals(intent.getQuotePurpose())
+                || !"USER".equals(intent.getPrincipalType())
+                || !preparation.intentId().equals(intent.getIntentId())
+                || !preparation.intentId().equals(preparation.operationId())
+                || !preparation.tenantId().equals(intent.getTenantId())
+                || !preparation.clientId().equals(intent.getClientId())
+                || !preparation.agentId().equals(intent.getAgentId())
+                || !preparation.leaseId().equals(intent.getLeaseId())
+                || !Objects.equals(preparation.reservedAt(), intent.getReservedAt())
+                || intent.getManagedApiKeyId() == null || intent.getManagedApiKeyId().isBlank()
+                || intent.getCaptureTransactionId() != null || intent.getRefundTransactionId() != null
+                || intent.getServiceReadyAt() != null) throw unavailable();
+        ApiKeyService service = keys.getIfAvailable();
+        if (service == null || !service.disableManagedKey(intent.getManagedApiKeyId(),
+                preparation.tenantId(), preparation.clientId(), preparation.ownerJiacn(),
+                managedKeyName(preparation.intentId()))) throw unavailable();
+    }
+
+    private static String managedKeyName(String intentId) { return "hosting:" + intentId; }
+
     private static IllegalStateException unavailable() { return new IllegalStateException("Managed credential/association not ready"); }
 }

@@ -15,4 +15,12 @@ public interface ApiKeyService extends IBaseService<OauthApiKeyEntity> {
      * @return API密钥实体，未找到返回null
      */
     OauthApiKeyEntity findByApiKey(String apiKey);
+
+    /**
+     * Disables one active managed key only when every non-secret association field matches exactly.
+     * Callers that couple revocation to another domain mutation must invoke this inside that same transaction.
+     *
+     * @return {@code true} only when the active row was changed by this CAS
+     */
+    boolean disableManagedKey(String keyId, String tenantId, String clientId, String jiacn, String keyName);
 }
