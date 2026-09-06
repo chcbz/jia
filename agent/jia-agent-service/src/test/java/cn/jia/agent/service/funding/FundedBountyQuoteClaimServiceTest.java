@@ -17,6 +17,7 @@ import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.impl.AgentCommandTransportCapture;
 import cn.jia.agent.service.impl.AgentLegacyTaskCompatibilityService;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -75,6 +77,22 @@ class FundedBountyQuoteClaimServiceTest {
                 fixture.service.quote(ACTOR, key(0), changed, TASK, quoteRequest()));
         assertEquals("IDEMPOTENCY_CONFLICT", failure.code());
         verify(fixture.quoteMapper, never()).insertQuote(any());
+    }
+
+    @Test
+    void quoteInsertIntegrityFailureWithoutCollisionKeepsPublicConflictAndRetainsCause() {
+        Fixture fixture = fixture(new TrackingTransactionManager());
+        DataIntegrityViolationException insertFailure =
+                new DataIntegrityViolationException("diagnostic quote insert failure");
+        when(fixture.quoteMapper.insertQuote(any())).thenThrow(insertFailure);
+
+        FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
+                fixture.service.quote(ACTOR, key(9), HASH, TASK, quoteRequest()));
+
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, failure.status());
+        assertEquals("FUNDED_BOUNTY_CONFLICT", failure.code());
+        assertEquals("Unable to resolve quote idempotency collision", failure.getMessage());
+        assertSame(insertFailure, failure.getCause());
     }
 
     @Test
@@ -275,6 +293,8 @@ class FundedBountyQuoteClaimServiceTest {
         funding.setRequiredSkillRequirements("[]");
         funding.setVersion(1L);
         when(fundingMapper.selectFundingForUpdate("tenant", "client", TASK)).thenReturn(funding);
+        when(identity.lockActiveCanonicalAgentIdsInScope(
+                "tenant", "client", "tenant", List.of(AGENT))).thenReturn(List.of(AGENT));
 
         AgentTaskQuoteEntity quote = new AgentTaskQuoteEntity();
         quote.setQuoteId(QUOTE);

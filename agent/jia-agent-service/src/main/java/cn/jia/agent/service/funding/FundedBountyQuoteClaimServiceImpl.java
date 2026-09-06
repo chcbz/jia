@@ -197,7 +197,11 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         } catch (DataIntegrityViolationException duplicate) {
             AgentTaskQuoteEntity existing = quoteMapper.selectQuoteByActorKeyForUpdate(
                     actor.tenantId(), actor.clientId(), PRINCIPAL_TYPE, actor.userId(), key);
-            if (existing == null) throw conflict("Unable to resolve quote idempotency collision");
+            if (existing == null) {
+                FundedBountyException unresolved = conflict("Unable to resolve quote idempotency collision");
+                unresolved.initCause(duplicate);
+                throw unresolved;
+            }
             return replayQuote(requestHash, root.getTaskId(), existing);
         }
         return quoteDto(quote);

@@ -19,9 +19,11 @@ import cn.jia.oauth.service.ApiKeyService;
 import org.junit.jupiter.api.*;
 import org.mybatis.spring.*;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.*;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.transaction.support.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -258,13 +260,15 @@ class SkillMarketplaceRealTransactionTest {
     private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM "+table,Integer.class); }
     private static String uuid() { return UUID.randomUUID().toString(); }
     private void schema(String resource) throws Exception {
-        String sql=new ClassPathResource(resource).getContentAsString(StandardCharsets.UTF_8).replaceAll("(?m)^--.*$","");
-        for(String statement:sql.split(";")) {
-            if(statement.isBlank()) continue;
-            String h2=statement.replaceAll("(?is)\\)\\s*ENGINE=InnoDB.*$",")")
-                    .replaceAll("(?i)\\s+COLLATE\\s+[a-z0-9_]+","").replaceAll("(?i)\\s+CHARACTER SET\\s+[a-z0-9_]+","");
-            jdbc.execute(h2);
-        }
+        String h2=new ClassPathResource(resource).getContentAsString(StandardCharsets.UTF_8)
+                .replaceAll("(?m)^--.*$","")
+                .replaceAll("(?is)\\)\\s*ENGINE=InnoDB\\s+DEFAULT\\s+CHARSET=utf8mb4"
+                        + "(?:\\s+COLLATE\\s*=\\s*[a-z0-9_]+)?"
+                        + "(?:\\s+COMMENT='(?:''|[^'])*')?\\s*;",");")
+                .replaceAll("(?i)\\s+COLLATE\\s+[a-z0-9_]+","")
+                .replaceAll("(?i)\\s+CHARACTER SET\\s+[a-z0-9_]+","");
+        new ResourceDatabasePopulator(new ByteArrayResource(h2.getBytes(StandardCharsets.UTF_8)))
+                .execute(Objects.requireNonNull(jdbc.getDataSource()));
     }
     @SuppressWarnings("unchecked") static <T> ObjectProvider<T> provider(T value) {
         ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);return p;
