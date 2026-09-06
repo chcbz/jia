@@ -3,14 +3,11 @@ package cn.jia.agent.config;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
-import javax.sql.DataSource;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -28,13 +25,14 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String LOCK = "cyf:agent-v0:bounty-quote-schema";
 
-    // Match the state predicates, not just their names: old nullable CHECKs accept SQL UNKNOWN.
-    private static final Map<String, String> STATE_CHECKS = Map.of(
-            "chk_bounty_quote_state", "(status='OPEN' AND claimed_at IS NULL) OR "
-                    + "(status='CLAIMED' AND claimed_at IS NOT NULL AND claimed_at>0)",
-            "chk_bounty_claim_state", "(status='POSTING' AND receipt_task_version IS NULL AND claimed_at IS NULL) OR "
-                    + "(status='COMPLETED' AND receipt_task_version IS NOT NULL AND receipt_task_version>0 "
-                    + "AND claimed_at IS NOT NULL AND claimed_at>0)");
+    private static final Map<String, String> CHECKS = Map.ofEntries(
+            Map.entry("chk_bounty_quote_hashes", "OCTET_LENGTH(request_hash)=32 AND OCTET_LENGTH(idempotency_key)=36 AND task_input_hash LIKE 'sha256:%' AND skill_set_hash LIKE 'sha256:%'"),
+            Map.entry("chk_bounty_quote_amounts", "task_version>=0 AND estimated_input_tokens>=0 AND estimated_cached_input_tokens>=0 AND estimated_output_tokens>=0 AND estimated_reasoning_tokens>=0 AND estimated_compute_micro>=0 AND worst_compute_micro>=estimated_compute_micro AND platform_fee_micro>=0 AND gross_allocation_micro>0 AND estimated_agent_payout_micro>=0 AND worst_agent_payout_micro>=0 AND minimum_accepted_payout_micro>=0 AND budget_headroom_micro>=0"),
+            Map.entry("chk_bounty_quote_state", "(status='OPEN' AND claimed_at IS NULL) OR (status='CLAIMED' AND claimed_at IS NOT NULL AND claimed_at>0)"),
+            Map.entry("chk_bounty_quote_recommendation", "recommendation IN ('recommended','caution','reject')"),
+            Map.entry("chk_bounty_quote_expiry", "expires_at>create_time"),
+            Map.entry("chk_bounty_claim_hash", "OCTET_LENGTH(request_hash)=32 AND OCTET_LENGTH(idempotency_key)=36"),
+            Map.entry("chk_bounty_claim_state", "(status='POSTING' AND receipt_task_version IS NULL AND claimed_at IS NULL) OR (status='COMPLETED' AND receipt_task_version IS NOT NULL AND receipt_task_version>0 AND claimed_at IS NOT NULL AND claimed_at>0)"));
 
     private final JdbcTemplate jdbc;
 
@@ -44,16 +42,33 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
 
     @Override
     public void afterPropertiesSet() {
-        requireMySql();
-        withLock(() -> {
-            List<String> present = presentTables();
-            if (present.isEmpty()) {
-                tableDdlStatements().forEach(jdbc::execute);
-            } else if (!Set.copyOf(present).equals(Set.copyOf(TABLES))) {
-                throw new IllegalStateException("Partial ECO-V0 bounty quote schema: " + present);
+        jdbc.execute((ConnectionCallback<Void>) connection -> {
+            if (!connection.getMetaData().getDatabaseProductName().toLowerCase(Locale.ROOT).contains("mysql")) {
+                throw new IllegalStateException("Bounty quote schema requires MySQL");
             }
-            validateCatalog();
+            JdbcTemplate locked = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+            if (!Integer.valueOf(1).equals(locked.queryForObject("SELECT GET_LOCK(?,10)", Integer.class, LOCK))) {
+                throw new IllegalStateException("Bounty quote schema lock timeout");
+            }
+            try {
+                new AgentTaskBountyQuoteSchemaInitializer(locked).initializeAndValidate();
+            } finally {
+                if (!Integer.valueOf(1).equals(locked.queryForObject("SELECT RELEASE_LOCK(?)", Integer.class, LOCK))) {
+                    throw new IllegalStateException("Bounty quote schema lock lost");
+                }
+            }
+            return null;
         });
+    }
+
+    private void initializeAndValidate() {
+        List<String> present = presentTables();
+        if (present.isEmpty()) {
+            tableDdlStatements().forEach(jdbc::execute);
+        } else if (!Set.copyOf(present).equals(Set.copyOf(TABLES))) {
+            throw new IllegalStateException("Partial ECO-V0 bounty quote schema: " + present);
+        }
+        validateCatalog();
     }
 
     void validateCatalog() {
@@ -70,20 +85,39 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
                     || !COLLATION.equalsIgnoreCase(text(metadata.getFirst(), "table_collation"))) {
                 throw new IllegalStateException("Invalid bounty quote engine/collation: " + table);
             }
-            List<String> columns = jdbc.queryForList("""
-                    SELECT column_name FROM information_schema.columns
+            List<Map<String, Object>> columnRows = jdbc.queryForList("""
+                    SELECT column_name,column_type,is_nullable,column_default,collation_name,extra
+                    FROM information_schema.columns
                     WHERE table_schema=DATABASE() AND table_name=? ORDER BY ordinal_position
-                    """, String.class, table);
-            if (!spec.columns().equals(columns)) {
+                    """, table);
+            if (!spec.columns().equals(columnRows.stream().map(row -> text(row, "column_name")).toList())) {
                 throw new IllegalStateException("Invalid bounty quote columns: " + table);
+            }
+            Map<String, ColumnSpec> expectedColumns = expectedColumns(table);
+            for (Map<String, Object> row : columnRows) {
+                ColumnSpec actual = new ColumnSpec(text(row, "column_type"), text(row, "is_nullable"),
+                        text(row, "column_default"), text(row, "collation_name"), text(row, "extra"));
+                if (!actual.equals(expectedColumns.get(text(row, "column_name")))) {
+                    throw new IllegalStateException("Invalid bounty quote column properties: " + table + "." + text(row, "column_name"));
+                }
             }
             Map<String, List<String>> indexes = new LinkedHashMap<>();
             for (Map<String, Object> row : jdbc.queryForList("""
-                    SELECT index_name,column_name FROM information_schema.statistics
+                    SELECT index_name,column_name,non_unique,seq_in_index,sub_part,index_type,is_visible,collation
+                    FROM information_schema.statistics
                     WHERE table_schema=DATABASE() AND table_name=? ORDER BY index_name,seq_in_index
                     """, table)) {
-                indexes.computeIfAbsent(text(row, "index_name"), ignored -> new ArrayList<>())
-                        .add(text(row, "column_name"));
+                String name = text(row, "index_name");
+                boolean unique = "PRIMARY".equals(name) || name.startsWith("uk_");
+                List<String> parts = indexes.computeIfAbsent(name, ignored -> new ArrayList<>());
+                if (!(unique ? "0" : "1").equals(text(row, "non_unique"))
+                        || !Integer.toString(parts.size() + 1).equals(text(row, "seq_in_index"))
+                        || text(row, "sub_part") != null || !"BTREE".equals(text(row, "index_type"))
+                        || !"YES".equals(text(row, "is_visible")) || !"A".equals(text(row, "collation"))
+                        || text(row, "column_name") == null) {
+                    throw new IllegalStateException("Invalid bounty quote index properties: " + table + "." + name);
+                }
+                parts.add(text(row, "column_name"));
             }
             if (!spec.indexes().equals(indexes)) {
                 throw new IllegalStateException("Invalid bounty quote indexes: " + table);
@@ -103,8 +137,8 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
                 if (!checks.add(name)) {
                     throw new IllegalStateException("Ambiguous bounty quote CHECK catalog: " + table);
                 }
-                String state = STATE_CHECKS.get(name);
-                if (state != null && (!"YES".equalsIgnoreCase(text(row, "enforced"))
+                String state = CHECKS.get(name);
+                if (state == null || (!"YES".equalsIgnoreCase(text(row, "enforced"))
                         || !AgentTaskFundingSchemaInitializer.normalizeCheck(state).equals(
                                 AgentTaskFundingSchemaInitializer.normalizeCheck(text(row, "check_clause"))))) {
                     throw new IllegalStateException("Invalid bounty quote state CHECK: " + table + "." + name);
@@ -120,6 +154,13 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
                     """, Integer.class, table, table);
             if (foreignKeys == null || foreignKeys != 0) {
                 throw new IllegalStateException("Bounty quote tables must not use database foreign keys");
+            }
+            Integer triggers = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.triggers
+                    WHERE trigger_schema=DATABASE() AND (event_object_table=? OR trigger_name LIKE ?)
+                    """, Integer.class, table, "%" + table + "%");
+            if (!Integer.valueOf(0).equals(triggers)) {
+                throw new IllegalStateException("Unexpected bounty quote trigger: " + table);
             }
         });
     }
@@ -160,52 +201,75 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
                 """, String.class);
     }
 
-    private void requireMySql() {
-        DataSource source = jdbc.getDataSource();
-        if (source == null) throw new IllegalStateException("Bounty quote schema requires DataSource");
-        try (Connection connection = source.getConnection()) {
-            String product = connection.getMetaData().getDatabaseProductName();
-            if (product == null || !product.toLowerCase(Locale.ROOT).contains("mysql")) {
-                throw new IllegalStateException("Bounty quote schema requires MySQL; got " + product);
-            }
-        } catch (SQLException failure) {
-            throw new IllegalStateException("Unable to inspect bounty quote database", failure);
-        }
-    }
-
-    private void withLock(Runnable action) {
-        DataSource source = jdbc.getDataSource();
-        if (source == null) throw new IllegalStateException("Bounty quote schema requires DataSource");
-        try (Connection connection = source.getConnection();
-             PreparedStatement acquire = connection.prepareStatement("SELECT GET_LOCK(?,10)")) {
-            acquire.setString(1, LOCK);
-            try (ResultSet result = acquire.executeQuery()) {
-                if (!result.next() || result.getInt(1) != 1 || result.wasNull()) {
-                    throw new IllegalStateException("Timed out acquiring bounty quote schema lock");
-                }
-            }
-            try {
-                action.run();
-            } finally {
-                try (PreparedStatement release = connection.prepareStatement("SELECT RELEASE_LOCK(?)")) {
-                    release.setString(1, LOCK);
-                    try (ResultSet result = release.executeQuery()) {
-                        if (!result.next() || result.getInt(1) != 1 || result.wasNull()) {
-                            throw new IllegalStateException("Bounty quote schema lock was not held");
-                        }
-                    }
-                }
-            }
-        } catch (SQLException failure) {
-            throw new IllegalStateException("Unable to serialize bounty quote schema initialization", failure);
-        }
-    }
-
     private static String text(Map<String, Object> row, String key) {
         Object value = row.get(key);
         if (value == null) value = row.get(key.toUpperCase(Locale.ROOT));
         return value == null ? null : value.toString();
     }
+
+    private static Map<String, ColumnSpec> expectedColumns(String table) {
+        Map<String, ColumnSpec> result = new LinkedHashMap<>();
+        if (TABLES.get(0).equals(table)) {
+            result.put("id", new ColumnSpec("bigint", "NO", null, null, "auto_increment"));
+            result.put("quote_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("task_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("agent_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("principal_type", new ColumnSpec("varchar(20)", "NO", null, COLLATION, ""));
+            result.put("principal_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("idempotency_key", new ColumnSpec("varbinary(36)", "NO", null, null, ""));
+            result.put("request_hash", new ColumnSpec("binary(32)", "NO", null, null, ""));
+            result.put("task_version", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("price_book_version", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("task_input_hash", new ColumnSpec("varchar(71)", "NO", null, COLLATION, ""));
+            result.put("skill_set_hash", new ColumnSpec("varchar(71)", "NO", null, COLLATION, ""));
+            result.put("model_route_version", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("estimated_input_tokens", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("estimated_cached_input_tokens", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("estimated_output_tokens", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("estimated_reasoning_tokens", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("estimated_compute_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("worst_compute_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("platform_fee_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("gross_allocation_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("estimated_agent_payout_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("worst_agent_payout_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("minimum_accepted_payout_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("budget_headroom_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("verified_skill_match", new ColumnSpec("tinyint(1)", "NO", null, null, ""));
+            result.put("advisory_ability_match", new ColumnSpec("tinyint(1)", "NO", null, null, ""));
+            result.put("budget_covered", new ColumnSpec("tinyint(1)", "NO", null, null, ""));
+            result.put("agent_ready", new ColumnSpec("tinyint(1)", "NO", null, null, ""));
+            result.put("recommendation", new ColumnSpec("varchar(20)", "NO", null, COLLATION, ""));
+            result.put("reason_codes", new ColumnSpec("text", "NO", null, COLLATION, ""));
+            result.put("status", new ColumnSpec("varchar(16)", "NO", "OPEN", COLLATION, ""));
+            result.put("expires_at", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("claimed_at", new ColumnSpec("bigint", "YES", null, null, ""));
+            result.put("tenant_id", new ColumnSpec("varchar(50)", "NO", null, COLLATION, ""));
+            result.put("client_id", new ColumnSpec("varchar(50)", "NO", null, COLLATION, ""));
+            result.put("create_time", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("update_time", new ColumnSpec("bigint", "NO", null, null, ""));
+        }
+        else if (TABLES.get(1).equals(table)) {
+            result.put("id", new ColumnSpec("bigint", "NO", null, null, "auto_increment"));
+            result.put("principal_type", new ColumnSpec("varchar(20)", "NO", null, COLLATION, ""));
+            result.put("principal_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("idempotency_key", new ColumnSpec("varbinary(36)", "NO", null, null, ""));
+            result.put("request_hash", new ColumnSpec("binary(32)", "NO", null, null, ""));
+            result.put("task_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("agent_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("quote_id", new ColumnSpec("varchar(100)", "NO", null, COLLATION, ""));
+            result.put("status", new ColumnSpec("varchar(16)", "NO", "POSTING", COLLATION, ""));
+            result.put("receipt_task_version", new ColumnSpec("bigint", "YES", null, null, ""));
+            result.put("claimed_at", new ColumnSpec("bigint", "YES", null, null, ""));
+            result.put("tenant_id", new ColumnSpec("varchar(50)", "NO", null, COLLATION, ""));
+            result.put("client_id", new ColumnSpec("varchar(50)", "NO", null, COLLATION, ""));
+            result.put("create_time", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("update_time", new ColumnSpec("bigint", "NO", null, null, ""));
+        }
+        return result;
+    }
+
+    private record ColumnSpec(String type, String nullable, String defaultValue, String collation, String extra) { }
 
     private static Map<String, TableSpec> expected() {
         Map<String, TableSpec> result = new LinkedHashMap<>();

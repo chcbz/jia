@@ -393,7 +393,8 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
 
     private void validateFunding(AgentTaskFundingEntity funding) {
         if (funding == null || !MODE.equals(funding.getFundingMode())
-                || !(FUNDS_HELD.equals(funding.getFundingStatus()) || REFUNDED.equals(funding.getFundingStatus()))
+                || !(FUNDS_HELD.equals(funding.getFundingStatus()) || REFUNDED.equals(funding.getFundingStatus())
+                    || "SETTLED".equals(funding.getFundingStatus()))
                 || funding.getGrossBountyAmountMicro() == null || funding.getGrossBountyAmountMicro() <= 0
                 || funding.getRemainingMicro() == null || funding.getRemainingMicro() < 0
                 || funding.getRemainingMicro() > funding.getGrossBountyAmountMicro()

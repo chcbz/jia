@@ -19,4 +19,10 @@ public class AgentTaskFundingSchemaConfiguration {
     public AgentTaskBountyQuoteSchemaInitializer agentTaskBountyQuoteSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new AgentTaskBountyQuoteSchemaInitializer(jdbcTemplate);
     }
+    @Bean
+    @org.springframework.context.annotation.DependsOn("agentTaskFundingSchemaInitializer")
+    @ConditionalOnProperty(prefix = "economy.preview", name = "enabled", havingValue = "true")
+    public AgentTaskSettlementSchemaInitializer agentTaskSettlementSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        return new AgentTaskSettlementSchemaInitializer(jdbcTemplate);
+    }
 }

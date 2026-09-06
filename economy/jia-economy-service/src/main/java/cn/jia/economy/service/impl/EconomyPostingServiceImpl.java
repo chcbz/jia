@@ -63,7 +63,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             EconomyJournalType.RESERVE_HOSTING_RENT,
             EconomyJournalType.CAPTURE_HOSTING_RENT,
             EconomyJournalType.REFUND_HOSTING_RENT,
-            EconomyJournalType.REFUND_BOUNTY);
+            EconomyJournalType.REFUND_BOUNTY,
+            EconomyJournalType.CAPTURE_COMPUTE, EconomyJournalType.CAPTURE_FEE, EconomyJournalType.PAY_AGENT,
+            EconomyJournalType.CAPTURE_SKILL, EconomyJournalType.REFUND_SKILL);
 
     private final EconomyLedgerMapper mapper;
     private final EconomyPreviewGate gate;
@@ -356,10 +358,12 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || !accounts.get(settlement.escrowAccount()).entity().getAccountId()
                         .equals(current.getEscrowAccountId())
                 || ((posting.command().journalType() == EconomyJournalType.REFUND_HOSTING_RENT
-                    || posting.command().journalType() == EconomyJournalType.REFUND_BOUNTY)
+                    || posting.command().journalType() == EconomyJournalType.REFUND_BOUNTY
+                    || posting.command().journalType() == EconomyJournalType.REFUND_SKILL)
                     && !accounts.get(settlement.destinationAccount()).entity().getAccountId()
                             .equals(current.getPayerAccountId()))
-                || !"ACTIVE".equals(current.getStatus())
+                || !("ACTIVE".equals(current.getStatus())
+                    || isBountyCapture(posting.command().journalType()) && "PARTIALLY_CAPTURED".equals(current.getStatus()))
                 || !EconomyConstants.CURRENCY_SILVER.equals(current.getCurrency())) {
             throw new EconomyPostingException(ESCROW_CONFLICT, "escrow settlement root is incompatible");
         }
@@ -374,7 +378,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         if (settlement.amountMicro() > remaining) {
             throw new EconomyPostingException(ESCROW_CONFLICT, "escrow settlement exceeds remaining funds");
         }
-        boolean capture = posting.command().journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT;
+        boolean capture = posting.command().journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT
+                || isBountyCapture(posting.command().journalType())
+                || posting.command().journalType() == EconomyJournalType.CAPTURE_SKILL;
         long capturedAfter = capture
                 ? checkedAdd(current.getCapturedMicro(), settlement.amountMicro())
                 : current.getCapturedMicro();
@@ -526,7 +532,10 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         }
         if (command.journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT
                 || command.journalType() == EconomyJournalType.REFUND_HOSTING_RENT
-                || command.journalType() == EconomyJournalType.REFUND_BOUNTY) {
+                || command.journalType() == EconomyJournalType.REFUND_BOUNTY
+                || isBountyCapture(command.journalType())
+                || command.journalType() == EconomyJournalType.CAPTURE_SKILL
+                || command.journalType() == EconomyJournalType.REFUND_SKILL) {
             validateSettlementTemplate(command, lines);
             return;
         }
@@ -567,6 +576,11 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
     }
 
 
+    private static boolean isBountyCapture(EconomyJournalType type) {
+        return type == EconomyJournalType.CAPTURE_COMPUTE || type == EconomyJournalType.CAPTURE_FEE
+                || type == EconomyJournalType.PAY_AGENT;
+    }
+
     private void validateSettlementTemplate(
             EconomyPostingCommand command, List<EconomyPostingLine> lines) {
         EconomyEscrowSettlement settlement = command.escrowSettlement();
@@ -581,11 +595,14 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         Map<EconomyAccountKey, Long> amounts = new HashMap<>();
         lines.forEach(line -> amounts.put(line.account(), line.signedAmountMicro()));
         boolean capture = command.journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT;
-        boolean bountyRefund = command.journalType() == EconomyJournalType.REFUND_BOUNTY;
-        EconomyEscrowType expectedEscrowType = bountyRefund
-                ? EconomyEscrowType.BOUNTY : EconomyEscrowType.HOSTING_RENT;
-        EconomyAccountOwnerType expectedEscrowOwner = bountyRefund
-                ? EconomyAccountOwnerType.TASK : EconomyAccountOwnerType.LEASE;
+        boolean bountyRefund = command.journalType() == EconomyJournalType.REFUND_BOUNTY
+                || isBountyCapture(command.journalType());
+        boolean skill = command.journalType() == EconomyJournalType.CAPTURE_SKILL
+                || command.journalType() == EconomyJournalType.REFUND_SKILL;
+        EconomyEscrowType expectedEscrowType = skill ? EconomyEscrowType.SKILL_ORDER
+                : bountyRefund ? EconomyEscrowType.BOUNTY : EconomyEscrowType.HOSTING_RENT;
+        EconomyAccountOwnerType expectedEscrowOwner = skill ? EconomyAccountOwnerType.ORDER
+                : bountyRefund ? EconomyAccountOwnerType.TASK : EconomyAccountOwnerType.LEASE;
         boolean destinationMatches = capture
                 ? settlement.destinationAccount().ownerType() == EconomyAccountOwnerType.SYSTEM
                     && settlement.destinationAccount().purpose() == EconomyAccountPurpose.HOSTING_RENT
@@ -594,6 +611,26 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 : settlement.destinationAccount().ownerType() == EconomyAccountOwnerType.USER
                     && settlement.destinationAccount().purpose() == EconomyAccountPurpose.AVAILABLE
                     && exactIdentityEquals(settlement.destinationAccount().ownerId(), command.principal().id());
+        if (isBountyCapture(command.journalType())) {
+            EconomyAccountKey destination = settlement.destinationAccount();
+            destinationMatches = switch (command.journalType()) {
+                case CAPTURE_COMPUTE -> destination.ownerType() == EconomyAccountOwnerType.SYSTEM
+                        && destination.purpose() == EconomyAccountPurpose.MODEL_COST
+                        && "MODEL_COST".equals(destination.ownerId());
+                case CAPTURE_FEE -> destination.ownerType() == EconomyAccountOwnerType.SYSTEM
+                        && destination.purpose() == EconomyAccountPurpose.PLATFORM_FEE
+                        && "PLATFORM_FEE".equals(destination.ownerId());
+                case PAY_AGENT -> destination.ownerType() == EconomyAccountOwnerType.AGENT
+                        && destination.purpose() == EconomyAccountPurpose.EARNINGS
+                        && destination.ownerId().matches("agt_[0-9a-f]{32}");
+                default -> false;
+            };
+        }
+        if (command.journalType() == EconomyJournalType.CAPTURE_SKILL) {
+            destinationMatches = settlement.destinationAccount().ownerType() == EconomyAccountOwnerType.SYSTEM
+                    && settlement.destinationAccount().purpose() == EconomyAccountPurpose.SKILL_STORE
+                    && "SKILL_STORE".equals(settlement.destinationAccount().ownerId());
+        }
         if (command.principal().type() != EconomyPrincipalType.USER
                 || settlement.escrowType() != expectedEscrowType
                 || settlement.escrowAccount().ownerType() != expectedEscrowOwner

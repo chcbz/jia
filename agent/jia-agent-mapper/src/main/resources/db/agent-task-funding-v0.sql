@@ -90,6 +90,12 @@ CREATE TABLE IF NOT EXISTS agent_task_funding (
             AND cancel_refunded_micro <= gross_bounty_amount_micro
             AND cancel_task_version IS NOT NULL AND cancel_task_version > 0
             AND refunded_at IS NOT NULL AND refunded_at > 0)
+        OR
+        (funding_status = 'SETTLED' AND version >= 2 AND remaining_micro = 0
+            AND escrow_id IS NOT NULL AND escrow_version IS NOT NULL AND escrow_version > 1 AND reserve_transaction_id IS NOT NULL
+            AND cancel_idempotency_key IS NULL AND cancel_request_hash IS NULL
+            AND refund_transaction_id IS NULL AND cancel_refunded_micro IS NULL
+            AND cancel_task_version IS NULL AND refunded_at IS NULL)
     )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
   COMMENT='One additive V0 funded-bounty projection per task';

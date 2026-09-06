@@ -62,6 +62,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
     private final FundedBountySkillEntitlementLookup skillLookup;
     private final TransactionTemplate transactions;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public FundedBountyQuoteClaimServiceImpl(AgentTaskBountyQuoteMapper quoteMapper,
             AgentTaskFundingMapper fundingMapper, AgentTaskMutationTransaction mutationTransaction,
             AgentIdentityService identityService, AgentRuntimeDao runtimeDao,
@@ -118,10 +119,11 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
             QuoteRequest request, AgentTaskMetaEntity root) {
         AgentTaskFundingEntity funding = fundingMapper.selectFundingForUpdate(
                 actor.tenantId(), actor.clientId(), root.getTaskId());
-        requireOwnedHeldFunding(actor, funding);
+        requireOwnedFunding(actor, funding);
         AgentTaskQuoteEntity replay = quoteMapper.selectQuoteByActorKeyForUpdate(
                 actor.tenantId(), actor.clientId(), PRINCIPAL_TYPE, actor.userId(), key);
         if (replay != null) return replayQuote(requestHash, root.getTaskId(), replay);
+        requireOwnedHeldFunding(actor, funding);
         if (!AgentConstants.TASK_STATUS_OPEN.equals(root.getRewardStatus())
                 || root.getAssignedAt() != null || root.getStartedAt() != null
                 || fundingMapper.countMembers(actor.tenantId(), actor.clientId(), root.getTaskId()) != 0
@@ -224,7 +226,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
             ClaimRequest request, AgentTaskMetaEntity root) {
         AgentTaskFundingEntity funding = fundingMapper.selectFundingForUpdate(
                 actor.tenantId(), actor.clientId(), root.getTaskId());
-        requireOwnedHeldFunding(actor, funding);
+        requireOwnedFunding(actor, funding);
         AgentTaskQuoteEntity quote = quoteMapper.selectQuoteForUpdate(
                 actor.tenantId(), actor.clientId(), root.getTaskId(), request.quoteId());
         if (quote == null || !exact(quote.getPrincipalId(), actor.userId())
@@ -234,6 +236,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         AgentTaskClaimOperationEntity replay = quoteMapper.selectClaimOperationForUpdate(
                 actor.tenantId(), actor.clientId(), PRINCIPAL_TYPE, actor.userId(), key);
         if (replay != null) return replayClaim(requestHash, root.getTaskId(), request, replay);
+        requireOwnedHeldFunding(actor, funding);
         validateClaimableQuote(root, request, quote);
         AgentTaskClaimOperationEntity operation = claimOperation(actor, key, requestHash, request, root);
         try {
@@ -436,12 +439,27 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         return snapshot;
     }
 
-    private static AgentRuntimeEntity requireScopedRuntime(FundedBountyActor actor,
+    private AgentRuntimeEntity requireScopedRuntime(FundedBountyActor actor,
             AgentRuntimeEntity runtime, String expectedAgentId) {
         if (runtime == null) throw notFound("Agent not found");
         if (!exact(expectedAgentId, runtime.getAgentId())
                 || !exact(actor.clientId(), runtime.getClientId())
-                || !exact(actor.tenantId(), runtime.getOwnerJiacn())) {
+                || !exact(actor.tenantId(), runtime.getOwnerJiacn())
+                || !exact(actor.tenantId(), runtime.getTenantId())
+                || runtime.getBindingId() == null || runtime.getBindingId() <= 0) {
+            throw notFound("Agent not found");
+        }
+        // Canonical identity/binding locks precede this runtime FOR UPDATE in both quote and
+        // assignment's claim callback. Verify the runtime references THAT active scoped binding.
+        try {
+            cn.jia.agent.entity.AgentIdentityRegistryEntity identity = identityService.requireActiveIdentityForBinding(
+                    actor.tenantId(), actor.clientId(), actor.tenantId(), runtime.getBindingId(), expectedAgentId);
+            if (identity == null || !runtime.getBindingId().equals(identity.getBindingId())
+                    || !exact(expectedAgentId, identity.getCanonicalAgentId())
+                    || !exact(actor.tenantId(), identity.getTenantId())
+                    || !exact(actor.tenantId(), identity.getOwnerJiacn())
+                    || !exact(actor.clientId(), identity.getClientId())) throw notFound("Agent not found");
+        } catch (cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException incompatible) {
             throw notFound("Agent not found");
         }
         return runtime;
@@ -519,13 +537,17 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         }
     }
 
-    private static void requireOwnedHeldFunding(FundedBountyActor actor, AgentTaskFundingEntity funding) {
+    private static void requireOwnedFunding(FundedBountyActor actor, AgentTaskFundingEntity funding) {
         if (funding == null || !exact(actor.tenantId(), funding.getTenantId())
                 || !exact(actor.clientId(), funding.getClientId())
                 || !PRINCIPAL_TYPE.equals(funding.getPayerPrincipalType())
                 || !exact(actor.userId(), funding.getPayerPrincipalId())) {
             throw notFound("Task not found");
         }
+    }
+
+    private static void requireOwnedHeldFunding(FundedBountyActor actor, AgentTaskFundingEntity funding) {
+        requireOwnedFunding(actor, funding);
         if (!FUNDS_HELD.equals(funding.getFundingStatus()) || funding.getRemainingMicro() == null
                 || funding.getVersion() == null || funding.getVersion() < 1) {
             throw conflict("Task funding is not available for quote or claim");
