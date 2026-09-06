@@ -22,22 +22,22 @@ public final class PlatformSkillPackageCatalog {
     private static final List<PlatformSkillProduct> PRODUCTS = List.of(
             product("sp_repo_inspector", "spv_repo_inspector_1_0_0", "repo-inspector",
                     "Repository Inspector", "Read-only repository inspection for structure and implementation facts.",
-                    0L, "NONE", "e4a2bb2215d1a7f885fa483838cff4829bcc9c5e72fc5c0063e24d90c79eaba9", 551L),
+                    0L, "NONE", "4cd173b1fd6606fbfa9d416a4858c914440552d9ac188d398d31a4454f79a4ed", 687L),
             product("sp_code_reviewer", "spv_code_reviewer_1_0_0", "code-reviewer",
                     "Code Reviewer", "Bounded contract and compatibility review with actionable findings.",
-                    20_000_000L, "NONE", "ea45ab9231048a0fdcaa294e392fbfb1c0818254c64316297d9975e89e940b02", 550L),
+                    20_000_000L, "NONE", "aa0efdf4a561bf0ccfed96a7a5f48c096c9321ba563e7f89e9a1b968d9c79eb1", 687L),
             product("sp_repo_test", "spv_repo_test_1_0_0", "repo-test",
                     "Repository Test", "Focused repository verification with attributable test evidence.",
-                    30_000_000L, "NONE", "bf4e3c922f4ca7820e908c75c6fb3576568f9c326a2947e599f8fdff55b74407", 522L),
+                    30_000_000L, "NONE", "5448a1d231272617085cc6be255d14296ea10c8087d436a0e182a9a4eadb501a", 660L),
             product("sp_code_editor", "spv_code_editor_1_0_0", "code-editor",
                     "Code Editor", "Scoped implementation work that preserves the frozen contract.",
-                    50_000_000L, "NONE", "15adfd2adf6ec787187957aa19815427cfd2c8598d398468d39710d2dbf33858", 547L),
+                    50_000_000L, "NONE", "25f80edca5ac1f88c7007712bba92a8d82a61e679c07ed08f5b57e19dd100b39", 688L),
             product("sp_web_builder", "spv_web_builder_1_0_0", "web-builder",
                     "Web Builder", "Bounded web implementation using established application flows.",
-                    60_000_000L, "NONE", "d78884cc1cde2f154aa701b39bcf5b8d810efb20156ace5e17de6df90d4b0b7b", 580L),
+                    60_000_000L, "NONE", "b655e9d7c4214d517feaf819e094b4627103f1b9ed15c5e6d73ce81386db6e63", 714L),
             product("sp_deploy_runner", "spv_deploy_runner_1_0_0", "deploy-runner",
                     "Deploy Runner", "Explicitly authorized deployment runbook execution with evidence.",
-                    100_000_000L, "ADMIN_ONLY", "71ce8b2387c1c7b1df9f0edb40b18a90ed4680e394c6f4a9749bfd6244be054e", 575L));
+                    100_000_000L, "ADMIN_ONLY", "fde2e6c59228972aee0a8b3823f9316feed0084bda7d53454c276710c68f73e9", 715L));
     private static final Map<String, PlatformSkillProduct> BY_PRODUCT_ID = indexByProductId();
     private static final Map<String, PlatformSkillProduct> BY_PRODUCT_VERSION_ID = indexByProductVersionId();
 
