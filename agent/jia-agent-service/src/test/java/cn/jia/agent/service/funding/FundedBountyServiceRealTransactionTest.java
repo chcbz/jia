@@ -168,7 +168,7 @@ class FundedBountyServiceRealTransactionTest {
         byte[] cancelHash = FundedBountyRequestDigest.cancel(created.getId(), "0");
         AgentTaskFundingCancelReceiptDTO cancelled = service.cancel(
                 ACTOR, key(2), cancelHash, created.getId(), 0L);
-        assertEquals("REFUNDED", cancelled.status());
+        assertEquals("REFUNDED", cancelled.fundingStatus());
         assertEquals("400", cancelled.refundedMicro());
         assertEquals(1000L, wallet());
         assertEquals(0L, escrow(created.getId()));
