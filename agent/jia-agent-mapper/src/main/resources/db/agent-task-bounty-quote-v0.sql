@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS agent_task_bounty_quote (
   KEY idx_bounty_quote_task (tenant_id,client_id,task_id,status,expires_at,id),
   CONSTRAINT chk_bounty_quote_hashes CHECK (OCTET_LENGTH(request_hash)=32 AND OCTET_LENGTH(idempotency_key)=36 AND task_input_hash LIKE 'sha256:%' AND skill_set_hash LIKE 'sha256:%'),
   CONSTRAINT chk_bounty_quote_amounts CHECK (task_version>=0 AND estimated_input_tokens>=0 AND estimated_cached_input_tokens>=0 AND estimated_output_tokens>=0 AND estimated_reasoning_tokens>=0 AND estimated_compute_micro>=0 AND worst_compute_micro>=estimated_compute_micro AND platform_fee_micro>=0 AND gross_allocation_micro>0 AND estimated_agent_payout_micro>=0 AND worst_agent_payout_micro>=0 AND minimum_accepted_payout_micro>=0 AND budget_headroom_micro>=0),
-  CONSTRAINT chk_bounty_quote_state CHECK ((status='OPEN' AND claimed_at IS NULL) OR (status='CLAIMED' AND claimed_at>0)),
+  CONSTRAINT chk_bounty_quote_state CHECK ((status='OPEN' AND claimed_at IS NULL) OR (status='CLAIMED' AND claimed_at IS NOT NULL AND claimed_at>0)),
   CONSTRAINT chk_bounty_quote_recommendation CHECK (recommendation IN ('recommended','caution','reject')),
   CONSTRAINT chk_bounty_quote_expiry CHECK (expires_at>create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
@@ -70,5 +70,5 @@ CREATE TABLE IF NOT EXISTS agent_task_bounty_claim_operation (
   UNIQUE KEY uk_bounty_claim_quote (tenant_id,client_id,quote_id),
   KEY idx_bounty_claim_task (tenant_id,client_id,task_id,status,id),
   CONSTRAINT chk_bounty_claim_hash CHECK (OCTET_LENGTH(request_hash)=32 AND OCTET_LENGTH(idempotency_key)=36),
-  CONSTRAINT chk_bounty_claim_state CHECK ((status='POSTING' AND receipt_task_version IS NULL AND claimed_at IS NULL) OR (status='COMPLETED' AND receipt_task_version>0 AND claimed_at>0))
+  CONSTRAINT chk_bounty_claim_state CHECK ((status='POSTING' AND receipt_task_version IS NULL AND claimed_at IS NULL) OR (status='COMPLETED' AND receipt_task_version IS NOT NULL AND receipt_task_version>0 AND claimed_at IS NOT NULL AND claimed_at>0))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

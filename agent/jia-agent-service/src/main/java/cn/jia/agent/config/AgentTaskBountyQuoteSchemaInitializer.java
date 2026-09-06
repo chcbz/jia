@@ -28,6 +28,14 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String LOCK = "cyf:agent-v0:bounty-quote-schema";
 
+    // Match the state predicates, not just their names: old nullable CHECKs accept SQL UNKNOWN.
+    private static final Map<String, String> STATE_CHECKS = Map.of(
+            "chk_bounty_quote_state", "(status='OPEN' AND claimed_at IS NULL) OR "
+                    + "(status='CLAIMED' AND claimed_at IS NOT NULL AND claimed_at>0)",
+            "chk_bounty_claim_state", "(status='POSTING' AND receipt_task_version IS NULL AND claimed_at IS NULL) OR "
+                    + "(status='COMPLETED' AND receipt_task_version IS NOT NULL AND receipt_task_version>0 "
+                    + "AND claimed_at IS NOT NULL AND claimed_at>0)");
+
     private final JdbcTemplate jdbc;
 
     public AgentTaskBountyQuoteSchemaInitializer(JdbcTemplate jdbc) {
@@ -80,11 +88,28 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
             if (!spec.indexes().equals(indexes)) {
                 throw new IllegalStateException("Invalid bounty quote indexes: " + table);
             }
-            Set<String> checks = new LinkedHashSet<>(jdbc.queryForList("""
-                    SELECT constraint_name FROM information_schema.table_constraints
-                    WHERE constraint_schema=DATABASE() AND table_name=? AND constraint_type='CHECK'
-                    ORDER BY constraint_name
-                    """, String.class, table));
+            Set<String> checks = new LinkedHashSet<>();
+            for (Map<String, Object> row : jdbc.queryForList("""
+                    SELECT tc.constraint_name,cc.check_clause,tc.enforced
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.check_constraints cc
+                      ON cc.constraint_catalog=tc.constraint_catalog
+                     AND cc.constraint_schema=tc.constraint_schema
+                     AND cc.constraint_name=tc.constraint_name
+                    WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'
+                    ORDER BY tc.constraint_name
+                    """, table)) {
+                String name = text(row, "constraint_name");
+                if (!checks.add(name)) {
+                    throw new IllegalStateException("Ambiguous bounty quote CHECK catalog: " + table);
+                }
+                String state = STATE_CHECKS.get(name);
+                if (state != null && (!"YES".equalsIgnoreCase(text(row, "enforced"))
+                        || !AgentTaskFundingSchemaInitializer.normalizeCheck(state).equals(
+                                AgentTaskFundingSchemaInitializer.normalizeCheck(text(row, "check_clause"))))) {
+                    throw new IllegalStateException("Invalid bounty quote state CHECK: " + table + "." + name);
+                }
+            }
             if (!spec.checks().equals(checks)) {
                 throw new IllegalStateException("Invalid bounty quote checks: " + table);
             }

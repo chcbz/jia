@@ -22,6 +22,13 @@ class AgentTaskBountyQuoteSchemaContractTest {
             assertTrue(sql.contains("uk_bounty_claim_quote"));
             assertTrue(sql.contains("request_hash binary(32)"));
             assertTrue(sql.contains("task_version bigint not null"));
+            assertTrue(sql.contains("claimed_at bigint null"));
+            assertTrue(sql.contains("receipt_task_version bigint null"));
+            assertTrue(sql.contains("(status='open' and claimed_at is null) or "
+                    + "(status='claimed' and claimed_at is not null and claimed_at>0)"));
+            assertTrue(sql.contains("(status='posting' and receipt_task_version is null and claimed_at is null) or "
+                    + "(status='completed' and receipt_task_version is not null and receipt_task_version>0 "
+                    + "and claimed_at is not null and claimed_at>0)"));
             assertFalse(sql.contains("alter table agent_task_funding"));
             assertFalse(sql.contains("create table if not exists model_price_book"));
         }

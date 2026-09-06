@@ -51,6 +51,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -244,6 +245,34 @@ class FundedBountyQuoteClaimRealTransactionTest {
         assertClaimedOnce(winner.agentId());
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_bounty_quote WHERE status='CLAIMED'", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_bounty_quote WHERE status='OPEN'", Integer.class));
+    }
+
+    @Test
+    void completedClaimAndClaimedQuoteRejectSqlUnknownNullBypasses() {
+        AgentTaskQuoteDTO quote = quote(AGENT_A, 2);
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_bounty_quote "
+                + "WHERE status='OPEN' AND claimed_at IS NULL", Integer.class));
+        AgentTaskClaimRequestDTO request = claimRequest(AGENT_A, quote.quoteId());
+        AgentTaskClaimReceiptDTO receipt = service.claim(
+                ACTOR, key(3), FundedBountyRequestDigest.claim(taskId, request), taskId, request);
+        // Otherwise-valid committed production rows ensure each failure is the intended CHECK.
+        DataAccessException quoteFailure = assertThrows(DataAccessException.class, () -> jdbc.update(
+                "UPDATE agent_task_bounty_quote SET claimed_at=NULL WHERE quote_id=?", quote.quoteId()));
+        assertTrue(quoteFailure.getMostSpecificCause().getMessage().toLowerCase(java.util.Locale.ROOT)
+                .contains("chk_bounty_quote_state"));
+        for (String assignment : List.of("receipt_task_version=NULL", "claimed_at=NULL",
+                "receipt_task_version=NULL,claimed_at=NULL")) {
+            DataAccessException failure = assertThrows(DataAccessException.class, () -> jdbc.update(
+                    "UPDATE agent_task_bounty_claim_operation SET " + assignment + " WHERE quote_id=?",
+                    quote.quoteId()));
+            assertTrue(failure.getMostSpecificCause().getMessage().toLowerCase(java.util.Locale.ROOT)
+                    .contains("chk_bounty_claim_state"));
+        }
+        assertEquals(Long.valueOf(receipt.claimedAt()), jdbc.queryForObject(
+                "SELECT claimed_at FROM agent_task_bounty_quote WHERE quote_id=?", Long.class, quote.quoteId()));
+        assertEquals(receipt, service.claim(ACTOR, key(3), FundedBountyRequestDigest.claim(taskId, request),
+                taskId, request));
+        assertClaimedOnce(AGENT_A);
     }
 
     @Test
