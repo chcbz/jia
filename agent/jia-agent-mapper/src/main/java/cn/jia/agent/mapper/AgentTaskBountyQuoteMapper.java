@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.Update;
 
 public interface AgentTaskBountyQuoteMapper {
     String SCOPE = " tenant_id=#{tenantId} AND client_id=#{clientId}"
-            + " AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}"
+            + " AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)"
             + " AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})"
             + " AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId}) ";
 
@@ -38,7 +38,7 @@ public interface AgentTaskBountyQuoteMapper {
 
     @Select("SELECT * FROM agent_task_bounty_quote WHERE " + SCOPE
             + " AND principal_type=#{principalType} AND principal_id=#{principalId}"
-            + " AND BINARY principal_id=BINARY #{principalId}"
+            + " AND CAST(principal_id AS BINARY)=CAST(#{principalId} AS BINARY)"
             + " AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{principalId})"
             + " AND idempotency_key=#{idempotencyKey} LIMIT 1 FOR UPDATE")
     AgentTaskQuoteEntity selectQuoteByActorKeyForUpdate(
@@ -47,9 +47,9 @@ public interface AgentTaskBountyQuoteMapper {
             @Param("idempotencyKey") byte[] idempotencyKey);
 
     @Select("SELECT * FROM agent_task_bounty_quote WHERE " + SCOPE
-            + " AND task_id=#{taskId} AND BINARY task_id=BINARY #{taskId}"
+            + " AND task_id=#{taskId} AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)"
             + " AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})"
-            + " AND quote_id=#{quoteId} AND BINARY quote_id=BINARY #{quoteId}"
+            + " AND quote_id=#{quoteId} AND CAST(quote_id AS BINARY)=CAST(#{quoteId} AS BINARY)"
             + " AND OCTET_LENGTH(quote_id)=OCTET_LENGTH(#{quoteId}) LIMIT 1 FOR UPDATE")
     AgentTaskQuoteEntity selectQuoteForUpdate(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
@@ -59,7 +59,7 @@ public interface AgentTaskBountyQuoteMapper {
             UPDATE agent_task_bounty_quote
             SET status='CLAIMED',claimed_at=#{claimedAt},update_time=#{claimedAt}
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
-              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND task_id=#{taskId} AND quote_id=#{quoteId} AND status='OPEN'
@@ -80,7 +80,7 @@ public interface AgentTaskBountyQuoteMapper {
 
     @Select("SELECT * FROM agent_task_bounty_claim_operation WHERE " + SCOPE
             + " AND principal_type=#{principalType} AND principal_id=#{principalId}"
-            + " AND BINARY principal_id=BINARY #{principalId}"
+            + " AND CAST(principal_id AS BINARY)=CAST(#{principalId} AS BINARY)"
             + " AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{principalId})"
             + " AND idempotency_key=#{idempotencyKey} LIMIT 1 FOR UPDATE")
     AgentTaskClaimOperationEntity selectClaimOperationForUpdate(
@@ -93,7 +93,7 @@ public interface AgentTaskBountyQuoteMapper {
             SET status='COMPLETED',receipt_task_version=#{taskVersion},claimed_at=#{claimedAt},
                 update_time=#{claimedAt}
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
-              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND principal_type=#{principalType} AND principal_id=#{principalId}

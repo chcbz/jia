@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.Update;
 
 public interface AgentTaskFundingMapper {
     String EXACT_SCOPE = " tenant_id=#{tenantId} AND client_id=#{clientId}"
-            + " AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}"
+            + " AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)"
             + " AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})"
             + " AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId}) ";
 
@@ -25,7 +25,7 @@ public interface AgentTaskFundingMapper {
 
     @Select("SELECT * FROM agent_task_funding_operation WHERE " + EXACT_SCOPE
             + " AND principal_type=#{principalType} AND principal_id=#{principalId}"
-            + " AND BINARY principal_id=BINARY #{principalId}"
+            + " AND CAST(principal_id AS BINARY)=CAST(#{principalId} AS BINARY)"
             + " AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{principalId})"
             + " AND idempotency_key=#{idempotencyKey} LIMIT 1 FOR UPDATE")
     AgentTaskFundingOperationEntity selectOperationForUpdate(
@@ -44,7 +44,7 @@ public interface AgentTaskFundingMapper {
             SET status='COMPLETED',reserve_transaction_id=#{transactionId},receipt_task_version=0,
                 receipt_created_at=#{createdAt},receipt_updated_at=#{updatedAt},update_time=#{updatedAt}
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
-              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND task_id=#{taskId} AND status='POSTING'
@@ -66,13 +66,13 @@ public interface AgentTaskFundingMapper {
     int insertFunding(AgentTaskFundingEntity funding);
 
     @Select("SELECT * FROM agent_task_funding WHERE " + EXACT_SCOPE
-            + " AND task_id=#{taskId} AND BINARY task_id=BINARY #{taskId}"
+            + " AND task_id=#{taskId} AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)"
             + " AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId}) LIMIT 1")
     AgentTaskFundingEntity selectFunding(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("taskId") String taskId);
 
     @Select("SELECT * FROM agent_task_funding WHERE " + EXACT_SCOPE
-            + " AND task_id=#{taskId} AND BINARY task_id=BINARY #{taskId}"
+            + " AND task_id=#{taskId} AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)"
             + " AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId}) LIMIT 1 FOR UPDATE")
     AgentTaskFundingEntity selectFundingForUpdate(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("taskId") String taskId);
@@ -82,7 +82,7 @@ public interface AgentTaskFundingMapper {
             SET funding_status='FUNDS_HELD',escrow_id=#{escrowId},escrow_version=#{escrowVersion},
                 reserve_transaction_id=#{transactionId},version=1,update_time=#{now}
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
-              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND task_id=#{taskId} AND funding_status='RESERVING' AND version=0
@@ -100,7 +100,7 @@ public interface AgentTaskFundingMapper {
                 cancel_task_version=#{cancelTaskVersion},refunded_at=#{refundedAt},
                 version=version+1,update_time=#{refundedAt}
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
-              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND task_id=#{taskId} AND funding_status='FUNDS_HELD' AND version=#{expectedVersion}

@@ -42,6 +42,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -184,13 +185,13 @@ class FundedBountyQuoteClaimServiceTest {
         TrackingTransactionManager manager = new TrackingTransactionManager();
         Fixture fixture = fixture(manager);
         Object rootLock = new Object();
-        when(fixture.mutation.executeWithLockedTaskRoot(anyString(), anyString(), anyString(), any()))
-                .thenAnswer(invocation -> {
-                    synchronized (rootLock) {
-                        return ((AgentTaskMutationTransaction.LockedTaskMutation<?>) invocation.getArgument(3))
-                                .apply(fixture.root);
-                    }
-                });
+        doAnswer(invocation -> {
+            synchronized (rootLock) {
+                return ((AgentTaskMutationTransaction.LockedTaskMutation<?>) invocation.getArgument(3))
+                        .apply(fixture.root);
+            }
+        }).when(fixture.mutation).executeWithLockedTaskRoot(
+                anyString(), anyString(), anyString(), any());
         stubSuccessfulAssignment(fixture);
         when(fixture.quoteMapper.markClaimed(anyString(), anyString(), anyString(), anyString(), anyLong()))
                 .thenAnswer(invocation -> {

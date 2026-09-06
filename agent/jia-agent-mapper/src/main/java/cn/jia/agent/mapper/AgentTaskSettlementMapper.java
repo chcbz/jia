@@ -8,7 +8,7 @@ import java.util.List;
 /** Root lock precedes all of these operations. Receipt rows are insert-only. */
 public interface AgentTaskSettlementMapper {
     String SCOPE = AgentTaskFundingMapper.EXACT_SCOPE;
-    String TASK = " AND task_id=#{taskId} AND BINARY task_id=BINARY #{taskId}"
+    String TASK = " AND task_id=#{taskId} AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)"
             + " AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId}) ";
 
     @Select("SELECT * FROM agent_task_bounty_settlement WHERE " + SCOPE + TASK + " FOR UPDATE")
