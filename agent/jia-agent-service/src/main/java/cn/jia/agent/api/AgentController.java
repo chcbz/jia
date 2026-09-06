@@ -20,6 +20,7 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
+import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
 import cn.jia.core.security.AllowSensitiveOutput;
@@ -27,6 +28,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import com.github.pagehelper.PageInfo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -39,6 +43,16 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Set;
+import java.nio.charset.StandardCharsets;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.Authentication;
+import cn.jia.agent.hosting.HostingRentApplicationService;
+import cn.jia.agent.hosting.HostingRentApplicationException;
+import cn.jia.agent.hosting.HostingRentHttp;
+import cn.jia.agent.hosting.HostingRentErrors;
+import cn.jia.economy.hosting.HostingRentException;
+import cn.jia.economy.exception.EconomyPostingException;
 
 @Slf4j
 @RestController
@@ -47,6 +61,12 @@ import java.util.List;
 public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
+    private HostingRentApplicationService hostingRent;
+
+    @Autowired
+    public void setHostingRent(HostingRentApplicationService hostingRent) {
+        this.hostingRent = java.util.Objects.requireNonNull(hostingRent);
+    }
 
     @PostMapping("/register")
     public Object register(@RequestBody AgentRegisterDTO request) {
@@ -78,6 +98,36 @@ public class AgentController {
     }
 
     @PostMapping("/personas/{personaCode}/bind")
+    @AllowSensitiveOutput(reason = "local persona binding returns the existing local setup document")
+    public Object bindPersonaHttp(@PathVariable String personaCode, Authentication authentication,
+            HttpServletRequest servletRequest, @RequestBody(required = false) byte[] rawBody) {
+        if (rawBody == null || rawBody.length == 0 || "null".equals(new String(rawBody, StandardCharsets.UTF_8).strip())) {
+            return bindPersona(personaCode, null);
+        }
+        var body = HostingRentHttp.body(rawBody, Set.of("mode", "hostingAction", "agentId", "quoteId", "leaseId",
+                "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountMicro", "expectedPeriodSeconds"), Set.of("mode"));
+        String mode = body.get("mode");
+        if (mode != null && "server".equalsIgnoreCase(mode.strip()) && hostingRent != null) {
+            try {
+                var receipt = hostingRent.bind(HostingRentHttp.actor(authentication), personaCode,
+                        HostingRentHttp.key(servletRequest), body);
+                return ResponseEntity.accepted().header("Cache-Control", "private, no-store").body(JsonResult.success(receipt));
+            } catch (RuntimeException failure) {
+                // Keep legacy non-rent error handling unchanged, but money responses never leak raw failures.
+                return HostingRentErrors.response(failure);
+            }
+        }
+        if (body.keySet().stream().anyMatch(name -> !"mode".equals(name))) throw HostingRentHttp.badRequest();
+        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
+        request.setMode(mode);
+        return bindPersona(personaCode, request);
+    }
+
+    @ExceptionHandler({HostingRentApplicationException.class, HostingRentException.class, EconomyPostingException.class})
+    public Object rentFailure(RuntimeException failure) { return HostingRentErrors.response(failure); }
+
+    // Direct legacy callers cannot pass a quote or bypass R00 server admission.
+
     @AllowSensitiveOutput(reason = "persona binding returns the codex-ws-agent API key needed for local setup")
     public Object bindPersona(@PathVariable String personaCode,
             @RequestBody(required = false) AgentPersonaBindRequestDTO request) {
@@ -220,6 +270,18 @@ public class AgentController {
     public Object deleteEvaluation(@PathVariable Long id) {
         abilityEvaluationService.delete(id);
         return JsonResult.success();
+    }
+
+    @ExceptionHandler(HostingRentAdmissionException.class)
+    public ResponseEntity<JsonResult<Void>> handleHostingRentUnavailable(
+            HostingRentAdmissionException e, HttpServletRequest request) {
+        log.warn("Agent hosting rent request rejected: uri={}, code={}",
+                request.getRequestURI(), e.code());
+        JsonResult<Void> result = JsonResult.failure(e.code(), e.getMessage());
+        result.setStatus(HttpStatus.SERVICE_UNAVAILABLE.value());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(result);
     }
 
     @ExceptionHandler(AgentBizException.class)

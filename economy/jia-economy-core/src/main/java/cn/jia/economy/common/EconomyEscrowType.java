@@ -1,5 +1,5 @@
 package cn.jia.economy.common;
 
 public enum EconomyEscrowType {
-    BOUNTY, SKILL_ORDER
+    BOUNTY, SKILL_ORDER, HOSTING_RENT
 }

@@ -17,6 +17,7 @@ import cn.jia.economy.mapper.EconomyLedgerMapper;
 import cn.jia.economy.service.EconomyAccountKey;
 import cn.jia.economy.service.EconomyEscrowFunding;
 import cn.jia.economy.service.EconomyEscrowResult;
+import cn.jia.economy.service.EconomyEscrowSettlement;
 import cn.jia.economy.service.EconomyPostedLine;
 import cn.jia.economy.service.EconomyPostingCommand;
 import cn.jia.economy.service.EconomyPostingLine;
@@ -58,7 +59,10 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
     private static final Set<EconomyJournalType> V0_ENABLED_TYPES = Set.of(
             EconomyJournalType.ISSUE_SILVER,
             EconomyJournalType.RESERVE_BOUNTY,
-            EconomyJournalType.RESERVE_SKILL);
+            EconomyJournalType.RESERVE_SKILL,
+            EconomyJournalType.RESERVE_HOSTING_RENT,
+            EconomyJournalType.CAPTURE_HOSTING_RENT,
+            EconomyJournalType.REFUND_HOSTING_RENT);
 
     private final EconomyLedgerMapper mapper;
     private final EconomyPreviewGate gate;
@@ -155,6 +159,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         FundingState fundingState = resolveFundingState(posting);
         TreeMap<EconomyAccountKey, LockedAccount> accounts = lockAccounts(posting);
         EscrowPlan escrow = planEscrow(posting, fundingState, accounts, transactionId, now);
+        EscrowSettlementPlan settlement = planEscrowSettlement(posting, accounts, now);
 
         for (LockedAccount locked : accounts.values()) {
             requireOne(mapper.updateAccountBalance(
@@ -164,6 +169,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         }
 
         if (escrow != null) persistEscrow(escrow);
+        if (settlement != null) persistEscrowSettlement(settlement);
 
         List<EconomyPostedLine> postedLines = new ArrayList<>();
         int sequence = 0;
@@ -330,6 +336,66 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         requireOne(mapper.insertFundingLot(escrow.lot()), "escrow funding lot insert");
     }
 
+
+    private EscrowSettlementPlan planEscrowSettlement(
+            ValidatedPosting posting,
+            TreeMap<EconomyAccountKey, LockedAccount> accounts,
+            long now) {
+        EconomyEscrowSettlement settlement = posting.command().escrowSettlement();
+        if (settlement == null) return null;
+        EconomyEscrowEntity current = mapper.selectEscrowByBusinessForUpdate(
+                posting.command().scope().tenantId(), posting.command().scope().clientId(),
+                settlement.escrowType().name(), posting.command().businessId());
+        if (current == null || current.getId() == null || current.getVersion() == null
+                || current.getGrossMicro() == null || current.getCapturedMicro() == null
+                || current.getRefundedMicro() == null
+                || current.getVersion() != settlement.expectedEscrowVersion()
+                || !settlement.escrowType().name().equals(current.getBusinessType())
+                || !posting.command().businessId().equals(current.getBusinessId())
+                || !accounts.get(settlement.escrowAccount()).entity().getAccountId()
+                        .equals(current.getEscrowAccountId())
+                || (posting.command().journalType() == EconomyJournalType.REFUND_HOSTING_RENT
+                    && !accounts.get(settlement.destinationAccount()).entity().getAccountId()
+                            .equals(current.getPayerAccountId()))
+                || !"ACTIVE".equals(current.getStatus())
+                || !EconomyConstants.CURRENCY_SILVER.equals(current.getCurrency())) {
+            throw new EconomyPostingException(ESCROW_CONFLICT, "escrow settlement root is incompatible");
+        }
+        EconomyEscrowFundingLotEntity fundingLot = mapper.selectFundingLotByTransaction(
+                current.getTenantId(), current.getClientId(), settlement.reserveTransactionId());
+        if (fundingLot == null || !current.getEscrowId().equals(fundingLot.getEscrowId())) {
+            throw new EconomyPostingException(ESCROW_CONFLICT,
+                    "escrow settlement does not reference its immutable reserve transaction");
+        }
+        long remaining = checkedAdd(checkedAdd(current.getGrossMicro(), -current.getCapturedMicro()),
+                -current.getRefundedMicro());
+        if (settlement.amountMicro() > remaining) {
+            throw new EconomyPostingException(ESCROW_CONFLICT, "escrow settlement exceeds remaining funds");
+        }
+        boolean capture = posting.command().journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT;
+        long capturedAfter = capture
+                ? checkedAdd(current.getCapturedMicro(), settlement.amountMicro())
+                : current.getCapturedMicro();
+        long refundedAfter = capture
+                ? current.getRefundedMicro()
+                : checkedAdd(current.getRefundedMicro(), settlement.amountMicro());
+        long remainingAfter = checkedAdd(checkedAdd(current.getGrossMicro(), -capturedAfter), -refundedAfter);
+        String status;
+        if (remainingAfter == 0 && capturedAfter == current.getGrossMicro()) status = "CAPTURED";
+        else if (remainingAfter == 0 && refundedAfter == current.getGrossMicro()) status = "REFUNDED";
+        else if (capturedAfter > 0) status = "PARTIALLY_CAPTURED";
+        else status = "ACTIVE";
+        return new EscrowSettlementPlan(current, capturedAfter, refundedAfter, status,
+                checkedAdd(current.getVersion(), 1L), now);
+    }
+
+    private void persistEscrowSettlement(EscrowSettlementPlan settlement) {
+        requireOne(mapper.updateEscrowSettlement(
+                settlement.current(), settlement.current().getTenantId(), settlement.current().getClientId(),
+                settlement.capturedAfter(), settlement.refundedAfter(), settlement.status(),
+                settlement.versionAfter(), settlement.now()), "escrow settlement CAS");
+    }
+
     private EconomyPostingResult replay(ValidatedPosting posting, EconomyTransactionEntity transaction) {
         if (!"POSTED".equals(transaction.getStatus())
                 || transaction.getPostedAt() == null
@@ -447,7 +513,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 throw new EconomyPostingException(INVALID_COMMAND,
                         "ISSUE_SILVER requires the internal treasury authority");
             }
-            if (command.escrowFunding() != null || lines.size() != 2
+            if (command.escrowFunding() != null || command.escrowSettlement() != null || lines.size() != 2
                     || !matches(lines, EconomyAccountOwnerType.SYSTEM,
                             EconomyAccountPurpose.SILVER_ISSUANCE, true)
                     || !matches(lines, EconomyAccountOwnerType.USER,
@@ -456,18 +522,31 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             }
             return;
         }
+        if (command.journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT
+                || command.journalType() == EconomyJournalType.REFUND_HOSTING_RENT) {
+            validateHostingSettlementTemplate(command, lines);
+            return;
+        }
         EconomyEscrowFunding funding = command.escrowFunding();
-        if (funding == null || funding.escrowType() == null
+        if (funding == null || command.escrowSettlement() != null || funding.escrowType() == null
                 || funding.payerAccount() == null || funding.escrowAccount() == null
                 || funding.amountMicro() <= 0 || lines.size() != 2) {
             throw new EconomyPostingException(INVALID_COMMAND, "reserve journal requires exact escrow funding data");
         }
         validateAccountKey(funding.payerAccount());
         validateAccountKey(funding.escrowAccount());
-        EconomyEscrowType expectedType = command.journalType() == EconomyJournalType.RESERVE_BOUNTY
-                ? EconomyEscrowType.BOUNTY : EconomyEscrowType.SKILL_ORDER;
-        EconomyAccountOwnerType expectedOwner = expectedType == EconomyEscrowType.BOUNTY
-                ? EconomyAccountOwnerType.TASK : EconomyAccountOwnerType.ORDER;
+        EconomyEscrowType expectedType;
+        EconomyAccountOwnerType expectedOwner;
+        if (command.journalType() == EconomyJournalType.RESERVE_BOUNTY) {
+            expectedType = EconomyEscrowType.BOUNTY;
+            expectedOwner = EconomyAccountOwnerType.TASK;
+        } else if (command.journalType() == EconomyJournalType.RESERVE_SKILL) {
+            expectedType = EconomyEscrowType.SKILL_ORDER;
+            expectedOwner = EconomyAccountOwnerType.ORDER;
+        } else {
+            expectedType = EconomyEscrowType.HOSTING_RENT;
+            expectedOwner = EconomyAccountOwnerType.LEASE;
+        }
         Map<EconomyAccountKey, Long> amounts = new HashMap<>();
         lines.forEach(line -> amounts.put(line.account(), line.signedAmountMicro()));
         if (command.principal().type() != EconomyPrincipalType.USER
@@ -481,6 +560,41 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || !Long.valueOf(-funding.amountMicro()).equals(amounts.get(funding.payerAccount()))
                 || !Long.valueOf(funding.amountMicro()).equals(amounts.get(funding.escrowAccount()))) {
             throw new EconomyPostingException(INVALID_COMMAND, "reserve journal template mismatch");
+        }
+    }
+
+
+    private void validateHostingSettlementTemplate(
+            EconomyPostingCommand command, List<EconomyPostingLine> lines) {
+        EconomyEscrowSettlement settlement = command.escrowSettlement();
+        if (command.escrowFunding() != null || settlement == null || lines.size() != 2
+                || settlement.escrowType() != EconomyEscrowType.HOSTING_RENT
+                || settlement.escrowAccount() == null || settlement.destinationAccount() == null
+                || settlement.amountMicro() <= 0 || settlement.expectedEscrowVersion() <= 0) {
+            throw new EconomyPostingException(INVALID_COMMAND, "hosting-rent settlement data is incomplete");
+        }
+        requireExact(settlement.reserveTransactionId(), "reserveTransactionId", 100);
+        validateAccountKey(settlement.escrowAccount());
+        validateAccountKey(settlement.destinationAccount());
+        Map<EconomyAccountKey, Long> amounts = new HashMap<>();
+        lines.forEach(line -> amounts.put(line.account(), line.signedAmountMicro()));
+        boolean capture = command.journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT;
+        boolean destinationMatches = capture
+                ? settlement.destinationAccount().ownerType() == EconomyAccountOwnerType.SYSTEM
+                    && settlement.destinationAccount().purpose() == EconomyAccountPurpose.HOSTING_RENT
+                    && EconomyConstants.HOSTING_RENT_SYSTEM_OWNER_ID.equals(
+                            settlement.destinationAccount().ownerId())
+                : settlement.destinationAccount().ownerType() == EconomyAccountOwnerType.USER
+                    && settlement.destinationAccount().purpose() == EconomyAccountPurpose.AVAILABLE
+                    && exactIdentityEquals(settlement.destinationAccount().ownerId(), command.principal().id());
+        if (command.principal().type() != EconomyPrincipalType.USER
+                || settlement.escrowAccount().ownerType() != EconomyAccountOwnerType.LEASE
+                || settlement.escrowAccount().purpose() != EconomyAccountPurpose.ESCROW
+                || !settlement.escrowAccount().ownerId().equals(command.businessId())
+                || !destinationMatches
+                || !Long.valueOf(-settlement.amountMicro()).equals(amounts.get(settlement.escrowAccount()))
+                || !Long.valueOf(settlement.amountMicro()).equals(amounts.get(settlement.destinationAccount()))) {
+            throw new EconomyPostingException(INVALID_COMMAND, "hosting-rent settlement template mismatch");
         }
     }
 
@@ -675,5 +789,14 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             EconomyEscrowFundingLotEntity lot,
             boolean insert,
             EconomyEscrowResult result) {
+    }
+
+    private record EscrowSettlementPlan(
+            EconomyEscrowEntity current,
+            long capturedAfter,
+            long refundedAfter,
+            String status,
+            long versionAfter,
+            long now) {
     }
 }

@@ -112,11 +112,13 @@ public interface EconomyLedgerMapper {
             @Param("ownerId") String ownerId,
             @Param("purpose") String purpose);
 
+    // Hosting capture changes held funds without touching AVAILABLE. Its order-escrow versions
+    // advance this snapshot revision too; non-hosting wallet behavior remains unchanged.
     @Select("""
             SELECT COALESCE(wallet.balance_micro,0) AS available_micro,
                    COALESCE(held.held_micro,0) AS held_micro,
                    COALESCE(held.minimum_held_component_micro,0) AS minimum_held_component_micro,
-                   COALESCE(wallet.version,0) AS version
+                   COALESCE(wallet.version,0)+COALESCE(held.hosting_version,0) AS version
             FROM (SELECT 1 AS singleton) snapshot_anchor
             LEFT JOIN economy_account wallet
               ON wallet.tenant_id=#{tenantId} AND wallet.client_id=#{clientId}
@@ -127,6 +129,7 @@ public interface EconomyLedgerMapper {
              AND OCTET_LENGTH(wallet.owner_id)=OCTET_LENGTH(#{ownerId})
             LEFT JOIN (
                 SELECT SUM(e.gross_micro-e.captured_micro-e.refunded_micro) AS held_micro,
+                       SUM(CASE WHEN e.business_type='HOSTING_RENT' THEN e.version ELSE 0 END) AS hosting_version,
                        MIN(e.gross_micro-e.captured_micro-e.refunded_micro) AS minimum_held_component_micro
                 FROM economy_escrow e
                 JOIN economy_account payer
@@ -318,4 +321,25 @@ public interface EconomyLedgerMapper {
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("transactionId") String transactionId);
+
+    @Update("""
+            UPDATE economy_escrow
+            SET captured_micro=#{capturedAfter},refunded_micro=#{refundedAfter},
+                status=#{status},version=#{versionAfter},update_time=#{now}
+            WHERE id=#{escrow.id} AND """ + EXACT_SCOPE + """
+              AND escrow_id=#{escrow.escrowId} AND version=#{escrow.version}
+              AND gross_micro=#{escrow.grossMicro}
+              AND captured_micro=#{escrow.capturedMicro} AND refunded_micro=#{escrow.refundedMicro}
+              AND status=#{escrow.status}
+              AND OCTET_LENGTH(escrow_id)=OCTET_LENGTH(#{escrow.escrowId})
+            """)
+    int updateEscrowSettlement(
+            @Param("escrow") EconomyEscrowEntity escrow,
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("capturedAfter") long capturedAfter,
+            @Param("refundedAfter") long refundedAfter,
+            @Param("status") String status,
+            @Param("versionAfter") long versionAfter,
+            @Param("now") long now);
 }

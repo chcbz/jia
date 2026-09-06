@@ -88,6 +88,21 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     }
 
     @Test
+    void expiredHostingIsRecheckedAtDeferredSendUsingCapturedScope() {
+        EsContext context = new EsContext();
+        context.setJiacn("tenant-a"); context.setClientId("client-a"); EsContextHolder.setContext(context);
+        when(agentWebSocketHandler.isAgentConnected("agent-wuyong")).thenReturn(true);
+        when(chatConversationEventBroker.stream("1001")).thenReturn(Flux.never());
+        var result = service().relay(request(List.of("agent-wuyong")), "1001", () -> Flux.just("builtin"));
+        doThrow(new IllegalStateException("HOSTING_RENT_RENEWAL_REQUIRED"))
+                .when(agentService).requireHostingNewWork("tenant-a", "client-a", "agent-wuyong");
+        EsContextHolder.setContext(new EsContext()); // Subscription does not use ambient replacement identity.
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> result.stream().collectList().block());
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
+    }
+
+    @Test
     void emitsOfflineDeliveryEventWithoutWebSocketSend() {
         when(agentWebSocketHandler.isAgentConnected("agent-wuyong")).thenReturn(false);
         JuyitingAgentRelayService service = service();
