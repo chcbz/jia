@@ -38,7 +38,7 @@ import static org.mockito.Mockito.when;
 class AgentServiceFundedBountyGuardTest {
     @AfterEach
     void clearContext() {
-        cn.jia.core.context.EsContextHolder.clear();
+        cn.jia.core.context.EsContextHolder.clearContext();
     }
 
     @Test
