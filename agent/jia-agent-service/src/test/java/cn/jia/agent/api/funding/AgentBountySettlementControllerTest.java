@@ -60,14 +60,39 @@ class AgentBountySettlementControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(FundedBountyException.class, () -> controller.read("task", null)).status());
         assertThrows(FundedBountyException.class, () -> controller.read("task",
                 new UsernamePasswordAuthenticationToken("fallback", "unused", List.of())));
-        Jwt missingScope = Jwt.withTokenValue("fixture").header("alg", "none").subject("sub").claim("jiacn", "Tenant").build();
-        assertThrows(FundedBountyException.class, () -> controller.read("task", new JwtAuthenticationToken(missingScope)));
         assertThrows(FundedBountyException.class, () -> controller.read("task",
                 new JwtAuthenticationToken(jwt("sub", "Tenant", "Client").getToken(), List.of(), "fallback")));
     }
 
+    @Test
+    void unauthenticatedJwtWithCompleteScopeIsRejectedBeforePreviewLookup() {
+        AgentBountySettlementController controller = new AgentBountySettlementController(
+                new StaticListableBeanFactory().getBeanProvider(FundedBountySettlementService.class));
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt("sub", "Tenant", "Client").getToken());
+        assertFalse(authentication.isAuthenticated());
+        FundedBountyException failure = assertThrows(FundedBountyException.class,
+                () -> controller.read("task", authentication));
+        assertEquals(HttpStatus.UNAUTHORIZED, failure.status());
+        assertEquals("ECONOMY_UNAUTHENTICATED", failure.code());
+    }
+
+    @Test
+    void authenticatedJwtMissingClientScopeIsForbiddenBeforePreviewLookup() {
+        AgentBountySettlementController controller = new AgentBountySettlementController(
+                new StaticListableBeanFactory().getBeanProvider(FundedBountySettlementService.class));
+        Jwt missingScope = Jwt.withTokenValue("fixture").header("alg", "none").subject("sub").claim("jiacn", "Tenant").build();
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(missingScope, List.of());
+        assertTrue(authentication.isAuthenticated());
+        FundedBountyException failure = assertThrows(FundedBountyException.class,
+                () -> controller.read("task", authentication));
+        assertEquals(HttpStatus.FORBIDDEN, failure.status());
+        assertEquals("ECONOMY_FORBIDDEN", failure.code());
+    }
+
     private static JwtAuthenticationToken jwt(String subject, String tenant, String client) {
-        return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
-                .subject(subject).claim("jiacn", tenant).claim("client_id", client).build());
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
+                .subject(subject).claim("jiacn", tenant).claim("client_id", client).build(), List.of());
+        assertTrue(authentication.isAuthenticated());
+        return authentication;
     }
 }

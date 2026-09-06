@@ -72,6 +72,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -129,7 +130,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
                 wire(new AgentIdentityRegistryDaoImpl(), template.getMapper(AgentIdentityRegistryMapper.class)),
                 wire(new AgentIdentityAliasDaoImpl(), template.getMapper(AgentIdentityAliasMapper.class)),
                 wire(new AgentPersonaBindingDaoImpl(), template.getMapper(AgentPersonaBindingMapper.class)));
-        AgentRuntimeDaoImpl runtime = wire(new AgentRuntimeDaoImpl(), template.getMapper(AgentRuntimeMapper.class));
+        AgentRuntimeDaoImpl runtime = new AgentRuntimeDaoImpl();
         AgentTaskMutationTransactionImpl mutation = new AgentTaskMutationTransactionImpl(meta, tm);
         AgentTaskAggregationService unusedAggregation = (AgentTaskAggregationService) Proxy.newProxyInstance(
                 AgentTaskAggregationService.class.getClassLoader(), new Class<?>[]{AgentTaskAggregationService.class},
@@ -146,6 +147,8 @@ class FundedBountyQuoteClaimRealTransactionTest {
         context.registerBean(AgentTaskFundingMapper.class, () -> rootTemplate.getMapper(AgentTaskFundingMapper.class));
         context.registerBean(cn.jia.agent.service.AgentTaskMutationTransaction.class, () -> mutation);
         context.registerBean(cn.jia.agent.service.AgentIdentityService.class, () -> identity);
+        // Spring must resolve the inherited @Inject mapper from the real session template.
+        context.registerBean(AgentRuntimeMapper.class, () -> template.getMapper(AgentRuntimeMapper.class));
         context.registerBean(cn.jia.agent.dao.AgentRuntimeDao.class, () -> runtime);
         context.registerBean(AgentLegacyTaskCompatibilityService.class, () -> assignment);
         context.registerBean(AgentCommandTransportCapture.class, () -> capture);
@@ -182,6 +185,8 @@ class FundedBountyQuoteClaimRealTransactionTest {
     @Test
     void productionSpringConstructorCreatesRealQuoteClaimBean() {
         assertEquals(service, context.getBean(FundedBountyQuoteClaimService.class));
+        assertSame(context.getBean(AgentRuntimeMapper.class), ReflectionTestUtils.getField(
+                context.getBean(cn.jia.agent.dao.AgentRuntimeDao.class), "baseMapper"));
         assertTrue(quote(AGENT_A, 2).verifiedSkillMatch());
     }
 
