@@ -13,8 +13,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -30,8 +28,8 @@ class EconomySkillSchemaInitializerMySqlTest {
     private static final String LOCK_TIMEOUT_MESSAGE =
             "Timed out acquiring ECO-V0 skill schema initialization lock";
     private static final long CONCURRENT_INITIALIZATION_DEADLINE_SECONDS = TimeUnit.MINUTES.toSeconds(40);
-    private static final long WORKER_CLEANUP_DEADLINE_SECONDS = 30;
     private final EconomySkillMySqlTestFixture fixture = new EconomySkillMySqlTestFixture();
+    private Throwable concurrentFailure;
 
     @BeforeEach
     void setUp() {
@@ -40,7 +38,7 @@ class EconomySkillSchemaInitializerMySqlTest {
 
     @AfterEach
     void tearDown() {
-        fixture.close();
+        fixture.closePreserving(concurrentFailure);
     }
 
     @Test
@@ -177,14 +175,14 @@ class EconomySkillSchemaInitializerMySqlTest {
     void concurrentInitializersSerializeWholeSchemaAndExactTriggerCreation() throws Throwable {
         EconomySkillMySqlTestFixture.Database database = fixture.newDatabase("concurrent");
         JdbcTemplate first = database.jdbc();
-        JdbcTemplate second = new JdbcTemplate(database.dataSource());
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        Throwable primaryFailure = null;
-        try {
-            Future<InitializationOutcome> one = executor.submit(() -> initializeAtBarrier(first, ready, start));
-            Future<InitializationOutcome> two = executor.submit(() -> initializeAtBarrier(second, ready, start));
+        // Resource close failures are suppressed onto the primary failure by try-with-resources.
+        try (EconomySkillMySqlTestFixture.InitializerWorkers workers = fixture.initializerWorkers()) {
+            Future<InitializationOutcome> one = workers.submit(
+                    () -> initializeAtBarrier(workers, database, ready, start));
+            Future<InitializationOutcome> two = workers.submit(
+                    () -> initializeAtBarrier(workers, database, ready, start));
             assertTrue(ready.await(10, TimeUnit.SECONDS), "initializers did not reach barrier");
             start.countDown();
             long deadline = System.nanoTime()
@@ -197,25 +195,10 @@ class EconomySkillSchemaInitializerMySqlTest {
                     () -> assertTrue(firstOutcome.succeeded() || secondOutcome.succeeded(),
                             "at least one concurrent initializer must complete successfully"));
         } catch (Throwable failure) {
-            primaryFailure = failure;
+            concurrentFailure = failure;
             throw failure;
         } finally {
             start.countDown();
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(WORKER_CLEANUP_DEADLINE_SECONDS, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                    if (!executor.awaitTermination(WORKER_CLEANUP_DEADLINE_SECONDS, TimeUnit.SECONDS)) {
-                        throw new IllegalStateException("initializer workers did not terminate before fixture cleanup");
-                    }
-                }
-            } catch (Throwable cleanupFailure) {
-                if (primaryFailure != null) {
-                    primaryFailure.addSuppressed(cleanupFailure);
-                } else {
-                    throw cleanupFailure;
-                }
-            }
         }
         assertEquals(7, first.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
@@ -228,11 +211,14 @@ class EconomySkillSchemaInitializerMySqlTest {
     }
 
     private InitializationOutcome initializeAtBarrier(
-            JdbcTemplate jdbc, CountDownLatch ready, CountDownLatch start) throws InterruptedException {
+            EconomySkillMySqlTestFixture.InitializerWorkers workers,
+            EconomySkillMySqlTestFixture.Database database,
+            CountDownLatch ready, CountDownLatch start) throws InterruptedException {
         ready.countDown();
         if (!start.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("initializer start was not released");
         try {
-            new EconomySkillSchemaInitializer(jdbc).afterPropertiesSet();
+            // Connection establishment is inside the shared fixture deadline, not the 10s start barrier.
+            new EconomySkillSchemaInitializer(workers.jdbc(database.dataSource())).afterPropertiesSet();
             return InitializationOutcome.success();
         } catch (Throwable failure) {
             return InitializationOutcome.failure(failure);
