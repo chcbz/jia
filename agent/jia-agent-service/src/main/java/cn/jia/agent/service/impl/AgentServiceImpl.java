@@ -143,6 +143,15 @@ public class AgentServiceImpl implements AgentService {
         hostingWorkAdmission.requireNewWork(tenantId, clientId, canonicalAgentId);
     }
 
+    private cn.jia.agent.skill.SkillAgentVersions skillAgentVersions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkillAgentVersions(cn.jia.agent.skill.SkillAgentVersions versions) {
+        this.skillAgentVersions = versions;
+    }
+    private void observeSkillLifecycle(AgentRuntimeEntity row) {
+        if (skillAgentVersions != null) skillAgentVersions.observe(row);
+    }
+
     private volatile FundedBountyService fundedBountyService;
     private volatile FundedBountyLegacyGuard fundedBountyLegacyGuard =
             FundedBountyLegacyGuard.unconfigured();
@@ -295,8 +304,10 @@ public class AgentServiceImpl implements AgentService {
 
         if (entity.getId() == null) {
             agentRuntimeDao.insert(entity);
+            observeSkillLifecycle(entity);
         } else {
             agentRuntimeDao.updateById(entity);
+            observeSkillLifecycle(entity);
         }
         publishAgentSnapshotAfterCommit("agent-register", clientId, jiacn, toRuntimeDTO(entity));
         return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());
@@ -447,6 +458,7 @@ public class AgentServiceImpl implements AgentService {
             runtime.setStatus(AgentConstants.STATUS_OFFLINE);
             runtime.setLastSeenAt(System.currentTimeMillis());
             require(agentRuntimeDao.updateById(runtime) == 1, "Agent runtime update failed");
+            observeSkillLifecycle(runtime);
             publishAgentSnapshotAfterCommit("agent-unbind", clientId, jiacn, toRuntimeDTO(runtime));
         }
     }
@@ -550,6 +562,7 @@ public class AgentServiceImpl implements AgentService {
         }
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
+        observeSkillLifecycle(entity);
         AgentRuntimeDTO dto = toRuntimeDTO(entity);
         publishAgentSnapshotAfterCommit("agent-presence", clientId, jiacn, dto);
         return dto;
@@ -1376,8 +1389,10 @@ public class AgentServiceImpl implements AgentService {
         runtime.setErrorMessage(null);
         if (runtime.getId() == null) {
             agentRuntimeDao.insert(runtime);
+            observeSkillLifecycle(runtime);
         } else {
             agentRuntimeDao.updateById(runtime);
+            observeSkillLifecycle(runtime);
         }
         return toRuntimeDTO(runtime);
     }
@@ -2212,6 +2227,7 @@ codexTimeoutMs=900000
                 ? failureReason : null);
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
+        observeSkillLifecycle(entity);
         return toRuntimeDTO(entity);
     }
 

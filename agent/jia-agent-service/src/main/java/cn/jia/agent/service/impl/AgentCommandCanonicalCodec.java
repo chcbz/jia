@@ -3,6 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandPayload;
+import cn.jia.agent.entity.AgentSkillInstallPayload;
 import cn.jia.agent.entity.AgentHallCommandContext;
 import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
@@ -97,7 +98,7 @@ public final class AgentCommandCanonicalCodec {
     }
 
     public static boolean isSupportedCommandType(String commandType) {
-        return HALL_COMMAND_TYPES.contains(commandType);
+        return "SKILL_INSTALL".equals(commandType) || HALL_COMMAND_TYPES.contains(commandType);
     }
 
     public static boolean isHallIntentCommand(AgentCommandDraft draft) {
@@ -169,6 +170,11 @@ public final class AgentCommandCanonicalCodec {
         number(json, "expiresAt", draft.expiresAt());
         if (isHallIntentCommand(draft)) string(json, "intentId", draft.intentId());
         number(json, "attempt", attempt);
+        if (draft.payload() instanceof AgentSkillInstallPayload p) {
+            string(json,"requestId",p.installationId());
+            string(json,"fencingToken","1"); string(json,"deliveryEpoch","1");
+            skillFields(json,p);
+        }
         payload(json, draft.payload());
         json.append('}');
         return bounded(json);
@@ -184,7 +190,7 @@ public final class AgentCommandCanonicalCodec {
             String commandType = text(root, "commandType");
             boolean hall = root.has("intentId");
             if (root.size() != (hall ? 14 : 13)) throw invalid("business envelope contains unknown fields");
-            AgentCommandPayload decodedPayload = hall
+            AgentCommandPayload decodedPayload = "SKILL_INSTALL".equals(commandType) ? decodeSkill(root.get("payload")) : hall
                     ? decodeHallPayload(root.get("payload"))
                     : decodeTaskInvitePayload(root.get("payload"));
             AgentCommandDraft draft = new AgentCommandDraft(
@@ -266,6 +272,23 @@ public final class AgentCommandCanonicalCodec {
             throw invalid("correlationId must equal taskId");
         }
         if (draft.issuedAt() <= 0) throw invalid("issuedAt must be positive");
+        if ("SKILL_INSTALL".equals(draft.commandType())) {
+            if (!(draft.payload() instanceof AgentSkillInstallPayload p) || draft.intentId()!=null
+                    || !draft.taskId().equals(p.orderId()) || !draft.causationId().equals(p.installationId())
+                    || !draft.commandId().equals("cmd_skill_" + p.installationId()) || draft.workItemId()!=null)
+                throw invalid("SKILL_INSTALL identity mismatch");
+            requireExact(p.orderId(),"orderId",100); requireExact(p.installationId(),"installationId",100);
+            requireExact(p.productVersionId(),"productVersionId",100);
+            if (!p.skillKey().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || !p.skillVersion().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+                    || !p.packageSize().matches("[1-9][0-9]{0,18}")
+                    || Long.parseLong(p.packageSize())>16777216L
+                    || !p.packageDigest().matches("sha256:[0-9a-f]{64}")
+                    || !p.downloadPath().equals("/internal/agent/skill-installations/"+p.installationId()+"/package"))
+                throw invalid("SKILL_INSTALL package mismatch");
+            requireFixedExpiry(draft,TASK_INVITE_TTL_MILLIS,"SKILL_INSTALL");
+            return;
+        }
         if (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())
                 && draft.intentId() == null) {
             String expected = taskInviteCommandId(
@@ -398,11 +421,25 @@ public final class AgentCommandCanonicalCodec {
                 nullableText(node, "autonomyLevel"), requiresApproval, decodedContext);
     }
 
+    private static AgentSkillInstallPayload decodeSkill(JsonNode n) {
+        requireObjectSize(n,8,"SKILL_INSTALL payload");
+        return new AgentSkillInstallPayload(text(n,"orderId"),text(n,"installationId"),text(n,"productVersionId"),
+                text(n,"skillKey"),text(n,"skillVersion"),text(n,"packageSize"),text(n,"packageDigest"),text(n,"downloadPath"));
+    }
+    private static void skillFields(StringBuilder json,AgentSkillInstallPayload p) {
+        string(json,"orderId",p.orderId()); string(json,"installationId",p.installationId());
+        string(json,"productVersionId",p.productVersionId()); string(json,"skillKey",p.skillKey());
+        string(json,"skillVersion",p.skillVersion()); string(json,"packageSize",p.packageSize());
+        string(json,"packageDigest",p.packageDigest()); string(json,"downloadPath",p.downloadPath());
+    }
+
     private static void payload(StringBuilder json, AgentCommandPayload payload) {
         if (payload instanceof AgentTaskInvitePayload invite) {
             taskInvitePayload(json, invite);
         } else if (payload instanceof AgentHallCommandPayload hall) {
             hallPayload(json, hall);
+        } else if (payload instanceof AgentSkillInstallPayload p) {
+            json.append(",\"payload\":{"); skillFields(json,p); json.append('}');
         } else {
             throw invalid("payload type is outside the frozen allowlist");
         }

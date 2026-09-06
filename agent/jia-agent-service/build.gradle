@@ -9,6 +9,10 @@ dependencies {
     compileOnly project(':task:jia-task-core')
     compileOnly project(':task:jia-task-api')
     compileOnly project(':oauth:jia-oauth-api')
+    compileOnly 'org.springframework.security:spring-security-config'
+    compileOnly 'org.springframework.security:spring-security-web'
+    testImplementation 'org.springframework.security:spring-security-config'
+    testImplementation 'org.springframework.security:spring-security-web'
     compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
     compileOnly 'org.springframework.security:spring-security-oauth2-jose'
     implementation project(':common:jia-common-service')

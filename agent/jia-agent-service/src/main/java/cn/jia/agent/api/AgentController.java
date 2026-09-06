@@ -73,6 +73,9 @@ import java.util.Objects;
 public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
+    private cn.jia.agent.skill.SkillRosterProjection skillRoster;
+    @Autowired
+    public void setSkillRoster(cn.jia.agent.skill.SkillRosterProjection projection) { this.skillRoster=projection; }
     private HostingRentApplicationService hostingRent;
 
     @Autowired
@@ -193,7 +196,10 @@ public class AgentController {
     public Object roster(@RequestBody AgentRosterSearchDTO request) {
         int pageNum = request.getPageNum() == null ? 1 : request.getPageNum();
         int pageSize = request.getPageSize() == null ? 50 : request.getPageSize();
-        return page(agentService.listRoster(request.getStatus(), request.getAbility(), pageNum, pageSize));
+        var result=agentService.listRoster(request.getStatus(), request.getAbility(), pageNum, pageSize);
+        if (skillRoster != null) skillRoster.project(
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication(), result.getList());
+        return page(result);
     }
 
     @GetMapping("/{agentId}")
