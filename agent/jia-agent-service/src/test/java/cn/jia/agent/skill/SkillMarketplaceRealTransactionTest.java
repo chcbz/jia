@@ -21,6 +21,7 @@ import org.mybatis.spring.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.*;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
@@ -38,6 +39,33 @@ import static org.mockito.ArgumentMatchers.*;
 class SkillMarketplaceRealTransactionTest {
     private static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("payer-sub","Tenant-A","Client-A");
     private static final String AGENT="agt_00000000000000000000000000000001";
+    private static final String TRANSPORT_SCHEMA="db/agent-command-transport-schema.sql";
+    private static final String MYSQL_AUDIT_UPDATE_TRIGGER="""
+            CREATE TRIGGER trg_command_operation_audit_no_update
+            BEFORE UPDATE ON agent_command_operation_audit
+            FOR EACH ROW
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'D09: operation audit rows are immutable after insert';
+            """.strip();
+    private static final String MYSQL_AUDIT_DELETE_TRIGGER="""
+            CREATE TRIGGER trg_command_operation_audit_no_delete
+            BEFORE DELETE ON agent_command_operation_audit
+            FOR EACH ROW
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'D09: physical delete of operation audit rows is forbidden';
+            """.strip();
+    private static final String H2_AUDIT_UPDATE_TRIGGER="""
+            CREATE TRIGGER trg_command_operation_audit_no_update
+            BEFORE UPDATE ON agent_command_operation_audit
+            FOR EACH ROW
+            CALL "cn.jia.agent.skill.SkillAuditMutationRejectTrigger";
+            """.strip();
+    private static final String H2_AUDIT_DELETE_TRIGGER="""
+            CREATE TRIGGER trg_command_operation_audit_no_delete
+            BEFORE DELETE ON agent_command_operation_audit
+            FOR EACH ROW
+            CALL "cn.jia.agent.skill.SkillAuditMutationRejectTrigger";
+            """.strip();
     private JdbcTemplate jdbc;
     private EconomySkillMarketplaceMapper market;
     private EconomySkillApplicationMapper app;
@@ -107,6 +135,32 @@ class SkillMarketplaceRealTransactionTest {
         ledger.insertAccountIfAbsent(new EconomyAccountEntity().setAccountId("wallet").setOwnerType("USER").setOwnerId(ACTOR.actorId()).setPurpose("AVAILABLE")
                 .setCurrency("SILVER").setBalanceMicro(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
                 .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
+    }
+    @Test void operationAuditRowsRejectUpdateAndDeleteAndRemainUnchanged() {
+        jdbc.update("""
+                INSERT INTO agent_command_operation_audit
+                  (operation_id,phase,operation_type,tenant_id,client_id,task_id,target_agent_id,
+                   source_message_id,delivery_id,requester_id,reason,ticket_reference,requested_at,
+                   outcome,created_by,created_at)
+                VALUES('audit-op-1','REQUEST','BROKER_REDRIVE',?,?,?,?,'message-1',1,
+                       'requester','fixture audit reason','ticket-1',1,'REQUESTED','creator',1)
+                """,ACTOR.tenantId(),ACTOR.clientId(),"task-1",AGENT);
+        Map<String,Object> before=jdbc.queryForMap(
+                "SELECT * FROM agent_command_operation_audit WHERE operation_id='audit-op-1'");
+
+        DataAccessException update=assertThrows(DataAccessException.class,()->jdbc.update(
+                "UPDATE agent_command_operation_audit SET outcome='FAILED' WHERE operation_id='audit-op-1'"));
+        assertTrue(update.getMostSpecificCause().getMessage().contains(
+                "D09: operation audit rows are immutable after insert"));
+        DataAccessException delete=assertThrows(DataAccessException.class,()->jdbc.update(
+                "DELETE FROM agent_command_operation_audit WHERE operation_id='audit-op-1'"));
+        assertTrue(delete.getMostSpecificCause().getMessage().contains(
+                "D09: physical delete of operation audit rows is forbidden"));
+
+        assertEquals(before,jdbc.queryForMap(
+                "SELECT * FROM agent_command_operation_audit WHERE operation_id='audit-op-1'"));
+        assertEquals(1,jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_command_operation_audit WHERE operation_id='audit-op-1'",Integer.class));
     }
     @Test void paidPurchaseInstallsCapturesAndReplaysOriginalReceipt() {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();var receipt=service.purchase(ACTOR,idem,body,false);
@@ -267,8 +321,30 @@ class SkillMarketplaceRealTransactionTest {
                         + "(?:\\s+COMMENT='(?:''|[^'])*')?\\s*;",");")
                 .replaceAll("(?i)\\s+COLLATE\\s+[a-z0-9_]+","")
                 .replaceAll("(?i)\\s+CHARACTER SET\\s+[a-z0-9_]+","");
+        h2=adaptTransportAuditTriggers(resource,h2);
         new ResourceDatabasePopulator(new ByteArrayResource(h2.getBytes(StandardCharsets.UTF_8)))
                 .execute(Objects.requireNonNull(jdbc.getDataSource()));
+    }
+    private static String adaptTransportAuditTriggers(String resource,String sql) {
+        if(!TRANSPORT_SCHEMA.equals(resource)) return sql;
+        if(occurrences(sql,"CREATE TRIGGER ")!=2 || occurrences(sql,"DROP TRIGGER IF EXISTS ")!=2
+                || occurrences(sql,MYSQL_AUDIT_UPDATE_TRIGGER)!=1
+                || occurrences(sql,MYSQL_AUDIT_DELETE_TRIGGER)!=1) {
+            throw new IllegalStateException("D09 fixture requires two exact immutable audit trigger definitions");
+        }
+        String adapted=sql.replace(MYSQL_AUDIT_UPDATE_TRIGGER,H2_AUDIT_UPDATE_TRIGGER)
+                .replace(MYSQL_AUDIT_DELETE_TRIGGER,H2_AUDIT_DELETE_TRIGGER);
+        if(occurrences(adapted,"CREATE TRIGGER ")!=2
+                || occurrences(adapted,"CALL \"cn.jia.agent.skill.SkillAuditMutationRejectTrigger\"")!=2
+                || adapted.contains("SIGNAL SQLSTATE")) {
+            throw new IllegalStateException("D09 fixture audit trigger adaptation drifted");
+        }
+        return adapted;
+    }
+    private static int occurrences(String value,String token) {
+        int count=0;
+        for(int index=0;(index=value.indexOf(token,index))>=0;index+=token.length()) count++;
+        return count;
     }
     @SuppressWarnings("unchecked") static <T> ObjectProvider<T> provider(T value) {
         ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);return p;
