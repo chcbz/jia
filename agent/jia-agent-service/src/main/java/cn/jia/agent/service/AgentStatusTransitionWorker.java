@@ -24,6 +24,9 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class AgentStatusTransitionWorker {
+    private cn.jia.agent.skill.SkillAgentVersions skillAgentVersions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkillAgentVersions(cn.jia.agent.skill.SkillAgentVersions versions) { this.skillAgentVersions=versions; }
     private final AgentPersonaBindingDao bindingDao;
     private final AgentIdentityRegistryDao identityRegistryDao;
     private final AgentRuntimeDao runtimeDao;
@@ -44,6 +47,7 @@ public class AgentStatusTransitionWorker {
                 ? observedAt : Math.max(currentLastSeenAt, observedAt));
         current.setStatus(nextStatus);
         requireUpdated(runtimeDao.updateById(current), current.getAgentId());
+        if (skillAgentVersions != null) skillAgentVersions.observe(current);
         return Transition.from(current, statusChanged);
     }
 
@@ -66,6 +70,7 @@ public class AgentStatusTransitionWorker {
         current.setCurrentTaskTitle(null);
         current.setErrorMessage(null);
         requireUpdated(runtimeDao.updateById(current), current.getAgentId());
+        if (skillAgentVersions != null) skillAgentVersions.observe(current);
         return Transition.from(current, true);
     }
 

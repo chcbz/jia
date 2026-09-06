@@ -43,10 +43,14 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.AgentHostingWorkAdmission;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.HostingRentAdmissionService;
+import cn.jia.agent.service.funding.FundedBountyLegacyGuard;
+import cn.jia.agent.service.funding.FundedBountyService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.service.AgentService;
@@ -125,6 +129,32 @@ public class AgentServiceImpl implements AgentService {
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter taskEventWriter;
     private final AgentCommandTransportCapture commandTransportCapture;
+    private final HostingRentAdmissionService hostingRentAdmissionService;
+    // Direct legacy test construction has no managed leases. Spring requires the real gate bean.
+    private AgentHostingWorkAdmission hostingWorkAdmission = (tenant, client, agent) -> { };
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setHostingWorkAdmission(AgentHostingWorkAdmission admission) {
+        this.hostingWorkAdmission = Objects.requireNonNull(admission);
+    }
+
+    @Override
+    public void requireHostingNewWork(String tenantId, String clientId, String canonicalAgentId) {
+        hostingWorkAdmission.requireNewWork(tenantId, clientId, canonicalAgentId);
+    }
+
+    private cn.jia.agent.skill.SkillAgentVersions skillAgentVersions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkillAgentVersions(cn.jia.agent.skill.SkillAgentVersions versions) {
+        this.skillAgentVersions = versions;
+    }
+    private void observeSkillLifecycle(AgentRuntimeEntity row) {
+        if (skillAgentVersions != null) skillAgentVersions.observe(row);
+    }
+
+    private volatile FundedBountyService fundedBountyService;
+    private volatile FundedBountyLegacyGuard fundedBountyLegacyGuard =
+            FundedBountyLegacyGuard.unconfigured();
 
     /** Backward-compatible constructor used by existing focused tests with all M3 flags OFF. */
     public AgentServiceImpl(
@@ -153,7 +183,6 @@ public class AgentServiceImpl implements AgentService {
                 taskEventWriter, AgentCommandTransportCapture.disabledForLegacyConstruction());
     }
 
-    @Autowired
     public AgentServiceImpl(
             AgentRuntimeDao agentRuntimeDao,
             AgentIdentityService agentIdentityService,
@@ -173,6 +202,35 @@ public class AgentServiceImpl implements AgentService {
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter taskEventWriter,
             AgentCommandTransportCapture commandTransportCapture) {
+        this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
+                agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
+                taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
+                scopePublicationCoordinator, sceneFeatureFlags, mutationTransaction,
+                taskEventWriter, commandTransportCapture, HostingRentAdmissionService.unconfigured());
+    }
+
+    @Autowired
+    public AgentServiceImpl(
+            AgentRuntimeDao agentRuntimeDao,
+            AgentIdentityService agentIdentityService,
+            AgentPersonaDao agentPersonaDao,
+            AgentPersonaBindingDao agentPersonaBindingDao,
+            AgentTaskMetaDao agentTaskMetaDao,
+            AgentTaskMemberDao agentTaskMemberDao,
+            AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService,
+            AgentTaskNoteDao agentTaskNoteDao,
+            DialogueTemplateDao dialogueTemplateDao,
+            ObjectProvider<AgentEventPublisher> eventPublisherProvider,
+            ObjectProvider<TaskService> taskServiceProvider,
+            ObjectProvider<ApiKeyService> apiKeyServiceProvider,
+            ObjectProvider<AgentSceneService> sceneServiceProvider,
+            AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentSceneFeatureFlags sceneFeatureFlags,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter taskEventWriter,
+            AgentCommandTransportCapture commandTransportCapture,
+            HostingRentAdmissionService hostingRentAdmissionService) {
         this.agentRuntimeDao = agentRuntimeDao;
         this.agentIdentityService = agentIdentityService;
         this.agentPersonaDao = agentPersonaDao;
@@ -191,6 +249,19 @@ public class AgentServiceImpl implements AgentService {
         this.mutationTransaction = mutationTransaction;
         this.taskEventWriter = taskEventWriter;
         this.commandTransportCapture = commandTransportCapture;
+        this.hostingRentAdmissionService = Objects.requireNonNull(
+                hostingRentAdmissionService, "hostingRentAdmissionService");
+    }
+
+    @Autowired
+    void configureFundedBountyService(ObjectProvider<FundedBountyService> provider) {
+        this.fundedBountyService = Objects.requireNonNull(provider, "provider").getIfAvailable();
+    }
+
+    @Autowired
+    void configureFundedBountyLegacyGuard(ObjectProvider<FundedBountyLegacyGuard> provider) {
+        this.fundedBountyLegacyGuard = Objects.requireNonNull(provider, "provider")
+                .getIfAvailable(FundedBountyLegacyGuard::failClosed);
     }
 
     @Override
@@ -233,8 +304,10 @@ public class AgentServiceImpl implements AgentService {
 
         if (entity.getId() == null) {
             agentRuntimeDao.insert(entity);
+            observeSkillLifecycle(entity);
         } else {
             agentRuntimeDao.updateById(entity);
+            observeSkillLifecycle(entity);
         }
         publishAgentSnapshotAfterCommit("agent-register", clientId, jiacn, toRuntimeDTO(entity));
         return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());
@@ -341,16 +414,22 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentPersonaBindResultDTO bindPersona(String personaCode, String mode) {
+        String normalizedMode = normalizeBindMode(mode);
+        if (BIND_MODE_SERVER.equals(normalizedMode)) {
+            hostingRentAdmissionService.requireServerBindAvailable();
+        }
         AgentRuntimeDTO agent = bindPersona(personaCode);
         AgentPersonaEntity persona = requirePersona(personaCode);
-        String normalizedMode = StringUtil.isBlank(mode) ? BIND_MODE_LOCAL : mode.trim().toLowerCase();
-        if (BIND_MODE_SERVER.equals(normalizedMode)) {
-            return buildServerHostedBinding(agent, persona);
+        return buildLocalBindingGuide(agent, persona);
+    }
+
+    private String normalizeBindMode(String mode) {
+        String normalizedMode = StringUtil.isBlank(mode)
+                ? BIND_MODE_LOCAL : mode.trim().toLowerCase(Locale.ROOT);
+        if (!BIND_MODE_LOCAL.equals(normalizedMode) && !BIND_MODE_SERVER.equals(normalizedMode)) {
+            throw new IllegalArgumentException("Unsupported bind mode: " + mode);
         }
-        if (BIND_MODE_LOCAL.equals(normalizedMode)) {
-            return buildLocalBindingGuide(agent, persona);
-        }
-        throw new IllegalArgumentException("Unsupported bind mode: " + mode);
+        return normalizedMode;
     }
 
     @Override
@@ -379,6 +458,7 @@ public class AgentServiceImpl implements AgentService {
             runtime.setStatus(AgentConstants.STATUS_OFFLINE);
             runtime.setLastSeenAt(System.currentTimeMillis());
             require(agentRuntimeDao.updateById(runtime) == 1, "Agent runtime update failed");
+            observeSkillLifecycle(runtime);
             publishAgentSnapshotAfterCommit("agent-unbind", clientId, jiacn, toRuntimeDTO(runtime));
         }
     }
@@ -482,6 +562,7 @@ public class AgentServiceImpl implements AgentService {
         }
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
+        observeSkillLifecycle(entity);
         AgentRuntimeDTO dto = toRuntimeDTO(entity);
         publishAgentSnapshotAfterCommit("agent-presence", clientId, jiacn, dto);
         return dto;
@@ -636,6 +717,9 @@ public class AgentServiceImpl implements AgentService {
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO createTask(AgentTaskCreateDTO request) {
         require(request != null && !StringUtil.isBlank(request.getTitle()), "title is required");
+        require(request.getGrossBountyAmountMicro() == null && request.getSettlementPolicy() == null
+                        && request.getRequiredSkillRequirements() == null,
+                "funded task fields require the funded bounty endpoint");
 
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
@@ -775,6 +859,7 @@ public class AgentServiceImpl implements AgentService {
         require(!requestedAgentIds.isEmpty(), "agentId is required");
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
+        requireLegacyAssignmentAllowed(tenantId, clientId, taskId, automatic, requestedAgentIds.size());
         List<String> agentIds = legacyTaskCompatibilityService.resolveAgentIds(
                 tenantId, clientId, tenantId, requestedAgentIds);
         boolean allowQueue = Boolean.TRUE.equals(request.getAllowQueue());
@@ -794,18 +879,30 @@ public class AgentServiceImpl implements AgentService {
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
                         tenantId, clientId, taskId, agentIds, automatic,
-                        (lockedTask, canonicalAgentIds) -> {
-                            List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
-                                    .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
-                                    .toList();
-                            for (AgentRuntimeEntity agent : runtimes) {
-                                validateAssignableAgent(agent, allowQueue);
-                                validateAbility(agent, lockedTask);
+                        new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
+                            @Override
+                            public void beforeIdentityLock(
+                                    AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
+                                requireLegacyAssignmentAllowedLocked(tenantId, clientId,
+                                        lockedTask.getTaskId(), automatic, canonicalAgentIds.size());
                             }
-                            if (automatic) {
-                                validateCompleteAbilityCoverage(runtimes, lockedTask);
+
+                            @Override
+                            public void validate(
+                                    AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
+                                List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
+                                        .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
+                                        .toList();
+                                for (AgentRuntimeEntity agent : runtimes) {
+                                    requireHostingNewWork(tenantId, clientId, agent.getAgentId());
+                                    validateAssignableAgent(agent, allowQueue);
+                                    validateAbility(agent, lockedTask);
+                                }
+                                if (automatic) {
+                                    validateCompleteAbilityCoverage(runtimes, lockedTask);
+                                }
+                                lockedAssignedAgents.set(List.copyOf(runtimes));
                             }
-                            lockedAssignedAgents.set(List.copyOf(runtimes));
                         });
         AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
                 agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
@@ -853,6 +950,7 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request) {
+        requireLegacyAssignmentAllowed(resolveCurrentJiacn(), resolveCurrentClientId(), taskId, true, 1);
         AgentTaskDTO task = getTask(taskId);
         List<AgentTaskRecommendationDTO> recommendations = recommendTaskAssignees(taskId);
         List<String> selectedAgentIds = selectAutoAssignAgentIds(task, recommendations);
@@ -871,6 +969,7 @@ public class AgentServiceImpl implements AgentService {
         require(!StringUtil.isBlank(request.getAgentId()), "agentId is required");
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
+        requireLegacyLifecycleAllowed(tenantId, clientId, taskId);
         String reportingAgentId = legacyTaskCompatibilityService.resolveAgentId(
                 tenantId, clientId, tenantId, request.getAgentId());
         requireOwnedAgent(requireAgent(reportingAgentId));
@@ -966,6 +1065,7 @@ public class AgentServiceImpl implements AgentService {
         return mutationTransaction.executeWithLockedTaskRoot(
                 tenantId, clientId, taskId, taskRoot -> {
                     requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
+                    requireLegacyLifecycleAllowedLocked(tenantId, clientId, taskId);
                     AgentTaskStatus currentStatus;
                     try {
                         currentStatus = AgentTaskStatus.fromPersistedValue(
@@ -1289,8 +1389,10 @@ public class AgentServiceImpl implements AgentService {
         runtime.setErrorMessage(null);
         if (runtime.getId() == null) {
             agentRuntimeDao.insert(runtime);
+            observeSkillLifecycle(runtime);
         } else {
             agentRuntimeDao.updateById(runtime);
+            observeSkillLifecycle(runtime);
         }
         return toRuntimeDTO(runtime);
     }
@@ -1936,8 +2038,35 @@ codexTimeoutMs=900000
         dto.setStartedAt(meta.getStartedAt());
         dto.setCompletedAt(meta.getCompletedAt());
         dto.setFailureReason(meta.getFailureReason());
+        dto.setTaskVersion(meta.getTaskVersion() == null ? null : Long.toString(meta.getTaskVersion()));
+        FundedBountyService fundingService = this.fundedBountyService;
+        if (fundingService != null) {
+            dto.setFunding(fundingService.findFunding(meta.getTenantId(), meta.getClientId(), meta.getTaskId()));
+            dto.setRequiredSkillRequirements(fundingService.requiredSkills(
+                    meta.getTenantId(), meta.getClientId(), meta.getTaskId()));
+        }
         enrichTaskPlan(dto, meta.getTaskId());
         return dto;
+    }
+
+    private void requireLegacyAssignmentAllowed(String tenantId, String clientId, String taskId,
+            boolean automatic, int targetCount) {
+        fundedBountyLegacyGuard.requireAssignmentAllowed(
+                tenantId, clientId, taskId, automatic, targetCount, false);
+    }
+
+    private void requireLegacyAssignmentAllowedLocked(String tenantId, String clientId, String taskId,
+            boolean automatic, int targetCount) {
+        fundedBountyLegacyGuard.requireAssignmentAllowed(
+                tenantId, clientId, taskId, automatic, targetCount, true);
+    }
+
+    private void requireLegacyLifecycleAllowed(String tenantId, String clientId, String taskId) {
+        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, false);
+    }
+
+    private void requireLegacyLifecycleAllowedLocked(String tenantId, String clientId, String taskId) {
+        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
     }
 
     private void applyAssignmentProjection(
@@ -2098,6 +2227,7 @@ codexTimeoutMs=900000
                 ? failureReason : null);
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
+        observeSkillLifecycle(entity);
         return toRuntimeDTO(entity);
     }
 

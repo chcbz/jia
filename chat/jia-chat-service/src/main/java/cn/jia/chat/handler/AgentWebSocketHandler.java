@@ -95,6 +95,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
             AgentProtocolConstants.TYPE_TASK_EVENT);
 
+    private cn.jia.agent.skill.SkillInstallResultService skillResults;
+    @Autowired
+    public void setSkillResults(cn.jia.agent.skill.SkillInstallResultService results) { this.skillResults=results; }
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ChatMessageDao chatMessageDao;
@@ -204,6 +207,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
 
+        // Dedicated durable skill branch BEFORE generic task normalization; never completes coding work.
+        if ("SKILL_INSTALL_RESULT".equals(payload.get("resultType"))) {
+            try {
+                handleSkillInstallResult(session,STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(),MESSAGE_TYPE));
+            } catch (RuntimeException malformed) {
+                sendProtocolError(session,Map.of(),"SKILL_RESULT_REJECTED","Malformed skill result");
+            }
+            return;
+        }
         AgentProtocolMessageNormalizer.NormalizedMessage normalized;
         try {
             normalized = protocolMessageNormalizer.normalizeInbound(payload);
@@ -404,6 +416,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 throw new IllegalStateException("Agent registration returned a mismatched canonical identity");
             }
             rememberSessionAgent(session.getId(), result.getAgentId());
+            session.getAttributes().put("skillRegistrationHash", cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash(result.getAgentId(),result.getToken()));
             rememberSuccessfulRegistration(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
@@ -433,6 +446,25 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     tenantId, clientId, agentId, agentId, "AGENT_RECONNECT"));
         } catch (RuntimeException failure) {
             log.warn("Agent reconnect signal was declined after successful registration");
+        }
+    }
+
+    private void handleSkillInstallResult(WebSocketSession session,Map<String,Object> payload) {
+        String agent=sessionAgentId(session), tenant=sessionJiacn(session), client=sessionClientId(session);
+        if (skillResults==null || !validExactDispatchId(agent,100)
+                || !successfullyRegisteredAgentIds(session.getId()).contains(agent)
+                || !validExactDispatchId(tenant,50) || !validExactDispatchId(client,50)
+                || declaredScopeConflict(payload,"tenantId",tenant) || declaredScopeConflict(payload,"clientId",client)
+                || !agent.equals(payload.get("targetAgentId"))
+                || sessionRuntimeInstanceId(session)==null
+                || !validExactDispatchId(strictString(payload.get("runtimeInstanceId")),100)) {
+            sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result identity unavailable"); return;
+        }
+        try {
+            Map<String,Object> receipt=skillResults.accept(tenant,client,agent,sessionAttribute(session,"managedApiKeyId"),payload);
+            sendEvent(session,"work.result.receipt",receipt); // accept() returns only after durable commit
+        } catch (RuntimeException failure) {
+            sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result could not be committed");
         }
     }
 
@@ -1366,6 +1398,33 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
         }
         return false;
+    }
+
+    private boolean matchesManagedSkill(WebSocketSession session,String tenant,String client,String agent,String key,byte[] generation) {
+        return session.isOpen() && agent.equals(sessionAgentId(session)) && tenant.equals(sessionJiacn(session))
+                && client.equals(sessionClientId(session)) && key.equals(sessionAttribute(session,"managedApiKeyId"))
+                && successfullyRegisteredAgentIds(session.getId()).contains(agent)
+                && session.getAttributes().get("skillRegistrationHash") instanceof byte[] hash
+                && java.security.MessageDigest.isEqual(generation,hash);
+    }
+    public boolean isManagedSkillSessionReady(String tenant,String client,String agent,String key,byte[] generation) {
+        return sessions.values().stream().anyMatch(s->matchesManagedSkill(s,tenant,client,agent,key,generation));
+    }
+    public AgentRawCommandDispatchResult dispatchManagedSkill(String tenant,String client,String agent,String key,byte[] generation,byte[] raw) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Skill WebSocket I/O inside transaction");
+        try {
+            var node=STRICT_RAW_COMMAND_JSON.readTree(raw);
+            if (!"SKILL_INSTALL".equals(textJson(node,"commandType"))
+                    || !validRawCommandEnvelope(tenant,client,textJson(node,"orderId"),agent,raw))
+                return AgentRawCommandDispatchResult.rejected();
+        } catch(Exception invalid) { return AgentRawCommandDispatchResult.rejected(); }
+        // Latest registration generation selects one exact authenticated session, not an owner-wide broadcast.
+        for(var session:sessions.values()) if(matchesManagedSkill(session,tenant,client,agent,key,generation)) {
+            try { synchronized(session) { session.sendMessage(new TextMessage(raw)); } return AgentRawCommandDispatchResult.sent(1,1); }
+            catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }
+        }
+        return AgentRawCommandDispatchResult.offline();
     }
 
     public boolean isAgentConnected(String tenantId, String clientId, String agentId) {

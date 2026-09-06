@@ -64,6 +64,9 @@ public final class AgentCommandRabbitConsumer {
     private final AgentCommandRabbitMessageDecoder decoder;
     private final LongSupplier nowMillis;
     private final String leaseOwner;
+    private cn.jia.agent.skill.SkillInstallDispatchService skillDispatch;
+    @Autowired(required=false)
+    public void setSkillDispatch(cn.jia.agent.skill.SkillInstallDispatchService skills) { this.skillDispatch=skills; }
 
     @Autowired
     public AgentCommandRabbitConsumer(
@@ -178,6 +181,18 @@ public final class AgentCommandRabbitConsumer {
             return completeExpired(token, now);
         }
 
+        if ("SKILL_INSTALL".equals(message.commandType())) {
+            if (skillDispatch==null) return completeDead(message,token,WS_DISPATCH_REJECTED);
+            AgentRawCommandDispatchResult sent;
+            try { sent=skillDispatch.dispatch(message.tenantId(),message.clientId(),message.taskId(),message.targetAgentId(),message.commandId(),message.rawWireBytes()); }
+            catch(RuntimeException unavailable) { return parkClaimedTransient(message,token,WS_SEND_FAILED,WS_RETRY_EXHAUSTED); }
+            return switch(sent.status()) {
+                case SENT -> completeSent(message,token);
+                case OFFLINE -> completeWaitingAgent(message,token);
+                case SEND_FAILED -> parkClaimedTransient(message,token,WS_SEND_FAILED,WS_RETRY_EXHAUSTED);
+                case REJECTED -> completeDead(message,token,WS_DISPATCH_REJECTED);
+            };
+        }
         AgentTaskAccessLevel access;
         try {
             access = accessService.resolveMemberAccess(

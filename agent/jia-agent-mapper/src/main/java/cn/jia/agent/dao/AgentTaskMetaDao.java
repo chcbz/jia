@@ -30,6 +30,9 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
             String tenantId, String clientId, String taskId);
 
+    int updateAssignmentByVersion(AgentTaskMetaEntity task, long expectedVersion,
+            long resultVersion, long updateTime);
+
     int updateStatusByVersion(String tenantId, String clientId, String taskId,
             long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
             String failureReason);

@@ -17,6 +17,7 @@ include 'oauth:jia-oauth-core', 'oauth:jia-oauth-api', 'oauth:jia-oauth-mapper',
         'oauth:jia-oauth-service', 'oauth:jia-oauth-resource',
         'oauth:jia-oauth-server-starter', 'oauth:jia-oauth-client-starter', 'oauth:jia-oauth-resource-starter'
 include 'point:jia-point-core', 'point:jia-point-api', 'point:jia-point-service', 'point:jia-point-mapper'
+include 'economy:jia-economy-core', 'economy:jia-economy-api', 'economy:jia-economy-service', 'economy:jia-economy-mapper'
 include 'sms:jia-sms-core', 'sms:jia-sms-api', 'sms:jia-sms-service', 'sms:jia-sms-mapper', 'sms:jia-sms-starter'
 include 'task:jia-task-core', 'task:jia-task-api', 'task:jia-task-service', 'task:jia-task-mapper', 'task:jia-task-starter'
 include 'user:jia-user-core', 'user:jia-user-api', 'user:jia-user-service', 'user:jia-user-mapper', 'user:jia-user-starter'

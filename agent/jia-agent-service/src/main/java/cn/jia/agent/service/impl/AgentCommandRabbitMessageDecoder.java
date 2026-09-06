@@ -22,7 +22,7 @@ import java.util.Set;
 
 /** Strict D03 AMQP provenance decoder. No decoded representation is used for WebSocket output. */
 final class AgentCommandRabbitMessageDecoder {
-    private static final Set<String> COMMAND_TYPES = Set.of(
+    private static final Set<String> COMMAND_TYPES = Set.of("SKILL_INSTALL",
             AgentProtocolConstants.COMMAND_TASK_INVITE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME,

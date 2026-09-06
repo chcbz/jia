@@ -23,6 +23,8 @@ dependencies {
     api project(':kefu:jia-kefu-mapper')
     api project(':point:jia-point-service')
     api project(':point:jia-point-mapper')
+    api project(':economy:jia-economy-service')
+    api project(':economy:jia-economy-mapper')
     api project(':wx:jia-wx-service')
     api project(':wx:jia-wx-mapper')
 

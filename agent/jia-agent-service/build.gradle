@@ -1,9 +1,18 @@
 dependencies {
     api project(':agent:jia-agent-api')
+    implementation project(':economy:jia-economy-api')
+    implementation project(':economy:jia-economy-mapper')
+    implementation project(':economy:jia-economy-service')
+    implementation project(':user:jia-user-api')
     implementation project(':agent:jia-agent-mapper')
+    implementation project(':economy:jia-economy-api')
     compileOnly project(':task:jia-task-core')
     compileOnly project(':task:jia-task-api')
     compileOnly project(':oauth:jia-oauth-api')
+    compileOnly 'org.springframework.security:spring-security-config'
+    compileOnly 'org.springframework.security:spring-security-web'
+    testImplementation 'org.springframework.security:spring-security-config'
+    testImplementation 'org.springframework.security:spring-security-web'
     compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
     compileOnly 'org.springframework.security:spring-security-oauth2-jose'
     implementation project(':common:jia-common-service')
@@ -12,6 +21,11 @@ dependencies {
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
+    // W04 integration sources exercise production task and economy collaborators.
+    testImplementation project(':task:jia-task-service')
+    testImplementation project(':task:jia-task-mapper')
+    testImplementation project(':economy:jia-economy-service')
+    testImplementation project(':economy:jia-economy-mapper')
     testImplementation project(':oauth:jia-oauth-api')
     testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
     testImplementation 'org.springframework.security:spring-security-oauth2-jose'
