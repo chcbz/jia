@@ -2,71 +2,105 @@ package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
 import cn.jia.agent.service.AbilityEvaluationService;
+import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
-import cn.jia.agent.service.HostingRentAdmissionException;
+import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.security.AllowSensitiveOutput;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
+import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class AgentControllerTest {
+    private final AgentService agentService = mock(AgentService.class);
+    private final AgentPersonaProvisioningService provisioning = mock(AgentPersonaProvisioningService.class);
+    private final AgentController controller = new AgentController(
+            agentService, mock(AbilityEvaluationService.class), provisioning);
 
     @Test
-    void bindPersonaAllowsSensitiveOutputForSetupApiKey() throws Exception {
+    void bindPersonaNeverAllowsSensitiveOutput() throws Exception {
         Method method = AgentController.class.getDeclaredMethod(
-                "bindPersona", String.class, AgentPersonaBindRequestDTO.class);
-
-        assertNotNull(method.getAnnotation(AllowSensitiveOutput.class));
+                "bindPersona", String.class, AgentPersonaBindRequestDTO.class, Authentication.class);
+        assertNull(method.getAnnotation(AllowSensitiveOutput.class));
     }
 
     @Test
-    void absentEmptyAndBlankModeKeepLegacyLocalBindingCompatibility() throws Exception {
-        AgentService service = mock(AgentService.class);
-        MockMvc mvc = mvc(service);
+    void exactJwtScopeIsForwardedByteExactForEveryPublicOperation() {
+        JwtAuthenticationToken auth = jwt("Owner-A", "Client-A");
+        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
+        request.setMode("local");
 
-        mvc.perform(post("/agent/personas/wuyong/bind"))
-                .andExpect(status().isOk());
-        mvc.perform(post("/agent/personas/wuyong/bind")
-                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
-                .andExpect(status().isOk());
-        mvc.perform(post("/agent/personas/wuyong/bind")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"mode\":\"   \"}"))
-                .andExpect(status().isOk());
-        mvc.perform(post("/agent/personas/wuyong/bind")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"mode\":\"local\"}"))
-                .andExpect(status().isOk());
+        controller.bindPersona("wuyong", request, auth);
+        controller.repairPersonaBinding(17L, auth);
+        controller.unbindPersona("wuyong", auth);
 
-        verify(service, org.mockito.Mockito.times(3)).bindPersona("wuyong");
-        verify(service).bindPersona("wuyong", "local");
+        var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
+                "Owner-A", "Client-A", "Owner-A");
+        verify(provisioning).bind(scope, "wuyong", "local");
+        verify(provisioning).repair(scope, 17L);
+        verify(provisioning).unbind(scope, "wuyong");
+        verifyNoInteractions(agentService);
     }
 
     @Test
-    void legacyServerBindSurfacesStableUnavailableHttpStatus() throws Exception {
-        AgentService service = mock(AgentService.class);
-        when(service.bindPersona("wuyong", "server")).thenThrow(
-                new HostingRentAdmissionException(
-                        HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_CONFIGURED));
+    void directServerModeCannotBypassPaidHostingRentBoundary() {
+        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
+        request.setMode("server");
 
-        mvc(service).perform(post("/agent/personas/wuyong/bind")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"mode\":\"server\"}"))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("HOSTING_RENT_NOT_CONFIGURED"))
-                .andExpect(jsonPath("$.status").value(503));
+        var failure = assertThrows(cn.jia.agent.service.HostingRentAdmissionException.class,
+                () -> controller.bindPersona("wuyong", request, jwt("owner", "client")));
+
+        assertEquals(cn.jia.agent.service.HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY,
+                failure.reason());
+        verifyNoInteractions(provisioning, agentService);
     }
 
-    private static MockMvc mvc(AgentService service) {
-        return MockMvcBuilders.standaloneSetup(
-                new AgentController(service, mock(AbilityEvaluationService.class))).build();
+    @Test
+    void invalidAuthenticationAndClaimsHaveZeroProvisioningSideEffects() {
+        List<Authentication> invalid = new java.util.ArrayList<>();
+        invalid.add(null);
+        invalid.add(UsernamePasswordAuthenticationToken.authenticated("user", "n/a", List.of()));
+        invalid.add(jwtClaims(null, "client"));
+        invalid.add(jwtClaims("owner", null));
+        invalid.add(jwtClaims(7, "client"));
+        invalid.add(jwtClaims("owner", 7));
+        invalid.add(jwt(" owner", "client"));
+        invalid.add(jwt("owner", "client\u00a0"));
+        invalid.add(jwt("owner\n", "client"));
+        invalid.add(jwt("owner\ud800", "client"));
+        invalid.add(jwt("0", "client"));
+        invalid.add(jwt("o".repeat(51), "client"));
+
+        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
+        request.setMode("server");
+        for (Authentication authentication : invalid) {
+            assertThrows(AgentBizException.class,
+                    () -> controller.bindPersona("wuyong", request, authentication));
+            assertThrows(AgentBizException.class,
+                    () -> controller.repairPersonaBinding(1L, authentication));
+            assertThrows(AgentBizException.class,
+                    () -> controller.unbindPersona("wuyong", authentication));
+        }
+        verifyNoInteractions(provisioning, agentService);
+    }
+
+    private static JwtAuthenticationToken jwt(String jiacn, String clientId) {
+        return jwtClaims(jiacn, clientId);
+    }
+
+    private static JwtAuthenticationToken jwtClaims(Object jiacn, Object clientId) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
+        if (jiacn != null) builder.claim("jiacn", jiacn);
+        if (clientId != null) builder.claim("client_id", clientId);
+        return new JwtAuthenticationToken(builder.build(), List.of());
     }
 }

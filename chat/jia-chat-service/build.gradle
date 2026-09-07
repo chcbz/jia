@@ -25,21 +25,23 @@ dependencies {
 	compileOnly libs.spring.boot.starter.websocket
 	compileOnly libs.spring.security.oauth2.client
 	compileOnly libs.spring.security.config
-	compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
-	compileOnly 'org.springframework.security:spring-security-oauth2-jose'
+	compileOnly libs.spring.security.oauth2.resource.server
+	compileOnly libs.spring.security.oauth2.jose
 	compileOnly libs.spring.redis
-	testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
-	testImplementation 'org.springframework.security:spring-security-oauth2-jose'
 	testImplementation libs.spring.security.config
 	testRuntimeOnly('com.github.lansheng228:embedded-redis:7.4.1') { transitive = false }
 //	implementation 'org.springframework.retry:spring-retry'
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')
+	testImplementation project(':agent:jia-agent-service')
 	testImplementation project(':agent:jia-agent-mapper')
 	testImplementation project(':oauth:jia-oauth-api')
 	testImplementation libs.spring.ai.starter.mcp.client
 	testImplementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	testImplementation libs.spring.boot.starter.websocket
+	testImplementation libs.spring.security.oauth2.resource.server
+	testImplementation libs.spring.security.oauth2.jose
+	testRuntimeOnly libs.mysql
 }
 
 version = '1.1.2-SNAPSHOT'

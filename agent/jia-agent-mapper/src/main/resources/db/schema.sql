@@ -828,3 +828,32 @@ BEFORE DELETE ON agent_command_operation_audit
 FOR EACH ROW
 SIGNAL SQLSTATE '45000'
     SET MESSAGE_TEXT = 'D09: physical delete of operation audit rows is forbidden';
+CREATE TABLE IF NOT EXISTS agent_hosted_profile (
+    id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
+    binding_id          BIGINT NOT NULL COMMENT 'Exact durable persona binding',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Immutable owner Jia account',
+    canonical_agent_id  VARCHAR(100) NOT NULL COMMENT 'Immutable canonical Agent ID',
+    persona_code        VARCHAR(50) NOT NULL COMMENT 'Immutable persona code',
+    profile_key         VARCHAR(160) NOT NULL COMMENT 'SHA-256 scope digest concatenated with bindingId',
+    api_key_id          VARCHAR(100) NOT NULL COMMENT 'Dedicated oauth_api_key row ID; never plaintext',
+    lifecycle_state     VARCHAR(32) NOT NULL COMMENT 'Hosted publication state machine',
+    resume_state        VARCHAR(32) DEFAULT NULL COMMENT 'Checkpoint retained while REPAIR_REQUIRED',
+    generation          BIGINT NOT NULL DEFAULT 0 COMMENT 'Profile file generation CAS',
+    desired_enabled     TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Desired exact profile activation',
+    last_error          VARCHAR(1000) DEFAULT NULL COMMENT 'Bounded non-sensitive repair reason',
+    create_time         BIGINT DEFAULT NULL,
+    update_time         BIGINT DEFAULT NULL,
+    tenant_id           VARCHAR(50) NOT NULL,
+    client_id           VARCHAR(50) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_hosted_binding (binding_id),
+    UNIQUE KEY uk_hosted_profile_key (profile_key),
+    UNIQUE KEY uk_hosted_api_key (api_key_id),
+    KEY idx_hosted_scope_state (tenant_id, client_id, owner_jiacn, lifecycle_state),
+    CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN
+      ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
+    CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
+    CONSTRAINT chk_hosted_repair CHECK (
+      (lifecycle_state = 'REPAIR_REQUIRED' AND resume_state IS NOT NULL)
+      OR (lifecycle_state <> 'REPAIR_REQUIRED' AND resume_state IS NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state';

@@ -40,5 +40,6 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit);
 
-    List<AgentTaskMetaEntity> search(String status, String ability);
+    List<AgentTaskMetaEntity> search(
+            String tenantId, String clientId, String status, String ability);
 }

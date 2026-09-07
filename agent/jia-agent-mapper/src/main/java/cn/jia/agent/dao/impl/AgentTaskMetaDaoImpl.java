@@ -6,7 +6,6 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.util.DateUtil;
-import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
@@ -133,15 +132,13 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
-    public List<AgentTaskMetaEntity> search(String status, String ability) {
-        LambdaQueryWrapper<AgentTaskMetaEntity> wrapper = new LambdaQueryWrapper<>();
-        if (!StringUtil.isBlank(status)) {
-            wrapper.eq(AgentTaskMetaEntity::getRewardStatus, status);
+    public List<AgentTaskMetaEntity> search(
+            String tenantId, String clientId, String status, String ability) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        if ("0".equals(tenantId) || "0".equals(clientId)) {
+            throw new IllegalArgumentException(
+                    "Legacy collaboration scope cannot be searched implicitly");
         }
-        if (!StringUtil.isBlank(ability)) {
-            wrapper.like(AgentTaskMetaEntity::getRequiredAbilities, "\"" + ability + "\"");
-        }
-        wrapper.orderByDesc(AgentTaskMetaEntity::getUpdateTime);
-        return baseMapper.selectList(wrapper);
+        return baseMapper.searchExactInScope(tenantId, clientId, status, ability);
     }
 }

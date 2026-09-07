@@ -1,49 +1,57 @@
 package cn.jia.agent.api;
 
-import cn.jia.agent.entity.AgentCapabilityDTO;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.entity.AbilityCompareRequestDTO;
 import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
-import cn.jia.agent.entity.AgentPersonaEntity;
+import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
+import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
-import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRosterSearchDTO;
+import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
-import cn.jia.agent.entity.funding.AgentTaskFundingCancelDTO;
-import cn.jia.agent.entity.funding.AgentTaskClaimRequestDTO;
-import cn.jia.agent.entity.funding.AgentTaskQuoteRequestDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
+import cn.jia.agent.entity.funding.AgentTaskClaimRequestDTO;
+import cn.jia.agent.entity.funding.AgentTaskFundingCancelDTO;
+import cn.jia.agent.entity.funding.AgentTaskQuoteRequestDTO;
+import cn.jia.agent.hosting.HostingRentApplicationException;
+import cn.jia.agent.hosting.HostingRentApplicationService;
+import cn.jia.agent.hosting.HostingRentErrors;
+import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AbilityEvaluationService;
+import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
-import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
-import cn.jia.agent.service.funding.FundedBountyRequestDigest;
 import cn.jia.agent.service.funding.FundedBountyQuoteClaimService;
+import cn.jia.agent.service.funding.FundedBountyRequestDigest;
 import cn.jia.agent.service.funding.FundedBountyService;
+import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.entity.JsonResultPage;
-import cn.jia.core.security.AllowSensitiveOutput;
-import jakarta.servlet.http.HttpServletRequest;
+import cn.jia.economy.exception.EconomyPostingException;
+import cn.jia.economy.hosting.HostingRentException;
 import com.github.pagehelper.PageInfo;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -57,15 +65,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.List;
-import java.util.Set;
-import cn.jia.agent.hosting.HostingRentApplicationService;
-import cn.jia.agent.hosting.HostingRentApplicationException;
-import cn.jia.agent.hosting.HostingRentHttp;
-import cn.jia.agent.hosting.HostingRentErrors;
-import cn.jia.economy.hosting.HostingRentException;
-import cn.jia.economy.exception.EconomyPostingException;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Slf4j
 @RestController
@@ -73,48 +75,65 @@ import java.util.Objects;
 public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
-    private cn.jia.agent.skill.SkillRosterProjection skillRoster;
-    @Autowired
-    public void setSkillRoster(cn.jia.agent.skill.SkillRosterProjection projection) { this.skillRoster=projection; }
-    private HostingRentApplicationService hostingRent;
-
-    @Autowired
-    public void setHostingRent(HostingRentApplicationService hostingRent) {
-        this.hostingRent = java.util.Objects.requireNonNull(hostingRent);
-    }
+    private final AgentPersonaProvisioningService personaProvisioningService;
     private final FundedBountyService fundedBountyService;
     private final FundedBountyQuoteClaimService fundedBountyQuoteClaimService;
+    private cn.jia.agent.skill.SkillRosterProjection skillRoster;
+    private HostingRentApplicationService hostingRent;
 
-    /** Backward-compatible constructor for existing unfunded controller tests. */
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
-        this.agentService = Objects.requireNonNull(agentService, "agentService");
-        this.abilityEvaluationService = Objects.requireNonNull(abilityEvaluationService, "abilityEvaluationService");
-        this.fundedBountyService = null;
-        this.fundedBountyQuoteClaimService = null;
-    }
-
-    @Autowired
-    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            ObjectProvider<FundedBountyService> fundedBountyServiceProvider,
-            ObjectProvider<FundedBountyQuoteClaimService> fundedBountyQuoteClaimServiceProvider) {
-        this(agentService, abilityEvaluationService,
-                Objects.requireNonNull(fundedBountyServiceProvider, "fundedBountyServiceProvider").getIfAvailable(),
-                Objects.requireNonNull(fundedBountyQuoteClaimServiceProvider,
-                        "fundedBountyQuoteClaimServiceProvider").getIfAvailable());
+        this(agentService, abilityEvaluationService, null, null, null);
     }
 
     AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
             FundedBountyService fundedBountyService) {
-        this(agentService, abilityEvaluationService, fundedBountyService, null);
+        this(agentService, abilityEvaluationService, null, fundedBountyService, null);
     }
 
     AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
             FundedBountyService fundedBountyService,
             FundedBountyQuoteClaimService fundedBountyQuoteClaimService) {
+        this(agentService, abilityEvaluationService, null,
+                fundedBountyService, fundedBountyQuoteClaimService);
+    }
+
+    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
+            AgentPersonaProvisioningService personaProvisioningService) {
+        this(agentService, abilityEvaluationService, personaProvisioningService, null, null);
+    }
+
+    @Autowired
+    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
+            AgentPersonaProvisioningService personaProvisioningService,
+            ObjectProvider<FundedBountyService> fundedBountyServiceProvider,
+            ObjectProvider<FundedBountyQuoteClaimService> fundedBountyQuoteClaimServiceProvider) {
+        this(agentService, abilityEvaluationService, personaProvisioningService,
+                Objects.requireNonNull(fundedBountyServiceProvider, "fundedBountyServiceProvider")
+                        .getIfAvailable(),
+                Objects.requireNonNull(fundedBountyQuoteClaimServiceProvider,
+                        "fundedBountyQuoteClaimServiceProvider").getIfAvailable());
+    }
+
+    private AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
+            AgentPersonaProvisioningService personaProvisioningService,
+            FundedBountyService fundedBountyService,
+            FundedBountyQuoteClaimService fundedBountyQuoteClaimService) {
         this.agentService = Objects.requireNonNull(agentService, "agentService");
-        this.abilityEvaluationService = Objects.requireNonNull(abilityEvaluationService, "abilityEvaluationService");
+        this.abilityEvaluationService = Objects.requireNonNull(
+                abilityEvaluationService, "abilityEvaluationService");
+        this.personaProvisioningService = personaProvisioningService;
         this.fundedBountyService = fundedBountyService;
         this.fundedBountyQuoteClaimService = fundedBountyQuoteClaimService;
+    }
+
+    @Autowired
+    public void setSkillRoster(cn.jia.agent.skill.SkillRosterProjection projection) {
+        this.skillRoster = Objects.requireNonNull(projection, "projection");
+    }
+
+    @Autowired
+    public void setHostingRent(HostingRentApplicationService hostingRent) {
+        this.hostingRent = Objects.requireNonNull(hostingRent, "hostingRent");
     }
 
     @PostMapping("/register")
@@ -147,49 +166,107 @@ public class AgentController {
     }
 
     @PostMapping("/personas/{personaCode}/bind")
-    @AllowSensitiveOutput(reason = "local persona binding returns the existing local setup document")
     public Object bindPersonaHttp(@PathVariable String personaCode, Authentication authentication,
             HttpServletRequest servletRequest, @RequestBody(required = false) byte[] rawBody) {
-        if (rawBody == null || rawBody.length == 0 || "null".equals(new String(rawBody, StandardCharsets.UTF_8).strip())) {
-            return bindPersona(personaCode, null);
+        if (rawBody == null || rawBody.length == 0
+                || "null".equals(new String(rawBody, StandardCharsets.UTF_8).strip())) {
+            return bindPersona(personaCode, null, authentication);
         }
-        var body = HostingRentHttp.body(rawBody, Set.of("mode", "hostingAction", "agentId", "quoteId", "leaseId",
-                "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountMicro", "expectedPeriodSeconds"), Set.of("mode"));
+        Map<String, String> body = HostingRentHttp.body(rawBody,
+                Set.of("mode", "hostingAction", "agentId", "quoteId", "leaseId",
+                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountMicro",
+                        "expectedPeriodSeconds"),
+                Set.of("mode", "agentId", "leaseId"));
         String mode = body.get("mode");
-        if (mode != null && "server".equalsIgnoreCase(mode.strip()) && hostingRent != null) {
+        if (mode != null && "server".equalsIgnoreCase(mode.strip())) {
+            if (hostingRent == null) {
+                throw new HostingRentAdmissionException(
+                        HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY);
+            }
             try {
-                var receipt = hostingRent.bind(HostingRentHttp.actor(authentication), personaCode,
+                Object receipt = hostingRent.bind(HostingRentHttp.actor(authentication), personaCode,
                         HostingRentHttp.key(servletRequest), body);
-                return ResponseEntity.accepted().header("Cache-Control", "private, no-store").body(JsonResult.success(receipt));
+                return ResponseEntity.accepted()
+                        .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                        .body(JsonResult.success(receipt));
             } catch (RuntimeException failure) {
-                // Keep legacy non-rent error handling unchanged, but money responses never leak raw failures.
                 return HostingRentErrors.response(failure);
             }
         }
-        if (body.keySet().stream().anyMatch(name -> !"mode".equals(name))) throw HostingRentHttp.badRequest();
+        if (body.keySet().stream().anyMatch(name -> !"mode".equals(name))) {
+            throw HostingRentHttp.badRequest();
+        }
         AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
         request.setMode(mode);
-        return bindPersona(personaCode, request);
+        return bindPersona(personaCode, request, authentication);
     }
 
-    @ExceptionHandler({HostingRentApplicationException.class, HostingRentException.class, EconomyPostingException.class})
-    public Object rentFailure(RuntimeException failure) { return HostingRentErrors.response(failure); }
+    @ExceptionHandler({HostingRentApplicationException.class, HostingRentException.class,
+            EconomyPostingException.class})
+    public Object rentFailure(RuntimeException failure) {
+        return HostingRentErrors.response(failure);
+    }
 
-    // Direct legacy callers cannot pass a quote or bypass R00 server admission.
-
-    @AllowSensitiveOutput(reason = "persona binding returns the codex-ws-agent API key needed for local setup")
-    public Object bindPersona(@PathVariable String personaCode,
-            @RequestBody(required = false) AgentPersonaBindRequestDTO request) {
-        if (request == null || request.getMode() == null || request.getMode().isBlank()) {
-            return JsonResult.success(agentService.bindPersona(personaCode));
+    public Object bindPersona(String personaCode, AgentPersonaBindRequestDTO request,
+            Authentication authentication) {
+        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        String mode = request == null ? "local" : request.getMode();
+        if (mode != null && "server".equalsIgnoreCase(mode.strip())) {
+            throw new HostingRentAdmissionException(
+                    HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY);
         }
-        return JsonResult.success(agentService.bindPersona(personaCode, request.getMode()));
+        return JsonResult.success(requirePersonaProvisioningService().bind(scope, personaCode, mode));
+    }
+
+    @PostMapping("/personas/bindings/{bindingId}/repair")
+    public Object repairPersonaBinding(@PathVariable long bindingId, Authentication authentication) {
+        return JsonResult.success(requirePersonaProvisioningService()
+                .repair(requireJwtScope(authentication), bindingId));
     }
 
     @DeleteMapping("/personas/{personaCode}/bind")
-    public Object unbindPersona(@PathVariable String personaCode) {
-        agentService.unbindPersona(personaCode);
+    public Object unbindPersona(@PathVariable String personaCode, Authentication authentication) {
+        requirePersonaProvisioningService().unbind(requireJwtScope(authentication), personaCode);
         return JsonResult.success();
+    }
+
+    private AgentPersonaProvisioningService requirePersonaProvisioningService() {
+        if (personaProvisioningService == null) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR,
+                    "Persona provisioning is unavailable");
+        }
+        return personaProvisioningService;
+    }
+
+    static AgentHostedBindingTransaction.Scope requireJwtScope(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwt)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is required");
+        }
+        Map<String, Object> claims = jwt.getToken().getClaims();
+        Object rawJiacn = claims.get("jiacn");
+        Object rawClientId = claims.get("client_id");
+        if (!(rawJiacn instanceof String jiacn) || !(rawClientId instanceof String clientId)
+                || "0".equals(jiacn) || !validExactScopeComponent(jiacn)
+                || !validExactScopeComponent(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is invalid");
+        }
+        return new AgentHostedBindingTransaction.Scope(jiacn, clientId, jiacn);
+    }
+
+    private static boolean validExactScopeComponent(String value) {
+        return value != null && !hasUnpairedSurrogate(value)
+                && value.codePointCount(0, value.length()) <= 50
+                && !value.codePoints().allMatch(AgentController::isPadding)
+                && !isPadding(value.codePointAt(0))
+                && !isPadding(value.codePointBefore(value.length()))
+                && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    private static boolean isPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
     @PostMapping("/roster")

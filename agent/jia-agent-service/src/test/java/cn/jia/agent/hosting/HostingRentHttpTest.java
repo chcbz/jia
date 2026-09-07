@@ -3,6 +3,7 @@ package cn.jia.agent.hosting;
 import cn.jia.agent.api.AgentController;
 import cn.jia.agent.api.AgentHostingRentController;
 import cn.jia.agent.service.AbilityEvaluationService;
+import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,11 +29,12 @@ class HostingRentHttpTest {
     private static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("Login-A", "Tenant-A", "Client-A");
     private final HostingRentApplicationService application = mock(HostingRentApplicationService.class);
     private final AgentService agents = mock(AgentService.class);
+    private final AgentPersonaProvisioningService provisioning = mock(AgentPersonaProvisioningService.class);
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        var controller = new AgentController(agents, mock(AbilityEvaluationService.class));
+        var controller = new AgentController(agents, mock(AbilityEvaluationService.class), provisioning);
         controller.setHostingRent(application);
         mvc = MockMvcBuilders.standaloneSetup(controller, new AgentHostingRentController(application)).build();
     }
@@ -124,15 +126,20 @@ class HostingRentHttpTest {
     }
 
     @Test
-    void localAndDefaultBindingStayOnOriginalServiceWithoutRentIdentityOrHeaders() throws Exception {
+    void localAndDefaultBindingUseExactAuthenticatedProvisioningWithoutRent() throws Exception {
         for (String body : List.of("null", "{}", "{\"mode\":null}", "{\"mode\":\" \"}")) {
-            mvc.perform(post(BIND).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk());
+            mvc.perform(post(BIND).principal(jwt()).contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isOk());
         }
-        mvc.perform(post(BIND).contentType(MediaType.APPLICATION_JSON).content("{\"mode\":\"local\"}"))
+        mvc.perform(post(BIND).principal(jwt()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"local\"}"))
                 .andExpect(status().isOk());
-        verify(agents, times(4)).bindPersona("wuyong");
-        verify(agents).bindPersona("wuyong", "local");
-        verifyNoInteractions(application);
+        var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
+                "Tenant-A", "Client-A", "Tenant-A");
+        verify(provisioning, times(2)).bind(scope, "wuyong", null);
+        verify(provisioning).bind(scope, "wuyong", " ");
+        verify(provisioning, times(2)).bind(scope, "wuyong", "local");
+        verifyNoInteractions(application, agents);
     }
 
     @Test

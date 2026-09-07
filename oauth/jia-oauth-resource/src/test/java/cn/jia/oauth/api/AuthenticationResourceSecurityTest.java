@@ -25,8 +25,11 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.test.context.support.TestPropertySourceUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
@@ -37,11 +40,13 @@ import java.util.Optional;
 
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-import static org.mockito.Mockito.*;
 
 class AuthenticationResourceSecurityTest {
 
@@ -52,6 +57,8 @@ class AuthenticationResourceSecurityTest {
     void setUp() {
         context = new AnnotationConfigWebApplicationContext();
         context.setServletContext(new MockServletContext());
+        TestPropertySourceUtils.addInlinedPropertiesToEnvironment(
+                context, "oauth.resource.uris[0]=/agent/**");
         context.register(TestApplication.class);
         context.refresh();
         mockMvc = MockMvcBuilders.webAppContextSetup(context)
@@ -78,51 +85,68 @@ class AuthenticationResourceSecurityTest {
     }
 
     @Test
-    void returnsNormalEnvelopeForValidUserJwtWithoutOverDisclosure() throws Exception {
+    void returnsTopLevelIdentityForValidUserJwtWithoutOverDisclosure() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer user-token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("E0"))
-                .andExpect(jsonPath("$.msg").value("ok"))
-                .andExpect(jsonPath("$.status").value(200))
-                .andExpect(jsonPath("$.data.subject").value("user-17"))
-                .andExpect(jsonPath("$.data.clientId").value("public-web"))
-                .andExpect(jsonPath("$.data.username").value("alice"))
-                .andExpect(jsonPath("$.data.jiacn").value("jia-17"))
-                .andExpect(jsonPath("$.data.scopes", contains("openid", "profile", "write")))
-                .andExpect(jsonPath("$.*", hasSize(4)))
-                .andExpect(jsonPath("$.data.*", hasSize(5)))
-                .andExpect(jsonPath("$.data.access_token").doesNotExist())
-                .andExpect(jsonPath("$.data.arbitrary_claim").doesNotExist())
+                .andExpect(jsonPath("$.subject").value("user-17"))
+                .andExpect(jsonPath("$.clientId").value("public-web"))
+                .andExpect(jsonPath("$.username").value("alice"))
+                .andExpect(jsonPath("$.jiacn").value("jia-17"))
+                .andExpect(jsonPath("$.scopes", contains("openid", "profile", "write")))
+                .andExpect(jsonPath("$.*", hasSize(5)))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
-                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("must-not-leak"))));
+                .andExpect(jsonPath("$.arbitrary_claim").doesNotExist())
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("must-not-leak"))));
     }
 
     @Test
-    void returnsNormalEnvelopeForValidMachineJwtWithAbsentScope() throws Exception {
+    void returnsTopLevelIdentityForValidMachineJwtWithAbsentScope() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer machine-token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("E0"))
-                .andExpect(jsonPath("$.data.subject").value("machine-client"))
-                .andExpect(jsonPath("$.data.clientId").value("machine-client"))
-                .andExpect(jsonPath("$.data.username").doesNotExist())
-                .andExpect(jsonPath("$.data.jiacn").doesNotExist())
-                .andExpect(jsonPath("$.data.scopes", hasSize(0)))
-                .andExpect(jsonPath("$.data.*", hasSize(3)));
+                .andExpect(jsonPath("$.subject").value("machine-client"))
+                .andExpect(jsonPath("$.clientId").value("machine-client"))
+                .andExpect(jsonPath("$.username").doesNotExist())
+                .andExpect(jsonPath("$.jiacn").doesNotExist())
+                .andExpect(jsonPath("$.scopes", hasSize(0)))
+                .andExpect(jsonPath("$.*", hasSize(3)));
     }
 
     @Test
     void preservesExactIdentityClaimsIncludingSurroundingWhitespace() throws Exception {
         mockMvc.perform(get("/resource").header("Authorization", "Bearer exact-identity-token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.subject").value(" user-17 "))
-                .andExpect(jsonPath("$.data.clientId").value(" public-web "))
-                .andExpect(jsonPath("$.data.username").value(" alice "))
-                .andExpect(jsonPath("$.data.jiacn").value(" jia-17 "))
-                .andExpect(jsonPath("$.data.scopes", hasSize(0)));
+                .andExpect(jsonPath("$.subject").value(" user-17 "))
+                .andExpect(jsonPath("$.clientId").value(" public-web "))
+                .andExpect(jsonPath("$.username").value(" alice "))
+                .andExpect(jsonPath("$.jiacn").value(" jia-17 "))
+                .andExpect(jsonPath("$.scopes", hasSize(0)));
     }
 
     @Test
-    void malformedSignedIdentityClaimsRemainHttp401WithProductionExceptionAdviceRegistered() throws Exception {
+    void configuredAgentResourceUsesTheSameAccountGateWithoutSessionOrRequestCache()
+            throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        mockMvc.perform(get("/agent/probe")
+                        .session(session)
+                        .header("Authorization", "Bearer user-token"))
+                .andExpect(status().isOk())
+                .andExpect(content().string("ok"));
+        assertNull(session.getAttribute(
+                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY));
+
+        mockMvc.perform(get("/agent/probe")
+                        .header("Authorization", "Bearer stale-user-token"))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(get("/agent/probe").session(session))
+                .andExpect(status().isUnauthorized());
+        assertNull(session.getAttribute("SPRING_SECURITY_SAVED_REQUEST"));
+    }
+
+    @Test
+    void malformedSignedIdentityClaimsRemainEmptyBody401WithProductionAdviceRegistered()
+            throws Exception {
         for (String token : List.of(
                 "missing-claims-token",
                 "blank-required-token",
@@ -164,6 +188,11 @@ class AuthenticationResourceSecurityTest {
         }
 
         @Bean
+        AgentProbeController agentProbeController() {
+            return new AgentProbeController();
+        }
+
+        @Bean
         AccountSecurityService accountSecurityService() {
             AccountSecurityService service = mock(AccountSecurityService.class);
             when(service.findByUserId(17)).thenReturn(Optional.of(
@@ -189,6 +218,14 @@ class AuthenticationResourceSecurityTest {
                         "scope", List.of("write", "openid", "profile"),
                         "access_token", "must-not-leak",
                         "arbitrary_claim", "must-not-leak"));
+                case "stale-user-token" -> jwt(token, Map.of(
+                        "token_kind", "user",
+                        "uid", "17",
+                        "auth_epoch", 3L,
+                        "sub", "user-17",
+                        "client_id", "public-web",
+                        "username", "alice",
+                        "jiacn", "jia-17"));
                 case "machine-token" -> jwt(token, Map.of(
                         "token_kind", "machine",
                         "sub", "machine-client",
@@ -253,6 +290,14 @@ class AuthenticationResourceSecurityTest {
                     .expiresAt(Instant.now().plusSeconds(300));
             claims.forEach(builder::claim);
             return builder.build();
+        }
+
+        @RestController
+        static class AgentProbeController {
+            @GetMapping("/agent/probe")
+            String probe() {
+                return "ok";
+            }
         }
     }
 }

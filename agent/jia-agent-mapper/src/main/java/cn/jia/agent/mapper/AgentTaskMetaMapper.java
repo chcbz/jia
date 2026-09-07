@@ -145,6 +145,31 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("limit") int limit);
 
     @Select("""
+            <script>
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+            <if test="status != null and status.trim() != ''">
+              AND reward_status = #{status}
+            </if>
+            <if test="ability != null and ability.trim() != ''">
+              AND required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
+            </if>
+            ORDER BY update_time DESC
+            </script>
+            """)
+    List<AgentTaskMetaEntity> searchExactInScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("status") String status,
+            @Param("ability") String ability);
+
+    @Select("""
             SELECT parent.*
             FROM agent_task_meta parent
             WHERE parent.tenant_id = #{tenantId}

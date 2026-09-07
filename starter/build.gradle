@@ -1,5 +1,23 @@
+import org.gradle.api.GradleException
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     id 'org.springframework.boot' version '4.0.1'
+}
+
+def isForbiddenPublicBootJarMember = rootProject.ext.isForbiddenPublicArtifactJarMember
+
+sourceSets {
+    publicArtifactVerifier {
+        java.srcDir 'src/publicArtifactVerifier/java'
+        resources.setSrcDirs([])
+    }
+    publicArtifactVerifierTest {
+        java.srcDir 'src/publicArtifactVerifierTest/java'
+        resources.setSrcDirs([])
+        compileClasspath += sourceSets.publicArtifactVerifier.output
+        runtimeClasspath += sourceSets.publicArtifactVerifier.output
+    }
 }
 
 dependencies {
@@ -51,6 +69,9 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testAnnotationProcessor libs.lombok
     testCompileOnly libs.lombok
+
+    publicArtifactVerifierTestImplementation(libs.junit.jupiter)
+    publicArtifactVerifierTestRuntimeOnly(libs.junit.platform.launcher)
 }
 
 version = '1.1.2-SNAPSHOT'
@@ -60,9 +81,78 @@ jar {
     enabled = false
 }
 
+def publicArtifactVerifierTests = tasks.register('publicArtifactVerifierTest', Test) {
+    group = 'verification'
+    description = 'Runs isolated mutation tests for the dependency-free public artifact verifier.'
+    testClassesDirs = sourceSets.publicArtifactVerifierTest.output.classesDirs
+    classpath = sourceSets.publicArtifactVerifierTest.runtimeClasspath
+    useJUnitPlatform()
+}
+
+tasks.register('publicBootJarSecurityPolicyTest') {
+    group = 'verification'
+    description = 'Compatibility lifecycle alias for the isolated public artifact verifier tests.'
+    dependsOn publicArtifactVerifierTests
+}
+
+tasks.named('check') {
+    dependsOn publicArtifactVerifierTests
+}
+
 bootJar {
     mainClass = 'cn.jia.JiaApplication'
     manifest {
         attributes 'Start-Class': 'cn.jia.JiaApplication'
+    }
+    exclude { details -> isForbiddenPublicBootJarMember(details.path) }
+    dependsOn publicArtifactVerifierTests
+    dependsOn tasks.named(sourceSets.publicArtifactVerifier.classesTaskName)
+    doLast {
+        def captured = new ByteArrayOutputStream()
+        int exitValue
+        try {
+            exitValue = providers.javaexec {
+                classpath = sourceSets.publicArtifactVerifier.runtimeClasspath
+                mainClass = 'cn.jia.build.security.PublicArtifactVerifier'
+                args archiveFile.get().asFile.absolutePath,
+                        new File(temporaryDir, 'public-artifact-verifier-root').absolutePath
+                standardOutput = captured
+                errorOutput = captured
+                ignoreExitValue = true
+            }.result.get().exitValue
+        } catch (Exception ignored) {
+            throw new GradleException('Public bootJar security policy violations:\n - <public-artifact-verifier-error>')
+        }
+        if (exitValue != 0) {
+            def fixedTokens = [
+                    '<nested-zip-eocd-error>',
+                    '<nested-zip-central-directory-error>',
+                    '<nested-zip-local-header-error>',
+                    '<nested-zip-data-descriptor-error>',
+                    '<nested-zip-occurrence-mismatch>',
+                    '<nested-zip-payload-integrity-error>',
+                    '<nested-zip-unsupported>',
+                    '<nested-zip-limit-error>',
+                    '<configuration-parse-error>',
+                    '<nested-temp-security-error>',
+                    '<nested-temp-cleanup-error>',
+                    '<public-artifact-verifier-error>'
+            ] as Set
+            def outputLines = captured.toString('UTF-8').readLines().findAll { !it.empty }
+            def diagnostics = outputLines.findAll { line ->
+                def tokenSeparator = line.lastIndexOf(': ')
+                if (tokenSeparator >= 0 && fixedTokens.contains(line.substring(tokenSeparator + 2))) {
+                    return line.substring(0, tokenSeparator) ==~ /(?:<public-bootjar>|<nested-temp>|[-A-Za-z0-9_.\/!]+)/
+                }
+                line == '<public-artifact-verifier-error>' ||
+                        line ==~ /[-A-Za-z0-9_.\/!]+/ ||
+                        line ==~ /[-A-Za-z0-9_.\/!]+: [-A-Za-z0-9_.]*api-key[-A-Za-z0-9_.]*/
+            }
+            if (diagnostics.empty || diagnostics.size() != outputLines.size()) {
+                diagnostics = ['<public-artifact-verifier-error>']
+            }
+            throw new GradleException('Public bootJar security policy violations:\n - ' +
+                    diagnostics.join('\n - '))
+        }
     }
 }

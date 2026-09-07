@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
@@ -25,6 +26,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureAgentPersonaColumns();
         ensureAgentRuntimeColumns();
         ensureBindingTable();
+        ensureHostedProfileTable();
         ensureIdentitySchema();
         ensureTaskCollaborationSchema();
         ensureTaskNoteTable();
@@ -117,6 +119,156 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "status IN (0, 1, 2, 3)");
         ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_tenant_owner",
                 "tenant_id = '0' OR tenant_id = owner_jiacn");
+    }
+
+    private void ensureHostedProfileTable() {
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS agent_hosted_profile (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    binding_id BIGINT NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
+                    canonical_agent_id VARCHAR(100) NOT NULL,
+                    persona_code VARCHAR(50) NOT NULL,
+                    profile_key VARCHAR(160) NOT NULL,
+                    api_key_id VARCHAR(100) NOT NULL,
+                    lifecycle_state VARCHAR(32) NOT NULL,
+                    resume_state VARCHAR(32) DEFAULT NULL,
+                    generation BIGINT NOT NULL DEFAULT 0,
+                    desired_enabled TINYINT(1) NOT NULL DEFAULT 1,
+                    last_error VARCHAR(1000) DEFAULT NULL,
+                    create_time BIGINT DEFAULT NULL,
+                    update_time BIGINT DEFAULT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_hosted_binding (binding_id),
+                    UNIQUE KEY uk_hosted_profile_key (profile_key),
+                    UNIQUE KEY uk_hosted_api_key (api_key_id),
+                    KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state),
+                    CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
+                    CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
+                    CONSTRAINT chk_hosted_repair CHECK ((lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL))
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state'
+                """);
+        for (String forbidden : List.of("api_key", "apikey", "credential", "secret")) {
+            if (!inspectColumnDefinition("agent_hosted_profile", forbidden).isEmpty()) {
+                throw new IllegalStateException("PWA-HOSTED-P0 forbids plaintext credential column " + forbidden);
+            }
+        }
+        ensureRequiredIndex("agent_hosted_profile", "uk_hosted_binding", true, List.of("binding_id"), "");
+        ensureRequiredIndex("agent_hosted_profile", "uk_hosted_profile_key", true, List.of("profile_key"), "");
+        ensureRequiredIndex("agent_hosted_profile", "uk_hosted_api_key", true, List.of("api_key_id"), "");
+        ensureRequiredIndex("agent_hosted_profile", "idx_hosted_scope_state", false,
+                List.of("tenant_id", "client_id", "owner_jiacn", "lifecycle_state"), "");
+        if (!isH2Database()) validateHostedProfileSchema();
+    }
+
+    void validateHostedProfileSchema() {
+        String engine = jdbcTemplate.queryForObject("""
+                SELECT ENGINE FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = 'agent_hosted_profile'
+                """, String.class);
+        if (!"InnoDB".equalsIgnoreCase(engine)) {
+            throw new IllegalStateException("PWA-HOSTED-P0 table must use InnoDB but was " + engine);
+        }
+        validateTableCollation("agent_hosted_profile", "utf8mb4_0900_bin");
+
+        java.util.Map<String, BackfillColumnExpectation> expected = java.util.Map.ofEntries(
+                java.util.Map.entry("id", new BackfillColumnExpectation("agent_hosted_profile", "id", "bigint", "bigint", false, null, null)),
+                java.util.Map.entry("binding_id", new BackfillColumnExpectation("agent_hosted_profile", "binding_id", "bigint", "bigint", false, null, null)),
+                java.util.Map.entry("owner_jiacn", new BackfillColumnExpectation("agent_hosted_profile", "owner_jiacn", "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("canonical_agent_id", new BackfillColumnExpectation("agent_hosted_profile", "canonical_agent_id", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("persona_code", new BackfillColumnExpectation("agent_hosted_profile", "persona_code", "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("profile_key", new BackfillColumnExpectation("agent_hosted_profile", "profile_key", "varchar", "varchar(160)", false, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("api_key_id", new BackfillColumnExpectation("agent_hosted_profile", "api_key_id", "varchar", "varchar(100)", false, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("lifecycle_state", new BackfillColumnExpectation("agent_hosted_profile", "lifecycle_state", "varchar", "varchar(32)", false, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("resume_state", new BackfillColumnExpectation("agent_hosted_profile", "resume_state", "varchar", "varchar(32)", true, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("generation", new BackfillColumnExpectation("agent_hosted_profile", "generation", "bigint", "bigint", false, "0", null)),
+                java.util.Map.entry("desired_enabled", new BackfillColumnExpectation("agent_hosted_profile", "desired_enabled", "tinyint", "tinyint(1)", false, "1", null)),
+                java.util.Map.entry("last_error", new BackfillColumnExpectation("agent_hosted_profile", "last_error", "varchar", "varchar(1000)", true, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("create_time", new BackfillColumnExpectation("agent_hosted_profile", "create_time", "bigint", "bigint", true, null, null)),
+                java.util.Map.entry("update_time", new BackfillColumnExpectation("agent_hosted_profile", "update_time", "bigint", "bigint", true, null, null)),
+                java.util.Map.entry("tenant_id", new BackfillColumnExpectation("agent_hosted_profile", "tenant_id", "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin")),
+                java.util.Map.entry("client_id", new BackfillColumnExpectation("agent_hosted_profile", "client_id", "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin")));
+        java.util.Map<String, BackfillColumnDefinition> actual = new java.util.LinkedHashMap<>();
+        jdbcTemplate.query("""
+                SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+                       COLLATION_NAME, EXTRA
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE() AND table_name = 'agent_hosted_profile'
+                ORDER BY ORDINAL_POSITION
+                """, rs -> {
+            actual.put(rs.getString("COLUMN_NAME"), new BackfillColumnDefinition(
+                    rs.getString("DATA_TYPE"), rs.getString("COLUMN_TYPE"),
+                    "YES".equalsIgnoreCase(rs.getString("IS_NULLABLE")),
+                    rs.getString("COLUMN_DEFAULT"), rs.getString("COLLATION_NAME"),
+                    rs.getString("EXTRA")));
+        });
+        if (!actual.keySet().equals(expected.keySet())) {
+            throw new IllegalStateException("PWA-HOSTED-P0 column set drift: " + actual.keySet());
+        }
+        for (var entry : expected.entrySet()) {
+            BackfillColumnExpectation want = entry.getValue();
+            BackfillColumnDefinition got = actual.get(entry.getKey());
+            boolean matches = want.dataType().equalsIgnoreCase(got.dataType())
+                    && normalizeSql(want.columnType()).equals(normalizeSql(got.columnType()))
+                    && want.nullable() == got.nullable()
+                    && java.util.Objects.equals(want.defaultValue(), got.defaultValue())
+                    && (want.collation() == null ? got.collation() == null
+                    : want.collation().equalsIgnoreCase(got.collation()));
+            if ("id".equals(entry.getKey())) matches &= "auto_increment".equalsIgnoreCase(got.extra());
+            else matches &= got.extra() == null || got.extra().isBlank();
+            if (!matches) throw new IllegalStateException(
+                    "PWA-HOSTED-P0 column drift at " + entry.getKey() + ": " + got);
+        }
+
+        java.util.Set<String> expectedIndexes = java.util.Set.of("PRIMARY", "uk_hosted_binding",
+                "uk_hosted_profile_key", "uk_hosted_api_key", "idx_hosted_scope_state");
+        java.util.Set<String> actualIndexes = new java.util.HashSet<>(jdbcTemplate.queryForList("""
+                SELECT DISTINCT INDEX_NAME FROM information_schema.statistics
+                WHERE table_schema = DATABASE() AND table_name = 'agent_hosted_profile'
+                """, String.class));
+        if (!actualIndexes.equals(expectedIndexes)) {
+            throw new IllegalStateException("PWA-HOSTED-P0 index set drift: " + actualIndexes);
+        }
+        ensureRequiredIndex("agent_hosted_profile", "PRIMARY", true, List.of("id"), "");
+
+        java.util.Map<String, String> expectedChecks = java.util.Map.of(
+                "chk_hosted_state", "lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')",
+                "chk_hosted_generation", "generation >= 0",
+                "chk_hosted_repair", "(lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL)");
+        java.util.Map<String, String> actualChecks = new java.util.HashMap<>();
+        jdbcTemplate.query("""
+                SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+                WHERE tc.CONSTRAINT_SCHEMA=DATABASE() AND tc.TABLE_NAME='agent_hosted_profile'
+                  AND tc.CONSTRAINT_TYPE='CHECK'
+                """, (RowCallbackHandler) rs -> {
+            actualChecks.put(rs.getString("CONSTRAINT_NAME"),
+                    normalizeIdentityExpression(rs.getString("CHECK_CLAUSE")));
+        });
+        java.util.Map<String, String> normalizedChecks = new java.util.HashMap<>();
+        expectedChecks.forEach((name, clause) -> normalizedChecks.put(name, normalizeIdentityExpression(clause)));
+        if (!actualChecks.equals(normalizedChecks)) {
+            throw new IllegalStateException("PWA-HOSTED-P0 CHECK set drift: " + actualChecks.keySet());
+        }
+        Integer foreignKeyCount = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.table_constraints
+                WHERE constraint_schema=DATABASE() AND table_name='agent_hosted_profile'
+                  AND constraint_type='FOREIGN KEY'
+                """, Integer.class);
+        if (foreignKeyCount == null || foreignKeyCount != 0) {
+            throw new IllegalStateException("PWA-HOSTED-P0 table must not have foreign keys");
+        }
+        Integer triggerCount = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE() AND event_object_table='agent_hosted_profile'
+                """, Integer.class);
+        if (triggerCount == null || triggerCount != 0) {
+            throw new IllegalStateException("PWA-HOSTED-P0 table must not have triggers");
+        }
     }
 
     private void validateExistingIdentityTables(boolean validateTriggers) {
@@ -509,6 +661,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 .replace("\\", "")
                 .replaceAll("[()]", " ")
                 .replaceAll("\\s*,\\s*", ",")
+                .replaceAll("\\s*(<>|>=|<=|=|>|<)\\s*", "$1")
                 .replaceAll("\\s+", " ")
                 .trim();
     }

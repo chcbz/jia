@@ -1,6 +1,5 @@
 package cn.jia.oauth.api;
 
-import cn.jia.core.entity.JsonResult;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.authority.AuthorityUtils;
@@ -19,7 +18,7 @@ class AuthenticationControllerTest {
     private final AuthenticationController controller = new AuthenticationController();
 
     @Test
-    void returnsNormalSuccessEnvelopeWithAllowlistedIdentityAndSortedUniqueScopes() {
+    void returnsTopLevelAllowlistedIdentityWithSortedUniqueScopes() {
         Jwt jwt = jwt(Map.of(
                 "sub", "user-17",
                 "client_id", "public-web",
@@ -29,12 +28,9 @@ class AuthenticationControllerTest {
                 "access_token", "must-not-leak",
                 "arbitrary_claim", Map.of("private", true)));
 
-        ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response = controller.resource(authenticated(jwt));
+        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt));
         OAuthResourceIdentityDTO identity = successData(response);
 
-        assertEquals("E0", response.getBody().getCode());
-        assertEquals("ok", response.getBody().getMsg());
-        assertEquals(200, response.getBody().getStatus());
         assertEquals("user-17", identity.subject());
         assertEquals("public-web", identity.clientId());
         assertEquals("alice", identity.username());
@@ -92,7 +88,7 @@ class AuthenticationControllerTest {
     }
 
     @Test
-    void rejectsMissingBlankOrMalformedRequiredClaimsWithDirect401() {
+    void rejectsMissingBlankOrMalformedRequiredClaimsWithEmptyBody401() {
         assertUnauthorized(jwt(Map.of("client_id", "client")));
         assertUnauthorized(jwt(Map.of("sub", "subject")));
         assertUnauthorized(jwt(Map.of("sub", " ", "client_id", "client")));
@@ -102,7 +98,7 @@ class AuthenticationControllerTest {
     }
 
     @Test
-    void rejectsBlankOrMalformedOptionalClaimsAndMalformedPresentScopeWithDirect401() {
+    void rejectsBlankOrMalformedOptionalClaimsAndMalformedPresentScopeWithEmptyBody401() {
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "username", " ")));
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "jiacn", List.of("jia"))));
         assertUnauthorized(jwt(Map.of("sub", "subject", "client_id", "client", "scope", "\t")));
@@ -142,13 +138,13 @@ class AuthenticationControllerTest {
     }
 
     private static OAuthResourceIdentityDTO successData(
-            ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response) {
+            ResponseEntity<OAuthResourceIdentityDTO> response) {
         assertEquals(200, response.getStatusCode().value());
-        return response.getBody().getData();
+        return response.getBody();
     }
 
     private void assertUnauthorized(Jwt jwt) {
-        ResponseEntity<JsonResult<OAuthResourceIdentityDTO>> response = controller.resource(authenticated(jwt));
+        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt));
         assertEquals(401, response.getStatusCode().value());
         assertNull(response.getBody());
     }
