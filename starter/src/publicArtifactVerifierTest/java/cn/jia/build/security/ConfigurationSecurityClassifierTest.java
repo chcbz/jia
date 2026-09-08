@@ -104,6 +104,49 @@ class ConfigurationSecurityClassifierTest {
     }
 
     @Test
+    void propertiesAcceptBenignLatin1AndUtf8WithoutWeakeningSecretDetection() throws Exception {
+        for (var charset : List.of(StandardCharsets.ISO_8859_1, StandardCharsets.UTF_8)) {
+            assertEquals(List.of(), keys(ConfigurationSecurityClassifier.classify(
+                    "messages.properties", "message=Español café\napi-key=${PUBLIC_API_KEY}\n".getBytes(charset))));
+            String unsafe = "message=café\napi-key=encoding-secret-canary\n"
+                    + "api-key=${PUBLIC_API_KEY}\n"
+                    + "escaped-api\\u002dkey=encoding-secret-canary\n"
+                    + "continued-api-key=encoding-\\\n secret-canary\n";
+            List<ConfigurationSecurityClassifier.Match> matches = ConfigurationSecurityClassifier.classify(
+                    "messages.properties", unsafe.getBytes(charset));
+            assertEquals(List.of("api-key", "escaped-api-key", "continued-api-key"), keys(matches));
+            assertTrue(matches.stream().noneMatch(value -> value.toString().contains("secret-canary")));
+        }
+    }
+
+    @Test
+    void unmarkedUtf8InterpretationCannotBeLostToLatin1Fallback() throws Exception {
+        // Kelvin sign lowercases to ASCII k under the existing canonical-key rule.
+        assertEquals(List.of("api-key"), keys(ConfigurationSecurityClassifier.classify(
+                "messages.properties", "api-\u212aey=utf8-secret-canary\n".getBytes(StandardCharsets.UTF_8))));
+    }
+
+    @Test
+    void propertiesBomKeepsStrippedUtf8SemanticsAndRejectsMalformedMarkedInput() throws Exception {
+        assertEquals(List.of(), keys(ConfigurationSecurityClassifier.classify("bom.properties",
+                "\ufeffapi-key=${PUBLIC_API_KEY}\nmessage=中文\n".getBytes(StandardCharsets.UTF_8))));
+        assertEquals(List.of("api-key"), keys(ConfigurationSecurityClassifier.classify("bom.properties",
+                "\ufeffapi-key=bom-secret-canary\n".getBytes(StandardCharsets.UTF_8))));
+        assertParseFailure("bom.properties",
+                new byte[]{(byte) 0xef, (byte) 0xbb, (byte) 0xbf, (byte) 0xc3, 0x28});
+    }
+
+    @Test
+    void propertiesEncodingCompatibilityStillRejectsMalformedEscapesAndBounds() {
+        for (var charset : List.of(StandardCharsets.ISO_8859_1, StandardCharsets.UTF_8)) {
+            assertParseFailure("messages.properties",
+                    "message=café\nbad=\\uZZZZ-secret-canary\n".getBytes(charset));
+        }
+        assertParseFailure("messages.properties", new byte[(1 << 20) + 1]);
+        assertParseFailure("messages.properties", "\n".repeat(10_000).getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
     void allowedValuePolicyIsExactAndEmbeddedDefaultsAreUnsafe() throws Exception {
         String properties = "a-api-key=\n"
                 + "b-api-key=ENC(ciphertext)\n"

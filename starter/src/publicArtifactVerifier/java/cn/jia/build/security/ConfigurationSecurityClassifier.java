@@ -57,7 +57,34 @@ final class ConfigurationSecurityClassifier {
 
     private static List<Match> classifyProperties(byte[] content)
             throws PublicArtifactVerifier.VerificationException {
-        String text = decodeUtf8(content);
+        String latin1 = new String(content, StandardCharsets.ISO_8859_1);
+        boolean hasBom = content.length >= 3 && content[0] == (byte) 0xef
+                && content[1] == (byte) 0xbb && content[2] == (byte) 0xbf;
+        String utf8;
+        try {
+            utf8 = decodeUtf8(content);
+        } catch (CharacterCodingException ignored) {
+            // A BOM commits to UTF-8: malformed marked input must not fall back.
+            if (hasBom) {
+                throw parseFailure();
+            }
+            return classifyPropertiesText(latin1);
+        }
+        List<Match> violations = new ArrayList<>(classifyPropertiesText(utf8));
+        // Unmarked properties may be read as Latin-1 or UTF-8. Neither interpretation
+        // may hide a violation; BOM input keeps the existing stripped UTF-8 semantics.
+        if (!hasBom && !utf8.equals(latin1)) {
+            for (Match match : classifyPropertiesText(latin1)) {
+                if (!violations.contains(match)) {
+                    violations.add(match);
+                }
+            }
+        }
+        return List.copyOf(violations);
+    }
+
+    private static List<Match> classifyPropertiesText(String text)
+            throws PublicArtifactVerifier.VerificationException {
         String[] lines = text.split("\\r\\n|\\n|\\r", -1);
         if (lines.length > MAX_LINES) {
             throw parseFailure();
@@ -162,17 +189,13 @@ final class ConfigurationSecurityClassifier {
                 || DUMMY.matcher(value).matches();
     }
 
-    private static String decodeUtf8(byte[] content) throws PublicArtifactVerifier.VerificationException {
-        try {
-            String text = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(content))
-                    .toString();
-            return !text.isEmpty() && text.charAt(0) == '\ufeff' ? text.substring(1) : text;
-        } catch (CharacterCodingException ignored) {
-            throw parseFailure();
-        }
+    private static String decodeUtf8(byte[] content) throws CharacterCodingException {
+        String text = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(content))
+                .toString();
+        return !text.isEmpty() && text.charAt(0) == '\ufeff' ? text.substring(1) : text;
     }
 
     private static PublicArtifactVerifier.VerificationException parseFailure() {

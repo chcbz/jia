@@ -22,7 +22,7 @@ import java.util.zip.CRC32;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
 
-/** Strict, occurrence-addressed reader for the non-ZIP64 JAR subset used by the verifier. */
+/** Strict occurrence-addressed ZIP32 reader, also accepting consistent redundant local ZIP64 sizes. */
 final class OccurrenceZipArchive implements Closeable {
     private static final long LOCAL_SIGNATURE = 0x04034b50L;
     private static final long DATA_DESCRIPTOR_SIGNATURE = 0x08074b50L;
@@ -487,7 +487,6 @@ final class OccurrenceZipArchive implements Closeable {
                 PublicArtifactVerifier.FailureCode.LOCAL_HEADER_ERROR);
         byte[] extra = readBytes(channel, localOffset + 30L + nameLength, extraLength,
                 PublicArtifactVerifier.FailureCode.LOCAL_HEADER_ERROR);
-        validateExtra(extra, PublicArtifactVerifier.FailureCode.LOCAL_HEADER_ERROR);
         rejectUnsupported(flags, method, 0, localCompressedSize, localUncompressedSize, localOffset);
         if (flags != occurrence.flags || method != occurrence.method
                 || !Arrays.equals(rawName, occurrence.rawName)) {
@@ -529,6 +528,8 @@ final class OccurrenceZipArchive implements Closeable {
                 throw failure(PublicArtifactVerifier.FailureCode.DATA_DESCRIPTOR_ERROR);
             }
         }
+        validateExtra(extra, PublicArtifactVerifier.FailureCode.LOCAL_HEADER_ERROR,
+                (flags & DATA_DESCRIPTOR_FLAG) == 0 ? occurrence : null);
         occurrence.dataOffset = dataOffset;
         occurrence.dataEnd = dataEnd;
     }
@@ -551,7 +552,13 @@ final class OccurrenceZipArchive implements Closeable {
 
     private static void validateExtra(byte[] extra, PublicArtifactVerifier.FailureCode malformedCode)
             throws PublicArtifactVerifier.VerificationException {
+        validateExtra(extra, malformedCode, null);
+    }
+
+    private static void validateExtra(byte[] extra, PublicArtifactVerifier.FailureCode malformedCode,
+            Occurrence redundantLocalSizes) throws PublicArtifactVerifier.VerificationException {
         int index = 0;
+        boolean seenZip64 = false;
         while (index < extra.length) {
             if (extra.length - index < 4) {
                 throw failure(malformedCode);
@@ -562,8 +569,22 @@ final class OccurrenceZipArchive implements Closeable {
             if (length > extra.length - index) {
                 throw failure(malformedCode);
             }
-            if (id == ZIP64_EXTRA || id == UNICODE_PATH_EXTRA) {
+            if (id == UNICODE_PATH_EXTRA) {
                 throw failure(PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+            }
+            if (id == ZIP64_EXTRA) {
+                // Only a unique pair of redundant local sizes is supported. The caller
+                // has already rejected sentinels and bound local32 sizes to central32.
+                // Central extras, descriptors and actual ZIP64 remain unsupported.
+                if (redundantLocalSizes == null || seenZip64 || length != 16) {
+                    throw failure(PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+                }
+                ByteBuffer sizes = ByteBuffer.wrap(extra, index, length).order(ByteOrder.LITTLE_ENDIAN);
+                if (sizes.getLong() != redundantLocalSizes.uncompressedSize
+                        || sizes.getLong() != redundantLocalSizes.compressedSize) {
+                    throw failure(PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+                }
+                seenZip64 = true;
             }
             index += length;
         }

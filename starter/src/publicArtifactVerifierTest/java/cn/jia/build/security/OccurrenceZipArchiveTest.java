@@ -182,6 +182,81 @@ class OccurrenceZipArchiveTest {
     }
 
     @Test
+    void redundantLocalZip64SizesAcceptStoredAndDeflatedPayloads() throws Exception {
+        for (boolean deflated : List.of(false, true)) {
+            ZipFixtureBuilder.EntrySpec entry = new ZipFixtureBuilder.EntrySpec(
+                    "config.properties", "api-key=zip-secret-canary\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                    .redundantLocalSizes();
+            if (deflated) {
+                entry.deflated();
+            }
+            try (OccurrenceZipArchive archive = OccurrenceZipArchive.open(write(
+                    new ZipFixtureBuilder().add(entry).build().copy()))) {
+                assertEquals(List.of("api-key"), classify(archive, archive.occurrences().get(0)));
+            }
+        }
+    }
+
+    @Test
+    void redundantLocalZip64RejectsConflictsHighBitsAndSentinels() throws Exception {
+        ZipFixtureBuilder.BuiltZip valid = new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("payload.bin", new byte[]{1, 2, 3})
+                        .redundantLocalSizes()).build();
+        ZipFixtureBuilder.Layout layout = valid.layouts().get(0);
+        int extra = layout.payloadOffset() - 20;
+        for (int offset : List.of(extra + 4, extra + 12, extra + 11, extra + 19)) {
+            assertOpenFailure(ZipFixtureBuilder.withByte(valid.copy(), offset, 0x80),
+                    PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+        }
+        for (int offset : List.of(layout.localCompressedSizeOffset(), layout.localUncompressedSizeOffset(),
+                layout.centralCompressedSizeOffset(), layout.centralUncompressedSizeOffset())) {
+            assertOpenFailure(ZipFixtureBuilder.withU32(valid.copy(), offset, 0xffffffffL),
+                    PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+        }
+        // Matching local64 and local32 is insufficient when central32 disagrees.
+        byte[] inconsistent = ZipFixtureBuilder.withU32(valid.copy(), layout.localUncompressedSizeOffset(), 2);
+        ZipFixtureBuilder.putU32(inconsistent, extra + 4, 2);
+        assertOpenFailure(inconsistent, PublicArtifactVerifier.FailureCode.OCCURRENCE_MISMATCH);
+        assertPayloadFailure(ZipFixtureBuilder.withByte(valid.copy(), layout.payloadOffset(), 0x7f),
+                PublicArtifactVerifier.FailureCode.PAYLOAD_INTEGRITY_ERROR);
+    }
+
+    @Test
+    void redundantLocalZip64RejectsDuplicatesWrongLengthsTruncationCentralAndDescriptors() throws Exception {
+        byte[] validExtra = new byte[20];
+        ZipFixtureBuilder.putU16(validExtra, 0, 1);
+        ZipFixtureBuilder.putU16(validExtra, 2, 16);
+        ZipFixtureBuilder.putU32(validExtra, 4, 3);
+        ZipFixtureBuilder.putU32(validExtra, 12, 3);
+        byte[] duplicate = new byte[40];
+        System.arraycopy(validExtra, 0, duplicate, 0, 20);
+        System.arraycopy(validExtra, 0, duplicate, 20, 20);
+        byte[] shortExtra = java.util.Arrays.copyOf(validExtra, 12);
+        ZipFixtureBuilder.putU16(shortExtra, 2, 8);
+        byte[] longExtra = java.util.Arrays.copyOf(validExtra, 28);
+        ZipFixtureBuilder.putU16(longExtra, 2, 24);
+        for (byte[] extra : List.of(duplicate, shortExtra, longExtra)) {
+            assertOpenFailure(new ZipFixtureBuilder()
+                    .add(new ZipFixtureBuilder.EntrySpec("payload.bin", new byte[]{1, 2, 3}).localExtra(extra))
+                    .build().copy(), PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+        }
+        assertOpenFailure(new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("payload.bin", new byte[]{1, 2, 3})
+                        .localExtra(java.util.Arrays.copyOf(validExtra, 19)))
+                .build().copy(), PublicArtifactVerifier.FailureCode.LOCAL_HEADER_ERROR);
+        assertOpenFailure(new ZipFixtureBuilder()
+                .add(new ZipFixtureBuilder.EntrySpec("payload.bin", new byte[]{1, 2, 3}).centralExtra(validExtra))
+                .build().copy(), PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+        for (ZipFixtureBuilder.Descriptor descriptor : List.of(
+                ZipFixtureBuilder.Descriptor.SIGNED, ZipFixtureBuilder.Descriptor.UNSIGNED)) {
+            assertOpenFailure(new ZipFixtureBuilder()
+                    .add(new ZipFixtureBuilder.EntrySpec("payload.bin", new byte[]{1, 2, 3})
+                            .redundantLocalSizes().descriptor(descriptor))
+                    .build().copy(), PublicArtifactVerifier.FailureCode.UNSUPPORTED);
+        }
+    }
+
+    @Test
     void structurallyValidEmptyArchiveIsAccepted() throws Exception {
         ZipFixtureBuilder.BuiltZip empty = new ZipFixtureBuilder().build();
         try (OccurrenceZipArchive archive = OccurrenceZipArchive.open(write(empty.copy()))) {

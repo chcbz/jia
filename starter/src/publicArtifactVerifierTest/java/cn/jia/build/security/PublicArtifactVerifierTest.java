@@ -32,6 +32,28 @@ class PublicArtifactVerifierTest {
     Path temporaryDirectory;
 
     @Test
+    void nestedRedundantZip64AndLatin1PropertiesStillScanAndRedactSecrets() throws Exception {
+        for (boolean unsafe : List.of(false, true)) {
+            String value = unsafe ? "format-secret-canary" : "${PUBLIC_API_KEY}";
+            byte[] nested = new ZipFixtureBuilder()
+                    .add(new ZipFixtureBuilder.EntrySpec("config/messages.properties",
+                            ("message=café\napi-key=" + value + "\n").getBytes(StandardCharsets.ISO_8859_1))
+                            .deflated().redundantLocalSizes())
+                    .build().copy();
+            Path outer = write("format-" + unsafe + ".jar", new ZipFixtureBuilder()
+                    .add(new ZipFixtureBuilder.EntrySpec("BOOT-INF/lib/library.jar", nested).stored())
+                    .build().copy());
+            Path root = temporaryDirectory.resolve("format-root-" + unsafe);
+            PublicArtifactVerifier.Result result = new PublicArtifactVerifier().verify(outer, root);
+            assertEquals(!unsafe, result.accepted());
+            assertEquals(unsafe ? List.of("BOOT-INF/lib/library.jar!config/messages.properties: api-key")
+                    : List.of(), diagnostics(result));
+            assertFalse(String.join("\n", diagnostics(result)).contains("format-secret-canary"));
+            assertFalse(Files.exists(root));
+        }
+    }
+
+    @Test
     void cumulativeLimitBelowBoundaryScansEveryNestedOccurrence() throws Exception {
         byte[] nested = safeNestedJar();
         long budget = nested.length * 2L + 1;

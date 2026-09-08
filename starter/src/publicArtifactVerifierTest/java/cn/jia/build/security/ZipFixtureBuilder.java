@@ -31,6 +31,9 @@ final class ZipFixtureBuilder {
         final byte[] data;
         int method;
         int extraFlags;
+        byte[] localExtra = new byte[0];
+        byte[] centralExtra = new byte[0];
+        boolean redundantLocalSizes;
         long declaredUncompressedSize = -1;
         boolean finalEmptyBlockAfterInputBoundary;
         Descriptor descriptor = Descriptor.NONE;
@@ -63,6 +66,21 @@ final class ZipFixtureBuilder {
 
         EntrySpec extraFlags(int value) {
             extraFlags = value;
+            return this;
+        }
+
+        EntrySpec localExtra(byte[] value) {
+            localExtra = value.clone();
+            return this;
+        }
+
+        EntrySpec centralExtra(byte[] value) {
+            centralExtra = value.clone();
+            return this;
+        }
+
+        EntrySpec redundantLocalSizes() {
+            redundantLocalSizes = true;
             return this;
         }
 
@@ -145,6 +163,14 @@ final class ZipFixtureBuilder {
                 long declaredUncompressedSize = entry.declaredUncompressedSize >= 0
                         ? entry.declaredUncompressedSize
                         : entry.data.length;
+                byte[] localExtra = entry.localExtra;
+                if (entry.redundantLocalSizes) {
+                    localExtra = new byte[20];
+                    putU16(localExtra, 0, 1);
+                    putU16(localExtra, 2, 16);
+                    putU32(localExtra, 4, declaredUncompressedSize);
+                    putU32(localExtra, 12, compressed.length);
+                }
                 CRC32 crc = new CRC32();
                 crc.update(entry.data);
                 int flags = (1 << 11) | entry.extraFlags;
@@ -167,9 +193,10 @@ final class ZipFixtureBuilder {
                 int localUncompressedOffset = output.size();
                 le32(output, entry.descriptor == Descriptor.NONE ? declaredUncompressedSize : 0);
                 le16(output, name.length);
-                le16(output, 0);
+                le16(output, localExtra.length);
                 int localNameOffset = output.size();
                 output.write(name);
+                output.write(localExtra);
                 int payloadOffset = output.size();
                 output.write(compressed);
                 int descriptorOffset = -1;
@@ -210,7 +237,7 @@ final class ZipFixtureBuilder {
                 int centralUncompressed = output.size();
                 le32(output, entry.declaredUncompressedSize);
                 le16(output, entry.name.length);
-                le16(output, 0);
+                le16(output, entry.spec.centralExtra.length);
                 le16(output, 0);
                 le16(output, 0);
                 le16(output, 0);
@@ -218,6 +245,7 @@ final class ZipFixtureBuilder {
                 int centralLocalOffset = output.size();
                 le32(output, entry.localOffset);
                 output.write(entry.name);
+                output.write(entry.spec.centralExtra);
                 layouts.add(new Layout(entry.localOffset, entry.localFlagsOffset, entry.localMethodOffset,
                         entry.localCrcOffset, entry.localCompressedOffset, entry.localUncompressedOffset,
                         entry.localNameOffset, entry.payloadOffset, entry.descriptorOffset, central,
