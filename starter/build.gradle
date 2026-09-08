@@ -111,15 +111,16 @@ bootJar {
         def captured = new ByteArrayOutputStream()
         int exitValue
         try {
-            exitValue = providers.javaexec {
+            def execution = providers.javaexec {
                 classpath = sourceSets.publicArtifactVerifier.runtimeClasspath
                 mainClass = 'cn.jia.build.security.PublicArtifactVerifier'
                 args archiveFile.get().asFile.absolutePath,
                         new File(temporaryDir, 'public-artifact-verifier-root').absolutePath
-                standardOutput = captured
-                errorOutput = captured
                 ignoreExitValue = true
-            }.result.get().exitValue
+            }
+            exitValue = execution.result.get().exitValue
+            captured.write(execution.standardOutput.asBytes.get())
+            captured.write(execution.standardError.asBytes.get())
         } catch (Exception ignored) {
             throw new GradleException('Public bootJar security policy violations:\n - <public-artifact-verifier-error>')
         }
