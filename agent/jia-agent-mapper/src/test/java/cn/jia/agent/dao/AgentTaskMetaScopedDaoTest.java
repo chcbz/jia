@@ -88,6 +88,60 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(fallbackSql.endsWith("limit #{limit}"), fallbackSql);
     }
 
+    @Test
+    void durableActiveWorkGuardCoversTaskMemberAndWorkItemAssignmentsInExactScope()
+            throws Exception {
+        Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "findDurableActiveAssignmentByAgentForUpdate",
+                String.class, String.class, String.class);
+        String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
+
+        assertTrue(sql.contains("select task.* from agent_task_meta task"), sql);
+        assertTrue(sql.contains("task.tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("task.client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("task.assigned_agent_id = #{agentid}"), sql);
+        assertTrue(sql.contains("cast(task.assigned_agent_id as binary(400)) "), sql);
+        assertTrue(sql.contains("cast(task.reward_status as binary) in ("), sql);
+        String taskAssignment = sql.substring(
+                sql.indexOf("task.assigned_agent_id = #{agentid}"),
+                sql.indexOf("or exists ( select 1 from agent_task_member"));
+        for (String status : new String[]{
+                "open", "planning", "assigned", "running", "reviewing", "blocked"}) {
+            assertTrue(taskAssignment.contains("cast('" + status + "' as binary)"),
+                    status + ": " + taskAssignment);
+        }
+
+        assertTrue(sql.contains("from agent_task_member member"), sql);
+        assertTrue(sql.contains("member.agent_id = #{agentid}"), sql);
+        assertTrue(sql.contains("member.task_id = task.task_id"), sql);
+        assertTrue(sql.contains("cast(member.tenant_id as binary(200)) "), sql);
+        assertTrue(sql.contains("cast(member.client_id as binary(200)) "), sql);
+        String memberAssignment = sql.substring(
+                sql.indexOf("from agent_task_member member"),
+                sql.indexOf("or exists ( select 1 from agent_task_work_item"));
+        for (String status : new String[]{"accepted", "working", "blocked"}) {
+            assertTrue(memberAssignment.contains("cast('" + status + "' as binary)"),
+                    status + ": " + memberAssignment);
+        }
+
+        assertTrue(sql.contains("from agent_task_work_item work_item"), sql);
+        assertTrue(sql.contains("work_item.assignee_agent_id = #{agentid}"), sql);
+        assertTrue(sql.contains("work_item.task_id = task.task_id"), sql);
+        assertTrue(sql.contains("cast(work_item.tenant_id as binary(200)) "), sql);
+        assertTrue(sql.contains("cast(work_item.client_id as binary(200)) "), sql);
+        String workItemAssignment = sql.substring(
+                sql.indexOf("from agent_task_work_item work_item"),
+                sql.indexOf("order by task.task_id asc, task.id asc"));
+        for (String status : new String[]{
+                "pending", "ready", "claimed", "running", "blocked", "submitted"}) {
+            assertTrue(workItemAssignment.contains("cast('" + status + "' as binary)"),
+                    status + ": " + workItemAssignment);
+        }
+
+        assertTrue(sql.contains("order by task.task_id asc, task.id asc"), sql);
+        assertTrue(sql.endsWith("limit 1 for update"), sql);
+    }
+
 
     @Test
     void taskSearchSqlUsesByteExactTenantAndClientWithoutLegacyFallback()

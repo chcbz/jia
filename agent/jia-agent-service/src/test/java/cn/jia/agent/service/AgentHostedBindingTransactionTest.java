@@ -7,12 +7,14 @@ import cn.jia.agent.dao.AgentHostedProfileDao;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.entity.AgentHostedProfileEntity;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
 import cn.jia.agent.service.impl.AgentServiceImpl;
@@ -158,6 +160,51 @@ class AgentHostedBindingTransactionTest {
                 anyString(), anyLong());
         verify(fixture.hostedDao, never()).transition(anyLong(), anyString(), anyLong(),
                 anyString(), anyLong(), anyBoolean());
+    }
+
+    @Test
+    void localUnbindRejectsDurableAssignedWorkWhenRuntimeProjectionIsIdle() {
+        Fixture fixture = fixture();
+        AgentPersonaBindingEntity binding = binding();
+        AgentRuntimeEntity runtime = runtime(AgentConstants.STATUS_ONLINE);
+        AgentTaskMetaEntity assigned = new AgentTaskMetaEntity();
+        assigned.setTaskId("durable-task");
+        assigned.setTenantId("owner-a");
+        assigned.setClientId("client-a");
+        assigned.setAssignedAgentId(AGENT_ID);
+        assigned.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
+
+        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
+                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+        when(fixture.identityService.requireRegistrationIdentityInScope(
+                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
+        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                .thenReturn(null);
+        when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
+        when(fixture.taskMetaDao.findDurableActiveAssignmentByAgentForUpdate(
+                "owner-a", "client-a", AGENT_ID)).thenReturn(assigned);
+
+        AgentServiceImpl.AgentBizException failure = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.prepareUnbind(SCOPE, "wuyong"));
+
+        assertEquals(AgentErrorConstants.AGENT_BUSY, failure.getCode());
+        InOrder order = inOrder(fixture.bindingDao, fixture.hostedDao,
+                fixture.runtimeDao, fixture.taskMetaDao);
+        order.verify(fixture.bindingDao).findExactActiveByScopeAndPersonaForUpdate(
+                "owner-a", "client-a", "owner-a", "wuyong");
+        order.verify(fixture.hostedDao).findExactForUpdate(
+                "owner-a", "client-a", "owner-a", 12L);
+        order.verify(fixture.runtimeDao).findByAgentIdForUpdate(AGENT_ID);
+        order.verify(fixture.taskMetaDao).findDurableActiveAssignmentByAgentForUpdate(
+                "owner-a", "client-a", AGENT_ID);
+        verify(fixture.bindingDao, never()).updateById(any());
+        verify(fixture.runtimeDao, never()).clearBindingAfterUnbind(
+                anyLong(), anyString(), anyLong(), anyString(), anyString(), anyLong());
+        verify(fixture.identityService, never()).suspendForBinding(
+                anyString(), anyString(), anyString(), anyLong());
+        verify(fixture.eventPublisher, never()).publishAgentStatus(any(), any(), any());
     }
 
     @Test
@@ -458,15 +505,44 @@ class AgentHostedBindingTransactionTest {
 
     @Test
     void hostedPublicationRereadUsesFreshReadOnlyTransactionBoundary() throws Exception {
-        var method = AgentHostedRuntimePublicationWorker.class.getMethod(
+        var boundMethod = AgentHostedRuntimePublicationWorker.class.getMethod(
                 "revalidateForPublication", Scope.class, String.class, long.class);
-        var transaction = method.getAnnotation(
+        var boundTransaction = boundMethod.getAnnotation(
+                org.springframework.transaction.annotation.Transactional.class);
+        var detachedMethod = AgentHostedRuntimePublicationWorker.class.getMethod(
+                "revalidateDetachedForPublication", Scope.class, String.class, long.class);
+        var detachedTransaction = detachedMethod.getAnnotation(
                 org.springframework.transaction.annotation.Transactional.class);
 
-        assertNotNull(transaction);
+        assertNotNull(boundTransaction);
         assertEquals(org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
-                transaction.propagation());
-        assertTrue(transaction.readOnly());
+                boundTransaction.propagation());
+        assertTrue(boundTransaction.readOnly());
+        assertNotNull(detachedTransaction);
+        assertEquals(org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+                detachedTransaction.propagation());
+        assertTrue(detachedTransaction.readOnly());
+    }
+
+    @Test
+    void hostedPublicationKeepsBoundAndDetachedRuntimeContractsDistinct() {
+        AgentRuntimeDao runtimeDao = mock(AgentRuntimeDao.class);
+        AgentHostedRuntimePublicationWorker worker =
+                new AgentHostedRuntimePublicationWorker(runtimeDao);
+        AgentRuntimeEntity bound = runtime(AgentConstants.STATUS_ONLINE);
+        AgentRuntimeEntity detached = runtime(AgentConstants.STATUS_OFFLINE);
+        detached.setBindingId(null);
+        detached.setClientId(null);
+        detached.setOwnerJiacn(null);
+        detached.setPersonaCode(null);
+        detached.setPersonaName(null);
+
+        when(runtimeDao.findByAgentId(AGENT_ID)).thenReturn(bound, detached, detached);
+
+        assertSame(bound, worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
+        assertNull(worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
+        assertSame(detached,
+                worker.revalidateDetachedForPublication(SCOPE, AGENT_ID, 31L));
     }
 
     @Test
@@ -519,6 +595,7 @@ class AgentHostedBindingTransactionTest {
         AgentPersonaDao personaDao = mock(AgentPersonaDao.class);
         AgentPersonaBindingDao bindingDao = mock(AgentPersonaBindingDao.class);
         AgentHostedProfileDao hostedDao = mock(AgentHostedProfileDao.class);
+        AgentTaskMetaDao taskMetaDao = mock(AgentTaskMetaDao.class);
         ApiKeyService apiKeys = mock(ApiKeyService.class);
         ObjectProvider<ApiKeyService> apiKeyProvider = mock(ObjectProvider.class);
         when(apiKeyProvider.getIfAvailable()).thenReturn(apiKeys);
@@ -530,10 +607,11 @@ class AgentHostedBindingTransactionTest {
         AgentHostedRuntimePublicationWorker runtimePublicationWorker =
                 new AgentHostedRuntimePublicationWorker(runtimeDao);
         AgentHostedBindingTransaction transaction = new AgentHostedBindingTransaction(
-                runtimeDao, identityService, personaDao, bindingDao, hostedDao, apiKeyProvider,
+                runtimeDao, identityService, personaDao, bindingDao, hostedDao, taskMetaDao,
+                apiKeyProvider,
                 eventPublisherProvider, scopePublicationCoordinator, runtimePublicationWorker);
         return new Fixture(transaction, runtimeDao, identityService, personaDao, bindingDao,
-                hostedDao, apiKeys, eventPublisher, scopePublicationCoordinator);
+                hostedDao, taskMetaDao, apiKeys, eventPublisher, scopePublicationCoordinator);
     }
 
     private static AgentPersonaBindingEntity binding() {
@@ -627,6 +705,7 @@ class AgentHostedBindingTransactionTest {
             AgentPersonaDao personaDao,
             AgentPersonaBindingDao bindingDao,
             AgentHostedProfileDao hostedDao,
+            AgentTaskMetaDao taskMetaDao,
             ApiKeyService apiKeys,
             AgentEventPublisher eventPublisher,
             AgentScopePublicationCoordinator scopePublicationCoordinator) {

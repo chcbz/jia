@@ -17,6 +17,24 @@ public class AgentHostedRuntimePublicationWorker {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public AgentRuntimeEntity revalidateForPublication(
+            AgentHostedBindingTransaction.Scope scope, String agentId, long bindingId) {
+        if (scope == null || agentId == null || agentId.isBlank()
+                || !agentId.equals(agentId.strip()) || bindingId <= 0) {
+            return null;
+        }
+        AgentRuntimeEntity current = runtimeDao.findByAgentId(agentId);
+        if (current == null
+                || !Objects.equals(current.getAgentId(), agentId)
+                || !Objects.equals(current.getBindingId(), bindingId)
+                || !Objects.equals(current.getClientId(), scope.clientId())
+                || !Objects.equals(current.getOwnerJiacn(), scope.ownerJiacn())) {
+            return null;
+        }
+        return current;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public AgentRuntimeEntity revalidateDetachedForPublication(
             AgentHostedBindingTransaction.Scope scope, String agentId, long runtimeId) {
         if (scope == null || agentId == null || agentId.isBlank()
                 || !agentId.equals(agentId.strip()) || runtimeId <= 0) {

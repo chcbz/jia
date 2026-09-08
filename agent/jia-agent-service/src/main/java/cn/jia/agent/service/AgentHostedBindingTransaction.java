@@ -7,6 +7,7 @@ import cn.jia.agent.dao.AgentHostedProfileDao;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.entity.AgentHostedProfileEntity;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
@@ -42,6 +43,7 @@ public class AgentHostedBindingTransaction {
     private final AgentPersonaDao personaDao;
     private final AgentPersonaBindingDao bindingDao;
     private final AgentHostedProfileDao hostedDao;
+    private final AgentTaskMetaDao taskMetaDao;
     private final ObjectProvider<ApiKeyService> apiKeyProvider;
     private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
     private final AgentScopePublicationCoordinator scopePublicationCoordinator;
@@ -49,7 +51,8 @@ public class AgentHostedBindingTransaction {
 
     public AgentHostedBindingTransaction(AgentRuntimeDao runtimeDao, AgentIdentityService identityService,
             AgentPersonaDao personaDao, AgentPersonaBindingDao bindingDao,
-            AgentHostedProfileDao hostedDao, ObjectProvider<ApiKeyService> apiKeyProvider,
+            AgentHostedProfileDao hostedDao, AgentTaskMetaDao taskMetaDao,
+            ObjectProvider<ApiKeyService> apiKeyProvider,
             ObjectProvider<AgentEventPublisher> eventPublisherProvider,
             AgentScopePublicationCoordinator scopePublicationCoordinator,
             AgentHostedRuntimePublicationWorker runtimePublicationWorker) {
@@ -58,6 +61,7 @@ public class AgentHostedBindingTransaction {
         this.personaDao = personaDao;
         this.bindingDao = bindingDao;
         this.hostedDao = hostedDao;
+        this.taskMetaDao = taskMetaDao;
         this.apiKeyProvider = apiKeyProvider;
         this.eventPublisherProvider = eventPublisherProvider;
         this.scopePublicationCoordinator = scopePublicationCoordinator;
@@ -191,7 +195,7 @@ public class AgentHostedBindingTransaction {
             }
         }
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
-        requireNoActiveTask(runtime);
+        requireNoActiveTask(scope, identity.getCanonicalAgentId(), runtime);
         if (hosted == null) {
             suspendDatabase(scope, binding, identity, runtime);
             publishOfflineAfterCommit(scope, runtime);
@@ -233,7 +237,7 @@ public class AgentHostedBindingTransaction {
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), bindingId);
         requireExactHosted(scope, binding, hosted);
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
-        requireNoActiveTask(runtime);
+        requireNoActiveTask(scope, identity.getCanonicalAgentId(), runtime);
         require(AgentHostedProfileState.SUSPENDING.equals(hosted.getLifecycleState())
                 && Objects.equals(hosted.getGeneration(), expectedGeneration), "Hosted unbind generation changed");
         OauthApiKeyEntity key = exactKey(hosted);
@@ -253,18 +257,22 @@ public class AgentHostedBindingTransaction {
         return hosted;
     }
 
-    private void requireNoActiveTask(AgentRuntimeEntity runtime) {
-        if (runtime == null) {
-            return;
+    private void requireNoActiveTask(Scope scope, String agentId, AgentRuntimeEntity runtime) {
+        if (runtime != null) {
+            if (!StringUtil.isBlank(runtime.getCurrentTaskId())
+                    || AgentConstants.STATUS_BUSY.equals(runtime.getStatus())) {
+                fail(AgentErrorConstants.AGENT_BUSY,
+                        "Agent cannot be unbound while it has active work");
+            }
+            if (!StringUtil.isBlank(runtime.getCurrentTaskTitle())) {
+                fail(AgentErrorConstants.AGENT_ERROR,
+                        "Agent task projection is inconsistent during unbind");
+            }
         }
-        if (!StringUtil.isBlank(runtime.getCurrentTaskId())
-                || AgentConstants.STATUS_BUSY.equals(runtime.getStatus())) {
+        if (taskMetaDao.findDurableActiveAssignmentByAgentForUpdate(
+                scope.tenantId(), scope.clientId(), agentId) != null) {
             fail(AgentErrorConstants.AGENT_BUSY,
-                    "Agent cannot be unbound while it has active work");
-        }
-        if (!StringUtil.isBlank(runtime.getCurrentTaskTitle())) {
-            fail(AgentErrorConstants.AGENT_ERROR,
-                    "Agent task projection is inconsistent during unbind");
+                    "Agent cannot be unbound while it has durable active work");
         }
     }
 
@@ -364,7 +372,7 @@ public class AgentHostedBindingTransaction {
                                 return;
                             }
                             AgentRuntimeEntity current = runtimePublicationWorker
-                                    .revalidateForPublication(scope, agentId, runtimeId);
+                                    .revalidateDetachedForPublication(scope, agentId, runtimeId);
                             if (current != null) {
                                 publisher.publishAgentStatus(
                                         scope.clientId(), scope.ownerJiacn(), toDto(current));

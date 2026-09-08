@@ -51,6 +51,8 @@ import cn.jia.core.util.JsonUtil;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
+import com.github.pagehelper.Page;
+import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
@@ -2104,6 +2106,36 @@ class AgentServiceImplTest extends BaseMockTest {
                 anyString(), anyString(), anyString(), anyLong(), anyString());
         verify(agentIdentityService, never()).requireActiveBinding(any(), any());
         verify(eventPublisherProvider, never()).getIfAvailable();
+    }
+
+    @Test
+    void listRosterPreservesPageHelperMetadataDuringDtoConversion() {
+        AgentRuntimeEntity first = ownedAgent(
+                "agent-003", "Lin Chong", AgentConstants.STATUS_OFFLINE, "[\"combat\"]");
+        AgentRuntimeEntity second = ownedAgent(
+                "agent-004", "Lu Zhishen", AgentConstants.STATUS_OFFLINE, "[\"combat\"]");
+        Page<AgentRuntimeEntity> persistedPage = new Page<>(2, 2);
+        persistedPage.setTotal(5L);
+        persistedPage.add(first);
+        persistedPage.add(second);
+        when(agentRuntimeDao.findRosterByOwner(
+                "jia_client", "juyiting", AgentConstants.STATUS_OFFLINE, "combat"))
+                .thenReturn(persistedPage);
+
+        try {
+            PageInfo<AgentRuntimeDTO> page = agentService.listRoster(
+                    AgentConstants.STATUS_OFFLINE, "combat", 2, 2);
+
+            assertEquals(5L, page.getTotal());
+            assertEquals(2, page.getPageNum());
+            assertEquals(2, page.getPageSize());
+            assertEquals(3, page.getPages());
+            assertEquals(List.of("agent-003", "agent-004"), page.getList().stream()
+                    .map(AgentRuntimeDTO::getAgentId)
+                    .toList());
+        } finally {
+            PageHelper.clearPage();
+        }
     }
 
     @Test

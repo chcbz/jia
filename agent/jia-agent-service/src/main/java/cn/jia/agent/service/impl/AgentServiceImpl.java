@@ -354,12 +354,9 @@ public class AgentServiceImpl implements AgentService {
         String clientId = resolveCurrentClientId();
         String ownerJiacn = resolveCurrentJiacn();
         PageHelper.startPage(pageNum, pageSize);
-        List<AgentRuntimeDTO> agents = agentRuntimeDao
-                .findRosterByOwner(clientId, ownerJiacn, status, ability)
-                .stream()
-                .map(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn))
-                .toList();
-        return PageInfo.of(agents);
+        PageInfo<AgentRuntimeEntity> agents = PageInfo.of(
+                agentRuntimeDao.findRosterByOwner(clientId, ownerJiacn, status, ability));
+        return agents.convert(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn));
     }
 
     @Override
