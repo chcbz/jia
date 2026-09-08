@@ -57,9 +57,9 @@ class AgentRuntimeMapperContractTest {
         assertExactParameter(sql, "agent_id", "agentid");
         assertExactParameter(sql, "client_id", "clientid");
         assertExactParameter(sql, "owner_jiacn", "ownerjiacn");
-        assertFalse(set.contains("name = null"));
-        assertFalse(set.contains("abilities = null"));
-        assertFalse(set.contains("tenant_id = null"));
+        assertColumnNotAssigned(set, "name");
+        assertColumnNotAssigned(set, "abilities");
+        assertColumnNotAssigned(set, "tenant_id");
     }
 
     private static String selectSql(String methodName) throws Exception {
@@ -85,6 +85,12 @@ class AgentRuntimeMapperContractTest {
 
     private static String normalize(String[] sql) {
         return String.join(" ", sql).replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static void assertColumnNotAssigned(String setClause, String column) {
+        assertFalse(java.util.Arrays.stream(setClause.substring(" set ".length()).split(","))
+                .map(String::strip)
+                .anyMatch(assignment -> assignment.startsWith(column + " =")), column);
     }
 
     private static void assertExactParameter(String sql, String column, String parameter) {
