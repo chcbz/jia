@@ -82,7 +82,8 @@ public class AgentController {
     private HostingRentApplicationService hostingRent;
 
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
-        this(agentService, abilityEvaluationService, null, null, null);
+        this(agentService, abilityEvaluationService, null, (FundedBountyService) null,
+                (FundedBountyQuoteClaimService) null);
     }
 
     AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
@@ -99,7 +100,8 @@ public class AgentController {
 
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
             AgentPersonaProvisioningService personaProvisioningService) {
-        this(agentService, abilityEvaluationService, personaProvisioningService, null, null);
+        this(agentService, abilityEvaluationService, personaProvisioningService,
+                (FundedBountyService) null, (FundedBountyQuoteClaimService) null);
     }
 
     @Autowired
