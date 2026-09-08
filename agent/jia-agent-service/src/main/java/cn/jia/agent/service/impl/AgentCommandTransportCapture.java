@@ -8,6 +8,7 @@ import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -29,6 +30,7 @@ public class AgentCommandTransportCapture {
     private final ObjectProvider<AgentCommandTransportWriter> writerProvider;
     private final boolean compatibilityDisabled;
 
+    @Autowired
     public AgentCommandTransportCapture(
             AgentRabbitSafetyGate gate,
             ObjectProvider<AgentCommandTransportWriter> writerProvider) {

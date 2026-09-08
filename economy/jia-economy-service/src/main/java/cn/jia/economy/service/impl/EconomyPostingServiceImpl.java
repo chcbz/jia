@@ -24,6 +24,7 @@ import cn.jia.economy.service.EconomyPostingLine;
 import cn.jia.economy.service.EconomyPostingResult;
 import cn.jia.economy.service.EconomyPostingService;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -74,6 +75,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
     private final Supplier<String> escrowIds;
     private final LongSupplier clock;
 
+    @Autowired
     public EconomyPostingServiceImpl(
             EconomyLedgerMapper mapper,
             PlatformTransactionManager transactionManager,
