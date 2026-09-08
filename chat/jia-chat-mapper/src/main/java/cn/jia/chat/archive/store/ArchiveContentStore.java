@@ -10,6 +10,7 @@ import java.util.List;
 public interface ArchiveContentStore {
     void insertWork(ArchiveWorkRecord work);
     ArchiveWorkRecord findWork(String workId);
+    ActiveContent findActiveContent(String workId);
     void insertEdition(ArchiveEditionRecord edition);
     ArchiveEditionRecord findEdition(String editionId);
     void insertBlock(ArchiveBlockRecord block);
@@ -23,4 +24,6 @@ public interface ArchiveContentStore {
     ArchiveEditionRecord lockEdition(String editionId);
     int switchActiveEdition(String workId, String editionId);
     int markActivated(String editionId);
+
+    record ActiveContent(ArchiveWorkRecord work, ArchiveEditionRecord edition) { }
 }

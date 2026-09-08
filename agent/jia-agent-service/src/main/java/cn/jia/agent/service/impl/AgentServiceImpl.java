@@ -351,10 +351,13 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public PageInfo<AgentRuntimeDTO> listRoster(String status, String ability, int pageNum, int pageSize) {
+        String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
         PageHelper.startPage(pageNum, pageSize);
-        List<AgentRuntimeDTO> agents = agentRuntimeDao.findRosterByOwner(resolveCurrentClientId(), resolveCurrentJiacn(), status, ability)
+        List<AgentRuntimeDTO> agents = agentRuntimeDao
+                .findRosterByOwner(clientId, ownerJiacn, status, ability)
                 .stream()
-                .map(this::toRuntimeDTO)
+                .map(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn))
                 .toList();
         return PageInfo.of(agents);
     }

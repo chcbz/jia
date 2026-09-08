@@ -15,12 +15,16 @@ import cn.jia.chat.archive.store.ArchiveContentStore;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 
 @Service
 public class ArchiveReaderServiceImpl implements ArchiveReaderService {
+    private static final long CATALOG_BLOCK_CACHE_NANOS = Duration.ofSeconds(30).toNanos();
+
     private final ArchiveContentStore store;
+    private volatile CatalogBlocks cachedCatalogBlocks;
 
     public ArchiveReaderServiceImpl(ArchiveContentStore store) {
         this.store = Objects.requireNonNull(store, "store");
@@ -30,23 +34,13 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
     @Transactional(readOnly = true)
     public ArchiveRepresentation<ArchiveCatalogDTO> catalog() {
         Active active = requireActive(null);
-        List<ArchiveBlockRecord> blocks = store.listBlocks(active.edition().editionId());
-        require(blocks.size() == 121, "active edition block count drift");
-        ArchiveBlockRecord preface = blocks.getFirst();
-        require("PREFACE".equals(preface.blockType()) && preface.readerOrdinal() == 0, "active preface drift");
-        List<ArchiveBlockSummaryDTO> chapters = blocks.subList(1, blocks.size()).stream()
-                .map(this::summary)
-                .toList();
-        for (int index = 0; index < chapters.size(); index++) {
-            ArchiveBlockSummaryDTO chapter = chapters.get(index);
-            require("CHAPTER".equals(chapter.blockType())
-                    && Integer.valueOf(index + 1).equals(chapter.number()), "active chapter order drift");
-        }
         ArchiveEditionRecord edition = active.edition();
+        CatalogBlocks blocks = catalogBlocks(edition);
         ArchiveActiveEditionDTO activeEdition = new ArchiveActiveEditionDTO(
                 edition.editionId(), edition.manifestSha256(), edition.sourceSha256(),
                 edition.prefaceParagraphCount(), edition.chapterParagraphCount(),
-                edition.readerParagraphCount(), edition.readerUtf8ByteLength(), summary(preface), chapters);
+                edition.readerParagraphCount(), edition.readerUtf8ByteLength(),
+                blocks.preface(), blocks.chapters());
         ArchiveCatalogDTO dto = new ArchiveCatalogDTO(ArchiveEtags.REPRESENTATION_SCHEMA_VERSION,
                 active.work().workId(), active.work().title(), activeEdition);
         return new ArchiveRepresentation<>(ArchiveEtags.catalog(edition.manifestSha256()), dto);
@@ -77,14 +71,18 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
     }
 
     private Active requireActive(String requestedEdition) {
-        ArchiveWorkRecord work = store.findWork(ArchiveManifestLoader.WORK_ID);
-        if (work == null || !ArchiveManifestLoader.WORK_TITLE.equals(work.title())
-                || work.activeEditionId() == null
-                || (requestedEdition != null && !requestedEdition.equals(work.activeEditionId()))) {
+        ArchiveContentStore.ActiveContent activeContent =
+                store.findActiveContent(ArchiveManifestLoader.WORK_ID);
+        if (activeContent == null || activeContent.work() == null || activeContent.edition() == null) {
             throw new ArchiveResourceNotFoundException();
         }
-        ArchiveEditionRecord edition = store.findEdition(work.activeEditionId());
-        if (edition == null || !"READY".equals(edition.importState())
+        ArchiveWorkRecord work = activeContent.work();
+        ArchiveEditionRecord edition = activeContent.edition();
+        if (!ArchiveManifestLoader.WORK_TITLE.equals(work.title())
+                || work.activeEditionId() == null
+                || !Objects.equals(work.activeEditionId(), edition.editionId())
+                || (requestedEdition != null && !requestedEdition.equals(work.activeEditionId()))
+                || !"READY".equals(edition.importState())
                 || !work.workId().equals(edition.workId())
                 || !ArchiveManifestLoader.EXPECTED_MANIFEST_SHA256.equals(edition.manifestSha256())
                 || !ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256.equals(edition.manifestFileSha256())
@@ -98,6 +96,34 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
             throw new ArchiveResourceNotFoundException();
         }
         return new Active(work, edition);
+    }
+
+    private CatalogBlocks catalogBlocks(ArchiveEditionRecord edition) {
+        long now = System.nanoTime();
+        CatalogBlocks current = cachedCatalogBlocks;
+        if (current != null && current.matches(edition)
+                && now - current.loadedAtNanos() >= 0
+                && now - current.loadedAtNanos() < CATALOG_BLOCK_CACHE_NANOS) {
+            return current;
+        }
+        List<ArchiveBlockRecord> rows = store.listBlocks(edition.editionId());
+        require(rows.size() == 121, "active edition block count drift");
+        ArchiveBlockRecord preface = rows.getFirst();
+        require("PREFACE".equals(preface.blockType()) && preface.readerOrdinal() == 0,
+                "active preface drift");
+        List<ArchiveBlockSummaryDTO> chapters = rows.subList(1, rows.size()).stream()
+                .map(this::summary)
+                .toList();
+        for (int index = 0; index < chapters.size(); index++) {
+            ArchiveBlockSummaryDTO chapter = chapters.get(index);
+            require("CHAPTER".equals(chapter.blockType())
+                    && Integer.valueOf(index + 1).equals(chapter.number()),
+                    "active chapter order drift");
+        }
+        CatalogBlocks loaded = new CatalogBlocks(edition.editionId(), edition.manifestSha256(),
+                now, summary(preface), chapters);
+        cachedCatalogBlocks = loaded;
+        return loaded;
     }
 
     private ArchiveRepresentation<ArchiveBlockDTO> representation(
@@ -127,6 +153,17 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
         }
     }
 
-    private record Active(ArchiveWorkRecord work, ArchiveEditionRecord edition) {
+    private record Active(ArchiveWorkRecord work, ArchiveEditionRecord edition) { }
+
+    private record CatalogBlocks(String editionId, String manifestSha256, long loadedAtNanos,
+            ArchiveBlockSummaryDTO preface, List<ArchiveBlockSummaryDTO> chapters) {
+        private CatalogBlocks {
+            chapters = List.copyOf(chapters);
+        }
+
+        private boolean matches(ArchiveEditionRecord edition) {
+            return Objects.equals(editionId, edition.editionId())
+                    && Objects.equals(manifestSha256, edition.manifestSha256());
+        }
     }
 }

@@ -60,6 +60,32 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
     }
 
     @Override
+    public ActiveContent findActiveContent(String workId) {
+        return first(jdbc.query("""
+                SELECT w.work_id AS active_work_id, w.title, w.active_edition_id,
+                       e.edition_id, e.work_id, e.import_state, e.source_sha256,
+                       e.manifest_sha256, e.manifest_file_sha256, e.source_utf8_byte_length,
+                       e.chapter_count, e.preface_paragraph_count, e.chapter_paragraph_count,
+                       e.reader_paragraph_count, e.preface_utf8_byte_length,
+                       e.chapter_utf8_byte_length, e.reader_utf8_byte_length
+                FROM archive_work w
+                JOIN archive_edition e
+                  ON e.edition_id = w.active_edition_id
+                 AND e.work_id = w.work_id
+                 AND CAST(e.edition_id AS BINARY) = CAST(w.active_edition_id AS BINARY)
+                 AND OCTET_LENGTH(e.edition_id) = OCTET_LENGTH(w.active_edition_id)
+                 AND CAST(e.work_id AS BINARY) = CAST(w.work_id AS BINARY)
+                 AND OCTET_LENGTH(e.work_id) = OCTET_LENGTH(w.work_id)
+                WHERE w.work_id = ?
+                  AND CAST(w.work_id AS BINARY) = CAST(? AS BINARY)
+                  AND OCTET_LENGTH(w.work_id) = OCTET_LENGTH(?)
+                """, (rs, ignored) -> new ActiveContent(
+                        new ArchiveWorkRecord(rs.getString("active_work_id"), rs.getString("title"),
+                                rs.getString("active_edition_id")),
+                        EDITION_MAPPER.mapRow(rs, ignored)), workId, workId, workId));
+    }
+
+    @Override
     public void insertEdition(ArchiveEditionRecord edition) {
         jdbc.update("""
                 INSERT INTO archive_edition (

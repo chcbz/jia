@@ -201,6 +201,16 @@ class ArchiveContentImporterTest {
         }
 
         @Override
+        public ActiveContent findActiveContent(String workId) {
+            ArchiveWorkRecord activeWork = findWork(workId);
+            if (activeWork == null || activeWork.activeEditionId() == null || edition == null
+                    || !activeWork.activeEditionId().equals(edition.editionId())) {
+                return null;
+            }
+            return new ActiveContent(activeWork, edition);
+        }
+
+        @Override
         public void insertEdition(ArchiveEditionRecord candidate) {
             insertAttempts++;
             if (edition != null) throw new DuplicateKeyException("edition");

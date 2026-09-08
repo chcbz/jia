@@ -1,6 +1,7 @@
 package cn.jia.agent.service;
 
 import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentHostedProfileState;
 import cn.jia.agent.dao.AgentHostedProfileDao;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
@@ -52,7 +53,9 @@ class AgentHostedBindingTransactionTest {
         when(fixture.runtimeDao.findByAgentId(AGENT_ID)).thenReturn(runtime);
         when(fixture.apiKeys.get("key-12")).thenReturn(key);
         when(fixture.bindingDao.updateById(binding)).thenReturn(1);
-        when(fixture.runtimeDao.updateById(runtime)).thenReturn(1);
+        when(fixture.runtimeDao.clearBindingAfterUnbind(
+                eq(31L), eq(AGENT_ID), eq(12L), eq("client-a"), eq("owner-a"), anyLong()))
+                .thenReturn(1);
         when(fixture.hostedDao.transition(5L, AgentHostedProfileState.SUSPENDING, 4L,
                 AgentHostedProfileState.SUSPENDED, 5L, false)).thenReturn(1);
 
@@ -63,13 +66,21 @@ class AgentHostedBindingTransactionTest {
             assertEquals(AgentHostedProfileState.SUSPENDED, result.getLifecycleState());
             assertEquals(AgentConstants.BINDING_STATUS_SUSPENDED, binding.getStatus());
             assertEquals(AgentConstants.STATUS_OFFLINE, runtime.getStatus());
-            assertEquals("fresh-endpoint", runtime.getEndpoint());
+            assertNull(runtime.getClientId());
+            assertNull(runtime.getOwnerJiacn());
+            assertNull(runtime.getBindingId());
+            assertNull(runtime.getPersonaCode());
+            assertNull(runtime.getPersonaName());
+            assertNull(runtime.getEndpoint());
+            assertNull(runtime.getTokenHash());
             verify(fixture.eventPublisher, never()).publishAgentStatus(any(), any(), any());
             InOrder order = inOrder(fixture.bindingDao, fixture.hostedDao, fixture.runtimeDao);
             order.verify(fixture.bindingDao).findByIdForUpdate(12L);
             order.verify(fixture.hostedDao).findExactForUpdate("owner-a", "client-a", "owner-a", 12L);
             order.verify(fixture.runtimeDao).findByAgentIdForUpdate(AGENT_ID);
             order.verify(fixture.bindingDao).updateById(binding);
+            order.verify(fixture.runtimeDao).clearBindingAfterUnbind(
+                    eq(31L), eq(AGENT_ID), eq(12L), eq("client-a"), eq("owner-a"), anyLong());
             commitSynchronizations();
         } finally {
             clearTransactionSynchronization();
@@ -80,22 +91,22 @@ class AgentHostedBindingTransactionTest {
                 eq("client-a"), eq("owner-a"), snapshot.capture());
         assertEquals(AGENT_ID, snapshot.getValue().getAgentId());
         assertEquals(AgentConstants.STATUS_OFFLINE, snapshot.getValue().getStatus());
-        assertEquals("fresh-endpoint", snapshot.getValue().getEndpoint());
+        assertNull(snapshot.getValue().getOwnerJiacn());
+        assertNull(snapshot.getValue().getEndpoint());
         verify(fixture.apiKeys, never()).update(any());
         verify(fixture.identityService).suspendForBinding("owner-a", "client-a", "owner-a", 12L);
     }
 
     @Test
-    void localUnbindLocksRuntimeBeforeMutationAndDefersPlainReadUntilAfterCommit() {
+    void localUnbindRejectsFreshActiveTaskBeforeAnyMutationOrPublication() {
         Fixture fixture = fixture();
-        AgentPersonaEntity persona = persona();
         AgentPersonaBindingEntity binding = binding();
         AgentIdentityRegistryEntity identity = identity();
         AgentRuntimeEntity freshRuntime = runtime(AgentConstants.STATUS_BUSY);
         freshRuntime.setCurrentTaskId("fresh-task");
-        freshRuntime.setErrorMessage("fresh-error");
+        freshRuntime.setCurrentTaskTitle("Fresh task");
 
-        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona);
+        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
                 "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
@@ -103,30 +114,85 @@ class AgentHostedBindingTransactionTest {
         when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
                 .thenReturn(null);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(freshRuntime);
-        when(fixture.runtimeDao.findByAgentId(AGENT_ID)).thenReturn(freshRuntime);
-        when(fixture.bindingDao.updateById(binding)).thenReturn(1);
-        when(fixture.runtimeDao.updateById(freshRuntime)).thenReturn(1);
 
-        beginTransactionSynchronization();
-        try {
-            assertNull(fixture.transaction.prepareUnbind(SCOPE, "wuyong"));
-            assertEquals("fresh-task", freshRuntime.getCurrentTaskId());
-            assertEquals("fresh-error", freshRuntime.getErrorMessage());
-            assertEquals(AgentConstants.STATUS_OFFLINE, freshRuntime.getStatus());
-            verify(fixture.runtimeDao, never()).findByAgentId(any());
-            InOrder order = inOrder(fixture.bindingDao, fixture.hostedDao, fixture.runtimeDao);
-            order.verify(fixture.bindingDao).findExactActiveByScopeAndPersonaForUpdate(
-                    "owner-a", "client-a", "owner-a", "wuyong");
-            order.verify(fixture.hostedDao).findExactForUpdate("owner-a", "client-a", "owner-a", 12L);
-            order.verify(fixture.runtimeDao).findByAgentIdForUpdate(AGENT_ID);
-            order.verify(fixture.bindingDao).updateById(binding);
-            verify(fixture.eventPublisher, never()).publishAgentStatus(any(), any(), any());
-            commitSynchronizations();
-        } finally {
-            clearTransactionSynchronization();
-        }
-        verify(fixture.eventPublisher, times(1)).publishAgentStatus(
-                eq("client-a"), eq("owner-a"), any(AgentRuntimeDTO.class));
+        AgentServiceImpl.AgentBizException failure = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.prepareUnbind(SCOPE, "wuyong"));
+
+        assertEquals(AgentErrorConstants.AGENT_BUSY, failure.getCode());
+        assertEquals(AgentConstants.BINDING_STATUS_ACTIVE, binding.getStatus());
+        assertEquals(AgentConstants.STATUS_BUSY, freshRuntime.getStatus());
+        verify(fixture.bindingDao, never()).updateById(any());
+        verify(fixture.runtimeDao, never()).clearBindingAfterUnbind(
+                anyLong(), anyString(), anyLong(), anyString(), anyString(), anyLong());
+        verify(fixture.identityService, never()).suspendForBinding(anyString(), anyString(),
+                anyString(), anyLong());
+        verify(fixture.eventPublisher, never()).publishAgentStatus(any(), any(), any());
+    }
+
+    @Test
+    void completeUnbindRejectsFreshActiveTaskBeforeCredentialOrDatabaseMutation() {
+        Fixture fixture = fixture();
+        AgentPersonaBindingEntity binding = binding();
+        AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.SUSPENDING, 4L);
+        AgentRuntimeEntity runtime = runtime(AgentConstants.STATUS_BUSY);
+        runtime.setCurrentTaskId("fresh-task");
+
+        when(fixture.bindingDao.findByIdForUpdate(12L)).thenReturn(binding);
+        when(fixture.identityService.requireRegistrationIdentityInScope(
+                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
+        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                .thenReturn(hosted);
+        when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
+
+        AgentServiceImpl.AgentBizException failure = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.completeUnbind(SCOPE, 12L, 4L, 5L));
+
+        assertEquals(AgentErrorConstants.AGENT_BUSY, failure.getCode());
+        verifyNoInteractions(fixture.apiKeys);
+        verify(fixture.bindingDao, never()).updateById(any());
+        verify(fixture.runtimeDao, never()).clearBindingAfterUnbind(
+                anyLong(), anyString(), anyLong(), anyString(), anyString(), anyLong());
+        verify(fixture.identityService, never()).suspendForBinding(anyString(), anyString(),
+                anyString(), anyLong());
+        verify(fixture.hostedDao, never()).transition(anyLong(), anyString(), anyLong(),
+                anyString(), anyLong(), anyBoolean());
+    }
+
+    @Test
+    void runtimeDetachCasFailureDoesNotClearCapturedRuntimeAndFailsTransaction() {
+        Fixture fixture = fixture();
+        AgentPersonaBindingEntity binding = binding();
+        AgentRuntimeEntity runtime = runtime(AgentConstants.STATUS_ONLINE);
+        runtime.setEndpoint("wss://agent.example");
+        runtime.setTokenHash("sensitive-hash");
+
+        when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
+        when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
+                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+        when(fixture.identityService.requireRegistrationIdentityInScope(
+                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
+        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                .thenReturn(null);
+        when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
+        when(fixture.bindingDao.updateById(binding)).thenReturn(1);
+        when(fixture.runtimeDao.clearBindingAfterUnbind(
+                eq(31L), eq(AGENT_ID), eq(12L), eq("client-a"), eq("owner-a"), anyLong()))
+                .thenReturn(0);
+
+        AgentServiceImpl.AgentBizException failure = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> fixture.transaction.prepareUnbind(SCOPE, "wuyong"));
+
+        assertEquals(AgentErrorConstants.AGENT_ERROR, failure.getCode());
+        assertEquals("client-a", runtime.getClientId());
+        assertEquals("owner-a", runtime.getOwnerJiacn());
+        assertEquals(12L, runtime.getBindingId());
+        assertEquals("wss://agent.example", runtime.getEndpoint());
+        assertEquals("sensitive-hash", runtime.getTokenHash());
+        assertEquals(AgentConstants.STATUS_ONLINE, runtime.getStatus());
+        verify(fixture.eventPublisher, never()).publishAgentStatus(any(), any(), any());
     }
 
     @Test
@@ -142,7 +208,9 @@ class AgentHostedBindingTransactionTest {
         AgentRuntimeEntity runtime = runtime(AgentConstants.STATUS_ONLINE);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
         when(fixture.bindingDao.updateById(any())).thenReturn(1);
-        when(fixture.runtimeDao.updateById(runtime)).thenReturn(1);
+        when(fixture.runtimeDao.clearBindingAfterUnbind(
+                eq(31L), eq(AGENT_ID), eq(12L), eq("client-a"), eq("owner-a"), anyLong()))
+                .thenReturn(1);
 
         beginTransactionSynchronization();
         try {
@@ -256,7 +324,8 @@ class AgentHostedBindingTransactionTest {
         verify(fixture.hostedDao, never()).transition(anyLong(), anyString(), anyLong(),
                 anyString(), anyLong(), anyBoolean());
         verify(fixture.bindingDao, never()).updateById(any());
-        verify(fixture.runtimeDao, never()).updateById(any());
+        verify(fixture.runtimeDao, never()).clearBindingAfterUnbind(
+                anyLong(), anyString(), anyLong(), anyString(), anyString(), anyLong());
         verify(fixture.identityService, never()).suspendForBinding(anyString(), anyString(),
                 anyString(), anyLong());
         verifyNoInteractions(fixture.apiKeys);
@@ -334,7 +403,7 @@ class AgentHostedBindingTransactionTest {
     }
 
     @Test
-    void delayedUnbindCallbackRereadsAndPublishesCurrentOnlineRuntimeInsteadOfCapturedOfflineState() {
+    void delayedUnbindCallbackSkipsDetachedSnapshotAfterRuntimeWasRebound() {
         Fixture fixture = fixture();
         AgentPersonaBindingEntity binding = binding();
         AgentIdentityRegistryEntity identity = identity();
@@ -354,7 +423,9 @@ class AgentHostedBindingTransactionTest {
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(unbound);
         when(fixture.runtimeDao.findByAgentId(AGENT_ID)).thenReturn(reconnected);
         when(fixture.bindingDao.updateById(binding)).thenReturn(1);
-        when(fixture.runtimeDao.updateById(unbound)).thenReturn(1);
+        when(fixture.runtimeDao.clearBindingAfterUnbind(
+                eq(31L), eq(AGENT_ID), eq(12L), eq("client-a"), eq("owner-a"), anyLong()))
+                .thenReturn(1);
 
         List<TransactionSynchronization> delayedCallbacks;
         beginTransactionSynchronization();
@@ -377,11 +448,11 @@ class AgentHostedBindingTransactionTest {
         delayedCallbacks.forEach(TransactionSynchronization::afterCommit);
 
         ArgumentCaptor<AgentRuntimeDTO> publications = ArgumentCaptor.forClass(AgentRuntimeDTO.class);
-        verify(fixture.eventPublisher, times(2)).publishAgentStatus(
+        verify(fixture.eventPublisher, times(1)).publishAgentStatus(
                 eq("client-a"), eq("owner-a"), publications.capture());
-        assertEquals(List.of(AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_ONLINE),
+        assertEquals(List.of(AgentConstants.STATUS_ONLINE),
                 publications.getAllValues().stream().map(AgentRuntimeDTO::getStatus).toList());
-        assertEquals("newer-online-endpoint", publications.getAllValues().get(1).getEndpoint());
+        assertEquals("newer-online-endpoint", publications.getValue().getEndpoint());
         verify(fixture.runtimeDao).findByAgentId(AGENT_ID);
     }
 
@@ -502,6 +573,7 @@ class AgentHostedBindingTransactionTest {
 
     private static AgentRuntimeEntity runtime(String status) {
         AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setId(31L);
         runtime.setAgentId(AGENT_ID);
         runtime.setBindingId(12L);
         runtime.setClientId("client-a");

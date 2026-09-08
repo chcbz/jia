@@ -2082,21 +2082,27 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void listRosterFiltersByStatusWithoutPublishingRuntimeStatus() {
-        AgentRuntimeEntity agent = new AgentRuntimeEntity();
-        agent.setAgentId("agent-001");
-        agent.setName("Wu Yong");
-        agent.setStatus(AgentConstants.STATUS_OFFLINE);
-        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", AgentConstants.STATUS_OFFLINE, "planning"))
+    void listRosterReturnsOnlyCurrentOwnedBindingsAsOperable() {
+        AgentRuntimeEntity agent = ownedAgent(
+                "agent-001", "Wu Yong", AgentConstants.STATUS_OFFLINE, "[\"planning\"]");
+        when(agentRuntimeDao.findRosterByOwner(
+                "jia_client", "juyiting", AgentConstants.STATUS_OFFLINE, "planning"))
                 .thenReturn(List.of(agent));
 
-        List<AgentRuntimeDTO> result = agentService.listRoster(AgentConstants.STATUS_OFFLINE, "planning", 1, 20)
-                .getList();
+        PageInfo<AgentRuntimeDTO> page = agentService.listRoster(
+                AgentConstants.STATUS_OFFLINE, "planning", 1, 20);
 
-        assertEquals(1, result.size());
-        assertEquals("agent-001", result.getFirst().getAgentId());
-        assertEquals(AgentConstants.STATUS_OFFLINE, result.getFirst().getStatus());
-        verify(agentRuntimeDao).findRosterByOwner("jia_client", "juyiting", AgentConstants.STATUS_OFFLINE, "planning");
+        assertEquals(1, page.getTotal());
+        assertEquals(1, page.getList().size());
+        AgentRuntimeDTO result = page.getList().getFirst();
+        assertEquals("agent-001", result.getAgentId());
+        assertEquals(AgentConstants.STATUS_OFFLINE, result.getStatus());
+        assertTrue(result.getBound());
+        assertTrue(result.getBoundToMe());
+        assertTrue(result.getCanOperate());
+        verify(agentIdentityService, never()).requireActiveIdentityForBinding(
+                anyString(), anyString(), anyString(), anyLong(), anyString());
+        verify(agentIdentityService, never()).requireActiveBinding(any(), any());
         verify(eventPublisherProvider, never()).getIfAvailable();
     }
 

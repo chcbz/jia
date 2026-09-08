@@ -40,17 +40,22 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
 
     @Override
     public List<AgentRuntimeEntity> findRosterByOwner(String clientId, String jiacn, String status, String ability) {
-        LambdaQueryWrapper<AgentRuntimeEntity> wrapper = new LambdaQueryWrapper<AgentRuntimeEntity>()
-                .eq(AgentRuntimeEntity::getClientId, clientId)
-                .eq(AgentRuntimeEntity::getOwnerJiacn, jiacn);
-        if (!StringUtil.isBlank(status)) {
-            wrapper.eq(AgentRuntimeEntity::getStatus, status);
+        requireExactId(clientId, "clientId");
+        requireExactId(jiacn, "jiacn");
+        return baseMapper.findActiveRosterByOwner(clientId, jiacn, status, ability);
+    }
+
+    @Override
+    public int clearBindingAfterUnbind(long runtimeId, String agentId, long bindingId,
+            String clientId, String ownerJiacn, long detachedAt) {
+        if (runtimeId <= 0 || bindingId <= 0 || detachedAt <= 0) {
+            throw new IllegalArgumentException("runtime detach coordinates are invalid");
         }
-        if (!StringUtil.isBlank(ability)) {
-            wrapper.like(AgentRuntimeEntity::getAbilities, "\"" + ability + "\"");
-        }
-        wrapper.orderByAsc(AgentRuntimeEntity::getPersonaCode);
-        return baseMapper.selectList(wrapper);
+        requireExactId(agentId, "agentId");
+        requireExactId(clientId, "clientId");
+        requireExactId(ownerJiacn, "ownerJiacn");
+        return baseMapper.clearBindingAfterUnbind(
+                runtimeId, agentId, bindingId, clientId, ownerJiacn, detachedAt);
     }
 
     @Override

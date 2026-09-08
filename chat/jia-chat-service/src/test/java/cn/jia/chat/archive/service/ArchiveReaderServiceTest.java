@@ -22,6 +22,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ArchiveReaderServiceTest {
     @Test
@@ -65,6 +66,24 @@ class ArchiveReaderServiceTest {
     }
 
     @Test
+    void catalogChecksActiveEditionEveryRequestButCachesOnlyBoundedBlockMetadata() {
+        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        FixtureStore store = new FixtureStore(manifest);
+        ArchiveReaderServiceImpl service = new ArchiveReaderServiceImpl(store);
+
+        service.catalog();
+        service.catalog();
+
+        assertEquals(2, store.activeReads);
+        assertEquals(1, store.blockReads);
+
+        store.active = false;
+        assertThrows(ArchiveResourceNotFoundException.class, service::catalog);
+        assertEquals(3, store.activeReads);
+        assertEquals(1, store.blockReads);
+    }
+
+    @Test
     void publicContentRowsDoNotInheritTenantClientBaseEntity() {
         for (Class<?> type : List.of(ArchiveWorkRecord.class, ArchiveEditionRecord.class,
                 ArchiveBlockRecord.class, ArchiveParagraphRecord.class)) {
@@ -83,6 +102,9 @@ class ArchiveReaderServiceTest {
         private final ArchiveEditionRecord edition;
         private final List<ArchiveBlockRecord> blocks;
         private final Map<String, List<ArchiveParagraphRecord>> paragraphs;
+        private boolean active = true;
+        private int activeReads;
+        private int blockReads;
 
         private FixtureStore(ArchiveManifest manifest) {
             work = new ArchiveWorkRecord(manifest.workId(), manifest.title(), manifest.editionId());
@@ -106,9 +128,16 @@ class ArchiveReaderServiceTest {
         }
 
         @Override public ArchiveWorkRecord findWork(String workId) { return work.workId().equals(workId) ? work : null; }
+        @Override public ActiveContent findActiveContent(String workId) {
+            activeReads++;
+            return active && work.workId().equals(workId) ? new ActiveContent(work, edition) : null;
+        }
         @Override public ArchiveEditionRecord findEdition(String editionId) { return edition.editionId().equals(editionId) ? edition : null; }
         @Override public ArchiveBlockRecord findBlock(String editionId, String blockId) { return blocks.stream().filter(b -> b.blockId().equals(blockId)).findFirst().orElse(null); }
-        @Override public List<ArchiveBlockRecord> listBlocks(String editionId) { return blocks; }
+        @Override public List<ArchiveBlockRecord> listBlocks(String editionId) {
+            blockReads++;
+            return blocks;
+        }
         @Override public List<ArchiveParagraphRecord> listParagraphs(String editionId, String blockId) { return paragraphs.getOrDefault(blockId, List.of()); }
         @Override public void insertWork(ArchiveWorkRecord value) { throw unsupported(); }
         @Override public void insertEdition(ArchiveEditionRecord value) { throw unsupported(); }

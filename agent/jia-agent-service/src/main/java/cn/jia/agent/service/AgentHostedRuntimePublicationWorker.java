@@ -17,17 +17,26 @@ public class AgentHostedRuntimePublicationWorker {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public AgentRuntimeEntity revalidateForPublication(
-            AgentHostedBindingTransaction.Scope scope, String agentId, long bindingId) {
+            AgentHostedBindingTransaction.Scope scope, String agentId, long runtimeId) {
         if (scope == null || agentId == null || agentId.isBlank()
-                || !agentId.equals(agentId.strip()) || bindingId <= 0) {
+                || !agentId.equals(agentId.strip()) || runtimeId <= 0) {
             return null;
         }
         AgentRuntimeEntity current = runtimeDao.findByAgentId(agentId);
         if (current == null
+                || !Objects.equals(current.getId(), runtimeId)
                 || !Objects.equals(current.getAgentId(), agentId)
-                || !Objects.equals(current.getBindingId(), bindingId)
-                || !Objects.equals(current.getClientId(), scope.clientId())
-                || !Objects.equals(current.getOwnerJiacn(), scope.ownerJiacn())) {
+                || current.getBindingId() != null
+                || current.getClientId() != null
+                || current.getOwnerJiacn() != null
+                || current.getPersonaCode() != null
+                || current.getPersonaName() != null
+                || current.getEndpoint() != null
+                || current.getTokenHash() != null
+                || current.getCurrentTaskId() != null
+                || current.getCurrentTaskTitle() != null
+                || current.getErrorMessage() != null
+                || !Objects.equals(current.getStatus(), "offline")) {
             return null;
         }
         return current;

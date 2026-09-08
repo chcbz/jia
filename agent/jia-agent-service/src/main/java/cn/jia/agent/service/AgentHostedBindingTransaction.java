@@ -191,6 +191,7 @@ public class AgentHostedBindingTransaction {
             }
         }
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
+        requireNoActiveTask(runtime);
         if (hosted == null) {
             suspendDatabase(scope, binding, identity, runtime);
             publishOfflineAfterCommit(scope, runtime);
@@ -232,6 +233,7 @@ public class AgentHostedBindingTransaction {
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), bindingId);
         requireExactHosted(scope, binding, hosted);
         AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
+        requireNoActiveTask(runtime);
         require(AgentHostedProfileState.SUSPENDING.equals(hosted.getLifecycleState())
                 && Objects.equals(hosted.getGeneration(), expectedGeneration), "Hosted unbind generation changed");
         OauthApiKeyEntity key = exactKey(hosted);
@@ -251,19 +253,49 @@ public class AgentHostedBindingTransaction {
         return hosted;
     }
 
+    private void requireNoActiveTask(AgentRuntimeEntity runtime) {
+        if (runtime == null) {
+            return;
+        }
+        if (!StringUtil.isBlank(runtime.getCurrentTaskId())
+                || AgentConstants.STATUS_BUSY.equals(runtime.getStatus())) {
+            fail(AgentErrorConstants.AGENT_BUSY,
+                    "Agent cannot be unbound while it has active work");
+        }
+        if (!StringUtil.isBlank(runtime.getCurrentTaskTitle())) {
+            fail(AgentErrorConstants.AGENT_ERROR,
+                    "Agent task projection is inconsistent during unbind");
+        }
+    }
+
     private void suspendDatabase(Scope scope, AgentPersonaBindingEntity binding,
             AgentIdentityRegistryEntity identity, AgentRuntimeEntity runtime) {
         binding.setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
         require(bindingDao.updateById(binding) == 1, "Binding suspension failed");
         identityService.suspendForBinding(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getId());
         if (runtime != null) {
-            require(Objects.equals(runtime.getAgentId(), identity.getCanonicalAgentId())
+            require(runtime.getId() != null && runtime.getId() > 0
+                    && Objects.equals(runtime.getAgentId(), identity.getCanonicalAgentId())
                     && Objects.equals(runtime.getBindingId(), binding.getId())
                     && Objects.equals(runtime.getClientId(), scope.clientId())
                     && Objects.equals(runtime.getOwnerJiacn(), scope.ownerJiacn()), "Runtime scope mismatch during unbind");
+            long detachedAt = System.currentTimeMillis();
+            require(runtimeDao.clearBindingAfterUnbind(runtime.getId(), runtime.getAgentId(),
+                    binding.getId(), scope.clientId(), scope.ownerJiacn(), detachedAt) == 1,
+                    "Runtime suspension changed concurrently");
+            runtime.setClientId(null);
+            runtime.setOwnerJiacn(null);
+            runtime.setPersonaCode(null);
+            runtime.setPersonaName(null);
+            runtime.setBindingId(null);
+            runtime.setEndpoint(null);
+            runtime.setTokenHash(null);
+            runtime.setCurrentTaskId(null);
+            runtime.setCurrentTaskTitle(null);
+            runtime.setErrorMessage(null);
             runtime.setStatus(AgentConstants.STATUS_OFFLINE);
-            runtime.setLastSeenAt(System.currentTimeMillis());
-            require(runtimeDao.updateById(runtime) == 1, "Runtime suspension failed");
+            runtime.setLastSeenAt(detachedAt);
+            runtime.setUpdateTime(detachedAt);
         }
     }
 
@@ -317,8 +349,8 @@ public class AgentHostedBindingTransaction {
             return;
         }
         String agentId = runtime.getAgentId();
-        Long bindingId = runtime.getBindingId();
-        if (StringUtil.isBlank(agentId) || bindingId == null || bindingId <= 0) {
+        Long runtimeId = runtime.getId();
+        if (StringUtil.isBlank(agentId) || runtimeId == null || runtimeId <= 0) {
             return;
         }
         try {
@@ -332,7 +364,7 @@ public class AgentHostedBindingTransaction {
                                 return;
                             }
                             AgentRuntimeEntity current = runtimePublicationWorker
-                                    .revalidateForPublication(scope, agentId, bindingId);
+                                    .revalidateForPublication(scope, agentId, runtimeId);
                             if (current != null) {
                                 publisher.publishAgentStatus(
                                         scope.clientId(), scope.ownerJiacn(), toDto(current));
