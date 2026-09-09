@@ -39,6 +39,7 @@ dependencies {
 	testImplementation libs.spring.ai.starter.mcp.client
 	testImplementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
 	testImplementation libs.spring.boot.starter.websocket
+	testRuntimeOnly libs.mysql
 }
 
 version = '1.1.2-SNAPSHOT'
