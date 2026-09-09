@@ -90,9 +90,9 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
     void applicationPaidPeriodSnapshotColumnsAndConstraintMustMatchExactly() {
         assertIncompatibleCompleteCatalog(new CatalogChange("paid_period_type", "intent",
                 "paid_from                BIGINT DEFAULT NULL", "paid_from                DECIMAL(20,0) DEFAULT NULL", "columns"));
-        assertIncompatibleCompleteCatalog(new CatalogChange("paid_period_default", "intent",
+        assertIncompatibleCompleteCatalog(new CatalogChange("paid_default", "intent",
                 "paid_through             BIGINT DEFAULT NULL", "paid_through             BIGINT DEFAULT 1", "columns"));
-        assertIncompatibleCompleteCatalog(new CatalogChange("paid_period_check", "intent",
+        assertIncompatibleCompleteCatalog(new CatalogChange("paid_check", "intent",
                 "paid_through > paid_from)", "paid_through >= paid_from)", "checks"));
     }
 
