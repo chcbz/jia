@@ -61,6 +61,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import javax.sql.DataSource;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -72,6 +74,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -93,6 +97,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
 
     private AnnotationConfigApplicationContext context;
     private JdbcTemplate jdbc;
+    private Connection schemaConnection;
     private PlatformTransactionManager tm;
     private FundedBountyServiceRealTransactionTest.IntegrationServices foundation;
     private FundedBountyServiceRealTransactionTest.RecordingBroker broker;
@@ -110,8 +115,11 @@ class FundedBountyQuoteClaimRealTransactionTest {
         DataSource source = context.getBean(DataSource.class);
         tm = context.getBean(PlatformTransactionManager.class);
         jdbc = new JdbcTemplate(source);
+        // H2 2.4.240 caches constant-IN comparison with the DDL SessionLocal.
+        // Keep it alive until teardown; never share this connection with business transactions.
+        schemaConnection = source.getConnection();
         new ResourceDatabasePopulator(new ClassPathResource("w04/funded-integration-h2.sql"),
-                new ClassPathResource("w05/claim-integration-h2.sql")).execute(source);
+                new ClassPathResource("w05/claim-integration-h2.sql")).populate(schemaConnection);
         // Load the actual W05 DDL, removing MySQL-only collation/engine syntax, not constraints.
         String quoteDdl;
         try (var input = new ClassPathResource("db/agent-task-bounty-quote-v0.sql").getInputStream()) {
@@ -120,7 +128,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
                     .replace(" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", "");
         }
         new ResourceDatabasePopulator(new ByteArrayResource(quoteDdl.getBytes(StandardCharsets.UTF_8)))
-                .execute(source);
+                .populate(schemaConnection);
         foundation = context.getBean(FundedBountyServiceRealTransactionTest.IntegrationServices.class);
         broker = context.getBean(FundedBountyServiceRealTransactionTest.RecordingBroker.class);
         SqlSessionTemplate template = claimMappers(source);
@@ -173,11 +181,19 @@ class FundedBountyQuoteClaimRealTransactionTest {
 
     @AfterEach
     void tearDown() {
-        if (context != null) {
+        try {
+            if (jdbc != null) jdbc.execute("DROP ALL OBJECTS"); // UUID-owned H2 from the R3 configuration only.
+        } finally {
             try {
-                if (jdbc != null) jdbc.execute("DROP ALL OBJECTS"); // UUID-owned H2 from the R3 configuration only.
+                if (context != null) context.close();
             } finally {
-                context.close();
+                if (schemaConnection != null) {
+                    try {
+                        schemaConnection.close();
+                    } catch (SQLException failure) {
+                        throw new IllegalStateException("Cannot close quote fixture schema connection", failure);
+                    }
+                }
             }
         }
     }
@@ -188,6 +204,28 @@ class FundedBountyQuoteClaimRealTransactionTest {
         assertSame(context.getBean(AgentRuntimeMapper.class), ReflectionTestUtils.getField(
                 context.getBean(cn.jia.agent.dao.AgentRuntimeDao.class), "baseMapper"));
         assertTrue(quote(AGENT_A, 2).verifiedSkillMatch());
+    }
+
+    @Test
+    void recommendationCheckSurvivesIndependentConnectionsAndRejectsInvalidValues() throws Exception {
+        assertFalse(schemaConnection.isClosed());
+        try (Connection observer = context.getBean(DataSource.class).getConnection()) {
+            assertNotSame(schemaConnection, observer);
+        }
+        quote(AGENT_A, 2);
+        for (String recommendation : List.of("recommended", "caution", "reject")) {
+            assertEquals(1, jdbc.update("UPDATE agent_task_bounty_quote SET recommendation=?", recommendation));
+            assertEquals(recommendation, jdbc.queryForObject(
+                    "SELECT recommendation FROM agent_task_bounty_quote", String.class));
+        }
+        DataAccessException invalid = assertThrows(DataAccessException.class,
+                () -> jdbc.update("UPDATE agent_task_bounty_quote SET recommendation='invalid'"));
+        assertEquals("23513", ((SQLException) invalid.getMostSpecificCause()).getSQLState());
+        DataAccessException nullValue = assertThrows(DataAccessException.class,
+                () -> jdbc.update("UPDATE agent_task_bounty_quote SET recommendation=NULL"));
+        assertEquals("23502", ((SQLException) nullValue.getMostSpecificCause()).getSQLState());
+        assertEquals("reject", jdbc.queryForObject("SELECT recommendation FROM agent_task_bounty_quote", String.class));
+        assertFalse(schemaConnection.isClosed());
     }
 
     @Test
