@@ -330,6 +330,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                     .setTenantId(validated.scope().tenantId()).setClientId(validated.scope().clientId())
                     .setCreateTime(now).setUpdateTime(now);
             requireOne(hostingMapper.insertIntent(intent), "renewal intent insert");
+            requirePersistedRowIdentity(intent.getId(), "renewal intent insert");
             ensureAccount(validated.scope(), hostingRevenue(), "system_hosting_rent", now);
             String captureKey = UUID.nameUUIDFromBytes(("hosting-renewal-capture:" + intentId)
                     .getBytes(StandardCharsets.UTF_8)).toString();
@@ -809,6 +810,13 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         if (rows != 1) {
             throw new HostingRentException(CONCURRENCY_CONFLICT,
                     operation + " affected " + rows + " rows; expected one");
+        }
+    }
+
+    private void requirePersistedRowIdentity(Long id, String operation) {
+        if (id == null || id <= 0) {
+            throw new HostingRentException(DATA_CORRUPT,
+                    operation + " did not hydrate the generated row identity");
         }
     }
 

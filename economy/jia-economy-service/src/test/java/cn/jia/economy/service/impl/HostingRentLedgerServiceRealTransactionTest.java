@@ -7,6 +7,7 @@ import cn.jia.economy.common.EconomyPrincipalType;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.entity.EconomyAccountEntity;
+import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.entity.EconomyHostingRentPlanEntity;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.hosting.HostingRentException;
@@ -25,6 +26,7 @@ import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -49,8 +51,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 class HostingRentLedgerServiceRealTransactionTest {
     private static final String TENANT = "Tenant-Rent";
@@ -516,6 +520,14 @@ class HostingRentLedgerServiceRealTransactionTest {
         HostingRentReserveCommand confirmation = reserve(quote.quoteId(), "00000000-0000-0000-0000-000000000102");
         HostingRentMutationReceipt renewed = service.renew(confirmation);
         assertEquals(renewed, service.renew(confirmation));
+        ArgumentCaptor<EconomyHostingProvisioningIntentEntity> insertedIntents =
+                ArgumentCaptor.forClass(EconomyHostingProvisioningIntentEntity.class);
+        verify(hostingMapper, atLeast(2)).insertIntent(insertedIntents.capture());
+        EconomyHostingProvisioningIntentEntity renewalIntent = insertedIntents.getAllValues().stream()
+                .filter(intent -> "RENEWAL".equals(intent.getQuotePurpose()))
+                .findFirst().orElseThrow();
+        assertTrue(renewalIntent.getId() != null && renewalIntent.getId() > 0,
+                "renewal CAS must use the database-generated identity hydrated onto the inserted entity");
         assertEquals(originalThrough, jdbc.queryForObject(
                 "SELECT paid_from FROM economy_hosting_provisioning_intent WHERE intent_id=?", Long.class, renewed.intentId()));
         long renewedThrough = originalThrough + V1_PERIOD_SECONDS * 1000;

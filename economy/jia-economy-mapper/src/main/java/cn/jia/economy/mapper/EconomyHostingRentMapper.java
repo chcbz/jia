@@ -6,6 +6,7 @@ import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.entity.EconomyHostingRentPlanEntity;
 import cn.jia.economy.entity.EconomyHostingRentQuoteEntity;
 import org.apache.ibatis.annotations.Insert;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -176,6 +177,7 @@ public interface EconomyHostingRentMapper {
                 #{refundIdempotencyKey},#{refundRequestHash},#{refundTransactionId},#{refundedAt},
                 #{outcomeEvidenceRef},#{serviceReadyAt},#{paidFrom},#{paidThrough},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
+    @Options(useGeneratedKeys = true, keyProperty = "id", keyColumn = "id")
     int insertIntent(EconomyHostingProvisioningIntentEntity intent);
 
     String INTENT_COLUMNS = " id,intent_id,lease_id,quote_id,quote_purpose,principal_type,principal_id,"
