@@ -9,10 +9,12 @@ import cn.jia.user.security.AccountState;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -40,6 +42,7 @@ import java.util.Optional;
 
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -61,8 +64,16 @@ class AuthenticationResourceSecurityTest {
                 context, "oauth.resource.uris[0]=/agent/**");
         context.register(TestApplication.class);
         context.refresh();
+
+        FilterChainProxy security = context.getBean(FilterChainProxy.class);
+        MockHttpServletRequest agentRequest = new MockHttpServletRequest("GET", "/agent/probe");
+        long matchingChains = security.getFilterChains().stream()
+                .filter(chain -> chain.matches(agentRequest))
+                .count();
+        assertEquals(1L, matchingChains, "configured agent route must use the resource chain");
+
         mockMvc = MockMvcBuilders.webAppContextSetup(context)
-                .addFilters(context.getBean(FilterChainProxy.class))
+                .addFilters(security)
                 .build();
     }
 
@@ -180,6 +191,7 @@ class AuthenticationResourceSecurityTest {
     @Configuration(proxyBeanMethods = false)
     @EnableWebMvc
     @EnableWebSecurity
+    @EnableConfigurationProperties
     @Import({ResourceServerConfig.class, ExceptionHandlerAdvice.class})
     static class TestApplication {
         @Bean
