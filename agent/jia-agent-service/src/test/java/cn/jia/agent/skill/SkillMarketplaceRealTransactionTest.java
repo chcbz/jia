@@ -27,6 +27,8 @@ import org.springframework.jdbc.datasource.*;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.transaction.support.*;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -66,6 +68,15 @@ class SkillMarketplaceRealTransactionTest {
             FOR EACH ROW
             CALL "cn.jia.agent.skill.SkillAuditMutationRejectTrigger";
             """.strip();
+    private static final String MYSQL_DISPOSITION_GUARD=
+            "disposition_guard           TINYINT GENERATED ALWAYS AS (IF(outcome_state='PENDING',1,NULL)) STORED";
+    private static final String H2_DISPOSITION_GUARD=
+            "disposition_guard           TINYINT GENERATED ALWAYS AS (CASE WHEN outcome_state='PENDING' THEN 1 ELSE NULL END)";
+    private static final String MYSQL_REDRIVE_GUARD=
+            "redrive_guard               TINYINT GENERATED ALWAYS AS (IF(settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED'),NULL,1)) STORED";
+    private static final String H2_REDRIVE_GUARD=
+            "redrive_guard               TINYINT GENERATED ALWAYS AS (CASE WHEN settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED') THEN NULL ELSE 1 END)";
+    private Connection schemaConnection;
     private JdbcTemplate jdbc;
     private EconomySkillMarketplaceMapper market;
     private EconomySkillApplicationMapper app;
@@ -86,6 +97,9 @@ class SkillMarketplaceRealTransactionTest {
     @BeforeEach void setup() throws Exception {
         var ds=new DriverManagerDataSource("jdbc:h2:mem:w09_"+UUID.randomUUID()+";MODE=MYSQL;DB_CLOSE_DELAY=-1;CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000","sa","");
         jdbc=new JdbcTemplate(ds); var manager=new DataSourceTransactionManager(ds); tx=new TransactionTemplate(manager);
+        // H2 2.4.240 constant-IN expressions retain their DDL SessionLocal comparator.
+        // Keep only that schema session alive; business transactions still use independent connections.
+        schemaConnection=ds.getConnection();
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql","db/agent-command-transport-schema.sql")) schema(resource);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
         for(Class<?> type:List.of(EconomySkillMarketplaceMapper.class,EconomySkillApplicationMapper.class,EconomySkillCredentialMapper.class,EconomyLedgerMapper.class,AgentCommandTransportMapper.class)) config.addMapper(type);
@@ -136,6 +150,66 @@ class SkillMarketplaceRealTransactionTest {
                 .setCurrency("SILVER").setBalanceMicro(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
                 .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
     }
+    @AfterEach void tearDown() throws SQLException {
+        try {
+            if(jdbc!=null) jdbc.execute("DROP ALL OBJECTS"); // This fixture's UUID-owned H2 only.
+        } finally {
+            if(schemaConnection!=null) schemaConnection.close();
+        }
+    }
+    @Test void transportGeneratedGuardAdapterRejectsDefinitionDrift() throws Exception {
+        String source=new ClassPathResource(TRANSPORT_SCHEMA).getContentAsString(StandardCharsets.UTF_8);
+        String adapted=adaptTransportGeneratedColumns(TRANSPORT_SCHEMA,source);
+        assertEquals(source,adapted.replace(H2_DISPOSITION_GUARD,MYSQL_DISPOSITION_GUARD)
+                .replace(H2_REDRIVE_GUARD,MYSQL_REDRIVE_GUARD));
+        assertEquals(source,adaptTransportGeneratedColumns("db/unrelated.sql",source));
+        assertThrows(IllegalStateException.class,()->adaptTransportGeneratedColumns(TRANSPORT_SCHEMA,
+                source.replace(MYSQL_DISPOSITION_GUARD,"disposition_guard TINYINT")));
+        assertThrows(IllegalStateException.class,()->adaptTransportGeneratedColumns(TRANSPORT_SCHEMA,
+                source+"\n"+MYSQL_REDRIVE_GUARD));
+    }
+    @Test void transportGeneratedGuardsPreserveExpressionsAndNullUniqueness() {
+        long delivery=0;
+        for(String outcome:List.of("PENDING","SUCCEEDED","FAILED")) {
+            for(String settlement:List.of("PENDING","SOURCE_ACKED","SOURCE_REQUEUED","NOT_ACQUIRED","UNKNOWN")) {
+                long group=++delivery;
+                String operation="guard-"+group;
+                insertRedriveGuardRow(operation,group,outcome,settlement);
+                Map<String,Object> row=jdbc.queryForMap(
+                        "SELECT disposition_guard,redrive_guard FROM agent_command_redrive_operation WHERE operation_id=?",operation);
+                if(outcome.equals("PENDING")) assertEquals(1,((Number)row.get("disposition_guard")).intValue());
+                else assertNull(row.get("disposition_guard"));
+                boolean released=Set.of("SOURCE_REQUEUED","NOT_ACQUIRED").contains(settlement);
+                if(released) {
+                    assertNull(row.get("redrive_guard"));
+                    insertRedriveGuardRow(operation+"-null",group,outcome,settlement);
+                    insertRedriveGuardRow(operation+"-active",group,"PENDING","PENDING");
+                    DataAccessException update=assertThrows(DataAccessException.class,()->jdbc.update(
+                            "UPDATE agent_command_redrive_operation SET settlement_state='PENDING' WHERE operation_id=?",operation));
+                    assertEquals("23505",((SQLException)update.getMostSpecificCause()).getSQLState());
+                    assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM agent_command_redrive_operation "
+                            +"WHERE delivery_id=? AND redrive_guard IS NULL",Integer.class,group));
+                } else {
+                    assertEquals(1,((Number)row.get("redrive_guard")).intValue());
+                    DataAccessException duplicate=assertThrows(DataAccessException.class,
+                            ()->insertRedriveGuardRow(operation+"-duplicate",group,outcome,settlement));
+                    assertEquals("23505",((SQLException)duplicate.getMostSpecificCause()).getSQLState());
+                }
+                assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_command_redrive_operation "
+                        +"WHERE delivery_id=? AND redrive_guard=1",Integer.class,group));
+            }
+        }
+    }
+    private void insertRedriveGuardRow(String operation,long delivery,String outcome,String settlement) {
+        jdbc.update("""
+                INSERT INTO agent_command_redrive_operation
+                  (operation_id,delivery_id,task_id,target_agent_id,command_id,source_event_id,
+                   source_message_id,source_attempt,wire_hash,requester_id,reason,ticket_reference,
+                   outcome_state,settlement_state,requested_at,tenant_id,client_id,create_time,update_time)
+                VALUES(?,?,'guard-task',?,'guard-command','guard-event','guard-message',1,?,
+                       'requester','fixture guard check','ticket-guard',?,?,1,?,?,1,1)
+                """,operation,delivery,AGENT,new byte[32],outcome,settlement,ACTOR.tenantId(),ACTOR.clientId());
+    }
     @Test void operationAuditRowsRejectUpdateAndDeleteAndRemainUnchanged() {
         jdbc.update("""
                 INSERT INTO agent_command_operation_audit
@@ -175,6 +249,46 @@ class SkillMarketplaceRealTransactionTest {
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
         assertEquals("ACTIVE",service.entitlements(ACTOR,AGENT).getFirst().get("status"));
         assertThrows(SkillMarketplaceException.class,()->results.packageBytes(key,i.getInstallationId()));
+    }
+    @Test void persistedSkillWireAndResultReplayKeepTransportAndInstallationIdentitiesDistinct() {
+        var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();
+        var receipt=service.purchase(ACTOR,idem,body,false);var i=installation();
+        assertEquals(i.getMessageId(),i.getRequestId());
+        assertNotEquals(i.getInstallationId(),i.getRequestId());
+        byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId());
+        var envelope=tools.jackson.databind.json.JsonMapper.builder().build().readTree(wire);
+        assertArrayEquals(cn.jia.agent.service.impl.AgentCommandCanonicalCodec.sha256(wire),
+                jdbc.queryForObject("SELECT wire_payload_hash FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
+        assertEquals(i.getMessageId(),envelope.get("messageId").asString());
+        assertEquals(envelope.get("messageId"),envelope.get("requestId"));
+        assertEquals(i.getInstallationId(),envelope.get("installationId").asString());
+        assertEquals(envelope.get("installationId"),envelope.get("payload").get("installationId"));
+        assertEquals(i.getOrderId(),envelope.get("orderId").asString());
+        assertEquals(i.getCommandId(),envelope.get("commandId").asString());
+        assertEquals(i.getAttempt().intValue(),envelope.get("attempt").asInt());
+        assertEquals(i.getFencingToken().toString(),envelope.get("fencingToken").asString());
+        assertEquals(i.getDeliveryEpoch().toString(),envelope.get("deliveryEpoch").asString());
+        assertEquals(i.getMessageId(),jdbc.queryForObject("SELECT message_id FROM agent_outbox_event WHERE command_id=?",String.class,i.getCommandId()));
+        assertEquals(i.getMessageId(),jdbc.queryForObject("SELECT active_message_id FROM agent_command_delivery WHERE command_id=?",String.class,i.getCommandId()));
+        assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
+        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
+        assertEquals(1,count("economy_skill_installation"));assertEquals(1,count("agent_outbox_event"));
+        assertEquals(1,count("agent_command_delivery"));
+        sent(i);var success=result(i,"SUCCEEDED",null);
+        assertNotEquals(i.getMessageId(),success.get("messageId"));
+        var wrongInstallation=new LinkedHashMap<>(success);wrongInstallation.put("installationId",i.getMessageId());
+        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",wrongInstallation));
+        var wrongAttempt=new LinkedHashMap<>(success);wrongAttempt.put("attempt",i.getAttempt()+1);
+        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",wrongAttempt));
+        assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
+        var accepted=results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success);
+        assertEquals(success.get("messageId"),accepted.get("correlationId"));
+        assertEquals(i.getInstallationId(),accepted.get("installationId"));
+        assertEquals(accepted,results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success));
+        assertEquals(1,count("economy_skill_result_receipt"));assertEquals("SUCCEEDED",installation().getStatus());
+        assertEquals(i.getInstallationId(),installation().getInstallationId());
+        assertEquals(i.getMessageId(),installation().getRequestId());
+        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
     }
     @Test void confirmedPreactivationFailureRefundsOriginalOrderExactlyOnce() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
@@ -321,9 +435,21 @@ class SkillMarketplaceRealTransactionTest {
                         + "(?:\\s+COMMENT='(?:''|[^'])*')?\\s*;",");")
                 .replaceAll("(?i)\\s+COLLATE\\s+[a-z0-9_]+","")
                 .replaceAll("(?i)\\s+CHARACTER SET\\s+[a-z0-9_]+","");
+        h2=adaptTransportGeneratedColumns(resource,h2);
         h2=adaptTransportAuditTriggers(resource,h2);
         new ResourceDatabasePopulator(new ByteArrayResource(h2.getBytes(StandardCharsets.UTF_8)))
-                .execute(Objects.requireNonNull(jdbc.getDataSource()));
+                .populate(Objects.requireNonNull(schemaConnection));
+    }
+    private static String adaptTransportGeneratedColumns(String resource,String sql) {
+        if(!TRANSPORT_SCHEMA.equals(resource)) return sql;
+        if(occurrences(sql,"GENERATED ALWAYS AS")!=2
+                || occurrences(sql,MYSQL_DISPOSITION_GUARD)!=1 || occurrences(sql,MYSQL_REDRIVE_GUARD)!=1) {
+            throw new IllegalStateException("D09 fixture requires two exact generated guard definitions");
+        }
+        // CASE preserves IF's branches and NULL values; H2 generated columns have no STORED suffix.
+        // Retain the original indexes, including NULL-distinct uk_redrive_operation_guard.
+        return sql.replace(MYSQL_DISPOSITION_GUARD,H2_DISPOSITION_GUARD)
+                .replace(MYSQL_REDRIVE_GUARD,H2_REDRIVE_GUARD);
     }
     private static String adaptTransportAuditTriggers(String resource,String sql) {
         if(!TRANSPORT_SCHEMA.equals(resource)) return sql;
