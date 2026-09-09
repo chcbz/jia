@@ -250,6 +250,46 @@ class SkillMarketplaceRealTransactionTest {
         assertEquals("ACTIVE",service.entitlements(ACTOR,AGENT).getFirst().get("status"));
         assertThrows(SkillMarketplaceException.class,()->results.packageBytes(key,i.getInstallationId()));
     }
+    @Test void persistedSkillWireAndResultReplayKeepTransportAndInstallationIdentitiesDistinct() {
+        var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();
+        var receipt=service.purchase(ACTOR,idem,body,false);var i=installation();
+        assertEquals(i.getMessageId(),i.getRequestId());
+        assertNotEquals(i.getInstallationId(),i.getRequestId());
+        byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId());
+        var envelope=tools.jackson.databind.json.JsonMapper.builder().build().readTree(wire);
+        assertArrayEquals(cn.jia.agent.service.impl.AgentCommandCanonicalCodec.sha256(wire),
+                jdbc.queryForObject("SELECT wire_payload_hash FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
+        assertEquals(i.getMessageId(),envelope.get("messageId").asString());
+        assertEquals(envelope.get("messageId"),envelope.get("requestId"));
+        assertEquals(i.getInstallationId(),envelope.get("installationId").asString());
+        assertEquals(envelope.get("installationId"),envelope.get("payload").get("installationId"));
+        assertEquals(i.getOrderId(),envelope.get("orderId").asString());
+        assertEquals(i.getCommandId(),envelope.get("commandId").asString());
+        assertEquals(i.getAttempt().intValue(),envelope.get("attempt").asInt());
+        assertEquals(i.getFencingToken().toString(),envelope.get("fencingToken").asString());
+        assertEquals(i.getDeliveryEpoch().toString(),envelope.get("deliveryEpoch").asString());
+        assertEquals(i.getMessageId(),jdbc.queryForObject("SELECT message_id FROM agent_outbox_event WHERE command_id=?",String.class,i.getCommandId()));
+        assertEquals(i.getMessageId(),jdbc.queryForObject("SELECT active_message_id FROM agent_command_delivery WHERE command_id=?",String.class,i.getCommandId()));
+        assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
+        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
+        assertEquals(1,count("economy_skill_installation"));assertEquals(1,count("agent_outbox_event"));
+        assertEquals(1,count("agent_command_delivery"));
+        sent(i);var success=result(i,"SUCCEEDED",null);
+        assertNotEquals(i.getMessageId(),success.get("messageId"));
+        var wrongInstallation=new LinkedHashMap<>(success);wrongInstallation.put("installationId",i.getMessageId());
+        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",wrongInstallation));
+        var wrongAttempt=new LinkedHashMap<>(success);wrongAttempt.put("attempt",i.getAttempt()+1);
+        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",wrongAttempt));
+        assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
+        var accepted=results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success);
+        assertEquals(success.get("messageId"),accepted.get("correlationId"));
+        assertEquals(i.getInstallationId(),accepted.get("installationId"));
+        assertEquals(accepted,results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success));
+        assertEquals(1,count("economy_skill_result_receipt"));assertEquals("SUCCEEDED",installation().getStatus());
+        assertEquals(i.getInstallationId(),installation().getInstallationId());
+        assertEquals(i.getMessageId(),installation().getRequestId());
+        assertArrayEquals(wire,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE command_id=?",byte[].class,i.getCommandId()));
+    }
     @Test void confirmedPreactivationFailureRefundsOriginalOrderExactlyOnce() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
         var failure=result(i,"FAILED","SKILL_PACKAGE_DIGEST_MISMATCH");

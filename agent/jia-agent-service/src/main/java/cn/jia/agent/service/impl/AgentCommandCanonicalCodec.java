@@ -171,7 +171,7 @@ public final class AgentCommandCanonicalCodec {
         if (isHallIntentCommand(draft)) string(json, "intentId", draft.intentId());
         number(json, "attempt", attempt);
         if (draft.payload() instanceof AgentSkillInstallPayload p) {
-            string(json,"requestId",p.installationId());
+            string(json,"requestId",messageId);
             string(json,"fencingToken","1"); string(json,"deliveryEpoch","1");
             skillFields(json,p);
         }

@@ -145,7 +145,7 @@ public final class SkillMarketplaceService {
             var command=writer.getObject().write(draft);
             var install=new SkillInstallationEntity().setInstallationId(installId).setOrderId(orderId).setProductVersionId(v.getProductVersionId())
                     .setTargetAgentId(q.getTargetAgentId()).setSchemaVersion(1).setMessageType("command.dispatch").setMessageId(command.messageId())
-                    .setRequestId(installId).setCommandType("SKILL_INSTALL").setCommandId(draft.commandId()).setAttempt(1).setFencingToken(1L).setDeliveryEpoch(1L)
+                    .setRequestId(command.messageId()).setCommandType("SKILL_INSTALL").setCommandId(draft.commandId()).setAttempt(1).setFencingToken(1L).setDeliveryEpoch(1L)
                     .setSkillKey(v.getSkillKey()).setSkillVersion(v.getSkillVersion()).setPackageSize(v.getPackageSize()).setPackageSha256(v.getPackageSha256())
                     .setDownloadPath(payload.downloadPath()).setStatus("REQUESTED").setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now).setUpdateTime(now);
             one(market.insertInstallation(install));
