@@ -292,12 +292,13 @@ class AuthenticationResourceSecurityTest {
             return builder.build();
         }
 
-        @RestController
-        static class AgentProbeController {
-            @GetMapping("/agent/probe")
-            String probe() {
-                return "ok";
-            }
+    }
+
+    @RestController
+    static class AgentProbeController {
+        @GetMapping("/agent/probe")
+        String probe() {
+            return "ok";
         }
     }
 }
