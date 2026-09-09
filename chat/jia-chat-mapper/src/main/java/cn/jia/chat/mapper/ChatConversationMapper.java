@@ -23,4 +23,26 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("id") Long id);
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM chat_conversation
+            WHERE id=#{id} AND tenant_id=#{tenantId} AND client_id=#{clientId} AND jiacn=#{jiacn}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(jiacn AS BINARY)=CAST(#{jiacn} AS BINARY)
+              AND OCTET_LENGTH(jiacn)=OCTET_LENGTH(#{jiacn})
+            LIMIT 1
+            <if test="forUpdate">FOR UPDATE</if>
+            </script>
+            """)
+    ChatConversationEntity findExactOwnedById(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("jiacn") String jiacn,
+            @Param("id") Long id,
+            @Param("forUpdate") boolean forUpdate);
 }

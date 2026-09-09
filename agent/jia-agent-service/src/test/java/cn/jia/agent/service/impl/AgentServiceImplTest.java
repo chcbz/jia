@@ -60,6 +60,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -345,6 +346,35 @@ class AgentServiceImplTest extends BaseMockTest {
         verify(eventPublisher).publishAgentStatus(eq("jia_client"), eq("juyiting"), eventCaptor.capture());
         assertEquals("agent-001", eventCaptor.getValue().getAgentId());
         assertEquals(AgentConstants.STATUS_ONLINE, eventCaptor.getValue().getStatus());
+    }
+
+    @Test
+    void registrationGenerationClearsOldOutputSnapshotBeforeTrustedWsReplacement() {
+        AgentPersonaBindingEntity binding = binding("agent-001", "wuyong");
+        AgentIdentityRegistryEntity identity = identity(
+                binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        when(agentIdentityService.requireRegistrationIdentityInScope(
+                "juyiting", "jia_client", "juyiting", "agent-001")).thenReturn(identity);
+        when(agentIdentityService.requireActiveBinding(identity, null)).thenReturn(binding);
+        when(agentIdentityService.activateForFirstRegistration(identity)).thenReturn(identity);
+        when(agentPersonaDao.findByCode("wuyong"))
+                .thenReturn(persona("wuyong", "吴用", "智多星"));
+        when(agentRuntimeDao.replaceOutputCapabilities(
+                eq("juyiting"), eq("jia_client"), eq("juyiting"), eq("agent-001"),
+                eq(binding.getId()), any(String.class), eq(null), eq(null), anyLong()))
+                .thenReturn(1);
+        ReflectionTestUtils.setField(agentService, "outputDeliveryEnabled", true);
+        AgentRegisterDTO request = new AgentRegisterDTO();
+        request.setAgentId("agent-001");
+        request.setRuntimeInstanceId("forged-http-runtime");
+        request.setOutputCapabilities(List.of("output.http.v1"));
+
+        AgentRegisterResultDTO result = agentService.register(request);
+
+        verify(agentRuntimeDao).replaceOutputCapabilities(
+                eq("juyiting"), eq("jia_client"), eq("juyiting"), eq("agent-001"),
+                eq(binding.getId()), eq(result.getToken()), eq(null), eq(null),
+                org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test

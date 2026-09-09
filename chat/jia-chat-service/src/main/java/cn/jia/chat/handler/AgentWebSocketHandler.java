@@ -22,6 +22,12 @@ import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.output.AgentOutputRuntimeCapabilityService;
+import cn.jia.agent.output.OutputAuthorizationException;
+import cn.jia.agent.output.OutputRunAuthorizationService;
+import cn.jia.agent.output.dto.OutputAuthReceiptDTO;
+import cn.jia.agent.output.OutputConstants;
+import cn.jia.agent.output.OutputRunRequest;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
@@ -110,6 +116,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private final Map<String, String> sessionRuntimeInstanceIds = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
+    @Autowired(required = false)
+    private AgentOutputRuntimeCapabilityService outputRuntimeCapabilityService;
+
+    @Autowired(required = false)
+    private OutputRunAuthorizationService outputRunAuthorizationService;
+
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
                                  ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker) {
         this(chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker, null,
@@ -185,6 +197,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         connected.put("capabilities", new String[] {AgentProtocolConstants.TYPE_PROTOCOL_HELLO,
                 AgentProtocolConstants.TYPE_CHAT_STREAM, AgentProtocolConstants.TYPE_CHAT_STOP,
                 AgentProtocolConstants.TYPE_PING, AgentProtocolConstants.TYPE_AGENT_REGISTER,
+                AgentProtocolConstants.TYPE_OUTPUT_AUTH_REQUEST,
                 AgentProtocolConstants.TYPE_AGENT_PRESENCE, AgentProtocolConstants.TYPE_CHAT_MESSAGE,
                 AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
                 AgentProtocolConstants.TYPE_COMMAND_ACK, AgentProtocolConstants.TYPE_WORK_PROGRESS,
@@ -221,6 +234,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             case AgentProtocolConstants.TYPE_CHAT_STREAM -> startChatStream(session, payload);
             case AgentProtocolConstants.TYPE_AGENT_REGISTER -> registerAgent(session, payload);
             case AgentProtocolConstants.TYPE_AGENT_PRESENCE -> updateAgentStatus(session, payload);
+            case AgentProtocolConstants.TYPE_OUTPUT_AUTH_REQUEST -> issueOutputTicket(session, payload);
+            case AgentProtocolConstants.TYPE_OUTPUT_AUTH_RECEIPT -> sendProtocolError(session, payload,
+                    "MESSAGE_DIRECTION_INVALID", "output.auth.receipt is server-to-Agent only");
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE -> saveAgentMessage(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA -> publishAgentMessageDelta(session, payload);
             case AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY -> assignTask(session, payload);
@@ -399,11 +415,21 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (payload.containsKey("abilities")) {
                 request.setAbilities(asStringList(payload.get("abilities")));
             }
+            request.setRuntimeInstanceId(sessionRuntimeInstanceId(session));
+            if (payload.containsKey("outputCapabilities")) {
+                request.setOutputCapabilities(asStringList(payload.get("outputCapabilities")));
+            }
             AgentRegisterResultDTO result = withSessionContext(session, () -> agentService.register(request));
             if (result == null || !agentId.equals(result.getAgentId())) {
                 throw new IllegalStateException("Agent registration returned a mismatched canonical identity");
             }
             rememberSessionAgent(session.getId(), result.getAgentId());
+            if (outputRuntimeCapabilityService != null) {
+                outputRuntimeCapabilityService.replaceAfterRegistration(
+                        sessionJiacn(session), sessionClientId(session), result.getAgentId(),
+                        sessionRuntimeInstanceId(session), result.getToken(),
+                        request.getOutputCapabilities());
+            }
             rememberSuccessfulRegistration(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
@@ -539,7 +565,24 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (payload.containsKey("abilities")) {
                 request.setAbilities(asStringList(payload.get("abilities")));
             }
+            if (payload.containsKey("outputCapabilities")) {
+                if (!successfullyRegisteredAgentIds(session.getId()).contains(agentId)) {
+                    sendProtocolError(session, payload, "AGENT_NOT_REGISTERED",
+                            "Agent must successfully register before output capability presence");
+                    return;
+                }
+                request.setOutputCapabilities(asStringList(payload.get("outputCapabilities")));
+                request.setRuntimeInstanceId(sessionRuntimeInstanceId(session));
+            }
             AgentRuntimeDTO agent = withSessionContext(session, () -> agentService.updateStatus(agentId, request));
+            if (request.getOutputCapabilities() != null) {
+                if (outputRuntimeCapabilityService == null) {
+                    throw new IllegalStateException("Output capability service is unavailable");
+                }
+                outputRuntimeCapabilityService.refreshPresence(
+                        sessionJiacn(session), sessionClientId(session), agentId,
+                        sessionRuntimeInstanceId(session), request.getOutputCapabilities());
+            }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
             }
@@ -551,6 +594,45 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sendEvent(session, "agent_status_updated", event);
         } catch (Exception e) {
             sendError(session, payload, errorCode(e), e.getMessage());
+        }
+    }
+
+    private void issueOutputTicket(WebSocketSession session, Map<String, Object> payload) {
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        if (agentId == null) return;
+        if (!successfullyRegisteredAgentIds(session.getId()).contains(agentId)) {
+            sendProtocolError(session, payload, "AGENT_NOT_REGISTERED",
+                    "Agent must successfully register before output authorization");
+            return;
+        }
+        if (outputRunAuthorizationService == null) {
+            sendProtocolError(session, payload, "PROTOCOL_HANDLER_NOT_AVAILABLE",
+                    "Output authorization is unavailable");
+            return;
+        }
+        String messageId = strictString(payload.get("messageId"));
+        String runId = strictString(payload.get("runId"));
+        if (!validExactDispatchId(messageId, 100)
+                || runId == null || !runId.matches("[0-9a-f]{32}")
+                || declaredScopeConflict(payload, "tenantId", sessionJiacn(session))
+                || declaredScopeConflict(payload, "clientId", sessionClientId(session))
+                || declaredScopeConflict(payload, "targetAgentId", agentId)
+                || declaredScopeConflict(payload, "sourceAgentId", agentId)) {
+            sendProtocolError(session, payload, "OUTPUT_AUTH_REJECTED",
+                    "Output authorization request was rejected");
+            return;
+        }
+        try {
+            OutputAuthReceiptDTO receipt = outputRunAuthorizationService.issueTicket(
+                    sessionJiacn(session), sessionClientId(session), agentId,
+                    sessionRuntimeInstanceId(session), messageId, runId);
+            sendOutputAuthReceipt(session, receipt);
+        } catch (OutputAuthorizationException denied) {
+            sendProtocolError(session, payload, denied.getCode(),
+                    "Output authorization request was rejected");
+        } catch (RuntimeException unavailable) {
+            sendProtocolError(session, payload, "OUTPUT_AUTH_UNAVAILABLE",
+                    "Output authorization could not be completed");
         }
     }
 
@@ -822,6 +904,21 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
     }
 
+    private boolean sendOutputAuthReceipt(
+            WebSocketSession session, OutputAuthReceiptDTO receipt) {
+        if (!session.isOpen()) return false;
+        try {
+            String wire = objectMapper.writeValueAsString(receipt);
+            synchronized (session) {
+                session.sendMessage(new TextMessage(wire));
+            }
+            return true;
+        } catch (Exception sendFailure) {
+            log.error("Output authorization receipt WebSocket send failed");
+            return false;
+        }
+    }
+
     @Override
     public void publishAgentStatus(String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
         Map<String, Object> payload = new HashMap<>();
@@ -1011,6 +1108,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
 
         byte[] raw = java.util.Arrays.copyOf(rawWireBytes, rawWireBytes.length);
+        byte[] outputAwareRaw = null;
         int matchingSessions = 0;
         int sentSessions = 0;
         for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
@@ -1028,8 +1126,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             matchingSessions++;
             try {
+                if (outputAwareRaw == null) {
+                    outputAwareRaw = addTrustedTaskOutputContext(raw, targetAgentId);
+                }
                 synchronized (session) {
-                    session.sendMessage(new TextMessage(raw));
+                    session.sendMessage(new TextMessage(outputAwareRaw));
                 }
                 sentSessions++;
             } catch (Exception sendFailure) {
@@ -1215,6 +1316,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || !taskScope.clientId().equals(sessionClientId(session)))) {
                 continue;
             }
+            if (commandDispatch && !outbound.containsKey("outputContext")) {
+                attachTrustedTaskOutputContext(outbound, agentId);
+            }
             delivered = sendEvent(session, outerType, outbound) || delivered;
         }
         return delivered;
@@ -1223,6 +1327,43 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private boolean directCompatibilityType(String messageType) {
         return AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(messageType)
                 || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
+    }
+
+    private byte[] addTrustedTaskOutputContext(byte[] raw, String targetAgentId) {
+        if (outputRunAuthorizationService == null) return raw;
+        try {
+            Map<String, Object> decoded = STRICT_RAW_COMMAND_JSON.readValue(raw, MESSAGE_TYPE);
+            attachTrustedTaskOutputContext(decoded, targetAgentId);
+            if (!decoded.containsKey("outputContext")) return raw;
+            return objectMapper.writeValueAsBytes(decoded);
+        } catch (Exception unavailable) {
+            return raw;
+        }
+    }
+
+    private void attachTrustedTaskOutputContext(
+            Map<String, Object> outbound, String targetAgentId) {
+        if (outputRunAuthorizationService == null) return;
+        String tenantId = strictString(outbound.get("tenantId"));
+        String clientId = strictString(outbound.get("clientId"));
+        String taskId = strictString(outbound.get("taskId"));
+        String commandId = strictString(outbound.get("commandId"));
+        String workItemId = strictString(outbound.get("workItemId"));
+        if (!validExactDispatchId(tenantId, 200)
+                || !validExactDispatchId(clientId, 200)
+                || !validExactDispatchId(taskId, 400)
+                || !validExactDispatchId(commandId, 400)
+                || !validExactDispatchId(targetAgentId, 400)) {
+            return;
+        }
+        try {
+            outputRunAuthorizationService.createOrRecoverRun(new OutputRunRequest(
+                    tenantId, clientId, OutputConstants.SOURCE_TASK, taskId,
+                    targetAgentId, "COMMAND", commandId, workItemId, 0))
+                    .ifPresent(context -> outbound.put("outputContext", context));
+        } catch (OutputAuthorizationException unsupported) {
+            // The trusted command remains available to clients that did not negotiate R1 output.
+        }
     }
 
     private String safeCanonicalOutboundType(String messageType) {
@@ -1486,11 +1627,20 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
         boolean protocolV1 = isProtocolV1(payload);
         boolean registration = AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(asString(payload.get("messageType")));
+        boolean outputAuthorization = AgentProtocolConstants.TYPE_OUTPUT_AUTH_REQUEST.equals(
+                asString(payload.get("messageType")));
         String runtimeInstanceId = asString(payload.get("runtimeInstanceId"));
         String currentRuntimeInstanceId = sessionRuntimeInstanceId(session);
-        if (protocolV1 && (runtimeInstanceId == null || runtimeInstanceId.isBlank())) {
+        if (protocolV1 && !outputAuthorization
+                && (runtimeInstanceId == null || runtimeInstanceId.isBlank())) {
             sendSessionIdentityError(session, payload, "RUNTIME_INSTANCE_ID_REQUIRED",
                     "runtimeInstanceId is required for Protocol v1 Agent messages");
+            return null;
+        }
+        if (outputAuthorization
+                && (currentRuntimeInstanceId == null || currentRuntimeInstanceId.isBlank())) {
+            sendSessionIdentityError(session, payload, "RUNTIME_INSTANCE_ID_NOT_FIXED",
+                    "Output authorization requires an authenticated runtime session");
             return null;
         }
         if (runtimeInstanceId != null && !runtimeInstanceId.isBlank()) {

@@ -26,6 +26,18 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     }
 
     @Override
+    public AgentRuntimeEntity findExactOutputRuntime(
+            String tenantId, String clientId, String ownerJiacn,
+            String agentId, boolean forUpdate) {
+        requireExactId(tenantId, "tenantId");
+        requireExactId(clientId, "clientId");
+        requireExactId(ownerJiacn, "ownerJiacn");
+        requireExactId(agentId, "agentId");
+        return baseMapper.findExactOutputRuntime(
+                tenantId, clientId, ownerJiacn, agentId, forUpdate);
+    }
+
+    @Override
     public List<AgentRuntimeEntity> findByStatusAndAbility(String status, String ability) {
         LambdaQueryWrapper<AgentRuntimeEntity> wrapper = new LambdaQueryWrapper<>();
         if (!StringUtil.isBlank(status)) {
@@ -71,6 +83,23 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
                         .or()
                         .lt(AgentRuntimeEntity::getLastSeenAt, cutoffTime))
                 .orderByAsc(AgentRuntimeEntity::getLastSeenAt));
+    }
+
+    @Override
+    public int replaceOutputCapabilities(
+            String tenantId, String clientId, String ownerJiacn, String agentId,
+            long bindingId, String registrationToken, String runtimeInstanceId,
+            String capabilitiesJson, long updatedAt) {
+        return baseMapper.replaceOutputCapabilities(tenantId, clientId, ownerJiacn, agentId,
+                bindingId, registrationToken, runtimeInstanceId, capabilitiesJson, updatedAt);
+    }
+
+    @Override
+    public int refreshOutputCapabilities(
+            String tenantId, String clientId, String ownerJiacn, String agentId,
+            long bindingId, String runtimeInstanceId, String capabilitiesJson, long updatedAt) {
+        return baseMapper.refreshOutputCapabilities(tenantId, clientId, ownerJiacn, agentId,
+                bindingId, runtimeInstanceId, capabilitiesJson, updatedAt);
     }
     private void requireExactId(String value, String field) {
         if (StringUtil.isBlank(value) || !value.equals(value.strip())

@@ -19,6 +19,8 @@ public class AgentProtocolMessageNormalizer {
     private static final Set<String> V1_EXCLUSIVE_TYPES = Set.of(
             AgentProtocolConstants.TYPE_PROTOCOL_HELLO,
             AgentProtocolConstants.TYPE_PROTOCOL_ERROR,
+            AgentProtocolConstants.TYPE_OUTPUT_AUTH_REQUEST,
+            AgentProtocolConstants.TYPE_OUTPUT_AUTH_RECEIPT,
             AgentProtocolConstants.TYPE_CHAT_MESSAGE,
             AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA,
             AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
@@ -33,7 +35,7 @@ public class AgentProtocolMessageNormalizer {
     private static final List<String> RESERVED_FIELDS = List.of(
             "schemaVersion", "tenantId", "clientId", "agentId", "sourceAgentId", "targetAgentId",
             "receiverAgentId", "runtimeInstanceId", "messageId", "requestId", "commandId", "commandType",
-            "correlationId", "causationId", "conversationId", "taskId", "workItemId",
+            "correlationId", "causationId", "conversationId", "taskId", "workItemId", "runId",
             "issuedAt", "sentAt", "timestamp", "expiresAt", "attempt");
 
     public NormalizedMessage normalizeInbound(Map<String, Object> rawMessage) {
@@ -70,6 +72,7 @@ public class AgentProtocolMessageNormalizer {
         envelope.setConversationId(value(raw, body, "conversationId"));
         envelope.setTaskId(value(raw, body, "taskId"));
         envelope.setWorkItemId(value(raw, body, "workItemId"));
+        envelope.setRunId(value(raw, body, "runId"));
         envelope.setCommandType(value(raw, body, "commandType"));
         envelope.setIssuedAt(asLong(valueObject(raw, body, "issuedAt")));
         envelope.setSentAt(asLong(valueObject(raw, body, "sentAt", "timestamp")));
@@ -338,6 +341,12 @@ public class AgentProtocolMessageNormalizer {
             require(envelope.getRuntimeInstanceId(), "RUNTIME_INSTANCE_ID_REQUIRED",
                     "runtimeInstanceId is required for Protocol v1 registration");
         }
+        if (AgentProtocolConstants.TYPE_OUTPUT_AUTH_REQUEST.equals(envelope.getMessageType())) {
+            if (envelope.getRunId() == null || !envelope.getRunId().matches("[0-9a-f]{32}")) {
+                throw new AgentProtocolException("RUN_ID_INVALID",
+                        "runId must be 32 lowercase hexadecimal characters");
+            }
+        }
         if (AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(envelope.getMessageType())) {
             require(envelope.getCommandId(), "COMMAND_ID_REQUIRED", "commandId is required for command.dispatch");
             require(envelope.getCommandType(), "COMMAND_TYPE_REQUIRED", "commandType is required for command.dispatch");
@@ -356,7 +365,8 @@ public class AgentProtocolMessageNormalizer {
                 || AgentProtocolConstants.TYPE_WORK_RESULT.equals(type)
                 || AgentProtocolConstants.TYPE_HELP_REQUEST.equals(type)
                 || AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH.equals(type)
-                || AgentProtocolConstants.TYPE_TASK_EVENT.equals(type);
+                || AgentProtocolConstants.TYPE_TASK_EVENT.equals(type)
+                || AgentProtocolConstants.TYPE_OUTPUT_AUTH_REQUEST.equals(type);
     }
 
     private void require(String value, String code, String message) {

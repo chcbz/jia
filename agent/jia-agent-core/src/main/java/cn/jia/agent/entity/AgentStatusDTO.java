@@ -16,4 +16,6 @@ public class AgentStatusDTO implements Serializable {
     private String currentTaskTitle;
     private String errorMessage;
     private List<String> abilities;
+    private List<String> outputCapabilities;
+    private String runtimeInstanceId;
 }

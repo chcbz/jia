@@ -30,6 +30,8 @@ public final class AgentProtocolConstants {
     public static final String TYPE_AGENT_REGISTER = "agent.register";
     public static final String TYPE_AGENT_PRESENCE = "agent.presence";
     public static final String TYPE_CAPABILITY_LOOKUP = "capability.lookup";
+    public static final String TYPE_OUTPUT_AUTH_REQUEST = "output.auth.request";
+    public static final String TYPE_OUTPUT_AUTH_RECEIPT = "output.auth.receipt";
     public static final String TYPE_TASK_ASSIGN_LEGACY = "task.assign";
 
     public static final String TYPE_CHAT_MESSAGE = "chat.message";
@@ -61,7 +63,8 @@ public final class AgentProtocolConstants {
     private static final Set<String> CANONICAL_TYPES = Set.of(
             TYPE_PROTOCOL_HELLO, TYPE_PROTOCOL_ERROR, TYPE_PING, TYPE_PONG,
             TYPE_CHAT_STREAM, TYPE_CHAT_STOP, TYPE_AGENT_REGISTER, TYPE_AGENT_PRESENCE,
-            TYPE_CAPABILITY_LOOKUP, TYPE_TASK_ASSIGN_LEGACY, TYPE_CHAT_MESSAGE,
+            TYPE_CAPABILITY_LOOKUP, TYPE_OUTPUT_AUTH_REQUEST, TYPE_OUTPUT_AUTH_RECEIPT,
+            TYPE_TASK_ASSIGN_LEGACY, TYPE_CHAT_MESSAGE,
             TYPE_CHAT_MESSAGE_DELTA, TYPE_COMMAND_DISPATCH, TYPE_COMMAND_ACK,
             TYPE_WORK_PROGRESS, TYPE_WORK_HEARTBEAT, TYPE_WORK_RESULT,
             TYPE_HELP_REQUEST, TYPE_ARTIFACT_PUBLISH, TYPE_TASK_EVENT);

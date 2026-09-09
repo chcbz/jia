@@ -15,6 +15,8 @@ public class AgentRegisterDTO implements Serializable {
     private String name;
     private String avatar;
     private List<String> abilities;
+    private List<String> outputCapabilities;
+    private String runtimeInstanceId;
     private String endpoint;
     private String personaCode;
     private String personaName;

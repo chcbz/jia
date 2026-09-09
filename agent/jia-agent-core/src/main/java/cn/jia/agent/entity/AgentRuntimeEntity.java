@@ -3,6 +3,8 @@ package cn.jia.agent.entity;
 import cn.jia.core.entity.BaseEntity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.TableName;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
@@ -30,6 +32,12 @@ public class AgentRuntimeEntity extends BaseEntity {
     private String personaName;
     private Long bindingId;
     private String abilities;
+    @TableField(select = false, insertStrategy = FieldStrategy.NEVER, updateStrategy = FieldStrategy.NEVER)
+    private String outputCapabilitiesJson;
+    @TableField(select = false, insertStrategy = FieldStrategy.NEVER, updateStrategy = FieldStrategy.NEVER)
+    private String outputCapabilitiesRuntimeId;
+    @TableField(select = false, insertStrategy = FieldStrategy.NEVER, updateStrategy = FieldStrategy.NEVER)
+    private Long outputCapabilitiesUpdatedAt;
     private String endpoint;
     private String tokenHash;
     private String status;

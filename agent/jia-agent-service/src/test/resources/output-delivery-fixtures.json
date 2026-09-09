@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "note": "Design fixtures only; no real credentials or production IDs",
+  "manifest": {
+    "schemaVersion": 1,
+    "items": [
+      {
+        "outputId": "11111111111111111111111111111111",
+        "title": "分析报告",
+        "relativePath": "report.md",
+        "artifactType": "analysis",
+        "publishToOwner": true
+      }
+    ]
+  },
+  "outputContext": {
+    "schemaVersion": 1,
+    "runId": "22222222222222222222222222222222",
+    "source": {
+      "type": "TASK",
+      "id": "task-example"
+    },
+    "maxFileBytes": "52428800",
+    "maxBatchBytes": "209715200",
+    "manifestRelativePath": "outputs/22222222222222222222222222222222/manifest.json",
+    "capabilities": [
+      "output.http.v1",
+      "task.owner-share.v1"
+    ]
+  },
+  "requestExamples": {
+    "UploadCreate": {
+      "runId": "22222222222222222222222222222222",
+      "source": {
+        "type": "TASK",
+        "id": "task-example"
+      },
+      "name": "report.md",
+      "size": "13",
+      "sha256": "ecf701f727d9e2d77c4aa49ac6fbbcc997278aca010bddeeb961c10cf54d435a",
+      "mime": "text/markdown"
+    },
+    "TaskPublish": {
+      "runId": "22222222222222222222222222222222",
+      "expectedPreviousVersion": "0",
+      "title": "分析报告",
+      "artifactType": "analysis",
+      "artifactId": "11111111111111111111111111111111",
+      "artifactVersion": "1",
+      "objectId": "33333333333333333333333333333333",
+      "publishToOwner": true
+    },
+    "ChatPublish": {
+      "runId": "22222222222222222222222222222222",
+      "expectedPreviousVersion": "0",
+      "title": "结论",
+      "artifactType": "summary",
+      "outputId": "11111111111111111111111111111111",
+      "version": "1",
+      "content": "这里是正文成果。"
+    },
+    "DeliverySubmit": {
+      "runId": "22222222222222222222222222222222",
+      "workItemId": "work-example",
+      "expectedTaskVersion": "7",
+      "expectedWorkItemVersion": "12",
+      "leaseToken": "EXAMPLE-NOT-A-CREDENTIAL",
+      "summary": "已提交报告与说明",
+      "items": [
+        {
+          "artifactId": "11111111111111111111111111111111",
+          "version": "1",
+          "purpose": "报告"
+        }
+      ]
+    },
+    "ReviewRequest": {
+      "decision": "request_changes",
+      "reason": "请补充数据来源",
+      "expectedDeliveryVersion": "1",
+      "expectedTaskVersion": "8"
+    }
+  },
+  "negativeCases": [
+    {
+      "id": "owner-mismatch",
+      "expectedHttp": 404
+    },
+    {
+      "id": "same-key-different-body",
+      "expectedHttp": 409
+    },
+    {
+      "id": "wrong-object-sha256",
+      "expectedHttp": 422
+    },
+    {
+      "id": "stale-writer-epoch",
+      "expectedHttp": 409
+    },
+    {
+      "id": "legacy-completed-policy1",
+      "expectedHttp": 409
+    },
+    {
+      "id": "unauthorized-owner-share",
+      "expectedHttp": 404
+    },
+    {
+      "id": "expired-output-still-referenced-elsewhere",
+      "expectedHttp": 410
+    }
+  ],
+  "sampleFile": {
+    "name": "report.md",
+    "utf8": "hello world!\n",
+    "byteLength": "13",
+    "sha256": "ecf701f727d9e2d77c4aa49ac6fbbcc997278aca010bddeeb961c10cf54d435a"
+  }
+}

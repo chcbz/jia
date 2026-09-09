@@ -34,6 +34,7 @@ public class AgentProtocolEnvelopeDTO implements Serializable {
     private String conversationId;
     private String taskId;
     private String workItemId;
+    private String runId;
     private String commandType;
 
     private Long issuedAt;

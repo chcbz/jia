@@ -2,15 +2,22 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.output.OutputAuthorizationException;
+import cn.jia.agent.output.OutputConstants;
+import cn.jia.agent.output.OutputRunAuthorizationService;
+import cn.jia.agent.output.OutputRunRequest;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
@@ -32,6 +39,9 @@ public class JuyitingAgentRelayService {
     private final ChatMessageDao chatMessageDao;
     private final AgentService agentService;
     private final JuyitingConversationScopeService scopeService;
+
+    @Autowired(required = false)
+    private OutputRunAuthorizationService outputRunAuthorizationService;
 
     public JuyitingAgentRelayResult relay(ChatMessageDTO chatMessage, String conversationId, Supplier<Flux<String>> builtinAgentStream) {
         JuyitingConversationScope scope = scopeService.resolve(chatMessage);
@@ -77,6 +87,10 @@ public class JuyitingAgentRelayService {
 
         Map<String, Object> payload = buildDirectAgentPayload(chatMessage, conversationId, selectedAgentId, scope);
         boolean delivered = agentWebSocketHandler.isAgentConnected(selectedAgentId);
+        if (delivered) {
+            attachOutputContext(payload, conversationId, selectedAgentId,
+                    String.valueOf(payload.get("messageId")));
+        }
         Flux<String> stream = delivered
                 ? Flux.create(emitter -> {
                     final Disposable[] subscriptionRef = new Disposable[1];
@@ -132,7 +146,12 @@ public class JuyitingAgentRelayService {
         boolean anyDelivered = false;
         for (String agentId : scope.targetAgentIds()) {
             Map<String, Object> payload = buildDirectAgentPayload(chatMessage, conversationId, agentId, scope);
-            boolean delivered = agentWebSocketHandler.isAgentConnected(agentId)
+            boolean connected = agentWebSocketHandler.isAgentConnected(agentId);
+            if (connected) {
+                attachOutputContext(payload, conversationId, agentId,
+                        String.valueOf(payload.get("messageId")));
+            }
+            boolean delivered = connected
                     && agentWebSocketHandler.sendDirectMessageToAgent(agentId, payload);
             anyDelivered = anyDelivered || delivered;
             events.add(buildAgentDeliveryEventJson(conversationId, agentId, delivered));
@@ -172,6 +191,25 @@ public class JuyitingAgentRelayService {
         payload.put("payload", protocolPayload);
         return payload;
     }
+
+    private void attachOutputContext(
+            Map<String, Object> payload, String conversationId,
+            String agentId, String messageId) {
+        if (outputRunAuthorizationService == null) return;
+        EsContext context = EsContextHolder.getContext();
+        String tenantId = context == null ? null : context.getJiacn();
+        String clientId = context == null ? null : context.getClientId();
+        if (tenantId == null || clientId == null) return;
+        try {
+            outputRunAuthorizationService.createOrRecoverRun(new OutputRunRequest(
+                    tenantId, clientId, OutputConstants.SOURCE_CONVERSATION,
+                    conversationId, agentId, "CHAT_MESSAGE", messageId, null, 0))
+                    .ifPresent(outputContext -> payload.put("outputContext", outputContext));
+        } catch (OutputAuthorizationException unavailable) {
+            // Chat delivery remains compatible when the runtime did not negotiate output support.
+        }
+    }
+
 
     private void saveDirectUserMessage(ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope) {
         ChatMessageEntity entity = new ChatMessageEntity();

@@ -10,6 +10,10 @@ public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
 
     AgentRuntimeEntity findByAgentIdForUpdate(String agentId);
 
+    AgentRuntimeEntity findExactOutputRuntime(
+            String tenantId, String clientId, String ownerJiacn,
+            String agentId, boolean forUpdate);
+
     List<AgentRuntimeEntity> findByStatusAndAbility(String status, String ability);
 
     List<AgentRuntimeEntity> findRosterByOwner(String clientId, String jiacn, String status, String ability);
@@ -17,4 +21,13 @@ public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
     List<AgentRuntimeEntity> findMapVisible(String clientId);
 
     List<AgentRuntimeEntity> findHeartbeatTimedOut(long cutoffTime);
+
+    int replaceOutputCapabilities(
+            String tenantId, String clientId, String ownerJiacn, String agentId,
+            long bindingId, String registrationToken, String runtimeInstanceId,
+            String capabilitiesJson, long updatedAt);
+
+    int refreshOutputCapabilities(
+            String tenantId, String clientId, String ownerJiacn, String agentId,
+            long bindingId, String runtimeInstanceId, String capabilitiesJson, long updatedAt);
 }

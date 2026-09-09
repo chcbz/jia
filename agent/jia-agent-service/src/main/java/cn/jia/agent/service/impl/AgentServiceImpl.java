@@ -64,6 +64,7 @@ import com.github.pagehelper.PageInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -125,6 +126,9 @@ public class AgentServiceImpl implements AgentService {
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter taskEventWriter;
     private final AgentCommandTransportCapture commandTransportCapture;
+
+    @Value("${agent.output-delivery.enabled:false}")
+    private boolean outputDeliveryEnabled;
 
     /** Backward-compatible constructor used by existing focused tests with all M3 flags OFF. */
     public AgentServiceImpl(
@@ -235,6 +239,12 @@ public class AgentServiceImpl implements AgentService {
             agentRuntimeDao.insert(entity);
         } else {
             agentRuntimeDao.updateById(entity);
+        }
+        if (outputDeliveryEnabled) {
+            require(agentRuntimeDao.replaceOutputCapabilities(
+                    jiacn, clientId, jiacn, canonicalAgentId, binding.getId(),
+                    token, null, null, System.currentTimeMillis()) == 1,
+                    "Agent output runtime generation reset failed");
         }
         publishAgentSnapshotAfterCommit("agent-register", clientId, jiacn, toRuntimeDTO(entity));
         return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());

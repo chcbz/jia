@@ -27,6 +27,8 @@ public class AgentRuntimeDTO implements Serializable {
     private Boolean canBind;
     private Boolean canOperate;
     private List<String> abilities;
+    private List<String> outputCapabilities;
+    private Long outputCapabilitiesUpdatedAt;
     private String status;
     private String endpoint;
     private String currentTaskId;

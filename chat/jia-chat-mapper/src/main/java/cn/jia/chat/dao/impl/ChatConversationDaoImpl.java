@@ -38,6 +38,26 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
     }
 
     @Override
+    public ChatConversationEntity findExactOwnedById(
+            String tenantId, String clientId, String jiacn, String conversationId,
+            boolean forUpdate) {
+        requireId(tenantId, "tenantId");
+        requireId(clientId, "clientId");
+        requireId(jiacn, "jiacn");
+        requireId(conversationId, "conversationId");
+        long id;
+        try {
+            id = Long.parseLong(conversationId);
+        } catch (NumberFormatException invalid) {
+            throw new IllegalArgumentException("conversationId is invalid");
+        }
+        if (id <= 0 || !Long.toString(id).equals(conversationId)) {
+            throw new IllegalArgumentException("conversationId is not canonical decimal");
+        }
+        return baseMapper.findExactOwnedById(tenantId, clientId, jiacn, id, forUpdate);
+    }
+
+    @Override
     public List<ChatConversationEntity> selectNonTaskThreadByEntity(ChatConversationEntity example) {
         ChatConversationEntity safe = example == null ? new ChatConversationEntity() : example;
         QueryWrapper<ChatConversationEntity> wrapper = new QueryWrapper<>(safe);

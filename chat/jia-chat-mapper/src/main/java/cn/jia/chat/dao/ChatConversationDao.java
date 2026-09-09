@@ -17,5 +17,9 @@ public interface ChatConversationDao extends IBaseDao<ChatConversationEntity> {
 
     ChatConversationEntity findScopedById(String tenantId, String clientId, String conversationId);
 
+    ChatConversationEntity findExactOwnedById(
+            String tenantId, String clientId, String jiacn, String conversationId,
+            boolean forUpdate);
+
     List<ChatConversationEntity> selectNonTaskThreadByEntity(ChatConversationEntity example);
 }
