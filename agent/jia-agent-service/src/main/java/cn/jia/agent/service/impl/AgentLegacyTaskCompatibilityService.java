@@ -177,11 +177,6 @@ public class AgentLegacyTaskCompatibilityService {
             boolean automatic, long changedAt, AgentTaskMetaEntity task,
             AssignmentPrecommitValidator precommitValidator) {
         validateLockedTask(task, tenantId, clientId, taskId);
-        List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
-                tenantId, clientId, tenantId, agentIds);
-        if (!agentIds.equals(lockedAgentIds)) {
-            throw forbidden();
-        }
         AgentTaskStatus taskStatus = persistedTaskStatus(task.getRewardStatus());
         if (taskStatus != AgentTaskStatus.OPEN && taskStatus != AgentTaskStatus.PLANNING
                 && taskStatus != AgentTaskStatus.ASSIGNED) {
@@ -200,10 +195,10 @@ public class AgentLegacyTaskCompatibilityService {
         if (!members.isEmpty() || !defaultItems.isEmpty()) {
             List<String> persistedAgentIds = validateIdempotentAssignment(
                     task, taskId, agentIds, members, defaultItems);
+            requireActiveAgentIds(tenantId, clientId, persistedAgentIds);
             return new AssignOutcome(persistedAgentIds, false, null, null);
         }
 
-        precommitValidator.validate(task, agentIds);
         String fromStatus = taskStatus.value();
         applyAssignmentMeta(task, agentIds, changedAt);
         requireSingleMutation(taskMetaDao.updateById(task), "task assignment metadata");
@@ -215,9 +210,20 @@ public class AgentLegacyTaskCompatibilityService {
                     index == 0 ? MEMBER_ROLE_COORDINATOR : MEMBER_ROLE_WORKER);
             insertDefaultWorkItem(tenantId, clientId, taskId, agentId);
         }
+        precommitValidator.validate(task, agentIds);
+        requireActiveAgentIds(tenantId, clientId, agentIds);
         String taskAssignedEventId = appendAssignmentEvents(
                 tenantId, clientId, taskId, task, agentIds, source, fromStatus, changedAt);
         return new AssignOutcome(agentIds, true, taskAssignedEventId, changedAt);
+    }
+
+    private void requireActiveAgentIds(
+            String tenantId, String clientId, List<String> agentIds) {
+        List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
+                tenantId, clientId, tenantId, agentIds);
+        if (!agentIds.equals(lockedAgentIds)) {
+            throw forbidden();
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)

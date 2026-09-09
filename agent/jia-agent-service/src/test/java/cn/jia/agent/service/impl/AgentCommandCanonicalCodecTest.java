@@ -5,6 +5,9 @@ import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentHallCommandContext;
 import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.output.OutputConstants;
+import cn.jia.agent.output.dto.OutputContextDTO;
+import cn.jia.agent.output.dto.OutputSourceDTO;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -51,6 +54,37 @@ class AgentCommandCanonicalCodecTest {
         assertArrayEquals(business,
                 AgentCommandCanonicalCodec.businessBytes(
                         AgentCommandCanonicalCodec.decodeBusinessBytes(business)));
+    }
+
+    @Test
+    void trustedOutputContextIsCanonicalAndSurvivesAttemptReencoding() {
+        AgentCommandDraft draft = taskInviteDraft("Task One");
+        String runId = "22222222222222222222222222222222";
+        OutputContextDTO context = new OutputContextDTO(
+                1, runId, new OutputSourceDTO(OutputConstants.SOURCE_TASK, "task-1"),
+                Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES),
+                Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES),
+                "outputs/" + runId + "/manifest.json",
+                List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                        OutputConstants.CAPABILITY_OWNER_SHARE_V1));
+
+        byte[] first = AgentCommandCanonicalCodec.wireBytes(
+                draft, "message-1", 1, context);
+        OutputContextDTO recovered = AgentCommandCanonicalCodec
+                .outputContextFromWire(first).orElseThrow();
+        byte[] second = AgentCommandCanonicalCodec.wireBytes(
+                draft, "message-2", 2, recovered);
+
+        assertEquals(context, recovered);
+        assertTrue(new String(first, StandardCharsets.UTF_8).contains(
+                "\"outputContext\":{\"schemaVersion\":1,\"runId\":\"" + runId + "\""));
+        assertEquals(runId, AgentCommandCanonicalCodec
+                .outputContextFromWire(second).orElseThrow().runId());
+        assertArrayEquals(
+                AgentCommandCanonicalCodec.businessBytes(draft),
+                AgentCommandCanonicalCodec.businessBytes(
+                        AgentCommandCanonicalCodec.decodeBusinessBytes(
+                                AgentCommandCanonicalCodec.businessBytes(draft))));
     }
 
     @Test

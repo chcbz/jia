@@ -1108,7 +1108,18 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
 
         byte[] raw = java.util.Arrays.copyOf(rawWireBytes, rawWireBytes.length);
-        byte[] outputAwareRaw = null;
+        String requiredRuntimeId;
+        try {
+            Map<String, Object> decoded = STRICT_RAW_COMMAND_JSON.readValue(raw, MESSAGE_TYPE);
+            requiredRuntimeId = requireOutputDispatchRuntime(
+                    decoded, tenantId, clientId, targetAgentId);
+        } catch (OutputAuthorizationException denied) {
+            return "OUTPUT_DISPATCH_RUNTIME_UNAVAILABLE".equals(denied.getCode())
+                    ? AgentRawCommandDispatchResult.offline()
+                    : AgentRawCommandDispatchResult.rejected();
+        } catch (Exception malformed) {
+            return AgentRawCommandDispatchResult.rejected();
+        }
         int matchingSessions = 0;
         int sentSessions = 0;
         for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
@@ -1121,16 +1132,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (session == null || !session.isOpen()
                     || !targetAgentId.equals(sessionAgentId(session))
                     || !tenantId.equals(sessionJiacn(session))
-                    || !clientId.equals(sessionClientId(session))) {
+                    || !clientId.equals(sessionClientId(session))
+                    || (requiredRuntimeId != null
+                            && !requiredRuntimeId.equals(sessionRuntimeInstanceId(session)))) {
                 continue;
             }
             matchingSessions++;
             try {
-                if (outputAwareRaw == null) {
-                    outputAwareRaw = addTrustedTaskOutputContext(raw, targetAgentId);
-                }
                 synchronized (session) {
-                    session.sendMessage(new TextMessage(outputAwareRaw));
+                    session.sendMessage(new TextMessage(raw));
                 }
                 sentSessions++;
             } catch (Exception sendFailure) {
@@ -1265,11 +1275,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
-        return sendDirectMessageToAgent(agentId, payload, null);
+        return sendDirectMessageToAgent(agentId, payload, null, null, null);
+    }
+
+    public boolean sendDirectMessageToAgent(
+            String agentId, Map<String, ?> payload,
+            String trustedTenantId, String trustedClientId) {
+        return sendDirectMessageToAgent(
+                agentId, payload, null, trustedTenantId, trustedClientId);
     }
 
     private boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload,
             Set<String> trustedTaskMemberAgentIds) {
+        return sendDirectMessageToAgent(
+                agentId, payload, trustedTaskMemberAgentIds, null, null);
+    }
+
+    private boolean sendDirectMessageToAgent(
+            String agentId, Map<String, ?> payload,
+            Set<String> trustedTaskMemberAgentIds,
+            String trustedTenantId, String trustedClientId) {
         if (isBlank(agentId)) {
             return false;
         }
@@ -1299,13 +1324,22 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
 
         boolean commandDispatch = AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
-        Map<String, Set<String>> candidateSessionAgentIds = commandDispatch
+        if (commandDispatch && !outbound.containsKey("outputContext")) {
+            attachTrustedTaskOutputContext(outbound, agentId);
+        }
+        String outputTenantId = taskScope == null ? trustedTenantId : taskScope.tenantId();
+        String outputClientId = taskScope == null ? trustedClientId : taskScope.clientId();
+        String requiredRuntimeId = requireOutputDispatchRuntime(
+                outbound, outputTenantId, outputClientId, agentId);
+        boolean outputAware = requiredRuntimeId != null;
+        Map<String, Set<String>> candidateSessionAgentIds = commandDispatch || outputAware
                 ? successfullyRegisteredAgentIds : sessionAgentIds;
         boolean delivered = false;
         for (Map.Entry<String, Set<String>> entry : candidateSessionAgentIds.entrySet()) {
             String sessionId = entry.getKey();
             if (!entry.getValue().contains(agentId)
-                    || (commandDispatch && !registeredAgentIds(sessionId).contains(agentId))) {
+                    || ((commandDispatch || outputAware)
+                            && !registeredAgentIds(sessionId).contains(agentId))) {
                 continue;
             }
             WebSocketSession session = sessions.get(sessionId);
@@ -1316,8 +1350,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || !taskScope.clientId().equals(sessionClientId(session)))) {
                 continue;
             }
-            if (commandDispatch && !outbound.containsKey("outputContext")) {
-                attachTrustedTaskOutputContext(outbound, agentId);
+            if (outputAware && (!outputTenantId.equals(sessionJiacn(session))
+                    || !outputClientId.equals(sessionClientId(session))
+                    || !requiredRuntimeId.equals(sessionRuntimeInstanceId(session)))) {
+                continue;
             }
             delivered = sendEvent(session, outerType, outbound) || delivered;
         }
@@ -1327,18 +1363,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private boolean directCompatibilityType(String messageType) {
         return AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(messageType)
                 || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType);
-    }
-
-    private byte[] addTrustedTaskOutputContext(byte[] raw, String targetAgentId) {
-        if (outputRunAuthorizationService == null) return raw;
-        try {
-            Map<String, Object> decoded = STRICT_RAW_COMMAND_JSON.readValue(raw, MESSAGE_TYPE);
-            attachTrustedTaskOutputContext(decoded, targetAgentId);
-            if (!decoded.containsKey("outputContext")) return raw;
-            return objectMapper.writeValueAsBytes(decoded);
-        } catch (Exception unavailable) {
-            return raw;
-        }
     }
 
     private void attachTrustedTaskOutputContext(
@@ -1356,14 +1380,42 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 || !validExactDispatchId(targetAgentId, 400)) {
             return;
         }
-        try {
-            outputRunAuthorizationService.createOrRecoverRun(new OutputRunRequest(
-                    tenantId, clientId, OutputConstants.SOURCE_TASK, taskId,
-                    targetAgentId, "COMMAND", commandId, workItemId, 0))
-                    .ifPresent(context -> outbound.put("outputContext", context));
-        } catch (OutputAuthorizationException unsupported) {
-            // The trusted command remains available to clients that did not negotiate R1 output.
+        outputRunAuthorizationService.createOrRecoverRun(new OutputRunRequest(
+                tenantId, clientId, OutputConstants.SOURCE_TASK, taskId,
+                targetAgentId, "COMMAND", commandId, workItemId, 0))
+                .ifPresent(context -> outbound.put("outputContext", context));
+    }
+
+    private String requireOutputDispatchRuntime(
+            Map<String, Object> outbound, String tenantId,
+            String clientId, String targetAgentId) {
+        if (!outbound.containsKey("outputContext")) return null;
+        if (outputRunAuthorizationService == null
+                || !validExactDispatchId(tenantId, 200)
+                || !validExactDispatchId(clientId, 200)) {
+            throw new OutputAuthorizationException(
+                    "OUTPUT_AUTH_FORBIDDEN", "Output-aware dispatch scope is unavailable");
         }
+        JsonNode context = objectMapper.valueToTree(outbound.get("outputContext"));
+        JsonNode source = context == null ? null : context.get("source");
+        String runId = context == null ? null : textJson(context, "runId");
+        String messageType = asString(outbound.get("messageType"));
+        String expectedType = AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType)
+                ? OutputConstants.SOURCE_TASK : OutputConstants.SOURCE_CONVERSATION;
+        String expectedSourceId = AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType)
+                ? strictString(outbound.get("taskId"))
+                : strictString(outbound.get("conversationId"));
+        if (context == null || !context.isObject()
+                || !integralJsonEquals(context, "schemaVersion", 1)
+                || runId == null || !runId.matches("[0-9a-f]{32}")
+                || source == null || !source.isObject()
+                || !expectedType.equals(textJson(source, "type"))
+                || !java.util.Objects.equals(expectedSourceId, textJson(source, "id"))) {
+            throw new OutputAuthorizationException(
+                    "OUTPUT_AUTH_FORBIDDEN", "Output-aware dispatch context is invalid");
+        }
+        return outputRunAuthorizationService.requireFreshDispatchRuntime(
+                tenantId, clientId, targetAgentId, runId);
     }
 
     private String safeCanonicalOutboundType(String messageType) {

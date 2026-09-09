@@ -7,6 +7,7 @@ import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.output.OutputRunAuthorizationService;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,12 +29,17 @@ class AgentCommandTransportCaptureTest {
     void flagsOffDoesNotResolveWriterOrTouchTransport() {
         @SuppressWarnings("unchecked")
         ObjectProvider<AgentCommandTransportWriter> provider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<OutputRunAuthorizationService> outputRunProvider = mock(ObjectProvider.class);
         AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
-                gate(AgentRabbitActivationState.OFF), provider);
+                gate(AgentRabbitActivationState.OFF), provider, outputRunProvider);
 
         assertFalse(capture.captureTaskInvites(null, null, null, 0));
+        assertTrue(capture.prepareTaskOutputContexts(
+                "tenant-a", "client-a", "task-1", List.of("agent-a")).isEmpty());
 
         verify(provider, never()).getIfAvailable();
+        verify(outputRunProvider, never()).getIfAvailable();
     }
 
     @Test
@@ -65,7 +72,7 @@ class AgentCommandTransportCaptureTest {
         assertTrue(canary.captureTaskInvites(task, agents, "evt-assigned", 1_000L));
 
         ArgumentCaptor<AgentCommandDraft> drafts = ArgumentCaptor.forClass(AgentCommandDraft.class);
-        verify(writer, org.mockito.Mockito.times(4)).write(drafts.capture());
+        verify(writer, org.mockito.Mockito.times(4)).write(drafts.capture(), isNull());
         assertTrue(drafts.getAllValues().stream().allMatch(draft ->
                 "TASK_INVITE".equals(draft.commandType())));
     }

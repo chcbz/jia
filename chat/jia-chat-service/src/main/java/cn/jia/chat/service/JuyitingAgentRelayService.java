@@ -2,7 +2,6 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.service.AgentService;
-import cn.jia.agent.output.OutputAuthorizationException;
 import cn.jia.agent.output.OutputConstants;
 import cn.jia.agent.output.OutputRunAuthorizationService;
 import cn.jia.agent.output.OutputRunRequest;
@@ -91,6 +90,9 @@ public class JuyitingAgentRelayService {
             attachOutputContext(payload, conversationId, selectedAgentId,
                     String.valueOf(payload.get("messageId")));
         }
+        EsContext dispatchContext = EsContextHolder.getContext();
+        String dispatchTenantId = dispatchContext == null ? null : dispatchContext.getJiacn();
+        String dispatchClientId = dispatchContext == null ? null : dispatchContext.getClientId();
         Flux<String> stream = delivered
                 ? Flux.create(emitter -> {
                     final Disposable[] subscriptionRef = new Disposable[1];
@@ -108,7 +110,8 @@ public class JuyitingAgentRelayService {
                             }, emitter::error);
                     subscriptionRef[0] = disposable;
 
-                    boolean sent = agentWebSocketHandler.sendDirectMessageToAgent(selectedAgentId, payload);
+                    boolean sent = agentWebSocketHandler.sendDirectMessageToAgent(
+                            selectedAgentId, payload, dispatchTenantId, dispatchClientId);
                     emitter.next(buildAgentDeliveryEventJson(conversationId, selectedAgentId, sent));
 
                     if (!sent) {
@@ -151,8 +154,12 @@ public class JuyitingAgentRelayService {
                 attachOutputContext(payload, conversationId, agentId,
                         String.valueOf(payload.get("messageId")));
             }
+            EsContext dispatchContext = EsContextHolder.getContext();
             boolean delivered = connected
-                    && agentWebSocketHandler.sendDirectMessageToAgent(agentId, payload);
+                    && agentWebSocketHandler.sendDirectMessageToAgent(
+                            agentId, payload,
+                            dispatchContext == null ? null : dispatchContext.getJiacn(),
+                            dispatchContext == null ? null : dispatchContext.getClientId());
             anyDelivered = anyDelivered || delivered;
             events.add(buildAgentDeliveryEventJson(conversationId, agentId, delivered));
         }
@@ -200,14 +207,10 @@ public class JuyitingAgentRelayService {
         String tenantId = context == null ? null : context.getJiacn();
         String clientId = context == null ? null : context.getClientId();
         if (tenantId == null || clientId == null) return;
-        try {
-            outputRunAuthorizationService.createOrRecoverRun(new OutputRunRequest(
-                    tenantId, clientId, OutputConstants.SOURCE_CONVERSATION,
-                    conversationId, agentId, "CHAT_MESSAGE", messageId, null, 0))
-                    .ifPresent(outputContext -> payload.put("outputContext", outputContext));
-        } catch (OutputAuthorizationException unavailable) {
-            // Chat delivery remains compatible when the runtime did not negotiate output support.
-        }
+        outputRunAuthorizationService.createOrRecoverRun(new OutputRunRequest(
+                tenantId, clientId, OutputConstants.SOURCE_CONVERSATION,
+                conversationId, agentId, "CHAT_MESSAGE", messageId, null, 0))
+                .ifPresent(outputContext -> payload.put("outputContext", outputContext));
     }
 
 

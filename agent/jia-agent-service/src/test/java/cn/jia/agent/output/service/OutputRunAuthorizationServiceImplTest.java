@@ -31,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -140,6 +141,75 @@ class OutputRunAuthorizationServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void policyZeroWithoutFreshCapabilityKeepsLegacyWireAndCreatesNoRun() {
+        AgentRuntimeEntity legacyRuntime = runtime(7L, null, false);
+        when(runtimeDao.findExactOutputRuntime(
+                "owner", "client", "owner", "agent-1", false))
+                .thenReturn(legacyRuntime);
+        when(runtimeDao.findExactOutputRuntime(
+                "owner", "client", "owner", "agent-1", true))
+                .thenReturn(legacyRuntime);
+
+        assertTrue(service.createOrRecoverRun(request()).isEmpty());
+
+        verify(runDao, never()).insert(any());
+    }
+
+    @Test
+    void multiTargetBatchLocksEveryRunBeforeSortedIdentityAndRuntimeRows() {
+        OutputRunRequest first = request();
+        OutputRunRequest second = new OutputRunRequest(
+                "owner", "client", OutputConstants.SOURCE_TASK, "task-1",
+                "agent-2", "COMMAND", "command-2", null, 0);
+        AgentRuntimeEntity runtimeTwo = runtime(8L, "runtime-2", true);
+        runtimeTwo.setAgentId("agent-2");
+        lenient().when(sourceAuthorizer.lockAndAuthorize(
+                "owner", "client", "task-1", "agent-2"))
+                .thenReturn(new OutputSourceAuthorization(
+                        "owner", "client", OutputConstants.SOURCE_TASK,
+                        "task-1", "owner", "agent-2", true));
+        when(runtimeDao.findExactOutputRuntime(
+                "owner", "client", "owner", "agent-2", false)).thenReturn(runtimeTwo);
+        when(runtimeDao.findExactOutputRuntime(
+                "owner", "client", "owner", "agent-2", true)).thenReturn(runtimeTwo);
+        when(identityService.lockActiveCanonicalAgentIdsInScope(
+                "owner", "client", "owner", List.of("agent-1", "agent-2")))
+                .thenReturn(List.of("agent-1", "agent-2"));
+        when(identityService.requireActiveIdentityForBinding(
+                "owner", "client", "owner", 8L, "agent-2"))
+                .thenReturn(new AgentIdentityRegistryEntity());
+        when(runDao.insert(any())).thenReturn(1);
+
+        Map<String, OutputContextDTO> contexts = service.createOrRecoverRuns(
+                List.of(second, first), List.of("agent-2", "agent-1"));
+
+        assertEquals(List.of("agent-1", "agent-2"), contexts.keySet().stream().sorted().toList());
+        InOrder order = inOrder(sourceAuthorizer, sourceDao, runDao, runtimeDao, identityService);
+        order.verify(sourceAuthorizer).lockAndAuthorize(
+                "owner", "client", "task-1", "agent-1");
+        order.verify(sourceAuthorizer).lockAndAuthorize(
+                "owner", "client", "task-1", "agent-2");
+        order.verify(sourceDao).findExact(
+                "owner", "client", OutputConstants.SOURCE_TASK, "task-1", true);
+        order.verify(runDao).findExactByOrigin(
+                "owner", "client", OutputConstants.SOURCE_TASK, "task-1",
+                "agent-1", "COMMAND", "command-1");
+        order.verify(runDao).findExactByOrigin(
+                "owner", "client", OutputConstants.SOURCE_TASK, "task-1",
+                "agent-2", "COMMAND", "command-2");
+        order.verify(runtimeDao).findExactOutputRuntime(
+                "owner", "client", "owner", "agent-1", false);
+        order.verify(runtimeDao).findExactOutputRuntime(
+                "owner", "client", "owner", "agent-2", false);
+        order.verify(identityService).lockActiveCanonicalAgentIdsInScope(
+                "owner", "client", "owner", List.of("agent-1", "agent-2"));
+        order.verify(runtimeDao).findExactOutputRuntime(
+                "owner", "client", "owner", "agent-1", true);
+        order.verify(runtimeDao).findExactOutputRuntime(
+                "owner", "client", "owner", "agent-2", true);
+    }
+
+    @Test
     void issueStoresOnlySha256AndExactBearerBootstrapsPersistedScope() throws Exception {
         String runId = "00000000000000000000000000000003";
         OutputRunBindingEntity run = activeRun(runId);
@@ -211,6 +281,50 @@ class OutputRunAuthorizationServiceImplTest extends BaseMockTest {
                 () -> service.issueTicket(
                         "owner", "client", "agent-1", "runtime-current", "auth-2", runId));
         verify(ticketDao, never()).insert(any());
+    }
+
+    @Test
+    void currentGenerationCanRenewTicketAfterDispatchFreshnessWindow() {
+        String runId = "00000000000000000000000000000008";
+        OutputRunBindingEntity run = activeRun(runId);
+        runtime.setOutputCapabilitiesUpdatedAt(
+                now - OutputConstants.CAPABILITY_FRESHNESS_MILLIS - 1);
+        when(runDao.findExactByRun("owner", "client", runId, false)).thenReturn(run);
+        when(runDao.findExactByRun("owner", "client", runId, true)).thenReturn(run);
+        when(ticketDao.lockRecentHashesForBinding(
+                eq("owner"), eq("client"), eq("7"), anyLong())).thenReturn(List.of());
+        when(ticketDao.insert(any())).thenReturn(1);
+
+        OutputAuthReceiptDTO receipt = service.issueTicket(
+                "owner", "client", "agent-1", "runtime-current", "auth-stale", runId);
+
+        assertEquals(runId, receipt.runId());
+        verify(ticketDao).insert(any());
+    }
+
+    @Test
+    void dispatchUsesFreshCurrentGenerationRatherThanOriginalRuntimeAuditField() {
+        String runId = "00000000000000000000000000000009";
+        OutputRunBindingEntity run = activeRun(runId);
+        run.setOriginalRuntimeId("runtime-original");
+        AgentRuntimeEntity recovered = runtime(7L, "runtime-recovered", true);
+        when(runDao.findExactByRun("owner", "client", runId, false)).thenReturn(run);
+        when(runDao.findExactByRun("owner", "client", runId, true)).thenReturn(run);
+        when(runtimeDao.findExactOutputRuntime(
+                "owner", "client", "owner", "agent-1", false)).thenReturn(recovered);
+        when(runtimeDao.findExactOutputRuntime(
+                "owner", "client", "owner", "agent-1", true)).thenReturn(recovered);
+
+        assertEquals("runtime-recovered", service.requireFreshDispatchRuntime(
+                "owner", "client", "agent-1", runId));
+
+        recovered.setOutputCapabilitiesUpdatedAt(
+                now - OutputConstants.CAPABILITY_FRESHNESS_MILLIS - 1);
+        OutputAuthorizationException stale = assertThrows(
+                OutputAuthorizationException.class,
+                () -> service.requireFreshDispatchRuntime(
+                        "owner", "client", "agent-1", runId));
+        assertEquals("OUTPUT_DISPATCH_RUNTIME_UNAVAILABLE", stale.getCode());
     }
 
     @Test

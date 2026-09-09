@@ -14,6 +14,7 @@ import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentInboxConsumers;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentWaitingCommandCandidate;
+import cn.jia.agent.output.dto.OutputContextDTO;
 import cn.jia.agent.service.AgentCommandReissueService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import org.slf4j.Logger;
@@ -156,8 +157,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!storedHash(delivery.getCommandPayload(), delivery.getCommandPayloadHash())) {
             throw conflict("COMMAND_PAYLOAD_HASH_DRIFT");
         }
+        OutputContextDTO outputContext = requireOutputContext(sourceOutbox.getWirePayload());
         byte[] sourceWire = AgentCommandCanonicalCodec.wireBytes(
-                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
+                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt(), outputContext);
         if (!Arrays.equals(sourceWire, sourceOutbox.getWirePayload())
                 || !storedHash(sourceOutbox.getWirePayload(), sourceOutbox.getWirePayloadHash())) {
             throw conflict("SOURCE_WIRE_CANONICAL_DRIFT");
@@ -178,7 +180,8 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || newEventId.equals(delivery.getCommandId())) {
             throw conflict("REISSUE_ID_COLLISION");
         }
-        byte[] newWire = AgentCommandCanonicalCodec.wireBytes(draft, newMessageId, nextAttempt);
+        byte[] newWire = AgentCommandCanonicalCodec.wireBytes(
+                draft, newMessageId, nextAttempt, outputContext);
         byte[] newWireHash = AgentCommandCanonicalCodec.sha256(newWire);
         if (!allows(delivery.getTenantId(), delivery.getClientId())) {
             throw conflict("MANUAL_REISSUE_SCOPE_DISABLED");
@@ -420,8 +423,9 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!hashEquals(commandHash, delivery.getCommandPayloadHash())) {
             throw conflict("COMMAND_PAYLOAD_HASH_DRIFT");
         }
+        OutputContextDTO outputContext = requireOutputContext(sourceOutbox.getWirePayload());
         byte[] sourceWire = AgentCommandCanonicalCodec.wireBytes(
-                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
+                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt(), outputContext);
         if (!Arrays.equals(sourceWire, sourceOutbox.getWirePayload())
                 || !hashEquals(AgentCommandCanonicalCodec.sha256(sourceWire),
                         sourceOutbox.getWirePayloadHash())) {
@@ -453,7 +457,8 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || newEventId.equals(delivery.getCommandId())) {
             throw conflict("REISSUE_ID_COLLISION");
         }
-        byte[] newWire = AgentCommandCanonicalCodec.wireBytes(draft, newMessageId, nextAttempt);
+        byte[] newWire = AgentCommandCanonicalCodec.wireBytes(
+                draft, newMessageId, nextAttempt, outputContext);
         byte[] newWireHash = AgentCommandCanonicalCodec.sha256(newWire);
 
         if (!allows(delivery.getTenantId(), delivery.getClientId())
@@ -704,6 +709,14 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private boolean storedHash(byte[] bytes, byte[] hash) {
         return bytes != null && hash != null && hash.length == 32
                 && hashEquals(AgentCommandCanonicalCodec.sha256(bytes), hash);
+    }
+
+    private OutputContextDTO requireOutputContext(byte[] wirePayload) {
+        try {
+            return AgentCommandCanonicalCodec.outputContextFromWire(wirePayload).orElse(null);
+        } catch (IllegalArgumentException invalid) {
+            throw conflict("SOURCE_OUTPUT_CONTEXT_INVALID");
+        }
     }
 
     private boolean hashEquals(byte[] left, byte[] right) {

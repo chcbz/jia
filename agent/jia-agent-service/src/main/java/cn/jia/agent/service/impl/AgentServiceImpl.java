@@ -42,6 +42,7 @@ import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.output.dto.OutputContextDTO;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
@@ -801,10 +802,15 @@ public class AgentServiceImpl implements AgentService {
         validateLegacyAssignableTask(meta);
         AtomicReference<List<AgentRuntimeEntity>> lockedAssignedAgents =
                 new AtomicReference<>(List.of());
+        AtomicReference<Map<String, OutputContextDTO>> assignmentOutputContexts =
+                new AtomicReference<>(Map.of());
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
                         tenantId, clientId, taskId, agentIds, automatic,
                         (lockedTask, canonicalAgentIds) -> {
+                            assignmentOutputContexts.set(
+                                    commandTransportCapture.prepareTaskOutputContexts(
+                                            tenantId, clientId, taskId, canonicalAgentIds));
                             List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
                                     .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
                                     .toList();
@@ -834,7 +840,8 @@ public class AgentServiceImpl implements AgentService {
         }
         task.setActionDispatchResults(List.of());
         boolean durableAssignmentDelivery = commandTransportCapture.captureTaskInvites(
-                task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt());
+                task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt(),
+                assignmentOutputContexts.get());
         publishTaskAssignmentSideEffectsAfterCommit(
                 task, assignedAgents, durableAssignmentDelivery);
         publishTaskAssignmentSceneStates(taskId, assignedAgents);

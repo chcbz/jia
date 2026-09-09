@@ -57,7 +57,8 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
     void connectedUnknownSendResultKeepsServerCreatedConversationRun() {
         String runId = "00000000000000000000000000000003";
         when(webSocketHandler.isAgentConnected("agent-1")).thenReturn(true);
-        when(webSocketHandler.sendDirectMessageToAgent(eq("agent-1"), any(Map.class)))
+        when(webSocketHandler.sendDirectMessageToAgent(
+                eq("agent-1"), any(Map.class), eq("owner"), eq("client")))
                 .thenReturn(false);
         when(eventBroker.stream("101")).thenReturn(Flux.never());
         when(outputAuthorizationService.createOrRecoverRun(any())).thenReturn(Optional.of(
@@ -74,7 +75,8 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
         assertEquals(true, result.delivered());
         assertTrue(events.getFirst().contains("\"delivered\":false"));
         ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
-        verify(webSocketHandler).sendDirectMessageToAgent(eq("agent-1"), payload.capture());
+        verify(webSocketHandler).sendDirectMessageToAgent(
+                eq("agent-1"), payload.capture(), eq("owner"), eq("client"));
         OutputContextDTO context = (OutputContextDTO) payload.getValue().get("outputContext");
         assertEquals(runId, context.runId());
         ArgumentCaptor<OutputRunRequest> request = ArgumentCaptor.forClass(OutputRunRequest.class);
@@ -94,7 +96,8 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
         result.stream().collectList().block();
 
         verify(outputAuthorizationService, never()).createOrRecoverRun(any());
-        verify(webSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
+        verify(webSocketHandler, never()).sendDirectMessageToAgent(
+                any(), any(Map.class), any(), any());
     }
 
     private JuyitingAgentRelayService service() {

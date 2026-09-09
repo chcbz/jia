@@ -11,6 +11,10 @@ import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandTransportWriteResult;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentRuntimeDTO;
+import cn.jia.agent.output.OutputConstants;
+import cn.jia.agent.output.OutputRunAuthorizationService;
+import cn.jia.agent.output.OutputRunRequest;
+import cn.jia.agent.output.dto.OutputContextDTO;
 import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentService;
@@ -45,6 +49,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
     private final AgentRabbitSafetyGate gate;
     private final AgentService agentService;
     private final AgentTaskCollaborationAccessService accessService;
+    private final OutputRunAuthorizationService outputRunAuthorizationService;
     private final TransactionTemplate transaction;
     private final Supplier<UUID> uuidSupplier;
 
@@ -54,7 +59,18 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,
             PlatformTransactionManager transactionManager) {
-        this(dao, dao, gate, agentService, accessService,
+        this(dao, dao, gate, agentService, accessService, null,
+                transactionManager, UUID::randomUUID);
+    }
+
+    public AgentCommandTransportWriterImpl(
+            AgentHallCommandTransportDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentService agentService,
+            AgentTaskCollaborationAccessService accessService,
+            OutputRunAuthorizationService outputRunAuthorizationService,
+            PlatformTransactionManager transactionManager) {
+        this(dao, dao, gate, agentService, accessService, outputRunAuthorizationService,
                 transactionManager, UUID::randomUUID);
     }
 
@@ -64,7 +80,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentRabbitSafetyGate gate,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
-        this(dao, null, gate, null, null, transactionManager, uuidSupplier);
+        this(dao, null, gate, null, null, null, transactionManager, uuidSupplier);
     }
 
     AgentCommandTransportWriterImpl(
@@ -74,7 +90,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentTaskCollaborationAccessService accessService,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
-        this(dao, dao, gate, agentService, accessService,
+        this(dao, dao, gate, agentService, accessService, null,
                 transactionManager, uuidSupplier);
     }
 
@@ -84,6 +100,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentRabbitSafetyGate gate,
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,
+            OutputRunAuthorizationService outputRunAuthorizationService,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
         this.dao = Objects.requireNonNull(dao, "dao");
@@ -91,6 +108,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         this.gate = Objects.requireNonNull(gate, "gate");
         this.agentService = agentService;
         this.accessService = accessService;
+        this.outputRunAuthorizationService = outputRunAuthorizationService;
         this.uuidSupplier = Objects.requireNonNull(uuidSupplier, "uuidSupplier");
         this.transaction = new TransactionTemplate(
                 Objects.requireNonNull(transactionManager, "transactionManager"));
@@ -99,6 +117,12 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
 
     @Override
     public AgentCommandTransportWriteResult write(AgentCommandDraft draft) {
+        return write(draft, null);
+    }
+
+    @Override
+    public AgentCommandTransportWriteResult write(
+            AgentCommandDraft draft, OutputContextDTO trustedOutputContext) {
         requireEnabled();
         byte[] commandBytes = AgentCommandCanonicalCodec.businessBytes(draft);
         if (AgentCommandCanonicalCodec.isHallIntentCommand(draft)) {
@@ -107,7 +131,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         }
         byte[] commandHash = AgentCommandCanonicalCodec.sha256(commandBytes);
         return transaction.execute(status -> writeInTransaction(
-                draft, commandBytes, commandHash));
+                draft, commandBytes, commandHash, trustedOutputContext));
     }
 
     @Override
@@ -120,8 +144,10 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         }
         byte[] commandHash = AgentCommandCanonicalCodec.sha256(commandBytes);
         return transaction.execute(status -> {
-            requireAuthorizedHall(draft, callerAgentId);
-            return writeInTransaction(draft, commandBytes, commandHash);
+            List<String> lockedAgents = requireAuthorizedHallMembership(draft, callerAgentId);
+            OutputContextDTO outputContext = prepareHallOutputContext(draft, lockedAgents);
+            requireAuthorizedHallIdentity(draft, lockedAgents);
+            return writeInTransaction(draft, commandBytes, commandHash, outputContext);
         });
     }
 
@@ -136,7 +162,8 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
      * Frozen order: task root -> member rows -> identity/runtime rows -> delivery -> outbox.
      * The existing ForUpdate access contracts own the task/member and identity/runtime locks.
      */
-    private void requireAuthorizedHall(AgentCommandDraft draft, String callerAgentId) {
+    private List<String> requireAuthorizedHallMembership(
+            AgentCommandDraft draft, String callerAgentId) {
         if (hallDao == null || agentService == null || accessService == null) {
             throw new IllegalStateException("Hall command authorization services are unavailable");
         }
@@ -152,6 +179,22 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
                         "Caller or target is not a writable task member");
             }
         }
+        return lockedAgents;
+    }
+
+    private OutputContextDTO prepareHallOutputContext(
+            AgentCommandDraft draft, List<String> lockedAgents) {
+        if (outputRunAuthorizationService == null) return null;
+        return outputRunAuthorizationService.createOrRecoverRuns(
+                List.of(new OutputRunRequest(
+                        draft.tenantId(), draft.clientId(), OutputConstants.SOURCE_TASK,
+                        draft.taskId(), draft.targetAgentId(), "COMMAND", draft.commandId(),
+                        draft.workItemId(), 0)),
+                lockedAgents).get(draft.targetAgentId());
+    }
+
+    private void requireAuthorizedHallIdentity(
+            AgentCommandDraft draft, List<String> lockedAgents) {
         for (String agentId : lockedAgents) {
             AgentRuntimeDTO runtime;
             try {
@@ -170,7 +213,8 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
     }
 
     private AgentCommandTransportWriteResult writeInTransaction(
-            AgentCommandDraft draft, byte[] commandBytes, byte[] commandHash) {
+            AgentCommandDraft draft, byte[] commandBytes, byte[] commandHash,
+            OutputContextDTO outputContext) {
         Admission admission = admission(draft.tenantId(), draft.clientId());
         AgentCommandDeliveryEntity existing = dao.lockDelivery(
                 draft.tenantId(), draft.clientId(), draft.commandId());
@@ -180,7 +224,8 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
 
         String messageId = nextUuid("messageId");
         String eventId = nextUuid("eventId");
-        byte[] wireBytes = AgentCommandCanonicalCodec.wireBytes(draft, messageId);
+        byte[] wireBytes = AgentCommandCanonicalCodec.wireBytes(
+                draft, messageId, AgentCommandCanonicalCodec.ATTEMPT, outputContext);
         byte[] wireHash = AgentCommandCanonicalCodec.sha256(wireBytes);
         String status = admission.dispatchEligible() ? "PENDING" : "DEAD";
         String marker = admission.marker();

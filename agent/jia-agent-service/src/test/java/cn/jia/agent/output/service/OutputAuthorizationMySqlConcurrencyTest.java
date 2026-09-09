@@ -217,6 +217,23 @@ class OutputAuthorizationMySqlConcurrencyTest {
     }
 
     @Test
+    void currentGenerationRenewsTicketAfterDispatchFreshnessWindow() {
+        insertSourceAndRun(0, OutputConstants.RUN_ACTIVE, "READ_WRITE");
+        jdbc.update("""
+                UPDATE agent_runtime
+                SET output_capabilities_updated_at=?
+                WHERE agent_id='agent-1'
+                """, System.currentTimeMillis()
+                        - OutputConstants.CAPABILITY_FRESHNESS_MILLIS - 1L);
+
+        OutputAuthReceiptDTO receipt = issue(service, 0, "runtime-1");
+
+        assertEquals(runId(0), receipt.runId());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_access_ticket", Integer.class));
+    }
+
+    @Test
     void terminalRestartGetsStatusOnlyAndOldFullTicketCannotMutate() {
         insertSourceAndRun(0, OutputConstants.RUN_ACTIVE, "READ_WRITE");
         OutputAuthReceiptDTO oldFull = issue(service, 0, "runtime-1");

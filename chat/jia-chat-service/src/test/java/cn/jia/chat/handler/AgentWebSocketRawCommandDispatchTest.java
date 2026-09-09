@@ -7,6 +7,7 @@ import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
+import cn.jia.agent.output.OutputRunAuthorizationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.chat.dao.ChatMessageDao;
@@ -17,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -41,6 +43,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     @Mock ObjectProvider<AgentService> agentServiceProvider;
     @Mock ChatMessageDao chatMessageDao;
     @Mock ChatConversationEventBroker eventBroker;
+    @Mock OutputRunAuthorizationService outputRunAuthorizationService;
 
     @Test
     void rawCommandGoesOnlyToExactTenantClientAndTargetSessionsWithoutWrappingOrReserialization()
@@ -76,6 +79,35 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         verify(crossTenant, never()).sendMessage(any(TextMessage.class));
         verify(crossClient, never()).sendMessage(any(TextMessage.class));
         verify(otherAgent, never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    void outputAwareRawCommandTargetsOnlyCurrentFreshRuntimeGeneration() throws Exception {
+        WebSocketSession oldRuntime = session(
+                "old-runtime", "tenant-a", "client-a", "agent-1", "runtime-old");
+        WebSocketSession currentRuntime = session(
+                "current-runtime", "tenant-a", "client-a", "agent-1", "runtime-current");
+        AgentWebSocketHandler handler = handler();
+        ReflectionTestUtils.setField(
+                handler, "outputRunAuthorizationService", outputRunAuthorizationService);
+        register(handler, oldRuntime, "agent-1");
+        register(handler, currentRuntime, "agent-1");
+        org.mockito.Mockito.clearInvocations(oldRuntime, currentRuntime);
+        String runId = "22222222222222222222222222222222";
+        when(outputRunAuthorizationService.requireFreshDispatchRuntime(
+                "tenant-a", "client-a", "agent-1", runId))
+                .thenReturn("runtime-current");
+        byte[] raw = outputAwareWire(runId);
+
+        AgentRawCommandDispatchResult result = handler.dispatchExactRawCommand(
+                "tenant-a", "client-a", "task-1", "agent-1", raw);
+
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
+        assertEquals(1, result.matchingSessionCount());
+        verify(oldRuntime, never()).sendMessage(any(TextMessage.class));
+        ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
+        verify(currentRuntime).sendMessage(sent.capture());
+        assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
     }
 
 
@@ -294,15 +326,36 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
 
     private WebSocketSession session(
             String id, String tenantId, String clientId, String agentId) {
+        return session(id, tenantId, clientId, agentId, "runtime-1");
+    }
+
+    private WebSocketSession session(
+            String id, String tenantId, String clientId,
+            String agentId, String runtimeInstanceId) {
         WebSocketSession session = org.mockito.Mockito.mock(WebSocketSession.class);
         when(session.getId()).thenReturn(id);
         when(session.isOpen()).thenReturn(true);
         when(session.getAttributes()).thenReturn(new HashMap<>(Map.of(
                 "agentId", agentId,
-                "runtimeInstanceId", "runtime-1",
+                "runtimeInstanceId", runtimeInstanceId,
                 "jiacn", tenantId,
                 "clientId", clientId)));
         return session;
+    }
+
+    private byte[] outputAwareWire(String runId) {
+        return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
+                + "\"messageId\":\"msg-output\",\"commandId\":\"cmd-output\","
+                + "\"tenantId\":\"tenant-a\",\"clientId\":\"client-a\","
+                + "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\","
+                + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,\"expiresAt\":2000000,"
+                + "\"outputContext\":{\"schemaVersion\":1,\"runId\":\"" + runId + "\","
+                + "\"source\":{\"type\":\"TASK\",\"id\":\"task-1\"},"
+                + "\"maxFileBytes\":\"52428800\",\"maxBatchBytes\":\"209715200\","
+                + "\"manifestRelativePath\":\"outputs/" + runId + "/manifest.json\","
+                + "\"capabilities\":[\"output.http.v1\"]},"
+                + "\"payload\":{\"instruction\":\"execute\"}}")
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     private byte[] d05HallTaskInviteWire() {

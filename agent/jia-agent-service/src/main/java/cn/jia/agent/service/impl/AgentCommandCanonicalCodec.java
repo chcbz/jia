@@ -6,6 +6,9 @@ import cn.jia.agent.entity.AgentCommandPayload;
 import cn.jia.agent.entity.AgentHallCommandContext;
 import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.output.OutputConstants;
+import cn.jia.agent.output.dto.OutputContextDTO;
+import cn.jia.agent.output.dto.OutputSourceDTO;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
@@ -21,6 +24,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 /** Byte-exact canonical JSON codec for frozen TASK_INVITE and bounded Hall commands. */
@@ -147,7 +151,14 @@ public final class AgentCommandCanonicalCodec {
     }
 
     public static byte[] wireBytes(AgentCommandDraft draft, String messageId, int attempt) {
+        return wireBytes(draft, messageId, attempt, null);
+    }
+
+    public static byte[] wireBytes(
+            AgentCommandDraft draft, String messageId, int attempt,
+            OutputContextDTO outputContext) {
         validate(draft);
+        validateOutputContext(draft, outputContext);
         requireExact(messageId, "messageId", 100);
         if (attempt <= 0) throw invalid("attempt must be positive");
         StringBuilder json = new StringBuilder(2048);
@@ -169,6 +180,7 @@ public final class AgentCommandCanonicalCodec {
         number(json, "expiresAt", draft.expiresAt());
         if (isHallIntentCommand(draft)) string(json, "intentId", draft.intentId());
         number(json, "attempt", attempt);
+        if (outputContext != null) outputContext(json, outputContext);
         payload(json, draft.payload());
         json.append('}');
         return bounded(json);
@@ -211,6 +223,48 @@ public final class AgentCommandCanonicalCodec {
             throw invalid;
         } catch (Exception malformed) {
             throw invalid("business bytes cannot be decoded");
+        }
+    }
+
+    public static Optional<OutputContextDTO> outputContextFromWire(byte[] raw) {
+        if (raw == null || raw.length == 0 || raw.length > MAX_CANONICAL_BYTES) {
+            throw invalid("canonical wire bytes are missing or oversized");
+        }
+        try {
+            JsonNode root = STRICT_JSON.readTree(raw);
+            if (root == null || !root.isObject()) throw invalid("wire JSON must be an object");
+            JsonNode context = root.get("outputContext");
+            if (context == null) return Optional.empty();
+            if (!context.isObject() || context.size() != 7) {
+                throw invalid("outputContext contains unknown fields");
+            }
+            JsonNode source = context.get("source");
+            if (source == null || !source.isObject() || source.size() != 2) {
+                throw invalid("outputContext source is invalid");
+            }
+            JsonNode capabilityNode = context.get("capabilities");
+            if (capabilityNode == null || !capabilityNode.isArray()) {
+                throw invalid("outputContext capabilities are invalid");
+            }
+            List<String> capabilities = new ArrayList<>();
+            for (JsonNode capability : capabilityNode) {
+                if (!capability.isTextual()) {
+                    throw invalid("outputContext capability is invalid");
+                }
+                capabilities.add(capability.textValue());
+            }
+            return Optional.of(new OutputContextDTO(
+                    integer(context, "schemaVersion"),
+                    text(context, "runId"),
+                    new OutputSourceDTO(text(source, "type"), text(source, "id")),
+                    text(context, "maxFileBytes"),
+                    text(context, "maxBatchBytes"),
+                    text(context, "manifestRelativePath"),
+                    capabilities));
+        } catch (IllegalArgumentException invalid) {
+            throw invalid;
+        } catch (Exception malformed) {
+            throw invalid("outputContext cannot be decoded");
         }
     }
 
@@ -406,6 +460,45 @@ public final class AgentCommandCanonicalCodec {
         } else {
             throw invalid("payload type is outside the frozen allowlist");
         }
+    }
+
+    private static void validateOutputContext(
+            AgentCommandDraft draft, OutputContextDTO context) {
+        if (context == null) return;
+        if (context.schemaVersion() != 1
+                || context.runId() == null || !context.runId().matches("[0-9a-f]{32}")
+                || context.source() == null
+                || !OutputConstants.SOURCE_TASK.equals(context.source().type())
+                || !draft.taskId().equals(context.source().id())
+                || !Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES)
+                        .equals(context.maxFileBytes())
+                || !Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES)
+                        .equals(context.maxBatchBytes())
+                || !("outputs/" + context.runId() + "/manifest.json")
+                        .equals(context.manifestRelativePath())) {
+            throw invalid("outputContext conflicts with the trusted command scope");
+        }
+        List<String> capabilities = context.capabilities();
+        if (!List.of(OutputConstants.CAPABILITY_HTTP_V1).equals(capabilities)
+                && !List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                        OutputConstants.CAPABILITY_OWNER_SHARE_V1).equals(capabilities)) {
+            throw invalid("outputContext capabilities are not canonical");
+        }
+    }
+
+    private static void outputContext(StringBuilder json, OutputContextDTO context) {
+        comma(json); quote(json, "outputContext"); json.append(':').append('{');
+        number(json, "schemaVersion", context.schemaVersion());
+        string(json, "runId", context.runId());
+        comma(json); quote(json, "source"); json.append(':').append('{');
+        string(json, "type", context.source().type());
+        string(json, "id", context.source().id());
+        json.append('}');
+        string(json, "maxFileBytes", context.maxFileBytes());
+        string(json, "maxBatchBytes", context.maxBatchBytes());
+        string(json, "manifestRelativePath", context.manifestRelativePath());
+        array(json, "capabilities", context.capabilities());
+        json.append('}');
     }
 
 

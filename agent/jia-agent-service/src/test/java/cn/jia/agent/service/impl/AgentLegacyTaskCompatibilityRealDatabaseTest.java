@@ -55,6 +55,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 
@@ -248,6 +249,23 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("agent_task_member"));
         assertEquals(0, count("agent_task_work_item"));
+    }
+
+    @Test
+    void precommitFailureAfterMemberLocksRollsBackAssignmentRows() {
+        assertThrows(IllegalStateException.class, () -> service.assignResolved(
+                TENANT, CLIENT, TASK, List.of(AGENT_A), false,
+                (lockedTask, agentIds) -> {
+                    assertEquals(1, count("agent_task_meta"));
+                    assertEquals(1, count("agent_task_member"));
+                    assertEquals(1, count("agent_task_work_item"));
+                    throw new IllegalStateException("forced output precommit failure");
+                }));
+
+        assertEquals(0, count("agent_task_meta"));
+        assertEquals(0, count("agent_task_member"));
+        assertEquals(0, count("agent_task_work_item"));
+        verify(eventWriter, never()).append(any());
     }
 
     @Test

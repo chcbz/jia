@@ -78,6 +78,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.anyLong;
+import static org.mockito.Mockito.anyMap;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
@@ -1141,7 +1142,7 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentTaskMetaDao.findByTaskId(
                 "juyiting", "jia_client", "task-001")).thenReturn(meta);
         when(commandTransportCapture.captureTaskInvites(
-                any(), any(), eq("evt-task-assigned"), eq(1_000L)))
+                any(), any(), eq("evt-task-assigned"), eq(1_000L), anyMap()))
                 .thenReturn(true);
         AgentTaskAssignDTO request = new AgentTaskAssignDTO();
         request.setAgentId("agent-wuyong");
@@ -1149,7 +1150,7 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentTaskDTO result = agentService.assignTask("task-001", request);
 
         verify(commandTransportCapture).captureTaskInvites(
-                eq(result), any(), eq("evt-task-assigned"), eq(1_000L));
+                eq(result), any(), eq("evt-task-assigned"), eq(1_000L), anyMap());
         verify(eventPublisher, never()).publishAgentAction(any());
         verify(eventPublisher).publishTaskEvent("task_assigned", result);
         assertTrue(result.getActionDispatchResults().isEmpty());

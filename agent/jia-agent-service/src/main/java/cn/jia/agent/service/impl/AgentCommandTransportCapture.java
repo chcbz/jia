@@ -6,7 +6,12 @@ import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.output.OutputConstants;
+import cn.jia.agent.output.OutputRunAuthorizationService;
+import cn.jia.agent.output.OutputRunRequest;
+import cn.jia.agent.output.dto.OutputContextDTO;
 import cn.jia.agent.service.AgentCommandTransportWriter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /** Assignment-only D02 producer boundary. Flags OFF returns before resolving the writer. */
 @Service
@@ -27,19 +33,30 @@ public class AgentCommandTransportCapture {
 
     private final AgentRabbitSafetyGate gate;
     private final ObjectProvider<AgentCommandTransportWriter> writerProvider;
+    private final ObjectProvider<OutputRunAuthorizationService> outputRunProvider;
     private final boolean compatibilityDisabled;
 
     public AgentCommandTransportCapture(
             AgentRabbitSafetyGate gate,
             ObjectProvider<AgentCommandTransportWriter> writerProvider) {
+        this(gate, writerProvider, null);
+    }
+
+    @Autowired
+    public AgentCommandTransportCapture(
+            AgentRabbitSafetyGate gate,
+            ObjectProvider<AgentCommandTransportWriter> writerProvider,
+            ObjectProvider<OutputRunAuthorizationService> outputRunProvider) {
         this.gate = gate;
         this.writerProvider = writerProvider;
+        this.outputRunProvider = outputRunProvider;
         this.compatibilityDisabled = false;
     }
 
     private AgentCommandTransportCapture() {
         this.gate = null;
         this.writerProvider = null;
+        this.outputRunProvider = null;
         this.compatibilityDisabled = true;
     }
 
@@ -52,6 +69,34 @@ public class AgentCommandTransportCapture {
             List<AgentRuntimeEntity> assignedAgents,
             String taskAssignedEventId,
             long occurredAt) {
+        return captureTaskInvites(
+                task, assignedAgents, taskAssignedEventId, occurredAt, Map.of());
+    }
+
+    public Map<String, OutputContextDTO> prepareTaskOutputContexts(
+            String tenantId, String clientId, String taskId, List<String> targetAgentIds) {
+        if (compatibilityDisabled || !gate.commandOutboxEnabled() || outputRunProvider == null) {
+            return Map.of();
+        }
+        OutputRunAuthorizationService service = outputRunProvider.getIfAvailable();
+        if (service == null) return Map.of();
+        List<String> orderedTargets = new ArrayList<>(targetAgentIds);
+        orderedTargets.sort(UTF8_ORDER);
+        List<OutputRunRequest> requests = orderedTargets.stream()
+                .map(agentId -> new OutputRunRequest(
+                        tenantId, clientId, OutputConstants.SOURCE_TASK, taskId,
+                        agentId, "COMMAND", AgentCommandCanonicalCodec.taskInviteCommandId(
+                                tenantId, clientId, taskId, agentId), null, 0))
+                .toList();
+        return service.createOrRecoverRuns(requests, orderedTargets);
+    }
+
+    public boolean captureTaskInvites(
+            AgentTaskDTO task,
+            List<AgentRuntimeEntity> assignedAgents,
+            String taskAssignedEventId,
+            long occurredAt,
+            Map<String, OutputContextDTO> outputContexts) {
         if (compatibilityDisabled || !gate.commandOutboxEnabled()) return false;
         AgentCommandTransportWriter writer = writerProvider.getIfAvailable();
         if (writer == null) {
@@ -89,7 +134,7 @@ public class AgentCommandTransportCapture {
                     task.getId(), taskAssignedEventId,
                     task.getTenantId(), task.getClientId(), task.getId(), null,
                     targetAgentId, AgentProtocolConstants.COMMAND_TASK_INVITE,
-                    occurredAt, expiresAt, payload));
+                    occurredAt, expiresAt, payload), outputContexts.get(targetAgentId));
         }
         return gate.allowsDispatch(task.getTenantId(), task.getClientId());
     }

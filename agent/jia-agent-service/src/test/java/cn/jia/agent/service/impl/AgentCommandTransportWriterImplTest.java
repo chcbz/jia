@@ -16,6 +16,9 @@ import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.output.OutputConstants;
+import cn.jia.agent.output.dto.OutputContextDTO;
+import cn.jia.agent.output.dto.OutputSourceDTO;
 import cn.jia.agent.service.AgentCommandShadowIntentException;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
@@ -34,6 +37,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -100,6 +104,36 @@ class AgentCommandTransportWriterImplTest {
         assertTrue(wire.contains("\"messageId\":\"" + result.messageId() + "\""));
         assertFalse(wire.contains("\"eventId\""));
         assertFalse(wire.contains("\"deliveryId\""));
+    }
+
+    @Test
+    void trustedContextIsFrozenIntoPersistedWireAndHashBeforeDispatch() {
+        AgentCommandDraft draft = draft("Task One");
+        String runId = "22222222222222222222222222222222";
+        OutputContextDTO context = new OutputContextDTO(
+                1, runId, new OutputSourceDTO(OutputConstants.SOURCE_TASK, "task-1"),
+                Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES),
+                Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES),
+                "outputs/" + runId + "/manifest.json",
+                List.of(OutputConstants.CAPABILITY_HTTP_V1));
+        when(dao.insertDelivery(any())).thenAnswer(invocation -> {
+            invocation.<AgentCommandDeliveryEntity>getArgument(0).setId(42L);
+            return 1;
+        });
+        when(dao.insertOutbox(any())).thenReturn(1);
+
+        assignmentWriter().write(draft, context);
+
+        ArgumentCaptor<AgentOutboxEventEntity> persisted =
+                ArgumentCaptor.forClass(AgentOutboxEventEntity.class);
+        verify(dao).insertOutbox(persisted.capture());
+        byte[] expected = AgentCommandCanonicalCodec.wireBytes(
+                draft, persisted.getValue().getMessageId(), 1, context);
+        assertArrayEquals(expected, persisted.getValue().getWirePayload());
+        assertArrayEquals(AgentCommandCanonicalCodec.sha256(expected),
+                persisted.getValue().getWirePayloadHash());
+        assertEquals(context, AgentCommandCanonicalCodec
+                .outputContextFromWire(persisted.getValue().getWirePayload()).orElseThrow());
     }
 
     @Test
