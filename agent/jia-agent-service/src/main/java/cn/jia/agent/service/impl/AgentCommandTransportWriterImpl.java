@@ -441,8 +441,19 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentCommandDraft storedDraft) {
         AgentRabbitTopologyManifest.PublishRoute route =
                 AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
-        byte[] expectedWire = AgentCommandCanonicalCodec.wireBytes(
-                storedDraft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
+        byte[] expectedWire = null;
+        if (outbox != null && outbox.getWirePayload() != null) {
+            try {
+                OutputContextDTO outputContext = AgentCommandCanonicalCodec
+                        .outputContextFromWire(outbox.getWirePayload()).orElse(null);
+                expectedWire = AgentCommandCanonicalCodec.wireBytes(
+                        storedDraft, delivery.getActiveMessageId(),
+                        delivery.getActiveAttempt(), outputContext);
+            } catch (IllegalArgumentException invalid) {
+                throw new IllegalStateException(
+                        "Shadow outbox output context is not canonical", invalid);
+            }
+        }
         if (outbox == null || outbox.getId() == null || outbox.getId() <= 0
                 || !Objects.equals(delivery.getTenantId(), outbox.getTenantId())
                 || !Objects.equals(delivery.getClientId(), outbox.getClientId())

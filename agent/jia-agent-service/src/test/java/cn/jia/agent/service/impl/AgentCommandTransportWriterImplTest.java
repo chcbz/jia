@@ -295,6 +295,50 @@ class AgentCommandTransportWriterImplTest {
     }
 
     @Test
+    void enrichedMqShadowHallIntentPromotesWithoutChangingWireOrHash() {
+        String runId = "33333333333333333333333333333333";
+        OutputContextDTO context = new OutputContextDTO(
+                1, runId, new OutputSourceDTO(OutputConstants.SOURCE_TASK, "task-1"),
+                Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES),
+                Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES),
+                "outputs/" + runId + "/manifest.json",
+                List.of(OutputConstants.CAPABILITY_HTTP_V1));
+
+        assertMqShadowPromotionPreservesWire(context);
+    }
+
+    @Test
+    void legacyMqShadowHallIntentPromotesWithoutChangingWireOrHash() {
+        assertMqShadowPromotionPreservesWire(null);
+    }
+
+    @Test
+    void mqShadowPromotionRejectsRehashedOutputContextScopeTampering() {
+        String runId = "44444444444444444444444444444444";
+        OutputContextDTO context = new OutputContextDTO(
+                1, runId, new OutputSourceDTO(OutputConstants.SOURCE_TASK, "task-1"),
+                Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES),
+                Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES),
+                "outputs/" + runId + "/manifest.json",
+                List.of(OutputConstants.CAPABILITY_HTTP_V1));
+        ShadowPromotion fixture = shadowPromotion(context);
+        byte[] tampered = new String(
+                fixture.outbox().getWirePayload(), StandardCharsets.UTF_8)
+                .replace("\"source\":{\"type\":\"TASK\",\"id\":\"task-1\"}",
+                        "\"source\":{\"type\":\"TASK\",\"id\":\"task-x\"}")
+                .getBytes(StandardCharsets.UTF_8);
+        fixture.outbox().setWirePayload(tampered)
+                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(tampered));
+
+        assertThrows(IllegalStateException.class, () -> hallWriter(
+                gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
+                .writeAuthorizedHall(fixture.retry(), CALLER));
+
+        verify(dao, never()).promoteShadowDelivery(any(), any(), anyLong());
+        verify(dao, never()).promoteShadowOutbox(any(), any(), anyLong());
+    }
+
+    @Test
     void legacyTaskInviteShadowDuplicateIsNeverPromotedByHallCutover() {
         AgentCommandDraft draft = draft("Task One");
         byte[] bytes = AgentCommandCanonicalCodec.businessBytes(draft);
@@ -392,6 +436,83 @@ class AgentCommandTransportWriterImplTest {
         return new AgentCommandTransportWriterImpl(
                 dao, gate, agentService, accessService,
                 transactions, () -> new UUID(0, 1));
+    }
+
+    private void assertMqShadowPromotionPreservesWire(OutputContextDTO context) {
+        ShadowPromotion fixture = shadowPromotion(context);
+        byte[] originalWire = fixture.outbox().getWirePayload().clone();
+        byte[] originalHash = fixture.outbox().getWirePayloadHash().clone();
+
+        var result = hallWriter(gate(AgentRabbitActivationState.DISPATCH_CANARY, true))
+                .writeAuthorizedHall(fixture.retry(), CALLER);
+
+        assertFalse(result.duplicate());
+        assertEquals(fixture.outbox().getEventId(), result.outboxEventId());
+        ArgumentCaptor<AgentOutboxEventEntity> promoted =
+                ArgumentCaptor.forClass(AgentOutboxEventEntity.class);
+        verify(dao).promoteShadowOutbox(
+                promoted.capture(),
+                org.mockito.ArgumentMatchers.eq(
+                        AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER),
+                org.mockito.ArgumentMatchers.eq(fixture.retry().issuedAt()));
+        assertArrayEquals(originalWire, promoted.getValue().getWirePayload());
+        assertArrayEquals(originalHash, promoted.getValue().getWirePayloadHash());
+        verify(dao, never()).insertDelivery(any());
+        verify(dao, never()).insertOutbox(any());
+    }
+
+    private ShadowPromotion shadowPromotion(OutputContextDTO context) {
+        AgentCommandDraft stored = hallDraft(1_000L, "执行工作项并回报结果");
+        AgentCommandDraft retry = hallDraft(9_000L, "执行工作项并回报结果");
+        byte[] business = AgentCommandCanonicalCodec.businessBytes(stored);
+        AgentCommandDeliveryEntity delivery = existing(stored, business)
+                .setStatus("DEAD")
+                .setAttemptCount(1)
+                .setActiveAttempt(1)
+                .setLastError(AgentCommandTransportWriterImpl.MQ_SHADOW_MARKER)
+                .setVersion(0L);
+        delivery.setUpdateTime(stored.issuedAt());
+        byte[] wire = AgentCommandCanonicalCodec.wireBytes(
+                stored, delivery.getActiveMessageId(), delivery.getActiveAttempt(), context);
+        var route = AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
+        AgentOutboxEventEntity outbox = new AgentOutboxEventEntity()
+                .setId(88L)
+                .setEventId("shadow-event")
+                .setMessageId(delivery.getActiveMessageId())
+                .setCommandId(delivery.getCommandId())
+                .setDeliveryId(delivery.getId())
+                .setAggregateType("task")
+                .setAggregateId(delivery.getTaskId())
+                .setDestination(route.destination())
+                .setRoutingKey(route.routingKey())
+                .setWirePayload(wire)
+                .setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire))
+                .setStatus("DEAD")
+                .setAttemptCount(0)
+                .setActiveAttempt(delivery.getActiveAttempt())
+                .setExpiresAt(delivery.getExpiresAt())
+                .setPublisherConfirmStatus("NONE")
+                .setMandatoryReturnStatus("NONE")
+                .setLastError(AgentCommandTransportWriterImpl.MQ_SHADOW_MARKER)
+                .setVersion(0L);
+        outbox.setTenantId(delivery.getTenantId());
+        outbox.setClientId(delivery.getClientId());
+        when(dao.lockDelivery(retry.tenantId(), retry.clientId(), retry.commandId()))
+                .thenReturn(delivery);
+        when(dao.lockActiveOutboxes(
+                delivery.getTenantId(), delivery.getClientId(),
+                delivery.getId(), delivery.getActiveMessageId()))
+                .thenReturn(List.of(outbox));
+        when(dao.promoteShadowDelivery(any(), any(), anyLong())).thenReturn(1);
+        when(dao.promoteShadowOutbox(any(), any(), anyLong())).thenReturn(1);
+        allowHallAuthorization();
+        return new ShadowPromotion(retry, delivery, outbox);
+    }
+
+    private record ShadowPromotion(
+            AgentCommandDraft retry,
+            AgentCommandDeliveryEntity delivery,
+            AgentOutboxEventEntity outbox) {
     }
 
     private void allowHallAuthorization() {
