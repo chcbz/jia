@@ -11,16 +11,21 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnExpression("${cors.enabled:true}")
 public class CorsConfig {
+    private static final List<String> REQUIRED_CREDENTIAL_HEADERS = List.of(
+            "Authorization", "Content-Type", "X-API-Key", "Idempotency-Key", "If-Match");
     @Value("${cors.allowed.origin.patterns:}")
     private String[] allowedOriginPatterns;
     @Value("${cors.allowed.methods:GET,POST,PUT,DELETE,OPTIONS}")
     private String[] allowedMethods;
-    @Value("${cors.allowed.headers:Authorization,Content-Type,X-API-Key}")
+    @Value("${cors.allowed.headers:Authorization,Content-Type,X-API-Key,Idempotency-Key,If-Match}")
     private String[] allowedHeaders;
 
     CorsConfiguration buildConfig() {
@@ -30,7 +35,7 @@ public class CorsConfig {
         }
         CorsConfiguration corsConfiguration = new CorsConfiguration();
         corsConfiguration.setAllowedOriginPatterns(origins);
-        corsConfiguration.setAllowedHeaders(nonblank(allowedHeaders));
+        corsConfiguration.setAllowedHeaders(requiredCredentialHeaders(nonblank(allowedHeaders)));
         corsConfiguration.setAllowedMethods(nonblank(allowedMethods));
         corsConfiguration.setAllowCredentials(true);
         return corsConfiguration;
@@ -40,6 +45,13 @@ public class CorsConfig {
         return Arrays.stream(values == null ? new String[0] : values)
                 .filter(value -> value != null && !value.isBlank())
                 .toList();
+    }
+
+    private static List<String> requiredCredentialHeaders(List<String> configured) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        configured.forEach(header -> headers.putIfAbsent(header.toLowerCase(Locale.ROOT), header));
+        REQUIRED_CREDENTIAL_HEADERS.forEach(header -> headers.putIfAbsent(header.toLowerCase(Locale.ROOT), header));
+        return List.copyOf(headers.values());
     }
 
     @Bean
