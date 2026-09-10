@@ -901,7 +901,7 @@ def verify_export_jar(path, patterns):
     # Inspect raw ZIP bytes AND inflated members, including nested boot JAR libs.
     # Bounds fail closed instead of accepting an unexamined archive/ZIP bomb.
     declared_size_limit = 1024 * 1024 * 1024
-    entry_count_limit = 100000
+    entry_count_limit = 150000
     remaining = [declared_size_limit, entry_count_limit]
 
     def limit_error(dimension, configured_limit, prior_total, attempted_total,
