@@ -11,17 +11,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CorsConfigTest {
     @Test
-    void credentialedCorsAlwaysAllowsReaderMutationPreflightHeadersForTrustedOrigins() {
+    void credentialedCorsAlwaysAllowsSseResumeAndReaderMutationPreflightHeadersForTrustedOrigins() {
         CorsConfig config = configured(new String[]{"https://kit.chaoyoufan.cn", "https://api.chaoyoufan.cn"});
         CorsConfiguration cors = config.buildConfig();
         assertEquals(List.of("https://kit.chaoyoufan.cn", "https://api.chaoyoufan.cn"),
                 cors.getAllowedOriginPatterns());
         assertEquals("https://api.chaoyoufan.cn", cors.checkOrigin("https://api.chaoyoufan.cn"));
         assertNull(cors.checkOrigin("https://untrusted.example"));
-        assertEquals(List.of("Authorization", "Content-Type", "X-API-Key", "Idempotency-Key", "If-Match"),
+        assertEquals(List.of("Authorization", "Content-Type", "X-API-Key", "Idempotency-Key", "If-Match", "Last-Event-ID"),
                 cors.getAllowedHeaders());
-        assertEquals(List.of("authorization", "content-type", "idempotency-key", "if-match"),
-                cors.checkHeaders(List.of("authorization", "content-type", "idempotency-key", "if-match")));
+        assertEquals(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id"),
+                cors.checkHeaders(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id")));
         assertTrue(cors.getAllowedMethods().containsAll(List.of("POST", "OPTIONS")));
         assertEquals(Boolean.TRUE, cors.getAllowCredentials());
         assertEquals(Ordered.HIGHEST_PRECEDENCE,
