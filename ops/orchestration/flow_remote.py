@@ -55,6 +55,11 @@ TOOL_PATHS = [
     "ops/ci/aliyun-flow/run-cloud.sh",
     "ops/ci/aliyun-flow/cold-init.gradle",
 ]
+# This one Gradle file is a ticket-hashed runner tool copied separately before
+# source verification. It contains a deliberate textual nested-Gradle deny rule,
+# so scanning it as application build source would self-match. No other source
+# Gradle blob may be excluded.
+TRUSTED_SOURCE_SCAN_EXCLUSIONS = frozenset(("ops/ci/aliyun-flow/cold-init.gradle",))
 FLOW_ENVIRONMENT = {
     "organization_id": "CYF_FLOW_ORGANIZATION_ID",
     "pipeline_id": "CYF_FLOW_PIPELINE_ID",
@@ -653,12 +658,15 @@ def verify_tools(ticket, actual_root):
         raise RemoteError("remote tool bundle digest mismatch")
 
 
-def verify_nested_gradle_absent(cwd):
-    """Scan immutable Gradle blobs with Python's regex engine; never mix grep dialects."""
+def verify_nested_gradle_absent(cwd, excluded_paths=frozenset()):
+    """Scan immutable application Gradle blobs; exclusions must be exact trusted tools."""
+    excluded = frozenset(excluded_paths)
+    if not excluded.issubset(TRUSTED_SOURCE_SCAN_EXCLUSIONS):
+        raise RemoteError("unexpected Gradle source scanner exclusion")
     names = run_git(cwd, ["ls-tree", "-r", "--name-only", "HEAD"])
     gradle_paths = [
         name for name in names.splitlines()
-        if name.endswith(".gradle") or name.endswith(".gradle.kts")
+        if (name.endswith(".gradle") or name.endswith(".gradle.kts")) and name not in excluded
     ]
     if not gradle_paths:
         raise RemoteError("source tree contains no Gradle build files")
@@ -703,7 +711,9 @@ def verify_source(ticket, cwd_value):
         raise RemoteError("wrapper properties bytes do not match ticket")
     if parse_wrapper_properties(wrapper_path.read_bytes()) != ticket["source"]["distribution_url"]:
         raise RemoteError("wrapper distribution URL does not match ticket")
-    verify_nested_gradle_absent(cwd)
+    # execute_run verifies the complete ticket tool bundle before verify_source.
+    # Only the exact ticket-hashed init-script path is omitted from source scanning.
+    verify_nested_gradle_absent(cwd, TRUSTED_SOURCE_SCAN_EXCLUSIONS)
     return {"head": head, "tree": tree, "remote_url": remote_url, "clean": True}
 
 
