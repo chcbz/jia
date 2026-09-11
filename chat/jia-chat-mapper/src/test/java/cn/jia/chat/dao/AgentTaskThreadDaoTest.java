@@ -162,7 +162,10 @@ class AgentTaskThreadDaoTest {
         ChatConversationMapper mapper = mock(ChatConversationMapper.class);
         ChatConversationDaoImpl dao = new ChatConversationDaoImpl();
         setBaseMapper(dao, mapper);
-        dao.selectNonTaskThreadByEntity(new ChatConversationEntity().setJiacn("owner"));
+        dao.selectNonTaskThreadByEntity(new ChatConversationEntity()
+                .setJiacn("owner")
+                .setTenantId("owner")
+                .setClientId("client-a"));
         ArgumentCaptor<Wrapper<ChatConversationEntity>> captor = ArgumentCaptor.forClass(Wrapper.class);
         verify(mapper).selectList(captor.capture());
         String sql = normalize(captor.getValue().getSqlSegment());
