@@ -4,15 +4,19 @@ import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.MapPropertySource;
 
 import java.time.Duration;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -20,13 +24,11 @@ import java.util.Set;
  * three-second SLO. This configuration deliberately does not create a servlet filter or change actuator exposure.
  *
  * <p>Boot supplies the normalized {@code uri} tag (including its neutral {@code UNKNOWN} value) for
- * {@code http.server.requests}; this filter never derives a tag from a raw request URI. At most
- * {@code max-uri-tags} values are retained. The high-precedence filter runs before Spring Boot's built-in
- * {@code management.metrics.web.server.max-uri-tags} deny filter; both caps are configured to the same value.
- * One slot is reserved for {@code OVERFLOW}, so an unexpected route-tag value is collapsed rather than causing a
- * new time series or being denied. Consequently, no
- * {@code http.server.requests} meter is silently dropped: {@code uri=OVERFLOW} is explicit evidence that the
- * route inventory/cardinality budget was exceeded and must not be used to claim per-route SLO compliance.</p>
+ * {@code http.server.requests}; this filter never derives a tag from a raw request URI. The single route-cardinality
+ * authority is {@code management.metrics.web.server.max-uri-tags}. One slot is reserved for {@code OVERFLOW}, so an
+ * unexpected route-tag value is collapsed before Boot's deny filter rather than causing a new time series or being
+ * silently denied. {@code uri=OVERFLOW} is explicit evidence that the route inventory/cardinality budget was
+ * exceeded and must not be used to claim per-route SLO compliance.</p>
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "jia.metrics.http", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -35,13 +37,32 @@ public class ApiPerformanceMetricsConfig {
     static final String HTTP_SERVER_REQUESTS = "http.server.requests";
     static final String URI_TAG = "uri";
     static final String OVERFLOW_ROUTE = "OVERFLOW";
+    static final String MAX_URI_TAGS_PROPERTY = "management.metrics.web.server.max-uri-tags";
+    static final int DEFAULT_MAX_URI_TAGS = 1024;
+
+    private static final String DEFAULTS_PROPERTY_SOURCE = "jiaApiPerformanceMetricsDefaults";
+
+    /**
+     * Supplies headroom only while this feature is enabled and only when the operator did not configure Boot's cap.
+     * Adding the low-precedence source during bean-factory post-processing lets Boot and this filter bind the same
+     * value without changing Boot's disabled-feature baseline.
+     */
+    @Bean
+    static BeanFactoryPostProcessor apiPerformanceMetricsDefaults(ConfigurableEnvironment environment) {
+        return beanFactory -> {
+            if (!environment.containsProperty(MAX_URI_TAGS_PROPERTY)) {
+                environment.getPropertySources().addLast(new MapPropertySource(
+                        DEFAULTS_PROPERTY_SOURCE, Map.of(MAX_URI_TAGS_PROPERTY, DEFAULT_MAX_URI_TAGS)));
+            }
+        };
+    }
 
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
     MeterFilter apiPerformanceHttpServerRequestsMeterFilter(
-            @Value("${jia.metrics.http.max-uri-tags:1024}") int maxUriTags) {
+            @Value("${" + MAX_URI_TAGS_PROPERTY + "}") int maxUriTags) {
         if (maxUriTags < 2) {
-            throw new IllegalArgumentException("jia.metrics.http.max-uri-tags must be at least 2");
+            throw new IllegalArgumentException(MAX_URI_TAGS_PROPERTY + " must be at least 2");
         }
         return new BoundedHttpServerRequestsMeterFilter(maxUriTags);
     }
