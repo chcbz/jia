@@ -45,11 +45,6 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
         broker = new ChatConversationEventBroker();
-        when(chatConversationService.isLiveGeneration(
-                "tester", "web-client", "1001", 1L)).thenReturn(true);
-        when(chatConversationService.appendOwnedMessage(
-                eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L)))
-                .thenAnswer(invocation -> invocation.getArgument(2));
     }
 
     @AfterEach
@@ -59,6 +54,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void legalSingleAgentRelayPersistsWithGenerationAndStreamsFinalEvent() throws Exception {
+        stubLiveConversation();
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
@@ -120,6 +116,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void bountyRelaysEveryPersistedAuthoritativeTarget() {
+        stubLiveConversation();
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         when(agentService.listTaskMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(members);
@@ -169,6 +166,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void clientDisposalReleasesRelayEventAndDeletionSubscriptions() {
+        stubLiveConversation();
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
@@ -193,6 +191,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void deletionCompletesExistingRelaySubscriptionAndReleasesBrokerSubscribers() throws Exception {
+        stubLiveConversation();
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
@@ -219,6 +218,14 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertFalse(broker.publishIfLive("1001", 1L, () -> true,
                 Map.of("type", "agent_message")));
         subscription.dispose();
+    }
+
+    private void stubLiveConversation() {
+        when(chatConversationService.isLiveGeneration(
+                "tester", "web-client", "1001", 1L)).thenReturn(true);
+        when(chatConversationService.appendOwnedMessage(
+                eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L)))
+                .thenAnswer(invocation -> invocation.getArgument(2));
     }
 
     private JuyitingAgentRelayService service() {

@@ -1149,8 +1149,6 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                     }
                     return ((ChatMessageEntity) invocation.getArgument(2)).setId(700L);
                 });
-        when(chatConversationService.isLiveGeneration(
-                "juyiting", "jia_client", "3001", 1L)).thenReturn(false);
         AgentWebSocketHandler handler = new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, broker);
         handler.setChatConversationService(chatConversationService);

@@ -244,18 +244,6 @@ class ChatControllerTest extends BaseMockTest {
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
-        ChatConversationEntity conversation = new ChatConversationEntity();
-        conversation.setId(372L);
-        conversation.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
-        setObjectField(conversation, "conversationScopeType", "bounty");
-        setObjectField(conversation, "conversationScopeKey", "task:372");
-        setObjectField(conversation, "taskId", "372");
-
-        when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
-        when(redisService.subscribeToChannel("372")).thenReturn(Flux.never());
-        when(chatConversationService.getOwned("tester", "web-client", "372"))
-                .thenReturn(conversation);
-
         ChatController controller = newController();
 
         ChatMessageDTO request = new ChatMessageDTO();
