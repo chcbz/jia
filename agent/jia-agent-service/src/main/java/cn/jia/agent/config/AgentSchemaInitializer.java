@@ -31,7 +31,41 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureSceneTables();
         ensureTaskEventSchema();
         ensureHistoricalEventBaselineAuditSchema();
+        ensureTaskArtifactOutputColumns();
         seedWaterMarginPersonas();
+    }
+
+    void ensureTaskArtifactOutputColumns() {
+        addColumnIfMissing("agent_task_artifact", "object_id",
+                "object_id VARBINARY(100) DEFAULT NULL COMMENT 'Verified output object ID'");
+        addColumnIfMissing("agent_task_artifact", "run_id",
+                "run_id VARBINARY(100) DEFAULT NULL COMMENT 'Authorized output run ID'");
+        addColumnIfMissing("agent_task_artifact", "file_name",
+                "file_name VARCHAR(255) DEFAULT NULL COMMENT 'Download file name'");
+        addColumnIfMissing("agent_task_artifact", "content_byte_length",
+                "content_byte_length BIGINT DEFAULT NULL COMMENT 'Immutable UTF-8 or object byte length'");
+        addColumnIfMissing("agent_task_artifact", "mime_type",
+                "mime_type VARCHAR(100) DEFAULT NULL COMMENT 'Verified MIME type'");
+        addColumnIfMissing("agent_task_artifact", "owner_shared_at",
+                "owner_shared_at BIGINT DEFAULT NULL COMMENT 'Explicit owner release time'");
+        addColumnIfMissing("agent_task_artifact", "retain_until",
+                "retain_until BIGINT DEFAULT NULL COMMENT 'Business version expiry time'");
+        if (!isH2Database()) {
+            validateIdentityColumn("agent_task_artifact", "object_id",
+                    "varbinary", "varbinary(100)", true, null, null);
+            validateIdentityColumn("agent_task_artifact", "run_id",
+                    "varbinary", "varbinary(100)", true, null, null);
+            validateIdentityColumn("agent_task_artifact", "file_name",
+                    "varchar", "varchar(255)", true, null, null);
+            validateIdentityColumn("agent_task_artifact", "content_byte_length",
+                    "bigint", "bigint", true, null, null);
+            validateIdentityColumn("agent_task_artifact", "mime_type",
+                    "varchar", "varchar(100)", true, null, null);
+            validateIdentityColumn("agent_task_artifact", "owner_shared_at",
+                    "bigint", "bigint", true, null, null);
+            validateIdentityColumn("agent_task_artifact", "retain_until",
+                    "bigint", "bigint", true, null, null);
+        }
     }
 
     private void ensureAgentPersonaColumns() {
@@ -930,6 +964,13 @@ public class AgentSchemaInitializer implements InitializingBean {
                     title                   VARCHAR(255) NOT NULL COMMENT 'Artifact title',
                     content                 MEDIUMTEXT COMMENT 'Inline artifact content',
                     storage_uri             VARCHAR(1000) DEFAULT NULL COMMENT 'External large object location',
+                    object_id               VARBINARY(100) DEFAULT NULL COMMENT 'Verified output object ID',
+                    run_id                  VARBINARY(100) DEFAULT NULL COMMENT 'Authorized output run ID',
+                    file_name               VARCHAR(255) DEFAULT NULL COMMENT 'Download file name',
+                    content_byte_length     BIGINT DEFAULT NULL COMMENT 'Immutable byte length',
+                    mime_type               VARCHAR(100) DEFAULT NULL COMMENT 'Verified MIME type',
+                    owner_shared_at         BIGINT DEFAULT NULL COMMENT 'Explicit owner release time',
+                    retain_until            BIGINT DEFAULT NULL COMMENT 'Business version expiry time',
                     content_hash            VARCHAR(128) DEFAULT NULL COMMENT 'Content integrity hash',
                     artifact_version        INT NOT NULL DEFAULT 1 COMMENT 'Logical artifact version',
                     visibility              VARCHAR(20) NOT NULL DEFAULT 'task_members' COMMENT 'task_members/reviewer/private',

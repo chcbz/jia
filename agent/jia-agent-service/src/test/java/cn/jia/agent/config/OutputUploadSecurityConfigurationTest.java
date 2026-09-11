@@ -37,6 +37,31 @@ class OutputUploadSecurityConfigurationTest {
     @Test void exactUploadRoutesRejectCookiesUserBearerAndMissingTicket()throws Exception{mvc.perform(post("/agent/output-uploads")).andExpect(status().isUnauthorized());mvc.perform(post("/agent/output-uploads").header("Authorization","Bearer user-jwt-token-value-that-is-not-run-ticket")).andExpect(status().isUnauthorized());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization","Bearer terminal-ticket-value-that-is-long-enough-0000")).andExpect(status().isForbidden());}
     @Test void validTicketPassesExactMethodsAndOutputUserRouteIsNotCaptured()throws Exception{String active="Bearer active-ticket-value-that-is-long-enough-000000";mvc.perform(post("/agent/output-uploads").header("Authorization",active)).andExpect(status().isOk());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization",active)).andExpect(status().isOk());mvc.perform(get("/agent/output-uploads/u").header("Authorization",active)).andExpect(status().isOk());mvc.perform(get("/agent/outputs")).andExpect(status().isOk());}
     @Test void terminalStatusTicketCanReachReceiptPostsButCannotWriteBytes()throws Exception{String terminal="Bearer terminal-ticket-value-that-is-long-enough-0000";mvc.perform(get("/agent/output-uploads/u").header("Authorization",terminal)).andExpect(status().isOk());mvc.perform(post("/agent/output-uploads/u/complete").header("Authorization",terminal)).andExpect(status().isOk());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization",terminal)).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("OUTPUT_AUTH_FORBIDDEN")).andExpect(jsonPath("$.retryable").value(false));}
+    @Test void publicationPostsAdmitStatusTicketForServerSideReceiptRecovery()throws Exception{
+        String active="Bearer active-ticket-value-that-is-long-enough-000000";
+        String terminal="Bearer terminal-ticket-value-that-is-long-enough-0000";
+        mvc.perform(post("/agent/tasks/task-1/artifacts").header("Authorization",active)
+                        .contentType("application/json"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/chat/conversations/101/outputs").header("Authorization",active)
+                        .contentType("application/json"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/agent/tasks/task-1/artifacts").header("Authorization",terminal)
+                        .contentType("application/json"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/chat/conversations/101/outputs"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED"));
+        mvc.perform(get("/agent/tasks/task-1/artifacts")).andExpect(status().isOk());
+        mvc.perform(get("/chat/conversations/101/outputs")).andExpect(status().isOk());
+        mvc.perform(post("/agent/tasks/task-1/artifacts").header("Authorization",active)
+                        .contentType("text/plain").header("X-Request-ID","mime-request-1"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(header().string("Cache-Control","no-store"))
+                .andExpect(header().string("X-Request-ID","mime-request-1"))
+                .andExpect(jsonPath("$.code").value("OUTPUT_MIME_UNSUPPORTED"))
+                .andExpect(jsonPath("$.message").value("Output MIME unsupported"));
+    }
     @Test void expectedAuthorizationDenialAndUnexpectedInfrastructureFailureAreSeparated()throws Exception{
         mvc.perform(get("/agent/output-uploads/u").header("Authorization","Bearer acl-ticket-value-that-is-long-enough-000000").header("X-Request-ID","acl-request-1"))
                 .andExpect(status().isForbidden()).andExpect(header().string("Cache-Control","no-store")).andExpect(header().string("X-Request-ID","acl-request-1"))
@@ -58,6 +83,10 @@ class OutputUploadSecurityConfigurationTest {
         @PostMapping("/agent/output-uploads/{id}/complete")String complete(){return "ok";}
         @GetMapping("/agent/output-uploads/{id}")String status(){return "ok";}
         @GetMapping("/agent/outputs")String user(){return "ok";}
+        @PostMapping("/agent/tasks/{taskId}/artifacts")String taskPublish(){return "ok";}
+        @GetMapping("/agent/tasks/{taskId}/artifacts")String taskList(){return "ok";}
+        @PostMapping("/chat/conversations/{conversationId}/outputs")String chatPublish(){return "ok";}
+        @GetMapping("/chat/conversations/{conversationId}/outputs")String chatList(){return "ok";}
     }
     static class StubAuthorization implements OutputRunAuthorizationService{
         @Override public java.util.Optional<cn.jia.agent.output.dto.OutputContextDTO> createOrRecoverRun(cn.jia.agent.output.OutputRunRequest r){throw new UnsupportedOperationException();}

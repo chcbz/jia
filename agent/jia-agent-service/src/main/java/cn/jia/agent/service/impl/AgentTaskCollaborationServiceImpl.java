@@ -828,6 +828,13 @@ public class AgentTaskCollaborationServiceImpl
         dto.setTitle(entity.getTitle());
         dto.setContent(entity.getContent());
         dto.setStorageUri(entity.getStorageUri());
+        dto.setObjectId(entity.getObjectId());
+        dto.setRunId(entity.getRunId());
+        dto.setFileName(entity.getFileName());
+        dto.setContentByteLength(entity.getContentByteLength());
+        dto.setMimeType(entity.getMimeType());
+        dto.setOwnerSharedAt(entity.getOwnerSharedAt());
+        dto.setRetainUntil(entity.getRetainUntil());
         dto.setContentHash(entity.getContentHash());
         dto.setArtifactVersion(entity.getArtifactVersion());
         dto.setVisibility(entity.getVisibility());

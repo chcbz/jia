@@ -1594,6 +1594,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 if ("agent_task_event".equals(args[0])) {
                     return List.of(taskEventColumn(String.valueOf(args[1])));
                 }
+                if ("agent_task_artifact".equals(args[0])) {
+                    return List.of(taskArtifactOutputColumn(String.valueOf(args[1])));
+                }
                 if (historicalEventAuditTables().contains(String.valueOf(args[0]))) {
                     return List.of(historicalEventColumn(
                             historicalAudit, String.valueOf(args[0]), String.valueOf(args[1])));
@@ -1780,6 +1783,21 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             case "event_json" -> new AgentSchemaInitializer.ColumnDefinition(
                     "mediumtext", "mediumtext", false, null, "");
             default -> throw new AssertionError("unknown task event column " + column);
+        };
+    }
+
+    private AgentSchemaInitializer.ColumnDefinition taskArtifactOutputColumn(String column) {
+        return switch (column) {
+            case "object_id", "run_id" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varbinary", "varbinary(100)", true, null, "");
+            case "file_name" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(255)", true, null, "");
+            case "mime_type" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(100)", true, null, "");
+            case "content_byte_length", "owner_shared_at", "retain_until" ->
+                    new AgentSchemaInitializer.ColumnDefinition(
+                            "bigint", "bigint", true, null, "");
+            default -> throw new AssertionError("unknown task artifact output column " + column);
         };
     }
 

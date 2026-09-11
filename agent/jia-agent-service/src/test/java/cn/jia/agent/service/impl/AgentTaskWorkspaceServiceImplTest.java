@@ -227,6 +227,25 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void unsharedInlineOutputIsRedactedEvenForCoordinatorAndProducer() throws Exception {
+        task.setCurrentEventVersion(1L);
+        task.setCoordinatorAgentId(ACTOR);
+        ArtifactRow output = artifact("inline-private", 1, ACTOR, "task_members");
+        output.setRunId("run-private");
+        output.setOwnerSharedAt(null);
+        when(dao.findArtifactVersion(TENANT, CLIENT, TASK, "inline-private", 1))
+                .thenReturn(output);
+        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(
+                artifactEvent(1L, output)));
+
+        AgentTaskWorkspaceDTO.Event event = service.snapshot(
+                TENANT, CLIENT, TASK, ACTOR).getRecentEvents().getFirst();
+
+        assertEquals(Boolean.TRUE, event.getRedacted());
+        assertNull(event.getEventType());
+    }
+
+    @Test
     void versionsAboveJavascriptSafeIntegerRemainExactDecimalStrings() {
         long version = 9_007_199_254_740_993L;
         task.setTaskVersion(version);

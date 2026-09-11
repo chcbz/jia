@@ -295,7 +295,8 @@ class AgentTaskWorkspaceRepeatableReadTest {
         jdbc.execute("CREATE TABLE agent_task_artifact (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "artifact_id VARCHAR(100),task_id VARCHAR(100),work_item_id VARCHAR(100),"
                 + "producer_agent_id VARCHAR(100),artifact_type VARCHAR(30),title VARCHAR(255),"
-                + "content_hash VARCHAR(128),artifact_version INT,visibility VARCHAR(20),created_at BIGINT,"
+                + "content_hash VARCHAR(128),artifact_version INT,visibility VARCHAR(20),"
+                + "object_id VARBINARY(100),run_id VARBINARY(100),owner_shared_at BIGINT,created_at BIGINT,"
                 + "tenant_id VARCHAR(50),client_id VARCHAR(50))");
         jdbc.execute("CREATE TABLE agent_task_event (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "task_id VARCHAR(100),event_version BIGINT,event_type VARCHAR(64),actor_type VARCHAR(20),"

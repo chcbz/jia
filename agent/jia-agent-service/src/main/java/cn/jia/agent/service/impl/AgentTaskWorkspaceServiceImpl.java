@@ -303,6 +303,9 @@ public class AgentTaskWorkspaceServiceImpl
     private static boolean canReadArtifact(String actorAgentId, String actorRole,
             String coordinatorAgentId, ArtifactRow artifact,
             boolean reviewerAccess, boolean coordinatorAccess) {
+        if (artifact.getRunId() != null && artifact.getOwnerSharedAt() == null) {
+            return false;
+        }
         if (coordinatorAccess || actorAgentId.equals(coordinatorAgentId)) {
             return true;
         }

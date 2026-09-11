@@ -39,6 +39,18 @@ public final class OutputConstants {
     public static final long MAX_SCOPE_BYTES = 1_073_741_824L;
     public static final int MAX_BINDING_UPLOADS = 2;
     public static final int MAX_SCOPE_UPLOADS = 8;
+    public static final long OUTPUT_RETENTION_MILLIS = 90L * 24 * 60 * 60 * 1000;
+    public static final long RECEIPT_RETENTION_MILLIS = RUN_RECOVERY_MILLIS + 7L * 24 * 60 * 60 * 1000;
+    public static final long READ_PIN_MILLIS = 11L * 60 * 1000;
+    public static final long DOWNLOAD_DEADLINE_MILLIS = 10L * 60 * 1000;
+    public static final long READ_PIN_RENEW_MILLIS = 30_000L;
+    public static final long CURSOR_TTL_MILLIS = 15L * 60 * 1000;
+    public static final List<String> SUPPORTED_MIME_TYPES = List.of(
+            "text/plain", "text/markdown", "text/csv", "application/json",
+            "image/png", "image/jpeg", "image/webp", "application/pdf", "application/zip",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     public static final long UPLOAD_SESSION_MILLIS = 86_400_000L;
     public static final long WRITER_LEASE_MILLIS = 300_000L;
     public static final long UPLOAD_HARD_DEADLINE_MILLIS = 600_000L;

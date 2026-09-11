@@ -206,6 +206,13 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
                 .setTitle(artifact.getTitle())
                 .setContent(artifact.getContent())
                 .setStorageUri(artifact.getStorageUri())
+                .setObjectId(artifact.getObjectId())
+                .setRunId(artifact.getRunId())
+                .setFileName(artifact.getFileName())
+                .setContentByteLength(artifact.getContentByteLength())
+                .setMimeType(artifact.getMimeType())
+                .setOwnerSharedAt(artifact.getOwnerSharedAt())
+                .setRetainUntil(artifact.getRetainUntil())
                 .setContentHash(artifact.getContentHash())
                 .setArtifactVersion(artifact.getArtifactVersion())
                 .setMetadataJson(artifact.getMetadataJson());

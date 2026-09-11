@@ -119,7 +119,7 @@ public interface AgentTaskWorkspaceMapper {
     @Select("""
             SELECT tenant_id, client_id, task_id, artifact_id, work_item_id,
                    producer_agent_id, artifact_type, title,
-                   artifact_version, visibility, created_at
+                   artifact_version, visibility, object_id, run_id, owner_shared_at, created_at
             FROM agent_task_artifact
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
@@ -135,6 +135,7 @@ public interface AgentTaskWorkspaceMapper {
                         AND CAST(visibility AS BINARY) = CAST('private' AS BINARY)
                         AND OCTET_LENGTH(visibility) = OCTET_LENGTH('private'))
                   )
+              AND (run_id IS NULL OR owner_shared_at IS NOT NULL)
               AND (
                     (visibility = 'task_members'
                      AND CAST(visibility AS BINARY) = CAST('task_members' AS BINARY)
@@ -177,7 +178,7 @@ public interface AgentTaskWorkspaceMapper {
     @Select("""
             SELECT tenant_id, client_id, task_id, artifact_id, work_item_id,
                    producer_agent_id, artifact_type, title,
-                   artifact_version, visibility, created_at
+                   artifact_version, visibility, object_id, run_id, owner_shared_at, created_at
             FROM agent_task_artifact
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}

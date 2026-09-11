@@ -72,8 +72,23 @@ public final class OutputUploadDaoImpl implements OutputUploadDao {
     @Override public UploadRow findUpload(String t,String c,String id,boolean lock) {
         return one("SELECT * FROM output_upload_session WHERE tenant_id=? AND client_id=? AND upload_id=?"+(lock?" FOR UPDATE":""),UPLOAD,t,c,id);
     }
+    @Override public UploadRow findUploadByObject(String t,String c,String id,boolean lock) {
+        return one("SELECT * FROM output_upload_session WHERE tenant_id=? AND client_id=? AND object_id=?"+(lock?" FOR UPDATE":""),UPLOAD,t,c,id);
+    }
     @Override public ObjectRow findObject(String t,String c,String id,boolean lock) {
         return one("SELECT * FROM output_object WHERE tenant_id=? AND client_id=? AND object_id=?"+(lock?" FOR UPDATE":""),OBJECT,t,c,id);
+    }
+    @Override public int insertReference(ReferenceRow r,long now) {
+        return jdbc.update("INSERT INTO output_object_reference (tenant_id,client_id,reference_key,object_id,source_type,source_id,output_id,output_version,reference_kind,delivery_id,state,retain_until,hold,hold_reason,released_at,created_at,updated_at,row_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,0)",r.tenantId(),r.clientId(),r.referenceKey(),r.objectId(),r.sourceType(),r.sourceId(),r.outputId(),r.outputVersion(),r.referenceKind(),r.deliveryId(),r.state(),r.retainUntil(),r.hold(),r.holdReason(),now,now);
+    }
+    @Override public ReferenceRow findReference(String t,String c,byte[] key,boolean lock) {
+        return one("SELECT * FROM output_object_reference WHERE tenant_id=? AND client_id=? AND reference_key=?"+(lock?" FOR UPDATE":""),REFERENCE,t,c,key);
+    }
+    @Override public int renewActiveReference(String t,String c,byte[] key,long until,long now) {
+        return jdbc.update("UPDATE output_object_reference SET retain_until=GREATEST(retain_until,?),updated_at=?,row_version=row_version+1 WHERE tenant_id=? AND client_id=? AND reference_key=? AND state='ACTIVE' AND hold=FALSE AND reference_kind='READ_PIN'",until,now,t,c,key);
+    }
+    @Override public int releaseReference(String t,String c,byte[] key,long now) {
+        return jdbc.update("UPDATE output_object_reference SET state='RELEASED',hold=FALSE,released_at=?,updated_at=?,row_version=row_version+1 WHERE tenant_id=? AND client_id=? AND reference_key=? AND state='ACTIVE'",now,now,t,c,key);
     }
     @Override public int beginWriter(String t,String c,String id,long old,long epoch,long start,long until,long deadline) {
         return jdbc.update("UPDATE output_upload_session SET state='UPLOADING',writer_epoch=?,writer_started_at=?,writer_until=?,writer_deadline_at=?,updated_at=?,row_version=row_version+1 WHERE tenant_id=? AND client_id=? AND upload_id=? AND writer_epoch=? AND state IN ('CREATED','UPLOADING') AND (writer_until IS NULL OR writer_until<?)",epoch,start,until,deadline,start,t,c,id,old,start);
@@ -179,4 +194,5 @@ public final class OutputUploadDaoImpl implements OutputUploadDao {
     private static final RowMapper<UploadRow> UPLOAD=(r,n)->new UploadRow(r.getString("tenant_id"),r.getString("client_id"),r.getString("upload_id"),r.getString("run_id"),r.getString("binding_id"),r.getString("object_id"),r.getString("file_name"),r.getLong("expected_size"),r.getBytes("expected_sha256"),r.getString("declared_mime"),r.getString("state"),r.getLong("writer_epoch"),nullableLong(r,"writer_started_at"),nullableLong(r,"writer_until"),nullableLong(r,"writer_deadline_at"),r.getLong("expires_at"),r.getLong("reserved_bytes"),r.getBoolean("slot_released"),r.getInt("verification_attempts"),nullableLong(r,"verification_next_at"),r.getString("verification_lease_owner"),nullableLong(r,"verification_lease_until"),r.getString("error_code"));
     private static final RowMapper<ObjectRow> OBJECT=(r,n)->new ObjectRow(r.getString("tenant_id"),r.getString("client_id"),r.getString("object_id"),r.getString("run_id"),r.getString("bucket"),r.getString("storage_key"),r.getString("storage_version"),r.getBytes("actual_sha256"),nullableLong(r,"actual_size"),r.getString("actual_mime"),r.getString("verification_status"),r.getString("lifecycle_status"),r.getString("scan_engine_version"),nullableLong(r,"verified_at"),nullableLong(r,"delete_after"),nullableLong(r,"deleted_at"),r.getInt("delete_attempts"),nullableLong(r,"delete_next_at"),r.getString("delete_lease_owner"),nullableLong(r,"delete_lease_until"),r.getString("error_code"));
     private static final RowMapper<CleanupRow> CLEANUP=(r,n)->new CleanupRow(r.getBytes("cleanup_id"),r.getString("tenant_id"),r.getString("client_id"),r.getString("object_id"),r.getString("upload_id"),r.getLong("writer_epoch"),r.getString("bucket"),r.getString("storage_key"),r.getString("storage_version"),r.getString("state"),r.getString("quota_charge_kind"),r.getLong("quota_charge_bytes"),r.getLong("safe_after"),r.getInt("attempts"),r.getLong("next_attempt_at"),r.getString("lease_owner"),nullableLong(r,"lease_until"));
+    private static final RowMapper<ReferenceRow> REFERENCE=(r,n)->new ReferenceRow(r.getString("tenant_id"),r.getString("client_id"),r.getBytes("reference_key"),r.getString("object_id"),r.getString("source_type"),r.getString("source_id"),r.getString("output_id"),r.getLong("output_version"),r.getString("reference_kind"),r.getString("delivery_id"),r.getString("state"),nullableLong(r,"retain_until"),r.getBoolean("hold"),r.getString("hold_reason"),nullableLong(r,"released_at"));
 }

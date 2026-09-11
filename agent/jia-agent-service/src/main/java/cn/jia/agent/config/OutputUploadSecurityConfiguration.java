@@ -44,7 +44,14 @@ public class OutputUploadSecurityConfiguration {
                 .requestCache(c->c.requestCache(new NullRequestCache())).csrf(AbstractHttpConfigurer::disable);
         return http.build();
     }
-    static boolean matches(HttpServletRequest r){String m=r.getMethod(),p=r.getRequestURI();if("POST".equals(m)&&"/agent/output-uploads".equals(p))return true;if(!p.matches("/agent/output-uploads/[^/]+(?:/content|/complete)?"))return false;return ("GET".equals(m)&&!p.endsWith("/content")&&!p.endsWith("/complete"))||("PUT".equals(m)&&p.endsWith("/content"))||("POST".equals(m)&&p.endsWith("/complete"));}
+    static boolean matches(HttpServletRequest r){String m=r.getMethod(),p=r.getRequestURI();
+        if("POST".equals(m)&&(p.matches("/agent/tasks/[^/]+/artifacts")
+                ||p.matches("/chat/conversations/[^/]+/outputs")))return true;
+        if("POST".equals(m)&&"/agent/output-uploads".equals(p))return true;
+        if(!p.matches("/agent/output-uploads/[^/]+(?:/content|/complete)?"))return false;
+        return ("GET".equals(m)&&!p.endsWith("/content")&&!p.endsWith("/complete"))
+                ||("PUT".equals(m)&&p.endsWith("/content"))
+                ||("POST".equals(m)&&p.endsWith("/complete"));}
     private static void authorizationError(HttpServletRequest request,HttpServletResponse response,String code,int status,boolean retryable)throws IOException{OutputHttpEnvelope.writeError(request,response,code,status==503?"Output authorization unavailable":"Output access is unavailable",status,retryable);}
     static final class OutputTicketFilter extends OncePerRequestFilter{
         private final OutputRunAuthorizationService authorization;OutputTicketFilter(OutputRunAuthorizationService a){authorization=a;}
@@ -54,13 +61,25 @@ public class OutputUploadSecurityConfiguration {
             try{
                 String h=r.getHeader(HttpHeaders.AUTHORIZATION);
                 if(h==null||!h.startsWith("Bearer ")){authorizationError(r,s,"OUTPUT_AUTH_UNAUTHORIZED",401,false);return;}
-                auth=authorization.authorizeTicket(h.substring(7),OutputConstants.OP_STATUS,true);
+                boolean publish="POST".equals(r.getMethod())&&(r.getRequestURI().matches("/agent/tasks/[^/]+/artifacts")
+                        ||r.getRequestURI().matches("/chat/conversations/[^/]+/outputs"));
+                auth=authorization.authorizeTicket(
+                        h.substring(7),OutputConstants.OP_STATUS,true);
+                if(publish&&!jsonContentType(r)){
+                    OutputHttpEnvelope.writeError(r,s,"OUTPUT_MIME_UNSUPPORTED",
+                            "Output MIME unsupported",415,false);return;
+                }
                 if("PUT".equals(r.getMethod())&&(!OutputConstants.RUN_ACTIVE.equals(auth.runState())||!auth.operations().contains(OutputConstants.OP_UPLOAD))){authorizationError(r,s,"OUTPUT_AUTH_FORBIDDEN",403,false);return;}
             }catch(cn.jia.agent.output.OutputAuthorizationException denied){SecurityContextHolder.clearContext();int status="OUTPUT_AUTH_UNAUTHORIZED".equals(denied.getCode())?401:403;authorizationError(r,s,denied.getCode(),status,false);return;}
             catch(RuntimeException unavailable){SecurityContextHolder.clearContext();authorizationError(r,s,"OUTPUT_AUTH_UNAVAILABLE",503,true);return;}
             UsernamePasswordAuthenticationToken token=new UsernamePasswordAuthenticationToken(auth,null,List.of(new SimpleGrantedAuthority("output-ticket")));
             SecurityContextHolder.getContext().setAuthentication(token);
             chain.doFilter(r,s);
+        }
+        private static boolean jsonContentType(HttpServletRequest request){
+            String value=request.getContentType();if(value==null)return false;
+            try{return MediaType.APPLICATION_JSON.isCompatibleWith(MediaType.parseMediaType(value));}
+            catch(RuntimeException invalid){return false;}
         }
     }
 }

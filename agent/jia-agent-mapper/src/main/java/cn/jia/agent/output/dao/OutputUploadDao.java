@@ -28,6 +28,11 @@ public interface OutputUploadDao {
                       String storageVersion, String state, String quotaChargeKind,
                       long quotaChargeBytes, long safeAfter, int attempts, long nextAttemptAt,
                       String leaseOwner, Long leaseUntil) { }
+    record ReferenceRow(String tenantId, String clientId, byte[] referenceKey,
+                        String objectId, String sourceType, String sourceId, String outputId,
+                        long outputVersion, String referenceKind, String deliveryId,
+                        String state, Long retainUntil, boolean hold, String holdReason,
+                        Long releasedAt) { }
 
     void ensureScopeQuota(String tenantId, String clientId, long maxBytes, int maxActive, long now);
     ScopeQuota lockScopeQuota(String tenantId, String clientId);
@@ -53,7 +58,15 @@ public interface OutputUploadDao {
     int insertObject(ObjectRow row, long now);
     int insertUpload(UploadRow row, long now);
     UploadRow findUpload(String tenantId, String clientId, String uploadId, boolean forUpdate);
+    UploadRow findUploadByObject(String tenantId, String clientId, String objectId,
+                                 boolean forUpdate);
     ObjectRow findObject(String tenantId, String clientId, String objectId, boolean forUpdate);
+    int insertReference(ReferenceRow row, long now);
+    ReferenceRow findReference(String tenantId, String clientId, byte[] referenceKey,
+                               boolean forUpdate);
+    int renewActiveReference(String tenantId, String clientId, byte[] referenceKey,
+                             long retainUntil, long now);
+    int releaseReference(String tenantId, String clientId, byte[] referenceKey, long now);
     int beginWriter(String tenantId, String clientId, String uploadId, long expectedEpoch,
                     long newEpoch, long startedAt, long writerUntil, long deadlineAt);
     int renewWriter(String tenantId, String clientId, String uploadId, long epoch,

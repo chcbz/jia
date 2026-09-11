@@ -101,6 +101,9 @@ public final class AgentTaskWorkspaceRows {
         private String title;
         private Integer artifactVersion;
         private String visibility;
+        private String objectId;
+        private String runId;
+        private Long ownerSharedAt;
         private Long createdAt;
     }
 

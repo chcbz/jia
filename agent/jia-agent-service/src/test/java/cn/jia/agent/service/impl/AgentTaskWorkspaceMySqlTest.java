@@ -715,6 +715,7 @@ class AgentTaskWorkspaceMySqlTest {
                     artifact_id VARCHAR(100), task_id VARCHAR(100), work_item_id VARCHAR(100),
                     producer_agent_id VARCHAR(100), artifact_type VARCHAR(30), title VARCHAR(255),
                     content_hash VARCHAR(128), artifact_version INT, visibility VARCHAR(20),
+                    object_id VARBINARY(100), run_id VARBINARY(100), owner_shared_at BIGINT,
                     created_at BIGINT, tenant_id VARCHAR(50), client_id VARCHAR(50)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
                 """);

@@ -14,17 +14,29 @@ public record OutputDeliveryProperties(
         Integer retryMultiplier,
         Long archiveMemberMaxBytes,
         Long archiveTreeMaxBytes,
-        String archiveTempDirectory) {
+        String archiveTempDirectory,
+        Boolean writesPaused,
+        String cursorSigningKey) {
     public OutputDeliveryProperties(boolean enabled) {
         this(enabled, null, null, null, "cyf-agent-outputs", "127.0.0.1", 3310, 10,
-                50L * 1024 * 1024, 90L * 1024 * 1024, null);
+                50L * 1024 * 1024, 90L * 1024 * 1024, null, false, null);
     }
 
     public OutputDeliveryProperties(boolean enabled, String storageEndpoint, String storageAccessKey,
             String storageSecretKey, String storageBucket, String scannerHost, Integer scannerPort,
             Integer retryMultiplier) {
         this(enabled, storageEndpoint, storageAccessKey, storageSecretKey, storageBucket, scannerHost,
-                scannerPort, retryMultiplier, 50L * 1024 * 1024, 90L * 1024 * 1024, null);
+                scannerPort, retryMultiplier, 50L * 1024 * 1024, 90L * 1024 * 1024, null,
+                false, null);
+    }
+
+    public OutputDeliveryProperties(boolean enabled, String storageEndpoint, String storageAccessKey,
+            String storageSecretKey, String storageBucket, String scannerHost, Integer scannerPort,
+            Integer retryMultiplier, Long archiveMemberMaxBytes, Long archiveTreeMaxBytes,
+            String archiveTempDirectory) {
+        this(enabled, storageEndpoint, storageAccessKey, storageSecretKey, storageBucket, scannerHost,
+                scannerPort, retryMultiplier, archiveMemberMaxBytes, archiveTreeMaxBytes,
+                archiveTempDirectory, false, null);
     }
 
     public OutputDeliveryProperties {
@@ -35,6 +47,8 @@ public record OutputDeliveryProperties(
         archiveMemberMaxBytes = archiveMemberMaxBytes == null ? 50L * 1024 * 1024 : archiveMemberMaxBytes;
         archiveTreeMaxBytes = archiveTreeMaxBytes == null ? 90L * 1024 * 1024 : archiveTreeMaxBytes;
         archiveTempDirectory = archiveTempDirectory == null || archiveTempDirectory.isBlank() ? null : archiveTempDirectory;
+        writesPaused = Boolean.TRUE.equals(writesPaused);
+        cursorSigningKey = cursorSigningKey == null || cursorSigningKey.isBlank() ? null : cursorSigningKey;
         if (scannerPort < 1 || scannerPort > 65535 || retryMultiplier < 1 || retryMultiplier > 100)
             throw new IllegalArgumentException("invalid output delivery infrastructure limits");
         if (archiveMemberMaxBytes < 1 || archiveMemberMaxBytes > 50L * 1024 * 1024

@@ -182,6 +182,29 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
     }
 
     @Test
+    void newInlineAndObjectOutputsStayHiddenUntilExplicitOwnerShare() {
+        insertTask(TENANT, CLIENT, TASK, 0L);
+        insertArtifact("legacy-visible", 1, "other", "task_members", 1000L);
+        jdbc.update("INSERT INTO agent_task_artifact "
+                        + "(artifact_id,task_id,producer_agent_id,artifact_type,title,content_hash,"
+                        + "artifact_version,visibility,run_id,object_id,owner_shared_at,created_at,tenant_id,client_id) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?),(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "inline-private", TASK, "other", "document", "private inline", "a".repeat(64),
+                1, "task_members", "run-1", null, null, 1002L, TENANT, CLIENT,
+                "object-shared", TASK, "other", "document", "shared object", "a".repeat(64),
+                1, "task_members", "run-2", "object-1", 1001L, 1001L, TENANT, CLIENT);
+
+        List<ArtifactRow> rows = mapper.findVisibleArtifacts(
+                TENANT, CLIENT, TASK, ACTOR, false, true);
+
+        assertEquals(List.of("object-shared", "legacy-visible"),
+                rows.stream().map(ArtifactRow::getArtifactId).toList());
+        assertTrue(rows.stream().noneMatch(row -> "inline-private".equals(row.getArtifactId())));
+        assertTrue(rows.stream().anyMatch(row -> "object-shared".equals(row.getArtifactId())));
+        assertTrue(rows.stream().anyMatch(row -> "legacy-visible".equals(row.getArtifactId())));
+    }
+
+    @Test
     void artifactAclIsAppliedBefore101LimitAndEventSuffixIsDescending101() {
         insertTask(TENANT, CLIENT, TASK, 105L);
         insertArtifact("case-collision", 1, ACTOR.toUpperCase(), "private", 20_000L);
@@ -281,7 +304,8 @@ class AgentTaskWorkspaceMapperRealDatabaseTest {
                 + "artifact_id VARCHAR_IGNORECASE(100),task_id VARCHAR_IGNORECASE(100),"
                 + "work_item_id VARCHAR(100),producer_agent_id VARCHAR_IGNORECASE(100),artifact_type VARCHAR(30),"
                 + "title VARCHAR(255),content_hash VARCHAR(128),artifact_version INT,"
-                + "visibility VARCHAR_IGNORECASE(20),created_at BIGINT,tenant_id VARCHAR_IGNORECASE(50),"
+                + "visibility VARCHAR_IGNORECASE(20),object_id VARCHAR(100),run_id VARCHAR(100),"
+                + "owner_shared_at BIGINT,created_at BIGINT,tenant_id VARCHAR_IGNORECASE(50),"
                 + "client_id VARCHAR_IGNORECASE(50))");
         jdbc.execute("CREATE TABLE agent_task_event (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "task_id VARCHAR_IGNORECASE(100),event_version BIGINT,event_type VARCHAR(64),"

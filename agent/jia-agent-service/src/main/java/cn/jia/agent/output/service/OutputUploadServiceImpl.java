@@ -52,6 +52,7 @@ public final class OutputUploadServiceImpl implements OutputUploadService {
     private final long archiveMemberMaxBytes;
     private final long archiveTreeMaxBytes;
     private final Path archiveTempDirectory;
+    private final boolean writesPaused;
     private final String worker=UUID.randomUUID().toString();
 
     public OutputUploadServiceImpl(OutputRunAuthorizationService authorization,OutputUploadDao dao,
@@ -64,9 +65,11 @@ public final class OutputUploadServiceImpl implements OutputUploadService {
         this.archiveMemberMaxBytes=properties.archiveMemberMaxBytes();
         this.archiveTreeMaxBytes=properties.archiveTreeMaxBytes();
         this.archiveTempDirectory=properties.archiveTempDirectory()==null?null:Path.of(properties.archiveTempDirectory());
+        this.writesPaused=properties.writesPaused();
     }
 
     @Override public OutputUploadDTO create(String bearer,String key,OutputUploadCreateDTO request){
+        if(writesPaused)throw unavailable("OUTPUT_WRITES_PAUSED");
         requireKey(key);validateCreate(request);byte[] requestHash=sha256(canonicalCreate(request));
         OutputUploadDTO result=withLockRetry(()->tx.execute(s->{
             OutputTicketAuthorization auth=authorize(bearer);
