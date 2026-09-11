@@ -59,8 +59,6 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
-        when(agentWebSocketHandler.isAgentConnected(
-                "tester", "web-client", "agent-wuyong")).thenReturn(true);
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class)))
                 .thenReturn(true);
@@ -124,8 +122,6 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
         for (String member : members) {
-            when(agentWebSocketHandler.isAgentConnected("tester", "web-client", member))
-                    .thenReturn(true);
             when(agentWebSocketHandler.sendDirectMessageToAgent(
                     eq("tester"), eq("web-client"), eq(member), any(Map.class)))
                     .thenReturn(true);
@@ -179,8 +175,6 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
         for (String member : members) {
-            when(agentWebSocketHandler.isAgentConnected(
-                    "tester", "web-client", member)).thenReturn(true);
             when(agentWebSocketHandler.sendDirectMessageToAgent(
                     eq("tester"), eq("web-client"), eq(member), any(Map.class)))
                     .thenReturn(false);
@@ -239,8 +233,6 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
-        when(agentWebSocketHandler.isAgentConnected(
-                "tester", "web-client", "agent-wuyong")).thenReturn(true);
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class)))
                 .thenReturn(true);
@@ -264,8 +256,6 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
-        when(agentWebSocketHandler.isAgentConnected(
-                "tester", "web-client", "agent-wuyong")).thenReturn(true);
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class)))
                 .thenReturn(true);

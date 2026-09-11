@@ -1138,6 +1138,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         conversation.setTenantId("0");
         when(chatConversationService.getOwned("juyiting", "jia_client", "3001"))
                 .thenReturn(conversation);
+        when(chatConversationService.isLiveGeneration(
+                "juyiting", "jia_client", "3001", 1L)).thenReturn(false);
         when(chatConversationService.appendOwnedMessage(
                 org.mockito.ArgumentMatchers.eq("juyiting"),
                 org.mockito.ArgumentMatchers.eq("jia_client"), any(ChatMessageEntity.class),
