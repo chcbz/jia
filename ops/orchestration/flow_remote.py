@@ -45,10 +45,12 @@ EXPECTED_BRANCH = "develop"
 EXPECTED_JAVA_MAJOR = 21
 EXPECTED_TASKS = [
     ":common:jia-common-core:test",
+    ":common:jia-common-service:test",
     "validateLayering",
     ":starter:bootJar",
 ]
 DEFAULT_TEST_FILTER = "cn.jia.core.security.SensitiveDataSanitizerTest"
+CORS_TEST_FILTER = "cn.jia.core.config.CorsConfigTest"
 TOOL_PATHS = [
     "ops/orchestration/cyf_orchestrator.py",
     "ops/orchestration/flow_remote.py",
@@ -290,7 +292,10 @@ def generated_argv(tool_root, run_root, test_filter):
         "--tests",
         test_filter,
         EXPECTED_TASKS[1],
+        "--tests",
+        CORS_TEST_FILTER,
         EXPECTED_TASKS[2],
+        EXPECTED_TASKS[3],
     ]
 
 
