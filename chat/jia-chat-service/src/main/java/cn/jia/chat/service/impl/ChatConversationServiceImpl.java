@@ -1,7 +1,7 @@
 package cn.jia.chat.service.impl;
 
-import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.AgentTaskThreadDao;
+import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
@@ -20,18 +20,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
-/**
- * 聊天会话服务实现类
- *
- * @author chc
- * @since 2026-04-19
- */
+/** Authenticated generic-conversation service. */
 @Service
 @Slf4j
 public class ChatConversationServiceImpl implements ChatConversationService {
+    private static final int MAX_IDENTITY_LENGTH = 50;
 
     private final ChatConversationDao chatConversationDao;
-
     private final ChatMessageDao chatMessageDao;
     private final AgentTaskThreadDao taskThreadDao;
 
@@ -45,20 +40,32 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     }
 
     @Override
-    public PageInfo<ChatConversationEntity> findPage(ChatConversationEntity example, int pageNum, int pageSize, String orderBy) {
-        PageHelper.startPage(pageNum, pageSize, orderBy);
-        // 如果未指定查询条件，默认按当前用户过滤
-        if (example == null) {
-            example = new ChatConversationEntity();
+    public PageInfo<ChatConversationEntity> findPage(
+            ChatConversationEntity example, int pageNum, int pageSize, String orderBy) {
+        EsContext context = requireIdentity();
+        ChatConversationEntity safe = copyAllowedSearch(example);
+        safe.setJiacn(context.getJiacn());
+        safe.setTenantId(context.getJiacn());
+        safe.setClientId(context.getClientId());
+        List<ChatConversationEntity> conversations;
+        try {
+            PageHelper.startPage(pageNum, pageSize, orderBy);
+            conversations = chatConversationDao.selectNonTaskThreadByEntity(safe);
+        } catch (RuntimeException exception) {
+            log.warn("Unable to query authenticated conversation scope; denying list", exception);
+            throw unavailable();
         }
-        if (example.getJiacn() == null || example.getJiacn().isEmpty()) {
-            example.setJiacn(EsContextHolder.getContext().getJiacn());
+        if (conversations == null) {
+            throw unavailable();
         }
-        List<ChatConversationEntity> conversations = chatConversationDao.selectNonTaskThreadByEntity(example);
-        if (conversations != null) {
-            conversations = conversations.stream()
-                    .filter(conversation -> !isTaskThreadEvidence(conversation))
-                    .toList();
+        for (ChatConversationEntity conversation : conversations) {
+            if (conversation == null || conversation.getId() == null
+                    || conversation.getDeletedAt() != null
+                    || !belongsToIdentity(conversation, conversation.getId(),
+                    context.getJiacn(), context.getClientId())
+                    || isTaskThreadEvidence(conversation)) {
+                throw unavailable();
+            }
         }
         return PageInfo.of(conversations);
     }
@@ -66,31 +73,130 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void deleteConversation(String conversationId) {
-        ChatConversationEntity conversation = requireGenericConversation(conversationId);
-        String authorizedConversationId = String.valueOf(conversation.getId());
-        // Only delete messages after the scoped ownership check and conversation deletion both succeed.
-        if (chatConversationDao.deleteById(conversation.getId()) != 1) {
+        Long requestedId = parseConversationId(conversationId);
+        EsContext context = requireIdentity();
+        String canonicalId = Long.toString(requestedId);
+        ChatConversationEntity conversation;
+        try {
+            conversation = chatConversationDao.lockScopedByIdIncludingDeleted(
+                    context.getJiacn(), context.getClientId(), canonicalId);
+        } catch (RuntimeException exception) {
+            log.warn("Unable to lock conversation delete scope; denying mutation. conversationId={}",
+                    canonicalId, exception);
             throw unavailable();
         }
-        chatMessageDao.deleteByConversationId(authorizedConversationId);
+        // A valid delete never discloses whether the row was missing, foreign, or already deleted.
+        if (conversation == null || conversation.getDeletedAt() != null
+                || !belongsToIdentity(conversation, requestedId,
+                context.getJiacn(), context.getClientId())
+                || isTaskThreadEvidence(conversation)) {
+            return;
+        }
+        long deletedAt = System.currentTimeMillis();
+        if (chatConversationDao.softDeleteScopedById(
+                context.getJiacn(), context.getClientId(), canonicalId, deletedAt) != 1) {
+            throw unavailable();
+        }
+        // The exact conversation row remains locked until commit. Every ordinary writer takes the
+        // same lock first, so a late callback either precedes this delete and is removed here, or
+        // follows it and observes the tombstone.
+        chatMessageDao.deleteExactConversationMessages(canonicalId);
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<ChatMessageEntity> findByConversationId(String conversationId) {
-        ChatConversationEntity conversation = requireGenericConversation(conversationId);
-        return chatMessageDao.findByConversationId(String.valueOf(conversation.getId()));
+        EsContext context = requireIdentity();
+        return findOwnedMessagesInternal(
+                context.getJiacn(), context.getClientId(), conversationId, null);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ChatConversationEntity create(ChatConversationEntity entity) {
-        chatConversationDao.insert(entity);
-        return entity;
+        if (entity == null) {
+            throw unavailable();
+        }
+        EsContext context = requireIdentity();
+        ChatConversationEntity safe = copyAllowedCreate(entity);
+        if (AgentTaskThreadConstants.hasTaskThreadMarkerEvidence(safe)) {
+            throw unavailable();
+        }
+        safe.setJiacn(context.getJiacn());
+        safe.setClientId(context.getClientId());
+        safe.setTenantId(TenantScopeHelper.DEFAULT_TENANT);
+        safe.setDeletedAt(null);
+        if (chatConversationDao.insert(safe) != 1) {
+            throw unavailable();
+        }
+        return safe;
     }
 
     @Override
     public ChatConversationEntity get(String conversationId) {
-        return requireGenericConversation(conversationId);
+        EsContext context = requireIdentity();
+        return requireGenericConversationForIdentity(
+                context.getJiacn(), context.getClientId(), conversationId);
+    }
+
+    @Override
+    public ChatConversationEntity getOwned(
+            String ownerJiacn, String clientId, String conversationId) {
+        requireIdentityParts(ownerJiacn, clientId);
+        return requireGenericConversationForIdentity(ownerJiacn, clientId, conversationId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatMessageEntity> findOwnedMessages(
+            String ownerJiacn, String clientId, String conversationId) {
+        requireIdentityParts(ownerJiacn, clientId);
+        return findOwnedMessagesInternal(ownerJiacn, clientId, conversationId, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatMessageEntity> findOwnedMessages(
+            String ownerJiacn, String clientId, String conversationId, int limit) {
+        requireIdentityParts(ownerJiacn, clientId);
+        if (limit < 1 || limit > 500) {
+            throw unavailable();
+        }
+        return findOwnedMessagesInternal(ownerJiacn, clientId, conversationId, limit);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatMessageEntity appendOwnedMessage(
+            String ownerJiacn, String clientId, ChatMessageEntity message) {
+        requireIdentityParts(ownerJiacn, clientId);
+        if (message == null) {
+            throw unavailable();
+        }
+        ChatConversationEntity conversation = lockGenericConversationForIdentity(
+                ownerJiacn, clientId, message.getConversationId());
+        ChatMessageEntity safe = copyAllowedMessage(message);
+        safe.setConversationId(Long.toString(conversation.getId()));
+        safe.setJiacn(conversation.getJiacn());
+        safe.setClientId(conversation.getClientId());
+        safe.setTenantId(conversation.getTenantId());
+        safe.setConversationType(conversation.getConversationType());
+        safe.init4Creation();
+        if (chatMessageDao.insert(safe) != 1) {
+            throw unavailable();
+        }
+        return safe;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEntity updateOwnedTitle(
+            String ownerJiacn, String clientId, String conversationId,
+            String title, Integer status) {
+        requireIdentityParts(ownerJiacn, clientId);
+        ChatConversationEntity existing = lockGenericConversationForIdentity(
+                ownerJiacn, clientId, conversationId);
+        return persistOwnedUpdate(existing, title, status);
     }
 
     @Override
@@ -99,57 +205,156 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         if (entity == null || entity.getId() == null) {
             throw unavailable();
         }
-        ChatConversationEntity existing = requireGenericConversation(String.valueOf(entity.getId()));
+        EsContext context = requireIdentity();
+        ChatConversationEntity existing = lockGenericConversationForIdentity(
+                context.getJiacn(), context.getClientId(), Long.toString(entity.getId()));
+        return persistOwnedUpdate(existing, entity.getTitle(), entity.getStatus());
+    }
+
+    private ChatConversationEntity persistOwnedUpdate(
+            ChatConversationEntity existing, String title, Integer status) {
         ChatConversationEntity allowedUpdate = new ChatConversationEntity()
                 .setId(existing.getId())
-                .setTitle(entity.getTitle())
-                .setStatus(entity.getStatus())
+                .setTitle(title)
+                .setStatus(status)
                 .setJiacn(existing.getJiacn())
                 .setConversationType(existing.getConversationType())
                 .setConversationScopeType(existing.getConversationScopeType())
                 .setConversationScopeKey(existing.getConversationScopeKey())
                 .setTaskId(existing.getTaskId())
-                .setTargetAgentId(existing.getTargetAgentId());
+                .setTargetAgentId(existing.getTargetAgentId())
+                .setDeletedAt(null);
         allowedUpdate.setTenantId(existing.getTenantId());
         allowedUpdate.setClientId(existing.getClientId());
-        chatConversationDao.updateById(allowedUpdate);
+        if (chatConversationDao.updateById(allowedUpdate) != 1) {
+            throw unavailable();
+        }
         return allowedUpdate;
     }
 
-    private ChatConversationEntity requireGenericConversation(String conversationId) {
-        Long requestedId = parseConversationId(conversationId);
-        EsContext context = EsContextHolder.getContext();
-        String jiacn = context.getJiacn();
-        String clientId = context.getClientId();
-        if (!isCanonicalIdentityPart(jiacn) || !isCanonicalIdentityPart(clientId)) {
+    private List<ChatMessageEntity> findOwnedMessagesInternal(
+            String ownerJiacn, String clientId, String conversationId, Integer limit) {
+        ChatConversationEntity conversation = requireGenericConversationForIdentity(
+                ownerJiacn, clientId, conversationId);
+        try {
+            return limit == null
+                    ? chatMessageDao.findOwnedByConversationId(
+                    ownerJiacn, clientId, Long.toString(conversation.getId()))
+                    : chatMessageDao.findOwnedByConversationIdWithLimit(
+                    ownerJiacn, clientId, Long.toString(conversation.getId()), limit);
+        } catch (RuntimeException exception) {
+            log.warn("Unable to read exact-scoped conversation messages; denying access. conversationId={}",
+                    conversation.getId(), exception);
             throw unavailable();
         }
+    }
 
+    private ChatConversationEntity requireGenericConversationForIdentity(
+            String ownerJiacn, String clientId, String conversationId) {
+        requireIdentityParts(ownerJiacn, clientId);
+        Long requestedId = parseConversationId(conversationId);
         ChatConversationEntity conversation;
         try {
             conversation = chatConversationDao.findScopedById(
-                    jiacn, clientId, String.valueOf(requestedId));
+                    ownerJiacn, clientId, Long.toString(requestedId));
         } catch (RuntimeException exception) {
             log.warn("Unable to verify generic conversation ownership; denying access. conversationId={}",
                     requestedId, exception);
             throw unavailable();
         }
-        if (!belongsToCurrentIdentity(conversation, requestedId, jiacn, clientId)
+        return validateGenericConversation(
+                conversation, requestedId, ownerJiacn, clientId);
+    }
+
+    private ChatConversationEntity lockGenericConversationForIdentity(
+            String ownerJiacn, String clientId, String conversationId) {
+        requireIdentityParts(ownerJiacn, clientId);
+        Long requestedId = parseConversationId(conversationId);
+        ChatConversationEntity conversation;
+        try {
+            conversation = chatConversationDao.lockScopedById(
+                    ownerJiacn, clientId, Long.toString(requestedId));
+        } catch (RuntimeException exception) {
+            log.warn("Unable to lock generic conversation ownership; denying mutation. conversationId={}",
+                    requestedId, exception);
+            throw unavailable();
+        }
+        return validateGenericConversation(
+                conversation, requestedId, ownerJiacn, clientId);
+    }
+
+    private ChatConversationEntity validateGenericConversation(
+            ChatConversationEntity conversation, Long requestedId,
+            String ownerJiacn, String clientId) {
+        if (conversation == null || conversation.getDeletedAt() != null
+                || !belongsToIdentity(conversation, requestedId, ownerJiacn, clientId)
                 || isTaskThreadEvidence(conversation)) {
             throw unavailable();
         }
         return conversation;
     }
 
+    private EsContext requireIdentity() {
+        EsContext context = EsContextHolder.getContext();
+        if (context == null) {
+            throw unavailable();
+        }
+        requireIdentityParts(context.getJiacn(), context.getClientId());
+        return context;
+    }
+
+    private void requireIdentityParts(String ownerJiacn, String clientId) {
+        if (!isCanonicalIdentityPart(ownerJiacn) || !isCanonicalIdentityPart(clientId)) {
+            throw unavailable();
+        }
+    }
+
+    private ChatConversationEntity copyAllowedSearch(ChatConversationEntity requested) {
+        if (requested == null) {
+            return new ChatConversationEntity();
+        }
+        ChatConversationEntity safe = new ChatConversationEntity()
+                .setId(requested.getId())
+                .setTitle(requested.getTitle())
+                .setStatus(requested.getStatus())
+                .setConversationType(requested.getConversationType())
+                .setConversationScopeType(requested.getConversationScopeType())
+                .setConversationScopeKey(requested.getConversationScopeKey())
+                .setTaskId(requested.getTaskId())
+                .setTargetAgentId(requested.getTargetAgentId());
+        safe.setCreateTime(requested.getCreateTime());
+        safe.setUpdateTime(requested.getUpdateTime());
+        return safe;
+    }
+
+    private ChatConversationEntity copyAllowedCreate(ChatConversationEntity requested) {
+        return new ChatConversationEntity()
+                .setTitle(requested.getTitle())
+                .setStatus(requested.getStatus())
+                .setConversationType(requested.getConversationType())
+                .setConversationScopeType(requested.getConversationScopeType())
+                .setConversationScopeKey(requested.getConversationScopeKey())
+                .setTaskId(requested.getTaskId())
+                .setTargetAgentId(requested.getTargetAgentId());
+    }
+
+    private ChatMessageEntity copyAllowedMessage(ChatMessageEntity requested) {
+        return new ChatMessageEntity()
+                .setMessageType(requested.getMessageType())
+                .setContent(requested.getContent())
+                .setMetadata(requested.getMetadata())
+                .setSyncStatus(requested.getSyncStatus())
+                .setSenderType(requested.getSenderType())
+                .setSenderName(requested.getSenderName());
+    }
+
     private Long parseConversationId(String conversationId) {
-        if (conversationId == null || conversationId.isBlank()
-                || !conversationId.equals(conversationId.strip())
-                || conversationId.chars().anyMatch(Character::isISOControl)) {
+        if (!isCanonicalIdentityPart(conversationId)) {
             throw unavailable();
         }
         try {
             long id = Long.parseLong(conversationId);
-            if (id <= 0) {
+            if (id <= 0 || !Long.toString(id).equals(conversationId)) {
                 throw unavailable();
             }
             return id;
@@ -158,20 +363,23 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         }
     }
 
-    private boolean belongsToCurrentIdentity(
-            ChatConversationEntity conversation, Long requestedId, String jiacn, String clientId) {
+    private boolean belongsToIdentity(
+            ChatConversationEntity conversation, Long requestedId,
+            String ownerJiacn, String clientId) {
         if (conversation == null
                 || !requestedId.equals(conversation.getId())
-                || !jiacn.equals(conversation.getJiacn())
+                || !ownerJiacn.equals(conversation.getJiacn())
                 || !clientId.equals(conversation.getClientId())) {
             return false;
         }
         String tenantId = conversation.getTenantId();
-        return jiacn.equals(tenantId) || TenantScopeHelper.DEFAULT_TENANT.equals(tenantId);
+        return ownerJiacn.equals(tenantId)
+                || TenantScopeHelper.DEFAULT_TENANT.equals(tenantId);
     }
 
     private boolean isCanonicalIdentityPart(String value) {
-        return value != null && !value.isBlank() && value.equals(value.strip())
+        return value != null && value.length() <= MAX_IDENTITY_LENGTH
+                && !value.isBlank() && value.equals(value.strip())
                 && value.chars().noneMatch(Character::isISOControl);
     }
 
@@ -189,7 +397,8 @@ public class ChatConversationServiceImpl implements ChatConversationService {
             return false;
         }
         try {
-            return taskThreadDao.findAnyByConversationId(String.valueOf(conversation.getId())) != null;
+            return taskThreadDao.findAnyByConversationId(
+                    Long.toString(conversation.getId())) != null;
         } catch (RuntimeException exception) {
             log.warn("Unable to prove conversation is outside task-thread scope; denying generic access. conversationId={}",
                     conversation.getId(), exception);

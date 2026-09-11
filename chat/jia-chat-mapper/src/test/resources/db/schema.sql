@@ -11,6 +11,7 @@ CREATE TABLE chat_conversation (
   conversation_scope_key varchar(120) DEFAULT NULL COMMENT 'juyiting scope key',
   task_id varchar(64) DEFAULT NULL COMMENT 'juyiting task id',
   target_agent_id varchar(100) DEFAULT NULL COMMENT 'juyiting private target agent id',
+  deleted_at bigint DEFAULT NULL COMMENT 'durable deletion tombstone',
   create_time bigint DEFAULT NULL COMMENT '创建时间戳',
   update_time bigint DEFAULT NULL COMMENT '更新时间戳',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',

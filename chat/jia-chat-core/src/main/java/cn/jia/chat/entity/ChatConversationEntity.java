@@ -63,4 +63,8 @@ public class ChatConversationEntity extends BaseEntity {
 
     @Schema(description = "会话状态（ACTIVE/CLOSED）")
     private Integer status;
+
+    @Schema(description = "durable deletion tombstone timestamp in epoch milliseconds")
+    @TableField("deleted_at")
+    private Long deletedAt;
 }

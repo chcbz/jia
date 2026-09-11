@@ -33,10 +33,17 @@ public class ChatSchemaInitializer implements ApplicationRunner {
         addColumnIfMissing("conversation_scope_key", "VARCHAR(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT 'Juyiting scope key'");
         addColumnIfMissing("task_id", "VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT 'Juyiting bounty task ID'");
         addColumnIfMissing("target_agent_id", "VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT 'Juyiting private target agent ID'");
+        addColumnIfMissing("deleted_at", "BIGINT DEFAULT NULL COMMENT 'Durable conversation deletion tombstone (epoch milliseconds)'");
         if (!indexExists("chat_conversation", "idx_chat_conversation_scope")) {
             jdbcTemplate.execute("""
                     CREATE INDEX idx_chat_conversation_scope
                         ON chat_conversation (conversation_type, conversation_scope_type, conversation_scope_key)
+                    """);
+        }
+        if (!indexExists("chat_conversation", "idx_chat_conversation_live_owner")) {
+            jdbcTemplate.execute("""
+                    CREATE INDEX idx_chat_conversation_live_owner
+                        ON chat_conversation (jiacn, client_id, deleted_at, update_time)
                     """);
         }
         ensureTaskThreadTable();

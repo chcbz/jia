@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -69,6 +70,62 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         };
 
         assertDoesNotThrow(() -> new ChatSchemaInitializer(template).run(null));
+    }
+
+
+    @Test
+    void mysqlAddsDurableConversationTombstoneAndLiveOwnerIndex() throws Exception {
+        List<String> executed = new ArrayList<>();
+        JdbcTemplate template = new JdbcTemplate(dialectDataSource("MySQL")) {
+            @Override
+            public void execute(String sql) {
+                executed.add(normalize(sql));
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                String normalized = normalize(sql);
+                if (normalized.contains("from information_schema.columns")) {
+                    return (T) Integer.valueOf("deleted_at".equals(args[0]) ? 0 : 1);
+                }
+                if (normalized.contains("from information_schema.statistics")) {
+                    return (T) Integer.valueOf("idx_chat_conversation_live_owner".equals(args[1]) ? 0 : 1);
+                }
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            public List<Map<String, Object>> queryForList(String sql) {
+                return normalize(sql).contains("from information_schema.columns")
+                        ? validTaskThreadColumns() : validTaskThreadIndexes();
+            }
+        };
+
+        new ChatSchemaInitializer(template).run(null);
+
+        assertTrue(executed.stream().anyMatch(sql -> sql.contains(
+                "alter table chat_conversation add column deleted_at bigint")), executed.toString());
+        assertTrue(executed.stream().anyMatch(sql -> sql.contains(
+                "create index idx_chat_conversation_live_owner on chat_conversation (jiacn, client_id, deleted_at, update_time)")),
+                executed.toString());
+    }
+
+    @Test
+    void migrationResourceDeclaresDurableTombstoneAndOwnerIndex() throws Exception {
+        try (var stream = getClass().getResourceAsStream(
+                "/db/conversation-delete-fence-migration.sql")) {
+            if (stream == null) {
+                throw new AssertionError("conversation delete migration resource is missing");
+            }
+            String sql = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            String normalized = normalize(sql);
+            assertTrue(normalized.contains("from information_schema.columns"), normalized);
+            assertTrue(normalized.contains("add column deleted_at bigint"), normalized);
+            assertTrue(normalized.contains("from information_schema.statistics"), normalized);
+            assertTrue(normalized.contains("create index idx_chat_conversation_live_owner"), normalized);
+            assertTrue(!normalized.contains("create index if not exists"), normalized);
+        }
     }
 
     @Test
@@ -146,6 +203,18 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         row.put("collation_name", collation);
         row.put("extra", extra);
         return row;
+    }
+
+    private List<Map<String, Object>> validTaskThreadIndexes() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        addIndex(rows, "PRIMARY", 0, "id");
+        addIndex(rows, "uk_task_thread_scope", 0,
+                "tenant_id", "client_id", "task_id", "thread_type", "thread_key");
+        addIndex(rows, "uk_task_thread_conversation", 0,
+                "tenant_id", "client_id", "conversation_id");
+        addIndex(rows, "idx_task_thread_task", 1,
+                "tenant_id", "client_id", "task_id", "status", "create_time");
+        return rows;
     }
 
     private List<Map<String, Object>> wrongTaskThreadIndexes() {

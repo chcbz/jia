@@ -1,7 +1,6 @@
 package cn.jia.chat.api;
 
 import cn.jia.agent.service.AgentService;
-import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -63,8 +62,6 @@ class ChatControllerTest extends BaseMockTest {
     @Mock
     BuiltinHallAgentSupport builtinHallAgentSupport;
     @Mock
-    ChatMessageDao chatMessageDao;
-    @Mock
     MemoryRepository memoryRepository;
     @Mock
     AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
@@ -90,8 +87,9 @@ class ChatControllerTest extends BaseMockTest {
 
         when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
-        when(agentWebSocketHandler.isAgentConnected("agent-wuyong")).thenReturn(true);
-        when(agentWebSocketHandler.sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class))).thenReturn(true);
+        when(agentWebSocketHandler.isAgentConnected("tester", "web-client", "agent-wuyong")).thenReturn(true);
+        when(agentWebSocketHandler.sendDirectMessageToAgent(
+                eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class))).thenReturn(true);
         when(chatConversationEventBroker.stream("1001")).thenReturn(Flux.just("""
                 {"type":"agent_message","conversationId":"1001","conversationType":"juyiting","agentId":"agent-wuyong","senderType":"agent","senderName":"Wu Yong","content":"ok"}
                 """).delayElements(Duration.ofMillis(10)));
@@ -108,8 +106,10 @@ class ChatControllerTest extends BaseMockTest {
         List<String> chunks = controller.handleChat(request).collectList().block();
 
         ArgumentCaptor<ChatMessageEntity> messageCaptor = ArgumentCaptor.forClass(ChatMessageEntity.class);
-        verify(chatMessageDao).insert(messageCaptor.capture());
-        verify(agentWebSocketHandler).sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class));
+        verify(chatConversationService).appendOwnedMessage(
+                eq("tester"), eq("web-client"), messageCaptor.capture());
+        verify(agentWebSocketHandler).sendDirectMessageToAgent(
+                eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class));
 
         ChatMessageEntity saved = messageCaptor.getValue();
         assertTrue("1001".equals(saved.getConversationId()));
@@ -247,6 +247,8 @@ class ChatControllerTest extends BaseMockTest {
 
         when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("372")).thenReturn(Flux.never());
+        when(chatConversationService.getOwned("tester", "web-client", "372"))
+                .thenReturn(conversation);
 
         ChatController controller = newController();
 
@@ -262,7 +264,8 @@ class ChatControllerTest extends BaseMockTest {
         List<String> chunks = controller.handleChat(request).collectList().block();
 
         assertTrue(chunks.stream().anyMatch(item -> item.contains("target outside bounty participants")));
-        verify(chatMessageDao, org.mockito.Mockito.never()).insert(any());
+        verify(chatConversationService, org.mockito.Mockito.never()).appendOwnedMessage(
+                any(), any(), any(ChatMessageEntity.class));
     }
 
     @Test
@@ -325,12 +328,21 @@ class ChatControllerTest extends BaseMockTest {
     private ChatController newController() {
         org.mockito.Mockito.lenient().when(taskThreadMemoryGuard.excludeProtected(any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        ChatConversationEntity publicConversation = new ChatConversationEntity()
+                .setId(1001L).setJiacn("tester").setConversationType("juyiting")
+                .setConversationScopeType("public").setConversationScopeKey("public");
+        publicConversation.setTenantId("0"); publicConversation.setClientId("web-client");
+        org.mockito.Mockito.lenient().when(chatConversationService.getOwned(
+                "tester", "web-client", "1001")).thenReturn(publicConversation);
+        org.mockito.Mockito.lenient().when(chatConversationService.appendOwnedMessage(
+                anyString(), anyString(), any(ChatMessageEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(2));
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 agentWebSocketHandler,
                 chatConversationEventBroker,
                 builtinHallAgentSupport,
-                chatMessageDao,
+                chatConversationService,
                 agentService,
                 scopeService
         );
@@ -343,7 +355,6 @@ class ChatControllerTest extends BaseMockTest {
                 builtinHallAgentSupport,
                 scopeService,
                 relayService,
-                chatMessageDao,
                 memoryRepository,
                 taskThreadMemoryGuard
         );
