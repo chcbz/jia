@@ -322,6 +322,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
         String ownerJiacn = sessionJiacn(session);
         String ownerClientId = sessionClientId(session);
+        long generation = lifecycleGeneration(conversation);
         String senderType = asString(payload.get("senderType"));
         String senderName = asString(payload.get("senderName"));
         String content = asString(payload.get("content"));
@@ -342,7 +343,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (senderName != null) {
             started.put("senderName", senderName);
         }
-        sendEvent(session, "started", started);
+        boolean live = chatConversationEventBroker.runIfLive(
+                conversationId, generation,
+                () -> chatConversationService.isLiveGeneration(
+                        ownerJiacn, ownerClientId, conversationId, generation),
+                () -> sendEvent(session, "started", started));
+        if (!live) {
+            return;
+        }
 
         Disposable disposable = chatClient.prompt(content)
                 .advisors(advisor -> advisor
@@ -355,24 +363,32 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 .stream()
                 .content()
                 .concatMap(chunk -> Mono.fromRunnable(() -> {
-                    if (requireOwnedConversation(session, payload, conversationId) == null) {
-                        return;
-                    }
                     Map<String, Object> event = copyTrace(payload);
                     event.put("conversationId", conversationId);
                     event.put("conversationType", conversationType);
                     event.put("content", chunk);
-                    sendEvent(session, "delta", event);
+                    chatConversationEventBroker.runIfLive(
+                            conversationId, generation,
+                            () -> chatConversationService.isLiveGeneration(
+                                    ownerJiacn, ownerClientId, conversationId, generation),
+                            () -> sendEvent(session, "delta", event));
                 }))
-                .doOnError(error -> sendError(session, payload, error.getMessage()))
+                .takeUntilOther(chatConversationEventBroker.deletionSignal(
+                        conversationId, generation))
+                .doOnError(error -> chatConversationEventBroker.runIfLive(
+                        conversationId, generation,
+                        () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, conversationId, generation),
+                        () -> sendError(session, payload, error.getMessage())))
                 .doOnComplete(() -> {
-                    if (requireOwnedConversation(session, payload, conversationId) == null) {
-                        return;
-                    }
                     Map<String, Object> done = copyTrace(payload);
                     done.put("conversationId", conversationId);
                     done.put("conversationType", conversationType);
-                    sendEvent(session, "done", done);
+                    chatConversationEventBroker.runIfLive(
+                            conversationId, generation,
+                            () -> chatConversationService.isLiveGeneration(
+                                    ownerJiacn, ownerClientId, conversationId, generation),
+                            () -> sendEvent(session, "done", done));
                 })
                 .doFinally(signal -> runningStreams.remove(streamKey))
                 .subscribeOn(Schedulers.boundedElastic())
@@ -742,6 +758,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
+        long generation = lifecycleGeneration(conversation);
         String senderName = Optional.ofNullable(asString(payload.get("senderName")))
                 .orElse(Optional.ofNullable(asString(payload.get("agentName"))).orElse(agentId));
 
@@ -764,7 +781,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         metadata.put("conversationType", conversationType);
         entity.setMetadata(JsonUtil.toJson(metadata));
         try {
-            entity = chatConversationService.appendOwnedMessage(jiacn, clientId, entity);
+            entity = chatConversationService.appendOwnedMessage(
+                    jiacn, clientId, entity, generation);
         } catch (RuntimeException denied) {
             sendError(session, payload, "CONVERSATION_NOT_AVAILABLE",
                     "Conversation is not available to this agent session");
@@ -780,9 +798,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         event.put("senderType", "agent");
         event.put("senderName", senderName);
         event.put("content", content);
-        sendEvent(session, "agent_message_saved", event);
-        broadcastEventToScope(clientId, jiacn, "agent_message", event);
-        chatConversationEventBroker.publish(conversationId, event);
+        chatConversationEventBroker.runIfLive(
+                conversationId, generation,
+                () -> chatConversationService.isLiveGeneration(
+                        jiacn, clientId, conversationId, generation),
+                () -> {
+                    sendEvent(session, "agent_message_saved", event);
+                    broadcastEventToScope(clientId, jiacn, "agent_message", event);
+                    chatConversationEventBroker.publishIfLive(
+                            conversationId, generation, () -> true, event);
+                });
     }
 
     private void publishAgentMessageDelta(WebSocketSession session, Map<String, Object> payload) {
@@ -806,6 +831,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
+        long generation = lifecycleGeneration(conversation);
         String senderName = Optional.ofNullable(asString(payload.get("senderName")))
                 .orElse(Optional.ofNullable(asString(payload.get("agentName"))).orElse(agentId));
 
@@ -820,20 +846,118 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         putIfPresent(event, "phase", payload.get("phase"));
         putIfPresent(event, "chunkIndex", payload.get("chunkIndex"));
         putIfPresent(event, "chunkCount", payload.get("chunkCount"));
-        chatConversationEventBroker.publish(conversationId, event);
+        chatConversationEventBroker.publishIfLive(
+                conversationId, generation,
+                () -> chatConversationService.isLiveGeneration(
+                        sessionJiacn(session), sessionClientId(session),
+                        conversationId, generation),
+                event);
     }
 
     private boolean requireConversationAgentScope(
             WebSocketSession session, Map<String, Object> payload,
             ChatConversationEntity conversation, String agentId) {
-        String targetAgentId = conversation.getTargetAgentId();
-        if (targetAgentId != null && !targetAgentId.isBlank()
-                && !targetAgentId.equals(agentId)) {
-            sendError(session, payload, "CONVERSATION_AGENT_SCOPE_MISMATCH",
-                    "Agent is outside the conversation target scope");
-            return false;
+        if (!isCanonicalScopeId(agentId)) {
+            return denyConversationAgentScope(session, payload);
         }
+
+        List<String> persistedTargets;
+        try {
+            persistedTargets = parsePersistedTargetAgentIds(conversation.getTargetAgentIds());
+        } catch (RuntimeException invalidScope) {
+            return denyConversationAgentScope(session, payload);
+        }
+        String legacyTarget = conversation.getTargetAgentId();
+        if (legacyTarget != null && !legacyTarget.isBlank()) {
+            if (!isCanonicalScopeId(legacyTarget)) {
+                return denyConversationAgentScope(session, payload);
+            }
+            if (persistedTargets.isEmpty()) {
+                persistedTargets = List.of(legacyTarget);
+            } else if (!persistedTargets.contains(legacyTarget)) {
+                return denyConversationAgentScope(session, payload);
+            }
+        }
+        if (!persistedTargets.isEmpty() && !persistedTargets.contains(agentId)) {
+            return denyConversationAgentScope(session, payload);
+        }
+
+        String scopeType = conversation.getConversationScopeType();
+        String taskId = conversation.getTaskId();
+        String scopeKey = conversation.getConversationScopeKey();
+        boolean taskScoped = "bounty".equals(scopeType)
+                || (taskId != null && !taskId.isBlank())
+                || (scopeKey != null && scopeKey.startsWith("task:"));
+        if ("private".equals(scopeType) && persistedTargets.size() != 1) {
+            return denyConversationAgentScope(session, payload);
+        }
+        if (!taskScoped) {
+            return true;
+        }
+        if (!("public".equals(scopeType) || "bounty".equals(scopeType)
+                || "private".equals(scopeType))) {
+            return denyConversationAgentScope(session, payload);
+        }
+        if (!isCanonicalScopeId(taskId)) {
+            return denyConversationAgentScope(session, payload);
+        }
+        String expectedScopeKey = "private".equals(scopeType)
+                ? "task:" + taskId + ":agent:" + agentId
+                : "task:" + taskId;
+        if (!expectedScopeKey.equals(scopeKey)) {
+            return denyConversationAgentScope(session, payload);
+        }
+        Set<String> authoritativeMembers = resolveTaskMemberAgentIds(
+                sessionJiacn(session), sessionClientId(session), taskId);
+        if (!authoritativeMembers.contains(agentId)) {
+            return denyConversationAgentScope(session, payload);
+        }
+        // New public/bounty conversations persist the complete authorized target set. A legacy
+        // row without that set remains bounded by current authoritative membership.
         return true;
+    }
+
+    private boolean denyConversationAgentScope(
+            WebSocketSession session, Map<String, Object> payload) {
+        sendError(session, payload, "CONVERSATION_AGENT_SCOPE_MISMATCH",
+                "Agent is outside the conversation target scope");
+        return false;
+    }
+
+    private List<String> parsePersistedTargetAgentIds(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<?> values = objectMapper.readValue(json, List.class);
+            LinkedHashSet<String> normalized = new LinkedHashSet<>();
+            for (Object value : values) {
+                if (!(value instanceof String text) || !isCanonicalScopeId(text)
+                        || !normalized.add(text)) {
+                    throw new IllegalArgumentException("Invalid persisted target agent scope");
+                }
+            }
+            return List.copyOf(normalized);
+        } catch (Exception invalid) {
+            throw new IllegalArgumentException("Invalid persisted target agent scope", invalid);
+        }
+    }
+
+    private boolean isCanonicalScopeId(String value) {
+        return value != null && !value.isBlank() && value.length() <= 100
+                && value.equals(value.strip())
+                && value.chars().noneMatch(Character::isISOControl);
+    }
+
+    private long lifecycleGeneration(ChatConversationEntity conversation) {
+        Long generation = conversation == null ? null : conversation.getLifecycleGeneration();
+        if (generation == null) {
+            return 1L;
+        }
+        if (generation < 1) {
+            throw new IllegalStateException("Conversation generation is unavailable");
+        }
+        return generation;
     }
 
     private ChatConversationEntity requireOwnedConversation(
@@ -1473,9 +1597,24 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     tenantId, clientId, taskId);
             return Set.of();
         }
+        if (!validExactDispatchId(tenantId, 50)
+                || !validExactDispatchId(clientId, 50)
+                || !isCanonicalScopeId(taskId)) {
+            return Set.of();
+        }
         try {
-            return new LinkedHashSet<>(Optional.ofNullable(
-                    agentService.listTaskMemberAgentIds(tenantId, clientId, taskId)).orElseGet(List::of));
+            List<String> rawMembers = agentService.listTaskMemberAgentIds(
+                    tenantId, clientId, taskId);
+            if (rawMembers == null || rawMembers.isEmpty()) {
+                return Set.of();
+            }
+            LinkedHashSet<String> members = new LinkedHashSet<>();
+            for (String member : rawMembers) {
+                if (!isCanonicalScopeId(member) || !members.add(member)) {
+                    return Set.of();
+                }
+            }
+            return Set.copyOf(members);
         } catch (RuntimeException e) {
             log.warn("Refusing task delivery because task members could not be resolved, tenantId={}, clientId={}, taskId={}",
                     tenantId, clientId, taskId, e);

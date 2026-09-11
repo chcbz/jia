@@ -54,6 +54,18 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
     }
 
     @Override
+    public boolean isLiveGeneration(
+            String ownerJiacn, String clientId, String conversationId, long expectedGeneration) {
+        requireIdentity(ownerJiacn, "ownerJiacn");
+        requireIdentity(clientId, "clientId");
+        if (expectedGeneration < 1) {
+            throw new IllegalArgumentException("expectedGeneration is invalid");
+        }
+        return baseMapper.countExactLiveGeneration(
+                ownerJiacn, clientId, parseId(conversationId), expectedGeneration) == 1;
+    }
+
+    @Override
     public List<ChatConversationEntity> selectNonTaskThreadByEntity(ChatConversationEntity example) {
         if (example == null) {
             throw new IllegalArgumentException("scoped conversation example is required");
@@ -101,6 +113,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
                 .eq(StringUtil.isNotBlank(example.getTaskId()), "task_id", example.getTaskId())
                 .eq(StringUtil.isNotBlank(example.getTargetAgentId()),
                         "target_agent_id", example.getTargetAgentId())
+                .eq(StringUtil.isNotBlank(example.getTargetAgentIds()),
+                        "target_agent_ids", example.getTargetAgentIds())
                 .eq(example.getCreateTime() != null, "create_time", example.getCreateTime())
                 .eq(example.getUpdateTime() != null, "update_time", example.getUpdateTime());
     }

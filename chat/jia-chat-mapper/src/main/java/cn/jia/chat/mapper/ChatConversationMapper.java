@@ -57,7 +57,9 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
 
     @Update("""
             UPDATE chat_conversation
-            SET deleted_at = #{deletedAt}, update_time = #{deletedAt}
+            SET deleted_at = #{deletedAt},
+                lifecycle_generation = lifecycle_generation + 1,
+                update_time = #{deletedAt}
             WHERE id = #{id}
             """ + EXACT_OWNER_SCOPE + """
               AND deleted_at IS NULL
@@ -67,4 +69,17 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
             @Param("clientId") String clientId,
             @Param("id") Long id,
             @Param("deletedAt") long deletedAt);
+
+    @Select("""
+            SELECT COUNT(*) FROM chat_conversation
+            WHERE id = #{id}
+            """ + EXACT_OWNER_SCOPE + """
+              AND deleted_at IS NULL
+              AND lifecycle_generation = #{expectedGeneration}
+            """)
+    int countExactLiveGeneration(
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId,
+            @Param("id") Long id,
+            @Param("expectedGeneration") long expectedGeneration);
 }

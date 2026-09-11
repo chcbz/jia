@@ -9,6 +9,7 @@ import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.chat.exception.AgentTaskThreadException.Reason;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.mybatis.TenantScopeHelper;
@@ -17,6 +18,8 @@ import com.github.pagehelper.PageInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 
@@ -29,14 +32,17 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     private final ChatConversationDao chatConversationDao;
     private final ChatMessageDao chatMessageDao;
     private final AgentTaskThreadDao taskThreadDao;
+    private final ChatConversationEventBroker eventBroker;
 
     public ChatConversationServiceImpl(
             ChatConversationDao chatConversationDao,
             ChatMessageDao chatMessageDao,
-            AgentTaskThreadDao taskThreadDao) {
+            AgentTaskThreadDao taskThreadDao,
+            ChatConversationEventBroker eventBroker) {
         this.chatConversationDao = chatConversationDao;
         this.chatMessageDao = chatMessageDao;
         this.taskThreadDao = taskThreadDao;
+        this.eventBroker = eventBroker;
     }
 
     @Override
@@ -76,31 +82,44 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         Long requestedId = parseConversationId(conversationId);
         EsContext context = requireIdentity();
         String canonicalId = Long.toString(requestedId);
+        ChatConversationEventBroker.DeletionFence deletionFence =
+                eventBroker.beginDeletion(canonicalId);
+        boolean fenceHandedToTransaction = false;
         ChatConversationEntity conversation;
         try {
-            conversation = chatConversationDao.lockScopedByIdIncludingDeleted(
-                    context.getJiacn(), context.getClientId(), canonicalId);
-        } catch (RuntimeException exception) {
-            log.warn("Unable to lock conversation delete scope; denying mutation. conversationId={}",
-                    canonicalId, exception);
-            throw unavailable();
+            try {
+                conversation = chatConversationDao.lockScopedByIdIncludingDeleted(
+                        context.getJiacn(), context.getClientId(), canonicalId);
+            } catch (RuntimeException exception) {
+                log.warn("Unable to lock conversation delete scope; denying mutation. conversationId={}",
+                        canonicalId, exception);
+                throw unavailable();
+            }
+            // A valid delete never discloses whether the row was missing or foreign.
+            if (conversation == null
+                    || !belongsToIdentity(conversation, requestedId,
+                    context.getJiacn(), context.getClientId())
+                    || isTaskThreadEvidence(conversation)) {
+                return;
+            }
+            long liveGeneration = requireLifecycleGeneration(conversation);
+            if (conversation.getDeletedAt() == null) {
+                long deletedAt = System.currentTimeMillis();
+                if (chatConversationDao.softDeleteScopedById(
+                        context.getJiacn(), context.getClientId(), canonicalId, deletedAt) != 1) {
+                    throw unavailable();
+                }
+                // The exact row remains locked until commit. Every ordinary writer takes this row
+                // lock first, so append-first/delete-first both converge without orphan messages.
+                chatMessageDao.deleteExactConversationMessages(canonicalId);
+            }
+            fenceHandedToTransaction = completeDeletionFenceAfterCommit(
+                    deletionFence, liveGeneration);
+        } finally {
+            if (!fenceHandedToTransaction) {
+                deletionFence.close();
+            }
         }
-        // A valid delete never discloses whether the row was missing, foreign, or already deleted.
-        if (conversation == null || conversation.getDeletedAt() != null
-                || !belongsToIdentity(conversation, requestedId,
-                context.getJiacn(), context.getClientId())
-                || isTaskThreadEvidence(conversation)) {
-            return;
-        }
-        long deletedAt = System.currentTimeMillis();
-        if (chatConversationDao.softDeleteScopedById(
-                context.getJiacn(), context.getClientId(), canonicalId, deletedAt) != 1) {
-            throw unavailable();
-        }
-        // The exact conversation row remains locked until commit. Every ordinary writer takes the
-        // same lock first, so a late callback either precedes this delete and is removed here, or
-        // follows it and observes the tombstone.
-        chatMessageDao.deleteExactConversationMessages(canonicalId);
     }
 
     @Override
@@ -126,6 +145,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         safe.setClientId(context.getClientId());
         safe.setTenantId(TenantScopeHelper.DEFAULT_TENANT);
         safe.setDeletedAt(null);
+        safe.setLifecycleGeneration(1L);
         if (chatConversationDao.insert(safe) != 1) {
             throw unavailable();
         }
@@ -144,6 +164,22 @@ public class ChatConversationServiceImpl implements ChatConversationService {
             String ownerJiacn, String clientId, String conversationId) {
         requireIdentityParts(ownerJiacn, clientId);
         return requireGenericConversationForIdentity(ownerJiacn, clientId, conversationId);
+    }
+
+    @Override
+    public boolean isLiveGeneration(
+            String ownerJiacn, String clientId, String conversationId, long expectedGeneration) {
+        try {
+            requireIdentityParts(ownerJiacn, clientId);
+            if (expectedGeneration < 1) {
+                return false;
+            }
+            return chatConversationDao.isLiveGeneration(
+                    ownerJiacn, clientId, Long.toString(parseConversationId(conversationId)),
+                    expectedGeneration);
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
     }
 
     @Override
@@ -169,12 +205,32 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     @Transactional(rollbackFor = Exception.class)
     public ChatMessageEntity appendOwnedMessage(
             String ownerJiacn, String clientId, ChatMessageEntity message) {
+        return appendOwnedMessageInternal(ownerJiacn, clientId, message, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatMessageEntity appendOwnedMessage(
+            String ownerJiacn, String clientId, ChatMessageEntity message, long expectedGeneration) {
+        if (expectedGeneration < 1) {
+            throw unavailable();
+        }
+        return appendOwnedMessageInternal(
+                ownerJiacn, clientId, message, expectedGeneration);
+    }
+
+    private ChatMessageEntity appendOwnedMessageInternal(
+            String ownerJiacn, String clientId, ChatMessageEntity message, Long expectedGeneration) {
         requireIdentityParts(ownerJiacn, clientId);
         if (message == null) {
             throw unavailable();
         }
         ChatConversationEntity conversation = lockGenericConversationForIdentity(
                 ownerJiacn, clientId, message.getConversationId());
+        long actualGeneration = requireLifecycleGeneration(conversation);
+        if (expectedGeneration != null && expectedGeneration != actualGeneration) {
+            throw unavailable();
+        }
         ChatMessageEntity safe = copyAllowedMessage(message);
         safe.setConversationId(Long.toString(conversation.getId()));
         safe.setJiacn(conversation.getJiacn());
@@ -223,7 +279,9 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                 .setConversationScopeKey(existing.getConversationScopeKey())
                 .setTaskId(existing.getTaskId())
                 .setTargetAgentId(existing.getTargetAgentId())
-                .setDeletedAt(null);
+                .setTargetAgentIds(existing.getTargetAgentIds())
+                .setDeletedAt(null)
+                .setLifecycleGeneration(requireLifecycleGeneration(existing));
         allowedUpdate.setTenantId(existing.getTenantId());
         allowedUpdate.setClientId(existing.getClientId());
         if (chatConversationDao.updateById(allowedUpdate) != 1) {
@@ -321,7 +379,8 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                 .setConversationScopeType(requested.getConversationScopeType())
                 .setConversationScopeKey(requested.getConversationScopeKey())
                 .setTaskId(requested.getTaskId())
-                .setTargetAgentId(requested.getTargetAgentId());
+                .setTargetAgentId(requested.getTargetAgentId())
+                .setTargetAgentIds(requested.getTargetAgentIds());
         safe.setCreateTime(requested.getCreateTime());
         safe.setUpdateTime(requested.getUpdateTime());
         return safe;
@@ -335,7 +394,9 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                 .setConversationScopeType(requested.getConversationScopeType())
                 .setConversationScopeKey(requested.getConversationScopeKey())
                 .setTaskId(requested.getTaskId())
-                .setTargetAgentId(requested.getTargetAgentId());
+                .setTargetAgentId(requested.getTargetAgentId())
+                .setTargetAgentIds(requested.getTargetAgentIds())
+                .setLifecycleGeneration(1L);
     }
 
     private ChatMessageEntity copyAllowedMessage(ChatMessageEntity requested) {
@@ -381,6 +442,40 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         return value != null && value.length() <= MAX_IDENTITY_LENGTH
                 && !value.isBlank() && value.equals(value.strip())
                 && value.chars().noneMatch(Character::isISOControl);
+    }
+
+    private long requireLifecycleGeneration(ChatConversationEntity conversation) {
+        Long generation = conversation == null ? null : conversation.getLifecycleGeneration();
+        // Existing rows are backfilled/defaulted to generation 1 by the migration. Keeping this
+        // compatibility default lets a rolling binary read a pre-migration fixture fail safely at
+        // the first generation-aware write/probe rather than inventing a later generation.
+        if (generation == null) {
+            return 1L;
+        }
+        if (generation < 1) {
+            throw unavailable();
+        }
+        return generation;
+    }
+
+    private boolean completeDeletionFenceAfterCommit(
+            ChatConversationEventBroker.DeletionFence deletionFence, long deletedGeneration) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            deletionFence.commitDeleted(deletedGeneration);
+            return false;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                deletionFence.commitDeleted(deletedGeneration);
+            }
+
+            @Override
+            public void afterCompletion(int status) {
+                deletionFence.close();
+            }
+        });
+        return true;
     }
 
     private AgentTaskThreadException unavailable() {

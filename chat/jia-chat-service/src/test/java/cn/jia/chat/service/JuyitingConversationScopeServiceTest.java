@@ -1,5 +1,6 @@
 package cn.jia.chat.service;
 
+import cn.jia.agent.service.AgentService;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
@@ -7,92 +8,140 @@ import org.mockito.Mock;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.when;
 
 class JuyitingConversationScopeServiceTest extends BaseMockTest {
-    @Mock
-    BuiltinHallAgentSupport builtinHallAgentSupport;
+    @Mock BuiltinHallAgentSupport builtinHallAgentSupport;
+    @Mock AgentService agentService;
 
     @Test
-    void resolvesRequestFieldsBeforeMetadataFallbacks() {
-        JuyitingConversationScopeService service = new JuyitingConversationScopeService(builtinHallAgentSupport);
-
-        ChatMessageDTO request = new ChatMessageDTO();
-        request.setConversationType("juyiting");
-        request.setConversationScopeType("bounty");
-        request.setConversationScopeKey("task:372");
-        request.setTaskId("372");
-        request.setTargetAgentId("agent-wuyong");
-        request.setTargetAgentIds(List.of("agent-wuyong", "agent-wuyong", "agent-linchong"));
+    void resolvesRequestFieldsBeforeDisplayMetadataFallbacks() {
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong", "agent-linchong"));
         request.setMetadata(Map.of(
-                "mode", "public",
-                "scopeKey", "public",
-                "selectedTaskId", "999",
-                "targetAgentIds", List.of("agent-songjiang")
-        ));
+                "mode", "public", "scopeKey", "task:999", "selectedTaskId", "999",
+                "participantAgentIds", List.of("forged-agent")));
 
-        JuyitingConversationScope scope = service.resolve(request);
+        JuyitingConversationScope scope = service().resolve(request);
 
         assertEquals("bounty", scope.scopeType());
         assertEquals("task:372", scope.scopeKey());
         assertEquals("372", scope.taskId());
-        assertEquals("agent-wuyong", scope.targetAgentId());
         assertEquals(List.of("agent-wuyong", "agent-linchong"), scope.targetAgentIds());
     }
 
     @Test
-    void derivesPrivateScopeFromTaskAndTarget() {
-        JuyitingConversationScopeService service = new JuyitingConversationScopeService(builtinHallAgentSupport);
+    void forgedParticipantMetadataNeverAuthorizesTarget() {
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+                .thenReturn(List.of("agent-wuyong"));
+        ChatMessageDTO request = bounty("372", List.of("agent-linchong"));
+        request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
 
-        ChatMessageDTO request = new ChatMessageDTO();
-        request.setConversationType("juyiting");
-        request.setConversationScopeType("private");
-        request.setTaskId("task-7");
-        request.setMetadata(Map.of("selectedAgentId", "agent-linchong"));
-
-        JuyitingConversationScope scope = service.resolve(request);
-
-        assertEquals("private", scope.scopeType());
-        assertEquals("task:task-7:agent:agent-linchong", scope.scopeKey());
-        assertEquals("task-7", scope.taskId());
-        assertEquals("agent-linchong", scope.targetAgentId());
-        assertEquals(List.of("agent-linchong"), scope.targetAgentIds());
-        assertEquals("agent-linchong", service.targetAgentIdFromScopeKey(scope.scopeKey()));
+        assertThrows(IllegalStateException.class, () -> authorize(request));
     }
 
     @Test
-    void defaultsPublicHallScopeToBuiltinSongJiang() {
-        when(builtinHallAgentSupport.defaultAgentId()).thenReturn("builtin-songjiang");
-        JuyitingConversationScopeService service = new JuyitingConversationScopeService(builtinHallAgentSupport);
+    void bountyRequiresCanonicalTaskAndExactTaskScope() {
+        ChatMessageDTO omitted = bounty(null, List.of("agent-wuyong"));
+        omitted.setConversationScopeKey("public");
+        assertThrows(IllegalStateException.class, () -> authorize(omitted));
 
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+                .thenReturn(List.of("agent-wuyong"));
+        ChatMessageDTO crossTask = bounty("372", List.of("agent-wuyong"));
+        crossTask.setConversationScopeKey("task:999");
+        assertThrows(IllegalStateException.class, () -> authorize(crossTask));
+    }
+
+    @Test
+    void taskMemberQueryFailureAndEmptyTaskFailClosed() {
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+                .thenThrow(new IllegalStateException("query failed"));
+        assertThrows(IllegalStateException.class, () -> authorize(request));
+
+        org.mockito.Mockito.doReturn(List.of()).when(agentService)
+                .listTaskMemberAgentIds("tenant-a", "client-a", "372");
+        assertThrows(IllegalStateException.class, () -> authorize(request));
+    }
+
+    @Test
+    void legalTaskTargetsUseAuthoritativeMembersAndSupportMultipleTargets() {
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+                .thenReturn(List.of("agent-wuyong", "agent-linchong"));
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong", "agent-linchong"));
+        request.setMetadata(Map.of("participantAgentIds", List.of("forged-agent")));
+
+        JuyitingConversationScope scope = authorize(request);
+
+        assertEquals(List.of("agent-wuyong", "agent-linchong"), scope.targetAgentIds());
+        assertEquals(List.of("agent-wuyong", "agent-linchong"), scope.authoritativeAgentIds());
+        assertEquals("[\"agent-wuyong\",\"agent-linchong\"]",
+                service().serializeTargetAgentIds(scope.targetAgentIds()));
+    }
+
+    @Test
+    void taskScopeWithoutTargetsDefaultsToAllAuthoritativeMembers() {
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+                .thenReturn(List.of("agent-wuyong", "agent-linchong"));
+        assertEquals(List.of("agent-wuyong", "agent-linchong"),
+                authorize(bounty("372", List.of())).targetAgentIds());
+    }
+
+    @Test
+    void privateTaskScopeAllowsOneAuthoritativeTarget() {
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+                .thenReturn(List.of("agent-wuyong", "agent-linchong"));
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
+        request.setConversationScopeType("private");
+        request.setConversationScopeKey("task:372:agent:agent-wuyong");
+
+        JuyitingConversationScope scope = authorize(request);
+
+        assertEquals("agent-wuyong", scope.targetAgentId());
+        assertEquals(List.of("agent-wuyong"), scope.targetAgentIds());
+        assertEquals(List.of("agent-wuyong", "agent-linchong"),
+                scope.authoritativeAgentIds());
+    }
+
+    @Test
+    void privateScopeAllowsExactlyOneTarget() {
+        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+                .thenReturn(List.of("agent-wuyong", "agent-linchong"));
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong", "agent-linchong"));
+        request.setConversationScopeType("private");
+        request.setConversationScopeKey("task:372:agent:agent-wuyong");
+        assertThrows(IllegalStateException.class, () -> authorize(request));
+    }
+
+    @Test
+    void publicHallWithoutTaskDefaultsToBuiltinSongJiang() {
+        when(builtinHallAgentSupport.defaultAgentId()).thenReturn("builtin-songjiang");
         ChatMessageDTO request = new ChatMessageDTO();
         request.setConversationType("juyiting");
-
-        JuyitingConversationScope scope = service.resolve(request);
-
+        JuyitingConversationScope scope = authorize(request);
         assertEquals("public", scope.scopeType());
-        assertEquals("public", scope.scopeKey());
-        assertEquals("builtin-songjiang", scope.targetAgentId());
         assertEquals(List.of("builtin-songjiang"), scope.targetAgentIds());
     }
 
-    @Test
-    void rejectsBountyTargetOutsideParticipants() {
-        JuyitingConversationScopeService service = new JuyitingConversationScopeService(builtinHallAgentSupport);
+    private JuyitingConversationScope authorize(ChatMessageDTO request) {
+        JuyitingConversationScopeService service = service();
+        return service.authorize(request, service.resolve(request), "tenant-a", "client-a");
+    }
 
+    private JuyitingConversationScopeService service() {
+        return new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
+    }
+
+    private ChatMessageDTO bounty(String taskId, List<String> targets) {
         ChatMessageDTO request = new ChatMessageDTO();
         request.setConversationType("juyiting");
         request.setConversationScopeType("bounty");
-        request.setTaskId("372");
-        request.setTargetAgentIds(List.of("agent-linchong"));
-        request.setMetadata(Map.of("participantAgentIds", List.of("agent-wuyong")));
-
-        JuyitingConversationScope scope = service.resolve(request);
-        Optional<String> invalid = service.invalidBountyTarget(request, scope);
-
-        assertEquals(Optional.of("agent-linchong"), invalid);
+        request.setConversationScopeKey(taskId == null ? null : "task:" + taskId);
+        request.setTaskId(taskId);
+        request.setTargetAgentIds(targets);
+        return request;
     }
 }

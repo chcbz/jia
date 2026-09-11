@@ -23,6 +23,10 @@ public interface ChatConversationService {
     /** Exact owner-scoped live lookup for callbacks that cannot use thread-local context. */
     ChatConversationEntity getOwned(String ownerJiacn, String clientId, String conversationId);
 
+    /** Fail-closed live-generation probe for asynchronous publication fences. */
+    boolean isLiveGeneration(
+            String ownerJiacn, String clientId, String conversationId, long expectedGeneration);
+
     /** Exact owner-scoped full history read for authenticated maintenance initiated by a user. */
     List<ChatMessageEntity> findOwnedMessages(
             String ownerJiacn, String clientId, String conversationId);
@@ -37,6 +41,10 @@ public interface ChatConversationService {
      */
     ChatMessageEntity appendOwnedMessage(
             String ownerJiacn, String clientId, ChatMessageEntity message);
+
+    /** Append only when the locked conversation still has the captured lifecycle generation. */
+    ChatMessageEntity appendOwnedMessage(
+            String ownerJiacn, String clientId, ChatMessageEntity message, long expectedGeneration);
 
     /** Exact owner-scoped title update for asynchronous summary callbacks. */
     ChatConversationEntity updateOwnedTitle(

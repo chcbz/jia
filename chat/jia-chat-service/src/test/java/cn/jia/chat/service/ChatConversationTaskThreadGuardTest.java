@@ -259,6 +259,19 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
     }
 
     @Test
+    void generationMismatchRejectsAppendBeforeMessageInsert() {
+        ChatConversationEntity owned = ownedConversation(96L, "0")
+                .setLifecycleGeneration(2L);
+        when(conversationDao.lockScopedById(OWNER, CLIENT, "96")).thenReturn(owned);
+        ChatMessageEntity stale = new ChatMessageEntity()
+                .setConversationId("96").setMessageType("ASSISTANT").setContent("stale");
+
+        assertUnavailable(() -> service().appendOwnedMessage(OWNER, CLIENT, stale, 1L));
+
+        verify(messageDao, never()).insert(any(ChatMessageEntity.class));
+    }
+
+    @Test
     void currentTenantConversationRemainsAccessible() {
         ChatConversationEntity owned = ownedConversation(95L, OWNER);
         when(conversationDao.findScopedById(OWNER, CLIENT, "95")).thenReturn(owned);
@@ -266,12 +279,14 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
     }
 
     private ChatConversationServiceImpl service() {
-        return new ChatConversationServiceImpl(conversationDao, messageDao, taskThreadDao);
+        return new ChatConversationServiceImpl(
+                conversationDao, messageDao, taskThreadDao,
+                new ChatConversationEventBroker());
     }
 
     private ChatConversationEntity ownedConversation(long id, String tenantId) {
         ChatConversationEntity conversation = new ChatConversationEntity()
-                .setId(id).setJiacn(OWNER);
+                .setId(id).setJiacn(OWNER).setLifecycleGeneration(1L);
         conversation.setTenantId(tenantId);
         conversation.setClientId(CLIENT);
         return conversation;

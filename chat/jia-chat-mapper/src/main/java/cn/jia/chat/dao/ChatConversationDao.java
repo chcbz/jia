@@ -19,5 +19,8 @@ public interface ChatConversationDao extends IBaseDao<ChatConversationEntity> {
     int softDeleteScopedById(
             String ownerJiacn, String clientId, String conversationId, long deletedAt);
 
+    boolean isLiveGeneration(
+            String ownerJiacn, String clientId, String conversationId, long expectedGeneration);
+
     List<ChatConversationEntity> selectNonTaskThreadByEntity(ChatConversationEntity example);
 }

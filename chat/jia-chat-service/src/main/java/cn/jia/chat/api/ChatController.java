@@ -48,6 +48,7 @@ import lombok.extern.slf4j.Slf4j;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import reactor.core.publisher.FluxSink;
 import reactor.core.scheduler.Schedulers;
+import reactor.core.Disposable;
 
 import java.util.HashMap;
 import java.util.List;
@@ -105,13 +106,15 @@ public class ChatController {
         String conversationId = String.valueOf(conversation.getId());
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
         String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
+        long generation = lifecycleGeneration(conversation);
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
         JuyitingAgentRelayResult agentDelivery = juyitingAgentRelayService.relay(
                 chatMessage,
                 conversationId,
                 () -> createBuiltinSongJiangStream(
-                        chatMessage, conversationId, ownerJiacn, ownerClientId, needSummary, summary)
+                        chatMessage, conversationId, ownerJiacn, ownerClientId,
+                        generation, needSummary, summary)
         );
         boolean skipAdvisorUserPersistence = agentDelivery.attempted();
         Flux<String> aiStream = agentDelivery.delivered()
@@ -123,27 +126,41 @@ public class ChatController {
         return Flux.create(emitter -> {
             Flux<String> backendStream = agentDelivery.stream()
                     .concatWith(aiStream)
-                    .takeUntilOther(cancelSignal)
                     .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
                     .concatWith(Flux.defer(() -> handleSummary(
                             needSummary, chatMessage.getContent(), summary.toString(),
                             conversationId, ownerJiacn, ownerClientId)))
-                    .doOnNext(emitter::next)
+                    .takeUntilOther(cancelSignal)
+                    .takeUntilOther(chatConversationEventBroker.deletionSignal(
+                            conversationId, generation))
+                    .doOnNext(value -> chatConversationEventBroker.runIfLive(
+                            conversationId, generation,
+                            () -> chatConversationService.isLiveGeneration(
+                                    ownerJiacn, ownerClientId, conversationId, generation),
+                            () -> emitter.next(value)))
                     .doOnError(error -> {
                         log.error("Error processing chat response", error);
                         String errorMsg = error.getMessage() != null ? error.getMessage() : "Stream error";
                         String escapedMsg = errorMsg.replace("\\", "\\\\").replace("\"", "\\\"");
-                        emitter.next("{\"error\": \"" + escapedMsg + "\", \"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}");
+                        chatConversationEventBroker.runIfLive(
+                                conversationId, generation,
+                                () -> chatConversationService.isLiveGeneration(
+                                        ownerJiacn, ownerClientId, conversationId, generation),
+                                () -> emitter.next("{\"error\": \"" + escapedMsg
+                                        + "\", \"conversationId\": \"" + conversationId
+                                        + "\", \"conversationType\": \""
+                                        + resolveConversationType(conversation) + "\"}"));
                         emitter.complete();
                     })
                     .doOnComplete(emitter::complete)
                     .subscribeOn(Schedulers.boundedElastic());
 
-            backendStream.subscribe();
+            Disposable backendSubscription = backendStream.subscribe();
 
-            emitter.onDispose(() ->
-                    log.debug("Client disconnected, backend processing continues for conversation: {}", conversationId)
-            );
+            emitter.onDispose(() -> {
+                backendSubscription.dispose();
+                log.debug("Client disconnected, backend processing stopped for conversation: {}", conversationId);
+            });
         }, FluxSink.OverflowStrategy.BUFFER);
     }
 
@@ -163,14 +180,31 @@ public class ChatController {
                 if (requestsReservedTaskThreadScope(chatMessage)) {
                     throw reservedTaskThreadAccess();
                 }
-                JuyitingConversationScope scope = juyitingConversationScopeService.resolve(chatMessage);
+                JuyitingConversationScope scope;
+                try {
+                    scope = juyitingConversationScopeService.authorize(
+                            chatMessage,
+                            juyitingConversationScopeService.resolve(chatMessage),
+                            requireIdentityPart(EsContextHolder.getContext().getJiacn()),
+                            requireIdentityPart(EsContextHolder.getContext().getClientId()));
+                } catch (RuntimeException denied) {
+                    throw new AgentTaskThreadException(
+                            AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                            "Conversation scope is unavailable");
+                }
                 if (AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(scope.scopeType())) {
                     throw reservedTaskThreadAccess();
                 }
                 message.setConversationScopeType(scope.scopeType());
                 message.setConversationScopeKey(scope.scopeKey());
                 message.setTaskId(scope.taskId());
-                message.setTargetAgentId(scope.targetAgentId());
+                message.setTargetAgentId(
+                        JuyitingConversationScopeService.SCOPE_PRIVATE.equals(scope.scopeType())
+                                ? scope.targetAgentId() : null);
+                message.setTargetAgentIds(
+                        juyitingConversationScopeService.serializeTargetAgentIds(
+                                scope.targetAgentIds()));
+                message.setLifecycleGeneration(1L);
             }
             message = chatConversationService.create(message);
         } else {
@@ -242,7 +276,7 @@ public class ChatController {
 
     private Flux<String> createBuiltinSongJiangStream(
             ChatMessageDTO chatMessage, String conversationId,
-            String ownerJiacn, String ownerClientId,
+            String ownerJiacn, String ownerClientId, long generation,
             boolean needSummary, StringBuilder summary) {
         StringBuilder answer = new StringBuilder();
         Flux<String> deliveryEvent = Flux.just(buildAgentDeliveryEventJson(conversationId, builtinHallAgentSupport.defaultAgentId(), true));
@@ -264,23 +298,34 @@ public class ChatController {
                 .messages()
                 .stream().content()
                 .map(chunk -> {
-                    chatConversationService.getOwned(ownerJiacn, ownerClientId, conversationId);
+                    if (!chatConversationService.isLiveGeneration(
+                            ownerJiacn, ownerClientId, conversationId, generation)) {
+                        throw new IllegalStateException("Conversation is no longer available");
+                    }
                     if (needSummary) {
                         summary.append(chunk);
                     }
                     answer.append(chunk);
                     Map<String, Object> event = buildAgentEvent("agent_message_delta", conversationId, chunk, null);
-                    chatConversationEventBroker.publish(conversationId, event);
+                    chatConversationEventBroker.publishIfLive(
+                            conversationId, generation,
+                            () -> chatConversationService.isLiveGeneration(
+                                    ownerJiacn, ownerClientId, conversationId, generation),
+                            event);
                     return JsonUtil.toSafeJson(event);
                 });
 
         Flux<String> finalEvent = Flux.defer(() -> {
             String content = answer.toString();
             ChatMessageEntity entity = saveBuiltinAgentMessage(
-                    conversationId, ownerJiacn, ownerClientId, content);
+                    conversationId, ownerJiacn, ownerClientId, generation, content);
             Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
             String eventJson = JsonUtil.toSafeJson(event);
-            chatConversationEventBroker.publish(conversationId, event);
+            chatConversationEventBroker.publishIfLive(
+                    conversationId, generation,
+                    () -> chatConversationService.isLiveGeneration(
+                            ownerJiacn, ownerClientId, conversationId, generation),
+                    event);
             return Flux.just(eventJson);
         });
         Flux<String> agentStream = deltaStream.concatWith(finalEvent)
@@ -291,9 +336,13 @@ public class ChatController {
                         summary.append(content);
                     }
                     ChatMessageEntity entity = saveBuiltinAgentMessage(
-                            conversationId, ownerJiacn, ownerClientId, content);
+                            conversationId, ownerJiacn, ownerClientId, generation, content);
                     Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
-                    chatConversationEventBroker.publish(conversationId, event);
+                    chatConversationEventBroker.publishIfLive(
+                            conversationId, generation,
+                            () -> chatConversationService.isLiveGeneration(
+                                    ownerJiacn, ownerClientId, conversationId, generation),
+                            event);
                     return Flux.just(JsonUtil.toSafeJson(event));
                 });
         return deliveryEvent.concatWith(agentStream);
@@ -327,7 +376,8 @@ public class ChatController {
     }
 
     private ChatMessageEntity saveBuiltinAgentMessage(
-            String conversationId, String ownerJiacn, String ownerClientId, String content) {
+            String conversationId, String ownerJiacn, String ownerClientId,
+            long generation, String content) {
         ChatMessageEntity entity = new ChatMessageEntity();
         entity.setJiacn(ownerJiacn);
         entity.setClientId(ownerClientId);
@@ -346,7 +396,8 @@ public class ChatController {
         metadata.put("conversationId", conversationId);
         metadata.put("conversationType", CONVERSATION_TYPE_JUYITING);
         entity.setMetadata(JsonUtil.toJson(metadata));
-        return chatConversationService.appendOwnedMessage(ownerJiacn, ownerClientId, entity);
+        return chatConversationService.appendOwnedMessage(
+                ownerJiacn, ownerClientId, entity, generation);
     }
 
     private String escapeJson(String value) {
@@ -384,6 +435,19 @@ public class ChatController {
         return value;
     }
 
+    private long lifecycleGeneration(ChatConversationEntity conversation) {
+        Long generation = conversation == null ? null : conversation.getLifecycleGeneration();
+        if (generation == null) {
+            return 1L;
+        }
+        if (generation < 1) {
+            throw new AgentTaskThreadException(
+                    AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                    "Conversation generation is unavailable");
+        }
+        return generation;
+    }
+
     @RequestMapping(value = "/stop_stream", method = RequestMethod.POST)
     public Object stopStream(@RequestBody ChatMessageDTO chatMessage) {
         requireGenericConversationAccess(chatMessage.getConversationId());
@@ -404,8 +468,8 @@ public class ChatController {
 
     @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> conversationEvents(@RequestParam(name = "id") String id) {
-        requireGenericConversationAccess(id);
-        return chatConversationEventBroker.stream(id)
+        ChatConversationEntity conversation = chatConversationService.get(id);
+        return chatConversationEventBroker.stream(id, lifecycleGeneration(conversation))
                 .map(event -> "data: " + event + "\n\n");
     }
 
