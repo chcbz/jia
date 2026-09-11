@@ -54,6 +54,7 @@ class OutputUploadSecurityConfigurationTest {
         @Override public String requireFreshDispatchRuntime(String t,String c,String p,String r){throw new UnsupportedOperationException();}
         @Override public cn.jia.agent.output.dto.OutputAuthReceiptDTO issueTicket(String t,String c,String p,String runtime,String m,String r){throw new UnsupportedOperationException();}
         @Override public OutputTicketAuthorization authorizeTicket(String raw,String op,boolean replay){if(raw.startsWith("active-ticket"))return ticket("ACTIVE",List.of("upload","publish","status"));if(raw.startsWith("terminal-ticket"))return ticket("CLOSED",List.of("status"));throw new OutputAuthorizationException("OUTPUT_AUTH_FORBIDDEN","denied");}
+        @Override public boolean authorizePersistedMutation(String t,String c,String r,String b){return true;}
         private OutputTicketAuthorization ticket(String state,List<String> ops){return new OutputTicketAuthorization("owner","client","run","TASK","task","agent","7","runtime",ops,System.currentTimeMillis()+10000,state);}
     }
 }

@@ -327,6 +327,46 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
                 operations, ticket.getExpiresAt(), run.getState());
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean authorizePersistedMutation(
+            String tenantId, String clientId, String runId, String bindingId) {
+        try {
+            if (!enabled) throw denied("Output delivery is disabled");
+            requireExact(tenantId, "tenantId", 200);
+            requireExact(clientId, "clientId", 200);
+            requireRunId(runId);
+            requireExact(bindingId, "bindingId", 400);
+            OutputRunBindingEntity projected = runDao.findExactByRun(
+                    tenantId, clientId, runId, false);
+            if (projected == null || !Objects.equals(bindingId, projected.getBindingId())) {
+                throw denied("Output run is unavailable");
+            }
+            OutputSourceAuthorization sourceAuthorization = sourceRegistry.lockAndAuthorize(
+                    tenantId, clientId, projected.getSourceType(), projected.getSourceId(),
+                    projected.getProducerAgentId(), OutputSourceAccessMode.MUTATION);
+            OutputSourceBindingEntity source = requireActiveSourceBinding(projected, true);
+            OutputRunBindingEntity run = runDao.findExactByRun(tenantId, clientId, runId, true);
+            long now = System.currentTimeMillis();
+            requireSameRunRoute(run, projected);
+            requireSameSource(run, source);
+            if (!Objects.equals(bindingId, run.getBindingId())
+                    || !OutputConstants.RUN_ACTIVE.equals(run.getState())
+                    || run.getRecoveryUntil() == null || run.getRecoveryUntil() < now
+                    || !sourceAuthorization.writable()) {
+                throw denied("Output run no longer authorizes this mutation");
+            }
+            AgentRuntimeEntity runtime = requireActiveBinding(
+                    tenantId, clientId, run.getProducerAgentId());
+            if (!Objects.equals(bindingId, Long.toString(runtime.getBindingId()))) {
+                throw denied("Output binding has changed");
+            }
+            return true;
+        } catch (OutputAuthorizationException denied) {
+            return false;
+        }
+    }
+
     private OutputSourceBindingEntity lockOrCreateSource(
             OutputSourceAuthorization authorization, long now) {
         OutputSourceBindingEntity existing = sourceDao.findExact(

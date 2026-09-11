@@ -29,4 +29,12 @@ public interface OutputRunAuthorizationService {
 
     OutputTicketAuthorization authorizeTicket(
             String rawBearer, String requiredOperation, boolean receiptReplay);
+
+    /**
+     * Revalidates a persisted asynchronous mutation without trusting a caller bearer. Implementations
+     * must lock the exact business source, source binding, run, canonical identity and current binding
+     * in the same transaction as the downstream mutation.
+     */
+    boolean authorizePersistedMutation(
+            String tenantId, String clientId, String runId, String bindingId);
 }

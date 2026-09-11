@@ -2,7 +2,6 @@ package cn.jia.agent.output.service;
 
 import cn.jia.agent.output.OutputUploadException;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,9 +16,11 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.Enumeration;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
-import java.util.zip.ZipInputStream;
+import java.util.zip.ZipFile;
 
 final class OutputContentInspector {
     private static final Set<String> TEXT = Set.of("text/plain","text/markdown","text/csv","application/json");
@@ -57,7 +58,7 @@ final class OutputContentInspector {
     private static String requireZip(String ext,String declared,byte[] bytes,boolean complete,long memberMaxBytes,long treeMaxBytes,Path tempDirectory){
         if(!complete&&Set.of("docx","xlsx","pptx","zip").contains(ext))return declared;
         ArchiveBudget budget=new ArchiveBudget(memberMaxBytes,treeMaxBytes,bytes.length,tempDirectory);Set<String> names=new HashSet<>();
-        inspectZip(new ByteArrayInputStream(bytes),1,budget,names,true);
+        inspectRootZip(bytes,budget,names);
         if(budget.activeContent)throw rejected("OUTPUT_ACTIVE_CONTENT_REJECTED");
         boolean word=names.contains("word/document.xml"), sheet=names.contains("xl/workbook.xml"), slides=names.contains("ppt/presentation.xml");
         if(word&&ext.equals("docx")&&declared.equals("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))return declared;
@@ -67,48 +68,59 @@ final class OutputContentInspector {
         throw rejected("OUTPUT_TYPE_MISMATCH");
     }
 
-    private static void inspectZip(InputStream source,int depth,ArchiveBudget budget,Set<String> rootNames,boolean root){
-        try(ZipInputStream zip=new ZipInputStream(source)){
-            for(ZipEntry entry;(entry=zip.getNextEntry())!=null;){
-                if(++budget.entries>ARCHIVE_MAX_ENTRIES)throw rejected("OUTPUT_ARCHIVE_LIMIT");
-                if(entry.isDirectory())continue;
-                if(entry.getMethod()!=ZipEntry.STORED&&entry.getMethod()!=ZipEntry.DEFLATED)throw rejected("OUTPUT_ARCHIVE_INVALID");
-                String name=entry.getName().replace('\\','/').toLowerCase(Locale.ROOT);
-                if(root)rootNames.add(name);
-                if(name.contains("vbaproject.bin")||name.endsWith(".exe")||name.endsWith(".dll")||name.endsWith(".js")||name.endsWith(".html")||name.endsWith(".svg"))budget.activeContent=true;
-                byte[] prefix=readPrefix(zip,budget);
-                if(isUnsupportedArchive(prefix))throw rejected("OUTPUT_ARCHIVE_INVALID");
-                if(isZip(prefix)){
-                    if(depth>=ARCHIVE_MAX_DEPTH)throw rejected("OUTPUT_ARCHIVE_LIMIT");
-                    inspectNested(zip,prefix,depth+1,budget);
-                }else{
-                    drainEntry(zip,budget,prefix.length);
-                }
-            }
-        }catch(OutputUploadException e){throw e;}catch(ZipException e){throw rejected("OUTPUT_ARCHIVE_INVALID");}
-        catch(IOException|ArithmeticException e){throw new ArchiveIoException(e);}
-    }
-
-    private static byte[] readPrefix(ZipInputStream zip,ArchiveBudget budget)throws IOException{
-        ByteArrayOutputStream prefix=new ByteArrayOutputStream(SNIFF_BYTES);byte[] buffer=new byte[SNIFF_BYTES];
-        while(prefix.size()<SNIFF_BYTES){int read=zip.read(buffer,0,SNIFF_BYTES-prefix.size());if(read<0)break;if(read==0)continue;prefix.write(buffer,0,read);budget.add(read,prefix.size());}
-        return prefix.toByteArray();
-    }
-
-    private static void drainEntry(ZipInputStream zip,ArchiveBudget budget,long memberBytes)throws IOException{
-        byte[] buffer=new byte[64*1024];long count=memberBytes;for(int read;(read=zip.read(buffer))!=-1;){if(read==0)continue;count=Math.addExact(count,read);budget.add(read,count);}
-    }
-
-    private static void inspectNested(ZipInputStream zip,byte[] prefix,int depth,ArchiveBudget budget)throws IOException{
+    private static void inspectRootZip(byte[] bytes,ArchiveBudget budget,Set<String> rootNames){
         Path directory=null,file=null;
         try{
             directory=createPrivateDirectory(budget.tempDirectory);file=createPrivateFile(directory);
-            long count=prefix.length;
-            try(OutputStream out=Files.newOutputStream(file)){out.write(prefix);byte[] buffer=new byte[64*1024];for(int read;(read=zip.read(buffer))!=-1;){if(read==0)continue;count=Math.addExact(count,read);budget.add(read,count);out.write(buffer,0,read);}}
-            try(InputStream nested=Files.newInputStream(file)){inspectZip(nested,depth,budget,Set.of(),false);}
-        }finally{
-            if(file!=null)Files.deleteIfExists(file);if(directory!=null)Files.deleteIfExists(directory);
+            Files.write(file,bytes);inspectZipFile(file,1,budget,rootNames,true);
+        }catch(OutputUploadException e){throw e;}catch(ZipException e){throw rejected("OUTPUT_ARCHIVE_INVALID");}
+        catch(IOException|ArithmeticException e){throw new ArchiveIoException(e);}
+        finally{deleteTemporary(file,directory);}
+    }
+
+    private static void inspectZipFile(Path file,int depth,ArchiveBudget budget,Set<String> rootNames,boolean root)throws IOException{
+        int files=0;Set<String> archiveNames=new HashSet<>();
+        try(ZipFile zip=new ZipFile(file.toFile(),StandardCharsets.UTF_8)){
+            Enumeration<? extends ZipEntry> entries=zip.entries();
+            while(entries.hasMoreElements()){
+                ZipEntry entry=entries.nextElement();
+                if(++budget.entries>ARCHIVE_MAX_ENTRIES)throw rejected("OUTPUT_ARCHIVE_LIMIT");
+                if(entry.getMethod()!=ZipEntry.STORED&&entry.getMethod()!=ZipEntry.DEFLATED)throw rejected("OUTPUT_ARCHIVE_INVALID");
+                String name=entry.getName().replace('\\','/').toLowerCase(Locale.ROOT);
+                if(name.isEmpty()||!archiveNames.add(name))throw rejected("OUTPUT_ARCHIVE_INVALID");
+                try(InputStream input=zip.getInputStream(entry)){
+                    EntryReader reader=new EntryReader(input,entry,budget);byte[] prefix=reader.readPrefix();
+                    if(entry.isDirectory()){
+                        reader.drain(null);reader.verify();
+                        if(reader.count()!=0)throw rejected("OUTPUT_ARCHIVE_INVALID");
+                        continue;
+                    }
+                    files++;if(root)rootNames.add(name);
+                    if(name.contains("vbaproject.bin")||name.endsWith(".exe")||name.endsWith(".dll")||name.endsWith(".js")||name.endsWith(".html")||name.endsWith(".svg"))budget.activeContent=true;
+                    if(isUnsupportedArchive(prefix))throw rejected("OUTPUT_ARCHIVE_INVALID");
+                    if(isZip(prefix)){
+                        if(depth>=ARCHIVE_MAX_DEPTH)throw rejected("OUTPUT_ARCHIVE_LIMIT");
+                        inspectNested(reader,prefix,depth+1,budget);
+                    }else reader.drain(null);
+                    reader.verify();
+                }
+            }
         }
+        if(files==0)throw rejected("OUTPUT_ARCHIVE_INVALID");
+    }
+
+    private static void inspectNested(EntryReader reader,byte[] prefix,int depth,ArchiveBudget budget)throws IOException{
+        Path directory=null,file=null;
+        try{
+            directory=createPrivateDirectory(budget.tempDirectory);file=createPrivateFile(directory);
+            try(OutputStream out=Files.newOutputStream(file)){out.write(prefix);reader.drain(out);}
+            reader.verify();inspectZipFile(file,depth,budget,Set.of(),false);
+        }finally{deleteTemporary(file,directory);}
+    }
+
+    private static void deleteTemporary(Path file,Path directory){
+        try{if(file!=null)Files.deleteIfExists(file);if(directory!=null)Files.deleteIfExists(directory);}
+        catch(IOException e){throw new ArchiveIoException(e);}
     }
 
     private static Path createPrivateDirectory(Path root)throws IOException{
@@ -128,6 +140,16 @@ final class OutputContentInspector {
         final long memberMaxBytes,treeMaxBytes;final Path tempDirectory;long treeBytes;int entries;boolean activeContent;
         ArchiveBudget(long memberMaxBytes,long treeMaxBytes,long rootBytes,Path tempDirectory){this.memberMaxBytes=memberMaxBytes;this.treeMaxBytes=treeMaxBytes;this.treeBytes=rootBytes;this.tempDirectory=tempDirectory;if(rootBytes>treeMaxBytes)throw rejected("OUTPUT_ARCHIVE_LIMIT");}
         void add(long bytes,long memberBytes){treeBytes=Math.addExact(treeBytes,bytes);if(memberBytes>memberMaxBytes||treeBytes>treeMaxBytes)throw rejected("OUTPUT_ARCHIVE_LIMIT");}
+    }
+
+    private static final class EntryReader{
+        private final InputStream input;private final ZipEntry entry;private final ArchiveBudget budget;private final CRC32 crc=new CRC32();private long count;
+        EntryReader(InputStream input,ZipEntry entry,ArchiveBudget budget){this.input=input;this.entry=entry;this.budget=budget;}
+        byte[] readPrefix()throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream(SNIFF_BYTES);byte[] buffer=new byte[SNIFF_BYTES];while(out.size()<SNIFF_BYTES){int n=read(buffer,0,SNIFF_BYTES-out.size());if(n<0)break;if(n>0)out.write(buffer,0,n);}return out.toByteArray();}
+        void drain(OutputStream copy)throws IOException{byte[] buffer=new byte[64*1024];for(int n;(n=read(buffer,0,buffer.length))!=-1;)if(n>0&&copy!=null)copy.write(buffer,0,n);}
+        private int read(byte[] buffer,int offset,int length)throws IOException{int n=input.read(buffer,offset,length);if(n>0){count=Math.addExact(count,n);budget.add(n,count);crc.update(buffer,offset,n);}return n;}
+        long count(){return count;}
+        void verify(){if(entry.getSize()<0||entry.getCrc()<0||entry.getSize()!=count||entry.getCrc()!=crc.getValue())throw rejected("OUTPUT_ARCHIVE_INVALID");}
     }
 
     static final class ArchiveIoException extends RuntimeException{ArchiveIoException(Throwable cause){super(cause);}}

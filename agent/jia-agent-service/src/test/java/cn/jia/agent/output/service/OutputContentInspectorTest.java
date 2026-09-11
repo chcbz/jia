@@ -63,7 +63,33 @@ class OutputContentInspectorTest {
         assertEquals("application/zip",OutputContentInspector.requireAllowed("nested.zip","application/zip",depth3,true));
     }
 
+    @Test void pkGarbageZeroEntryAndTruncatedCentralDirectoryAreRejected()throws Exception{
+        for(byte[] malformed:List.of(
+                new byte[]{0x50,0x4b,0x03,0x04,0,0,0,0},
+                emptyZip(),
+                Arrays.copyOf(zip(new Entry("ok.txt","ok".getBytes(StandardCharsets.UTF_8))),
+                        zip(new Entry("ok.txt","ok".getBytes(StandardCharsets.UTF_8))).length-5))){
+            OutputUploadException rejected=assertThrows(OutputUploadException.class,
+                    ()->OutputContentInspector.requireAllowed("broken.zip","application/zip",malformed,true));
+            assertEquals("OUTPUT_ARCHIVE_INVALID",rejected.code());
+        }
+    }
+
+    @Test void directoryNamedEntriesCannotHideBytesLimitsOrNestedActiveContent()throws Exception{
+        OutputUploadException oversized=assertThrows(OutputUploadException.class,
+                ()->OutputContentInspector.requireAllowed("directory.zip","application/zip",
+                        zip(new Entry("folder/",new byte[2049])),true,2048,16*1024));
+        assertEquals("OUTPUT_ARCHIVE_LIMIT",oversized.code());
+
+        byte[] hidden=zip(new Entry("payload.html","<html>bad</html>".getBytes(StandardCharsets.UTF_8)));
+        OutputUploadException hiddenArchive=assertThrows(OutputUploadException.class,
+                ()->OutputContentInspector.requireAllowed("directory.zip","application/zip",
+                        zip(new Entry("folder/",hidden)),true));
+        assertEquals("OUTPUT_ARCHIVE_INVALID",hiddenArchive.code());
+    }
+
     private static byte[] zip(Entry...entries)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream();try(ZipOutputStream zip=new ZipOutputStream(out)){for(Entry entry:entries){zip.putNextEntry(new ZipEntry(entry.name));zip.write(entry.bytes);zip.closeEntry();}}return out.toByteArray();}
+    private static byte[] emptyZip()throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream();try(ZipOutputStream ignored=new ZipOutputStream(out)){}return out.toByteArray();}
     private static byte[] repeat(byte[] block,int count){byte[] bytes=new byte[Math.multiplyExact(block.length,count)];for(int i=0;i<count;i++)System.arraycopy(block,0,bytes,i*block.length,block.length);return bytes;}
     private record Entry(String name,byte[] bytes){}
 }

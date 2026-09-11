@@ -8,13 +8,21 @@ import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Strict opt-in OD02 schema bootstrap. Existing partial installs fail closed. */
 public final class OutputObjectSchemaInitializer implements InitializingBean {
+    private static final Pattern TABLE_NAME=Pattern.compile("(?i)CREATE\\s+TABLE\\s+IF\\s+NOT\\s+EXISTS\\s+([a-z0-9_]+)");
+    private static final Pattern COLUMN=Pattern.compile("(?is)^([a-z0-9_]+)\\s+([a-z]+(?:\\([^)]*\\))?)(.*)$");
+    private static final Pattern INDEX=Pattern.compile("(?is)^(UNIQUE\\s+)?KEY\\s+([a-z0-9_]+)\\s*\\(([^)]*)\\)$");
+    private static final Pattern CHECK=Pattern.compile("(?is)^CONSTRAINT\\s+([a-z0-9_]+)\\s+CHECK\\s*\\((.*)\\)$");
     static final String RESOURCE = "db/output-delivery-002-object-schema.sql";
     static final List<String> TABLES = List.of("output_scope_quota", "output_binding_upload_quota",
             "output_run_upload_quota",
@@ -38,17 +46,9 @@ public final class OutputObjectSchemaInitializer implements InitializingBean {
         if (present.isEmpty()) for (String statement : ddlStatements()) jdbc.execute(statement);
         if (presentTables().size() != TABLES.size())
             throw new IllegalStateException("OD02 object schema is incomplete");
-        Map<String,List<String>> columns=Map.of(
-                "output_scope_quota",List.of("tenant_id","client_id","reserved_bytes","stored_bytes","max_bytes","active_uploads","max_active_uploads","created_at","updated_at","row_version"),
-                "output_binding_upload_quota",List.of("tenant_id","client_id","binding_id","active_uploads","max_active_uploads","created_at","updated_at","row_version"),
-                "output_run_upload_quota",List.of("tenant_id","client_id","run_id","upload_requests","max_upload_requests","attempt_bytes","max_attempt_bytes","created_at","updated_at","row_version"),
-                "output_object",List.of("tenant_id","client_id","object_id","run_id","bucket","storage_key","storage_version","actual_sha256","actual_size","actual_mime","verification_status","lifecycle_status","scan_engine_version","verified_at","delete_after","deleted_at","delete_attempts","delete_next_at","delete_lease_owner","delete_lease_until","error_code","created_at","updated_at","row_version"),
-                "output_upload_session",List.of("tenant_id","client_id","upload_id","run_id","binding_id","object_id","file_name","expected_size","expected_sha256","declared_mime","state","writer_epoch","writer_started_at","writer_until","writer_deadline_at","expires_at","reserved_bytes","slot_released","verification_attempts","verification_next_at","verification_lease_owner","verification_lease_until","error_code","created_at","updated_at","row_version"),
-                "output_object_reference",List.of("tenant_id","client_id","reference_key","object_id","source_type","source_id","output_id","output_version","reference_kind","delivery_id","state","retain_until","hold","hold_reason","released_at","created_at","updated_at","row_version"),
-                "output_mutation_receipt",List.of("tenant_id","client_id","actor_kind","actor_id","operation","idempotency_key","request_hash","http_status","response_json","retain_until","created_at","updated_at","row_version"),
-                "output_storage_cleanup_job",List.of("cleanup_id","tenant_id","client_id","object_id","upload_id","writer_epoch","bucket","storage_key","storage_version","state","quota_charge_kind","quota_charge_bytes","safe_after","attempts","next_attempt_at","lease_owner","lease_until","last_error","created_at","updated_at","row_version"));
-        for(var entry:columns.entrySet())requireColumns(entry.getKey(),entry.getValue());
-        requirePrimary("output_scope_quota",List.of("tenant_id","client_id"));requirePrimary("output_binding_upload_quota",List.of("tenant_id","client_id","binding_id"));requirePrimary("output_run_upload_quota",List.of("tenant_id","client_id","run_id"));requirePrimary("output_object",List.of("tenant_id","client_id","object_id"));requirePrimary("output_upload_session",List.of("tenant_id","client_id","upload_id"));requirePrimary("output_object_reference",List.of("tenant_id","client_id","reference_key"));requirePrimary("output_mutation_receipt",List.of("tenant_id","client_id","actor_kind","actor_id","operation","idempotency_key"));requirePrimary("output_storage_cleanup_job",List.of("tenant_id","client_id","cleanup_id"));
+        Map<String,TableContract> contracts=contracts();
+        if(!contracts.keySet().equals(new java.util.LinkedHashSet<>(TABLES)))throw new IllegalStateException("OD02 contract table drift");
+        for(String table:TABLES)requireContract(table,contracts.get(table));
     }
 
     private List<String> presentTables() {
@@ -57,15 +57,50 @@ public final class OutputObjectSchemaInitializer implements InitializingBean {
                 + placeholders + ") ORDER BY table_name", String.class, TABLES.toArray());
     }
 
-    private void requireColumns(String table, List<String> required) {
-        List<String> actual = jdbc.queryForList("SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? ORDER BY ordinal_position",
-                String.class, table);
+    private void requireContract(String table,TableContract expected) {
+        List<String> columns=jdbc.queryForList("SELECT CONCAT(column_name,'|',LOWER(column_type),'|',is_nullable,'|',COALESCE(CAST(column_default AS CHAR),'<NULL>'),'|',COALESCE(collation_name,'<NULL>'),'|',COALESCE(character_set_name,'<NULL>'),'|',COALESCE(extra,''),'|',COALESCE(generation_expression,'')) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? ORDER BY ordinal_position",String.class,table);
+        List<String> indexes=jdbc.queryForList("SELECT CONCAT(index_name,'|',non_unique,'|',seq_in_index,'|',column_name,'|',COALESCE(CAST(sub_part AS CHAR),'<NULL>'),'|',index_type) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? ORDER BY index_name,seq_in_index",String.class,table);
+        indexes.sort(Comparator.naturalOrder());
+        List<Map<String,Object>> checkRows=jdbc.queryForList("SELECT cc.constraint_name,cc.check_clause,tc.enforced FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc ON cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name WHERE tc.table_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK' ORDER BY cc.constraint_name",table);
+        List<String> checks=new ArrayList<>();for(Map<String,Object> row:checkRows)checks.add(value(row,"constraint_name")+"|"+normalizeCheck(value(row,"check_clause"))+"|"+value(row,"enforced"));
         String engine=jdbc.queryForObject("SELECT engine FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?",String.class,table);
         String collation=jdbc.queryForObject("SELECT table_collation FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?",String.class,table);
-        if (!actual.equals(required)||!"InnoDB".equalsIgnoreCase(engine)||!"utf8mb4_0900_bin".equalsIgnoreCase(collation)) throw new IllegalStateException("OD02 schema drift: " + table);
+        requireMetadata(table,"columns",expected.columns(),columns);
+        requireMetadata(table,"indexes",expected.indexes(),indexes);
+        requireMetadata(table,"checks",expected.checks(),checks);
+        if(!"InnoDB".equalsIgnoreCase(engine))throw new IllegalStateException("OD02 schema drift: "+table+" engine expected InnoDB but was "+engine);
+        if(!"utf8mb4_0900_bin".equalsIgnoreCase(collation))throw new IllegalStateException("OD02 schema drift: "+table+" collation expected utf8mb4_0900_bin but was "+collation);
     }
 
-    private void requirePrimary(String table,List<String> expected){List<String> actual=jdbc.queryForList("SELECT column_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name='PRIMARY' ORDER BY seq_in_index",String.class,table);if(!actual.equals(expected))throw new IllegalStateException("OD02 primary key drift: "+table);}
+    private static Map<String,TableContract> contracts()throws Exception{
+        Map<String,TableContract> result=new LinkedHashMap<>();
+        for(String statement:ddlStatements()){
+            Matcher tableMatcher=TABLE_NAME.matcher(statement);if(!tableMatcher.find())throw new IllegalStateException("OD02 table declaration drift");String table=tableMatcher.group(1).toLowerCase(Locale.ROOT);
+            int open=statement.indexOf('(',tableMatcher.end()),close=statement.toUpperCase(Locale.ROOT).lastIndexOf(") ENGINE");if(open<0||close<open)throw new IllegalStateException("OD02 table body drift: "+table);
+            List<String> columns=new ArrayList<>(),indexes=new ArrayList<>(),checks=new ArrayList<>();
+            for(String definition:splitDefinitions(statement.substring(open+1,close))){String part=definition.trim();String upper=part.toUpperCase(Locale.ROOT);
+                if(upper.startsWith("PRIMARY KEY")){addIndex(indexes,"PRIMARY",false,columnsOf(part));continue;}
+                Matcher index=INDEX.matcher(part);if(index.matches()){addIndex(indexes,index.group(2),index.group(1)==null,columnsOf(index.group(3)));continue;}
+                Matcher check=CHECK.matcher(part);if(check.matches()){checks.add(check.group(1)+"|"+normalizeCheck(check.group(2))+"|YES");continue;}
+                Matcher column=COLUMN.matcher(part);if(!column.matches())throw new IllegalStateException("OD02 column declaration drift: "+table);
+                String name=column.group(1),type=column.group(2).toLowerCase(Locale.ROOT),tail=column.group(3);if(type.equals("boolean"))type="tinyint(1)";
+                boolean nullable=!tail.toUpperCase(Locale.ROOT).contains("NOT NULL");Matcher defaultValue=Pattern.compile("(?i)\\bDEFAULT\\s+([^\\s]+)").matcher(tail);String defaultText=defaultValue.find()?normalizeDefault(defaultValue.group(1)):"<NULL>";
+                Matcher explicitCollation=Pattern.compile("(?i)\\bCOLLATE\\s+([a-z0-9_]+)").matcher(tail);boolean character=type.startsWith("varchar(");String columnCollation=character?(explicitCollation.find()?explicitCollation.group(1).toLowerCase(Locale.ROOT):"utf8mb4_0900_bin"):"<NULL>";String charset=character?"utf8mb4":"<NULL>";
+                columns.add(name+"|"+type+"|"+(nullable?"YES":"NO")+"|"+defaultText+"|"+columnCollation+"|"+charset+"||");
+            }
+            indexes.sort(Comparator.naturalOrder());checks.sort(Comparator.naturalOrder());result.put(table,new TableContract(List.copyOf(columns),List.copyOf(indexes),List.copyOf(checks)));
+        }
+        return result;
+    }
+
+    private static List<String> splitDefinitions(String body){List<String> parts=new ArrayList<>();int depth=0,start=0;for(int i=0;i<body.length();i++){char c=body.charAt(i);if(c=='(')depth++;else if(c==')')depth--;else if(c==','&&depth==0){parts.add(body.substring(start,i));start=i+1;}}parts.add(body.substring(start));return parts;}
+    private static List<String> columnsOf(String definition){int open=definition.indexOf('('),close=definition.lastIndexOf(')');String body=open>=0&&close>open?definition.substring(open+1,close):definition;return java.util.Arrays.stream(body.split(",")).map(String::trim).map(x->x.replace("`","")).toList();}
+    private static void addIndex(List<String> target,String name,boolean nonUnique,List<String> columns){for(int i=0;i<columns.size();i++)target.add(name+"|"+(nonUnique?1:0)+"|"+(i+1)+"|"+columns.get(i)+"|<NULL>|BTREE");}
+    private static String normalizeDefault(String value){String normalized=value.replace("'","").toLowerCase(Locale.ROOT);return normalized.equals("false")?"0":normalized;}
+    private static String normalizeCheck(String value){return value.replace("`","").replaceAll("[\\s()]","").toLowerCase(Locale.ROOT);}
+    private static void requireMetadata(String table,String kind,List<String> expected,List<String> actual){if(!expected.equals(actual))throw new IllegalStateException("OD02 schema drift: "+table+" "+kind+" expected "+expected+" but was "+actual);}
+    private static String value(Map<String,Object> row,String key){for(var entry:row.entrySet())if(entry.getKey().equalsIgnoreCase(key))return Objects.toString(entry.getValue(),"");throw new IllegalStateException("OD02 metadata field missing: "+key);}
+    private record TableContract(List<String> columns,List<String> indexes,List<String> checks){}
 
     static List<String> ddlStatements() throws Exception {
         String sql = new ClassPathResource(RESOURCE).getContentAsString(StandardCharsets.UTF_8);

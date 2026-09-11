@@ -64,23 +64,37 @@ class OutputUploadSecurityCoexistenceTest {
                         .header("Authorization","Bearer active-ticket-value-that-is-long-enough-000000")
                         .header("Idempotency-Key","complete-http-key-01"))
                 .andExpect(status().isAccepted()).andExpect(header().string("Cache-Control","no-store"))
-                .andExpect(jsonPath("$.status").value(202)).andExpect(jsonPath("$.data.state").value("VERIFYING"));
+                .andExpect(jsonPath("$.code").value("E0")).andExpect(jsonPath("$.data.state").value("VERIFYING"))
+                .andExpect(jsonPath("$.status").doesNotExist()).andExpect(jsonPath("$.msg").doesNotExist())
+                .andExpect(jsonPath("$.data.uploadUrl").doesNotExist()).andExpect(jsonPath("$.data.errorCode").doesNotExist());
     }
 
     @Test void authenticatedMissingHeaderAndMissingBodyAreBadRequests()throws Exception{
         String ticket="Bearer active-ticket-value-that-is-long-enough-000000";
-        mvc.perform(post("/agent/output-uploads/upload-1/complete").header("Authorization",ticket))
+        mvc.perform(post("/agent/output-uploads/upload-1/complete").header("Authorization",ticket).header("X-Request-ID","wire-bad-1"))
                 .andExpect(status().isBadRequest()).andExpect(header().string("Cache-Control","no-store"))
-                .andExpect(jsonPath("$.status").value(400)).andExpect(jsonPath("$.code").value("OUTPUT_REQUEST_INVALID"));
+                .andExpect(header().string("X-Request-ID","wire-bad-1"))
+                .andExpect(jsonPath("$.code").value("OUTPUT_REQUEST_INVALID"))
+                .andExpect(jsonPath("$.message").value("Invalid output request"))
+                .andExpect(jsonPath("$.retryable").value(false)).andExpect(jsonPath("$.requestId").value("wire-bad-1"))
+                .andExpect(jsonPath("$.status").doesNotExist()).andExpect(jsonPath("$.msg").doesNotExist());
         mvc.perform(post("/agent/output-uploads").header("Authorization",ticket).header("Idempotency-Key","create-http-key-0001").contentType("application/json"))
                 .andExpect(status().isBadRequest()).andExpect(header().string("Cache-Control","no-store"))
-                .andExpect(jsonPath("$.status").value(400)).andExpect(jsonPath("$.code").value("OUTPUT_REQUEST_INVALID"));
+                .andExpect(jsonPath("$.code").value("OUTPUT_REQUEST_INVALID"))
+                .andExpect(jsonPath("$.message").value("Invalid output request"))
+                .andExpect(jsonPath("$.retryable").value(false)).andExpect(jsonPath("$.requestId").isString());
     }
 
     @Test void authenticatedSessionAndUserBearerCannotReplaceRunTicket()throws Exception{
         MockHttpSession session=authenticatedSession();
-        mvc.perform(post("/agent/output-uploads/upload-1/complete").session(session).header("Idempotency-Key","complete-http-key-01")).andExpect(status().isUnauthorized());
-        mvc.perform(post("/agent/output-uploads/upload-1/complete").session(session).header("Authorization","Bearer user-jwt-token-value-that-is-not-run-ticket").header("Idempotency-Key","complete-http-key-01")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/agent/output-uploads/upload-1/complete").session(session).header("Idempotency-Key","complete-http-key-01").header("X-Request-ID","wire-auth-1"))
+                .andExpect(status().isUnauthorized()).andExpect(header().string("X-Request-ID","wire-auth-1"))
+                .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED"))
+                .andExpect(jsonPath("$.message").value("Output access is unavailable"))
+                .andExpect(jsonPath("$.retryable").value(false)).andExpect(jsonPath("$.requestId").value("wire-auth-1"))
+                .andExpect(jsonPath("$.status").doesNotExist()).andExpect(jsonPath("$.msg").doesNotExist());
+        mvc.perform(post("/agent/output-uploads/upload-1/complete").session(session).header("Authorization","Bearer user-jwt-token-value-that-is-not-run-ticket").header("Idempotency-Key","complete-http-key-01")).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED")).andExpect(jsonPath("$.requestId").isString());
     }
 
     @Test void actualResourceAndFallbackChainsRemainOrderedAndIsolated()throws Exception{

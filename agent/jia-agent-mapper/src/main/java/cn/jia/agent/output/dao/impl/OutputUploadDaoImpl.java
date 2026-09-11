@@ -121,13 +121,16 @@ public final class OutputUploadDaoImpl implements OutputUploadDao {
         return jdbc.update("UPDATE output_storage_cleanup_job SET state='RETAINED',storage_version=?,quota_charge_kind='NONE',quota_charge_bytes=0,updated_at=?,row_version=row_version+1 WHERE tenant_id=? AND client_id=? AND upload_id=? AND writer_epoch=? AND state='HELD'",version,now,t,c,upload,epoch);
     }
     @Override public int countOpenCleanup(String t,String c,String upload) {
-        Integer n=jdbc.queryForObject("SELECT COUNT(*) FROM output_storage_cleanup_job WHERE tenant_id=? AND client_id=? AND upload_id=? AND state IN ('HELD','PENDING','CLAIMED')",Integer.class,t,c,upload);return n==null?0:n;
+        Integer n=jdbc.queryForObject("SELECT COUNT(*) FROM output_storage_cleanup_job WHERE tenant_id=? AND client_id=? AND upload_id=? AND state IN ('HELD','RETAINED','PENDING','CLAIMED')",Integer.class,t,c,upload);return n==null?0:n;
     }
     @Override public List<CleanupRow> findDueCleanup(long now,int limit) {
         return jdbc.query("SELECT * FROM output_storage_cleanup_job WHERE (state='PENDING' AND safe_after<=? AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<?)) OR (state='CLAIMED' AND lease_until<?) ORDER BY next_attempt_at,cleanup_id LIMIT ?",CLEANUP,now,now,now,now,limit);
     }
     @Override public CleanupRow findCleanup(byte[] id,String t,String c,boolean lock) {
         return one("SELECT * FROM output_storage_cleanup_job WHERE tenant_id=? AND client_id=? AND cleanup_id=?"+(lock?" FOR UPDATE":""),CLEANUP,t,c,id);
+    }
+    @Override public CleanupRow findCleanupByUploadEpoch(String t,String c,String upload,long epoch,boolean lock) {
+        return one("SELECT * FROM output_storage_cleanup_job WHERE tenant_id=? AND client_id=? AND upload_id=? AND writer_epoch=?"+(lock?" FOR UPDATE":""),CLEANUP,t,c,upload,epoch);
     }
     @Override public int claimCleanup(byte[] id,String t,String c,String owner,long until,long now) {
         return jdbc.update("UPDATE output_storage_cleanup_job SET state='CLAIMED',lease_owner=?,lease_until=?,updated_at=?,row_version=row_version+1 WHERE tenant_id=? AND client_id=? AND cleanup_id=? AND ((state='PENDING' AND safe_after<=? AND next_attempt_at<=? AND (lease_until IS NULL OR lease_until<?)) OR (state='CLAIMED' AND lease_until<?))",owner,until,now,t,c,id,now,now,now,now);

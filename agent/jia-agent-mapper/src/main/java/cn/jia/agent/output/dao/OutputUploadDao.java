@@ -79,6 +79,8 @@ public interface OutputUploadDao {
     int countOpenCleanup(String tenantId, String clientId, String uploadId);
     List<CleanupRow> findDueCleanup(long now, int limit);
     CleanupRow findCleanup(byte[] cleanupId, String tenantId, String clientId, boolean forUpdate);
+    CleanupRow findCleanupByUploadEpoch(String tenantId, String clientId, String uploadId,
+                                        long writerEpoch, boolean forUpdate);
     int claimCleanup(byte[] cleanupId, String tenantId, String clientId,
                      String owner, long leaseUntil, long now);
     int finishCleanup(byte[] cleanupId, String tenantId, String clientId,

@@ -49,12 +49,16 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -407,6 +411,22 @@ class OutputAuthorizationMySqlConcurrencyTest {
         pool.shutdownNow();
     }
 
+    @Test
+    void verificationFinalizationRechecksTerminalRevokedSourceAndBindingDuringScan() throws Exception {
+        verifyDeniedDuringScan(10, () -> jdbc.update("UPDATE output_run_binding SET state='CLOSED' WHERE run_id=?", runId(10)), true);
+        verifyDeniedDuringScan(11, () -> jdbc.update("UPDATE output_run_binding SET state='RESULT_SUBMITTED' WHERE run_id=?", runId(11)), true);
+        verifyDeniedDuringScan(12, () -> jdbc.update("UPDATE output_run_binding SET state='REVOKED' WHERE run_id=?", runId(12)), false);
+        verifyDeniedDuringScan(13, () -> jdbc.update("UPDATE od01_source_root SET access_level='READ_ONLY' WHERE source_id=?", sourceId(13)), false);
+        verifyDeniedDuringScan(14, () -> jdbc.update("UPDATE agent_runtime SET binding_id=8 WHERE agent_id='agent-1'"), false);
+    }
+
+    private void verifyDeniedDuringScan(int index, Runnable revoke, boolean receiptReplayAllowed) throws Exception {
+        refreshRuntime("runtime-1", 7L);insertSourceAndRun(index, OutputConstants.RUN_ACTIVE, "READ_WRITE");OutputAuthReceiptDTO ticket=issue(service,index,"runtime-1");MemoryStorage storage=new MemoryStorage();BlockingScanner scanner=new BlockingScanner();OutputUploadServiceImpl uploads=new OutputUploadServiceImpl(service,new OutputUploadDaoImpl(jdbc),storage,scanner,new DataSourceTransactionManager(dataSource),new OutputDeliveryProperties(true));byte[] fixture="hello world!\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);OutputUploadCreateDTO request=new OutputUploadCreateDTO(runId(index),new OutputSourceDTO(OutputConstants.SOURCE_TASK,sourceId(index)),"report.md","13","ecf701f727d9e2d77c4aa49ac6fbbcc997278aca010bddeeb961c10cf54d435a","text/markdown");String bearer="Bearer "+ticket.token(),completeKey="verify-auth-complete-"+index;var created=uploads.create(bearer,"verify-auth-create-"+index,request);uploads.put(bearer,created.uploadId(),new ByteArrayInputStream(fixture));ExecutorService executor=Executors.newSingleThreadExecutor();Future<?> completing=executor.submit(()->uploads.complete(bearer,created.uploadId(),completeKey));assertTrue(scanner.entered.await(10,TimeUnit.SECONDS));revoke.run();scanner.release.countDown();completing.get(15,TimeUnit.SECONDS);executor.shutdownNow();
+        assertEquals("REJECTED",jdbc.queryForObject("SELECT state FROM output_upload_session WHERE upload_id=?",String.class,created.uploadId()));assertEquals("OUTPUT_AUTH_REVOKED",jdbc.queryForObject("SELECT error_code FROM output_upload_session WHERE upload_id=?",String.class,created.uploadId()));assertEquals(0L,jdbc.queryForObject("SELECT stored_bytes FROM output_scope_quota",Long.class));
+        if(receiptReplayAllowed)assertEquals("VERIFYING",uploads.complete(bearer,created.uploadId(),completeKey).state());else assertThrows(OutputAuthorizationException.class,()->uploads.complete(bearer,created.uploadId(),completeKey));
+        jdbc.update("UPDATE output_storage_cleanup_job SET safe_after=0,next_attempt_at=0 WHERE upload_id=?",created.uploadId());uploads.recover(1);assertEquals(0L,jdbc.queryForObject("SELECT reserved_bytes FROM output_scope_quota",Long.class));
+    }
+
     private OutputRunAuthorizationServiceImpl service(
             OutputRunBindingDao selectedRunDao, OutputAccessTicketDao selectedTicketDao) {
         return new OutputRunAuthorizationServiceImpl(
@@ -656,6 +676,20 @@ class OutputAuthorizationMySqlConcurrencyTest {
 
     private OutputAuthorizationException denied(String message) {
         return new OutputAuthorizationException("OUTPUT_AUTH_FORBIDDEN", message);
+    }
+
+    private static final class BlockingScanner implements OutputMalwareScanner {
+        private final CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+        @Override public ScanResult scan(java.io.InputStream input,long maximumBytes)throws IOException{input.readAllBytes();entered.countDown();try{if(!release.await(10,TimeUnit.SECONDS))throw new IOException("scan barrier timeout");}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException(e);}return new ScanResult(true,"test",null);}
+    }
+
+    private static final class MemoryStorage implements OutputObjectStorage {
+        private final Map<String,byte[]> bytes=new ConcurrentHashMap<>();private final Map<String,String> tokens=new ConcurrentHashMap<>();
+        @Override public Stored putCreateOnly(String bucket,String key,java.io.InputStream input,long length,String contentType,long deadline)throws IOException{byte[] value=input.readAllBytes();if(bytes.putIfAbsent(key,value)!=null)throw new IOException("exists");return new Stored(null,"etag");}
+        @Override public java.io.InputStream open(String bucket,String key,String version)throws IOException{byte[] value=bytes.get(key);if(value==null)throw new IOException("missing");return new ByteArrayInputStream(value);}
+        @Override public void putTombstone(String bucket,String key,String token,long deadline){bytes.put(key,new byte[0]);tokens.put(key,token);}
+        @Override public Head head(String bucket,String key){byte[] value=bytes.get(key);return new Head(value==null?0:value.length,null,tokens.get(key));}
+        @Override public void delete(String bucket,String key,String version){bytes.remove(key);}
     }
 
     @FunctionalInterface

@@ -6,7 +6,6 @@ import cn.jia.agent.output.OutputUploadService;
 import cn.jia.agent.output.dto.OutputSourceDTO;
 import cn.jia.agent.output.dto.OutputUploadCreateDTO;
 import cn.jia.agent.output.dto.OutputUploadDTO;
-import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
@@ -42,22 +41,21 @@ public class OutputUploadController {
     public OutputUploadController(OutputUploadService service){this.service=service;}
 
     @PostMapping(consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<JsonResult<OutputUploadDTO>> create(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@RequestHeader("Idempotency-Key")String key,@RequestBody byte[] bytes){if(bytes.length>8192)throw bad();JsonNode n=parse(bytes);exactFields(n,CREATE_FIELDS);JsonNode source=n.get("source");exactFields(source,SOURCE_FIELDS);return ok(service.create(bearer,key,new OutputUploadCreateDTO(text(n,"runId"),new OutputSourceDTO(text(source,"type"),text(source,"id")),text(n,"name"),text(n,"size"),text(n,"sha256"),text(n,"mime"))),HttpStatus.OK);}
+    public ResponseEntity<OutputHttpEnvelope.Success<OutputUploadDTO>> create(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@RequestHeader("Idempotency-Key")String key,@RequestBody byte[] bytes){if(bytes.length>8192)throw bad();JsonNode n=parse(bytes);exactFields(n,CREATE_FIELDS);JsonNode source=n.get("source");exactFields(source,SOURCE_FIELDS);return ok(service.create(bearer,key,new OutputUploadCreateDTO(text(n,"runId"),new OutputSourceDTO(text(source,"type"),text(source,"id")),text(n,"name"),text(n,"size"),text(n,"sha256"),text(n,"mime"))),HttpStatus.OK);}
     @PutMapping(value="/{uploadId}/content",consumes=MediaType.APPLICATION_OCTET_STREAM_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<JsonResult<OutputUploadDTO>> put(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@PathVariable String uploadId,HttpServletRequest request)throws java.io.IOException{return ok(service.put(bearer,uploadId,request.getInputStream()),HttpStatus.OK);}
+    public ResponseEntity<OutputHttpEnvelope.Success<OutputUploadDTO>> put(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@PathVariable String uploadId,HttpServletRequest request)throws java.io.IOException{return ok(service.put(bearer,uploadId,request.getInputStream()),HttpStatus.OK);}
     @PostMapping(value="/{uploadId}/complete",produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<JsonResult<OutputUploadDTO>> complete(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@RequestHeader("Idempotency-Key")String key,@PathVariable String uploadId){OutputUploadDTO result=service.complete(bearer,uploadId,key);return ok(result,"VERIFYING".equals(result.state())?HttpStatus.ACCEPTED:HttpStatus.OK);}
+    public ResponseEntity<OutputHttpEnvelope.Success<OutputUploadDTO>> complete(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@RequestHeader("Idempotency-Key")String key,@PathVariable String uploadId){OutputUploadDTO result=service.complete(bearer,uploadId,key);return ok(result,"VERIFYING".equals(result.state())?HttpStatus.ACCEPTED:HttpStatus.OK);}
     @GetMapping(value="/{uploadId}",produces=MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<JsonResult<OutputUploadDTO>> status(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@PathVariable String uploadId){return ok(service.status(bearer,uploadId),HttpStatus.OK);}
+    public ResponseEntity<OutputHttpEnvelope.Success<OutputUploadDTO>> status(@RequestHeader(HttpHeaders.AUTHORIZATION)String bearer,@PathVariable String uploadId){return ok(service.status(bearer,uploadId),HttpStatus.OK);}
 
-    @ExceptionHandler(OutputUploadException.class) public ResponseEntity<JsonResult<Void>> upload(OutputUploadException e){return error(e.code(),e.getMessage(),e.status());}
-    @ExceptionHandler(OutputAuthorizationException.class) public ResponseEntity<JsonResult<Void>> auth(OutputAuthorizationException e){return error(e.getCode(),"Output access is unavailable",e.getCode().contains("FORBIDDEN")?403:401);}
-    @ExceptionHandler({MissingRequestHeaderException.class,HttpMessageNotReadableException.class}) public ResponseEntity<JsonResult<Void>> binding(Exception e){return error("OUTPUT_REQUEST_INVALID","Invalid output request",400);}
-    @ExceptionHandler(Exception.class) public ResponseEntity<JsonResult<Void>> unexpected(Exception e){return error("OUTPUT_DELIVERY_UNAVAILABLE","Output delivery unavailable",503);}
+    @ExceptionHandler(OutputUploadException.class) public ResponseEntity<OutputHttpEnvelope.Error> upload(OutputUploadException e,HttpServletRequest r){return OutputHttpEnvelope.error(r,e.code(),e.getMessage(),e.status(),!e.terminal());}
+    @ExceptionHandler(OutputAuthorizationException.class) public ResponseEntity<OutputHttpEnvelope.Error> auth(OutputAuthorizationException e,HttpServletRequest r){return OutputHttpEnvelope.error(r,e.getCode(),"Output access is unavailable",e.getCode().contains("FORBIDDEN")?403:401,false);}
+    @ExceptionHandler({MissingRequestHeaderException.class,HttpMessageNotReadableException.class}) public ResponseEntity<OutputHttpEnvelope.Error> binding(Exception e,HttpServletRequest r){return OutputHttpEnvelope.error(r,"OUTPUT_REQUEST_INVALID","Invalid output request",400,false);}
+    @ExceptionHandler(Exception.class) public ResponseEntity<OutputHttpEnvelope.Error> unexpected(Exception e,HttpServletRequest r){return OutputHttpEnvelope.error(r,"OUTPUT_DELIVERY_UNAVAILABLE","Output delivery unavailable",503,true);}
     private static JsonNode parse(byte[] b){try{JsonNode n=JSON.readTree(b);if(n==null||!n.isObject())throw bad();return n;}catch(Exception e){throw bad();}}
     private static void exactFields(JsonNode n,Set<String> fields){if(n==null||!n.isObject())throw bad();Set<String> actual=new java.util.HashSet<>(n.propertyNames());if(!actual.equals(fields))throw bad();}
     private static String text(JsonNode n,String key){JsonNode v=n.get(key);if(v==null||!v.isString())throw bad();return v.asText();}
     private static OutputUploadException bad(){return new OutputUploadException("OUTPUT_REQUEST_INVALID","Invalid output request",400);}
-    private static <T>ResponseEntity<JsonResult<T>> ok(T data,HttpStatus status){JsonResult<T> body=JsonResult.success(data);body.setStatus(status.value());return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"no-store").body(body);}
-    private static ResponseEntity<JsonResult<Void>> error(String code,String message,int status){JsonResult<Void> body=new JsonResult<>(null,message,code,status);return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"no-store").body(body);}
+    private static <T>ResponseEntity<OutputHttpEnvelope.Success<T>> ok(T data,HttpStatus status){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"no-store").body(new OutputHttpEnvelope.Success<>(data));}
 }
