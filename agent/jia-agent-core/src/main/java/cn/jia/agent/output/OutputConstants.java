@@ -36,6 +36,21 @@ public final class OutputConstants {
     public static final int AUTH_REQUESTS_PER_MINUTE = 60;
     public static final String TICKET_AUDIENCE = "output-api";
 
+    public static final long MAX_SCOPE_BYTES = 1_073_741_824L;
+    public static final int MAX_BINDING_UPLOADS = 2;
+    public static final int MAX_SCOPE_UPLOADS = 8;
+    public static final long UPLOAD_SESSION_MILLIS = 86_400_000L;
+    public static final long WRITER_LEASE_MILLIS = 300_000L;
+    public static final long UPLOAD_HARD_DEADLINE_MILLIS = 600_000L;
+    public static final long JOB_LEASE_MILLIS = 60_000L;
+
+    public static final String UPLOAD_CREATED = "CREATED";
+    public static final String UPLOAD_UPLOADING = "UPLOADING";
+    public static final String UPLOAD_VERIFYING = "VERIFYING";
+    public static final String UPLOAD_READY = "READY";
+    public static final String UPLOAD_REJECTED = "REJECTED";
+    public static final String UPLOAD_EXPIRED = "EXPIRED";
+
     private OutputConstants() {
     }
 }

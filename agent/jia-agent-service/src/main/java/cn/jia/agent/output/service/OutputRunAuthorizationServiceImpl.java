@@ -324,7 +324,7 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
                 ticket.getTenantId(), ticket.getClientId(), run.getRunId(),
                 run.getSourceType(), run.getSourceId(), run.getProducerAgentId(),
                 run.getBindingId(), ticket.getIssuedRuntimeId(),
-                operations, ticket.getExpiresAt());
+                operations, ticket.getExpiresAt(), run.getState());
     }
 
     private OutputSourceBindingEntity lockOrCreateSource(

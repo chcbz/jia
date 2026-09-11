@@ -6,15 +6,23 @@ dependencies {
     compileOnly project(':oauth:jia-oauth-api')
     compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
     compileOnly 'org.springframework.security:spring-security-oauth2-jose'
+    compileOnly libs.spring.security.config
+    compileOnly libs.spring.security.web
     implementation project(':common:jia-common-service')
     implementation libs.spring.rabbit
     implementation libs.jackson.databind
+    implementation platform('software.amazon.awssdk:bom:2.31.78')
+    implementation 'software.amazon.awssdk:s3'
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
     testImplementation project(':oauth:jia-oauth-api')
+    testImplementation project(':oauth:jia-oauth-resource')
+    testImplementation project(':user:jia-user-service')
     testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
     testImplementation 'org.springframework.security:spring-security-oauth2-jose'
+    testImplementation libs.spring.security.config
+    testImplementation libs.spring.security.web
     testImplementation platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}")
     testImplementation 'io.projectreactor:reactor-test'
     testRuntimeOnly libs.mysql

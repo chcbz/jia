@@ -12,5 +12,6 @@ public record OutputTicketAuthorization(
         String bindingId,
         String runtimeInstanceId,
         List<String> operations,
-        long expiresAt) {
+        long expiresAt,
+        String runState) {
 }

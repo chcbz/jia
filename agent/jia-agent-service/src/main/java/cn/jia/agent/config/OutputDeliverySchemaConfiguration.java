@@ -13,4 +13,10 @@ public class OutputDeliverySchemaConfiguration {
             JdbcTemplate jdbcTemplate) {
         return new OutputDeliverySchemaInitializer(jdbcTemplate);
     }
+
+    @Bean
+    @Conditional(OutputDeliveryEnabledCondition.class)
+    public OutputObjectSchemaInitializer outputObjectSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        return new OutputObjectSchemaInitializer(jdbcTemplate);
+    }
 }

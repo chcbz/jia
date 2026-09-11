@@ -1,6 +1,8 @@
 package cn.jia.agent.output.service;
 
 import cn.jia.agent.config.OutputDeliverySchemaInitializer;
+import cn.jia.agent.config.OutputDeliveryProperties;
+import cn.jia.agent.config.OutputObjectSchemaInitializer;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.dao.impl.AgentRuntimeDaoImpl;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
@@ -11,13 +13,19 @@ import cn.jia.agent.output.OutputSourceAccessMode;
 import cn.jia.agent.output.OutputSourceAuthorization;
 import cn.jia.agent.output.OutputSourceAuthorizer;
 import cn.jia.agent.output.OutputTicketAuthorization;
+import cn.jia.agent.output.OutputMalwareScanner;
+import cn.jia.agent.output.OutputObjectStorage;
+import cn.jia.agent.output.dao.OutputUploadDao;
 import cn.jia.agent.output.dao.OutputAccessTicketDao;
 import cn.jia.agent.output.dao.OutputRunBindingDao;
 import cn.jia.agent.output.dao.OutputSourceBindingDao;
 import cn.jia.agent.output.dao.impl.OutputAccessTicketDaoImpl;
 import cn.jia.agent.output.dao.impl.OutputRunBindingDaoImpl;
 import cn.jia.agent.output.dao.impl.OutputSourceBindingDaoImpl;
+import cn.jia.agent.output.dao.impl.OutputUploadDaoImpl;
 import cn.jia.agent.output.dto.OutputAuthReceiptDTO;
+import cn.jia.agent.output.dto.OutputSourceDTO;
+import cn.jia.agent.output.dto.OutputUploadCreateDTO;
 import cn.jia.agent.output.entity.OutputAccessTicketEntity;
 import cn.jia.agent.output.entity.OutputRunBindingEntity;
 import cn.jia.agent.output.mapper.OutputAccessTicketMapper;
@@ -42,6 +50,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -350,6 +360,53 @@ class OutputAuthorizationMySqlConcurrencyTest {
         assertInstanceOf(OutputAuthorizationException.class, expired.get(10, TimeUnit.SECONDS));
     }
 
+    @Test
+    void productionTicketLocksRemainEnlistedUntilUploadMutationCommits() throws Exception {
+        insertSourceAndRun(0, OutputConstants.RUN_ACTIVE, "READ_WRITE");
+        OutputAuthReceiptDTO ticket = issue(service, 0, "runtime-1");
+        OutputUploadDao delegate = new OutputUploadDaoImpl(jdbc);
+        CountDownLatch authorized = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        OutputUploadDao barrier = (OutputUploadDao) Proxy.newProxyInstance(
+                OutputUploadDao.class.getClassLoader(), new Class<?>[]{OutputUploadDao.class},
+                (proxy, method, arguments) -> {
+                    if (method.getName().equals("ensureScopeQuota")) {
+                        authorized.countDown();
+                        assertTrue(release.await(10, TimeUnit.SECONDS));
+                    }
+                    try {
+                        return method.invoke(delegate, arguments);
+                    } catch (InvocationTargetException exception) {
+                        throw exception.getCause();
+                    }
+                });
+        OutputUploadServiceImpl uploads = new OutputUploadServiceImpl(
+                service, barrier, mock(OutputObjectStorage.class), mock(OutputMalwareScanner.class),
+                new DataSourceTransactionManager(dataSource), new OutputDeliveryProperties(true));
+        OutputUploadCreateDTO request = new OutputUploadCreateDTO(
+                runId(0), new OutputSourceDTO(OutputConstants.SOURCE_TASK, sourceId(0)),
+                "report.md", "13",
+                "ecf701f727d9e2d77c4aa49ac6fbbcc997278aca010bddeeb961c10cf54d435a",
+                "text/markdown");
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<?> create = pool.submit(() -> uploads.create(
+                "Bearer " + ticket.token(), "auth-enlisted-create-01", request));
+        assertTrue(authorized.await(10, TimeUnit.SECONDS));
+        Future<Integer> revoke = pool.submit(() -> jdbc.update(
+                "UPDATE output_access_ticket SET revoked_at=? WHERE ticket_hash=?",
+                System.currentTimeMillis(), ticketHash(ticket.token())));
+        Thread.sleep(200L);
+        assertTrue(!revoke.isDone(), "ticket revocation must wait for the upload transaction's ticket lock");
+        release.countDown();
+        create.get(10, TimeUnit.SECONDS);
+        assertEquals(1, revoke.get(10, TimeUnit.SECONDS));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM output_upload_session", Integer.class));
+        assertThrows(OutputAuthorizationException.class, () -> uploads.create(
+                "Bearer " + ticket.token(), "auth-enlisted-create-02", request));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM output_upload_session", Integer.class));
+        pool.shutdownNow();
+    }
+
     private OutputRunAuthorizationServiceImpl service(
             OutputRunBindingDao selectedRunDao, OutputAccessTicketDao selectedTicketDao) {
         return new OutputRunAuthorizationServiceImpl(
@@ -416,7 +473,7 @@ class OutputAuthorizationMySqlConcurrencyTest {
         return identity;
     }
 
-    private void createSchema() {
+    private void createSchema() throws Exception {
         jdbc.execute("""
                 CREATE TABLE agent_runtime (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -430,6 +487,7 @@ class OutputAuthorizationMySqlConcurrencyTest {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         new OutputDeliverySchemaInitializer(jdbc).afterPropertiesSet();
+        new OutputObjectSchemaInitializer(jdbc).afterPropertiesSet();
         jdbc.execute("""
                 CREATE TABLE od01_source_root (
                     tenant_id VARBINARY(200) NOT NULL,client_id VARBINARY(200) NOT NULL,
