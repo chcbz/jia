@@ -845,6 +845,25 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void writableTaskMembersExcludeInvitedAndTerminalReadOnlyStatuses() {
+        AgentTaskMetaEntity task = scopedTaskRow("task-write", "tenant-a", "client-a");
+        when(agentTaskMetaDao.findByTaskId("tenant-a", "client-a", "task-write"))
+                .thenReturn(task);
+        when(agentTaskMemberDao.listByTask("tenant-a", "client-a", "task-write"))
+                .thenReturn(List.of(
+                        taskMember("tenant-a", "client-a", "task-write", "accepted", "accepted"),
+                        taskMember("tenant-a", "client-a", "task-write", "working", "working"),
+                        taskMember("tenant-a", "client-a", "task-write", "blocked", "blocked"),
+                        taskMember("tenant-a", "client-a", "task-write", "invited", "invited"),
+                        taskMember("tenant-a", "client-a", "task-write", "done", "done"),
+                        taskMember("tenant-a", "client-a", "task-write", "failed", "failed")));
+
+        assertEquals(List.of("accepted", "working", "blocked"),
+                agentService.listTaskWritableMemberAgentIds(
+                        "tenant-a", "client-a", "task-write"));
+    }
+
+    @Test
     void assignTaskAcceptsMultipleAgentsAndReturnsAssignees() {
         AgentRuntimeEntity wuYong = new AgentRuntimeEntity();
         wuYong.setAgentId("agent-wuyong");
@@ -2828,6 +2847,8 @@ class AgentServiceImplTest extends BaseMockTest {
         member.setTaskId(taskId);
         member.setAgentId(agentId);
         member.setMemberStatus(status);
+        member.setMemberRole("worker");
+        member.setAssignmentSource("manual");
         return member;
     }
 

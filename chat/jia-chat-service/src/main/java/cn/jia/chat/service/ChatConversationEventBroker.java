@@ -23,7 +23,6 @@ public class ChatConversationEventBroker {
     private static final int STRIPE_COUNT = 64;
 
     private final Map<String, EventSink> sinks = new ConcurrentHashMap<>();
-    private final Map<String, Long> retiredGenerations = new ConcurrentHashMap<>();
     private final ReentrantLock[] stripes = new ReentrantLock[STRIPE_COUNT];
 
     public ChatConversationEventBroker() {
@@ -32,14 +31,16 @@ public class ChatConversationEventBroker {
         }
     }
 
-    /** Legacy test/helper entrypoint. Production paths must pass a persisted generation. */
+    /** Legacy test/helper entrypoint. Production paths must pass a persisted generation and live check. */
     public Flux<String> stream(String conversationId) {
-        return stream(conversationId, 1L);
+        return stream(conversationId, 1L, () -> true);
     }
 
-    public Flux<String> stream(String conversationId, long generation) {
+    public Flux<String> stream(
+            String conversationId, long generation, BooleanSupplier persistentLiveCheck) {
         return Flux.defer(() -> {
-            EventSink eventSink = retain(conversationId, generation, false);
+            EventSink eventSink = retain(
+                    conversationId, generation, false, persistentLiveCheck);
             if (eventSink == null) {
                 return Flux.empty();
             }
@@ -49,9 +50,11 @@ public class ChatConversationEventBroker {
     }
 
     /** Emits once when deletion commits, allowing HTTP/relay pipelines to dispose their source. */
-    public Flux<Boolean> deletionSignal(String conversationId, long generation) {
+    public Flux<Boolean> deletionSignal(
+            String conversationId, long generation, BooleanSupplier persistentLiveCheck) {
         return Flux.defer(() -> {
-            EventSink eventSink = retain(conversationId, generation, true);
+            EventSink eventSink = retain(
+                    conversationId, generation, true, persistentLiveCheck);
             if (eventSink == null) {
                 return Flux.just(Boolean.TRUE);
             }
@@ -91,8 +94,7 @@ public class ChatConversationEventBroker {
         ReentrantLock lock = stripe(conversationId);
         lock.lock();
         try {
-            if (generation <= retiredGenerations.getOrDefault(conversationId, 0L)
-                    || !persistentLiveCheck.getAsBoolean()) {
+            if (!persistentLiveCheck.getAsBoolean()) {
                 return false;
             }
             publication.run();
@@ -127,14 +129,20 @@ public class ChatConversationEventBroker {
         return sink == null ? 0 : sink.watchers.get();
     }
 
-    private EventSink retain(String conversationId, long generation, boolean watcher) {
-        if (!validKey(conversationId, generation)) {
+    private EventSink retain(
+            String conversationId, long generation, boolean watcher,
+            BooleanSupplier persistentLiveCheck) {
+        if (!validKey(conversationId, generation) || persistentLiveCheck == null) {
             return null;
         }
         ReentrantLock lock = stripe(conversationId);
         lock.lock();
         try {
-            if (generation <= retiredGenerations.getOrDefault(conversationId, 0L)) {
+            try {
+                if (!persistentLiveCheck.getAsBoolean()) {
+                    return null;
+                }
+            } catch (RuntimeException unavailable) {
                 return null;
             }
             EventSink existing = sinks.get(conversationId);
@@ -167,7 +175,6 @@ public class ChatConversationEventBroker {
     }
 
     private void invalidateLocked(String conversationId, long generation) {
-        retiredGenerations.merge(conversationId, generation, Math::max);
         EventSink eventSink = sinks.remove(conversationId);
         if (eventSink != null) {
             eventSink.invalidated = true;

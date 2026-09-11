@@ -34,7 +34,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void forgedParticipantMetadataNeverAuthorizesTarget() {
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "372"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO request = bounty("372", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
@@ -48,7 +48,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
         omitted.setConversationScopeKey("public");
         assertThrows(IllegalStateException.class, () -> authorize(omitted));
 
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "372"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO crossTask = bounty("372", List.of("agent-wuyong"));
         crossTask.setConversationScopeKey("task:999");
@@ -58,18 +58,18 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
     @Test
     void taskMemberQueryFailureAndEmptyTaskFailClosed() {
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "372"))
                 .thenThrow(new IllegalStateException("query failed"));
         assertThrows(IllegalStateException.class, () -> authorize(request));
 
         org.mockito.Mockito.doReturn(List.of()).when(agentService)
-                .listTaskMemberAgentIds("tenant-a", "client-a", "372");
+                .listTaskWritableMemberAgentIds("tenant-a", "client-a", "372");
         assertThrows(IllegalStateException.class, () -> authorize(request));
     }
 
     @Test
     void legalTaskTargetsUseAuthoritativeMembersAndSupportMultipleTargets() {
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong", "agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("forged-agent")));
@@ -84,7 +84,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void taskScopeWithoutTargetsDefaultsToAllAuthoritativeMembers() {
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         assertEquals(List.of("agent-wuyong", "agent-linchong"),
                 authorize(bounty("372", List.of())).targetAgentIds());
@@ -92,7 +92,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void privateTaskScopeAllowsOneAuthoritativeTarget() {
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
         request.setConversationScopeType("private");
@@ -108,7 +108,7 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
 
     @Test
     void privateScopeAllowsExactlyOneTarget() {
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         ChatMessageDTO request = bounty("372", List.of("agent-wuyong", "agent-linchong"));
         request.setConversationScopeType("private");

@@ -374,7 +374,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                             () -> sendEvent(session, "delta", event));
                 }))
                 .takeUntilOther(chatConversationEventBroker.deletionSignal(
-                        conversationId, generation))
+                        conversationId, generation,
+                        () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, conversationId, generation)))
                 .doOnError(error -> chatConversationEventBroker.runIfLive(
                         conversationId, generation,
                         () -> chatConversationService.isLiveGeneration(
@@ -804,7 +806,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         jiacn, clientId, conversationId, generation),
                 () -> {
                     sendEvent(session, "agent_message_saved", event);
-                    broadcastEventToScope(clientId, jiacn, "agent_message", event);
+                    broadcastConversationEventToTargets(
+                            clientId, jiacn, persistedConversationTargetAgentIds(conversation),
+                            "agent_message", event);
                     chatConversationEventBroker.publishIfLive(
                             conversationId, generation, () -> true, event);
                 });
@@ -863,22 +867,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
         List<String> persistedTargets;
         try {
-            persistedTargets = parsePersistedTargetAgentIds(conversation.getTargetAgentIds());
+            persistedTargets = persistedConversationTargetAgentIds(conversation);
         } catch (RuntimeException invalidScope) {
             return denyConversationAgentScope(session, payload);
         }
-        String legacyTarget = conversation.getTargetAgentId();
-        if (legacyTarget != null && !legacyTarget.isBlank()) {
-            if (!isCanonicalScopeId(legacyTarget)) {
-                return denyConversationAgentScope(session, payload);
-            }
-            if (persistedTargets.isEmpty()) {
-                persistedTargets = List.of(legacyTarget);
-            } else if (!persistedTargets.contains(legacyTarget)) {
-                return denyConversationAgentScope(session, payload);
-            }
-        }
-        if (!persistedTargets.isEmpty() && !persistedTargets.contains(agentId)) {
+        if (persistedTargets.isEmpty() || !persistedTargets.contains(agentId)) {
             return denyConversationAgentScope(session, payload);
         }
 
@@ -912,8 +905,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (!authoritativeMembers.contains(agentId)) {
             return denyConversationAgentScope(session, payload);
         }
-        // New public/bounty conversations persist the complete authorized target set. A legacy
-        // row without that set remains bounded by current authoritative membership.
+        // Persisted recipients are mandatory; current writable membership further narrows task scope.
         return true;
     }
 
@@ -922,6 +914,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sendError(session, payload, "CONVERSATION_AGENT_SCOPE_MISMATCH",
                 "Agent is outside the conversation target scope");
         return false;
+    }
+
+    private List<String> persistedConversationTargetAgentIds(
+            ChatConversationEntity conversation) {
+        List<String> persistedTargets = parsePersistedTargetAgentIds(
+                conversation.getTargetAgentIds());
+        String legacyTarget = conversation.getTargetAgentId();
+        if (legacyTarget == null || legacyTarget.isBlank()) {
+            return persistedTargets;
+        }
+        if (!isCanonicalScopeId(legacyTarget)) {
+            throw new IllegalArgumentException("Invalid legacy target agent scope");
+        }
+        if (persistedTargets.isEmpty()) {
+            return List.of(legacyTarget);
+        }
+        if (!persistedTargets.contains(legacyTarget)) {
+            throw new IllegalArgumentException("Conflicting persisted target agent scope");
+        }
+        return persistedTargets;
     }
 
     private List<String> parsePersistedTargetAgentIds(String json) {
@@ -1225,6 +1237,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private void broadcastEvent(String type, Map<String, ?> payload) {
         sessions.values().forEach(session -> sendEvent(session, type, payload));
+    }
+
+    private void broadcastConversationEventToTargets(
+            String clientId, String ownerJiacn, List<String> targetAgentIds,
+            String type, Map<String, ?> payload) {
+        if (isBlank(clientId) || isBlank(ownerJiacn)
+                || targetAgentIds == null || targetAgentIds.isEmpty()) {
+            log.warn("Refusing Agent conversation broadcast without explicit recipients, type={}", type);
+            return;
+        }
+        Set<String> targets = Set.copyOf(targetAgentIds);
+        sessions.values().stream()
+                .filter(WebSocketSession::isOpen)
+                .filter(session -> clientId.equals(sessionClientId(session))
+                        && ownerJiacn.equals(sessionJiacn(session)))
+                .filter(session -> targets.contains(sessionAgentId(session))
+                        && successfullyRegisteredAgentIds
+                                .getOrDefault(session.getId(), Set.of())
+                                .contains(sessionAgentId(session)))
+                .forEach(session -> sendEvent(session, type, payload));
     }
 
     private void broadcastEventToScope(String clientId, String ownerJiacn,
@@ -1603,7 +1635,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return Set.of();
         }
         try {
-            List<String> rawMembers = agentService.listTaskMemberAgentIds(
+            List<String> rawMembers = agentService.listTaskWritableMemberAgentIds(
                     tenantId, clientId, taskId);
             if (rawMembers == null || rawMembers.isEmpty()) {
                 return Set.of();

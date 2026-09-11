@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -74,7 +75,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         List<String> events = eventsFuture.get(2, TimeUnit.SECONDS);
 
         assertTrue(result.attempted());
-        assertTrue(result.delivered());
+        assertTrue(result.delivered().block());
         assertTrue(events.stream().anyMatch(value -> value.contains("agentDelivery")));
         assertTrue(events.stream().anyMatch(value -> value.contains("\"content\":\"ok\"")));
         verify(chatConversationService).appendOwnedMessage(
@@ -85,7 +86,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void participantMetadataCannotForgeTaskAuthorization() {
-        when(agentService.listTaskMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
@@ -103,13 +104,13 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void taskQueryExceptionAndEmptyTaskFailClosed() {
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-wuyong"));
-        when(agentService.listTaskMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenThrow(new IllegalStateException("query"));
         assertTrue(service().relay(request, "1001", Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
 
         org.mockito.Mockito.doReturn(List.of()).when(agentService)
-                .listTaskMemberAgentIds("tester", "web-client", "task-7");
+                .listTaskWritableMemberAgentIds("tester", "web-client", "task-7");
         assertTrue(service().relay(request, "1001", Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
     }
@@ -118,7 +119,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     void bountyRelaysEveryPersistedAuthoritativeTarget() {
         stubLiveConversation();
         List<String> members = List.of("agent-wuyong", "agent-linchong");
-        when(agentService.listTaskMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(members);
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
@@ -134,7 +135,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 request("bounty", "task-7", members), "1001", Flux::empty);
         List<String> events = result.stream().collectList().block();
 
-        assertTrue(result.delivered());
+        assertTrue(result.delivered().block());
         assertEquals(2, events.size());
         for (String member : members) {
             verify(agentWebSocketHandler).sendDirectMessageToAgent(
@@ -148,8 +149,76 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     }
 
     @Test
+    void emptyPersistedTargetSnapshotFailsClosed() {
+        when(agentService.listTaskWritableMemberAgentIds(
+                "tester", "web-client", "task-7"))
+                .thenReturn(List.of("agent-wuyong"));
+        ChatConversationEntity legacy = conversation(
+                "bounty", "task:task-7", "task-7", List.of("agent-wuyong"));
+        legacy.setTargetAgentId(null);
+        legacy.setTargetAgentIds(null);
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(legacy);
+
+        JuyitingAgentRelayResult result = service().relay(
+                request("bounty", "task-7", List.of("agent-wuyong")),
+                "1001", Flux::empty);
+
+        assertTrue(result.stream().blockFirst().contains("conversation scope mismatch"));
+        verify(chatConversationService, never()).appendOwnedMessage(
+                any(), any(), any(ChatMessageEntity.class),
+                org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void allFailedMultiTargetSendsEnableFallback() {
+        stubLiveConversation();
+        List<String> members = List.of("agent-wuyong", "agent-linchong");
+        when(agentService.listTaskWritableMemberAgentIds(
+                "tester", "web-client", "task-7")).thenReturn(members);
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
+        for (String member : members) {
+            when(agentWebSocketHandler.isAgentConnected(
+                    "tester", "web-client", member)).thenReturn(true);
+            when(agentWebSocketHandler.sendDirectMessageToAgent(
+                    eq("tester"), eq("web-client"), eq(member), any(Map.class)))
+                    .thenReturn(false);
+        }
+
+        JuyitingAgentRelayResult result = service().relay(
+                request("bounty", "task-7", members), "1001", Flux::empty);
+        List<String> events = result.stream().collectList().block();
+
+        assertFalse(result.delivered().block());
+        assertEquals(2, events.size());
+        assertTrue(events.stream().allMatch(value -> value.contains("\"delivered\":false")));
+    }
+
+    @Test
+    void deletedConversationBeforeRelaySubscriptionCompletesDeliveryOutcomeFalse() {
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("public", "public", null,
+                        List.of("agent-wuyong")));
+        when(chatConversationService.appendOwnedMessage(
+                eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L)))
+                .thenAnswer(invocation -> invocation.getArgument(2));
+        when(chatConversationService.isLiveGeneration(
+                "tester", "web-client", "1001", 1L)).thenReturn(false);
+
+        JuyitingAgentRelayResult result = service().relay(
+                request("public", null, List.of("agent-wuyong")),
+                "1001", Flux::empty);
+
+        assertTrue(result.stream().collectList().block(Duration.ofSeconds(2)).isEmpty());
+        assertFalse(result.delivered().block(Duration.ofSeconds(2)));
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(
+                any(), any(), any(), any(Map.class));
+    }
+
+    @Test
     void requestedTargetOutsidePersistedSetIsRejected() {
-        when(agentService.listTaskMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7",

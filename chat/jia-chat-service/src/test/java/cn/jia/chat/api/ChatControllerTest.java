@@ -90,7 +90,7 @@ class ChatControllerTest extends BaseMockTest {
         when(agentWebSocketHandler.isAgentConnected("tester", "web-client", "agent-wuyong")).thenReturn(true);
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class))).thenReturn(true);
-        when(chatConversationEventBroker.stream("1001", 1L)).thenReturn(Flux.just("""
+        when(chatConversationEventBroker.stream("1001", 1L, any())).thenReturn(Flux.just("""
                 {"type":"agent_message","conversationId":"1001","conversationType":"juyiting","agentId":"agent-wuyong","senderType":"agent","senderName":"Wu Yong","content":"ok"}
                 """).delayElements(Duration.ofMillis(10)));
 
@@ -157,7 +157,8 @@ class ChatControllerTest extends BaseMockTest {
         assertThrows(AgentTaskThreadException.class, () -> controller.conversationEvents("77"));
 
         verify(redisService, never()).publishSignal("77");
-        verify(chatConversationEventBroker, never()).stream(eq("77"), org.mockito.ArgumentMatchers.anyLong());
+        verify(chatConversationEventBroker, never()).stream(
+                eq("77"), org.mockito.ArgumentMatchers.anyLong(), any());
     }
 
     @Test
@@ -175,7 +176,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "conversationScopeKey", "task:372");
         setObjectField(request, "taskId", "372");
         setObjectField(request, "targetAgentIds", List.of("agent-wuyong", "agent-linchong"));
-        when(agentService.listTaskMemberAgentIds("tester", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         when(chatConversationService.create(any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -255,7 +256,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "targetAgentIds", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-wuyong")));
 
-        when(agentService.listTaskMemberAgentIds("tester", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
                 .thenReturn(List.of("agent-wuyong"));
 
         assertThrows(AgentTaskThreadException.class,
@@ -274,7 +275,7 @@ class ChatControllerTest extends BaseMockTest {
         EsContextHolder.setContext(context);
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         ChatController controller = newController();
-        when(agentService.listTaskMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(members);
         when(chatConversationService.create(any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(0))
@@ -351,7 +352,7 @@ class ChatControllerTest extends BaseMockTest {
 
         assertTrue(completed.await(2, java.util.concurrent.TimeUnit.SECONDS));
         assertEquals(0, events.get());
-        assertTrue(!broker.publishIfLive("5001", 1L, () -> true,
+        assertTrue(!broker.publishIfLive("5001", 1L, () -> false,
                 Map.of("type", "agent_message")));
     }
 
@@ -417,7 +418,8 @@ class ChatControllerTest extends BaseMockTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         ChatConversationEntity publicConversation = new ChatConversationEntity()
                 .setId(1001L).setJiacn("tester").setConversationType("juyiting")
-                .setConversationScopeType("public").setConversationScopeKey("public");
+                .setConversationScopeType("public").setConversationScopeKey("public")
+                .setTargetAgentIds("[\"agent-wuyong\"]");
         publicConversation.setTenantId("0"); publicConversation.setClientId("web-client");
         org.mockito.Mockito.lenient().when(chatConversationService.getOwned(
                 "tester", "web-client", "1001")).thenReturn(publicConversation);
@@ -429,7 +431,7 @@ class ChatControllerTest extends BaseMockTest {
                 anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong()))
                 .thenReturn(true);
         org.mockito.Mockito.lenient().when(chatConversationEventBroker.deletionSignal(
-                anyString(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(Flux.never());
+                anyString(), org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(Flux.never());
         org.mockito.Mockito.lenient().when(chatConversationEventBroker.runIfLive(
                 anyString(), org.mockito.ArgumentMatchers.anyLong(), any(), any(Runnable.class)))
                 .thenAnswer(invocation -> {

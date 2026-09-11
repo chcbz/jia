@@ -117,11 +117,11 @@ public class ChatController {
                         generation, needSummary, summary)
         );
         boolean skipAdvisorUserPersistence = agentDelivery.attempted();
-        Flux<String> aiStream = agentDelivery.delivered()
+        Flux<String> aiStream = agentDelivery.delivered().flatMapMany(delivered -> delivered
                 ? Flux.empty()
                 : createAIStream(chatMessage, conversationId, ownerJiacn, ownerClientId,
                         resolveConversationType(conversation), needSummary, summary,
-                        skipAdvisorUserPersistence);
+                        skipAdvisorUserPersistence));
 
         return Flux.create(emitter -> {
             Flux<String> backendStream = agentDelivery.stream()
@@ -132,7 +132,9 @@ public class ChatController {
                             conversationId, ownerJiacn, ownerClientId)))
                     .takeUntilOther(cancelSignal)
                     .takeUntilOther(chatConversationEventBroker.deletionSignal(
-                            conversationId, generation))
+                            conversationId, generation,
+                            () -> chatConversationService.isLiveGeneration(
+                                    ownerJiacn, ownerClientId, conversationId, generation)))
                     .doOnNext(value -> chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
@@ -469,7 +471,12 @@ public class ChatController {
     @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> conversationEvents(@RequestParam(name = "id") String id) {
         ChatConversationEntity conversation = chatConversationService.get(id);
-        return chatConversationEventBroker.stream(id, lifecycleGeneration(conversation))
+        long generation = lifecycleGeneration(conversation);
+        String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
+        String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
+        return chatConversationEventBroker.stream(
+                        id, generation, () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, id, generation))
                 .map(event -> "data: " + event + "\n\n");
     }
 

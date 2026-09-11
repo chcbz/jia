@@ -20,7 +20,7 @@ class ChatConversationEventBrokerTest {
         AtomicReference<String> eventJson = new AtomicReference<>();
         CountDownLatch latch = new CountDownLatch(1);
 
-        broker.stream("conv-001", 1L).take(1).subscribe(value -> {
+        broker.stream("conv-001", 1L, () -> true).take(1).subscribe(value -> {
             eventJson.set(value);
             latch.countDown();
         });
@@ -37,9 +37,9 @@ class ChatConversationEventBrokerTest {
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
         CountDownLatch completed = new CountDownLatch(2);
         AtomicInteger events = new AtomicInteger();
-        Disposable subscriber = broker.stream("42", 7L)
+        Disposable subscriber = broker.stream("42", 7L, () -> true)
                 .subscribe(ignored -> events.incrementAndGet(), ignored -> { }, completed::countDown);
-        Disposable watcher = broker.deletionSignal("42", 7L)
+        Disposable watcher = broker.deletionSignal("42", 7L, () -> true)
                 .subscribe(ignored -> { }, ignored -> { }, completed::countDown);
         assertEquals(1, broker.subscriberCount("42"));
         assertEquals(1, broker.watcherCount("42"));
@@ -51,7 +51,7 @@ class ChatConversationEventBrokerTest {
         assertTrue(completed.await(2, TimeUnit.SECONDS));
         assertEquals(0, broker.subscriberCount("42"));
         assertEquals(0, broker.watcherCount("42"));
-        assertFalse(broker.publishIfLive("42", 7L, () -> true,
+        assertFalse(broker.publishIfLive("42", 7L, () -> false,
                 Map.of("type", "agent_message")));
         assertEquals(0, events.get());
         subscriber.dispose();
@@ -65,10 +65,11 @@ class ChatConversationEventBrokerTest {
             fence.commitDeleted(3L);
         }
 
-        assertFalse(broker.runIfLive("77", 3L, () -> true,
+        assertFalse(broker.runIfLive("77", 3L, () -> false,
                 () -> { throw new AssertionError("stale callback ran"); }));
-        assertTrue(broker.stream("77", 3L).collectList().block().isEmpty());
-        assertTrue(broker.deletionSignal("77", 3L).collectList().block().contains(Boolean.TRUE));
+        assertTrue(broker.stream("77", 3L, () -> false).collectList().block().isEmpty());
+        assertTrue(broker.deletionSignal("77", 3L, () -> false)
+                .collectList().block().contains(Boolean.TRUE));
         assertEquals(0, broker.subscriberCount("77"));
         assertEquals(0, broker.watcherCount("77"));
     }

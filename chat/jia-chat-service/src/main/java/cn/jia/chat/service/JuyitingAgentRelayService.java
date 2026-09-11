@@ -14,6 +14,8 @@ import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,7 +40,7 @@ public class JuyitingAgentRelayService {
         JuyitingConversationScope requestedScope = scopeService.resolve(chatMessage);
         if (!JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING.equals(scopeService.resolveConversationType(chatMessage))
                 || requestedScope.scopeType() == null) {
-            return new JuyitingAgentRelayResult(false, false, Flux.empty());
+            return new JuyitingAgentRelayResult(false, Mono.just(false), Flux.empty());
         }
 
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
@@ -53,7 +55,7 @@ public class JuyitingAgentRelayService {
         ChatConversationEntity conversation = chatConversationService.getOwned(
                 ownerJiacn, ownerClientId, conversationId);
         if (!conversationMatchesScope(conversation, scope)) {
-            return new JuyitingAgentRelayResult(true, true, Flux.just(JsonUtil.toSafeJson(Map.of(
+            return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "conversation scope mismatch",
                     "conversationId", conversationId,
                     "conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING
@@ -64,7 +66,7 @@ public class JuyitingAgentRelayService {
         Optional<String> forbiddenTarget = forbiddenOwnedRosterTarget(
                 scope, ownerJiacn, ownerClientId);
         if (forbiddenTarget.isPresent()) {
-            return new JuyitingAgentRelayResult(true, true, Flux.just(JsonUtil.toSafeJson(Map.of(
+            return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(Map.of(
                     "error", "target outside owned roster",
                     "agentId", forbiddenTarget.get(),
                     "conversationId", conversationId,
@@ -85,65 +87,70 @@ public class JuyitingAgentRelayService {
         String selectedAgentId = scope.targetAgentIds().getFirst();
         if (builtinHallAgentSupport.isBuiltinAgent(selectedAgentId)) {
             return new JuyitingAgentRelayResult(
-                    true, true, builtinAgentStream.get().takeUntilOther(
+                    true, Mono.just(true), builtinAgentStream.get().takeUntilOther(
                     chatConversationEventBroker.deletionSignal(
-                            conversationId, generation)));
+                            conversationId, generation,
+                            () -> chatConversationService.isLiveGeneration(
+                                    ownerJiacn, ownerClientId, conversationId, generation))));
         }
 
         Map<String, Object> payload = buildDirectAgentPayload(chatMessage, conversationId, selectedAgentId, scope);
         String tenantId = ownerJiacn;
         String clientId = ownerClientId;
-        boolean delivered = agentWebSocketHandler.isAgentConnected(
-                ownerJiacn, ownerClientId, selectedAgentId);
-        Flux<String> stream = delivered
-                ? Flux.<String>create(emitter -> {
-                    final Disposable[] subscriptionRef = new Disposable[1];
-                    Disposable disposable = chatConversationEventBroker.stream(conversationId, generation)
-                            .filter(this::isDirectAgentEvent)
-                            .subscribe(eventJson -> {
-                                emitter.next(eventJson);
-                                if (isDirectAgentFinalEvent(eventJson)) {
-                                    Disposable current = subscriptionRef[0];
-                                    if (current != null && !current.isDisposed()) {
-                                        current.dispose();
-                                    }
-                                    emitter.complete();
-                                }
-                            }, emitter::error);
-                    subscriptionRef[0] = disposable;
-
-                    AtomicBoolean sent = new AtomicBoolean();
-                    boolean live = chatConversationEventBroker.runIfLive(
+        Sinks.One<Boolean> deliveryOutcome = Sinks.one();
+        Flux<String> stream = Flux.<String>create(emitter -> {
+            final Disposable[] subscriptionRef = new Disposable[1];
+            Disposable disposable = chatConversationEventBroker.stream(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
-                                    tenantId, clientId, conversationId, generation),
-                            () -> {
-                                agentService.requireHostingNewWork(
-                                        tenantId, clientId, selectedAgentId);
-                                sent.set(agentWebSocketHandler.sendDirectMessageToAgent(
-                                        tenantId, clientId, selectedAgentId, payload));
-                            });
-                    if (!live) {
-                        disposable.dispose();
-                        emitter.complete();
-                        return;
-                    }
-                    emitter.next(buildAgentDeliveryEventJson(
-                            conversationId, selectedAgentId, sent.get()));
+                                    tenantId, clientId, conversationId, generation))
+                    .filter(this::isDirectAgentEvent)
+                    .subscribe(eventJson -> {
+                        emitter.next(eventJson);
+                        if (isDirectAgentFinalEvent(eventJson)) {
+                            Disposable current = subscriptionRef[0];
+                            if (current != null && !current.isDisposed()) {
+                                current.dispose();
+                            }
+                            emitter.complete();
+                        }
+                    }, emitter::error);
+            subscriptionRef[0] = disposable;
 
-                    if (!sent.get()) {
-                        disposable.dispose();
-                        emitter.complete();
-                    }
+            AtomicBoolean sent = new AtomicBoolean();
+            boolean live = chatConversationEventBroker.runIfLive(
+                    conversationId, generation,
+                    () -> chatConversationService.isLiveGeneration(
+                            tenantId, clientId, conversationId, generation),
+                    () -> {
+                        agentService.requireHostingNewWork(
+                                tenantId, clientId, selectedAgentId);
+                        sent.set(agentWebSocketHandler.sendDirectMessageToAgent(
+                                tenantId, clientId, selectedAgentId, payload));
+                    });
+            deliveryOutcome.tryEmitValue(live && sent.get());
+            if (!live) {
+                disposable.dispose();
+                emitter.complete();
+                return;
+            }
+            emitter.next(buildAgentDeliveryEventJson(
+                    conversationId, selectedAgentId, sent.get()));
 
-                    emitter.onDispose(disposable);
-                }, FluxSink.OverflowStrategy.BUFFER)
+            if (!sent.get()) {
+                disposable.dispose();
+                emitter.complete();
+            }
+
+            emitter.onDispose(disposable);
+        }, FluxSink.OverflowStrategy.BUFFER)
                 .takeUntilOther(chatConversationEventBroker.deletionSignal(
-                        conversationId, generation))
-                : guardedDeliveryEvent(
-                        conversationId, selectedAgentId, false,
-                        ownerJiacn, ownerClientId, generation);
-        return new JuyitingAgentRelayResult(true, delivered, stream);
+                        conversationId, generation,
+                        () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, conversationId, generation)))
+                .doFinally(ignored -> deliveryOutcome.tryEmitValue(false));
+        return new JuyitingAgentRelayResult(
+                true, deliveryOutcome.asMono().defaultIfEmpty(false), stream);
     }
 
     public String selectedAgentId(ChatMessageDTO chatMessage) {
@@ -170,10 +177,10 @@ public class JuyitingAgentRelayService {
     private JuyitingAgentRelayResult relayMultiTargetAgentMessage(
             ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
             String ownerJiacn, String ownerClientId, long generation) {
-        boolean anyConnected = scope.targetAgentIds().stream().anyMatch(agentId ->
-                agentWebSocketHandler.isAgentConnected(ownerJiacn, ownerClientId, agentId));
+        Sinks.One<Boolean> deliveryOutcome = Sinks.one();
         Flux<String> events = Flux.defer(() -> {
             List<String> deliveryEvents = new ArrayList<>();
+            AtomicBoolean anyDelivered = new AtomicBoolean();
             for (String agentId : scope.targetAgentIds()) {
                 AtomicBoolean delivered = new AtomicBoolean();
                 boolean live = chatConversationEventBroker.runIfLive(
@@ -183,12 +190,12 @@ public class JuyitingAgentRelayService {
                         () -> {
                             agentService.requireHostingNewWork(
                                     ownerJiacn, ownerClientId, agentId);
-                            if (agentWebSocketHandler.isAgentConnected(
-                                    ownerJiacn, ownerClientId, agentId)) {
-                                delivered.set(agentWebSocketHandler.sendDirectMessageToAgent(
-                                        ownerJiacn, ownerClientId, agentId,
-                                        buildDirectAgentPayload(
-                                                chatMessage, conversationId, agentId, scope)));
+                            delivered.set(agentWebSocketHandler.sendDirectMessageToAgent(
+                                    ownerJiacn, ownerClientId, agentId,
+                                    buildDirectAgentPayload(
+                                            chatMessage, conversationId, agentId, scope)));
+                            if (delivered.get()) {
+                                anyDelivered.set(true);
                             }
                         });
                 if (!live) {
@@ -197,10 +204,15 @@ public class JuyitingAgentRelayService {
                 deliveryEvents.add(buildAgentDeliveryEventJson(
                         conversationId, agentId, delivered.get()));
             }
+            deliveryOutcome.tryEmitValue(anyDelivered.get());
             return Flux.fromIterable(deliveryEvents);
         }).takeUntilOther(chatConversationEventBroker.deletionSignal(
-                conversationId, generation));
-        return new JuyitingAgentRelayResult(true, anyConnected, events);
+                        conversationId, generation,
+                        () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, conversationId, generation)))
+                .doFinally(ignored -> deliveryOutcome.tryEmitValue(false));
+        return new JuyitingAgentRelayResult(
+                true, deliveryOutcome.asMono().defaultIfEmpty(false), events);
     }
 
     private Map<String, Object> buildDirectAgentPayload(ChatMessageDTO chatMessage, String conversationId, String agentId, JuyitingConversationScope scope) {
@@ -301,24 +313,8 @@ public class JuyitingAgentRelayService {
         } catch (RuntimeException invalidPersistedScope) {
             return false;
         }
-        return persistedTargets.isEmpty()
-                || persistedTargets.containsAll(requested.targetAgentIds());
-    }
-
-    private Flux<String> guardedDeliveryEvent(
-            String conversationId, String agentId, boolean delivered,
-            String ownerJiacn, String ownerClientId, long generation) {
-        return Flux.defer(() -> {
-            List<String> event = new ArrayList<>(1);
-            chatConversationEventBroker.runIfLive(
-                    conversationId, generation,
-                    () -> chatConversationService.isLiveGeneration(
-                            ownerJiacn, ownerClientId, conversationId, generation),
-                    () -> event.add(buildAgentDeliveryEventJson(
-                            conversationId, agentId, delivered)));
-            return Flux.fromIterable(event);
-        }).takeUntilOther(chatConversationEventBroker.deletionSignal(
-                conversationId, generation));
+        return !persistedTargets.isEmpty()
+                && persistedTargets.containsAll(requested.targetAgentIds());
     }
 
     private JuyitingAgentRelayResult deniedScope(
@@ -332,7 +328,7 @@ public class JuyitingAgentRelayService {
             event.put("conversationScopeKey", scope.scopeKey());
         }
         return new JuyitingAgentRelayResult(
-                true, true, Flux.just(JsonUtil.toSafeJson(event)));
+                true, Mono.just(true), Flux.just(JsonUtil.toSafeJson(event)));
     }
 
     private long lifecycleGeneration(ChatConversationEntity conversation) {

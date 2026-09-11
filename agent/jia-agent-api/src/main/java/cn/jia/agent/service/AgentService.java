@@ -64,6 +64,9 @@ public interface AgentService {
 
     List<String> listTaskMemberAgentIds(String tenantId, String clientId, String taskId);
 
+    /** Returns only canonical members currently allowed to append task conversation messages. */
+    List<String> listTaskWritableMemberAgentIds(String tenantId, String clientId, String taskId);
+
     AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
 
     List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId);

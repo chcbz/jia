@@ -82,7 +82,7 @@ public class JuyitingConversationScopeService {
         List<String> members;
         try {
             members = normalizeAuthoritativeAgentIds(
-                    agentService.listTaskMemberAgentIds(tenantId, clientId, taskId));
+                    agentService.listTaskWritableMemberAgentIds(tenantId, clientId, taskId));
         } catch (RuntimeException queryFailure) {
             throw denied();
         }
