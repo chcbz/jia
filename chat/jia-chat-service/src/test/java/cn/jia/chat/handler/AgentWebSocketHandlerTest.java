@@ -1339,7 +1339,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
-        stubAgentSession("session-chat-relay", "agent-wuyong");
+        stubAgentSession(session, "session-chat-relay", "agent-wuyong",
+                "tester", "web-client", null);
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token-001", AgentConstants.STATUS_ONLINE));
