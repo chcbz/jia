@@ -1381,6 +1381,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(chatConversationEventBroker.stream("1001"))
                 .thenReturn(Flux.just("{\"type\":\"agent_message\",\"content\":\"ok\"}"));
 
+        EsContext relayContext = new EsContext();
+        relayContext.setJiacn("tester");
+        relayContext.setClientId("web-client");
+        EsContextHolder.setContext(relayContext);
         JuyitingAgentRelayResult relayResult = relayService.relay(chatMessage, "1001", () -> Flux.just("builtin"));
         List<String> events = relayResult.stream().collectList().block(Duration.ofSeconds(5));
 

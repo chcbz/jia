@@ -226,6 +226,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         JuyitingAgentRelayService service = service();
         ChatMessageDTO request = request(List.of("agent-linchong"));
         request.setConversationScopeType("bounty");
+        request.setConversationScopeKey("task:372");
         request.setTaskId("372");
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-wuyong")));
         ChatConversationEntity bounty = new ChatConversationEntity()

@@ -244,6 +244,7 @@ class ChatControllerTest extends BaseMockTest {
         conversation.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
         setObjectField(conversation, "conversationScopeType", "bounty");
         setObjectField(conversation, "conversationScopeKey", "task:372");
+        setObjectField(conversation, "taskId", "372");
 
         when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("372")).thenReturn(Flux.never());
