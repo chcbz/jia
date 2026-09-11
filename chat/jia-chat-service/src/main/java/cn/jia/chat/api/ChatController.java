@@ -465,7 +465,45 @@ public class ChatController {
 
     @RequestMapping(value = "/conversation/content", method = RequestMethod.GET)
     public Object getConversationContent(@RequestParam(name = "id") String id) {
-        return JsonResult.success(chatConversationService.findByConversationId(id));
+        List<ConversationMessageResponse> messages = chatConversationService.findByConversationId(id).stream()
+                .map(ConversationMessageResponse::from)
+                .toList();
+        return JsonResult.success(messages);
+    }
+
+    private record ConversationMessageResponse(
+            // The response sanitizer reflects beans into maps before Jackson, so wire IDs must already be strings.
+            String id,
+            String conversationId,
+            String messageType,
+            String content,
+            String metadata,
+            String jiacn,
+            String syncStatus,
+            String conversationType,
+            String senderType,
+            String senderName,
+            Long createTime,
+            Long updateTime,
+            String tenantId,
+            String clientId) {
+        private static ConversationMessageResponse from(ChatMessageEntity message) {
+            return new ConversationMessageResponse(
+                    ExactWireIds.decimal(message.getId()),
+                    message.getConversationId(),
+                    message.getMessageType(),
+                    message.getContent(),
+                    message.getMetadata(),
+                    message.getJiacn(),
+                    message.getSyncStatus(),
+                    message.getConversationType(),
+                    message.getSenderType(),
+                    message.getSenderName(),
+                    message.getCreateTime(),
+                    message.getUpdateTime(),
+                    message.getTenantId(),
+                    message.getClientId());
+        }
     }
 
     @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)

@@ -19,13 +19,19 @@ import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.redis.RedisService;
+import cn.jia.core.security.SensitiveResponseBodyAdvice;
+import cn.jia.core.security.SensitiveResponseProperties;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.core.MethodParameter;
+import org.springframework.http.MediaType;
 import reactor.core.publisher.Flux;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -160,6 +166,64 @@ class ChatControllerTest extends BaseMockTest {
         verify(redisService, never()).publishSignal("77");
         verify(chatConversationEventBroker, never()).stream(
                 eq("77"), org.mockito.ArgumentMatchers.anyLong(), any());
+    }
+
+    @Test
+    void conversationContentKeepsExactMessageIdsAfterSensitiveResponseAdvice() throws Exception {
+        long userMessageId = 9_007_199_254_740_993L;
+        long agentMessageId = 9_007_199_254_740_995L;
+        String userMetadata = "{\"scene\":\"juyiting\",\"selectedAgentId\":\"agent-wuyong\"}";
+        String agentMetadata = "{\"messageId\":\"9007199254740995\",\"agentId\":\"agent-wuyong\"}";
+        ChatMessageEntity userMessage = new ChatMessageEntity()
+                .setId(userMessageId)
+                .setConversationId("1001")
+                .setMessageType("USER")
+                .setContent("请回报 password=hunter2")
+                .setMetadata(userMetadata)
+                .setJiacn("tester")
+                .setSyncStatus("SYNCED")
+                .setConversationType("juyiting")
+                .setSenderType("user")
+                .setSenderName("测试用户");
+        userMessage.setCreateTime(100L);
+        userMessage.setUpdateTime(101L);
+        userMessage.setTenantId("0");
+        userMessage.setClientId("web-client");
+        ChatMessageEntity agentMessage = new ChatMessageEntity()
+                .setId(agentMessageId)
+                .setConversationId("1001")
+                .setMessageType("ASSISTANT")
+                .setContent("已收到")
+                .setMetadata(agentMetadata)
+                .setJiacn("tester")
+                .setSyncStatus("SYNCED")
+                .setConversationType("juyiting")
+                .setSenderType("agent")
+                .setSenderName("吴用");
+        when(chatConversationService.findByConversationId("1001"))
+                .thenReturn(List.of(userMessage, agentMessage));
+
+        Object controllerBody = newController().getConversationContent("1001");
+        SensitiveResponseBodyAdvice advice =
+                new SensitiveResponseBodyAdvice(new SensitiveResponseProperties());
+        Method method = ChatController.class.getDeclaredMethod("getConversationContent", String.class);
+        Object sanitizedBody = advice.beforeBodyWrite(
+                controllerBody, new MethodParameter(method, -1), MediaType.APPLICATION_JSON,
+                null, null, null);
+        String json = new ObjectMapper().writeValueAsString(sanitizedBody);
+        Map<String, Object> wire = new ObjectMapper().readValue(json, new TypeReference<>() { });
+        List<Map<String, Object>> messages = (List<Map<String, Object>>) wire.get("data");
+
+        assertEquals(2, messages.size());
+        assertEquals("9007199254740993", messages.get(0).get("id"));
+        assertEquals("9007199254740995", messages.get(1).get("id"));
+        assertEquals(userMetadata, messages.get(0).get("metadata"));
+        assertEquals(agentMetadata, messages.get(1).get("metadata"));
+        assertEquals("user", messages.get(0).get("senderType"));
+        assertEquals("agent", messages.get(1).get("senderType"));
+        assertTrue(String.valueOf(messages.get(0).get("content")).contains("password=******"));
+        assertTrue(!json.contains("hunter2"));
+        verify(chatConversationService).findByConversationId("1001");
     }
 
     @Test
