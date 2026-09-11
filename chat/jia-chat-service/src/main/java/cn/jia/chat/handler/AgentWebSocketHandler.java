@@ -807,7 +807,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 () -> {
                     sendEvent(session, "agent_message_saved", event);
                     broadcastConversationEventToTargets(
-                            clientId, jiacn, persistedConversationTargetAgentIds(conversation),
+                            clientId, jiacn,
+                            currentConversationRecipientAgentIds(conversation, jiacn, clientId),
                             "agent_message", event);
                     chatConversationEventBroker.publishIfLive(
                             conversationId, generation, () -> true, event);
@@ -928,12 +929,33 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             throw new IllegalArgumentException("Invalid legacy target agent scope");
         }
         if (persistedTargets.isEmpty()) {
-            return List.of(legacyTarget);
+            return List.of();
         }
         if (!persistedTargets.contains(legacyTarget)) {
             throw new IllegalArgumentException("Conflicting persisted target agent scope");
         }
         return persistedTargets;
+    }
+
+    private List<String> currentConversationRecipientAgentIds(
+            ChatConversationEntity conversation, String tenantId, String clientId) {
+        List<String> persistedTargets = persistedConversationTargetAgentIds(conversation);
+        String scopeType = conversation.getConversationScopeType();
+        String taskId = conversation.getTaskId();
+        String scopeKey = conversation.getConversationScopeKey();
+        boolean taskScoped = "bounty".equals(scopeType)
+                || (taskId != null && !taskId.isBlank())
+                || (scopeKey != null && scopeKey.startsWith("task:"));
+        if (!taskScoped) {
+            return persistedTargets;
+        }
+        Set<String> currentMembers = resolveTaskMemberAgentIds(tenantId, clientId, taskId);
+        if (currentMembers.isEmpty()) {
+            return List.of();
+        }
+        return persistedTargets.stream()
+                .filter(currentMembers::contains)
+                .toList();
     }
 
     private List<String> parsePersistedTargetAgentIds(String json) {

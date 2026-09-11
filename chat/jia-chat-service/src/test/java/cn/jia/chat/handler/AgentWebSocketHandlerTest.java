@@ -1081,9 +1081,120 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.eq("juyiting"),
                 org.mockito.ArgumentMatchers.eq("jia_client"), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.eq(1L));
-        verify(agentService).listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-7");
+        verify(agentService, org.mockito.Mockito.times(2))
+                .listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-7");
         verify(agentService).listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-8");
         verify(agentService).listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-10");
+    }
+
+    @Test
+    void emptyCanonicalConversationTargetsCannotFallBackToLegacyTarget() throws Exception {
+        stubAgentSession("session-empty-targets", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO(
+                        "agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        ChatConversationEntity missingTargets = new ChatConversationEntity()
+                .setId(2010L).setJiacn("juyiting").setConversationType("juyiting")
+                .setConversationScopeType("public").setConversationScopeKey("public")
+                .setTargetAgentId("agent-001").setTargetAgentIds(null)
+                .setLifecycleGeneration(1L);
+        missingTargets.setClientId("jia_client");
+        missingTargets.setTenantId("0");
+        ChatConversationEntity emptyTargets = new ChatConversationEntity()
+                .setId(2011L).setJiacn("juyiting").setConversationType("juyiting")
+                .setConversationScopeType("public").setConversationScopeKey("public")
+                .setTargetAgentId("agent-001").setTargetAgentIds("[]")
+                .setLifecycleGeneration(1L);
+        emptyTargets.setClientId("jia_client");
+        emptyTargets.setTenantId("0");
+        when(chatConversationService.getOwned("juyiting", "jia_client", "2010"))
+                .thenReturn(missingTargets);
+        when(chatConversationService.getOwned("juyiting", "jia_client", "2011"))
+                .thenReturn(emptyTargets);
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        handler.setChatConversationService(chatConversationService);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-001\"}"));
+        org.mockito.Mockito.clearInvocations(session);
+
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.message\",\"conversationId\":\"2010\"," +
+                        "\"agentId\":\"agent-001\",\"content\":\"blocked\"}"));
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.message.delta\",\"conversationId\":\"2011\"," +
+                        "\"agentId\":\"agent-001\",\"content\":\"blocked\"}"));
+
+        verify(chatConversationService, never()).appendOwnedMessage(
+                any(), any(), any(ChatMessageEntity.class),
+                org.mockito.ArgumentMatchers.anyLong());
+        verify(chatConversationEventBroker, never()).runIfLive(
+                any(), org.mockito.ArgumentMatchers.anyLong(), any(), any(Runnable.class));
+        verify(chatConversationEventBroker, never()).publishIfLive(
+                any(), org.mockito.ArgumentMatchers.anyLong(), any(), any());
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.times(2)).sendMessage(captor.capture());
+        String messages = captor.getAllValues().stream()
+                .map(TextMessage::getPayload).reduce("", String::concat);
+        assertTrue(messages.contains("CONVERSATION_AGENT_SCOPE_MISMATCH"));
+    }
+
+    @Test
+    void finalTaskConversationMessageExcludesRevokedPersistedRecipient() throws Exception {
+        WebSocketSession senderSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession revokedSession = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(senderSession, "session-current-member", "agent-current",
+                "juyiting", "jia_client", null);
+        stubAgentSession(revokedSession, "session-revoked-member", "agent-revoked",
+                "juyiting", "jia_client", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class))).thenAnswer(invocation -> {
+            AgentRegisterDTO request = invocation.getArgument(0);
+            return new AgentRegisterResultDTO(
+                    request.getAgentId(), "token", AgentConstants.STATUS_ONLINE);
+        });
+        when(agentService.listTaskWritableMemberAgentIds(
+                "juyiting", "jia_client", "task-recipients"))
+                .thenReturn(List.of("agent-current"));
+        ChatConversationEntity conversation = new ChatConversationEntity()
+                .setId(2012L).setJiacn("juyiting").setConversationType("juyiting")
+                .setConversationScopeType("bounty")
+                .setConversationScopeKey("task:task-recipients")
+                .setTaskId("task-recipients")
+                .setTargetAgentIds("[\"agent-current\",\"agent-revoked\"]")
+                .setLifecycleGeneration(1L);
+        conversation.setClientId("jia_client");
+        conversation.setTenantId("0");
+        when(chatConversationService.getOwned("juyiting", "jia_client", "2012"))
+                .thenReturn(conversation);
+        when(chatConversationService.appendOwnedMessage(
+                org.mockito.ArgumentMatchers.eq("juyiting"),
+                org.mockito.ArgumentMatchers.eq("jia_client"),
+                any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.eq(1L)))
+                .thenAnswer(invocation -> ((ChatMessageEntity) invocation.getArgument(2)).setId(712L));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        handler.setChatConversationService(chatConversationService);
+        handler.afterConnectionEstablished(senderSession);
+        handler.afterConnectionEstablished(revokedSession);
+        handler.handleTextMessage(senderSession, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-current\"}"));
+        handler.handleTextMessage(revokedSession, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-revoked\"}"));
+        org.mockito.Mockito.clearInvocations(senderSession, revokedSession);
+
+        handler.handleTextMessage(senderSession, new TextMessage(
+                "{\"type\":\"agent.message\",\"conversationId\":\"2012\"," +
+                        "\"agentId\":\"agent-current\",\"content\":\"scoped result\"}"));
+
+        verify(senderSession, org.mockito.Mockito.atLeastOnce()).sendMessage(any(TextMessage.class));
+        verify(revokedSession, never()).sendMessage(any(TextMessage.class));
+        verify(agentService, org.mockito.Mockito.times(2))
+                .listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-recipients");
     }
 
     @Test
