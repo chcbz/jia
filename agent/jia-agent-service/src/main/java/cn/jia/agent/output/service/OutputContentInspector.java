@@ -13,7 +13,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.Enumeration;
@@ -71,6 +75,7 @@ final class OutputContentInspector {
     private static void inspectRootZip(byte[] bytes,ArchiveBudget budget,Set<String> rootNames){
         Path directory=null,file=null;
         try{
+            requireConsistentZipStructure(bytes);
             directory=createPrivateDirectory(budget.tempDirectory);file=createPrivateFile(directory);
             Files.write(file,bytes);inspectZipFile(file,1,budget,rootNames,true);
         }catch(OutputUploadException e){throw e;}catch(ZipException e){throw rejected("OUTPUT_ARCHIVE_INVALID");}
@@ -114,9 +119,52 @@ final class OutputContentInspector {
         try{
             directory=createPrivateDirectory(budget.tempDirectory);file=createPrivateFile(directory);
             try(OutputStream out=Files.newOutputStream(file)){out.write(prefix);reader.drain(out);}
-            reader.verify();inspectZipFile(file,depth,budget,Set.of(),false);
+            reader.verify();requireConsistentZipStructure(Files.readAllBytes(file));inspectZipFile(file,depth,budget,Set.of(),false);
         }finally{deleteTemporary(file,directory);}
     }
+
+    private static void requireConsistentZipStructure(byte[] bytes){
+        try{
+            int eocd=findEocd(bytes);if(eocd<0)throw rejected("OUTPUT_ARCHIVE_INVALID");
+            int disk=u16(bytes,eocd+4),centralDisk=u16(bytes,eocd+6),diskEntries=u16(bytes,eocd+8),entries=u16(bytes,eocd+10);
+            long centralSize=u32(bytes,eocd+12),centralOffset=u32(bytes,eocd+16);
+            if(disk!=0||centralDisk!=0||diskEntries!=entries||entries==0xffff||centralSize==0xffffffffL||centralOffset==0xffffffffL
+                    ||centralOffset+centralSize!=eocd||centralOffset<0||centralOffset>Integer.MAX_VALUE)throw rejected("OUTPUT_ARCHIVE_INVALID");
+            int position=(int)centralOffset,end=Math.toIntExact(centralOffset+centralSize);List<CentralEntry> central=new ArrayList<>();
+            for(int index=0;index<entries;index++){
+                if(position+46>end||u32(bytes,position)!=0x02014b50L)throw rejected("OUTPUT_ARCHIVE_INVALID");
+                int flags=u16(bytes,position+8),method=u16(bytes,position+10),nameLength=u16(bytes,position+28),extraLength=u16(bytes,position+30),commentLength=u16(bytes,position+32),startDisk=u16(bytes,position+34);
+                long crc=u32(bytes,position+16),compressed=u32(bytes,position+20),expanded=u32(bytes,position+24),localOffset=u32(bytes,position+42);int next=Math.addExact(position,Math.addExact(46,Math.addExact(nameLength,Math.addExact(extraLength,commentLength))));
+                if(next>end||startDisk!=0||(flags&1)!=0||compressed==0xffffffffL||expanded==0xffffffffL||localOffset==0xffffffffL||localOffset>Integer.MAX_VALUE)throw rejected("OUTPUT_ARCHIVE_INVALID");
+                central.add(new CentralEntry((int)localOffset,flags,method,crc,compressed,expanded,Arrays.copyOfRange(bytes,position+46,position+46+nameLength)));position=next;
+            }
+            if(position!=end)throw rejected("OUTPUT_ARCHIVE_INVALID");central.sort(Comparator.comparingInt(CentralEntry::localOffset));int cursor=0;
+            for(CentralEntry entry:central){
+                if(entry.localOffset()!=cursor||cursor+30>(int)centralOffset||u32(bytes,cursor)!=0x04034b50L)throw rejected("OUTPUT_ARCHIVE_INVALID");
+                int flags=u16(bytes,cursor+6),method=u16(bytes,cursor+8),nameLength=u16(bytes,cursor+26),extraLength=u16(bytes,cursor+28),headerEnd=Math.addExact(cursor,Math.addExact(30,Math.addExact(nameLength,extraLength)));
+                if(flags!=entry.flags()||method!=entry.method()||headerEnd>(int)centralOffset||!Arrays.equals(entry.name(),Arrays.copyOfRange(bytes,cursor+30,cursor+30+nameLength)))throw rejected("OUTPUT_ARCHIVE_INVALID");
+                long dataEnd=Math.addExact((long)headerEnd,entry.compressedSize());if(dataEnd>centralOffset)throw rejected("OUTPUT_ARCHIVE_INVALID");
+                if((flags&8)==0){if(u32(bytes,cursor+14)!=entry.crc()||u32(bytes,cursor+18)!=entry.compressedSize()||u32(bytes,cursor+22)!=entry.expandedSize())throw rejected("OUTPUT_ARCHIVE_INVALID");cursor=Math.toIntExact(dataEnd);}
+                else{
+                    long localCrc=u32(bytes,cursor+14),localCompressed=u32(bytes,cursor+18),localExpanded=u32(bytes,cursor+22);
+                    if((localCrc!=0&&localCrc!=entry.crc())||(localCompressed!=0&&localCompressed!=entry.compressedSize())||(localExpanded!=0&&localExpanded!=entry.expandedSize()))throw rejected("OUTPUT_ARCHIVE_INVALID");
+                    cursor=requireDescriptor(bytes,Math.toIntExact(dataEnd),(int)centralOffset,entry);
+                }
+            }
+            if(cursor!=(int)centralOffset)throw rejected("OUTPUT_ARCHIVE_INVALID");
+        }catch(OutputUploadException e){throw e;}catch(IndexOutOfBoundsException|ArithmeticException e){throw rejected("OUTPUT_ARCHIVE_INVALID");}
+    }
+
+    private static int requireDescriptor(byte[] bytes,int at,int limit,CentralEntry entry){
+        if(at+16<=limit&&u32(bytes,at)==0x08074b50L&&u32(bytes,at+4)==entry.crc()&&u32(bytes,at+8)==entry.compressedSize()&&u32(bytes,at+12)==entry.expandedSize())return at+16;
+        if(at+12<=limit&&u32(bytes,at)==entry.crc()&&u32(bytes,at+4)==entry.compressedSize()&&u32(bytes,at+8)==entry.expandedSize())return at+12;
+        throw rejected("OUTPUT_ARCHIVE_INVALID");
+    }
+
+    private static int findEocd(byte[] bytes){int minimum=Math.max(0,bytes.length-65_557);for(int at=bytes.length-22;at>=minimum;at--)if(u32(bytes,at)==0x06054b50L&&at+22+u16(bytes,at+20)==bytes.length)return at;return -1;}
+    private static int u16(byte[] bytes,int at){if(at<0||at+2>bytes.length)throw new IndexOutOfBoundsException();return (bytes[at]&255)|((bytes[at+1]&255)<<8);}
+    private static long u32(byte[] bytes,int at){if(at<0||at+4>bytes.length)throw new IndexOutOfBoundsException();return Integer.toUnsignedLong((bytes[at]&255)|((bytes[at+1]&255)<<8)|((bytes[at+2]&255)<<16)|((bytes[at+3]&255)<<24));}
+    private record CentralEntry(int localOffset,int flags,int method,long crc,long compressedSize,long expandedSize,byte[] name){}
 
     private static void deleteTemporary(Path file,Path directory){
         try{if(file!=null)Files.deleteIfExists(file);if(directory!=null)Files.deleteIfExists(directory);}

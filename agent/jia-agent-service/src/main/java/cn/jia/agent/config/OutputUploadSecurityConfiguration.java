@@ -38,14 +38,14 @@ public class OutputUploadSecurityConfiguration {
         http.securityMatcher(OutputUploadSecurityConfiguration::matches)
                 .authorizeHttpRequests(a->a.anyRequest().permitAll())
                 .addFilterBefore(filter, AnonymousAuthenticationFilter.class)
-                .exceptionHandling(e->e.authenticationEntryPoint((r,s,x)->unauthorized(r,s)))
+                .exceptionHandling(e->e.authenticationEntryPoint((r,s,x)->authorizationError(r,s,"OUTPUT_AUTH_UNAUTHORIZED",401,false)))
                 .sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .securityContext(c->c.securityContextRepository(new NullSecurityContextRepository()))
                 .requestCache(c->c.requestCache(new NullRequestCache())).csrf(AbstractHttpConfigurer::disable);
         return http.build();
     }
     static boolean matches(HttpServletRequest r){String m=r.getMethod(),p=r.getRequestURI();if("POST".equals(m)&&"/agent/output-uploads".equals(p))return true;if(!p.matches("/agent/output-uploads/[^/]+(?:/content|/complete)?"))return false;return ("GET".equals(m)&&!p.endsWith("/content")&&!p.endsWith("/complete"))||("PUT".equals(m)&&p.endsWith("/content"))||("POST".equals(m)&&p.endsWith("/complete"));}
-    private static void unauthorized(HttpServletRequest request,HttpServletResponse response)throws IOException{OutputHttpEnvelope.writeError(request,response,"OUTPUT_AUTH_UNAUTHORIZED","Output access is unavailable",401,false);}
+    private static void authorizationError(HttpServletRequest request,HttpServletResponse response,String code,int status,boolean retryable)throws IOException{OutputHttpEnvelope.writeError(request,response,code,status==503?"Output authorization unavailable":"Output access is unavailable",status,retryable);}
     static final class OutputTicketFilter extends OncePerRequestFilter{
         private final OutputRunAuthorizationService authorization;OutputTicketFilter(OutputRunAuthorizationService a){authorization=a;}
         @Override protected boolean shouldNotFilter(HttpServletRequest r){return !matches(r);}
@@ -53,10 +53,11 @@ public class OutputUploadSecurityConfiguration {
             OutputTicketAuthorization auth;
             try{
                 String h=r.getHeader(HttpHeaders.AUTHORIZATION);
-                if(h==null||!h.startsWith("Bearer ")){unauthorized(r,s);return;}
+                if(h==null||!h.startsWith("Bearer ")){authorizationError(r,s,"OUTPUT_AUTH_UNAUTHORIZED",401,false);return;}
                 auth=authorization.authorizeTicket(h.substring(7),OutputConstants.OP_STATUS,true);
-                if("PUT".equals(r.getMethod())&&(!OutputConstants.RUN_ACTIVE.equals(auth.runState())||!auth.operations().contains(OutputConstants.OP_UPLOAD))){unauthorized(r,s);return;}
-            }catch(RuntimeException denied){SecurityContextHolder.clearContext();unauthorized(r,s);return;}
+                if("PUT".equals(r.getMethod())&&(!OutputConstants.RUN_ACTIVE.equals(auth.runState())||!auth.operations().contains(OutputConstants.OP_UPLOAD))){authorizationError(r,s,"OUTPUT_AUTH_FORBIDDEN",403,false);return;}
+            }catch(cn.jia.agent.output.OutputAuthorizationException denied){SecurityContextHolder.clearContext();int status="OUTPUT_AUTH_UNAUTHORIZED".equals(denied.getCode())?401:403;authorizationError(r,s,denied.getCode(),status,false);return;}
+            catch(RuntimeException unavailable){SecurityContextHolder.clearContext();authorizationError(r,s,"OUTPUT_AUTH_UNAVAILABLE",503,true);return;}
             UsernamePasswordAuthenticationToken token=new UsernamePasswordAuthenticationToken(auth,null,List.of(new SimpleGrantedAuthority("output-ticket")));
             SecurityContextHolder.getContext().setAuthentication(token);
             chain.doFilter(r,s);

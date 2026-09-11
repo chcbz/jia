@@ -88,8 +88,29 @@ class OutputContentInspectorTest {
         assertEquals("OUTPUT_ARCHIVE_INVALID",hiddenArchive.code());
     }
 
+    @Test void centralDirectoryMustReferenceEveryExactLocalRecordOnce()throws Exception{
+        byte[] valid=zip(new Entry("visible.txt","ok".getBytes(StandardCharsets.UTF_8)),new Entry("hidden.txt",new byte[1024]));
+        OutputUploadException overLimit=assertThrows(OutputUploadException.class,()->OutputContentInspector.requireAllowed("valid.zip","application/zip",valid,true,64,4096));
+        assertEquals("OUTPUT_ARCHIVE_LIMIT",overLimit.code());
+        for(byte[] inconsistent:List.of(unlistSecondCentralEntry(valid),mismatchFirstLocalName(valid),mismatchFirstLocalCrc(valid),duplicateFirstLocalOffset(valid),wrongEocdCount(valid),wrongCentralOffset(valid))){
+            OutputUploadException rejected=assertThrows(OutputUploadException.class,()->OutputContentInspector.requireAllowed("hidden.zip","application/zip",inconsistent,true,64,4096));
+            assertEquals("OUTPUT_ARCHIVE_INVALID",rejected.code());
+        }
+    }
+
     private static byte[] zip(Entry...entries)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream();try(ZipOutputStream zip=new ZipOutputStream(out)){for(Entry entry:entries){zip.putNextEntry(new ZipEntry(entry.name));zip.write(entry.bytes);zip.closeEntry();}}return out.toByteArray();}
     private static byte[] emptyZip()throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream();try(ZipOutputStream ignored=new ZipOutputStream(out)){}return out.toByteArray();}
+    private static byte[] unlistSecondCentralEntry(byte[] valid){int eocd=find(valid,0x06054b50,valid.length-22),central=(int)u32(valid,eocd+16),firstLength=46+u16(valid,central+28)+u16(valid,central+30)+u16(valid,central+32);byte[] malformed=new byte[central+firstLength+22];System.arraycopy(valid,0,malformed,0,central+firstLength);System.arraycopy(valid,eocd,malformed,central+firstLength,22);int newEocd=central+firstLength;put16(malformed,newEocd+8,1);put16(malformed,newEocd+10,1);put32(malformed,newEocd+12,firstLength);put32(malformed,newEocd+16,central);return malformed;}
+    private static byte[] mismatchFirstLocalName(byte[] valid){byte[] malformed=valid.clone();malformed[30]=(byte)(malformed[30]=='v'?'x':'v');return malformed;}
+    private static byte[] mismatchFirstLocalCrc(byte[] valid){byte[] malformed=valid.clone();put32(malformed,14,1);return malformed;}
+    private static byte[] duplicateFirstLocalOffset(byte[] valid){byte[] malformed=valid.clone();int eocd=find(malformed,0x06054b50,malformed.length-22),central=(int)u32(malformed,eocd+16),second=central+46+u16(malformed,central+28)+u16(malformed,central+30)+u16(malformed,central+32);put32(malformed,second+42,u32(malformed,central+42));return malformed;}
+    private static byte[] wrongEocdCount(byte[] valid){byte[] malformed=valid.clone();int eocd=find(malformed,0x06054b50,malformed.length-22);put16(malformed,eocd+8,1);put16(malformed,eocd+10,1);return malformed;}
+    private static byte[] wrongCentralOffset(byte[] valid){byte[] malformed=valid.clone();int eocd=find(malformed,0x06054b50,malformed.length-22);put32(malformed,eocd+16,u32(malformed,eocd+16)+1);return malformed;}
+    private static int find(byte[] bytes,int signature,int start){for(int i=start;i>=0;i--)if(u32(bytes,i)==Integer.toUnsignedLong(signature))return i;throw new IllegalArgumentException("signature");}
+    private static int u16(byte[] b,int at){return (b[at]&255)|((b[at+1]&255)<<8);}
+    private static long u32(byte[] b,int at){return Integer.toUnsignedLong((b[at]&255)|((b[at+1]&255)<<8)|((b[at+2]&255)<<16)|((b[at+3]&255)<<24));}
+    private static void put16(byte[] b,int at,int v){b[at]=(byte)v;b[at+1]=(byte)(v>>>8);}
+    private static void put32(byte[] b,int at,long v){for(int i=0;i<4;i++)b[at+i]=(byte)(v>>>(8*i));}
     private static byte[] repeat(byte[] block,int count){byte[] bytes=new byte[Math.multiplyExact(block.length,count)];for(int i=0;i<count;i++)System.arraycopy(block,0,bytes,i*block.length,block.length);return bytes;}
     private record Entry(String name,byte[] bytes){}
 }

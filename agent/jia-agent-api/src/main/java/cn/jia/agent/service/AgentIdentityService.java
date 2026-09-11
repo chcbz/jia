@@ -34,6 +34,15 @@ public interface AgentIdentityService {
             List<String> canonicalAgentIds);
 
     /**
+     * Locks and validates one current active identity for an authorization decision. Expected
+     * lifecycle, binding and scope denials return false inside this transactional boundary so a
+     * caller's joined transaction is not marked rollback-only. Infrastructure failures propagate.
+     */
+    boolean lockCurrentActiveIdentityForAuthorization(
+            String tenantId, String clientId, String ownerJiacn,
+            long bindingId, String canonicalAgentId);
+
+    /**
      * Validates a historical direct canonical reference without requiring current active lifecycle
      * or binding state. PROVISIONED, system, alias text, unknown and cross-scope references fail.
      */

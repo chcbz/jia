@@ -127,6 +127,6 @@ class OutputUploadSecurityCoexistenceTest {
     }
 
     static final class StubAuthorization extends OutputUploadSecurityConfigurationTest.StubAuthorization{
-        @Override public OutputTicketAuthorization authorizeTicket(String raw,String op,boolean replay){if(raw.startsWith("active-ticket"))return new OutputTicketAuthorization("owner","client","run","TASK","task","agent","7","runtime",List.of("upload","publish","status"),System.currentTimeMillis()+10_000,"ACTIVE");throw new OutputAuthorizationException("OUTPUT_AUTH_FORBIDDEN","denied");}
+        @Override public OutputTicketAuthorization authorizeTicket(String raw,String op,boolean replay){if(raw.startsWith("active-ticket"))return new OutputTicketAuthorization("owner","client","run","TASK","task","agent","7","runtime",List.of("upload","publish","status"),System.currentTimeMillis()+10_000,"ACTIVE");throw new OutputAuthorizationException("OUTPUT_AUTH_UNAUTHORIZED","denied");}
     }
 }

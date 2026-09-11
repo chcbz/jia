@@ -4,9 +4,17 @@ import cn.jia.agent.config.OutputDeliverySchemaInitializer;
 import cn.jia.agent.config.OutputDeliveryProperties;
 import cn.jia.agent.config.OutputObjectSchemaInitializer;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentIdentityAliasDao;
+import cn.jia.agent.dao.AgentIdentityRegistryDao;
+import cn.jia.agent.dao.AgentPersonaBindingDao;
+import cn.jia.agent.dao.impl.AgentIdentityAliasDaoImpl;
+import cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl;
+import cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl;
 import cn.jia.agent.dao.impl.AgentRuntimeDaoImpl;
-import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.mapper.AgentRuntimeMapper;
+import cn.jia.agent.mapper.AgentIdentityAliasMapper;
+import cn.jia.agent.mapper.AgentIdentityRegistryMapper;
+import cn.jia.agent.mapper.AgentPersonaBindingMapper;
 import cn.jia.agent.output.OutputAuthorizationException;
 import cn.jia.agent.output.OutputConstants;
 import cn.jia.agent.output.OutputSourceAccessMode;
@@ -32,6 +40,7 @@ import cn.jia.agent.output.mapper.OutputAccessTicketMapper;
 import cn.jia.agent.output.mapper.OutputRunBindingMapper;
 import cn.jia.agent.output.mapper.OutputSourceBindingMapper;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.impl.AgentIdentityServiceImpl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
@@ -44,9 +53,12 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.mybatis.spring.transaction.SpringManagedTransactionFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
 
 import javax.sql.DataSource;
 import java.io.ByteArrayInputStream;
@@ -72,16 +84,12 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
- * MySQL 8 production-mapper evidence for OD01 ticket serialization and current-read fences.
- * The business-source and identity service boundaries are controlled fixtures; output source,
- * run, ticket and runtime access all use their production mapper/DAO implementations.
+ * MySQL 8 evidence for ticket serialization and current-read fences. The business source is a
+ * controlled fixture; output and identity checks use production mapper/DAO/service code behind
+ * Spring transaction proxies.
  */
 @EnabledIfEnvironmentVariable(named = "OD01_MYSQL_URL", matches = ".+")
 class OutputAuthorizationMySqlConcurrencyTest {
@@ -128,7 +136,15 @@ class OutputAuthorizationMySqlConcurrencyTest {
                 template.getMapper(OutputAccessTicketMapper.class));
         runtimeDao = wire(new AgentRuntimeDaoImpl(),
                 template.getMapper(AgentRuntimeMapper.class));
-        identityService = identityBoundary();
+        AgentIdentityRegistryDao registryDao = wire(new AgentIdentityRegistryDaoImpl(),
+                template.getMapper(AgentIdentityRegistryMapper.class));
+        AgentIdentityAliasDao aliasDao = wire(new AgentIdentityAliasDaoImpl(),
+                template.getMapper(AgentIdentityAliasMapper.class));
+        AgentPersonaBindingDao bindingDao = wire(new AgentPersonaBindingDaoImpl(),
+                template.getMapper(AgentPersonaBindingMapper.class));
+        identityService = transactionalProxy(
+                new AgentIdentityServiceImpl(registryDao, aliasDao, bindingDao),
+                AgentIdentityService.class);
         service = service(runDao, ticketDao);
     }
 
@@ -413,26 +429,188 @@ class OutputAuthorizationMySqlConcurrencyTest {
 
     @Test
     void verificationFinalizationRechecksTerminalRevokedSourceAndBindingDuringScan() throws Exception {
-        verifyDeniedDuringScan(10, () -> jdbc.update("UPDATE output_run_binding SET state='CLOSED' WHERE run_id=?", runId(10)), true);
-        verifyDeniedDuringScan(11, () -> jdbc.update("UPDATE output_run_binding SET state='RESULT_SUBMITTED' WHERE run_id=?", runId(11)), true);
-        verifyDeniedDuringScan(12, () -> jdbc.update("UPDATE output_run_binding SET state='REVOKED' WHERE run_id=?", runId(12)), false);
-        verifyDeniedDuringScan(13, () -> jdbc.update("UPDATE od01_source_root SET access_level='READ_ONLY' WHERE source_id=?", sourceId(13)), false);
-        verifyDeniedDuringScan(14, () -> jdbc.update("UPDATE agent_runtime SET binding_id=8 WHERE agent_id='agent-1'"), false);
+        verifyDeniedDuringScan(10, () -> jdbc.update(
+                "UPDATE output_run_binding SET state='CLOSED' WHERE run_id=?", runId(10)), true);
+        verifyDeniedDuringScan(11, () -> jdbc.update(
+                "UPDATE output_run_binding SET state='RESULT_SUBMITTED' WHERE run_id=?",
+                runId(11)), true);
+        verifyDeniedDuringScan(12, () -> jdbc.update(
+                "UPDATE output_run_binding SET state='REVOKED' WHERE run_id=?", runId(12)), false);
+        verifyDeniedDuringScan(13, () -> jdbc.update(
+                "UPDATE od01_source_root SET access_level='READ_ONLY' WHERE source_id=?",
+                sourceId(13)), false);
+        verifyDeniedDuringScan(14, () -> jdbc.update(
+                "UPDATE agent_runtime SET binding_id=8 WHERE agent_id='agent-1'"), false);
+        verifyDeniedDuringScan(15, () -> jdbc.update("""
+                UPDATE agent_identity_registry
+                SET lifecycle_status='SUSPENDED',suspended_at=?
+                WHERE canonical_agent_id='agent-1'
+                """, System.currentTimeMillis()), false);
+        verifyDeniedDuringScan(16, () -> jdbc.update("""
+                UPDATE agent_identity_registry
+                SET lifecycle_status='RETIRED',retired_at=?
+                WHERE canonical_agent_id='agent-1'
+                """, System.currentTimeMillis()), false);
+        verifyDeniedDuringScan(17, () -> jdbc.update(
+                "DELETE FROM agent_identity_registry WHERE canonical_agent_id='agent-1'"), false);
+        verifyDeniedDuringScan(18, () -> jdbc.update(
+                "UPDATE agent_persona_binding SET status=0 WHERE id=7"), false);
+        verifyAllowedDuringScan(19);
+    }
+
+    @Test
+    void unexpectedIdentityInfrastructureFailureLeavesVerificationRetryable() throws Exception {
+        resetIdentity();
+        refreshRuntime("runtime-1", 7L);
+        insertSourceAndRun(19, OutputConstants.RUN_ACTIVE, "READ_WRITE");
+        OutputAuthReceiptDTO ticket = issue(service, 19, "runtime-1");
+        AgentIdentityService failing = (AgentIdentityService) Proxy.newProxyInstance(
+                AgentIdentityService.class.getClassLoader(),
+                new Class<?>[]{AgentIdentityService.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("lockCurrentActiveIdentityForAuthorization")) {
+                        throw new IllegalStateException("identity database unavailable");
+                    }
+                    try {
+                        return method.invoke(identityService, args);
+                    } catch (InvocationTargetException error) {
+                        throw error.getCause();
+                    }
+                });
+        OutputRunAuthorizationServiceImpl failingAuthorization = service(runDao, ticketDao, failing);
+        MemoryStorage storage = new MemoryStorage();
+        OutputMalwareScanner clean = (input, maximumBytes) -> {
+            input.readAllBytes();
+            return new OutputMalwareScanner.ScanResult(true, "test", null);
+        };
+        OutputUploadServiceImpl uploads = new OutputUploadServiceImpl(
+                failingAuthorization, new OutputUploadDaoImpl(jdbc), storage, clean,
+                new DataSourceTransactionManager(dataSource), new OutputDeliveryProperties(true));
+        byte[] fixture = "hello world!\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        OutputUploadCreateDTO request = uploadRequest(19);
+        String bearer = "Bearer " + ticket.token();
+        var created = uploads.create(bearer, "verify-infra-create-19", request);
+        uploads.put(bearer, created.uploadId(), new ByteArrayInputStream(fixture));
+
+        assertThrows(IllegalStateException.class, () -> uploads.complete(
+                bearer, created.uploadId(), "verify-infra-complete-19"));
+        assertEquals("VERIFYING", jdbc.queryForObject(
+                "SELECT state FROM output_upload_session WHERE upload_id=?",
+                String.class, created.uploadId()));
+        assertEquals(13L, jdbc.queryForObject(
+                "SELECT reserved_bytes FROM output_scope_quota", Long.class));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT stored_bytes FROM output_scope_quota", Long.class));
     }
 
     private void verifyDeniedDuringScan(int index, Runnable revoke, boolean receiptReplayAllowed) throws Exception {
-        refreshRuntime("runtime-1", 7L);insertSourceAndRun(index, OutputConstants.RUN_ACTIVE, "READ_WRITE");OutputAuthReceiptDTO ticket=issue(service,index,"runtime-1");MemoryStorage storage=new MemoryStorage();BlockingScanner scanner=new BlockingScanner();OutputUploadServiceImpl uploads=new OutputUploadServiceImpl(service,new OutputUploadDaoImpl(jdbc),storage,scanner,new DataSourceTransactionManager(dataSource),new OutputDeliveryProperties(true));byte[] fixture="hello world!\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);OutputUploadCreateDTO request=new OutputUploadCreateDTO(runId(index),new OutputSourceDTO(OutputConstants.SOURCE_TASK,sourceId(index)),"report.md","13","ecf701f727d9e2d77c4aa49ac6fbbcc997278aca010bddeeb961c10cf54d435a","text/markdown");String bearer="Bearer "+ticket.token(),completeKey="verify-auth-complete-"+index;var created=uploads.create(bearer,"verify-auth-create-"+index,request);uploads.put(bearer,created.uploadId(),new ByteArrayInputStream(fixture));ExecutorService executor=Executors.newSingleThreadExecutor();Future<?> completing=executor.submit(()->uploads.complete(bearer,created.uploadId(),completeKey));assertTrue(scanner.entered.await(10,TimeUnit.SECONDS));revoke.run();scanner.release.countDown();completing.get(15,TimeUnit.SECONDS);executor.shutdownNow();
-        assertEquals("REJECTED",jdbc.queryForObject("SELECT state FROM output_upload_session WHERE upload_id=?",String.class,created.uploadId()));assertEquals("OUTPUT_AUTH_REVOKED",jdbc.queryForObject("SELECT error_code FROM output_upload_session WHERE upload_id=?",String.class,created.uploadId()));assertEquals(0L,jdbc.queryForObject("SELECT stored_bytes FROM output_scope_quota",Long.class));
-        if(receiptReplayAllowed)assertEquals("VERIFYING",uploads.complete(bearer,created.uploadId(),completeKey).state());else assertThrows(OutputAuthorizationException.class,()->uploads.complete(bearer,created.uploadId(),completeKey));
-        jdbc.update("UPDATE output_storage_cleanup_job SET safe_after=0,next_attempt_at=0 WHERE upload_id=?",created.uploadId());uploads.recover(1);assertEquals(0L,jdbc.queryForObject("SELECT reserved_bytes FROM output_scope_quota",Long.class));
+        resetIdentity();
+        refreshRuntime("runtime-1", 7L);
+        insertSourceAndRun(index, OutputConstants.RUN_ACTIVE, "READ_WRITE");
+        OutputAuthReceiptDTO ticket = issue(service, index, "runtime-1");
+        MemoryStorage storage = new MemoryStorage();
+        BlockingScanner scanner = new BlockingScanner();
+        OutputUploadServiceImpl uploads = uploadService(service, storage, scanner);
+        byte[] fixture = "hello world!\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        OutputUploadCreateDTO request = uploadRequest(index);
+        String bearer = "Bearer " + ticket.token();
+        String completeKey = "verify-auth-complete-" + index;
+        var created = uploads.create(bearer, "verify-auth-create-" + index, request);
+        uploads.put(bearer, created.uploadId(), new ByteArrayInputStream(fixture));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> completing = executor.submit(
+                    () -> uploads.complete(bearer, created.uploadId(), completeKey));
+            assertTrue(scanner.entered.await(10, TimeUnit.SECONDS));
+            revoke.run();
+            scanner.release.countDown();
+            completing.get(15, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals("REJECTED", jdbc.queryForObject(
+                "SELECT state FROM output_upload_session WHERE upload_id=?",
+                String.class, created.uploadId()));
+        assertEquals("OUTPUT_AUTH_REVOKED", jdbc.queryForObject(
+                "SELECT error_code FROM output_upload_session WHERE upload_id=?",
+                String.class, created.uploadId()));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT stored_bytes FROM output_scope_quota", Long.class));
+        if (receiptReplayAllowed) {
+            assertEquals("VERIFYING", uploads.complete(
+                    bearer, created.uploadId(), completeKey).state());
+        } else {
+            assertThrows(OutputAuthorizationException.class,
+                    () -> uploads.complete(bearer, created.uploadId(), completeKey));
+        }
+        jdbc.update("""
+                UPDATE output_storage_cleanup_job SET safe_after=0,next_attempt_at=0
+                WHERE upload_id=?
+                """, created.uploadId());
+        uploads.recover(1);
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT reserved_bytes FROM output_scope_quota", Long.class));
+    }
+
+    private void verifyAllowedDuringScan(int index) throws Exception {
+        resetIdentity();
+        refreshRuntime("runtime-1", 7L);
+        insertSourceAndRun(index, OutputConstants.RUN_ACTIVE, "READ_WRITE");
+        OutputAuthReceiptDTO ticket = issue(service, index, "runtime-1");
+        MemoryStorage storage = new MemoryStorage();
+        BlockingScanner scanner = new BlockingScanner();
+        OutputUploadServiceImpl uploads = uploadService(service, storage, scanner);
+        byte[] fixture = "hello world!\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        OutputUploadCreateDTO request = uploadRequest(index);
+        String bearer = "Bearer " + ticket.token();
+        var created = uploads.create(bearer, "verify-auth-create-" + index, request);
+        uploads.put(bearer, created.uploadId(), new ByteArrayInputStream(fixture));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> completing = executor.submit(() -> uploads.complete(
+                    bearer, created.uploadId(), "verify-auth-complete-" + index));
+            assertTrue(scanner.entered.await(10, TimeUnit.SECONDS));
+            scanner.release.countDown();
+            completing.get(15, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals("READY", jdbc.queryForObject(
+                "SELECT state FROM output_upload_session WHERE upload_id=?",
+                String.class, created.uploadId()));
+        assertEquals(13L, jdbc.queryForObject(
+                "SELECT stored_bytes FROM output_scope_quota", Long.class));
+    }
+
+    private OutputUploadServiceImpl uploadService(
+            OutputRunAuthorizationServiceImpl authorization,
+            OutputObjectStorage storage,
+            OutputMalwareScanner scanner) {
+        return new OutputUploadServiceImpl(
+                authorization, new OutputUploadDaoImpl(jdbc), storage, scanner,
+                new DataSourceTransactionManager(dataSource), new OutputDeliveryProperties(true));
+    }
+
+    private OutputUploadCreateDTO uploadRequest(int index) {
+        return new OutputUploadCreateDTO(
+                runId(index), new OutputSourceDTO(OutputConstants.SOURCE_TASK, sourceId(index)),
+                "report.md", "13",
+                "ecf701f727d9e2d77c4aa49ac6fbbcc997278aca010bddeeb961c10cf54d435a",
+                "text/markdown");
     }
 
     private OutputRunAuthorizationServiceImpl service(
             OutputRunBindingDao selectedRunDao, OutputAccessTicketDao selectedTicketDao) {
+        return service(selectedRunDao,selectedTicketDao,identityService);
+    }
+
+    private OutputRunAuthorizationServiceImpl service(
+            OutputRunBindingDao selectedRunDao, OutputAccessTicketDao selectedTicketDao,
+            AgentIdentityService selectedIdentityService) {
         return new OutputRunAuthorizationServiceImpl(
                 new OutputSourceAuthorizerRegistry(List.of(sourceBoundary())),
                 sourceDao, selectedRunDao, selectedTicketDao,
-                runtimeDao, identityService, true);
+                runtimeDao, selectedIdentityService, true);
     }
 
     private OutputSourceAuthorizer sourceBoundary() {
@@ -477,22 +655,6 @@ class OutputAuthorizationMySqlConcurrencyTest {
         };
     }
 
-    private AgentIdentityService identityBoundary() {
-        AgentIdentityService identity = mock(AgentIdentityService.class);
-        when(identity.lockActiveCanonicalAgentIdsInScope(
-                anyString(), anyString(), anyString(), anyList()))
-                .thenAnswer(invocation -> List.copyOf(invocation.getArgument(3)));
-        when(identity.requireActiveIdentityForBinding(
-                anyString(), anyString(), anyString(), anyLong(), anyString()))
-                .thenAnswer(invocation -> {
-                    AgentIdentityRegistryEntity entity = new AgentIdentityRegistryEntity();
-                    entity.setBindingId(invocation.getArgument(3));
-                    entity.setCanonicalAgentId(invocation.getArgument(4));
-                    return entity;
-                });
-        return identity;
-    }
-
     private void createSchema() throws Exception {
         jdbc.execute("""
                 CREATE TABLE agent_runtime (
@@ -504,6 +666,51 @@ class OutputAuthorizationMySqlConcurrencyTest {
                     current_task_title VARCHAR(200),last_seen_at BIGINT,error_message VARCHAR(1000),
                     create_time BIGINT,update_time BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),
                     UNIQUE KEY uk_runtime_agent(agent_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_persona_binding (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+                    persona_code VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+                    agent_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+                    bound_at BIGINT NOT NULL,status INT NOT NULL,
+                    create_time BIGINT NULL,update_time BIGINT NULL,
+                    tenant_id VARCHAR(50) COLLATE utf8mb4_0900_bin NULL,
+                    client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NULL,
+                    PRIMARY KEY(id),UNIQUE KEY uk_test_binding_agent(agent_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_identity_registry (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    canonical_agent_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+                    canonical_type VARCHAR(32) COLLATE utf8mb4_0900_bin NOT NULL,
+                    lifecycle_status VARCHAR(20) COLLATE utf8mb4_0900_bin NOT NULL,
+                    client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NULL,
+                    owner_jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NULL,
+                    tenant_id VARCHAR(50) COLLATE utf8mb4_0900_bin NULL,
+                    binding_id BIGINT NULL,provisioned_at BIGINT NULL,activated_at BIGINT NULL,
+                    suspended_at BIGINT NULL,retired_at BIGINT NULL,
+                    audit_reason VARCHAR(1000) COLLATE utf8mb4_0900_bin NOT NULL,
+                    create_time BIGINT NULL,update_time BIGINT NULL,
+                    PRIMARY KEY(id),UNIQUE KEY uk_test_identity_agent(canonical_agent_id),
+                    UNIQUE KEY uk_test_identity_binding(binding_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_identity_alias (
+                    id BIGINT NOT NULL AUTO_INCREMENT,registry_id BIGINT NOT NULL,
+                    canonical_agent_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+                    alias_type VARCHAR(32) COLLATE utf8mb4_0900_bin NOT NULL,
+                    alias_value VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+                    alias_status VARCHAR(20) COLLATE utf8mb4_0900_bin NOT NULL,
+                    valid_from BIGINT NOT NULL,valid_to BIGINT NULL,
+                    client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+                    owner_jiacn VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+                    tenant_id VARCHAR(50) COLLATE utf8mb4_0900_bin NOT NULL,
+                    audit_reason VARCHAR(1000) COLLATE utf8mb4_0900_bin NOT NULL,
+                    create_time BIGINT NULL,update_time BIGINT NULL,PRIMARY KEY(id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         new OutputDeliverySchemaInitializer(jdbc).afterPropertiesSet();
@@ -527,6 +734,34 @@ class OutputAuthorizationMySqlConcurrencyTest {
                         'online',?,?,?,?,?,CAST(? AS JSON),'runtime-1',?)
                 """, now, now, now, "owner", "client",
                 "[\"output.http.v1\",\"task.owner-share.v1\"]", now);
+        jdbc.update("""
+                INSERT INTO agent_persona_binding(
+                    id,jiacn,persona_code,agent_id,bound_at,status,create_time,update_time,
+                    tenant_id,client_id)
+                VALUES (7,'owner','test','agent-1',?,1,?,?,'owner','client')
+                """, now, now, now);
+        jdbc.update("""
+                INSERT INTO agent_identity_registry(
+                    id,canonical_agent_id,canonical_type,lifecycle_status,client_id,owner_jiacn,
+                    tenant_id,binding_id,provisioned_at,activated_at,audit_reason,create_time,update_time)
+                VALUES (7,'agent-1','LEGACY_CANONICAL','ACTIVE','client','owner','owner',
+                        7,?,?,'OD02 authorization test',?,?)
+                """, now, now, now, now);
+    }
+
+    private void resetIdentity() {
+        long now = System.currentTimeMillis();
+        jdbc.update("UPDATE agent_persona_binding SET status=1,update_time=? WHERE id=7", now);
+        jdbc.update("""
+                INSERT INTO agent_identity_registry(
+                    id,canonical_agent_id,canonical_type,lifecycle_status,client_id,owner_jiacn,
+                    tenant_id,binding_id,provisioned_at,activated_at,suspended_at,retired_at,
+                    audit_reason,create_time,update_time)
+                VALUES (7,'agent-1','LEGACY_CANONICAL','ACTIVE','client','owner','owner',
+                        7,?,?,NULL,NULL,'OD02 authorization test',?,?)
+                ON DUPLICATE KEY UPDATE lifecycle_status='ACTIVE',binding_id=7,
+                    suspended_at=NULL,retired_at=NULL,update_time=VALUES(update_time)
+                """, now, now, now, now);
     }
 
     private void insertSourceAndRun(int index, String state, String accessLevel) {
@@ -616,6 +851,9 @@ class OutputAuthorizationMySqlConcurrencyTest {
         configuration.addMapper(OutputRunBindingMapper.class);
         configuration.addMapper(OutputAccessTicketMapper.class);
         configuration.addMapper(AgentRuntimeMapper.class);
+        configuration.addMapper(AgentIdentityRegistryMapper.class);
+        configuration.addMapper(AgentIdentityAliasMapper.class);
+        configuration.addMapper(AgentPersonaBindingMapper.class);
         GlobalConfig globalConfig = new GlobalConfig();
         globalConfig.setIdentifierGenerator(new DefaultIdentifierGenerator());
         globalConfig.setBanner(false);
@@ -625,6 +863,16 @@ class OutputAuthorizationMySqlConcurrencyTest {
         factory.setConfiguration(configuration);
         factory.setGlobalConfig(globalConfig);
         return factory.getObject();
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T transactionalProxy(Object target, Class<T> interfaceType) {
+        ProxyFactory factory = new ProxyFactory(target);
+        factory.setInterfaces(interfaceType);
+        factory.addAdvice(new TransactionInterceptor(
+                new DataSourceTransactionManager(dataSource),
+                new AnnotationTransactionAttributeSource()));
+        return (T) factory.getProxy();
     }
 
     private <T> T wire(T target, Object mapper) throws Exception {

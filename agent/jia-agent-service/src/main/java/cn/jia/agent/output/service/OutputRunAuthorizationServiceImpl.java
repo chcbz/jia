@@ -1,6 +1,7 @@
 package cn.jia.agent.output.service;
 
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.output.OutputAuthorizationException;
 import cn.jia.agent.output.OutputConstants;
@@ -19,6 +20,7 @@ import cn.jia.agent.output.entity.OutputAccessTicketEntity;
 import cn.jia.agent.output.entity.OutputRunBindingEntity;
 import cn.jia.agent.output.entity.OutputSourceBindingEntity;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.impl.AgentServiceImpl;
 import cn.jia.core.util.JsonUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -279,7 +281,7 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
             String rawBearer, String requiredOperation, boolean receiptReplay) {
         if (!enabled) throw denied("Output delivery is disabled");
         if (rawBearer == null || rawBearer.length() < 40 || rawBearer.length() > 100) {
-            throw denied("Output ticket is invalid");
+            throw unauthorized("Output ticket is invalid");
         }
         requireExact(requiredOperation, "requiredOperation", 32);
         byte[] ticketHash = sha256(rawBearer);
@@ -356,9 +358,9 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
                     || !sourceAuthorization.writable()) {
                 throw denied("Output run no longer authorizes this mutation");
             }
-            AgentRuntimeEntity runtime = requireActiveBinding(
-                    tenantId, clientId, run.getProducerAgentId());
-            if (!Objects.equals(bindingId, Long.toString(runtime.getBindingId()))) {
+            AgentRuntimeEntity runtime = lockCurrentRuntimeForPersistedAuthorization(
+                    tenantId, clientId, run.getProducerAgentId(), bindingId);
+            if (runtime == null) {
                 throw denied("Output binding has changed");
             }
             return true;
@@ -434,40 +436,78 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
 
     private Map<String, AgentRuntimeEntity> lockCurrentRuntimes(
             String tenantId, String clientId, List<String> agentIds) {
-        Map<String, AgentRuntimeEntity> previews = new LinkedHashMap<>();
-        for (String agentId : agentIds) {
-            AgentRuntimeEntity preview = runtimeDao.findExactOutputRuntime(
-                    tenantId, clientId, tenantId, agentId, false);
-            if (preview == null || preview.getBindingId() == null) {
-                throw denied("Agent runtime is outside the output scope");
+        try {
+            Map<String, AgentRuntimeEntity> previews = new LinkedHashMap<>();
+            for (String agentId : agentIds) {
+                AgentRuntimeEntity preview = runtimeDao.findExactOutputRuntime(
+                        tenantId, clientId, tenantId, agentId, false);
+                if (preview == null || preview.getBindingId() == null) {
+                    throw denied("Agent runtime is outside the output scope");
+                }
+                previews.put(agentId, preview);
             }
-            previews.put(agentId, preview);
-        }
-        if (!agentIds.equals(identityService.lockActiveCanonicalAgentIdsInScope(
-                tenantId, clientId, tenantId, agentIds))) {
-            throw denied("Agent binding is unavailable");
-        }
-        Map<String, AgentRuntimeEntity> runtimes = new LinkedHashMap<>();
-        for (String agentId : agentIds) {
-            AgentRuntimeEntity runtime = runtimeDao.findExactOutputRuntime(
-                    tenantId, clientId, tenantId, agentId, true);
-            if (runtime == null || runtime.getBindingId() == null
-                    || !Objects.equals(tenantId, runtime.getTenantId())
-                    || !Objects.equals(clientId, runtime.getClientId())
-                    || !Objects.equals(tenantId, runtime.getOwnerJiacn())
-                    || !Objects.equals(previews.get(agentId).getBindingId(), runtime.getBindingId())) {
-                throw denied("Agent runtime changed while output authorization was locking");
+            if (!agentIds.equals(identityService.lockActiveCanonicalAgentIdsInScope(
+                    tenantId, clientId, tenantId, agentIds))) {
+                throw denied("Agent binding is unavailable");
             }
-            identityService.requireActiveIdentityForBinding(
-                    tenantId, clientId, tenantId, runtime.getBindingId(), agentId);
-            runtimes.put(agentId, runtime);
+            Map<String, AgentRuntimeEntity> runtimes = new LinkedHashMap<>();
+            for (String agentId : agentIds) {
+                AgentRuntimeEntity runtime = runtimeDao.findExactOutputRuntime(
+                        tenantId, clientId, tenantId, agentId, true);
+                if (runtime == null || runtime.getBindingId() == null
+                        || !Objects.equals(tenantId, runtime.getTenantId())
+                        || !Objects.equals(clientId, runtime.getClientId())
+                        || !Objects.equals(tenantId, runtime.getOwnerJiacn())
+                        || !Objects.equals(previews.get(agentId).getBindingId(), runtime.getBindingId())) {
+                    throw denied("Agent runtime changed while output authorization was locking");
+                }
+                identityService.requireActiveIdentityForBinding(
+                        tenantId, clientId, tenantId, runtime.getBindingId(), agentId);
+                runtimes.put(agentId, runtime);
+            }
+            return runtimes;
+        } catch (AgentServiceImpl.AgentBizException identityDenied) {
+            if (AgentErrorConstants.AGENT_FORBIDDEN.equals(identityDenied.getCode())) {
+                throw denied("Agent binding is unavailable");
+            }
+            throw identityDenied;
         }
-        return runtimes;
     }
 
     private AgentRuntimeEntity requireActiveBinding(
             String tenantId, String clientId, String agentId) {
         return lockCurrentRuntimes(tenantId, clientId, List.of(agentId)).get(agentId);
+    }
+
+    private AgentRuntimeEntity lockCurrentRuntimeForPersistedAuthorization(
+            String tenantId, String clientId, String agentId, String bindingId) {
+        AgentRuntimeEntity preview = runtimeDao.findExactOutputRuntime(
+                tenantId, clientId, tenantId, agentId, false);
+        if (preview == null || preview.getBindingId() == null
+                || !Objects.equals(bindingId, Long.toString(preview.getBindingId()))) {
+            return null;
+        }
+        long expectedBinding;
+        try {
+            expectedBinding = Long.parseLong(bindingId);
+        } catch (NumberFormatException invalid) {
+            return null;
+        }
+        if (!identityService.lockCurrentActiveIdentityForAuthorization(
+                tenantId, clientId, tenantId, expectedBinding, agentId)) {
+            return null;
+        }
+        AgentRuntimeEntity runtime = runtimeDao.findExactOutputRuntime(
+                tenantId, clientId, tenantId, agentId, true);
+        if (runtime == null || runtime.getBindingId() == null
+                || !Objects.equals(preview.getBindingId(), runtime.getBindingId())
+                || !Objects.equals(bindingId, Long.toString(runtime.getBindingId()))
+                || !Objects.equals(tenantId, runtime.getTenantId())
+                || !Objects.equals(clientId, runtime.getClientId())
+                || !Objects.equals(tenantId, runtime.getOwnerJiacn())) {
+            return null;
+        }
+        return runtime;
     }
 
     private OutputSourceBindingEntity requireActiveSourceBinding(
@@ -543,7 +583,7 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
             OutputAccessTicketEntity ticket, String requiredOperation, long now) {
         if (ticket == null || ticket.getRevokedAt() != null
                 || ticket.getExpiresAt() == null || ticket.getExpiresAt() < now) {
-            throw denied("Output ticket is expired or revoked");
+            throw unauthorized("Output ticket is expired or revoked");
         }
         List<String> operations = JsonUtil.jsonToList(ticket.getOperationsJson(), String.class);
         if (!operations.contains(requiredOperation)) {
@@ -739,6 +779,10 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
 
     private OutputAuthorizationException denied(String message) {
         return new OutputAuthorizationException("OUTPUT_AUTH_FORBIDDEN", message);
+    }
+
+    private OutputAuthorizationException unauthorized(String message) {
+        return new OutputAuthorizationException("OUTPUT_AUTH_UNAUTHORIZED", message);
     }
 
     private static int compareUtf8Unsigned(String left, String right) {

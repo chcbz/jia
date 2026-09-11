@@ -266,6 +266,28 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean lockCurrentActiveIdentityForAuthorization(
+            String tenantId, String clientId, String ownerJiacn,
+            long bindingId, String canonicalAgentId) {
+        try {
+            if (!List.of(canonicalAgentId).equals(lockActiveCanonicalAgentIdsInScope(
+                    tenantId, clientId, ownerJiacn, List.of(canonicalAgentId)))) {
+                return false;
+            }
+            AgentIdentityRegistryEntity identity = requireActiveIdentityForBinding(
+                    tenantId, clientId, ownerJiacn, bindingId, canonicalAgentId);
+            return identity != null && Objects.equals(identity.getBindingId(), bindingId)
+                    && Objects.equals(identity.getCanonicalAgentId(), canonicalAgentId);
+        } catch (AgentServiceImpl.AgentBizException denied) {
+            if (AgentErrorConstants.AGENT_FORBIDDEN.equals(denied.getCode())) {
+                return false;
+            }
+            throw denied;
+        }
+    }
+
+    @Override
     @Transactional(readOnly = true, rollbackFor = Exception.class)
     public String requirePersistedCanonicalAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
