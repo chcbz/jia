@@ -363,6 +363,10 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
             if (runtime == null) {
                 throw denied("Output binding has changed");
             }
+            if (run.getRecoveryUntil() == null
+                    || run.getRecoveryUntil() < System.currentTimeMillis()) {
+                throw denied("Output run recovery expired while authorization was locking");
+            }
             return true;
         } catch (OutputAuthorizationException denied) {
             return false;

@@ -503,6 +503,89 @@ class OutputAuthorizationMySqlConcurrencyTest {
                 "SELECT stored_bytes FROM output_scope_quota", Long.class));
     }
 
+    @Test
+    void verificationFinalizationRechecksRecoveryAfterWaitingForIdentityLock() throws Exception {
+        resetIdentity();
+        refreshRuntime("runtime-1", 7L);
+        int index = 20;
+        insertSourceAndRun(index, OutputConstants.RUN_ACTIVE, "READ_WRITE");
+        OutputAuthReceiptDTO ticket = issue(service, index, "runtime-1");
+        CountDownLatch identityAuthorizationEntered = new CountDownLatch(1);
+        AgentIdentityService observedIdentity = (AgentIdentityService) Proxy.newProxyInstance(
+                AgentIdentityService.class.getClassLoader(),
+                new Class<?>[]{AgentIdentityService.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("lockCurrentActiveIdentityForAuthorization")) {
+                        identityAuthorizationEntered.countDown();
+                    }
+                    try {
+                        return method.invoke(identityService, args);
+                    } catch (InvocationTargetException error) {
+                        throw error.getCause();
+                    }
+                });
+        OutputRunAuthorizationServiceImpl observedAuthorization = service(
+                runDao, ticketDao, observedIdentity);
+        MemoryStorage storage = new MemoryStorage();
+        BlockingScanner scanner = new BlockingScanner();
+        OutputUploadServiceImpl uploads = uploadService(observedAuthorization, storage, scanner);
+        byte[] fixture = "hello world!\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String bearer = "Bearer " + ticket.token();
+        var created = uploads.create(
+                bearer, "verify-expiry-create-20", uploadRequest(index));
+        uploads.put(bearer, created.uploadId(), new ByteArrayInputStream(fixture));
+
+        CountDownLatch identityLocked = new CountDownLatch(1);
+        CountDownLatch releaseIdentity = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> completing = executor.submit(() -> uploads.complete(
+                    bearer, created.uploadId(), "verify-expiry-complete-20"));
+            assertTrue(scanner.entered.await(10, TimeUnit.SECONDS));
+            long recoveryUntil = System.currentTimeMillis() + 2_000L;
+            assertEquals(1, jdbc.update(
+                    "UPDATE output_run_binding SET recovery_until=? WHERE run_id=?",
+                    recoveryUntil, runId(index)));
+            Future<?> holdingIdentity = executor.submit(() -> transaction.execute(status -> {
+                jdbc.queryForObject(
+                        "SELECT id FROM agent_persona_binding WHERE id=7 FOR UPDATE", Long.class);
+                identityLocked.countDown();
+                await(releaseIdentity, "identity lock release");
+                return null;
+            }));
+            await(identityLocked, "identity lock acquisition");
+            scanner.release.countDown();
+            await(identityAuthorizationEntered, "persisted identity authorization");
+            long remaining = recoveryUntil + 100L - System.currentTimeMillis();
+            if (remaining > 0) {
+                Thread.sleep(remaining);
+            }
+            releaseIdentity.countDown();
+            completing.get(15, TimeUnit.SECONDS);
+            holdingIdentity.get(15, TimeUnit.SECONDS);
+        } finally {
+            scanner.release.countDown();
+            releaseIdentity.countDown();
+            executor.shutdownNow();
+        }
+
+        assertEquals("REJECTED", jdbc.queryForObject(
+                "SELECT state FROM output_upload_session WHERE upload_id=?",
+                String.class, created.uploadId()));
+        assertEquals("OUTPUT_AUTH_REVOKED", jdbc.queryForObject(
+                "SELECT error_code FROM output_upload_session WHERE upload_id=?",
+                String.class, created.uploadId()));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT stored_bytes FROM output_scope_quota", Long.class));
+        jdbc.update("""
+                UPDATE output_storage_cleanup_job SET safe_after=0,next_attempt_at=0
+                WHERE upload_id=?
+                """, created.uploadId());
+        uploads.recover(1);
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT reserved_bytes FROM output_scope_quota", Long.class));
+    }
+
     private void verifyDeniedDuringScan(int index, Runnable revoke, boolean receiptReplayAllowed) throws Exception {
         resetIdentity();
         refreshRuntime("runtime-1", 7L);
