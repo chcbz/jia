@@ -1248,7 +1248,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(chatConversationService.getOwned("juyiting", "jia_client", "3010"))
                 .thenReturn(conversation);
         when(chatConversationService.appendOwnedMessage(
-                eq("juyiting"), eq("jia_client"), any(ChatMessageEntity.class), eq(1L)))
+                org.mockito.ArgumentMatchers.eq("juyiting"),
+                org.mockito.ArgumentMatchers.eq("jia_client"),
+                any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.eq(1L)))
                 .thenAnswer(invocation -> ((ChatMessageEntity) invocation.getArgument(2)).setId(710L));
 
         AgentWebSocketHandler handler = new AgentWebSocketHandler(
