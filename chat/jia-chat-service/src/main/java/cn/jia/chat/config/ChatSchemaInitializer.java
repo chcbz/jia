@@ -33,13 +33,111 @@ public class ChatSchemaInitializer implements ApplicationRunner {
         addColumnIfMissing("conversation_scope_key", "VARCHAR(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT 'Juyiting scope key'");
         addColumnIfMissing("task_id", "VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT 'Juyiting bounty task ID'");
         addColumnIfMissing("target_agent_id", "VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT 'Juyiting private target agent ID'");
+        addColumnIfMissing("target_agent_ids", "VARCHAR(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL COMMENT 'Persisted JSON array of authorized Juyiting target agent IDs'");
+        addColumnIfMissing("deleted_at", "BIGINT DEFAULT NULL COMMENT 'Durable conversation deletion tombstone (epoch milliseconds)'");
+        addColumnIfMissing("lifecycle_generation", "BIGINT NOT NULL DEFAULT 1 COMMENT 'Monotonic conversation lifecycle generation'");
+        validateConversationFenceColumns();
         if (!indexExists("chat_conversation", "idx_chat_conversation_scope")) {
             jdbcTemplate.execute("""
                     CREATE INDEX idx_chat_conversation_scope
                         ON chat_conversation (conversation_type, conversation_scope_type, conversation_scope_key)
                     """);
         }
+        ensureLiveOwnerIndex();
         ensureTaskThreadTable();
+    }
+
+    private void validateConversationFenceColumns() {
+        if (isH2Database()) {
+            return;
+        }
+        Map<String, ColumnDefinition> expected = new LinkedHashMap<>();
+        expected.put("target_agent_ids", new ColumnDefinition(
+                "varchar", 2000L, true, null, ""));
+        expected.put("deleted_at", new ColumnDefinition(
+                "bigint", null, true, null, ""));
+        expected.put("lifecycle_generation", new ColumnDefinition(
+                "bigint", null, false, "1", ""));
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT column_name, data_type, character_maximum_length, is_nullable,
+                       column_default, collation_name, extra
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'chat_conversation'
+                  AND column_name IN ('target_agent_ids', 'deleted_at', 'lifecycle_generation')
+                ORDER BY ordinal_position
+                """);
+        Map<String, Map<String, Object>> actual = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            actual.put(stringValue(row, "column_name"), row);
+        }
+        if (!actual.keySet().equals(expected.keySet())) {
+            throw new IllegalStateException("Incompatible chat_conversation fence columns; expected="
+                    + expected.keySet() + ", actual=" + actual.keySet());
+        }
+        expected.forEach((name, definition) -> validateConversationColumn(
+                name, definition, actual.get(name)));
+    }
+
+    private void validateConversationColumn(
+            String name, ColumnDefinition expected, Map<String, Object> actual) {
+        String dataType = stringValue(actual, "data_type");
+        Long length = longValue(actual, "character_maximum_length");
+        boolean nullable = "YES".equalsIgnoreCase(stringValue(actual, "is_nullable"));
+        String defaultValue = nullableString(actual, "column_default");
+        String extra = stringValue(actual, "extra").toLowerCase(Locale.ROOT);
+        if (!expected.dataType().equalsIgnoreCase(dataType)
+                || !java.util.Objects.equals(expected.length(), length)
+                || expected.nullable() != nullable
+                || !java.util.Objects.equals(expected.defaultValue(), defaultValue)
+                || !extra.equals(expected.extra())) {
+            throw new IllegalStateException("Incompatible chat_conversation column " + name
+                    + "; expected=" + expected + ", actual=" + actual);
+        }
+        if ("varchar".equals(expected.dataType())
+                && !"utf8mb4_0900_bin".equalsIgnoreCase(
+                stringValue(actual, "collation_name"))) {
+            throw new IllegalStateException("Incompatible chat_conversation column " + name
+                    + " collation; expected=utf8mb4_0900_bin, actual="
+                    + stringValue(actual, "collation_name"));
+        }
+    }
+
+    private void ensureLiveOwnerIndex() {
+        List<String> expected = List.of(
+                "jiacn", "client_id", "deleted_at", "lifecycle_generation", "update_time");
+        if (isH2Database()) {
+            if (!indexExists("chat_conversation", "idx_chat_conversation_live_owner")) {
+                jdbcTemplate.execute("""
+                        CREATE INDEX idx_chat_conversation_live_owner
+                            ON chat_conversation
+                            (jiacn, client_id, deleted_at, lifecycle_generation, update_time)
+                        """);
+            }
+            return;
+        }
+        List<Map<String, Object>> parts = jdbcTemplate.queryForList("""
+                SELECT non_unique, seq_in_index, column_name, sub_part
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'chat_conversation'
+                  AND index_name = 'idx_chat_conversation_live_owner'
+                ORDER BY seq_in_index
+                """);
+        boolean exact = !parts.isEmpty()
+                && parts.stream().allMatch(row -> longValue(row, "non_unique") == 1L
+                && row.get("SUB_PART") == null && row.get("sub_part") == null)
+                && parts.stream().map(row -> stringValue(row, "column_name")).toList().equals(expected);
+        if (!parts.isEmpty() && !exact) {
+            jdbcTemplate.execute("DROP INDEX idx_chat_conversation_live_owner ON chat_conversation");
+        }
+        if (!exact) {
+            jdbcTemplate.execute("""
+                    CREATE INDEX idx_chat_conversation_live_owner
+                        ON chat_conversation
+                        (jiacn, client_id, deleted_at, lifecycle_generation, update_time)
+                    """);
+        }
     }
 
     private void ensureTaskThreadTable() {

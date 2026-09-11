@@ -102,6 +102,13 @@ public class AgentServiceImpl implements AgentService {
     private static final int TASK_MEMBERSHIP_SNAPSHOT_LIMIT = 500;
     private static final int MAX_RUNTIME_ABILITIES = 128;
     private static final int MAX_RUNTIME_ABILITY_LENGTH = 100;
+    private static final Set<AgentTaskMemberStatus> TASK_CONVERSATION_WRITABLE_STATUSES = Set.of(
+            AgentTaskMemberStatus.ACCEPTED, AgentTaskMemberStatus.WORKING,
+            AgentTaskMemberStatus.BLOCKED);
+    private static final Set<String> TASK_MEMBER_ROLES = Set.of(
+            "coordinator", "worker", "reviewer", "observer");
+    private static final Set<String> TASK_ASSIGNMENT_SOURCES = Set.of(
+            "manual", "auto", "migration", "legacy");
 
     private final AgentRuntimeDao agentRuntimeDao;
     private final AgentIdentityService agentIdentityService;
@@ -893,6 +900,47 @@ public class AgentServiceImpl implements AgentService {
         return legacyMeta == null
                 ? List.of()
                 : parseAssignedAgentIds(legacyMeta.getAssignedAgentId());
+    }
+
+    @Override
+    public List<String> listTaskWritableMemberAgentIds(
+            String tenantId, String clientId, String taskId) {
+        require(!StringUtil.isBlank(tenantId), "tenantId is required");
+        require(!StringUtil.isBlank(clientId), "clientId is required");
+        require(!StringUtil.isBlank(taskId), "taskId is required");
+
+        AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        if (task == null || !Objects.equals(tenantId, task.getTenantId())
+                || !Objects.equals(clientId, task.getClientId())
+                || !Objects.equals(taskId, task.getTaskId())) {
+            return List.of();
+        }
+        try {
+            AgentTaskStatus.fromPersistedValue(task.getRewardStatus());
+        } catch (IllegalArgumentException invalidTaskStatus) {
+            return List.of();
+        }
+
+        List<AgentTaskMemberEntity> members = Optional.ofNullable(
+                agentTaskMemberDao.listByTask(tenantId, clientId, taskId))
+                .orElseGet(Collections::emptyList);
+        LinkedHashSet<String> writableAgentIds = new LinkedHashSet<>();
+        for (AgentTaskMemberEntity member : members) {
+            require(member != null
+                            && Objects.equals(tenantId, member.getTenantId())
+                            && Objects.equals(clientId, member.getClientId())
+                            && Objects.equals(taskId, member.getTaskId())
+                            && isExactStoredText(member.getAgentId(), 100)
+                            && TASK_MEMBER_ROLES.contains(member.getMemberRole())
+                            && TASK_ASSIGNMENT_SOURCES.contains(member.getAssignmentSource()),
+                    "Persisted task member is outside the writable task scope");
+            AgentTaskMemberStatus status =
+                    AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus());
+            if (TASK_CONVERSATION_WRITABLE_STATUSES.contains(status)) {
+                writableAgentIds.add(member.getAgentId());
+            }
+        }
+        return List.copyOf(writableAgentIds);
     }
 
     @Override

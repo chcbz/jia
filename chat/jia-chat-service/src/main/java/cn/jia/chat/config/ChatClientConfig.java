@@ -9,7 +9,7 @@ import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
 import cn.jia.chat.advisor.LongTermMemoryAdvisor;
 import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.chat.advisor.RequestResponseAdvisor;
-import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.tool.AgentTools;
 import cn.jia.chat.tool.ChatTools;
@@ -50,7 +50,7 @@ public class ChatClientConfig {
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             ObjectProvider<McpSyncClient> mcpSyncClientsProvider, MemoryRepository memoryRepository,
             AgentTaskThreadMemoryGuard taskThreadMemoryGuard,
-            ChatMessageDao chatMessageDao, TaskTools taskTools,
+            ChatConversationService chatConversationService, TaskTools taskTools,
             ObjectProvider<AgentTools> agentToolsProvider,
             ObjectProvider<PointTools> pointToolsProvider,
             ObjectProvider<MaterialTools> materialToolsProvider,
@@ -64,7 +64,7 @@ public class ChatClientConfig {
                 .similarityThreshold(0.75)
                 .build();
 
-        DatabaseChatMemoryAdvisor contextMemoryAdvisor = DatabaseChatMemoryAdvisor.builder(chatMessageDao)
+        DatabaseChatMemoryAdvisor contextMemoryAdvisor = DatabaseChatMemoryAdvisor.builder(chatConversationService)
                 .maxMessages(10)
                 .build();
 

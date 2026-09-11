@@ -182,7 +182,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         presence.setAgentId("agent-1");
         presence.setStatus("online");
         when(agentService.updateStatus(any(), any())).thenReturn(presence);
-        when(agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-1"))
+        when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "task-1"))
                 .thenReturn(List.of("agent-1"));
         AgentWebSocketHandler handler = handler();
         handler.afterConnectionEstablished(session);

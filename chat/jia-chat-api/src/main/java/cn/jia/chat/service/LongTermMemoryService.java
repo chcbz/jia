@@ -27,6 +27,9 @@ public interface LongTermMemoryService {
      */
     void syncConversation(String conversationId);
 
+    /** User-initiated sync using exact authenticated conversation ownership. */
+    void syncOwnedConversation(String ownerJiacn, String clientId, String conversationId);
+
     /**
      * 同步待处理会话
      * <p>
@@ -66,5 +69,5 @@ public interface LongTermMemoryService {
      * @param conversationId 会话ID
      * @return 消息列表
      */
-    List<ChatMessageEntity> getConversationMessages(String conversationId);
+    List<ChatMessageEntity> getConversationMessagesForMaintenance(String conversationId);
 }

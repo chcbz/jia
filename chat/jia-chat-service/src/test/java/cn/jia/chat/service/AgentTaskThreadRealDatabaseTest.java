@@ -537,6 +537,7 @@ class AgentTaskThreadRealDatabaseTest {
                     conversation_scope_key VARCHAR(120),
                     task_id VARCHAR(64),
                     target_agent_id VARCHAR(100),
+                    deleted_at BIGINT,
                     status INT,
                     create_time BIGINT,
                     update_time BIGINT,

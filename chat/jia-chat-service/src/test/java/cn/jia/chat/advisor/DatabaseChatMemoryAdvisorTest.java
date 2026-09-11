@@ -1,6 +1,6 @@
 package cn.jia.chat.advisor;
 
-import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
@@ -19,11 +19,11 @@ import static org.mockito.Mockito.verify;
 class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
 
     @Mock
-    ChatMessageDao chatMessageDao;
+    ChatConversationService chatConversationService;
 
     @Test
     void saveMessagePersistsJuyitingMetadata() throws Exception {
-        DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatMessageDao)
+        DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatConversationService)
                 .conversationId("test-conv")
                 .maxMessages(10)
                 .build();
@@ -45,7 +45,9 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
         saveMessageMethod.invoke(advisor, userMessage, context);
 
         ArgumentCaptor<ChatMessageEntity> captor = ArgumentCaptor.forClass(ChatMessageEntity.class);
-        verify(chatMessageDao).insert(captor.capture());
+        verify(chatConversationService).appendOwnedMessage(
+                org.mockito.ArgumentMatchers.eq("test-user"),
+                org.mockito.ArgumentMatchers.eq("test-client"), captor.capture());
 
         ChatMessageEntity entity = captor.getValue();
         assertEquals("juyiting", entity.getConversationType());
@@ -58,7 +60,7 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
 
     @Test
     void saveMessageDefaultsToNormalWhenConversationTypeMissing() throws Exception {
-        DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatMessageDao)
+        DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatConversationService)
                 .conversationId("test-conv")
                 .maxMessages(10)
                 .build();
@@ -77,7 +79,9 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
         saveMessageMethod.invoke(advisor, assistantMessage, context);
 
         ArgumentCaptor<ChatMessageEntity> captor = ArgumentCaptor.forClass(ChatMessageEntity.class);
-        verify(chatMessageDao).insert(captor.capture());
+        verify(chatConversationService).appendOwnedMessage(
+                org.mockito.ArgumentMatchers.eq("test-user"),
+                org.mockito.ArgumentMatchers.eq("test-client"), captor.capture());
 
         ChatMessageEntity entity = captor.getValue();
         assertEquals("normal", entity.getConversationType());
@@ -88,7 +92,7 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
 
     @Test
     void saveMessageHandlesEmptySenderMetadataFromContext() throws Exception {
-        DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatMessageDao)
+        DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatConversationService)
                 .conversationId("test-conv")
                 .maxMessages(10)
                 .build();
@@ -109,7 +113,9 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
         saveMessageMethod.invoke(advisor, userMessage, context);
 
         ArgumentCaptor<ChatMessageEntity> captor = ArgumentCaptor.forClass(ChatMessageEntity.class);
-        verify(chatMessageDao).insert(captor.capture());
+        verify(chatConversationService).appendOwnedMessage(
+                org.mockito.ArgumentMatchers.eq("test-user"),
+                org.mockito.ArgumentMatchers.eq("test-client"), captor.capture());
 
         ChatMessageEntity entity = captor.getValue();
         assertEquals("normal", entity.getConversationType());

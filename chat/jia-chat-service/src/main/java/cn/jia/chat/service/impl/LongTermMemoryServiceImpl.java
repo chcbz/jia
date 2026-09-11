@@ -4,6 +4,7 @@ import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.memory.MemoryDocument;
+import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.LongTermMemoryService;
 import cn.jia.chat.service.SummaryGenerator;
 import cn.jia.core.util.DateUtil;
@@ -39,6 +40,9 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
     private SummaryGenerator summaryGenerator;
 
     @Autowired
+    private ChatConversationService chatConversationService;
+
+    @Autowired
     private AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
 
     @Autowired
@@ -71,48 +75,52 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
             log.warn("Skipping sync: conversationId is empty");
             return;
         }
-
         try {
-            log.info("Starting sync for conversation: {}", conversationId);
+            log.info("Starting maintenance sync for conversation: {}", conversationId);
             if (taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
                 chatMessageDao.updateSyncStatusByConversationId(
                         conversationId, AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED);
                 log.info("Excluded task-thread conversation from legacy memory sync: {}", conversationId);
                 return;
             }
-
-            // 1. 获取会话消息
-            List<ChatMessageEntity> messages = chatMessageDao.findByConversationId(conversationId);
-            if (messages == null || messages.isEmpty()) {
-                log.warn("No messages found for conversation: {}", conversationId);
-                chatMessageDao.updateSyncStatusByConversationId(conversationId, SYNC_STATUS_SYNCED);
-                return;
-            }
-
-            // 2. 调用 LLM 生成摘要
-            String summary = summaryGenerator.summarizeConversation(messages);
-
-            // 3. 获取第一个消息的 jiacn
-            String jiacn = messages.getFirst().getJiacn();
-
-            // 4. 写入向量库
-            MemoryDocument document = new MemoryDocument();
-            document.setJiacn(jiacn);
-            document.setConversationId(conversationId);
-            document.setContent(summary);
-            document.setSummaryType(SUMMARY_TYPE_CONVERSATION);
-            document.setTimestamp(System.currentTimeMillis());
-
-            memoryRepository.save(document);
-
-            // 5. 更新同步状态
-            chatMessageDao.updateSyncStatusByConversationId(conversationId, SYNC_STATUS_SYNCED);
-
-            log.info("Successfully synced conversation: {}", conversationId);
+            syncMessages(conversationId,
+                    chatMessageDao.findByConversationIdForMaintenance(conversationId));
         } catch (Exception e) {
             log.error("Failed to sync conversation: {}", conversationId, e);
             throw new RuntimeException("Sync conversation failed: " + conversationId, e);
         }
+    }
+
+    @Override
+    public void syncOwnedConversation(
+            String ownerJiacn, String clientId, String conversationId) {
+        try {
+            log.info("Starting authenticated sync for conversation: {}", conversationId);
+            syncMessages(conversationId, chatConversationService.findOwnedMessages(
+                    ownerJiacn, clientId, conversationId));
+        } catch (Exception e) {
+            log.error("Failed authenticated sync for conversation: {}", conversationId, e);
+            throw new RuntimeException("Sync conversation failed: " + conversationId, e);
+        }
+    }
+
+    private void syncMessages(String conversationId, List<ChatMessageEntity> messages) {
+        if (messages == null || messages.isEmpty()) {
+            log.warn("No messages found for conversation: {}", conversationId);
+            chatMessageDao.updateSyncStatusByConversationId(conversationId, SYNC_STATUS_SYNCED);
+            return;
+        }
+        String summary = summaryGenerator.summarizeConversation(messages);
+        String jiacn = messages.getFirst().getJiacn();
+        MemoryDocument document = new MemoryDocument();
+        document.setJiacn(jiacn);
+        document.setConversationId(conversationId);
+        document.setContent(summary);
+        document.setSummaryType(SUMMARY_TYPE_CONVERSATION);
+        document.setTimestamp(System.currentTimeMillis());
+        memoryRepository.save(document);
+        chatMessageDao.updateSyncStatusByConversationId(conversationId, SYNC_STATUS_SYNCED);
+        log.info("Successfully synced conversation: {}", conversationId);
     }
 
     @Override
@@ -311,7 +319,7 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
     }
 
     @Override
-    public List<ChatMessageEntity> getConversationMessages(String conversationId) {
-        return chatMessageDao.findByConversationId(conversationId);
+    public List<ChatMessageEntity> getConversationMessagesForMaintenance(String conversationId) {
+        return chatMessageDao.findByConversationIdForMaintenance(conversationId);
     }
 }

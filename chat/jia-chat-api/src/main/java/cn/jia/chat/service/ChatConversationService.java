@@ -6,61 +6,49 @@ import com.github.pagehelper.PageInfo;
 
 import java.util.List;
 
-/**
- * 聊天会话服务接口
- *
- * @author chc
- * @since 2026-04-19
- */
+/** Authenticated generic-conversation boundary. */
 public interface ChatConversationService {
+    PageInfo<ChatConversationEntity> findPage(
+            ChatConversationEntity example, int pageNum, int pageSize, String orderBy);
 
-    /**
-     * 分页查询会话列表
-     *
-     * @param example 查询条件
-     * @param pageNum 页码
-     * @param pageSize 每页大小
-     * @param orderBy 排序字段
-     * @return 分页结果
-     */
-    PageInfo<ChatConversationEntity> findPage(ChatConversationEntity example, int pageNum, int pageSize, String orderBy);
-
-    /**
-     * 删除指定会话（包含会话记录和消息）
-     *
-     * @param conversationId 会话ID
-     */
+    /** Idempotent, non-disclosing soft delete of an ordinary conversation. */
     void deleteConversation(String conversationId);
 
-    /**
-     * 根据会话ID查询消息列表
-     *
-     * @param conversationId 会话ID
-     * @return 消息列表（按messageOrder排序）
-     */
     List<ChatMessageEntity> findByConversationId(String conversationId);
 
-    /**
-     * 创建会话
-     *
-     * @param entity 会话实体
-     * @return 创建后的会话实体
-     */
     ChatConversationEntity create(ChatConversationEntity entity);
 
-    /**
-     * 根据会话ID获取会话
-     *
-     * @param conversationId 会话ID
-     * @return 会话实体
-     */
     ChatConversationEntity get(String conversationId);
 
+    /** Exact owner-scoped live lookup for callbacks that cannot use thread-local context. */
+    ChatConversationEntity getOwned(String ownerJiacn, String clientId, String conversationId);
+
+    /** Fail-closed live-generation probe for asynchronous publication fences. */
+    boolean isLiveGeneration(
+            String ownerJiacn, String clientId, String conversationId, long expectedGeneration);
+
+    /** Exact owner-scoped full history read for authenticated maintenance initiated by a user. */
+    List<ChatMessageEntity> findOwnedMessages(
+            String ownerJiacn, String clientId, String conversationId);
+
+    /** Exact owner-scoped bounded history read for advisors running after a thread switch. */
+    List<ChatMessageEntity> findOwnedMessages(
+            String ownerJiacn, String clientId, String conversationId, int limit);
+
     /**
-     * 更新会话
-     *
-     * @param entity 会话实体
-     * @return 更新后的会话实体
+     * Atomically locks a live owned conversation, derives all message identity from it, and inserts.
+     * Lock order is chat_conversation row then chat_message insert.
      */
+    ChatMessageEntity appendOwnedMessage(
+            String ownerJiacn, String clientId, ChatMessageEntity message);
+
+    /** Append only when the locked conversation still has the captured lifecycle generation. */
+    ChatMessageEntity appendOwnedMessage(
+            String ownerJiacn, String clientId, ChatMessageEntity message, long expectedGeneration);
+
+    /** Exact owner-scoped title update for asynchronous summary callbacks. */
+    ChatConversationEntity updateOwnedTitle(
+            String ownerJiacn, String clientId, String conversationId, String title, Integer status);
+
     ChatConversationEntity update(ChatConversationEntity entity);
 }
