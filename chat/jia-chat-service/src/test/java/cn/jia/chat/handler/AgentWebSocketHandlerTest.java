@@ -945,7 +945,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ChatConversationEntity conversation = new ChatConversationEntity()
                 .setId(1001L).setJiacn("juyiting").setConversationType("juyiting")
                 .setConversationScopeType("public").setConversationScopeKey("public")
-                .setTargetAgentIds("[\"agent-wuyong\"]").setLifecycleGeneration(1L);
+                .setTargetAgentIds("[\"agent-001\"]").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("jia_client");
         when(chatConversationService.getOwned("juyiting", "jia_client", "1001"))
                 .thenReturn(conversation);
@@ -1102,6 +1102,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         conversation.setTenantId("0");
         when(chatConversationService.getOwned("juyiting", "jia_client", "3000"))
                 .thenReturn(conversation);
+        when(chatConversationService.isLiveGeneration(
+                "juyiting", "jia_client", "3000", 1L)).thenReturn(false);
         try (ChatConversationEventBroker.DeletionFence fence = broker.beginDeletion("3000")) {
             fence.commitDeleted(1L);
         }
@@ -1645,7 +1647,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         chatMessage.setSenderName("测试用户");
         chatMessage.setTargetAgentIds(List.of("agent-wuyong"));
 
-        when(chatConversationEventBroker.stream("1001", 1L, any()))
+        when(chatConversationEventBroker.stream(
+                org.mockito.ArgumentMatchers.eq("1001"),
+                org.mockito.ArgumentMatchers.eq(1L), any()))
                 .thenReturn(Flux.just("{\"type\":\"agent_message\",\"content\":\"ok\"}"));
 
         EsContext relayContext = new EsContext();

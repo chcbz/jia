@@ -274,7 +274,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertTrue(complete.await(2, TimeUnit.SECONDS));
         assertEquals(0, broker.subscriberCount("1001"));
         assertEquals(0, broker.watcherCount("1001"));
-        assertFalse(broker.publishIfLive("1001", 1L, () -> true,
+        assertFalse(broker.publishIfLive("1001", 1L, () -> false,
                 Map.of("type", "agent_message")));
         subscription.dispose();
     }

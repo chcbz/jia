@@ -87,10 +87,11 @@ class ChatControllerTest extends BaseMockTest {
 
         when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
-        when(agentWebSocketHandler.isAgentConnected("tester", "web-client", "agent-wuyong")).thenReturn(true);
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class))).thenReturn(true);
-        when(chatConversationEventBroker.stream("1001", 1L, any())).thenReturn(Flux.just("""
+        when(chatConversationEventBroker.stream(
+                org.mockito.ArgumentMatchers.eq("1001"),
+                org.mockito.ArgumentMatchers.eq(1L), any())).thenReturn(Flux.just("""
                 {"type":"agent_message","conversationId":"1001","conversationType":"juyiting","agentId":"agent-wuyong","senderType":"agent","senderName":"Wu Yong","content":"ok"}
                 """).delayElements(Duration.ofMillis(10)));
 
@@ -295,8 +296,6 @@ class ChatControllerTest extends BaseMockTest {
                 });
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
         for (String member : members) {
-            when(agentWebSocketHandler.isAgentConnected("tester", "web-client", member))
-                    .thenReturn(true);
             when(agentWebSocketHandler.sendDirectMessageToAgent(
                     eq("tester"), eq("web-client"), eq(member), any(Map.class)))
                     .thenReturn(true);
@@ -326,10 +325,16 @@ class ChatControllerTest extends BaseMockTest {
 
     @Test
     void deletingConversationCompletesExistingSseSubscriberWithoutEvent() throws Exception {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
         ChatConversationEntity conversation = new ChatConversationEntity()
                 .setId(5001L).setLifecycleGeneration(1L);
         when(chatConversationService.get("5001")).thenReturn(conversation);
+        when(chatConversationService.isLiveGeneration(
+                "tester", "web-client", "5001", 1L)).thenReturn(true);
         JuyitingConversationScopeService scopeService =
                 new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         ChatController controller = new ChatController(
