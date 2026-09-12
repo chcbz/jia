@@ -16,6 +16,10 @@ public interface AgentTaskWorkItemDao {
     List<AgentTaskWorkItemEntity> listByTask(
             String tenantId, String clientId, String taskId, String status, int limit);
 
+    /** Locks the complete bounded task graph in deterministic binary work-item ID order. */
+    List<AgentTaskWorkItemEntity> listByTaskForUpdate(
+            String tenantId, String clientId, String taskId, int limit);
+
     List<AgentTaskWorkItemEntity> listByAssignee(
             String tenantId, String clientId, String assigneeAgentId, String status, int limit);
 
@@ -35,6 +39,11 @@ public interface AgentTaskWorkItemDao {
     int claimReadyByVersion(
             String tenantId, String clientId, String taskId, String workItemId,
             String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item);
+
+    /** Exact-scope pending-to-ready CAS used only after full dependency-graph validation. */
+    int readyPendingByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            long expectedVersion, long changedAt, AgentTaskWorkItemDTO item);
 
     int updateActiveLeaseByVersion(
             String tenantId, String clientId, String taskId, String workItemId,

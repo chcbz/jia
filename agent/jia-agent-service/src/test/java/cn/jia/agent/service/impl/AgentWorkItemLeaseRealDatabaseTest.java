@@ -757,6 +757,12 @@ class AgentWorkItemLeaseRealDatabaseTest {
         }
 
         @Override
+        public List<AgentTaskWorkItemEntity> listByTaskForUpdate(
+                String tenantId, String clientId, String taskId, int limit) {
+            return delegate.listByTaskForUpdate(tenantId, clientId, taskId, limit);
+        }
+
+        @Override
         public List<AgentTaskWorkItemEntity> listByAssignee(
                 String tenantId, String clientId, String assigneeAgentId, String status, int limit) {
             return delegate.listByAssignee(tenantId, clientId, assigneeAgentId, status, limit);
@@ -797,6 +803,14 @@ class AgentWorkItemLeaseRealDatabaseTest {
             return delegate.claimReadyByVersion(
                     tenantId, clientId, taskId, workItemId,
                     expectedAssigneeAgentId, expectedVersion, item);
+        }
+
+        @Override
+        public int readyPendingByVersion(
+                String tenantId, String clientId, String taskId, String workItemId,
+                long expectedVersion, long changedAt, AgentTaskWorkItemDTO item) {
+            return delegate.readyPendingByVersion(
+                    tenantId, clientId, taskId, workItemId, expectedVersion, changedAt, item);
         }
 
         @Override

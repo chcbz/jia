@@ -76,6 +76,15 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public List<AgentTaskWorkItemEntity> listByTaskForUpdate(
+            String tenantId, String clientId, String taskId, int limit) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        return baseMapper.selectTaskGraphForUpdate(
+                tenantId, clientId, taskId, boundedDependencyGraphLimit(limit));
+    }
+
+    @Override
     public List<AgentTaskWorkItemEntity> listByAssignee(
             String tenantId, String clientId, String assigneeAgentId, String status, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
@@ -163,6 +172,27 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public int readyPendingByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            long expectedVersion, long changedAt, AgentTaskWorkItemDTO item) {
+        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        if (!"ready".equals(item.getStatus())
+                || !taskId.equals(item.getTaskId())
+                || !workItemId.equals(item.getWorkItemId())
+                || item.getVersion() == null || item.getVersion() != expectedVersion
+                || item.getLeaseToken() != null || item.getLeaseUntil() != null
+                || item.getResultArtifactId() != null || item.getSubmittedAt() != null
+                || item.getCompletedAt() != null
+                || item.getAttemptCount() >= item.getMaxAttempts()
+                || changedAt <= 0) {
+            throw new IllegalArgumentException(
+                    "dependency ready CAS requires an exact ready snapshot and positive changedAt");
+        }
+        return baseMapper.readyPendingByVersion(
+                tenantId, clientId, taskId, workItemId, expectedVersion, item, changedAt);
+    }
+
+    @Override
     public int updateActiveLeaseByVersion(
             String tenantId, String clientId, String taskId, String workItemId,
             String assigneeAgentId, String leaseToken, String expectedStatus,
@@ -217,6 +247,13 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         if (value < 0) {
             throw new IllegalArgumentException(name + " must be nonnegative");
         }
+    }
+
+    private int boundedDependencyGraphLimit(int limit) {
+        if (limit <= 0 || limit > 501) {
+            throw new IllegalArgumentException("dependency graph limit must be between 1 and 501");
+        }
+        return limit;
     }
 
     private List<AgentTaskWorkItemEntity> ordered(

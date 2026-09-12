@@ -14,6 +14,7 @@ import cn.jia.agent.entity.AgentWorkItemResultCommitViewDTO;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentWorkItemDependencyService;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import cn.jia.agent.service.AgentWorkItemResultCommitService;
 import cn.jia.agent.service.AgentTaskEventWriter;
@@ -38,32 +39,44 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
+    private final AgentWorkItemDependencyService dependencyService;
     private final LongSupplier clock;
 
     @Inject
     public AgentWorkItemResultCommitServiceImpl(
             AgentWorkItemLeaseService leaseService, AgentTaskArtifactService artifactService,
             AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
-            AgentTaskEventWriter eventWriter) {
+            AgentTaskEventWriter eventWriter, AgentWorkItemDependencyService dependencyService) {
         this(leaseService, artifactService, workItemDao, mutationTransaction, eventWriter,
-                System::currentTimeMillis);
+                dependencyService, System::currentTimeMillis);
     }
 
     AgentWorkItemResultCommitServiceImpl(
             AgentWorkItemLeaseService leaseService, AgentTaskArtifactService artifactService,
             AgentTaskWorkItemDao workItemDao, LongSupplier clock) {
-        this(leaseService, artifactService, workItemDao, directTransaction(), command -> null, clock);
+        this(leaseService, artifactService, workItemDao, directTransaction(), command -> null,
+                noDependencyResolution(), clock);
     }
 
     AgentWorkItemResultCommitServiceImpl(
             AgentWorkItemLeaseService leaseService, AgentTaskArtifactService artifactService,
             AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter eventWriter, LongSupplier clock) {
+        this(leaseService, artifactService, workItemDao, mutationTransaction, eventWriter,
+                noDependencyResolution(), clock);
+    }
+
+    AgentWorkItemResultCommitServiceImpl(
+            AgentWorkItemLeaseService leaseService, AgentTaskArtifactService artifactService,
+            AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter, AgentWorkItemDependencyService dependencyService,
+            LongSupplier clock) {
         this.leaseService = Objects.requireNonNull(leaseService, "leaseService");
         this.artifactService = Objects.requireNonNull(artifactService, "artifactService");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
         this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
+        this.dependencyService = Objects.requireNonNull(dependencyService, "dependencyService");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -126,6 +139,11 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
 
         appendSubmittedEvent(tenantId, clientId, taskId, actorAgentId, current,
                 lease.getVersion(), lease.getVersion() + 1, submittedAt, published.getArtifactId());
+
+        // The resolver joins this already-active REQUIRED transaction and task-root lock. A result
+        // commit only reaches SUBMITTED, so it never fabricates completion; this call validates the
+        // graph and catches up dependents whose authoritative prerequisites were completed earlier.
+        dependencyService.resolveReady(tenantId, clientId, taskId);
 
         AgentWorkItemResultCommitViewDTO result = new AgentWorkItemResultCommitViewDTO();
         result.setTaskId(taskId);
@@ -225,6 +243,10 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
             throw invalidPersisted("Result commit clock returned a negative timestamp");
         }
         return value;
+    }
+
+    private static AgentWorkItemDependencyService noDependencyResolution() {
+        return (tenantId, clientId, taskId) -> null;
     }
 
     private static AgentTaskMutationTransaction directTransaction() {

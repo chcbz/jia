@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEntity> {
@@ -94,6 +95,67 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
             @Param("expectedVersion") long expectedVersion,
             @Param("item") AgentTaskWorkItemDTO item,
             @Param("updateTime") long updateTime);
+
+    @Select("""
+            SELECT *
+            FROM agent_task_work_item
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+            ORDER BY CAST(work_item_id AS BINARY), id
+            LIMIT #{limit}
+            FOR UPDATE
+            """)
+    java.util.List<AgentTaskWorkItemEntity> selectTaskGraphForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("limit") int limit);
+
+    @Update("""
+            UPDATE agent_task_work_item
+            SET title = #{item.title}, description = #{item.description},
+                work_type = #{item.workType}, required_abilities = #{item.requiredAbilities},
+                assignee_agent_id = #{item.assigneeAgentId}, status = #{item.status},
+                priority = #{item.priority}, required_item = #{item.requiredItem},
+                dependency_json = #{item.dependencyJson}, lease_token = #{item.leaseToken},
+                lease_until = #{item.leaseUntil}, attempt_count = #{item.attemptCount},
+                max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
+                submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
+                update_time = #{changedAt}, version = version + 1
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{taskId}
+              AND work_item_id = #{workItemId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
+              AND status = 'pending'
+              AND CAST(status AS BINARY) = CAST('pending' AS BINARY)
+              AND OCTET_LENGTH(status) = OCTET_LENGTH('pending')
+              AND lease_token IS NULL
+              AND lease_until IS NULL
+              AND version = #{expectedVersion}
+            """)
+    int readyPendingByVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("workItemId") String workItemId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("item") AgentTaskWorkItemDTO item,
+            @Param("changedAt") long changedAt);
 
     @Update("""
             UPDATE agent_task_work_item
