@@ -7,11 +7,11 @@ dependencies {
     compileOnly(libs.spring.boot.starter.amqp)
     compileOnly(libs.aliyun.java.sdk.core)
     compileOnly(libs.aliyun.java.sdk.dysmsapi)
-    compileOnly(libs.mail)
+    // The eagerly introspected email component needs javax.mail and its provider at runtime.
+    implementation(libs.mail)
     compileOnly(libs.spring.boot.starter.websocket)
     testImplementation project(':common:jia-common-test')
     testImplementation project(':base:jia-base-api')
-    testImplementation(libs.mail)
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

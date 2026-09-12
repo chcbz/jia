@@ -81,6 +81,15 @@ jar {
     enabled = false
 }
 
+// Supply only the application's runtime graph to the isolated mail regression loader.
+// Do not use testRuntimeClasspath: test-only mail can conceal a broken bootJar runtime.
+tasks.named('test', Test) {
+    inputs.files(sourceSets.main.runtimeClasspath).withPropertyName('smsMainRuntimeClasspath')
+    doFirst {
+        systemProperty 'cyf.sms.main-runtime-classpath', sourceSets.main.runtimeClasspath.asPath
+    }
+}
+
 def publicArtifactVerifierTests = tasks.register('publicArtifactVerifierTest', Test) {
     group = 'verification'
     description = 'Runs isolated mutation tests for the dependency-free public artifact verifier.'
