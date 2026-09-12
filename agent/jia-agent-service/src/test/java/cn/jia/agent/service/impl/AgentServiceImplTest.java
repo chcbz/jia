@@ -40,6 +40,7 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.task.entity.TaskPlanEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.mapper.AgentPersonaCatalogBindingRow;
 import cn.jia.agent.mapper.AgentTaskStatsRow;
 import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.agent.service.AgentIdentityService;
@@ -1310,14 +1311,14 @@ class AgentServiceImplTest extends BaseMockTest {
     @Test
     void personaCatalogDisclosesOnlyExactOwnerBindingAndTreatsForeignOwnerAsUnbound() {
         AgentPersonaEntity persona = persona("lujunyi", "卢俊义", "玉麒麟");
-        AgentPersonaBindingEntity foreign = binding("foreign-agent", "lujunyi");
-        foreign.setTenantId("other-owner");
-        foreign.setJiacn("other-owner");
-        when(agentPersonaDao.selectAll()).thenReturn(List.of(persona));
-        when(agentPersonaBindingDao.findExactActiveByScopeAndPersona(
-                "juyiting", "jia_client", "juyiting", "lujunyi")).thenReturn(null);
+        persona.setTenantId("0");
+        when(agentPersonaDao.findCatalogProjection("juyiting", "jia_client"))
+                .thenReturn(List.of(persona));
+        when(agentPersonaBindingDao.findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting")).thenReturn(List.of());
 
-        List<AgentRuntimeDTO> result = agentService.listPersonaCatalog();
+        List<AgentRuntimeDTO> result = agentService.listPersonaCatalog(
+                "juyiting", "jia_client", "juyiting");
 
         assertEquals(1, result.size());
         AgentRuntimeDTO dto = result.getFirst();
@@ -1328,8 +1329,8 @@ class AgentServiceImplTest extends BaseMockTest {
         assertFalse(dto.getBoundToMe());
         assertTrue(dto.getCanBind());
         assertEquals(AgentConstants.STATUS_OFFLINE, dto.getStatus());
-        verify(agentPersonaBindingDao).findExactActiveByScopeAndPersona(
-                "juyiting", "jia_client", "juyiting", "lujunyi");
+        verify(agentPersonaBindingDao).findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting");
         verify(agentPersonaBindingDao, never()).findActiveByClientAndPersona(any(), any());
         verify(agentIdentityService, never()).requireRegistrationIdentityInScope(any(), any(), any(), any());
         verify(agentRuntimeDao, never()).findByAgentId(any());
@@ -1338,22 +1339,25 @@ class AgentServiceImplTest extends BaseMockTest {
     @Test
     void personaCatalogExactOwnerBindingIsBoundAndCannotBindAgain() {
         AgentPersonaEntity persona = persona("lujunyi", "卢俊义", "玉麒麟");
+        persona.setTenantId("0");
         AgentPersonaBindingEntity binding = binding(
                 "agt_0123456789abcdef0123456789abcdef", "lujunyi");
         AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
         AgentRuntimeEntity runtime = runtimeAgent(
-                identity.getCanonicalAgentId(), "卢俊义", AgentConstants.STATUS_ONLINE, "[]");
+                identity.getCanonicalAgentId(), "卢俊义", AgentConstants.STATUS_ONLINE,
+                "[\"runtime-skill\"]");
+        runtime.setTenantId("juyiting");
         runtime.setClientId("jia_client");
         runtime.setOwnerJiacn("juyiting");
         runtime.setBindingId(binding.getId());
-        when(agentPersonaDao.selectAll()).thenReturn(List.of(persona));
-        when(agentPersonaBindingDao.findExactActiveByScopeAndPersona(
-                "juyiting", "jia_client", "juyiting", "lujunyi")).thenReturn(binding);
-        when(agentIdentityService.requireRegistrationIdentityInScope(
-                "juyiting", "jia_client", "juyiting", binding.getAgentId())).thenReturn(identity);
-        when(agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId())).thenReturn(runtime);
+        when(agentPersonaDao.findCatalogProjection("juyiting", "jia_client"))
+                .thenReturn(List.of(persona));
+        when(agentPersonaBindingDao.findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting"))
+                .thenReturn(List.of(catalogOverlay(binding, identity, runtime)));
 
-        AgentRuntimeDTO dto = agentService.listPersonaCatalog().getFirst();
+        AgentRuntimeDTO dto = agentService.listPersonaCatalog(
+                "juyiting", "jia_client", "juyiting").getFirst();
 
         assertEquals(identity.getCanonicalAgentId(), dto.getAgentId());
         assertEquals("juyiting", dto.getOwnerJiacn());
@@ -1361,6 +1365,91 @@ class AgentServiceImplTest extends BaseMockTest {
         assertTrue(dto.getBoundToMe());
         assertFalse(dto.getCanBind());
         assertTrue(dto.getCanOperate());
+        assertEquals(List.of("runtime-skill"), dto.getAbilities());
+        verify(agentIdentityService, never()).requireRegistrationIdentityInScope(any(), any(), any(), any());
+        verify(agentRuntimeDao, never()).findByAgentId(any());
+    }
+
+    @Test
+    void personaCatalogCachesOnlyMetadataAndOverlaysFreshBindingStateOnEveryRequest() {
+        AgentPersonaEntity persona = persona("linchong", "林冲", "豹子头");
+        persona.setTenantId("0");
+        persona.setPower(88);
+        AgentPersonaBindingEntity binding = binding(
+                "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "linchong");
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        when(agentPersonaDao.findCatalogProjection("juyiting", "jia_client"))
+                .thenReturn(List.of(persona));
+        when(agentPersonaBindingDao.findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting"))
+                .thenReturn(List.of(), List.of(catalogOverlay(binding, identity, null)));
+
+        AgentRuntimeDTO first = agentService.listPersonaCatalog(
+                "juyiting", "jia_client", "juyiting").getFirst();
+        first.setName("poisoned");
+        first.setAbilities(List.of("poisoned"));
+        first.getStats().setPower(999);
+        AgentRuntimeDTO second = agentService.listPersonaCatalog(
+                "juyiting", "jia_client", "juyiting").getFirst();
+
+        assertEquals("林冲", second.getName());
+        assertEquals(List.of("planning", "research"), second.getAbilities());
+        assertEquals(88, second.getStats().getPower());
+        assertFalse(first.getBound());
+        assertTrue(second.getBound());
+        assertEquals(identity.getCanonicalAgentId(), second.getAgentId());
+        verify(agentPersonaDao, times(1)).findCatalogProjection("juyiting", "jia_client");
+        verify(agentPersonaBindingDao, times(2)).findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting");
+    }
+
+    @Test
+    void personaCatalogFailsClosedOnCrossScopeOrIncompleteUserOverlay() {
+        AgentPersonaEntity persona = persona("linchong", "林冲", "豹子头");
+        persona.setTenantId("0");
+        AgentPersonaBindingEntity binding = binding(
+                "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "linchong");
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentPersonaCatalogBindingRow escaped = catalogOverlay(binding, identity, null);
+        escaped.setIdentityClientId("Client-A");
+        when(agentPersonaDao.findCatalogProjection("juyiting", "jia_client"))
+                .thenReturn(List.of(persona));
+        when(agentPersonaBindingDao.findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting")).thenReturn(List.of(escaped));
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> agentService.listPersonaCatalog("juyiting", "jia_client", "juyiting"));
+    }
+
+    @Test
+    void personaCatalogFailsClosedOnUnknownBindingPersonaOrInvalidRuntimeStatus() {
+        AgentPersonaEntity persona = persona("linchong", "林冲", "豹子头");
+        persona.setTenantId("0");
+        AgentPersonaBindingEntity binding = binding(
+                "agt_cccccccccccccccccccccccccccccccc", "wuyong");
+        AgentIdentityRegistryEntity identity = identity(binding, AgentConstants.IDENTITY_STATUS_ACTIVE);
+        AgentPersonaCatalogBindingRow unknownPersona = catalogOverlay(binding, identity, null);
+        when(agentPersonaDao.findCatalogProjection("juyiting", "jia_client"))
+                .thenReturn(List.of(persona));
+        when(agentPersonaBindingDao.findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting")).thenReturn(List.of(unknownPersona));
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> agentService.listPersonaCatalog("juyiting", "jia_client", "juyiting"));
+
+        AgentRuntimeEntity runtime = runtimeAgent(
+                identity.getCanonicalAgentId(), "吴用", "tampered", "[]");
+        runtime.setTenantId("juyiting");
+        runtime.setClientId("jia_client");
+        runtime.setOwnerJiacn("juyiting");
+        runtime.setBindingId(binding.getId());
+        binding.setPersonaCode("linchong");
+        AgentPersonaCatalogBindingRow invalidRuntime = catalogOverlay(binding, identity, runtime);
+        when(agentPersonaBindingDao.findCatalogOverlay(
+                "juyiting", "jia_client", "juyiting")).thenReturn(List.of(invalidRuntime));
+
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> agentService.listPersonaCatalog("juyiting", "jia_client", "juyiting"));
     }
 
     @Test
@@ -3132,6 +3221,39 @@ class AgentServiceImplTest extends BaseMockTest {
         identity.setBindingId(binding.getId());
         identity.setAuditReason("test");
         return identity;
+    }
+
+    private AgentPersonaCatalogBindingRow catalogOverlay(
+            AgentPersonaBindingEntity binding, AgentIdentityRegistryEntity identity,
+            AgentRuntimeEntity runtime) {
+        AgentPersonaCatalogBindingRow row = new AgentPersonaCatalogBindingRow();
+        row.setBindingId(binding.getId());
+        row.setBindingTenantId(binding.getTenantId());
+        row.setBindingClientId(binding.getClientId());
+        row.setBindingOwnerJiacn(binding.getJiacn());
+        row.setPersonaCode(binding.getPersonaCode());
+        row.setBindingAgentId(binding.getAgentId());
+        row.setBindingStatus(binding.getStatus());
+        row.setIdentityId(identity.getId());
+        row.setIdentityBindingId(identity.getBindingId());
+        row.setIdentityTenantId(identity.getTenantId());
+        row.setIdentityClientId(identity.getClientId());
+        row.setIdentityOwnerJiacn(identity.getOwnerJiacn());
+        row.setCanonicalAgentId(identity.getCanonicalAgentId());
+        row.setCanonicalType(identity.getCanonicalType());
+        row.setLifecycleStatus(identity.getLifecycleStatus());
+        row.setAgentReferenceValid(true);
+        if (runtime != null) {
+            row.setRuntimeId(runtime.getId() == null ? 20L : runtime.getId());
+            row.setRuntimeTenantId(runtime.getTenantId());
+            row.setRuntimeClientId(runtime.getClientId());
+            row.setRuntimeOwnerJiacn(runtime.getOwnerJiacn());
+            row.setRuntimeBindingId(runtime.getBindingId());
+            row.setRuntimeAgentId(runtime.getAgentId());
+            row.setRuntimeAbilities(runtime.getAbilities());
+            row.setRuntimeStatus(runtime.getStatus());
+        }
+        return row;
     }
 
     private AgentPersonaEntity persona(String code, String name, String title) {

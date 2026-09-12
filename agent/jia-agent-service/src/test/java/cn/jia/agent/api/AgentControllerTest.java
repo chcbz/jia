@@ -7,6 +7,8 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.security.AllowSensitiveOutput;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -38,16 +40,19 @@ class AgentControllerTest {
         AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
         request.setMode("local");
 
+        Object catalogResponse = controller.personaCatalog(auth);
         controller.bindPersona("wuyong", request, auth);
         controller.repairPersonaBinding(17L, auth);
         controller.unbindPersona("wuyong", auth);
 
+        ResponseEntity<?> response = assertInstanceOf(ResponseEntity.class, catalogResponse);
+        assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
         var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
                 "Owner-A", "Client-A", "Owner-A");
+        verify(agentService).listPersonaCatalog("Owner-A", "Client-A", "Owner-A");
         verify(provisioning).bind(scope, "wuyong", "local");
         verify(provisioning).repair(scope, 17L);
         verify(provisioning).unbind(scope, "wuyong");
-        verifyNoInteractions(agentService);
     }
 
     @Test
@@ -82,6 +87,8 @@ class AgentControllerTest {
         AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
         request.setMode("server");
         for (Authentication authentication : invalid) {
+            assertThrows(AgentBizException.class,
+                    () -> controller.personaCatalog(authentication));
             assertThrows(AgentBizException.class,
                     () -> controller.bindPersona("wuyong", request, authentication));
             assertThrows(AgentBizException.class,

@@ -1,5 +1,7 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.cache.AgentPersonaCatalogCache;
+import cn.jia.agent.cache.AgentPersonaCatalogCache.CatalogEntry;
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.common.AgentErrorConstants;
@@ -41,6 +43,7 @@ import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.mapper.AgentPersonaCatalogBindingRow;
 import cn.jia.agent.mapper.AgentTaskStatsRow;
 import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.agent.service.AgentIdentityService;
@@ -92,6 +95,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 @Service
 @Slf4j
@@ -104,6 +108,10 @@ public class AgentServiceImpl implements AgentService {
     private static final int TASK_MEMBERSHIP_SNAPSHOT_LIMIT = 500;
     private static final int MAX_RUNTIME_ABILITIES = 128;
     private static final int MAX_RUNTIME_ABILITY_LENGTH = 100;
+    private static final Pattern OPAQUE_AGENT_ID = Pattern.compile("agt_[0-9a-f]{32}");
+    private static final Set<String> AGENT_RUNTIME_STATUSES = Set.of(
+            AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY,
+            AgentConstants.STATUS_OFFLINE, AgentConstants.STATUS_ERROR);
     private static final Set<AgentTaskMemberStatus> TASK_CONVERSATION_WRITABLE_STATUSES = Set.of(
             AgentTaskMemberStatus.ACCEPTED, AgentTaskMemberStatus.WORKING,
             AgentTaskMemberStatus.BLOCKED);
@@ -116,6 +124,7 @@ public class AgentServiceImpl implements AgentService {
     private final AgentIdentityService agentIdentityService;
     private final AgentPersonaDao agentPersonaDao;
     private final AgentPersonaBindingDao agentPersonaBindingDao;
+    private AgentPersonaCatalogCache personaCatalogCache = new AgentPersonaCatalogCache();
     private final AgentTaskMetaDao agentTaskMetaDao;
     private final AgentTaskMemberDao agentTaskMemberDao;
     private final AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService;
@@ -138,6 +147,11 @@ public class AgentServiceImpl implements AgentService {
     @org.springframework.beans.factory.annotation.Autowired
     public void setHostingWorkAdmission(AgentHostingWorkAdmission admission) {
         this.hostingWorkAdmission = Objects.requireNonNull(admission);
+    }
+
+    @Autowired
+    public void setPersonaCatalogCache(AgentPersonaCatalogCache personaCatalogCache) {
+        this.personaCatalogCache = Objects.requireNonNull(personaCatalogCache, "personaCatalogCache");
     }
 
     @Override
@@ -406,15 +420,135 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
-    public List<AgentRuntimeDTO> listPersonaCatalog() {
-        String clientId = resolveCurrentClientId();
-        String jiacn = resolveCurrentJiacn();
-        return agentPersonaDao.selectAll().stream()
-                .filter(persona -> persona.getActive() == null || Boolean.TRUE.equals(persona.getActive()))
-                .sorted((left, right) -> Integer.compare(Optional.ofNullable(left.getRankNo()).orElse(Integer.MAX_VALUE),
-                        Optional.ofNullable(right.getRankNo()).orElse(Integer.MAX_VALUE)))
-                .map(persona -> toCatalogDTO(persona, clientId, jiacn))
+    public List<AgentRuntimeDTO> listPersonaCatalog(
+            String tenantId, String clientId, String ownerJiacn) {
+        AgentHostedBindingTransaction.Scope scope =
+                new AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
+        List<CatalogEntry> catalog = personaCatalogCache.get(
+                scope.tenantId(), scope.clientId(),
+                () -> agentPersonaDao.findCatalogProjection(scope.tenantId(), scope.clientId()))
+                .entries();
+        Map<String, AgentPersonaCatalogBindingRow> bindings = loadCatalogBindings(scope, catalog);
+        return catalog.stream()
+                .map(persona -> toCatalogDTO(persona, bindings.get(persona.personaCode()), scope))
                 .toList();
+    }
+
+    private Map<String, AgentPersonaCatalogBindingRow> loadCatalogBindings(
+            AgentHostedBindingTransaction.Scope scope, List<CatalogEntry> catalog) {
+        List<AgentPersonaCatalogBindingRow> rows = Optional.ofNullable(
+                agentPersonaBindingDao.findCatalogOverlay(
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn()))
+                .orElseThrow(() -> personaCatalogForbidden(
+                        "Persona catalog binding projection is unavailable"));
+        Set<String> catalogCodes = catalog.stream()
+                .map(CatalogEntry::personaCode)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (rows.size() > catalogCodes.size()) {
+            throw personaCatalogForbidden("Persona catalog binding projection is unbounded");
+        }
+        LinkedHashMap<String, AgentPersonaCatalogBindingRow> bindings = new LinkedHashMap<>();
+        for (AgentPersonaCatalogBindingRow row : rows) {
+            requireCatalogOverlay(scope, row);
+            if (!catalogCodes.contains(row.getPersonaCode())) {
+                throw personaCatalogForbidden(
+                        "Persona catalog binding references unavailable metadata");
+            }
+            if (bindings.putIfAbsent(row.getPersonaCode(), row) != null) {
+                throw personaCatalogForbidden(
+                        "Persona catalog returned duplicate active owner bindings");
+            }
+        }
+        return Map.copyOf(bindings);
+    }
+
+    private void requireCatalogOverlay(
+            AgentHostedBindingTransaction.Scope scope, AgentPersonaCatalogBindingRow row) {
+        if (row == null || row.getBindingId() == null || row.getBindingId() <= 0
+                || row.getBindingStatus() == null
+                || row.getBindingStatus() != AgentConstants.BINDING_STATUS_ACTIVE
+                || !Objects.equals(scope.tenantId(), row.getBindingTenantId())
+                || !Objects.equals(scope.clientId(), row.getBindingClientId())
+                || !Objects.equals(scope.ownerJiacn(), row.getBindingOwnerJiacn())
+                || !isExactPersonaCatalogText(row.getPersonaCode(), 50)
+                || !isExactPersonaCatalogText(row.getBindingAgentId(), 100)) {
+            throw personaCatalogForbidden(
+                    "Persona catalog binding escaped the byte-exact requested scope");
+        }
+        if (row.getIdentityId() == null || row.getIdentityId() <= 0
+                || !Objects.equals(row.getBindingId(), row.getIdentityBindingId())
+                || !Objects.equals(scope.tenantId(), row.getIdentityTenantId())
+                || !Objects.equals(scope.clientId(), row.getIdentityClientId())
+                || !Objects.equals(scope.ownerJiacn(), row.getIdentityOwnerJiacn())
+                || !isExactPersonaCatalogText(row.getCanonicalAgentId(), 100)
+                || !validCatalogCanonicalIdentity(row)
+                || !Boolean.TRUE.equals(row.getAgentReferenceValid())) {
+            throw personaCatalogForbidden(
+                    "Persona catalog identity escaped the byte-exact requested scope");
+        }
+        boolean runtimeAbsent = row.getRuntimeId() == null;
+        if (runtimeAbsent) {
+            if (row.getRuntimeTenantId() != null || row.getRuntimeClientId() != null
+                    || row.getRuntimeOwnerJiacn() != null || row.getRuntimeBindingId() != null
+                    || row.getRuntimeAgentId() != null || row.getRuntimeAbilities() != null
+                    || row.getRuntimeStatus() != null) {
+                throw personaCatalogForbidden("Persona catalog runtime projection is incomplete");
+            }
+        } else if (row.getRuntimeId() <= 0
+                || !Objects.equals(scope.tenantId(), row.getRuntimeTenantId())
+                || !Objects.equals(scope.clientId(), row.getRuntimeClientId())
+                || !Objects.equals(scope.ownerJiacn(), row.getRuntimeOwnerJiacn())
+                || !Objects.equals(row.getBindingId(), row.getRuntimeBindingId())
+                || !Objects.equals(row.getCanonicalAgentId(), row.getRuntimeAgentId())
+                || row.getRuntimeStatus() == null
+                || !AGENT_RUNTIME_STATUSES.contains(row.getRuntimeStatus())) {
+            throw personaCatalogForbidden(
+                    "Persona catalog runtime escaped the byte-exact requested scope");
+        }
+    }
+
+    private boolean validCatalogCanonicalIdentity(AgentPersonaCatalogBindingRow row) {
+        String canonical = row.getCanonicalAgentId();
+        boolean lifecycleValid = AgentConstants.IDENTITY_STATUS_PROVISIONED.equals(row.getLifecycleStatus())
+                || AgentConstants.IDENTITY_STATUS_ACTIVE.equals(row.getLifecycleStatus());
+        if (!lifecycleValid) {
+            return false;
+        }
+        if (AgentConstants.IDENTITY_TYPE_OPAQUE.equals(row.getCanonicalType())) {
+            return OPAQUE_AGENT_ID.matcher(canonical).matches();
+        }
+        return AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL.equals(row.getCanonicalType())
+                && !OPAQUE_AGENT_ID.matcher(canonical).matches()
+                && !AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(canonical);
+    }
+
+    private boolean isExactPersonaCatalogText(String value, int maxCodePoints) {
+        if (value == null || value.isEmpty()
+                || value.codePointCount(0, value.length()) > maxCodePoints
+                || isPersonaCatalogPadding(value.codePointAt(0))
+                || isPersonaCatalogPadding(value.codePointBefore(value.length()))
+                || value.codePoints().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        for (int index = 0; index < value.length(); index++) {
+            char unit = value.charAt(index);
+            if (Character.isHighSurrogate(unit)) {
+                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) {
+                    return false;
+                }
+            } else if (Character.isLowSurrogate(unit)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isPersonaCatalogPadding(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+    }
+
+    private AgentBizException personaCatalogForbidden(String message) {
+        return new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, message);
     }
 
     @Override
@@ -1608,43 +1742,40 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
-    private AgentRuntimeDTO toCatalogDTO(AgentPersonaEntity persona, String clientId, String jiacn) {
-        AgentPersonaBindingEntity binding = Boolean.TRUE.equals(persona.getSystemAgent())
-                ? null
-                : agentPersonaBindingDao.findExactActiveByScopeAndPersona(
-                        jiacn, clientId, jiacn, persona.getPersonaCode());
-        boolean boundToMe = binding != null && jiacn.equals(binding.getJiacn());
-        String catalogAgentId = null;
-        if (boundToMe) {
-            catalogAgentId = agentIdentityService.requireRegistrationIdentityInScope(
-                    jiacn, clientId, jiacn, binding.getAgentId()).getCanonicalAgentId();
+    private AgentRuntimeDTO toCatalogDTO(CatalogEntry persona,
+            AgentPersonaCatalogBindingRow binding, AgentHostedBindingTransaction.Scope scope) {
+        if (persona.systemAgent() && binding != null) {
+            throw personaCatalogForbidden("System persona must not have a user binding");
         }
-        AgentRuntimeEntity runtime = StringUtil.isBlank(catalogAgentId) ? null : agentRuntimeDao.findByAgentId(catalogAgentId);
+        String catalogAgentId = binding == null ? null : binding.getCanonicalAgentId();
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(catalogAgentId);
-        dto.setName(persona.getName());
-        dto.setAvatar(persona.getAvatar());
-        dto.setPersonaCode(persona.getPersonaCode());
-        dto.setPersonaName(persona.getName());
-        dto.setTitle(persona.getTitle());
-        dto.setStarName(persona.getStarName());
-        dto.setRankNo(persona.getRankNo());
-        dto.setVisualConfig(persona.getVisualConfig());
-        dto.setSystemAgent(Boolean.TRUE.equals(persona.getSystemAgent()));
-        dto.setAbilities(parseList(runtime != null && !StringUtil.isBlank(runtime.getAbilities())
-                ? runtime.getAbilities() : persona.getAbilities()));
-        dto.setStatus(runtime == null ? AgentConstants.STATUS_OFFLINE : runtime.getStatus());
-        dto.setOwnerJiacn(binding == null ? null : binding.getJiacn());
-        dto.setBound(binding != null || Boolean.TRUE.equals(persona.getSystemAgent()));
-        dto.setBoundToMe(boundToMe);
-        dto.setCanBind(!Boolean.TRUE.equals(persona.getSystemAgent()) && binding == null);
-        dto.setCanOperate(Boolean.TRUE.equals(dto.getBoundToMe()));
-        AgentRuntimeEntity statsEntity = new AgentRuntimeEntity();
-        statsEntity.setAgentId(dto.getAgentId());
-        statsEntity.setPersonaCode(persona.getPersonaCode());
-        statsEntity.setPersonaName(persona.getName());
-        statsEntity.setAbilities(persona.getAbilities());
-        dto.setStats(buildStats(statsEntity));
+        dto.setName(persona.name());
+        dto.setAvatar(persona.avatar());
+        dto.setPersonaCode(persona.personaCode());
+        dto.setPersonaName(persona.name());
+        dto.setTitle(persona.title());
+        dto.setStarName(persona.starName());
+        dto.setRankNo(persona.rankNo());
+        dto.setVisualConfig(persona.visualConfig());
+        dto.setSystemAgent(persona.systemAgent());
+        dto.setAbilities(parseList(binding != null && binding.getRuntimeId() != null
+                && !StringUtil.isBlank(binding.getRuntimeAbilities())
+                ? binding.getRuntimeAbilities() : persona.abilities()));
+        dto.setStatus(binding == null || binding.getRuntimeId() == null
+                ? AgentConstants.STATUS_OFFLINE : binding.getRuntimeStatus());
+        dto.setOwnerJiacn(binding == null ? null : scope.ownerJiacn());
+        dto.setBound(binding != null || persona.systemAgent());
+        dto.setBoundToMe(binding != null);
+        dto.setCanBind(!persona.systemAgent() && binding == null);
+        dto.setCanOperate(binding != null);
+        AgentStatsDTO stats = new AgentStatsDTO();
+        stats.setPower(persona.power());
+        stats.setIntelligence(persona.intelligence());
+        stats.setLeadership(persona.leadership());
+        stats.setCompletedTaskCount(0);
+        stats.setFailedTaskCount(0);
+        dto.setStats(stats);
         return dto;
     }
 

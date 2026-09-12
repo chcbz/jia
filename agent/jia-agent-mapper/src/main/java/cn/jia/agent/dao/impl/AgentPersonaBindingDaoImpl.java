@@ -4,6 +4,7 @@ import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
+import cn.jia.agent.mapper.AgentPersonaCatalogBindingRow;
 import cn.jia.common.dao.BaseDaoImpl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
@@ -32,6 +33,14 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         requirePersonaScope(tenantId, clientId, ownerJiacn, personaCode);
         return baseMapper.findExactActiveByScopeAndPersona(
                 tenantId, clientId, ownerJiacn, personaCode, AgentConstants.BINDING_STATUS_ACTIVE);
+    }
+
+    @Override
+    public List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
+            String tenantId, String clientId, String ownerJiacn) {
+        requirePersonaOwnerScope(tenantId, clientId, ownerJiacn);
+        return baseMapper.findCatalogOverlay(
+                tenantId, clientId, ownerJiacn, AgentConstants.BINDING_STATUS_ACTIVE);
     }
 
     @Override
@@ -89,6 +98,13 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(personaCode, "personaCode", 50);
+        requirePersonaOwnerScope(tenantId, clientId, ownerJiacn);
+    }
+
+    private void requirePersonaOwnerScope(String tenantId, String clientId, String ownerJiacn) {
+        requireExact(tenantId, "tenantId", 50);
+        requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
         if ("0".equals(ownerJiacn) || !tenantId.equals(ownerJiacn)) {
             throw new IllegalArgumentException("persona owner scope is invalid");
         }

@@ -163,8 +163,12 @@ public class AgentController {
     }
 
     @GetMapping("/personas/catalog")
-    public Object personaCatalog() {
-        return JsonResult.success(agentService.listPersonaCatalog());
+    public Object personaCatalog(Authentication authentication) {
+        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(agentService.listPersonaCatalog(
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn())));
     }
 
     @PostMapping("/personas/{personaCode}/bind")

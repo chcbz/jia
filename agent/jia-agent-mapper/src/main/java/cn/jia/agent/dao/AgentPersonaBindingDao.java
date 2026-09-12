@@ -1,6 +1,7 @@
 package cn.jia.agent.dao;
 
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
+import cn.jia.agent.mapper.AgentPersonaCatalogBindingRow;
 import cn.jia.core.dao.IBaseDao;
 
 import java.util.List;
@@ -12,6 +13,9 @@ public interface AgentPersonaBindingDao extends IBaseDao<AgentPersonaBindingEnti
 
     AgentPersonaBindingEntity findExactActiveByScopeAndPersona(
             String tenantId, String clientId, String ownerJiacn, String personaCode);
+
+    List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
+            String tenantId, String clientId, String ownerJiacn);
 
     AgentPersonaBindingEntity findExactActiveByScopeAndPersonaForUpdate(
             String tenantId, String clientId, String ownerJiacn, String personaCode);

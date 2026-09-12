@@ -32,7 +32,7 @@ public interface AgentService {
 
     List<AgentCapabilityDTO> listCapabilities();
 
-    List<AgentRuntimeDTO> listPersonaCatalog();
+    List<AgentRuntimeDTO> listPersonaCatalog(String tenantId, String clientId, String ownerJiacn);
 
     AgentRuntimeDTO bindPersona(String tenantId, String clientId, String ownerJiacn, String personaCode);
 

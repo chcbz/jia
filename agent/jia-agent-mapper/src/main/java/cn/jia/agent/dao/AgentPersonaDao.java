@@ -11,4 +11,6 @@ public interface AgentPersonaDao extends IBaseDao<AgentPersonaEntity> {
     AgentPersonaEntity findByCode(String personaCode);
 
     List<AgentPersonaEntity> findRuntimeProjection();
+
+    List<AgentPersonaEntity> findCatalogProjection(String tenantId, String clientId);
 }
