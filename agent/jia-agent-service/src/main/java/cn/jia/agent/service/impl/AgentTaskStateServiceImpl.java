@@ -106,6 +106,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         RequiredTransition required = requireTransition(transition);
         return withLockedTaskRoot(
                 tenantId, clientId, taskId, root -> {
+                    requireLegacyDeliveryPolicy(root, tenantId, clientId, taskId);
                     AgentTaskMetaEntity current = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
                     if (current == null) {
                         throw notFound("Task state was not found in the requested scope");
@@ -144,6 +145,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         requireScopeAndId(tenantId, clientId, taskId, "taskId");
         requireId(agentId, "agentId");
         return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+            requireLegacyDeliveryPolicy(root, tenantId, clientId, taskId);
             MemberChange change = prepareMember(tenantId, clientId, taskId, agentId, transition, now());
             requireSingleCasUpdate(memberDao.updateByVersion(
                     tenantId, clientId, taskId, agentId, change.expectedVersion(), change.update()));
@@ -159,6 +161,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         requireScopeAndId(tenantId, clientId, workItemId, "workItemId");
         return withLockedTaskRootForWorkItem(tenantId, clientId, workItemId, root -> {
             String taskId = root.getTaskId();
+            requireLegacyDeliveryPolicy(root, tenantId, clientId, taskId);
             WorkItemChange change = prepareWorkItem(
                     tenantId, clientId, taskId, workItemId, transition, now());
             requireSingleCasUpdate(workItemDao.updateByVersion(
@@ -179,6 +182,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         requireId(agentId, "agentId");
         requireId(workItemId, "workItemId");
         return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+            requireLegacyDeliveryPolicy(root, tenantId, clientId, taskId);
             long changedAt = now();
             MemberChange memberChange = prepareMember(
                     tenantId, clientId, taskId, agentId, memberTransition, changedAt);
@@ -215,6 +219,21 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                 change.currentStatus(), change.result().getStatus(), change.expectedVersion(),
                 change.result().getVersion(), change.result().getChangedAt(), null,
                 agentId, change.update().getMemberRole(), null);
+    }
+
+    private void requireLegacyDeliveryPolicy(AgentTaskMetaEntity root,
+            String tenantId, String clientId, String taskId) {
+        if (root == null || !tenantId.equals(root.getTenantId())
+                || !clientId.equals(root.getClientId()) || !taskId.equals(root.getTaskId())) {
+            throw invalidPersisted("Locked task root does not match state scope");
+        }
+        Integer policy = root.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) return;
+        if (policy == 1) {
+            throw new AgentTaskStateException(Reason.RESERVED_FOR_CLAIM_PROTOCOL,
+                    "Delivery policy 1 state is owned by the delivery protocol");
+        }
+        throw invalidPersisted("Persisted delivery policy is unsupported");
     }
 
     private void appendWorkItemEvent(String tenantId, String clientId, String taskId,
@@ -532,6 +551,10 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     private AgentTaskStateException invalidPersistedStatus(String type) {
         return new AgentTaskStateException(
                 Reason.INVALID_PERSISTED_STATE, "Persisted " + type + " status is unknown");
+    }
+
+    private AgentTaskStateException invalidPersisted(String message) {
+        return new AgentTaskStateException(Reason.INVALID_PERSISTED_STATE, message);
     }
 
     private AgentTaskStateException notFound(String message) {

@@ -20,4 +20,5 @@ public class AgentTaskCreateDTO implements Serializable {
     private String grossBountyAmountMicro;
     private String settlementPolicy;
     private List<AgentSkillRequirementDTO> requiredSkillRequirements;
+    private AgentTaskDeliveryRequirementsDTO deliveryRequirements;
 }

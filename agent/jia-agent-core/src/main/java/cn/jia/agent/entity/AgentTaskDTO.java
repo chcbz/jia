@@ -34,6 +34,8 @@ public class AgentTaskDTO implements Serializable {
     private Long completedAt;
     private String failureReason;
     private String taskVersion;
+    private String deliveryPolicyVersion;
+    private AgentTaskDeliveryRequirementsDTO deliveryRequirements;
     private List<AgentSkillRequirementDTO> requiredSkillRequirements;
     private AgentTaskFundingDTO funding;
 }

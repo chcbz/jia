@@ -30,6 +30,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentWorkItemResultCommitServiceImplTest {
@@ -49,6 +50,7 @@ class AgentWorkItemResultCommitServiceImplTest {
     private AgentTaskMutationTransaction mutationTransaction;
     private AgentTaskEventWriter eventWriter;
     private AgentWorkItemResultCommitServiceImpl service;
+    private AgentTaskMetaEntity taskRoot;
 
     @BeforeEach
     void setUp() {
@@ -57,18 +59,40 @@ class AgentWorkItemResultCommitServiceImplTest {
         workItemDao = mock(AgentTaskWorkItemDao.class);
         mutationTransaction = mock(AgentTaskMutationTransaction.class);
         eventWriter = mock(AgentTaskEventWriter.class);
+        taskRoot = new AgentTaskMetaEntity()
+                .setTaskId(TASK).setTaskVersion(0L).setCurrentEventVersion(0L)
+                .setDeliveryPolicyVersion(0);
+        taskRoot.setTenantId(TENANT);
+        taskRoot.setClientId(CLIENT);
         when(mutationTransaction.executeWithLockedTaskRoot(
                 eq(TENANT), eq(CLIENT), eq(TASK), any())).thenAnswer(invocation -> {
             AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
-            AgentTaskMetaEntity root = new AgentTaskMetaEntity()
-                    .setTaskId(TASK).setTaskVersion(0L).setCurrentEventVersion(0L);
-            root.setTenantId(TENANT);
-            root.setClientId(CLIENT);
-            return mutation.apply(root);
+            return mutation.apply(taskRoot);
         });
         service = new AgentWorkItemResultCommitServiceImpl(
                 leaseService, artifactService, workItemDao,
                 mutationTransaction, eventWriter, () -> NOW);
+    }
+
+    @Test
+    void policy1AndUnsupportedPolicyRejectBeforeLeaseArtifactOrResultWrites() {
+        taskRoot = new AgentTaskMetaEntity()
+                .setTaskId(TASK).setTaskVersion(0L).setCurrentEventVersion(0L)
+                .setDeliveryPolicyVersion(1);
+        taskRoot.setTenantId(TENANT);
+        taskRoot.setClientId(CLIENT);
+
+        AgentTaskCollaborationException reserved = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command()));
+        assertEquals(Reason.RESERVED_FOR_LEASE_PROTOCOL, reserved.getReason());
+
+        taskRoot.setDeliveryPolicyVersion(2);
+        AgentTaskCollaborationException unsupported = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command()));
+        assertEquals(Reason.INVALID_PERSISTED_STATE, unsupported.getReason());
+        verifyNoInteractions(leaseService, artifactService, workItemDao, eventWriter);
     }
 
     @Test

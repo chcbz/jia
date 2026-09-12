@@ -102,6 +102,42 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
 
     @Update("""
             UPDATE agent_task_work_item
+            SET dispatched_run_id = #{runId}, update_time = #{updateTime}
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND task_id = #{taskId}
+              AND work_item_id = #{workItemId}
+              AND assignee_agent_id = #{assigneeAgentId}
+              AND status = 'ready'
+              AND required_item = TRUE
+              AND lease_token IS NULL
+              AND lease_until IS NULL
+              AND execution_run_id IS NULL
+              AND dispatched_run_id IS NULL
+              AND version = #{expectedVersion}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
+              AND CAST(assignee_agent_id AS BINARY) = CAST(#{assigneeAgentId} AS BINARY)
+              AND OCTET_LENGTH(assignee_agent_id) = OCTET_LENGTH(#{assigneeAgentId})
+            """)
+    int bindDispatchedRun(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("workItemId") String workItemId,
+            @Param("assigneeAgentId") String assigneeAgentId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("runId") String runId,
+            @Param("updateTime") long updateTime);
+
+    @Update("""
+            UPDATE agent_task_work_item
             SET title = #{item.title}, description = #{item.description},
                 work_type = #{item.workType}, required_abilities = #{item.requiredAbilities},
                 assignee_agent_id = #{item.assigneeAgentId}, status = #{item.status},

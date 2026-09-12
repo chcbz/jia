@@ -37,7 +37,7 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
     );
     private static final Set<String> SENSITIVE_PARAMETER_NAMES = Set.of(
             "password", "passwd", "pwd", "code", "authorizationcode", "devicecode", "usercode",
-            "codeverifier", "accesstoken", "refreshtoken", "idtoken", "token", "clientsecret",
+            "codeverifier", "accesstoken", "refreshtoken", "idtoken", "leasetoken", "token", "clientsecret",
             "clientassertion", "apikey", "xapikey", "secret", "credential", "otp", "totp", "smscode",
             "verificationcode", "openid", "weixinid", "phone", "mobile",
             "authorization", "proxyauthorization", "cookie", "setcookie", "idtokenhint",

@@ -22,7 +22,6 @@ public class OutputDeliverySchemaConfiguration {
     }
 
     @Bean
-    @Conditional(OutputDeliveryEnabledCondition.class)
     @DependsOn("agentSchemaInitializer")
     public OutputDeliveryLeaseSchemaInitializer outputDeliveryLeaseSchemaInitializer(
             JdbcTemplate jdbcTemplate) {

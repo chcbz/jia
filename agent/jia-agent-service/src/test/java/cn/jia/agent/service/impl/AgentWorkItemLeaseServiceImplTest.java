@@ -62,7 +62,18 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         lenient().when(mutationTransaction.executeWithLockedTaskRoot(any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
                     AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
-                    return mutation.apply(new cn.jia.agent.entity.AgentTaskMetaEntity());
+                    String tenantId = invocation.getArgument(0);
+                    String clientId = invocation.getArgument(1);
+                    String taskId = invocation.getArgument(2);
+                    cn.jia.agent.entity.AgentTaskMetaEntity root =
+                            new cn.jia.agent.entity.AgentTaskMetaEntity()
+                                    .setTaskId(taskId)
+                                    .setTaskVersion(0L)
+                                    .setCurrentEventVersion(0L)
+                                    .setDeliveryPolicyVersion(0);
+                    root.setTenantId(tenantId);
+                    root.setClientId(clientId);
+                    return mutation.apply(root);
                 });
         service = new AgentWorkItemLeaseServiceImpl(
                 memberDao, workItemDao, mutationTransaction, eventWriter,

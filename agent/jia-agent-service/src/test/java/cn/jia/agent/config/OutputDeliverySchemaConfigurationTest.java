@@ -5,10 +5,10 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
+import java.sql.SQLException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -18,29 +18,26 @@ class OutputDeliverySchemaConfigurationTest {
             .withUserConfiguration(OutputDeliverySchemaConfiguration.class);
 
     @Test
-    void defaultDisabledNeedsNoJdbcBean() {
+    void defaultDisabledStillRequiresTheAgentCoreLeaseSchemaPrerequisite() {
         RUNNER.run(context -> {
-            assertNull(context.getStartupFailure());
-            assertTrue(context.getBeansOfType(
-                    OutputDeliverySchemaInitializer.class).isEmpty());
+            assertTrue(context.getStartupFailure() != null);
         });
     }
 
     @Test
-    void explicitDisabledPerformsNoJdbcAccess() throws Exception {
+    void explicitDisabledStillInspectsTheUnconditionalLeaseSchema() throws Exception {
         AtomicInteger accesses = new AtomicInteger();
         DataSource poison = mock(DataSource.class);
         when(poison.getConnection()).thenAnswer(invocation -> {
             accesses.incrementAndGet();
-            throw new AssertionError("disabled OD01 must not inspect the old schema");
+            throw new SQLException("M003A prerequisite inspection reached the DataSource");
         });
-        RUNNER.withBean(JdbcTemplate.class, () -> new JdbcTemplate(poison))
+        RUNNER.withBean("agentSchemaInitializer", Object.class, Object::new)
+                .withBean(JdbcTemplate.class, () -> new JdbcTemplate(poison))
                 .withPropertyValues("agent.output-delivery.enabled=false")
                 .run(context -> {
-                    assertNull(context.getStartupFailure());
-                    assertTrue(context.getBeansOfType(
-                            OutputDeliverySchemaInitializer.class).isEmpty());
-                    assertEquals(0, accesses.get());
+                    assertTrue(context.getStartupFailure() != null);
+                    assertEquals(1, accesses.get());
                 });
     }
 

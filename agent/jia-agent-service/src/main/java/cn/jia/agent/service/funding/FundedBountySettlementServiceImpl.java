@@ -71,6 +71,7 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
 
     private AgentTaskSettlementReceiptDTO completeLocked(FundedBountyActor actor, String key, byte[] keyBytes,
             byte[] hash, long expected, long actual, AgentTaskMetaEntity root) {
+        requireFundedPolicy0(root);
         AgentTaskFundingEntity held = ownedFunding(actor, root.getTaskId());
         AgentTaskSettlementEntity replay = settlements.findForUpdate(actor.tenantId(), actor.clientId(), root.getTaskId());
         if (replay != null) {
@@ -204,6 +205,13 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
                 || quote.getMinimumAcceptedPayoutMicro() > gross - quote.getWorstComputeMicro() - quote.getPlatformFeeMicro()) {
             throw conflict("Accepted worst budget is not covered");
         }
+    }
+
+    private static void requireFundedPolicy0(AgentTaskMetaEntity root) {
+        Integer policy = root == null ? null : root.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) return;
+        if (policy == 1) throw conflict("Funded delivery-policy tasks are not supported");
+        throw unavailable("Persisted delivery policy is unsupported");
     }
 
     private AgentTaskFundingEntity ownedFunding(FundedBountyActor actor, String taskId) {

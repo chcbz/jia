@@ -300,6 +300,7 @@ public class AgentLegacyTaskCompatibilityService {
             String tenantId, String clientId, String taskId, String agentId,
             AgentTaskStatus reportStatus, String failureReason, AgentTaskMetaEntity task) {
         validateLockedTask(task, tenantId, clientId, taskId);
+        requireLegacyDeliveryPolicy(task);
         fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, tenantId, List.of(agentId));
@@ -369,6 +370,15 @@ public class AgentLegacyTaskCompatibilityService {
             throw invalidPersisted("Scoped task identity is non-canonical or mismatched");
         }
         requireTaskVersion(task.getTaskVersion());
+    }
+
+    private void requireLegacyDeliveryPolicy(AgentTaskMetaEntity task) {
+        Integer policy = task.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) return;
+        if (policy == 1) {
+            throw reserved("Delivery policy 1 must use the HTTP lease and submission protocol");
+        }
+        throw invalidPersisted("Persisted delivery policy is unsupported");
     }
 
     private void applyAssignmentMeta(

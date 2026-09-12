@@ -85,6 +85,9 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         validateActor(actor);
         validateHash(requestHash);
         asciiUuid(idempotencyKey);
+        if (request != null && request.getDeliveryRequirements() != null) {
+            throw conflict("Funded delivery-policy tasks are not supported");
+        }
         long amount = parseFundedRequest(request);
         AgentTaskDTO result = transactions.execute(status -> createInTransaction(
                 actor, idempotencyKey, requestHash, request, amount));

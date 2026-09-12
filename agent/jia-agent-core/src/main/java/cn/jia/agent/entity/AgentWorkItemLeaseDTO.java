@@ -13,6 +13,7 @@ public class AgentWorkItemLeaseDTO implements Serializable {
     private String taskId;
     private String workItemId;
     private String agentId;
+    private String runId;
     private String status;
     private String leaseToken;
     private Long leaseUntil;

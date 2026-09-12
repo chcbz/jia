@@ -30,6 +30,7 @@ import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskAssigneeDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
+import cn.jia.agent.entity.AgentTaskDeliveryRequirementsDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
@@ -42,6 +43,7 @@ import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.output.dto.OutputContextDTO;
+import cn.jia.agent.output.OutputConstants;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentHostedBindingTransaction;
 import cn.jia.agent.service.AgentHostedRuntimePublicationWorker;
@@ -160,6 +162,15 @@ public class AgentServiceImpl implements AgentService {
 
     @Value("${agent.output-delivery.enabled:false}")
     private boolean outputDeliveryEnabled;
+
+    @Value("${agent.output-delivery.policy1.enabled:false}")
+    private boolean deliveryPolicy1Enabled;
+
+    @Value("${agent.output-delivery.policy1.owner-allowlist:}")
+    private String deliveryPolicy1OwnerAllowlist;
+
+    @Value("${agent.output-delivery.policy1.client-allowlist:}")
+    private String deliveryPolicy1ClientAllowlist;
 
     /** Backward-compatible constructor used by existing focused tests with all M3 flags OFF. */
     public AgentServiceImpl(
@@ -789,6 +800,12 @@ public class AgentServiceImpl implements AgentService {
 
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
+        AgentTaskDeliveryRequirementsDTO deliveryRequirements =
+                normalizeDeliveryRequirements(request.getDeliveryRequirements());
+        int deliveryPolicyVersion = deliveryRequirements == null ? 0 : 1;
+        if (deliveryPolicyVersion == 1) {
+            requireDeliveryPolicy1Admission(tenantId, clientId);
+        }
         String reservedTaskId = UUID.randomUUID().toString();
         AgentTaskMetaEntity reservedMeta = new AgentTaskMetaEntity();
         reservedMeta.setTaskId(reservedTaskId);
@@ -799,9 +816,13 @@ public class AgentServiceImpl implements AgentService {
         reservedMeta.setCollaborationMode("single");
         reservedMeta.setRiskLevel("low");
         reservedMeta.setMaxAgents(1);
-        reservedMeta.setReviewRequired(false);
+        reservedMeta.setReviewRequired(deliveryPolicyVersion == 1);
         reservedMeta.setTaskVersion(0L);
         reservedMeta.setCurrentEventVersion(0L);
+        reservedMeta.setDeliveryPolicyVersion(deliveryPolicyVersion);
+        reservedMeta.setDeliveryRevision(0L);
+        reservedMeta.setDeliveryRequirementJson(deliveryRequirements == null
+                ? null : requireJson(deliveryRequirements, "deliveryRequirements"));
         applyCurrentTaskScope(reservedMeta);
 
         return mutationTransaction.executeAfterTaskRootReservation(
@@ -983,8 +1004,10 @@ public class AgentServiceImpl implements AgentService {
         validateLegacyAssignableTask(meta);
         AtomicReference<List<AgentRuntimeEntity>> lockedAssignedAgents =
                 new AtomicReference<>(List.of());
-        AtomicReference<Map<String, OutputContextDTO>> assignmentOutputContexts =
-                new AtomicReference<>(Map.of());
+        AtomicReference<AgentCommandTransportCapture.PreparedTaskOutputContexts>
+                assignmentOutputContexts = new AtomicReference<>(
+                        new AgentCommandTransportCapture.PreparedTaskOutputContexts(
+                                Map.of(), Map.of()));
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
                         tenantId, clientId, taskId, agentIds, automatic,
@@ -994,6 +1017,8 @@ public class AgentServiceImpl implements AgentService {
                                     AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
                                 requireLegacyAssignmentAllowedLocked(tenantId, clientId,
                                         lockedTask.getTaskId(), automatic, canonicalAgentIds.size());
+                                requireDeliveryAssignmentAllowedLocked(
+                                        lockedTask, automatic, canonicalAgentIds.size());
                             }
 
                             @Override
@@ -1006,6 +1031,9 @@ public class AgentServiceImpl implements AgentService {
                                     requireHostingNewWork(tenantId, clientId, agent.getAgentId());
                                     validateAssignableAgent(agent, allowQueue);
                                     validateAbility(agent, lockedTask);
+                                    if (deliveryPolicyVersion(lockedTask) == 1) {
+                                        requireDeliveryCapableRuntime(agent);
+                                    }
                                 }
                                 if (automatic) {
                                     validateCompleteAbilityCoverage(runtimes, lockedTask);
@@ -1017,8 +1045,9 @@ public class AgentServiceImpl implements AgentService {
                             public void afterAssignmentRows(
                                     AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
                                 assignmentOutputContexts.set(
-                                        commandTransportCapture.prepareTaskOutputContexts(
-                                                tenantId, clientId, taskId, canonicalAgentIds));
+                                        commandTransportCapture.prepareTaskOutputDispatch(
+                                                tenantId, clientId, taskId, canonicalAgentIds,
+                                                deliveryPolicyVersion(lockedTask)));
                             }
                         });
         AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
@@ -1039,7 +1068,8 @@ public class AgentServiceImpl implements AgentService {
         task.setActionDispatchResults(List.of());
         boolean durableAssignmentDelivery = commandTransportCapture.captureTaskInvites(
                 task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt(),
-                assignmentOutputContexts.get());
+                assignmentOutputContexts.get().contexts(),
+                assignmentOutputContexts.get().workItemIds());
         publishTaskAssignmentSideEffectsAfterCommit(
                 task, assignedAgents, durableAssignmentDelivery);
         publishTaskAssignmentSceneStates(taskId, assignedAgents);
@@ -1149,6 +1179,7 @@ public class AgentServiceImpl implements AgentService {
         String clientId = resolveCurrentClientId();
         return mutationTransaction.executeWithLockedTaskRoot(
                 tenantId, clientId, taskId, taskRoot -> {
+                    requireLegacyDeliveryMutation(taskRoot, "archive");
                     requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
                     AgentTaskNoteEntity note = new AgentTaskNoteEntity();
                     note.setTaskId(taskId);
@@ -1916,6 +1947,10 @@ public class AgentServiceImpl implements AgentService {
         dto.setCompletedAt(meta.getCompletedAt());
         dto.setFailureReason(meta.getFailureReason());
         dto.setTaskVersion(meta.getTaskVersion() == null ? null : Long.toString(meta.getTaskVersion()));
+        int policyVersion = deliveryPolicyVersion(meta);
+        dto.setDeliveryPolicyVersion(Integer.toString(policyVersion));
+        dto.setDeliveryRequirements(policyVersion == 1
+                ? parseDeliveryRequirements(meta.getDeliveryRequirementJson()) : null);
         FundedBountyService fundingService = this.fundedBountyService;
         if (fundingService != null) {
             dto.setFunding(fundingService.findFunding(meta.getTenantId(), meta.getClientId(), meta.getTaskId()));
@@ -1955,6 +1990,121 @@ public class AgentServiceImpl implements AgentService {
         meta.setCollaborationMode(agentIds.size() == 1 ? "single" : "team");
         meta.setMaxAgents(agentIds.size());
         meta.setCoordinatorAgentId(primaryAgentId);
+    }
+
+    private int deliveryPolicyVersion(AgentTaskMetaEntity task) {
+        Integer value = task == null ? null : task.getDeliveryPolicyVersion();
+        require(value == null || value == 0 || value == 1,
+                "Persisted task delivery policy is unsupported");
+        return value == null ? 0 : value;
+    }
+
+    private void requireLegacyDeliveryMutation(AgentTaskMetaEntity task, String operation) {
+        if (deliveryPolicyVersion(task) == 1) {
+            throw new IllegalArgumentException(
+                    "Delivery policy 1 does not permit legacy task " + operation);
+        }
+    }
+
+    private void requireDeliveryPolicy1Admission(String ownerJiacn, String clientId) {
+        require(outputDeliveryEnabled && deliveryPolicy1Enabled,
+                "Delivery policy 1 is not enabled");
+        require(allowlistContains(deliveryPolicy1OwnerAllowlist, ownerJiacn)
+                        && allowlistContains(deliveryPolicy1ClientAllowlist, clientId),
+                "Delivery policy 1 is unavailable for this owner scope");
+    }
+
+    private void requireDeliveryAssignmentAllowedLocked(
+            AgentTaskMetaEntity task, boolean automatic, int targetCount) {
+        int policyVersion = deliveryPolicyVersion(task);
+        if (policyVersion == 0) return;
+        require(!automatic && targetCount == 1,
+                "Delivery policy 1 requires one explicitly assigned Agent");
+        require(task.getDeliveryRevision() != null && task.getDeliveryRevision() == 0L
+                        && task.getCurrentDeliveryId() == null
+                        && parseDeliveryRequirements(task.getDeliveryRequirementJson()) != null,
+                "Persisted delivery policy 1 task is incomplete");
+    }
+
+    private void requireDeliveryCapableRuntime(AgentRuntimeEntity runtime) {
+        long now = System.currentTimeMillis();
+        Long updatedAt = runtime.getOutputCapabilitiesUpdatedAt();
+        List<String> capabilities = JsonUtil.jsonToList(
+                runtime.getOutputCapabilitiesJson(), String.class);
+        require(runtime.getOutputCapabilitiesRuntimeId() != null
+                        && updatedAt != null && updatedAt <= now
+                        && now - updatedAt <= OutputConstants.CAPABILITY_FRESHNESS_MILLIS
+                        && capabilities.contains(OutputConstants.CAPABILITY_HTTP_V1)
+                        && capabilities.contains(OutputConstants.CAPABILITY_DELIVERY_HTTP_V1),
+                "Assigned Agent lacks a fresh delivery runtime capability");
+    }
+
+    private AgentTaskDeliveryRequirementsDTO normalizeDeliveryRequirements(
+            AgentTaskDeliveryRequirementsDTO request) {
+        if (request == null) return null;
+        require(request.getMode() != null && request.getMode().equals(request.getMode().strip())
+                        && Set.of("text", "files", "mixed").contains(request.getMode()),
+                "deliveryRequirements.mode is invalid");
+        int minFiles = request.getMinFiles() == null ? 0 : request.getMinFiles();
+        require(minFiles >= 0 && minFiles <= 100,
+                "deliveryRequirements.minFiles is invalid");
+        if ("text".equals(request.getMode())) {
+            require(minFiles == 0, "Text delivery cannot require files");
+        } else {
+            require(minFiles >= 1, "File delivery requires at least one file");
+        }
+        List<String> names = request.getRequiredNames() == null
+                ? List.of() : request.getRequiredNames();
+        require(names.size() <= 100, "deliveryRequirements.requiredNames is too large");
+        LinkedHashSet<String> exactNames = new LinkedHashSet<>();
+        for (String name : names) {
+            require(name != null && !name.isBlank() && name.equals(name.strip())
+                            && name.length() <= 255
+                            && name.chars().noneMatch(Character::isISOControl),
+                    "deliveryRequirements.requiredNames contains an invalid name");
+            require(exactNames.add(name),
+                    "deliveryRequirements.requiredNames contains a duplicate name");
+        }
+        require(!"text".equals(request.getMode()) || exactNames.isEmpty(),
+                "Text delivery cannot require file names");
+        String instructions = request.getInstructions();
+        require(instructions == null || instructions.length() <= 16_384
+                        && instructions.codePoints().noneMatch(codePoint ->
+                            Character.isISOControl(codePoint)
+                                    && codePoint != '\n' && codePoint != '\r' && codePoint != '\t'),
+                "deliveryRequirements.instructions is invalid");
+        require(request.getMaxReviewRevisions() == null
+                        || request.getMaxReviewRevisions() == 3,
+                "deliveryRequirements.maxReviewRevisions must be 3");
+        AgentTaskDeliveryRequirementsDTO normalized = new AgentTaskDeliveryRequirementsDTO();
+        normalized.setMode(request.getMode());
+        normalized.setMinFiles(minFiles);
+        normalized.setRequiredNames(List.copyOf(exactNames));
+        normalized.setInstructions(instructions);
+        normalized.setMaxReviewRevisions(3);
+        return normalized;
+    }
+
+    private AgentTaskDeliveryRequirementsDTO parseDeliveryRequirements(String json) {
+        if (StringUtil.isBlank(json)) return null;
+        AgentTaskDeliveryRequirementsDTO parsed = JsonUtil.fromJson(
+                json, AgentTaskDeliveryRequirementsDTO.class);
+        require(parsed != null, "Persisted delivery requirements are invalid");
+        return normalizeDeliveryRequirements(parsed);
+    }
+
+    private String requireJson(Object value, String field) {
+        String json = JsonUtil.toJson(value);
+        require(json != null, field + " could not be serialized");
+        return json;
+    }
+
+    private boolean allowlistContains(String configured, String expected) {
+        if (configured == null || expected == null) return false;
+        return Arrays.stream(configured.split(",", -1))
+                .map(String::strip)
+                .filter(value -> !value.isEmpty())
+                .anyMatch(expected::equals);
     }
 
     private List<String> resolveTaskAssigneeIds(AgentTaskMetaEntity meta) {

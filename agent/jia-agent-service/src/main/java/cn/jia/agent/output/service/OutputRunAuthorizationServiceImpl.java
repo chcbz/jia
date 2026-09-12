@@ -123,7 +123,8 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
         for (OutputRunRequest request : batch.requests()) {
             AgentRuntimeEntity runtime = runtimes.get(request.producerAgentId());
             boolean freshCapability = supportsCapabilitySnapshot(
-                    runtime, null, System.currentTimeMillis(), true);
+                    runtime, null, System.currentTimeMillis(), true,
+                    request.policyVersion() == 1);
             OutputRunBindingEntity prior = priorRuns.get(request);
             if (!freshCapability) {
                 if (prior != null || request.policyVersion() > 0) {
@@ -198,7 +199,8 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
         }
         now = System.currentTimeMillis();
         requireRunRecoveryCurrent(run, now);
-        if (!supportsCapabilitySnapshot(runtime, null, now, true)) {
+        if (!supportsCapabilitySnapshot(runtime, null, now, true,
+                Objects.equals(run.getPolicyVersion(), 1))) {
             throw new OutputAuthorizationException("OUTPUT_DISPATCH_RUNTIME_UNAVAILABLE",
                     "The current output runtime is unavailable for dispatch");
         }
@@ -237,8 +239,6 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
         now = System.currentTimeMillis();
         requireSameRunRoute(run, projected);
         requireSameSource(run, source);
-        List<String> ticketOperations = requireTicketableRun(
-                run, sourceAuthorization, producerAgentId, now);
         AgentRuntimeEntity runtime = requireCurrentRuntime(
                 tenantId, clientId, producerAgentId, runtimeInstanceId);
         if (!Objects.equals(Long.toString(runtime.getBindingId()), run.getBindingId())) {
@@ -253,7 +253,9 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
         }
         now = System.currentTimeMillis();
         requireRunRecoveryCurrent(run, now);
-        requireCapabilitySnapshot(runtime, runtimeInstanceId, now, false);
+        requireCapabilitySnapshot(runtime, runtimeInstanceId, now, false, false);
+        List<String> ticketOperations = requireTicketableRun(
+                run, sourceAuthorization, producerAgentId, runtime, now);
 
         byte[] raw = new byte[32];
         RANDOM.nextBytes(raw);
@@ -322,11 +324,24 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
         List<String> operations = requireUsableTicket(ticket, requiredOperation, now);
         requireAuthorizedRun(run, ticket, sourceAuthorization,
                 requiredOperation, receiptReplay, now);
+        boolean currentRuntimeTicket = Objects.equals(
+                runtime.getOutputCapabilitiesRuntimeId(), ticket.getIssuedRuntimeId())
+                && Objects.equals(run.getOriginalRuntimeId(), ticket.getIssuedRuntimeId());
+        if (OutputConstants.OP_LEASE.equals(requiredOperation)) {
+            if (!Objects.equals(run.getPolicyVersion(), 1)
+                    || !OutputConstants.SOURCE_TASK.equals(run.getSourceType())
+                    || run.getWorkItemId() == null || !currentRuntimeTicket
+                    || !supportsCapabilitySnapshot(runtime, ticket.getIssuedRuntimeId(),
+                            now, true, true)) {
+                throw denied("Output ticket does not authorize the current work lease runtime");
+            }
+        }
         return new OutputTicketAuthorization(
                 ticket.getTenantId(), ticket.getClientId(), run.getRunId(),
                 run.getSourceType(), run.getSourceId(), run.getProducerAgentId(),
-                run.getBindingId(), ticket.getIssuedRuntimeId(),
-                operations, ticket.getExpiresAt(), run.getState());
+                run.getBindingId(), ticket.getIssuedRuntimeId(), currentRuntimeTicket,
+                operations, ticket.getExpiresAt(), run.getState(),
+                run.getPolicyVersion(), run.getWorkItemId(), run.getRecoveryUntil());
     }
 
     @Override
@@ -406,22 +421,24 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
             String expectedRuntimeId) {
         AgentRuntimeEntity runtime = lockCurrentRuntimes(
                 tenantId, clientId, List.of(agentId)).get(agentId);
-        requireCapabilitySnapshot(runtime, expectedRuntimeId, System.currentTimeMillis(), false);
+        requireCapabilitySnapshot(runtime, expectedRuntimeId,
+                System.currentTimeMillis(), false, false);
         return runtime;
     }
 
     private void requireCapabilitySnapshot(
             AgentRuntimeEntity runtime, String expectedRuntimeId, long now,
-            boolean requireDispatchFreshness) {
+            boolean requireDispatchFreshness, boolean requireDeliveryCapability) {
         if (!supportsCapabilitySnapshot(
-                runtime, expectedRuntimeId, now, requireDispatchFreshness)) {
+                runtime, expectedRuntimeId, now, requireDispatchFreshness,
+                requireDeliveryCapability)) {
             throw denied("Agent output capability snapshot is absent, stale, or from another runtime");
         }
     }
 
     private boolean supportsCapabilitySnapshot(
             AgentRuntimeEntity runtime, String expectedRuntimeId, long now,
-            boolean requireDispatchFreshness) {
+            boolean requireDispatchFreshness, boolean requireDeliveryCapability) {
         if (runtime == null
                 || runtime.getOutputCapabilitiesJson() == null
                 || runtime.getOutputCapabilitiesRuntimeId() == null
@@ -435,7 +452,9 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
         }
         List<String> capabilities = JsonUtil.jsonToList(
                 runtime.getOutputCapabilitiesJson(), String.class);
-        return capabilities.contains(OutputConstants.CAPABILITY_HTTP_V1);
+        return capabilities.contains(OutputConstants.CAPABILITY_HTTP_V1)
+                && (!requireDeliveryCapability
+                        || capabilities.contains(OutputConstants.CAPABILITY_DELIVERY_HTTP_V1));
     }
 
     private Map<String, AgentRuntimeEntity> lockCurrentRuntimes(
@@ -540,7 +559,7 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
 
     private List<String> requireTicketableRun(
             OutputRunBindingEntity run, OutputSourceAuthorization sourceAuthorization,
-            String producerAgentId, long now) {
+            String producerAgentId, AgentRuntimeEntity runtime, long now) {
         if (run == null || !Objects.equals(producerAgentId, run.getProducerAgentId())
                 || run.getRecoveryUntil() == null || run.getRecoveryUntil() < now) {
             throw denied("Output run is unavailable");
@@ -549,7 +568,15 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
             if (!sourceAuthorization.writable()) {
                 throw denied("Output source no longer permits mutations");
             }
-            return OutputConstants.R1_TICKET_OPERATIONS;
+            boolean leaseCapable = Objects.equals(run.getPolicyVersion(), 1)
+                    && OutputConstants.SOURCE_TASK.equals(run.getSourceType())
+                    && run.getWorkItemId() != null
+                    && Objects.equals(run.getOriginalRuntimeId(),
+                            runtime.getOutputCapabilitiesRuntimeId())
+                    && supportsCapabilitySnapshot(runtime,
+                            runtime.getOutputCapabilitiesRuntimeId(), now, true, true);
+            return leaseCapable ? OutputConstants.R2_LEASE_TICKET_OPERATIONS
+                    : OutputConstants.R1_TICKET_OPERATIONS;
         }
         if (isTerminal(run.getState())) return List.of(OutputConstants.OP_STATUS);
         throw denied("Output run is unavailable");
@@ -661,8 +688,13 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
                 runtime.getOutputCapabilitiesJson(), String.class);
         List<String> capabilities = OutputConstants.SOURCE_TASK.equals(run.getSourceType())
                         && runtimeCapabilities.contains(OutputConstants.CAPABILITY_OWNER_SHARE_V1)
-                ? List.of(OutputConstants.CAPABILITY_HTTP_V1,
-                        OutputConstants.CAPABILITY_OWNER_SHARE_V1)
+                ? Objects.equals(run.getPolicyVersion(), 1)
+                        && runtimeCapabilities.contains(OutputConstants.CAPABILITY_DELIVERY_HTTP_V1)
+                    ? List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                            OutputConstants.CAPABILITY_OWNER_SHARE_V1,
+                            OutputConstants.CAPABILITY_DELIVERY_HTTP_V1)
+                    : List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                            OutputConstants.CAPABILITY_OWNER_SHARE_V1)
                 : List.of(OutputConstants.CAPABILITY_HTTP_V1);
         return new OutputContextDTO(
                 1, run.getRunId(),

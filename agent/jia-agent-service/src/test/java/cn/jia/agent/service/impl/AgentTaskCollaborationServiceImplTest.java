@@ -51,6 +51,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentTaskCollaborationServiceImplTest {
@@ -110,6 +111,40 @@ class AgentTaskCollaborationServiceImplTest {
         assertEquals(ACTOR, insert.getValue().getRequesterAgentId());
         assertEquals("open", insert.getValue().getStatus());
         assertEquals("work-1", insert.getValue().getWorkItemId());
+    }
+
+    @Test
+    void policy1BlocksLegacyRequestTransitionAndArtifactBeforeBusinessTables() {
+        AgentTaskMetaEntity root = task(null);
+        root.setDeliveryPolicyVersion(1);
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(root);
+
+        for (Runnable attempt : List.<Runnable>of(
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()),
+                () -> service.acknowledge(TENANT, CLIENT, TASK, ACTOR, "req-1",
+                        transition(0L, null)),
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR,
+                        artifactCommand(1, 0)))) {
+            AgentTaskCollaborationException denied = assertThrows(
+                    AgentTaskCollaborationException.class, attempt::run);
+            assertEquals(Reason.RESERVED_FOR_LEASE_PROTOCOL, denied.getReason());
+        }
+
+        verifyNoInteractions(memberDao, workItemDao, requestDao, artifactDao, eventWriter);
+    }
+
+    @Test
+    void unsupportedDeliveryPolicyBlocksLegacyCollaboration() {
+        AgentTaskMetaEntity root = task(null);
+        root.setDeliveryPolicyVersion(2);
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(root);
+
+        AgentTaskCollaborationException denied = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.create(TENANT, CLIENT, TASK, ACTOR, createRequest()));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, denied.getReason());
+        verifyNoInteractions(memberDao, workItemDao, requestDao, artifactDao, eventWriter);
     }
 
 

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "note": "Portable OD07 examples. IDs and lease token are synthetic, never credentials. Versions describe one ordered example, not production state.",
+  "source": { "type": "TASK", "id": "task-example" },
+  "workItemId": "work-example",
+  "runId": "22222222222222222222222222222222",
+  "mutations": [
+    {
+      "action": "claim",
+      "idempotencyKey": "lease-example-claim-0001",
+      "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "0", "leaseDurationMillis": "120000" }
+    },
+    {
+      "action": "start",
+      "idempotencyKey": "lease-example-start-0001",
+      "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "1", "leaseToken": "EXAMPLE-NOT-A-CREDENTIAL" }
+    },
+    {
+      "action": "heartbeat",
+      "idempotencyKey": "lease-example-heartbeat-0001",
+      "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "2", "leaseToken": "EXAMPLE-NOT-A-CREDENTIAL", "leaseDurationMillis": "120000" }
+    },
+    {
+      "action": "release",
+      "idempotencyKey": "lease-example-release-0001",
+      "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "3", "leaseToken": "EXAMPLE-NOT-A-CREDENTIAL" }
+    }
+  ],
+  "invalidSchemaRequests": [
+    { "runId": "22222222222222222222222222222222", "expectedVersion": 0, "leaseDurationMillis": "120000" },
+    { "runId": "22222222222222222222222222222222", "expectedVersion": "0", "agentId": "untrusted-body-agent" },
+    { "expectedVersion": "0", "leaseDurationMillis": "120000" }
+  ],
+  "actionSemanticRejections": [
+    { "action": "claim", "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "0" }, "reason": "claim requires duration" },
+    { "action": "start", "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "1" }, "reason": "start requires leaseToken" },
+    { "action": "heartbeat", "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "2", "leaseToken": "EXAMPLE-NOT-A-CREDENTIAL" }, "reason": "heartbeat requires duration" },
+    { "action": "release", "request": { "runId": "22222222222222222222222222222222", "expectedVersion": "3" }, "reason": "release requires leaseToken" }
+  ],
+  "recoveryInvariant": "GET returns active leaseToken only for the authorized matching execution run; an old runtime or another run cannot recover it.",
+  "receiptInvariant": "The same idempotency key and body replay the committed result; the same key with another body conflicts. Heartbeat and terminal operations are serialized."
+}

@@ -2,6 +2,8 @@ package cn.jia.agent.service.funding;
 
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.AgentTaskCreateDTO;
+import cn.jia.agent.entity.AgentTaskDeliveryRequirementsDTO;
 import cn.jia.agent.entity.funding.AgentTaskFundingCancelReceiptDTO;
 import cn.jia.agent.entity.funding.AgentTaskFundingEntity;
 import cn.jia.agent.mapper.AgentTaskFundingMapper;
@@ -25,10 +27,30 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class FundedBountyServiceReplayTest {
     private static final String KEY = "018f0000-0000-7000-8000-000000000007";
+
+    @Test
+    void fundedCreateRejectsDeliveryRequirementsBeforeTransactionOrFinancialWrite() {
+        Fixture fixture = fixture();
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+        AgentTaskDeliveryRequirementsDTO delivery = new AgentTaskDeliveryRequirementsDTO();
+        delivery.setMode("files");
+        delivery.setMinFiles(1);
+        request.setDeliveryRequirements(delivery);
+
+        FundedBountyException denied = assertThrows(
+                FundedBountyException.class,
+                () -> fixture.service.create(
+                        new FundedBountyActor("tenant", "client", "user-1"),
+                        KEY, new byte[32], request));
+
+        assertEquals("FUNDED_TASK_CONFLICT", denied.code());
+        verifyNoInteractions(fixture.mapper, fixture.mutation, fixture.ledger);
+    }
 
     @Test
     void refundedCancellationReplayReturnsPersistedReceiptEvenIfTaskVersionLaterChanges() {

@@ -117,6 +117,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
 
     private AgentTaskQuoteDTO quoteLocked(FundedBountyActor actor, byte[] key, byte[] requestHash,
             QuoteRequest request, AgentTaskMetaEntity root) {
+        requireFundedPolicy0(root);
         AgentTaskFundingEntity funding = fundingMapper.selectFundingForUpdate(
                 actor.tenantId(), actor.clientId(), root.getTaskId());
         requireOwnedFunding(actor, funding);
@@ -228,6 +229,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
 
     private AgentTaskClaimReceiptDTO claimLocked(FundedBountyActor actor, byte[] key, byte[] requestHash,
             ClaimRequest request, AgentTaskMetaEntity root) {
+        requireFundedPolicy0(root);
         AgentTaskFundingEntity funding = fundingMapper.selectFundingForUpdate(
                 actor.tenantId(), actor.clientId(), root.getTaskId());
         requireOwnedFunding(actor, funding);
@@ -314,6 +316,13 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
                 || fundingMapper.countWorkItems(root.getTenantId(), root.getClientId(), root.getTaskId()) != 0) {
             throw conflict("Funded task is not open for claim");
         }
+    }
+
+    private void requireFundedPolicy0(AgentTaskMetaEntity root) {
+        Integer policy = root == null ? null : root.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) return;
+        if (policy == 1) throw conflict("Funded delivery-policy tasks are not supported");
+        throw unavailable("Persisted delivery policy is unsupported");
     }
 
     private static AgentTaskClaimOperationEntity claimOperation(FundedBountyActor actor, byte[] key,

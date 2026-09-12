@@ -88,6 +88,28 @@ class AgentCommandCanonicalCodecTest {
     }
 
     @Test
+    void r1HallWorkItemContextRemainsCompatibleWithoutDeliveryCapability() {
+        AgentCommandDraft draft = hallDraft(
+                "execute", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
+                1_000L, "执行当前工作项并回报结果", "evt-1", canonicalContext());
+        String runId = "33333333333333333333333333333333";
+        OutputContextDTO context = new OutputContextDTO(
+                1, runId, new OutputSourceDTO(OutputConstants.SOURCE_TASK, "task-1"),
+                Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES),
+                Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES),
+                "outputs/" + runId + "/manifest.json",
+                List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                        OutputConstants.CAPABILITY_OWNER_SHARE_V1));
+
+        byte[] wire = AgentCommandCanonicalCodec.wireBytes(
+                draft, "message-r1-work-item", 1, context);
+
+        assertEquals("work-1", draft.workItemId());
+        assertEquals(context,
+                AgentCommandCanonicalCodec.outputContextFromWire(wire).orElseThrow());
+    }
+
+    @Test
     void hallGoldenIdentityTtlAndTypedPayloadAreFrozen() {
         AgentCommandDraft draft = hallDraft(
                 "execute", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,

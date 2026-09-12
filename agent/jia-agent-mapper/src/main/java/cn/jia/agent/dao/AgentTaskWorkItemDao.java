@@ -32,6 +32,9 @@ public interface AgentTaskWorkItemDao {
     int updateByVersion(String tenantId, String clientId, String workItemId,
             long expectedVersion, AgentTaskWorkItemDTO item);
 
+    int bindDispatchedRun(String tenantId, String clientId, String taskId,
+            String workItemId, String assigneeAgentId, long expectedVersion, String runId);
+
     int claimReadyByVersion(
             String tenantId, String clientId, String taskId, String workItemId,
             String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item);

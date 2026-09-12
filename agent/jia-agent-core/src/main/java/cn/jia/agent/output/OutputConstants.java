@@ -25,7 +25,10 @@ public final class OutputConstants {
     public static final String OP_UPLOAD = "upload";
     public static final String OP_PUBLISH = "publish";
     public static final String OP_STATUS = "status";
+    public static final String OP_LEASE = "lease";
     public static final List<String> R1_TICKET_OPERATIONS = List.of(OP_UPLOAD, OP_PUBLISH, OP_STATUS);
+    public static final List<String> R2_LEASE_TICKET_OPERATIONS =
+            List.of(OP_UPLOAD, OP_PUBLISH, OP_STATUS, OP_LEASE);
 
     public static final long CAPABILITY_FRESHNESS_MILLIS = 90_000L;
     public static final long RUN_RECOVERY_MILLIS = 86_400_000L;
@@ -41,6 +44,7 @@ public final class OutputConstants {
     public static final int MAX_SCOPE_UPLOADS = 8;
     public static final long OUTPUT_RETENTION_MILLIS = 90L * 24 * 60 * 60 * 1000;
     public static final long RECEIPT_RETENTION_MILLIS = RUN_RECOVERY_MILLIS + 7L * 24 * 60 * 60 * 1000;
+    public static final long RECEIPT_POST_RECOVERY_MILLIS = 7L * 24 * 60 * 60 * 1000;
     public static final long READ_PIN_MILLIS = 11L * 60 * 1000;
     public static final long DOWNLOAD_DEADLINE_MILLIS = 10L * 60 * 1000;
     public static final long READ_PIN_RENEW_MILLIS = 30_000L;

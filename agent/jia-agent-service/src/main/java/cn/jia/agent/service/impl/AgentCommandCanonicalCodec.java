@@ -518,8 +518,15 @@ public final class AgentCommandCanonicalCodec {
         List<String> capabilities = context.capabilities();
         if (!List.of(OutputConstants.CAPABILITY_HTTP_V1).equals(capabilities)
                 && !List.of(OutputConstants.CAPABILITY_HTTP_V1,
-                        OutputConstants.CAPABILITY_OWNER_SHARE_V1).equals(capabilities)) {
+                        OutputConstants.CAPABILITY_OWNER_SHARE_V1).equals(capabilities)
+                && !List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                        OutputConstants.CAPABILITY_OWNER_SHARE_V1,
+                        OutputConstants.CAPABILITY_DELIVERY_HTTP_V1).equals(capabilities)) {
             throw invalid("outputContext capabilities are not canonical");
+        }
+        boolean delivery = capabilities.contains(OutputConstants.CAPABILITY_DELIVERY_HTTP_V1);
+        if (delivery && draft.workItemId() == null) {
+            throw invalid("delivery outputContext requires the trusted command workItemId");
         }
     }
 

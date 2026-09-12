@@ -92,6 +92,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
             AgentTaskMetaEntity task) {
         long calculatedAt = now();
         validateTask(task, tenantId, clientId, taskId);
+        requireLegacyDeliveryPolicy(task);
         if (task.getTaskVersion() != expectedVersion) throw conflict();
 
         List<AgentTaskAggregationSnapshotRow> snapshot = taskMetaDao.findAggregationSnapshot(
@@ -175,6 +176,16 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 || task.getCompletedAt() != null && task.getCompletedAt() < 0) {
             throw invalidPersisted("Persisted task timestamps are invalid");
         }
+    }
+
+    private void requireLegacyDeliveryPolicy(AgentTaskMetaEntity task) {
+        Integer policy = task.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) return;
+        if (policy == 1) {
+            throw new AgentTaskStateException(Reason.RESERVED_FOR_CLAIM_PROTOCOL,
+                    "Delivery policy 1 completion is owned by the review protocol");
+        }
+        throw invalidPersisted("Persisted delivery policy is unsupported");
     }
 
     private AgentTaskMemberEntity memberFromSnapshot(

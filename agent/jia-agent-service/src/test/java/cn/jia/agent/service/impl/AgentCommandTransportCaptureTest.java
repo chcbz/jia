@@ -7,17 +7,25 @@ import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.output.OutputConstants;
 import cn.jia.agent.output.OutputRunAuthorizationService;
+import cn.jia.agent.output.dto.OutputContextDTO;
+import cn.jia.agent.output.dto.OutputSourceDTO;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
+import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.isNull;
@@ -75,6 +83,82 @@ class AgentCommandTransportCaptureTest {
         verify(writer, org.mockito.Mockito.times(4)).write(drafts.capture(), isNull());
         assertTrue(drafts.getAllValues().stream().allMatch(draft ->
                 "TASK_INVITE".equals(draft.commandType())));
+    }
+
+    @Test
+    void policy1DispatchBindsRunAndCarriesTrustedWorkItemThroughCanonicalWire() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentCommandTransportWriter> writerProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<OutputRunAuthorizationService> outputRunProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentTaskWorkItemDao> workItemProvider = mock(ObjectProvider.class);
+        AgentCommandTransportWriter writer = mock(AgentCommandTransportWriter.class);
+        OutputRunAuthorizationService outputRuns = mock(OutputRunAuthorizationService.class);
+        AgentTaskWorkItemDao workItems = mock(AgentTaskWorkItemDao.class);
+        when(writerProvider.getIfAvailable()).thenReturn(writer);
+        when(outputRunProvider.getIfAvailable()).thenReturn(outputRuns);
+        when(workItemProvider.getIfAvailable()).thenReturn(workItems);
+        AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
+                gate(AgentRabbitActivationState.DB_SHADOW), writerProvider, outputRunProvider);
+        capture.configureWorkItemDao(workItemProvider);
+
+        AgentTaskWorkItemEntity workItem = new AgentTaskWorkItemEntity()
+                .setWorkItemId("work-1").setTaskId("task-1")
+                .setAssigneeAgentId("agent-a").setStatus("ready")
+                .setRequiredItem(true).setVersion(0L);
+        when(workItems.listByTask("tenant-a", "client-a", "task-1", null, 2))
+                .thenReturn(List.of(workItem));
+        OutputContextDTO context = new OutputContextDTO(
+                1, "0123456789abcdef0123456789abcdef",
+                new OutputSourceDTO(OutputConstants.SOURCE_TASK, "task-1"),
+                Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES),
+                Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES),
+                "outputs/0123456789abcdef0123456789abcdef/manifest.json",
+                List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                        OutputConstants.CAPABILITY_OWNER_SHARE_V1,
+                        OutputConstants.CAPABILITY_DELIVERY_HTTP_V1));
+        when(outputRuns.createOrRecoverRuns(org.mockito.ArgumentMatchers.anyList(),
+                eq(List.of("agent-a")))).thenReturn(Map.of("agent-a", context));
+        when(workItems.bindDispatchedRun("tenant-a", "client-a", "task-1",
+                "work-1", "agent-a", 0L, context.runId())).thenReturn(1);
+
+        AgentCommandTransportCapture.PreparedTaskOutputContexts prepared =
+                capture.prepareTaskOutputDispatch("tenant-a", "client-a", "task-1",
+                        List.of("agent-a"), 1);
+        capture.captureTaskInvites(task(), List.of(agent("agent-a")),
+                "evt-assigned", 1_000L, prepared.contexts(), prepared.workItemIds());
+
+        ArgumentCaptor<AgentCommandDraft> draft = ArgumentCaptor.forClass(AgentCommandDraft.class);
+        verify(writer).write(draft.capture(), eq(context));
+        assertEquals("work-1", draft.getValue().workItemId());
+        assertEquals(context, AgentCommandCanonicalCodec.outputContextFromWire(
+                AgentCommandCanonicalCodec.wireBytes(
+                        draft.getValue(), "msg-policy1", 1, context)).orElseThrow());
+    }
+
+    @Test
+    void deliveryCapabilityWithoutTrustedWorkItemIsRejectedByCodec() {
+        AgentCommandDraft draft = new AgentCommandDraft(
+                1, AgentCommandCanonicalCodec.taskInviteCommandId(
+                        "tenant-a", "client-a", "task-1", "agent-a"),
+                "task-1", "evt-assigned", "tenant-a", "client-a", "task-1", null,
+                "agent-a", "TASK_INVITE", 1_000L, 2_000L,
+                new cn.jia.agent.entity.AgentTaskInvitePayload(
+                        "task_briefing", "reason", "instruction", "Task One", List.of(),
+                        "agent-a", List.of("agent-a"), "coordinator", "acceptance", "juyiting"));
+        OutputContextDTO context = new OutputContextDTO(
+                1, "0123456789abcdef0123456789abcdef",
+                new OutputSourceDTO(OutputConstants.SOURCE_TASK, "task-1"),
+                Long.toString(OutputConstants.DEFAULT_MAX_FILE_BYTES),
+                Long.toString(OutputConstants.DEFAULT_MAX_RUN_BYTES),
+                "outputs/0123456789abcdef0123456789abcdef/manifest.json",
+                List.of(OutputConstants.CAPABILITY_HTTP_V1,
+                        OutputConstants.CAPABILITY_OWNER_SHARE_V1,
+                        OutputConstants.CAPABILITY_DELIVERY_HTTP_V1));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentCommandCanonicalCodec.wireBytes(draft, "msg-policy1", 1, context));
     }
 
     private AgentTaskDTO task() {

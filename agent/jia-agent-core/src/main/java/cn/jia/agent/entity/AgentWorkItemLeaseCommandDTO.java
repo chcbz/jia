@@ -15,6 +15,7 @@ public class AgentWorkItemLeaseCommandDTO implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private String agentId;
+    private String runId;
     private String leaseToken;
     private Long expectedVersion;
     private Long leaseDurationMillis;

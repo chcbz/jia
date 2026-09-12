@@ -29,6 +29,7 @@ import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
+import cn.jia.agent.entity.AgentTaskDeliveryRequirementsDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
@@ -45,6 +46,7 @@ import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.output.OutputConstants;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
@@ -89,6 +91,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyBoolean;
+import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.anyMap;
 import static org.mockito.Mockito.anyString;
@@ -166,7 +169,12 @@ class AgentServiceImplTest extends BaseMockTest {
         agentService = new AgentServiceImpl(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao, agentTaskMetaDao,
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
                 apiKeyServiceProvider, sceneServiceProvider, scopePublicationCoordinator,
-                new AgentSceneFeatureFlags(true, true), mutationTransaction, taskEventWriter);
+                new AgentSceneFeatureFlags(true, true), mutationTransaction, taskEventWriter,
+                commandTransportCapture);
+        org.mockito.Mockito.lenient().when(commandTransportCapture.prepareTaskOutputDispatch(
+                        any(), any(), any(), any(), anyInt()))
+                .thenReturn(new AgentCommandTransportCapture.PreparedTaskOutputContexts(
+                        Map.of(), Map.of()));
         org.mockito.Mockito.lenient().when(legacyTaskCompatibilityService.resolveAgentIds(
                         any(), any(), any(), any()))
                 .thenAnswer(invocation -> List.copyOf(invocation.<List<String>>getArgument(3)));
@@ -182,7 +190,9 @@ class AgentServiceImplTest extends BaseMockTest {
                             invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2));
                     AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator validator =
                             invocation.getArgument(5);
+                    validator.beforeIdentityLock(lockedTask, ids);
                     validator.validate(lockedTask, ids);
+                    validator.afterAssignmentRows(lockedTask, ids);
                     return new AgentLegacyTaskCompatibilityService.AssignOutcome(
                             ids, true, "evt-task-assigned", 1_000L);
                 });
@@ -768,6 +778,162 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void policy1CreationIsDefaultClosedBeforeTaskReservation() {
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+        request.setTitle("formal delivery");
+        request.setDeliveryRequirements(deliveryRequirements("files", 1));
+
+        IllegalArgumentException denied = assertThrows(
+                IllegalArgumentException.class, () -> agentService.createTask(request));
+
+        assertEquals("Delivery policy 1 is not enabled", denied.getMessage());
+        verify(agentTaskMetaDao, never()).insert(any());
+        verify(mutationTransaction, never()).executeAfterTaskRootReservation(
+                any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void policy1CreationRequiresExactOwnerAndClientAllowlistsAndPersistsNormalizedRequirements() {
+        ReflectionTestUtils.setField(agentService, "outputDeliveryEnabled", true);
+        ReflectionTestUtils.setField(agentService, "deliveryPolicy1Enabled", true);
+        ReflectionTestUtils.setField(agentService, "deliveryPolicy1OwnerAllowlist", "other,juyiting");
+        ReflectionTestUtils.setField(agentService, "deliveryPolicy1ClientAllowlist", "jia_client");
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+        request.setTitle("formal delivery");
+        AgentTaskDeliveryRequirementsDTO requirements = deliveryRequirements("mixed", 2);
+        requirements.setRequiredNames(List.of("evidence.png", "changes.zip"));
+        requirements.setInstructions("Provide the reviewed files and a short summary.");
+        request.setDeliveryRequirements(requirements);
+
+        AgentTaskDTO result = agentService.createTask(request);
+
+        ArgumentCaptor<AgentTaskMetaEntity> inserted =
+                ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
+        verify(agentTaskMetaDao).insert(inserted.capture());
+        assertEquals(1, inserted.getValue().getDeliveryPolicyVersion());
+        assertEquals(0L, inserted.getValue().getDeliveryRevision());
+        assertTrue(inserted.getValue().getReviewRequired());
+        AgentTaskDeliveryRequirementsDTO persisted = JsonUtil.fromJson(
+                inserted.getValue().getDeliveryRequirementJson(),
+                AgentTaskDeliveryRequirementsDTO.class);
+        assertEquals(3, persisted.getMaxReviewRevisions());
+        assertEquals(List.of("evidence.png", "changes.zip"), persisted.getRequiredNames());
+        assertEquals("1", result.getDeliveryPolicyVersion());
+        assertEquals("mixed", result.getDeliveryRequirements().getMode());
+    }
+
+    @Test
+    void policy1AssignmentRejectsAutomaticAndMultipleTargetsBeforeRuntimeLock() {
+        AgentTaskMetaEntity meta = policy1Task("[\"planning\"]");
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
+                .thenReturn(meta);
+        AgentRuntimeEntity candidate = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+                .thenReturn(List.of(candidate));
+
+        IllegalArgumentException automatic = assertThrows(
+                IllegalArgumentException.class,
+                () -> agentService.autoAssignTask("task-001", new AgentTaskAssignDTO()));
+        assertEquals("Delivery policy 1 requires one explicitly assigned Agent",
+                automatic.getMessage());
+
+        AgentTaskAssignDTO multiple = new AgentTaskAssignDTO();
+        multiple.setAgentIds(List.of("agent-wuyong", "agent-linchong"));
+        IllegalArgumentException multi = assertThrows(
+                IllegalArgumentException.class,
+                () -> agentService.assignTask("task-001", multiple));
+        assertEquals("Delivery policy 1 requires one explicitly assigned Agent",
+                multi.getMessage());
+        verify(agentRuntimeDao, never()).findByAgentIdForUpdate(anyString());
+        verify(commandTransportCapture, never()).prepareTaskOutputDispatch(
+                any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void policy1AssignmentRequiresFreshDeliveryCapability() {
+        AgentTaskMetaEntity meta = policy1Task("[\"planning\"]");
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
+                .thenReturn(meta);
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentId("agent-wuyong");
+
+        AgentRuntimeEntity missing = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        missing.setOutputCapabilitiesRuntimeId("runtime-1");
+        missing.setOutputCapabilitiesUpdatedAt(System.currentTimeMillis());
+        missing.setOutputCapabilitiesJson(JsonUtil.toJson(
+                List.of(OutputConstants.CAPABILITY_HTTP_V1)));
+        when(agentRuntimeDao.findByAgentIdForUpdate("agent-wuyong")).thenReturn(missing);
+        assertEquals("Assigned Agent lacks a fresh delivery runtime capability",
+                assertThrows(IllegalArgumentException.class,
+                        () -> agentService.assignTask("task-001", request)).getMessage());
+
+        AgentRuntimeEntity stale = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        stale.setOutputCapabilitiesRuntimeId("runtime-2");
+        stale.setOutputCapabilitiesUpdatedAt(System.currentTimeMillis()
+                - OutputConstants.CAPABILITY_FRESHNESS_MILLIS - 1);
+        stale.setOutputCapabilitiesJson(JsonUtil.toJson(List.of(
+                OutputConstants.CAPABILITY_HTTP_V1,
+                OutputConstants.CAPABILITY_DELIVERY_HTTP_V1)));
+        when(agentRuntimeDao.findByAgentIdForUpdate("agent-wuyong")).thenReturn(stale);
+        assertEquals("Assigned Agent lacks a fresh delivery runtime capability",
+                assertThrows(IllegalArgumentException.class,
+                        () -> agentService.assignTask("task-001", request)).getMessage());
+
+        verify(commandTransportCapture, never()).prepareTaskOutputDispatch(
+                any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void policy1AssignmentPreparesDispatchAfterFreshCapabilityValidation() {
+        AgentTaskMetaEntity meta = policy1Task("[\"planning\"]");
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
+                .thenReturn(meta);
+        AgentRuntimeEntity capable = ownedAgent(
+                "agent-wuyong", "Wu Yong", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
+        capable.setOutputCapabilitiesRuntimeId("runtime-1");
+        capable.setOutputCapabilitiesUpdatedAt(System.currentTimeMillis());
+        capable.setOutputCapabilitiesJson(JsonUtil.toJson(List.of(
+                OutputConstants.CAPABILITY_HTTP_V1,
+                OutputConstants.CAPABILITY_DELIVERY_HTTP_V1)));
+        when(agentRuntimeDao.findByAgentIdForUpdate("agent-wuyong")).thenReturn(capable);
+        AgentTaskAssignDTO request = new AgentTaskAssignDTO();
+        request.setAgentId("agent-wuyong");
+
+        AgentTaskDTO assigned = agentService.assignTask("task-001", request);
+
+        assertEquals("1", assigned.getDeliveryPolicyVersion());
+        verify(commandTransportCapture).prepareTaskOutputDispatch(
+                "juyiting", "jia_client", "task-001", List.of("agent-wuyong"), 1);
+    }
+
+    private AgentTaskDeliveryRequirementsDTO deliveryRequirements(String mode, int minFiles) {
+        AgentTaskDeliveryRequirementsDTO requirements = new AgentTaskDeliveryRequirementsDTO();
+        requirements.setMode(mode);
+        requirements.setMinFiles(minFiles);
+        return requirements;
+    }
+
+    private AgentTaskMetaEntity policy1Task(String requiredAbilities) {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(0L);
+        meta.setCurrentEventVersion(0L);
+        meta.setRequiredAbilities(requiredAbilities);
+        meta.setReviewRequired(true);
+        meta.setDeliveryPolicyVersion(1);
+        meta.setDeliveryRevision(0L);
+        meta.setDeliveryRequirementJson(JsonUtil.toJson(deliveryRequirements("files", 1)));
+        return meta;
+    }
+
+    @Test
     void createReservesScopedRootBeforeTaskPlanAndPublishesOnlyAfterCommit() {
         when(taskServiceProvider.getIfAvailable()).thenReturn(taskService);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
@@ -1258,7 +1424,7 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentTaskMetaDao.findByTaskId(
                 "juyiting", "jia_client", "task-001")).thenReturn(meta);
         when(commandTransportCapture.captureTaskInvites(
-                any(), any(), eq("evt-task-assigned"), eq(1_000L), anyMap()))
+                any(), any(), eq("evt-task-assigned"), eq(1_000L), anyMap(), anyMap()))
                 .thenReturn(true);
         AgentTaskAssignDTO request = new AgentTaskAssignDTO();
         request.setAgentId("agent-wuyong");
@@ -1266,7 +1432,7 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentTaskDTO result = agentService.assignTask("task-001", request);
 
         verify(commandTransportCapture).captureTaskInvites(
-                eq(result), any(), eq("evt-task-assigned"), eq(1_000L), anyMap());
+                eq(result), any(), eq("evt-task-assigned"), eq(1_000L), anyMap(), anyMap());
         verify(eventPublisher, never()).publishAgentAction(any());
         verify(eventPublisher).publishTaskEvent("task_assigned", result);
         assertTrue(result.getActionDispatchResults().isEmpty());

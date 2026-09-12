@@ -791,6 +791,15 @@ class AgentWorkItemLeaseRealDatabaseTest {
         }
 
         @Override
+        public int bindDispatchedRun(
+                String tenantId, String clientId, String taskId, String workItemId,
+                String assigneeAgentId, long expectedVersion, String runId) {
+            return delegate.bindDispatchedRun(
+                    tenantId, clientId, taskId, workItemId,
+                    assigneeAgentId, expectedVersion, runId);
+        }
+
+        @Override
         public int claimReadyByVersion(
                 String tenantId, String clientId, String taskId, String workItemId,
                 String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item) {

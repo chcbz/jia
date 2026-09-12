@@ -148,6 +148,21 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public int bindDispatchedRun(String tenantId, String clientId, String taskId,
+            String workItemId, String assigneeAgentId, long expectedVersion, String runId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
+        TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
+        TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
+        if (runId == null || !runId.matches("[0-9a-f]{32}")) {
+            throw new IllegalArgumentException("runId is invalid");
+        }
+        return baseMapper.bindDispatchedRun(tenantId, clientId, taskId, workItemId,
+                assigneeAgentId, expectedVersion, runId, DateUtil.nowTime());
+    }
+
+    @Override
     public int claimReadyByVersion(
             String tenantId, String clientId, String taskId, String workItemId,
             String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item) {

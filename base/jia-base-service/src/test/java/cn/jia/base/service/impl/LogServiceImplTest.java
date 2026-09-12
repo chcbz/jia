@@ -137,6 +137,30 @@ class LogServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void recursivelySanitizesNormalizedLeaseTokenKeysWhileKeepingLeaseAuditMetadata() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/agent/tasks/task-1/work-items/work-1/lease/heartbeat");
+        request.setContentType("application/json");
+        request.setContent(("{\"runId\":\"run-1\",\"expectedVersion\":\"7\","
+                + "\"leaseToken\":\"lease-secret-direct\","
+                + "\"nested\":{\"lease_token\":\"lease-secret-nested\",\"status\":\"RUNNING\"},"
+                + "\"items\":[{\"LEASE-TOKEN\":\"lease-secret-list\",\"operation\":\"submit\"}]}" )
+                .getBytes(StandardCharsets.UTF_8));
+        setIdentity("Jia-Lease", "worker");
+
+        LogEntity persisted = persist(request);
+
+        assertTrue(persisted.getParam().contains("run-1"));
+        assertTrue(persisted.getParam().contains("RUNNING"));
+        assertTrue(persisted.getParam().contains("submit"));
+        assertFalse(persisted.getParam().toLowerCase(Locale.ROOT).contains("leasetoken"));
+        assertFalse(persisted.getParam().toLowerCase(Locale.ROOT).contains("lease_token"));
+        assertFalse(persisted.getParam().toLowerCase(Locale.ROOT).contains("lease-token"));
+        assertNoSecret(persisted,
+                "lease-secret-direct", "lease-secret-nested", "lease-secret-list");
+    }
+
+    @Test
     void sanitizesUrlEncodedFormIncludingEncodedAndMixedCaseNames() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/profile/update");
         request.setContentType("application/x-www-form-urlencoded;charset=UTF-8");

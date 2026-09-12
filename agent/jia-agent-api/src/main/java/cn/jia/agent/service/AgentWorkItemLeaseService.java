@@ -3,6 +3,7 @@ package cn.jia.agent.service;
 import cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
 
 public interface AgentWorkItemLeaseService {
     AgentWorkItemLeaseDTO claim(
@@ -33,6 +34,17 @@ public interface AgentWorkItemLeaseService {
     AgentWorkItemLeaseDTO validateLeaseForResult(
             String tenantId, String clientId, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
+
+    /** Internal transaction participant. Caller must already hold the exact task root lock. */
+    AgentWorkItemLeaseDTO mutateWithLockedTaskRoot(
+            AgentTaskMetaEntity lockedTaskRoot, String tenantId, String clientId,
+            String taskId, String workItemId, String action,
+            AgentWorkItemLeaseCommandDTO command);
+
+    /** Ticket-bound R2 recovery under an already locked exact task root. */
+    AgentWorkItemLeaseDTO recoverWithLockedTaskRoot(
+            AgentTaskMetaEntity lockedTaskRoot, String tenantId, String clientId,
+            String taskId, String workItemId, AgentWorkItemLeaseCommandDTO command);
 
     AgentWorkItemLeaseScanDTO expireLeases(String tenantId, String clientId, int limit);
 }

@@ -70,26 +70,68 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     AgentTaskEventWriter eventWriter;
 
     AgentTaskStateServiceImpl service;
+    AgentTaskMetaEntity taskRoot;
 
     @BeforeEach
     void setUp() {
         org.mockito.Mockito.lenient().when(mutationTransaction.executeWithLockedTaskRoot(any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
+                    if (!TENANT.equals(invocation.getArgument(0))
+                            || !CLIENT.equals(invocation.getArgument(1))
+                            || !TASK_ID.equals(invocation.getArgument(2))) {
+                        throw new cn.jia.agent.exception.AgentTaskCollaborationException(
+                                cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,
+                                "Task not found in requested scope");
+                    }
                     AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
-                    AgentTaskMetaEntity root = task("assigned", 0L);
-                    root.setCurrentEventVersion(0L);
-                    return mutation.apply(root);
+                    return mutation.apply(taskRoot);
                 });
         org.mockito.Mockito.lenient().when(
                 mutationTransaction.executeWithLockedTaskRootForWorkItem(any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
                     AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
-                    AgentTaskMetaEntity root = task("assigned", 0L);
-                    root.setCurrentEventVersion(0L);
-                    return mutation.apply(root);
+                    return mutation.apply(taskRoot);
                 });
+        taskRoot = task("assigned", 0L);
+        taskRoot.setCurrentEventVersion(0L);
         service = new AgentTaskStateServiceImpl(
                 taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter, () -> NOW);
+    }
+
+    @Test
+    void policy1BlocksAllDirectStateEntrypointsBeforeAggregateAccess() {
+        taskRoot.setDeliveryPolicyVersion(1);
+
+        for (Runnable attempt : Arrays.<Runnable>asList(
+                () -> service.transitionTask(TENANT, CLIENT, TASK_ID,
+                        transition("running", 0L, null)),
+                () -> service.transitionMember(TENANT, CLIENT, TASK_ID, AGENT_ID,
+                        transition("working", 0L, null)),
+                () -> service.transitionWorkItem(TENANT, CLIENT, WORK_ITEM_ID,
+                        transition("cancelled", 0L, null)),
+                () -> service.transitionMemberAndWorkItem(
+                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        transition("working", 0L, null),
+                        transition("cancelled", 0L, null)))) {
+            AgentTaskStateException denied = assertThrows(
+                    AgentTaskStateException.class, attempt::run);
+            assertEquals(Reason.RESERVED_FOR_CLAIM_PROTOCOL, denied.getReason());
+        }
+
+        verifyNoInteractions(taskMetaDao, memberDao, workItemDao, eventWriter);
+    }
+
+    @Test
+    void unsupportedDeliveryPolicyFailsClosedBeforeStateAccess() {
+        taskRoot.setDeliveryPolicyVersion(2);
+
+        AgentTaskStateException denied = assertThrows(
+                AgentTaskStateException.class,
+                () -> service.transitionTask(TENANT, CLIENT, TASK_ID,
+                        transition("running", 0L, null)));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, denied.getReason());
+        verifyNoInteractions(taskMetaDao, memberDao, workItemDao, eventWriter);
     }
 
     @Test
@@ -237,17 +279,12 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @Test
     void scopeMissIsNotFoundWithoutLeakingOrWritingAcrossScope() {
-        when(memberDao.findByTaskAndAgent(
-                "tenant-wrong", CLIENT, TASK_ID, AGENT_ID)).thenReturn(null);
-
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMember(
                         "tenant-wrong", CLIENT, TASK_ID, AGENT_ID, transition("accepted", 0L, null)));
 
         assertEquals(Reason.NOT_FOUND, exception.getReason());
-        verify(memberDao).findByTaskAndAgent("tenant-wrong", CLIENT, TASK_ID, AGENT_ID);
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
-        verifyNoInteractions(taskMetaDao, workItemDao);
+        verifyNoInteractions(taskMetaDao, memberDao, workItemDao, eventWriter);
     }
 
     @Test

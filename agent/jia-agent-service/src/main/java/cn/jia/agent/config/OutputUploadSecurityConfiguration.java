@@ -45,6 +45,8 @@ public class OutputUploadSecurityConfiguration {
         return http.build();
     }
     static boolean matches(HttpServletRequest r){String m=r.getMethod(),p=r.getRequestURI();
+        if(("GET".equals(m)||"POST".equals(m))
+                &&p.matches("/agent/tasks/[^/]+/work-items/[^/]+/lease(?:/(?:claim|start|heartbeat|release))?"))return true;
         if("POST".equals(m)&&(p.matches("/agent/tasks/[^/]+/artifacts")
                 ||p.matches("/chat/conversations/[^/]+/outputs")))return true;
         if("POST".equals(m)&&"/agent/output-uploads".equals(p))return true;
@@ -63,9 +65,11 @@ public class OutputUploadSecurityConfiguration {
                 if(h==null||!h.startsWith("Bearer ")){authorizationError(r,s,"OUTPUT_AUTH_UNAUTHORIZED",401,false);return;}
                 boolean publish="POST".equals(r.getMethod())&&(r.getRequestURI().matches("/agent/tasks/[^/]+/artifacts")
                         ||r.getRequestURI().matches("/chat/conversations/[^/]+/outputs"));
+                boolean lease="POST".equals(r.getMethod())&&r.getRequestURI()
+                        .matches("/agent/tasks/[^/]+/work-items/[^/]+/lease/(?:claim|start|heartbeat|release)");
                 auth=authorization.authorizeTicket(
                         h.substring(7),OutputConstants.OP_STATUS,true);
-                if(publish&&!jsonContentType(r)){
+                if((publish||lease)&&!jsonContentType(r)){
                     OutputHttpEnvelope.writeError(r,s,"OUTPUT_MIME_UNSUPPORTED",
                             "Output MIME unsupported",415,false);return;
                 }

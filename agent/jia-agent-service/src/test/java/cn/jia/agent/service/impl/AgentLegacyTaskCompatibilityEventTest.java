@@ -28,6 +28,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -38,6 +39,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
@@ -73,7 +75,7 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
                     AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
                     return mutation.apply(task);
                 });
-        when(identityService.lockActiveCanonicalAgentIdsInScope(
+        org.mockito.Mockito.lenient().when(identityService.lockActiveCanonicalAgentIdsInScope(
                 eq(TENANT), eq(CLIENT), eq(TENANT), anyList()))
                 .thenAnswer(invocation -> List.copyOf(invocation.getArgument(3)));
         org.mockito.Mockito.lenient().when(eventWriter.append(any()))
@@ -158,6 +160,20 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
                 TENANT, CLIENT, TASK, AGENT, "running", null);
         assertFalse(duplicate.changed());
         verify(eventWriter, never()).append(any());
+    }
+
+    @Test
+    void policy1LegacyReportFailsBeforeIdentityChildrenAggregationOrEvents() {
+        task.setDeliveryPolicyVersion(1);
+
+        cn.jia.agent.exception.AgentTaskCollaborationException denied = assertThrows(
+                cn.jia.agent.exception.AgentTaskCollaborationException.class,
+                () -> service().reportResolved(
+                        TENANT, CLIENT, TASK, AGENT, "running", null));
+
+        assertEquals(cn.jia.agent.exception.AgentTaskCollaborationException.Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                denied.getReason());
+        verifyNoInteractions(identityService, memberDao, workItemDao, aggregationService, eventWriter);
     }
 
     private AgentLegacyTaskCompatibilityService service() {

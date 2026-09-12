@@ -48,6 +48,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class FundedBountyQuoteClaimServiceTest {
@@ -56,6 +57,39 @@ class FundedBountyQuoteClaimServiceTest {
     private static final String AGENT = "agt_00000000000000000000000000000001";
     private static final String QUOTE = "q_00000000000000000000000000000001";
     private static final byte[] HASH = new byte[32];
+
+    @Test
+    void policy1QuoteAndClaimFailBeforeFundingReceiptOrAssignmentTables() {
+        Fixture fixture = fixture(new TrackingTransactionManager());
+        fixture.root.setDeliveryPolicyVersion(1);
+
+        FundedBountyException quoteDenied = assertThrows(
+                FundedBountyException.class,
+                () -> fixture.service.quote(ACTOR, key(0), HASH, TASK, quoteRequest()));
+        FundedBountyException claimDenied = assertThrows(
+                FundedBountyException.class,
+                () -> fixture.service.claim(ACTOR, key(1), HASH, TASK,
+                        claim(AGENT, false)));
+
+        assertEquals("FUNDED_BOUNTY_CONFLICT", quoteDenied.code());
+        assertEquals("FUNDED_BOUNTY_CONFLICT", claimDenied.code());
+        verifyNoInteractions(fixture.fundingMapper, fixture.quoteMapper,
+                fixture.assignment, fixture.transport);
+    }
+
+    @Test
+    void unsupportedDeliveryPolicyFailsClosedBeforeFundingRead() {
+        Fixture fixture = fixture(new TrackingTransactionManager());
+        fixture.root.setDeliveryPolicyVersion(2);
+
+        FundedBountyException denied = assertThrows(
+                FundedBountyException.class,
+                () -> fixture.service.quote(ACTOR, key(0), HASH, TASK, quoteRequest()));
+
+        assertEquals("FUNDED_BOUNTY_UNAVAILABLE", denied.code());
+        verifyNoInteractions(fixture.fundingMapper, fixture.quoteMapper,
+                fixture.assignment, fixture.transport);
+    }
 
     @Test
     void quoteIdempotencyReplayReturnsOriginalImmutableExpiryAndDifferentHashConflicts() {

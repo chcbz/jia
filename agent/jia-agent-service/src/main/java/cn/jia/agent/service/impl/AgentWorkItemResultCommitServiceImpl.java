@@ -5,6 +5,7 @@ import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO;
@@ -83,7 +84,10 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
         }
 
         return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
-                taskRoot -> commitResultLocked(tenantId, clientId, taskId, actorAgentId, command));
+                taskRoot -> {
+                    requireLegacyDeliveryPolicy(taskRoot, tenantId, clientId, taskId);
+                    return commitResultLocked(tenantId, clientId, taskId, actorAgentId, command);
+                });
     }
 
     private AgentWorkItemResultCommitViewDTO commitResultLocked(
@@ -232,7 +236,15 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
             @Override
             public <T> T executeWithLockedTaskRoot(String tenantId, String clientId, String taskId,
                     LockedTaskMutation<T> mutation) {
-                return mutation.apply(null);
+                cn.jia.agent.entity.AgentTaskMetaEntity root =
+                        new cn.jia.agent.entity.AgentTaskMetaEntity()
+                                .setTaskId(taskId)
+                                .setTaskVersion(0L)
+                                .setCurrentEventVersion(0L)
+                                .setDeliveryPolicyVersion(0);
+                root.setTenantId(tenantId);
+                root.setClientId(clientId);
+                return mutation.apply(root);
             }
             @Override
             public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
@@ -245,6 +257,21 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
                 throw new UnsupportedOperationException();
             }
         };
+    }
+
+    private void requireLegacyDeliveryPolicy(AgentTaskMetaEntity root,
+            String tenantId, String clientId, String taskId) {
+        if (root == null || !tenantId.equals(root.getTenantId())
+                || !clientId.equals(root.getClientId()) || !taskId.equals(root.getTaskId())) {
+            throw invalidPersisted("Locked task root does not match result scope");
+        }
+        Integer policy = root.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) return;
+        if (policy == 1) {
+            throw new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                    "Delivery policy 1 must use the delivery submission protocol");
+        }
+        throw invalidPersisted("Persisted delivery policy is unsupported");
     }
 
     private AgentTaskCollaborationException invalid(String message) {

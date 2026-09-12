@@ -139,6 +139,7 @@ public class AgentTaskCollaborationServiceImpl
 
     private AgentTaskRequestViewDTO createLocked(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskRequestCreateDTO command, AgentTaskMetaEntity taskRoot) {
+        requireLegacyDeliveryPolicy(taskRoot);
         Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("request command is required");
@@ -272,6 +273,7 @@ public class AgentTaskCollaborationServiceImpl
 
     private AgentTaskArtifactViewDTO publishLocked(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
+        requireLegacyDeliveryPolicy(taskRoot);
         requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("artifact command is required");
@@ -419,6 +421,7 @@ public class AgentTaskCollaborationServiceImpl
             String tenantId, String clientId, String taskId, String actorAgentId,
             String requestId, AgentTaskRequestStatus target, AgentTaskRequestTransitionDTO command,
             AgentTaskMetaEntity taskRoot) {
+        requireLegacyDeliveryPolicy(taskRoot);
         Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
         AgentTaskRequestEntity current = requireRequest(tenantId, clientId, taskId, requestId);
         long expectedVersion = requireExpectedVersion(command);
@@ -483,6 +486,16 @@ public class AgentTaskCollaborationServiceImpl
                 requestTransitionEvent(target), currentStatus.value(), target.value(),
                 expectedVersion, expectedVersion + 1, changedAt);
         return requestView(current);
+    }
+
+    private void requireLegacyDeliveryPolicy(AgentTaskMetaEntity taskRoot) {
+        Integer policy = taskRoot == null ? null : taskRoot.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) return;
+        if (policy == 1) {
+            throw new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                    "Delivery policy 1 cannot use legacy collaboration mutations");
+        }
+        throw invalidPersisted("Persisted delivery policy is unsupported");
     }
 
     private String requestCreateEvent(String requestType) {

@@ -2,10 +2,12 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
+import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
+import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.output.OutputConstants;
 import cn.jia.agent.output.OutputRunAuthorizationService;
 import cn.jia.agent.output.OutputRunRequest;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -35,6 +38,16 @@ public class AgentCommandTransportCapture {
     private final ObjectProvider<AgentCommandTransportWriter> writerProvider;
     private final ObjectProvider<OutputRunAuthorizationService> outputRunProvider;
     private final boolean compatibilityDisabled;
+    private AgentTaskWorkItemDao workItemDao;
+
+    public record PreparedTaskOutputContexts(
+            Map<String, OutputContextDTO> contexts,
+            Map<String, String> workItemIds) {
+        public PreparedTaskOutputContexts {
+            contexts = contexts == null ? Map.of() : Map.copyOf(contexts);
+            workItemIds = workItemIds == null ? Map.of() : Map.copyOf(workItemIds);
+        }
+    }
 
     public AgentCommandTransportCapture(
             AgentRabbitSafetyGate gate,
@@ -64,6 +77,11 @@ public class AgentCommandTransportCapture {
         return new AgentCommandTransportCapture();
     }
 
+    @Autowired
+    void configureWorkItemDao(ObjectProvider<AgentTaskWorkItemDao> provider) {
+        this.workItemDao = provider == null ? null : provider.getIfAvailable();
+    }
+
     public boolean captureTaskInvites(
             AgentTaskDTO task,
             List<AgentRuntimeEntity> assignedAgents,
@@ -75,20 +93,71 @@ public class AgentCommandTransportCapture {
 
     public Map<String, OutputContextDTO> prepareTaskOutputContexts(
             String tenantId, String clientId, String taskId, List<String> targetAgentIds) {
+        return prepareTaskOutputContexts(tenantId, clientId, taskId, targetAgentIds, 0);
+    }
+
+    public Map<String, OutputContextDTO> prepareTaskOutputContexts(
+            String tenantId, String clientId, String taskId, List<String> targetAgentIds,
+            int policyVersion) {
+        return prepareTaskOutputDispatch(
+                tenantId, clientId, taskId, targetAgentIds, policyVersion).contexts();
+    }
+
+    public PreparedTaskOutputContexts prepareTaskOutputDispatch(
+            String tenantId, String clientId, String taskId, List<String> targetAgentIds,
+            int policyVersion) {
         if (compatibilityDisabled || !gate.commandOutboxEnabled() || outputRunProvider == null) {
-            return Map.of();
+            return new PreparedTaskOutputContexts(Map.of(), Map.of());
         }
         OutputRunAuthorizationService service = outputRunProvider.getIfAvailable();
-        if (service == null) return Map.of();
+        if (service == null) return new PreparedTaskOutputContexts(Map.of(), Map.of());
         List<String> orderedTargets = new ArrayList<>(targetAgentIds);
         orderedTargets.sort(UTF8_ORDER);
+        AgentTaskWorkItemEntity policyItem = null;
+        if (policyVersion == 1) {
+            if (orderedTargets.size() != 1 || workItemDao == null) {
+                throw new IllegalStateException(
+                        "Delivery policy 1 requires one target and the work-item DAO");
+            }
+            List<AgentTaskWorkItemEntity> items = workItemDao.listByTask(
+                    tenantId, clientId, taskId, null, 2);
+            if (items == null || items.size() != 1
+                    || !Boolean.TRUE.equals(items.getFirst().getRequiredItem())
+                    || !orderedTargets.getFirst().equals(items.getFirst().getAssigneeAgentId())
+                    || !"ready".equals(items.getFirst().getStatus())
+                    || items.getFirst().getVersion() == null
+                    || items.getFirst().getDispatchedRunId() != null
+                    || items.getFirst().getExecutionRunId() != null) {
+                throw new IllegalStateException(
+                        "Delivery policy 1 requires one undispatched required work item");
+            }
+            policyItem = items.getFirst();
+        } else if (policyVersion != 0) {
+            throw new IllegalStateException("Unsupported task delivery policy");
+        }
+        String workItemId = policyItem == null ? null : policyItem.getWorkItemId();
         List<OutputRunRequest> requests = orderedTargets.stream()
                 .map(agentId -> new OutputRunRequest(
                         tenantId, clientId, OutputConstants.SOURCE_TASK, taskId,
                         agentId, "COMMAND", AgentCommandCanonicalCodec.taskInviteCommandId(
-                                tenantId, clientId, taskId, agentId), null, 0))
+                                tenantId, clientId, taskId, agentId), workItemId, policyVersion))
                 .toList();
-        return service.createOrRecoverRuns(requests, orderedTargets);
+        Map<String, OutputContextDTO> contexts = service.createOrRecoverRuns(requests, orderedTargets);
+        Map<String, String> workItemIds = new LinkedHashMap<>();
+        if (policyItem != null) {
+            OutputContextDTO context = contexts.get(orderedTargets.getFirst());
+            if (context == null || context.runId() == null
+                    || !context.runId().matches("[0-9a-f]{32}")) {
+                throw new IllegalStateException("Policy-1 dispatch did not create a trusted run");
+            }
+            if (workItemDao.bindDispatchedRun(tenantId, clientId, taskId,
+                    policyItem.getWorkItemId(), orderedTargets.getFirst(),
+                    policyItem.getVersion(), context.runId()) != 1) {
+                throw new IllegalStateException("Policy-1 work item dispatch binding failed");
+            }
+            workItemIds.put(orderedTargets.getFirst(), policyItem.getWorkItemId());
+        }
+        return new PreparedTaskOutputContexts(contexts, workItemIds);
     }
 
     public boolean captureTaskInvites(
@@ -97,6 +166,17 @@ public class AgentCommandTransportCapture {
             String taskAssignedEventId,
             long occurredAt,
             Map<String, OutputContextDTO> outputContexts) {
+        return captureTaskInvites(task, assignedAgents, taskAssignedEventId,
+                occurredAt, outputContexts, Map.of());
+    }
+
+    public boolean captureTaskInvites(
+            AgentTaskDTO task,
+            List<AgentRuntimeEntity> assignedAgents,
+            String taskAssignedEventId,
+            long occurredAt,
+            Map<String, OutputContextDTO> outputContexts,
+            Map<String, String> workItemIds) {
         if (compatibilityDisabled || !gate.commandOutboxEnabled()) return false;
         AgentCommandTransportWriter writer = writerProvider.getIfAvailable();
         if (writer == null) {
@@ -123,6 +203,18 @@ public class AgentCommandTransportCapture {
         targets.sort(Comparator.comparing(AgentRuntimeEntity::getAgentId, UTF8_ORDER));
         for (AgentRuntimeEntity target : targets) {
             String targetAgentId = target.getAgentId();
+            OutputContextDTO outputContext = outputContexts.get(targetAgentId);
+            String workItemId = workItemIds.get(targetAgentId);
+            boolean deliveryRun = outputContext != null && outputContext.capabilities()
+                    .contains(OutputConstants.CAPABILITY_DELIVERY_HTTP_V1);
+            if (deliveryRun != (workItemId != null)
+                    || workItemId != null && (workItemId.isBlank()
+                    || !workItemId.equals(workItemId.strip())
+                    || workItemId.length() > 100
+                    || workItemId.chars().anyMatch(Character::isISOControl))) {
+                throw new IllegalStateException(
+                        "Delivery command requires its trusted work-item identity");
+            }
             AgentTaskInvitePayload payload = new AgentTaskInvitePayload(
                     ACTION_TYPE, REASON, INSTRUCTION, title, abilities, coordinator,
                     collaboratorIds, targetAgentId.equals(coordinator) ? "coordinator" : "worker",
@@ -132,7 +224,7 @@ public class AgentCommandTransportCapture {
                     AgentCommandCanonicalCodec.taskInviteCommandId(
                             task.getTenantId(), task.getClientId(), task.getId(), targetAgentId),
                     task.getId(), taskAssignedEventId,
-                    task.getTenantId(), task.getClientId(), task.getId(), null,
+                    task.getTenantId(), task.getClientId(), task.getId(), workItemId,
                     targetAgentId, AgentProtocolConstants.COMMAND_TASK_INVITE,
                     occurredAt, expiresAt, payload), outputContexts.get(targetAgentId));
         }
