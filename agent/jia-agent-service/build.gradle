@@ -41,6 +41,15 @@ description = 'jia-agent-service'
 // assertion message even under Flow's short test logging; do not dump other tests,
 // runtime environment, request bodies, or database connection properties.
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+    // Keep the original real-fixture exception chain visible in the immutable
+    // cloud job log; a sanitized SQLState alone cannot identify an engine failure.
+    testLogging {
+        events 'failed'
+        exceptionFormat 'full'
+        showExceptions true
+        showCauses true
+        showStackTraces true
+    }
     afterTest { descriptor, result ->
         if (descriptor.className == 'cn.jia.agent.service.impl.AgentCommandOperationsRealTransactionTest'
                 && result.resultType == org.gradle.api.tasks.testing.TestResult.ResultType.FAILURE) {
