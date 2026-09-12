@@ -133,7 +133,7 @@ public class ApiPerformanceMetricsConfig {
 
         @Override
         public void onStop(ServerRequestObservationContext context) {
-            Long startedAt = context.remove(START_NANOS_KEY);
+            Long startedAt = (Long) context.remove(START_NANOS_KEY);
             if (startedAt == null) {
                 return;
             }
