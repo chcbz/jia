@@ -19,6 +19,7 @@ import cn.jia.agent.exception.AgentTaskStateException.Reason;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskStateService;
+import cn.jia.agent.service.AgentWorkItemDependencyService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
@@ -41,6 +42,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
+    private final AgentWorkItemDependencyService dependencyService;
     private final LongSupplier clock;
 
     @Inject
@@ -49,9 +51,20 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
             AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao,
             AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter,
+            AgentWorkItemDependencyService dependencyService) {
+        this(taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter,
+                dependencyService, System::currentTimeMillis);
+    }
+
+    AgentTaskStateServiceImpl(
+            AgentTaskMetaDao taskMetaDao,
+            AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao,
+            AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter eventWriter) {
         this(taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter,
-                System::currentTimeMillis);
+                noDependencyResolution(), System::currentTimeMillis);
     }
 
     AgentTaskStateServiceImpl(
@@ -61,11 +74,24 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter eventWriter,
             LongSupplier clock) {
+        this(taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter,
+                noDependencyResolution(), clock);
+    }
+
+    AgentTaskStateServiceImpl(
+            AgentTaskMetaDao taskMetaDao,
+            AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter,
+            AgentWorkItemDependencyService dependencyService,
+            LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
         this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
+        this.dependencyService = Objects.requireNonNull(dependencyService, "dependencyService");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -165,6 +191,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                     tenantId, clientId, workItemId, change.expectedVersion(), change.update()));
             appendWorkItemEvent(tenantId, clientId, taskId, change,
                     AgentTaskMutationEventSupport.workItemEvent(change.result().getStatus()), null);
+            resolveDependenciesAfterCompletion(tenantId, clientId, taskId, change);
             return change.result();
         });
     }
@@ -200,11 +227,19 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
             appendMemberEvent(tenantId, clientId, taskId, agentId, memberChange);
             appendWorkItemEvent(tenantId, clientId, taskId, workItemChange,
                     AgentTaskMutationEventSupport.workItemEvent(workItemChange.result().getStatus()), null);
+            resolveDependenciesAfterCompletion(tenantId, clientId, taskId, workItemChange);
             AgentTaskMemberWorkItemStateDTO result = new AgentTaskMemberWorkItemStateDTO();
             result.setMember(memberChange.result());
             result.setWorkItem(workItemChange.result());
             return result;
         });
+    }
+
+    private void resolveDependenciesAfterCompletion(
+            String tenantId, String clientId, String taskId, WorkItemChange change) {
+        if (AgentTaskWorkItemStatus.COMPLETED.value().equals(change.result().getStatus())) {
+            dependencyService.resolveReady(tenantId, clientId, taskId);
+        }
     }
 
     private void appendMemberEvent(String tenantId, String clientId, String taskId,
@@ -312,6 +347,10 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                     "Claim-sensitive work item transition requires the B04 claim protocol");
         }
 
+        if (targetStatus == AgentTaskWorkItemStatus.COMPLETED) {
+            requireAcceptedResultProof(current, changedAt);
+        }
+
         AgentTaskWorkItemDTO update = copyWorkItem(current);
         update.setStatus(targetStatus.value());
         if (targetStatus == AgentTaskWorkItemStatus.SUBMITTED && update.getSubmittedAt() == null) {
@@ -329,6 +368,18 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         AgentTaskStateDTO result = state(AGGREGATE_WORK_ITEM, current.getTaskId(), null, workItemId,
                 targetStatus.value(), required.expectedVersion() + 1, changedAt);
         return new WorkItemChange(current, currentStatus.value(), required.expectedVersion(), update, result);
+    }
+
+    private void requireAcceptedResultProof(AgentTaskWorkItemEntity current, long changedAt) {
+        String artifactId = current.getResultArtifactId();
+        if (artifactId == null || artifactId.isEmpty() || artifactId.length() > 100
+                || !artifactId.equals(artifactId.strip())
+                || artifactId.chars().anyMatch(Character::isISOControl)
+                || current.getSubmittedAt() == null || current.getSubmittedAt() <= 0
+                || current.getCompletedAt() != null || changedAt <= 0) {
+            throw new AgentTaskStateException(Reason.INVALID_PERSISTED_STATE,
+                    "Submitted work item lacks canonical accepted-result completion proof");
+        }
     }
 
     private RequiredTransition requireTransition(AgentTaskStateTransitionDTO transition) {
@@ -523,6 +574,10 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     private String trimToNull(String value) {
         return StringUtil.isBlank(value) ? null : value.trim();
+    }
+
+    private static AgentWorkItemDependencyService noDependencyResolution() {
+        return (tenantId, clientId, taskId) -> null;
     }
 
     private AgentTaskStateException invalidRequest(String message) {

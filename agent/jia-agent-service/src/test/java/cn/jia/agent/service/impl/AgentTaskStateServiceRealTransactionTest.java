@@ -3,31 +3,32 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.dao.impl.AgentTaskEventDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
-import cn.jia.agent.entity.AgentTaskMemberDTO;
 import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMemberWorkItemStateDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskStateTransitionDTO;
-import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
+import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
+import cn.jia.agent.service.AgentTaskEventBroker;
+import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskStateService;
-import cn.jia.core.entity.BaseEntity;
 import cn.jia.core.util.DateUtil;
-import com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
-import com.baomidou.mybatisplus.core.toolkit.GlobalConfigUtils;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
 import org.apache.ibatis.session.SqlSessionFactory;
+import org.mybatis.spring.SqlSessionTemplate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,6 +44,11 @@ import org.springframework.transaction.interceptor.TransactionInterceptor;
 import javax.sql.DataSource;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -61,16 +67,21 @@ class AgentTaskStateServiceRealTransactionTest {
 
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_b03_real_tx;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
-            + "CASE_INSENSITIVE_IDENTIFIERS=TRUE";
+            + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
     private static final String TENANT = "tenant-a";
     private static final String CLIENT = "client-a";
     private static final String TASK_ID = "task-1";
     private static final String AGENT_ID = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String WORK_ITEM_ID = "workitem-1";
+    private static final String PREREQUISITE_A = "work-prerequisite-a";
+    private static final String PREREQUISITE_B = "work-prerequisite-b";
+    private static final String DEPENDENT = "work-dependent";
 
     private DataSource dataSource;
     private JdbcTemplate jdbc;
     private AgentTaskStateService transactionalService;
+    private AgentTaskEventWriter eventWriter;
+    private PlatformTransactionManager transactionManager;
 
     private AgentTaskMetaDao taskMetaDao;
     private AgentTaskMemberDao memberDao;
@@ -93,9 +104,10 @@ class AgentTaskStateServiceRealTransactionTest {
         SqlSessionFactory sqlSessionFactory = createSqlSessionFactory();
 
         // 4. Create real DAOs with real mappers
-        AgentTaskMetaMapper metaMapper = sqlSessionFactory.openSession().getMapper(AgentTaskMetaMapper.class);
-        AgentTaskMemberMapper memberMapper = sqlSessionFactory.openSession().getMapper(AgentTaskMemberMapper.class);
-        AgentTaskWorkItemMapper workItemMapper = sqlSessionFactory.openSession().getMapper(AgentTaskWorkItemMapper.class);
+        SqlSessionTemplate sqlSession = new SqlSessionTemplate(sqlSessionFactory);
+        AgentTaskMetaMapper metaMapper = sqlSession.getMapper(AgentTaskMetaMapper.class);
+        AgentTaskMemberMapper memberMapper = sqlSession.getMapper(AgentTaskMemberMapper.class);
+        AgentTaskWorkItemMapper workItemMapper = sqlSession.getMapper(AgentTaskWorkItemMapper.class);
 
         taskMetaDao = new AgentTaskMetaDaoImpl();
         setField(taskMetaDao, "baseMapper", metaMapper);
@@ -104,8 +116,14 @@ class AgentTaskStateServiceRealTransactionTest {
 
         workItemDao = new AgentTaskWorkItemDaoImpl(workItemMapper);
 
-        // 5. Real DataSourceTransactionManager
-        PlatformTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
+        // 5. Real DataSourceTransactionManager and existing atomic event writer
+        transactionManager = new DataSourceTransactionManager(dataSource);
+        AgentTaskEventDaoImpl eventDao = new AgentTaskEventDaoImpl();
+        setField(eventDao, "baseMapper", sqlSession.getMapper(AgentTaskEventMapper.class));
+        eventWriter = new AgentTaskEventWriterImpl(
+                eventDao, transactionManager,
+                new AgentTaskEventAfterCommitPublisher(
+                        new AgentTaskEventBroker(), transactionManager));
         AgentTaskMutationTransactionImpl mutationTransaction =
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
 
@@ -124,9 +142,12 @@ class AgentTaskStateServiceRealTransactionTest {
         interceptor.setTransactionAttributeSource(attributeSource);
 
         // 7. Wrap service in Spring proxy — this is the production code path
+        AgentWorkItemDependencyServiceImpl dependencyService =
+                new AgentWorkItemDependencyServiceImpl(
+                        workItemDao, mutationTransaction, eventWriter, DateUtil::nowTime);
         AgentTaskStateServiceImpl rawService = new AgentTaskStateServiceImpl(
                 taskMetaDao, memberDao, workItemDao, mutationTransaction,
-                command -> new cn.jia.agent.entity.AgentTaskEventWriteResult());
+                eventWriter, dependencyService, DateUtil::nowTime);
         ProxyFactory proxyFactory = new ProxyFactory(rawService);
         proxyFactory.setInterfaces(AgentTaskStateService.class);
         proxyFactory.addAdvice(interceptor);
@@ -224,15 +245,129 @@ class AgentTaskStateServiceRealTransactionTest {
     }
 
     @Test
+    void directAuthoritativeCompletionInstantlyUnlocksAndReplayAddsNoMutationOrEvent() {
+        insertSubmittedWorkItem(PREREQUISITE_A, 4L, "artifact-a", 500L, AGENT_ID);
+        insertPendingWorkItem(DEPENDENT, "[\"work-prerequisite-a\"]", 0L);
+
+        transactionalService.transitionWorkItem(
+                TENANT, CLIENT, PREREQUISITE_A, transition("completed", 4L, null));
+
+        Map<String, Object> prerequisite = readWorkItem(PREREQUISITE_A);
+        assertEquals("completed", prerequisite.get("STATUS"));
+        assertEquals(5L, ((Number) prerequisite.get("VERSION")).longValue());
+        assertEquals("artifact-a", prerequisite.get("RESULT_ARTIFACT_ID"));
+        assertEquals(500L, ((Number) prerequisite.get("SUBMITTED_AT")).longValue());
+        assertTrue(((Number) prerequisite.get("COMPLETED_AT")).longValue() > 0);
+        Map<String, Object> dependent = readWorkItem(DEPENDENT);
+        assertEquals("ready", dependent.get("STATUS"));
+        assertEquals(1L, ((Number) dependent.get("VERSION")).longValue());
+        assertEquals(java.util.List.of(
+                        cn.jia.agent.common.TaskEventType.WORK_ITEM_COMPLETED,
+                        cn.jia.agent.common.TaskEventType.WORK_ITEM_READY),
+                jdbc.queryForList(
+                        "SELECT event_type FROM agent_task_event ORDER BY event_version",
+                        String.class));
+
+        AgentTaskStateException replay = assertThrows(AgentTaskStateException.class,
+                () -> transactionalService.transitionWorkItem(
+                        TENANT, CLIENT, PREREQUISITE_A,
+                        transition("completed", 5L, null)));
+        assertEquals(Reason.INVALID_TRANSITION, replay.getReason());
+        assertEquals(2, countEvents());
+        assertEquals(1L, ((Number) readWorkItem(DEPENDENT).get("VERSION")).longValue());
+    }
+
+    @Test
+    void concurrentCompletionEntryPathsShareRootLockAndUnlockExactlyOnce() throws Exception {
+        insertMember("working", 3L);
+        insertSubmittedWorkItem(PREREQUISITE_A, 4L, "artifact-a", 500L, AGENT_ID);
+        insertSubmittedWorkItem(PREREQUISITE_B, 6L, "artifact-b", 600L, AGENT_ID);
+        insertPendingWorkItem(
+                DEPENDENT,
+                "[\"work-prerequisite-a\",\"work-prerequisite-b\"]", 0L);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> direct = executor.submit(() -> {
+                await(start);
+                transactionalService.transitionWorkItem(
+                        TENANT, CLIENT, PREREQUISITE_A,
+                        transition("completed", 4L, null));
+            });
+            Future<?> combined = executor.submit(() -> {
+                await(start);
+                transactionalService.transitionMemberAndWorkItem(
+                        TENANT, CLIENT, TASK_ID, AGENT_ID, PREREQUISITE_B,
+                        transition("done", 3L, null),
+                        transition("completed", 6L, null));
+            });
+            start.countDown();
+            direct.get(5, TimeUnit.SECONDS);
+            combined.get(5, TimeUnit.SECONDS);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+
+        assertEquals("completed", readWorkItem(PREREQUISITE_A).get("STATUS"));
+        assertEquals("completed", readWorkItem(PREREQUISITE_B).get("STATUS"));
+        assertEquals("done", readMember().getMemberStatus());
+        assertEquals("ready", readWorkItem(DEPENDENT).get("STATUS"));
+        assertEquals(1L, ((Number) readWorkItem(DEPENDENT).get("VERSION")).longValue());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_event"
+                        + " WHERE event_type = ? AND aggregate_id = ?",
+                Integer.class, cn.jia.agent.common.TaskEventType.WORK_ITEM_READY, DEPENDENT));
+    }
+
+    @Test
+    void readyEventFailureRollsBackCompletionEventCompletionCasAndReadyCas() {
+        insertSubmittedWorkItem(PREREQUISITE_A, 4L, "artifact-a", 500L, AGENT_ID);
+        insertPendingWorkItem(DEPENDENT, "[\"work-prerequisite-a\"]", 0L);
+        AgentTaskMutationTransactionImpl mutationTransaction =
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
+        AgentTaskEventWriter persisted = eventWriter;
+        AgentTaskEventWriter failReadyEvent = command -> {
+            if (cn.jia.agent.common.TaskEventType.WORK_ITEM_READY.equals(
+                    command.getEventType())) {
+                throw new IllegalStateException("ready append failed");
+            }
+            return persisted.append(command);
+        };
+        AgentWorkItemDependencyServiceImpl dependencyService =
+                new AgentWorkItemDependencyServiceImpl(
+                        workItemDao, mutationTransaction, failReadyEvent, DateUtil::nowTime);
+        AgentTaskStateService failing = transactionalProxy(
+                new AgentTaskStateServiceImpl(
+                        taskMetaDao, memberDao, workItemDao, mutationTransaction,
+                        failReadyEvent, dependencyService, DateUtil::nowTime),
+                transactionManager);
+
+        assertThrows(IllegalStateException.class, () -> failing.transitionWorkItem(
+                TENANT, CLIENT, PREREQUISITE_A, transition("completed", 4L, null)));
+
+        Map<String, Object> prerequisite = readWorkItem(PREREQUISITE_A);
+        assertEquals("submitted", prerequisite.get("STATUS"));
+        assertEquals(4L, ((Number) prerequisite.get("VERSION")).longValue());
+        assertNull(prerequisite.get("COMPLETED_AT"));
+        Map<String, Object> dependent = readWorkItem(DEPENDENT);
+        assertEquals("pending", dependent.get("STATUS"));
+        assertEquals(0L, ((Number) dependent.get("VERSION")).longValue());
+        assertEquals(0, countEvents());
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT current_event_version FROM agent_task_meta WHERE task_id = ?",
+                Long.class, TASK_ID));
+    }
+
+    @Test
     void eventAppendFailureRollsBackBusinessMutationWithRealTransactionManager() {
         insertMember("working", 3L);
-        PlatformTransactionManager txManager = new DataSourceTransactionManager(dataSource);
         AgentTaskStateServiceImpl raw = new AgentTaskStateServiceImpl(
                 taskMetaDao, memberDao, workItemDao,
-                new AgentTaskMutationTransactionImpl(taskMetaDao, txManager),
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager),
                 command -> { throw new IllegalStateException("event append failed"); });
         TransactionInterceptor interceptor = new TransactionInterceptor();
-        interceptor.setTransactionManager(txManager);
+        interceptor.setTransactionManager(transactionManager);
         interceptor.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
         ProxyFactory factory = new ProxyFactory(raw);
         factory.setInterfaces(AgentTaskStateService.class);
@@ -301,6 +436,26 @@ class AgentTaskStateServiceRealTransactionTest {
                     PRIMARY KEY (id),
                     UNIQUE (tenant_id, client_id, work_item_id)
                 )""");
+        jdbc.execute("""
+                CREATE TABLE agent_task_event (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    task_id VARCHAR(100) NOT NULL,
+                    event_version BIGINT NOT NULL,
+                    event_id VARCHAR(100) NOT NULL,
+                    event_type VARCHAR(64) NOT NULL,
+                    actor_type VARCHAR(20) NOT NULL,
+                    actor_id VARCHAR(100),
+                    aggregate_type VARCHAR(30) NOT NULL,
+                    aggregate_id VARCHAR(100) NOT NULL,
+                    event_json CLOB NOT NULL,
+                    occurred_at BIGINT NOT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    create_time BIGINT,
+                    update_time BIGINT,
+                    UNIQUE (tenant_id, client_id, task_id, event_version),
+                    UNIQUE (tenant_id, client_id, event_id)
+                )""");
         // Task meta table (not written by B03 but needed for completeness)
         jdbc.execute("""
                 CREATE TABLE agent_task_meta (
@@ -333,6 +488,7 @@ class AgentTaskStateServiceRealTransactionTest {
     private SqlSessionFactory createSqlSessionFactory() throws Exception {
         MybatisConfiguration configuration = new MybatisConfiguration();
         configuration.addMapper(AgentTaskMetaMapper.class);
+        configuration.addMapper(AgentTaskEventMapper.class);
         configuration.addMapper(AgentTaskMemberMapper.class);
         configuration.addMapper(AgentTaskWorkItemMapper.class);
 
@@ -378,6 +534,68 @@ class AgentTaskStateServiceRealTransactionTest {
                         10, 1, 1, 3, ?, ?, ?, ?, ?)
                 """, WORK_ITEM_ID, TASK_ID, assignee, status,
                 version, TENANT, CLIENT, now, now);
+    }
+
+    private void insertSubmittedWorkItem(
+            String workItemId, long version, String artifactId, long submittedAt,
+            String assignee) {
+        long now = DateUtil.nowTime();
+        jdbc.update("""
+                INSERT INTO agent_task_work_item
+                (work_item_id, task_id, title, work_type, assignee_agent_id, status,
+                 priority, required_item, dependency_json, attempt_count, max_attempts,
+                 result_artifact_id, submitted_at, version, tenant_id, client_id,
+                 create_time, update_time)
+                VALUES (?, ?, 'Submitted WI', 'implementation', ?, 'submitted',
+                        10, 1, '[]', 1, 3, ?, ?, ?, ?, ?, ?, ?)
+                """, workItemId, TASK_ID, assignee, artifactId, submittedAt, version,
+                TENANT, CLIENT, now, now);
+    }
+
+    private void insertPendingWorkItem(String workItemId, String dependencies, long version) {
+        long now = DateUtil.nowTime();
+        jdbc.update("""
+                INSERT INTO agent_task_work_item
+                (work_item_id, task_id, title, work_type, status, priority, required_item,
+                 dependency_json, attempt_count, max_attempts, version, tenant_id, client_id,
+                 create_time, update_time)
+                VALUES (?, ?, 'Pending WI', 'implementation', 'pending', 10, 1,
+                        ?, 0, 3, ?, ?, ?, ?, ?)
+                """, workItemId, TASK_ID, dependencies, version, TENANT, CLIENT, now, now);
+    }
+
+    private Map<String, Object> readWorkItem(String workItemId) {
+        return jdbc.queryForMap(
+                "SELECT status, version, result_artifact_id, submitted_at, completed_at"
+                        + " FROM agent_task_work_item"
+                        + " WHERE tenant_id = ? AND client_id = ? AND work_item_id = ?",
+                TENANT, CLIENT, workItemId);
+    }
+
+    private AgentTaskStateService transactionalProxy(
+            AgentTaskStateServiceImpl target, PlatformTransactionManager transactionManager) {
+        TransactionInterceptor interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactionManager);
+        interceptor.setTransactionAttributeSource(
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        ProxyFactory factory = new ProxyFactory(target);
+        factory.setInterfaces(AgentTaskStateService.class);
+        factory.addAdvice(interceptor);
+        return (AgentTaskStateService) factory.getProxy();
+    }
+
+    private int countEvents() {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_event", Integer.class);
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting to start", interrupted);
+        }
     }
 
     private AgentTaskMemberEntity readMember() {

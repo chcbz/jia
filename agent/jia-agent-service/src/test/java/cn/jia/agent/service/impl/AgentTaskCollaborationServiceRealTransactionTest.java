@@ -441,62 +441,6 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     }
 
     @Test
-    void dependencyReadyEventFailureRollsBackResultArtifactSubmissionAndReadyCas() {
-        jdbc.update("INSERT INTO agent_task_work_item"
-                        + " (work_item_id,task_id,title,work_type,status,priority,required_item,"
-                        + "dependency_json,attempt_count,max_attempts,result_artifact_id,"
-                        + "completed_at,version,tenant_id,client_id,create_time,update_time)"
-                        + " VALUES (?,?,?,'implementation','completed',0,1,?,0,3,?,500,1,?,?,1,1)",
-                "work-prerequisite", TASK, "prerequisite", "[]", "artifact-prerequisite",
-                TENANT, CLIENT);
-        jdbc.update("INSERT INTO agent_task_work_item"
-                        + " (work_item_id,task_id,title,work_type,status,priority,required_item,"
-                        + "dependency_json,attempt_count,max_attempts,version,tenant_id,client_id,"
-                        + "create_time,update_time)"
-                        + " VALUES (?,?,?,'implementation','pending',0,1,?,0,3,0,?,?,1,1)",
-                "work-dependent", TASK, "dependent", "[\"work-prerequisite\"]",
-                TENANT, CLIENT);
-        insertRunningWorkItem("work-result", 7L, "lease-current", 1_500L);
-        AgentTaskEventWriter failReadyEvent = command -> {
-            if (cn.jia.agent.common.TaskEventType.WORK_ITEM_READY.equals(
-                    command.getEventType())) {
-                throw new IllegalStateException("ready append failed");
-            }
-            return eventWriter.append(command);
-        };
-        AgentWorkItemDependencyServiceImpl dependency =
-                new AgentWorkItemDependencyServiceImpl(
-                        workItemDao, mutationTransaction, failReadyEvent, () -> LEASE_NOW);
-        AgentWorkItemResultCommitService failing =
-                (AgentWorkItemResultCommitService) transactionalProxy(
-                        new AgentWorkItemResultCommitServiceImpl(
-                                leaseService, artifactService, workItemDao, mutationTransaction,
-                                failReadyEvent, dependency, () -> LEASE_NOW),
-                        dataSource, AgentWorkItemResultCommitService.class);
-
-        assertThrows(IllegalStateException.class, () -> failing.commitResult(
-                TENANT, CLIENT, TASK, REQUESTER,
-                resultCommand("work-result", "artifact-rollback", "lease-current", 7L)));
-
-        Map<String, Object> result = jdbc.queryForMap(
-                "SELECT status, version, result_artifact_id FROM agent_task_work_item"
-                        + " WHERE work_item_id='work-result'");
-        assertEquals("running", result.get("STATUS"));
-        assertEquals(7L, ((Number) result.get("VERSION")).longValue());
-        assertEquals(null, result.get("RESULT_ARTIFACT_ID"));
-        Map<String, Object> dependent = jdbc.queryForMap(
-                "SELECT status, version FROM agent_task_work_item"
-                        + " WHERE work_item_id='work-dependent'");
-        assertEquals("pending", dependent.get("STATUS"));
-        assertEquals(0L, ((Number) dependent.get("VERSION")).longValue());
-        assertEquals(0, count("SELECT COUNT(*) FROM agent_task_artifact"));
-        assertEquals(0, count("SELECT COUNT(*) FROM agent_task_event"));
-        assertEquals(0L, jdbc.queryForObject(
-                "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
-                Long.class, TASK));
-    }
-
-    @Test
     void submittedEventAppendFailureRollsBackArtifactWorkItemAndEarlierArtifactEvent() {
         insertRunningWorkItem("work-result", 7L, "lease-current", 1_500L);
         AgentWorkItemResultCommitService failing =

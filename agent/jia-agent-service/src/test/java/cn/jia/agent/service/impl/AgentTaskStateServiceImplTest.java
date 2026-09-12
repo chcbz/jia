@@ -1,5 +1,6 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
@@ -15,6 +16,7 @@ import cn.jia.agent.exception.AgentTaskStateException.Reason;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskStateService;
+import cn.jia.agent.service.AgentWorkItemDependencyService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
@@ -68,6 +70,8 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     AgentTaskMutationTransaction mutationTransaction;
     @Mock
     AgentTaskEventWriter eventWriter;
+    @Mock
+    AgentWorkItemDependencyService dependencyService;
 
     AgentTaskStateServiceImpl service;
 
@@ -89,7 +93,8 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
                     return mutation.apply(root);
                 });
         service = new AgentTaskStateServiceImpl(
-                taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter, () -> NOW);
+                taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter,
+                dependencyService, () -> NOW);
     }
 
     @Test
@@ -219,6 +224,134 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         assertEquals("submitted", update.getValue().getStatus());
         assertEquals("preserve me", update.getValue().getDescription());
         assertEquals(NOW, update.getValue().getSubmittedAt());
+        verify(dependencyService, never()).resolveReady(any(), any(), any());
+    }
+
+    @Test
+    void authoritativeCompletionPreservesProofAndResolvesAfterCompletedEvent() {
+        AgentTaskWorkItemEntity current = submittedWorkItem(7L);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+
+        AgentTaskStateDTO result = service.transitionWorkItem(
+                TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null));
+
+        assertEquals("completed", result.getStatus());
+        assertEquals(8L, result.getVersion());
+        ArgumentCaptor<AgentTaskWorkItemDTO> update =
+                ArgumentCaptor.forClass(AgentTaskWorkItemDTO.class);
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
+        InOrder order = inOrder(mutationTransaction, workItemDao, eventWriter, dependencyService);
+        order.verify(mutationTransaction).executeWithLockedTaskRootForWorkItem(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), any());
+        order.verify(workItemDao).findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID);
+        order.verify(workItemDao).updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), update.capture());
+        order.verify(eventWriter).append(event.capture());
+        order.verify(dependencyService).resolveReady(TENANT, CLIENT, TASK_ID);
+        assertEquals("artifact-accepted", update.getValue().getResultArtifactId());
+        assertEquals(9_000L, update.getValue().getSubmittedAt());
+        assertEquals(NOW, update.getValue().getCompletedAt());
+        assertEquals(TaskEventType.WORK_ITEM_COMPLETED, event.getValue().getEventType());
+    }
+
+    @Test
+    void combinedAuthoritativeCompletionUsesTheSameResolverBoundary() {
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+                .thenReturn(member("working", 3L));
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(submittedWorkItem(7L));
+        when(memberDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+
+        service.transitionMemberAndWorkItem(
+                TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                transition("done", 3L, null), transition("completed", 7L, null));
+
+        InOrder order = inOrder(memberDao, workItemDao, eventWriter, dependencyService);
+        order.verify(memberDao).updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
+        order.verify(workItemDao).updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any());
+        order.verify(eventWriter).append(any());
+        order.verify(eventWriter).append(any());
+        order.verify(dependencyService).resolveReady(TENANT, CLIENT, TASK_ID);
+    }
+
+    @Test
+    void completionProofMustBeCanonicalAndFreshBeforeAnyCasOrEvent() {
+        AgentTaskWorkItemEntity missingArtifact = submittedWorkItem(7L);
+        missingArtifact.setResultArtifactId(null);
+        AgentTaskWorkItemEntity missingSubmission = submittedWorkItem(7L);
+        missingSubmission.setSubmittedAt(null);
+        AgentTaskWorkItemEntity staleCompletion = submittedWorkItem(7L);
+        staleCompletion.setCompletedAt(9_500L);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(missingArtifact, missingSubmission, staleCompletion);
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            AgentTaskStateException failure = assertThrows(AgentTaskStateException.class,
+                    () -> service.transitionWorkItem(
+                            TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null)));
+            assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
+        }
+
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verifyNoInteractions(eventWriter, dependencyService);
+    }
+
+    @Test
+    void failedAndCancelledTransitionsNeverResolveDependencies() {
+        AgentTaskWorkItemEntity running = workItem("running", 6L);
+        AgentTaskWorkItemEntity ready = workItem("ready", 2L);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(running, ready);
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(2L), any())).thenReturn(1);
+
+        service.transitionWorkItem(
+                TENANT, CLIENT, WORK_ITEM_ID, transition("failed", 6L, null));
+        service.transitionWorkItem(
+                TENANT, CLIENT, WORK_ITEM_ID, transition("cancelled", 2L, null));
+
+        verify(dependencyService, never()).resolveReady(any(), any(), any());
+    }
+
+    @Test
+    void completionEventFailurePreventsDependencyResolution() {
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(submittedWorkItem(7L));
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+        when(eventWriter.append(any())).thenThrow(new IllegalStateException("completed event failed"));
+
+        assertThrows(IllegalStateException.class, () -> service.transitionWorkItem(
+                TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null)));
+
+        verify(dependencyService, never()).resolveReady(any(), any(), any());
+    }
+
+    @Test
+    void dependencyFailurePropagatesAfterAuthoritativeCompletionEvent() {
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+                .thenReturn(submittedWorkItem(7L));
+        when(workItemDao.updateByVersion(
+                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+        when(dependencyService.resolveReady(TENANT, CLIENT, TASK_ID))
+                .thenThrow(new IllegalStateException("ready event failed"));
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> service.transitionWorkItem(
+                        TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null)));
+
+        assertEquals("ready event failed", failure.getMessage());
+        verify(eventWriter).append(any());
     }
 
     @Test
@@ -651,6 +784,14 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         entity.setTenantId(TENANT);
         entity.setClientId(CLIENT);
         return entity;
+    }
+
+    private AgentTaskWorkItemEntity submittedWorkItem(long version) {
+        AgentTaskWorkItemEntity item = workItem("submitted", version);
+        item.setResultArtifactId("artifact-accepted");
+        item.setSubmittedAt(9_000L);
+        item.setCompletedAt(null);
+        return item;
     }
 
     private AgentTaskStateTransitionDTO transition(String status, long version, String failureReason) {

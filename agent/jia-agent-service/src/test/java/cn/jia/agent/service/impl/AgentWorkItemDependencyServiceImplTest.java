@@ -137,7 +137,7 @@ class AgentWorkItemDependencyServiceImplTest {
     }
 
     @Test
-    void authoritativeCompletionRequiresAcceptedArtifactAndPositiveCompletionTime() {
+    void authoritativeCompletionRequiresAcceptedArtifactAndPositiveSubmissionAndCompletionTimes() {
         Fixture missingArtifact = fixture(root("running"));
         AgentTaskWorkItemEntity completed = completed("dependency", null, 1L);
         completed.setResultArtifactId(null);
@@ -153,6 +153,14 @@ class AgentWorkItemDependencyServiceImplTest {
                 .thenReturn(List.of(noTime, pending("dependent", "[\"dependency\"]", 2L)));
         assertReason(Reason.INVALID_PERSISTED_STATE,
                 () -> missingTime.service.resolveReady(TENANT, CLIENT, TASK));
+
+        Fixture missingSubmission = fixture(root("running"));
+        AgentTaskWorkItemEntity noSubmission = completed("dependency", null, 1L);
+        noSubmission.setSubmittedAt(null);
+        when(missingSubmission.dao.listByTaskForUpdate(TENANT, CLIENT, TASK, 501))
+                .thenReturn(List.of(noSubmission, pending("dependent", "[\"dependency\"]", 2L)));
+        assertReason(Reason.INVALID_PERSISTED_STATE,
+                () -> missingSubmission.service.resolveReady(TENANT, CLIENT, TASK));
     }
 
     @Test
@@ -358,6 +366,7 @@ class AgentWorkItemDependencyServiceImplTest {
     private AgentTaskWorkItemEntity completed(String id, String dependencies, long version) {
         AgentTaskWorkItemEntity item = item(id, "completed", dependencies, version);
         item.setResultArtifactId("artifact-" + id);
+        item.setSubmittedAt(400L);
         item.setCompletedAt(500L);
         return item;
     }

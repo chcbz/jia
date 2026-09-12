@@ -10,7 +10,6 @@ import cn.jia.agent.entity.AgentWorkItemDependencyResolutionDTO;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentWorkItemDependencyException;
 import cn.jia.agent.exception.AgentWorkItemDependencyException.Reason;
-import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentWorkItemDependencyService;
 import cn.jia.agent.state.AgentTaskStatus;
@@ -64,21 +63,21 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
 
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskMutationTransaction mutationTransaction;
-    private final AgentTaskEventWriter eventWriter;
+    private final cn.jia.agent.service.AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
 
     @Inject
     public AgentWorkItemDependencyServiceImpl(
             AgentTaskWorkItemDao workItemDao,
             AgentTaskMutationTransaction mutationTransaction,
-            AgentTaskEventWriter eventWriter) {
+            cn.jia.agent.service.AgentTaskEventWriter eventWriter) {
         this(workItemDao, mutationTransaction, eventWriter, System::currentTimeMillis);
     }
 
     AgentWorkItemDependencyServiceImpl(
             AgentTaskWorkItemDao workItemDao,
             AgentTaskMutationTransaction mutationTransaction,
-            AgentTaskEventWriter eventWriter,
+            cn.jia.agent.service.AgentTaskEventWriter eventWriter,
             LongSupplier clock) {
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
@@ -238,6 +237,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
         }
         if (status == AgentTaskWorkItemStatus.COMPLETED
                 && (!validPersistedId(row.getResultArtifactId())
+                || row.getSubmittedAt() == null || row.getSubmittedAt() <= 0
                 || row.getCompletedAt() == null || row.getCompletedAt() <= 0)) {
             throw invalidPersisted(
                     "Completed work item does not satisfy the accepted-result terminal contract");
@@ -341,6 +341,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
                 return false;
             }
             if (!validPersistedId(dependency.getResultArtifactId())
+                    || dependency.getSubmittedAt() == null || dependency.getSubmittedAt() <= 0
                     || dependency.getCompletedAt() == null || dependency.getCompletedAt() <= 0) {
                 throw invalidPersisted(
                         "Completed dependency does not satisfy the accepted-result terminal contract");
