@@ -77,7 +77,7 @@ public class ElasticsearchService {
                     SafeRequestTimeoutException.Dependency.ELASTICSEARCH);
         }
         if (hasCause(exception, ConnectException.class) || hasCause(exception, NoRouteToHostException.class)
-                || hasCause(exception, UnknownHostException.class) || hasCauseNamed(exception, "NoHttpResponseException")) {
+                || hasCause(exception, UnknownHostException.class) || hasCauseWithSimpleNameSuffix(exception, "NoHttpResponseException")) {
             return SafeRequestTimeoutException.dependencyUnavailableBeforeWork(
                     SafeRequestTimeoutException.Dependency.ELASTICSEARCH);
         }
@@ -90,7 +90,7 @@ public class ElasticsearchService {
             return;
         }
         if (hasCause(exception, ConnectException.class) || hasCause(exception, NoRouteToHostException.class)
-                || hasCause(exception, UnknownHostException.class) || hasCauseNamed(exception, "NoHttpResponseException")) {
+                || hasCause(exception, UnknownHostException.class) || hasCauseWithSimpleNameSuffix(exception, "NoHttpResponseException")) {
             log.warn("Elasticsearch delete was unavailable before a response; outcome may be unknown");
             return;
         }
