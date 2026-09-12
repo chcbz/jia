@@ -28,6 +28,7 @@ class AgentRuntimeMapperContractTest {
         assertTrue(sql.contains("a.alias_status = 'active'"));
         assertTrue(sql.contains("a.valid_to is null"));
         assertTrue(sql.contains("order by r.persona_code asc"));
+        assertFalse(sql.contains("for update"));
         assertFalse(sql.contains(" limit "), "PageHelper owns bounded pagination");
 
         assertExactParameter(sql, "r.client_id", "clientid");
@@ -58,6 +59,7 @@ class AgentRuntimeMapperContractTest {
         assertTrue(sql.contains("i.owner_jiacn = r.owner_jiacn"));
         assertTrue(sql.contains("i.canonical_agent_id = r.agent_id"));
         assertTrue(sql.contains("order by r.last_seen_at desc"));
+        assertFalse(sql.contains("for update"));
         assertExactParameter(sql, "r.client_id", "clientid");
         assertExactColumns(sql, "b.client_id", "r.client_id");
         assertExactColumns(sql, "b.jiacn", "r.owner_jiacn");

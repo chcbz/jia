@@ -2307,9 +2307,13 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals(3, result.size());
         assertEquals("tenant-a", result.get(0).getOwnerJiacn());
+        assertTrue(result.get(0).getBoundToMe());
+        assertTrue(result.get(0).getCanOperate());
         assertEquals(2, result.get(0).getStats().getCompletedTaskCount());
         assertEquals(10L, result.get(0).getStats().getAverageDurationSeconds());
         assertEquals("tenant-b", result.get(1).getOwnerJiacn());
+        assertFalse(result.get(1).getBoundToMe());
+        assertFalse(result.get(1).getCanOperate());
         assertEquals(4, result.get(1).getStats().getCompletedTaskCount());
         assertEquals(20L, result.get(1).getStats().getAverageDurationSeconds());
     }
@@ -2385,6 +2389,72 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, failure.getCode());
         verify(agentPersonaDao, never()).findRuntimeProjection();
         verify(agentTaskMetaDao, never()).findStatsByAgents(any());
+    }
+
+    @Test
+    void rosterRejectsCaseVariantOwnerRowsBeforeAnyEnrichmentQuery() {
+        AgentRuntimeEntity leaked = runtimeAgent(
+                "agent-owner-variant", "Owner Variant", AgentConstants.STATUS_ONLINE, "[]");
+        leaked.setClientId("jia_client");
+        leaked.setOwnerJiacn("JUYITING");
+        leaked.setBindingId(1L);
+        when(agentRuntimeDao.findRosterByOwner(
+                "jia_client", "juyiting", null, null)).thenReturn(List.of(leaked));
+
+        AgentServiceImpl.AgentBizException failure = assertThrows(
+                AgentServiceImpl.AgentBizException.class,
+                () -> agentService.listRoster(null, null, 1, 50));
+
+        assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, failure.getCode());
+        verify(agentPersonaDao, never()).findRuntimeProjection();
+        verify(agentTaskMetaDao, never()).findStatsByAgents(any());
+    }
+
+    @Test
+    void mapRejectsCaseVariantClientRowsBeforeAnyEnrichmentQuery() {
+        AgentRuntimeEntity leaked = runtimeAgent(
+                "agent-map-client-variant", "Map Client Variant",
+                AgentConstants.STATUS_ONLINE, "[]");
+        leaked.setClientId("CLIENT-A");
+        leaked.setOwnerJiacn("tenant-a");
+        leaked.setBindingId(1L);
+        EsContext context = new EsContext();
+        context.setClientId("client-a");
+        context.setJiacn("tenant-a");
+        EsContextHolder.setContext(context);
+        when(agentRuntimeDao.findMapVisible("client-a")).thenReturn(List.of(leaked));
+
+        AgentServiceImpl.AgentBizException failure = assertThrows(
+                AgentServiceImpl.AgentBizException.class, agentService::listMapAgents);
+
+        assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, failure.getCode());
+        verify(agentPersonaDao, never()).findRuntimeProjection();
+        verify(agentTaskMetaDao, never()).findStatsByAgents(any());
+    }
+
+    @Test
+    void mapRejectsDuplicateTaskStatsForSameByteExactScope() {
+        AgentRuntimeEntity runtime = runtimeAgent(
+                "agent-owned", "Owned", AgentConstants.STATUS_ONLINE, "[]");
+        runtime.setClientId("client-a");
+        runtime.setOwnerJiacn("tenant-a");
+        runtime.setBindingId(1L);
+        EsContext context = new EsContext();
+        context.setClientId("client-a");
+        context.setJiacn("tenant-a");
+        EsContextHolder.setContext(context);
+        when(agentRuntimeDao.findMapVisible("client-a")).thenReturn(List.of(runtime));
+        when(agentPersonaDao.findRuntimeProjection()).thenReturn(List.of());
+        AgentTaskStatsScope scope = new AgentTaskStatsScope(
+                "tenant-a", "client-a", "agent-owned");
+        when(agentTaskMetaDao.findStatsByAgents(any())).thenReturn(List.of(
+                taskStats(scope, 1, 1, 0, 1, 10),
+                taskStats(scope, 1, 1, 0, 1, 10)));
+
+        IllegalArgumentException failure = assertThrows(
+                IllegalArgumentException.class, agentService::listMapAgents);
+
+        assertTrue(failure.getMessage().contains("duplicate byte-exact scope"));
     }
 
     @Test

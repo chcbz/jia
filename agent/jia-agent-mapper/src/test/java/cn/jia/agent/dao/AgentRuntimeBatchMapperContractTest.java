@@ -70,6 +70,8 @@ class AgentRuntimeBatchMapperContractTest {
         assertExactParameter(sql, "task.client_id", "scope.clientid");
         assertExactParameter(sql, "task.assigned_agent_id", "scope.agentid");
         assertTrue(sql.contains("group by task.tenant_id, cast(task.tenant_id as binary), octet_length(task.tenant_id), task.client_id, cast(task.client_id as binary), octet_length(task.client_id), task.assigned_agent_id, cast(task.assigned_agent_id as binary), octet_length(task.assigned_agent_id)"));
+        assertFalse(sql.contains("for update"));
+        assertFalse(sql.contains("token_hash"));
         assertFalse(sql.contains("${"));
         assertFalse(sql.contains("/agent/active"));
     }
