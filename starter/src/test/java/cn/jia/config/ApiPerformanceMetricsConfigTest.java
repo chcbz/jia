@@ -1,5 +1,7 @@
 package cn.jia.config;
 
+import cn.jia.core.deadline.RequestDeadline;
+import cn.jia.core.deadline.RequestDeadlineFilter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -127,23 +129,25 @@ class ApiPerformanceMetricsConfigTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         AtomicLong now = new AtomicLong();
         ApiPerformanceMetricsConfig.HttpServerObservationHandler handler =
-                new ApiPerformanceMetricsConfig.HttpServerObservationHandler(registry, 1000, 3000, now::get);
+                new ApiPerformanceMetricsConfig.HttpServerObservationHandler(registry, 1000, now::get);
         ServerRequestObservationContext slowContext = new ServerRequestObservationContext(
                 new MockHttpServletRequest(), new MockHttpServletResponse());
         handler.onStart(slowContext);
         assertEquals(1.0, registry.find(ApiPerformanceMetricsConfig.HTTP_INFLIGHT).gauge().value());
         now.addAndGet(TimeUnit.MILLISECONDS.toNanos(1000));
         handler.onStop(slowContext);
+        assertEquals(0.0, registry.find(ApiPerformanceMetricsConfig.HTTP_DEADLINE_EXHAUSTED).counter().count());
 
+        MockHttpServletRequest exhaustedRequest = new MockHttpServletRequest();
+        exhaustedRequest.setAttribute(RequestDeadlineFilter.DEADLINE_ATTRIBUTE, RequestDeadline.start(0));
         ServerRequestObservationContext exhaustedContext = new ServerRequestObservationContext(
-                new MockHttpServletRequest(), new MockHttpServletResponse());
+                exhaustedRequest, new MockHttpServletResponse());
         handler.onStart(exhaustedContext);
-        now.addAndGet(TimeUnit.MILLISECONDS.toNanos(3000));
         handler.onStop(exhaustedContext);
         handler.onStop(exhaustedContext);
 
         assertEquals(0.0, registry.find(ApiPerformanceMetricsConfig.HTTP_INFLIGHT).gauge().value());
-        assertEquals(2.0, registry.find(ApiPerformanceMetricsConfig.HTTP_SLOW).counter().count());
+        assertEquals(1.0, registry.find(ApiPerformanceMetricsConfig.HTTP_SLOW).counter().count());
         assertEquals(1.0, registry.find(ApiPerformanceMetricsConfig.HTTP_DEADLINE_EXHAUSTED).counter().count());
         assertTrue(registry.find(ApiPerformanceMetricsConfig.HTTP_INFLIGHT).gauge().getId().getTags().isEmpty());
         assertTrue(registry.find(ApiPerformanceMetricsConfig.HTTP_SLOW).counter().getId().getTags().isEmpty());
@@ -153,16 +157,10 @@ class ApiPerformanceMetricsConfigTest {
     }
 
     @Test
-    void rejectsInvalidLowCardinalityMetricThresholds() {
+    void rejectsInvalidLowCardinalitySlowThreshold() {
         assertThrows(IllegalArgumentException.class,
                 () -> new ApiPerformanceMetricsConfig.HttpServerObservationHandler(
-                        new SimpleMeterRegistry(), 0, 3000, System::nanoTime));
-        assertThrows(IllegalArgumentException.class,
-                () -> new ApiPerformanceMetricsConfig.HttpServerObservationHandler(
-                        new SimpleMeterRegistry(), 1000, 0, System::nanoTime));
-        assertThrows(IllegalArgumentException.class,
-                () -> new ApiPerformanceMetricsConfig.HttpServerObservationHandler(
-                        new SimpleMeterRegistry(), 3001, 3000, System::nanoTime));
+                        new SimpleMeterRegistry(), 0, System::nanoTime));
     }
 
     @Test

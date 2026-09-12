@@ -1,5 +1,7 @@
 package cn.jia.config;
 
+import cn.jia.core.deadline.RequestDeadline;
+import cn.jia.core.deadline.RequestDeadlineFilter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
@@ -41,8 +43,9 @@ import java.util.function.LongSupplier;
  *
  * <p>The low-cardinality {@code cyf.http.*} meters deliberately have no route or request tags. They are derived from
  * the same completed HTTP observation: {@code inflight} tracks active observations, {@code slow} records requests at
- * or above the configured slow threshold, and {@code deadline.exhausted} records requests that consumed the observed
- * three-second budget. The latter is observability only; request deadline enforcement remains PERF-A03 work.</p>
+ * or above the existing slow-log threshold, and {@code deadline.exhausted} records the existing shadow deadline
+ * lifecycle when its request budget is exhausted. The latter is observability only; request deadline enforcement
+ * remains PERF-A03 work.</p>
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "jia.metrics.http", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -57,7 +60,6 @@ public class ApiPerformanceMetricsConfig {
     static final String MAX_URI_TAGS_PROPERTY = "management.metrics.web.server.max-uri-tags";
     static final int DEFAULT_MAX_URI_TAGS = 1024;
     static final long DEFAULT_SLOW_THRESHOLD_MILLIS = 1000;
-    static final long DEFAULT_DEADLINE_MILLIS = 3000;
 
     private static final String DEFAULTS_PROPERTY_SOURCE = "jiaApiPerformanceMetricsDefaults";
 
@@ -89,10 +91,9 @@ public class ApiPerformanceMetricsConfig {
     @Bean
     ObservationHandler<ServerRequestObservationContext> apiPerformanceHttpObservationHandler(
             MeterRegistry meterRegistry,
-            @Value("${jia.metrics.http.slow-threshold-ms:" + DEFAULT_SLOW_THRESHOLD_MILLIS + "}")
-            long slowThresholdMillis,
-            @Value("${jia.metrics.http.deadline-ms:" + DEFAULT_DEADLINE_MILLIS + "}") long deadlineMillis) {
-        return new HttpServerObservationHandler(meterRegistry, slowThresholdMillis, deadlineMillis, System::nanoTime);
+            @Value("${http.request.log.slow-threshold-ms:" + DEFAULT_SLOW_THRESHOLD_MILLIS + "}")
+            long slowThresholdMillis) {
+        return new HttpServerObservationHandler(meterRegistry, slowThresholdMillis, System::nanoTime);
     }
 
     static final class HttpServerObservationHandler implements ObservationHandler<ServerRequestObservationContext> {
@@ -102,23 +103,14 @@ public class ApiPerformanceMetricsConfig {
         private final Counter slowRequests;
         private final Counter exhaustedDeadlines;
         private final long slowThresholdNanos;
-        private final long deadlineNanos;
         private final LongSupplier monotonicClock;
 
-        HttpServerObservationHandler(MeterRegistry meterRegistry, long slowThresholdMillis, long deadlineMillis,
+        HttpServerObservationHandler(MeterRegistry meterRegistry, long slowThresholdMillis,
                 LongSupplier monotonicClock) {
             if (slowThresholdMillis <= 0) {
-                throw new IllegalArgumentException("jia.metrics.http.slow-threshold-ms must be positive");
-            }
-            if (deadlineMillis <= 0) {
-                throw new IllegalArgumentException("jia.metrics.http.deadline-ms must be positive");
-            }
-            if (slowThresholdMillis > deadlineMillis) {
-                throw new IllegalArgumentException(
-                        "jia.metrics.http.slow-threshold-ms must not exceed jia.metrics.http.deadline-ms");
+                throw new IllegalArgumentException("http.request.log.slow-threshold-ms must be positive");
             }
             this.slowThresholdNanos = TimeUnit.MILLISECONDS.toNanos(slowThresholdMillis);
-            this.deadlineNanos = TimeUnit.MILLISECONDS.toNanos(deadlineMillis);
             this.monotonicClock = monotonicClock;
             Gauge.builder(HTTP_INFLIGHT, inFlight, AtomicLong::get).register(meterRegistry);
             this.slowRequests = Counter.builder(HTTP_SLOW).register(meterRegistry);
@@ -142,9 +134,14 @@ public class ApiPerformanceMetricsConfig {
             if (durationNanos >= slowThresholdNanos) {
                 slowRequests.increment();
             }
-            if (durationNanos >= deadlineNanos) {
+            if (requestDeadlineExhausted(context)) {
                 exhaustedDeadlines.increment();
             }
+        }
+
+        private static boolean requestDeadlineExhausted(ServerRequestObservationContext context) {
+            Object deadline = context.getCarrier().getAttribute(RequestDeadlineFilter.DEADLINE_ATTRIBUTE);
+            return deadline instanceof RequestDeadline && ((RequestDeadline) deadline).isExpired();
         }
 
         @Override
