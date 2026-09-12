@@ -1,11 +1,14 @@
 package cn.jia.core.interceptor;
 
+import cn.jia.core.filter.RequestIdFilter;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.method.HandlerMethod;
@@ -21,6 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class HttpRequestLogInterceptorTest {
+    @AfterEach
+    void clearMdc() {
+        MDC.clear();
+    }
+
     @Test
     void neverAccessesRequestValuesOrLeaksThemToCompletionLog() throws Exception {
         DeterministicInterceptor interceptor = new DeterministicInterceptor(0L);
@@ -73,6 +81,29 @@ class HttpRequestLogInterceptorTest {
         assertTrue(logged.contains("outcome=ERROR"));
         assertFalse(logged.contains("secret-account-id"));
         assertFalse(logged.contains("exception-secret"));
+    }
+
+    @Test
+    void reusesFilterRequestIdAndAvailableTraceIdForCompletionLog() throws Exception {
+        DeterministicInterceptor interceptor = new DeterministicInterceptor(0L);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/orders/secret-order-id");
+        request.setAttribute(RequestIdFilter.REQUEST_ID_ATTRIBUTE, "request-correlation-01");
+        request.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/orders/{orderId}");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        HandlerMethod handler = new HandlerMethod(new TestHandler(), TestHandler.class.getMethod("handle"));
+        MDC.put(RequestIdFilter.MDC_TRACE_ID_KEY, "trace-correlation-01");
+
+        List<ILoggingEvent> events = captureLogs(() -> {
+            interceptor.preHandle(request, response, handler);
+            interceptor.afterCompletion(request, response, handler, null);
+        });
+
+        assertEquals(1, events.size());
+        String logged = events.get(0).getFormattedMessage();
+        assertTrue(logged.contains("request_id=request-correlation-01"));
+        assertTrue(logged.contains("trace_id=trace-correlation-01"));
+        assertTrue(logged.contains("route=/orders/{orderId}"));
+        assertFalse(logged.contains("secret-order-id"));
     }
 
     @Test

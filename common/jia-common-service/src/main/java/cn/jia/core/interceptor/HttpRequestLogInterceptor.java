@@ -1,8 +1,10 @@
 package cn.jia.core.interceptor;
 
+import cn.jia.core.filter.RequestIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.HandlerMapping;
@@ -24,6 +26,8 @@ public class HttpRequestLogInterceptor implements HandlerInterceptor {
     private static final String UNKNOWN_METHOD = "UNKNOWN";
     private static final int MAX_ROUTE_LENGTH = 256;
     private static final Pattern SAFE_METHOD = Pattern.compile("[A-Z]{1,16}");
+    private static final Pattern SAFE_CORRELATION_ID = Pattern.compile("[A-Za-z0-9._-]{8,128}");
+    private static final String TRACE_ID_ATTRIBUTE = HttpRequestLogInterceptor.class.getName() + ".traceId";
 
     private final long slowThresholdMillis;
 
@@ -40,7 +44,7 @@ public class HttpRequestLogInterceptor implements HandlerInterceptor {
         synchronized (request) {
             RequestLogState state = request.getAttribute(REQUEST_LOG_STATE_ATTRIBUTE) instanceof RequestLogState
                     ? (RequestLogState) request.getAttribute(REQUEST_LOG_STATE_ATTRIBUTE)
-                    : new RequestLogState(nanoTime(), UUID.randomUUID().toString());
+                    : new RequestLogState(nanoTime(), requestId(request));
             request.setAttribute(REQUEST_LOG_STATE_ATTRIBUTE, state);
             request.setAttribute(REQUEST_CORRELATION_ID_ATTRIBUTE, state.requestId);
         }
@@ -69,9 +73,32 @@ public class HttpRequestLogInterceptor implements HandlerInterceptor {
             return;
         }
 
-        log.warn("http_request_complete request_id={} method={} route={} status={} duration_ms={} outcome={}",
-                state.requestId, safeMethod(request.getMethod()), trustedRouteTemplate(request, handler), status,
+        log.warn("http_request_complete request_id={} trace_id={} method={} route={} status={} duration_ms={} outcome={}",
+                state.requestId, traceId(request), safeMethod(request.getMethod()), trustedRouteTemplate(request, handler), status,
                 durationMillis, failed ? "ERROR" : "SLOW");
+    }
+
+    private static String requestId(HttpServletRequest request) {
+        Object requestId = request.getAttribute(RequestIdFilter.REQUEST_ID_ATTRIBUTE);
+        return requestId instanceof String && SAFE_CORRELATION_ID.matcher((String) requestId).matches()
+                ? (String) requestId
+                : UUID.randomUUID().toString();
+    }
+
+    private static String traceId(HttpServletRequest request) {
+        Object storedTraceId = request.getAttribute(TRACE_ID_ATTRIBUTE);
+        if (storedTraceId instanceof String && SAFE_CORRELATION_ID.matcher((String) storedTraceId).matches()) {
+            return (String) storedTraceId;
+        }
+        String traceId = MDC.get(RequestIdFilter.MDC_TRACE_ID_KEY);
+        if (traceId == null) {
+            traceId = MDC.get("traceId");
+        }
+        if (traceId != null && SAFE_CORRELATION_ID.matcher(traceId).matches()) {
+            request.setAttribute(TRACE_ID_ATTRIBUTE, traceId);
+            return traceId;
+        }
+        return null;
     }
 
     protected long nanoTime() {

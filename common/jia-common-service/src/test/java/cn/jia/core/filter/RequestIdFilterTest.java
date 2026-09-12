@@ -101,6 +101,28 @@ class RequestIdFilterTest {
     }
 
     @Test
+    void retainsFinalIdAndMdcCorrelationAcrossErrorRedispatch() throws Exception {
+        String requestId = "error-request-id-01";
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(RequestIdFilter.HEADER_NAME, requestId);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<String> initialMdc = new AtomicReference<>();
+        AtomicReference<String> redispatchMdc = new AtomicReference<>();
+
+        filter.doFilter(request, response, (ignoredRequest, ignoredResponse) ->
+                initialMdc.set(MDC.get(RequestIdFilter.MDC_REQUEST_ID_KEY)));
+        request.setDispatcherType(DispatcherType.ERROR);
+        filter.doFilter(request, response, (ignoredRequest, ignoredResponse) ->
+                redispatchMdc.set(MDC.get(RequestIdFilter.MDC_REQUEST_ID_KEY)));
+
+        assertEquals(requestId, initialMdc.get());
+        assertEquals(requestId, redispatchMdc.get());
+        assertEquals(requestId, response.getHeader(RequestIdFilter.HEADER_NAME));
+        assertEquals(requestId, request.getAttribute(RequestIdFilter.REQUEST_ID_ATTRIBUTE));
+        assertNull(MDC.get(RequestIdFilter.MDC_REQUEST_ID_KEY));
+    }
+
+    @Test
     void correlatesAvailableTraceIdWithoutOverwritingOuterMdc() throws Exception {
         MDC.put(RequestIdFilter.MDC_REQUEST_ID_KEY, "outer-request-id");
         MDC.put("traceId", "otel-trace-id");
