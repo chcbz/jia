@@ -35,7 +35,11 @@ public final class ConversationOutputVersionProvider implements OutputVersionPro
             throw hidden();
         }
         if (conversation == null || conversation.getId() == null
-                || !Objects.equals(sourceId, Long.toString(conversation.getId()))) throw hidden();
+                || !Objects.equals(tenantId, conversation.getTenantId())
+                || !Objects.equals(clientId, conversation.getClientId())
+                || !Objects.equals(jiacn, conversation.getJiacn())
+                || !Objects.equals(sourceId, Long.toString(conversation.getId()))
+                || conversation.getDeletedAt() != null) throw hidden();
     }
 
     @Override

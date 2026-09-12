@@ -43,6 +43,7 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND CAST(jiacn AS BINARY)=CAST(#{jiacn} AS BINARY)
               AND OCTET_LENGTH(jiacn)=OCTET_LENGTH(#{jiacn})
+              AND deleted_at IS NULL
             LIMIT 1
             <if test="forUpdate">FOR UPDATE</if>
             </script>

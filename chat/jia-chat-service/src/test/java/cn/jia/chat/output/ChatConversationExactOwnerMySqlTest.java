@@ -1,5 +1,7 @@
 package cn.jia.chat.output;
 
+import cn.jia.agent.output.OutputAuthorizationException;
+import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.impl.ChatConversationDaoImpl;
 import cn.jia.chat.entity.ChatConversationEntity;
@@ -34,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 /** Real MySQL proof for the exact owner lookup and its FOR UPDATE lock. */
 @EnabledIfEnvironmentVariable(named = "OD01_MYSQL_URL", matches = ".+")
@@ -123,6 +126,69 @@ class ChatConversationExactOwnerMySqlTest {
         }
     }
 
+    @Test
+    void exactOwnerLookupExcludesSoftDeletedRowsForSnapshotAndLockingReads() {
+        jdbc.update("""
+                UPDATE chat_conversation
+                SET deleted_at=10,lifecycle_generation=lifecycle_generation+1
+                WHERE id=101
+                """);
+
+        assertNull(conversationDao.findExactOwnedById(
+                "owner", "client", "owner", "101", false));
+        assertNull(conversationDao.findExactOwnedById(
+                "owner", "client", "owner", "101", true));
+    }
+
+    @Test
+    void deleteCommittedBeforeAuthorizationLockMakesAuthorizationFailClosed() throws Exception {
+        TransactionTemplate transaction = new TransactionTemplate(
+                new DataSourceTransactionManager(dataSource));
+        ConversationOutputSourceAuthorizer authorizer = new ConversationOutputSourceAuthorizer(
+                conversationDao, mock(AgentTaskCollaborationAccessService.class));
+        CountDownLatch deleted = new CountDownLatch(1);
+        CountDownLatch commitDelete = new CountDownLatch(1);
+        CountDownLatch authorizationStarted = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Void> deleter = executor.submit(() -> {
+                transaction.executeWithoutResult(status -> {
+                    assertEquals(1, jdbc.update("""
+                            UPDATE chat_conversation
+                            SET deleted_at=10,lifecycle_generation=lifecycle_generation+1
+                            WHERE id=101 AND deleted_at IS NULL
+                            """));
+                    deleted.countDown();
+                    await(commitDelete);
+                });
+                return null;
+            });
+            assertTrue(deleted.await(10, TimeUnit.SECONDS));
+
+            Future<String> authorization = executor.submit(() -> {
+                authorizationStarted.countDown();
+                try {
+                    transaction.execute(status -> authorizer.lockAndAuthorize(
+                            "owner", "client", "101", "agent-1"));
+                    return "ALLOWED";
+                } catch (OutputAuthorizationException denied) {
+                    return denied.getCode();
+                }
+            });
+            assertTrue(authorizationStarted.await(10, TimeUnit.SECONDS));
+            Thread.sleep(200L);
+            assertFalse(authorization.isDone(),
+                    "authorization must wait for the deleting transaction's row lock");
+
+            commitDelete.countDown();
+            deleter.get(10, TimeUnit.SECONDS);
+            assertEquals("OUTPUT_SOURCE_FORBIDDEN", authorization.get(10, TimeUnit.SECONDS));
+        } finally {
+            commitDelete.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     private void createSchema() {
         jdbc.execute("""
                 CREATE TABLE chat_conversation (
@@ -131,6 +197,7 @@ class ChatConversationExactOwnerMySqlTest {
                     conversation_scope_type VARCHAR(30),conversation_scope_key VARCHAR(200),
                     task_id VARCHAR(100),target_agent_id VARCHAR(100),status INT,
                     tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,
+                    lifecycle_generation BIGINT NOT NULL DEFAULT 1,deleted_at BIGINT,
                     create_time BIGINT,update_time BIGINT,
                     KEY idx_conversation_scope(tenant_id,client_id,task_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci

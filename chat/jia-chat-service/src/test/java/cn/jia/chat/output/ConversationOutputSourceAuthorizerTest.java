@@ -71,6 +71,38 @@ class ConversationOutputSourceAuthorizerTest extends BaseMockTest {
     }
 
     @Test
+    void deletedConversationFailsClosedBeforeTaskAclAndAfterOwnerLock() {
+        ConversationOutputSourceAuthorizer authorizer =
+                new ConversationOutputSourceAuthorizer(conversationDao, taskAccessService);
+        ChatConversationEntity deletedPreview = conversation(
+                "owner", "client", 101L, "agent-1", "task-1");
+        deletedPreview.setDeletedAt(10L);
+        when(conversationDao.findExactOwnedById(
+                "owner", "client", "owner", "101", false)).thenReturn(deletedPreview);
+
+        assertThrows(OutputAuthorizationException.class,
+                () -> authorizer.lockAndAuthorize(
+                        "owner", "client", "101", "agent-1"));
+        verify(taskAccessService, never()).resolveMemberAccessForUpdate(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+
+        ChatConversationEntity livePreview = conversation(
+                "owner", "client", 102L, "agent-1", null);
+        ChatConversationEntity deletedLocked = conversation(
+                "owner", "client", 102L, "agent-1", null);
+        deletedLocked.setDeletedAt(11L);
+        when(conversationDao.findExactOwnedById(
+                "owner", "client", "owner", "102", false)).thenReturn(livePreview);
+        when(conversationDao.findExactOwnedById(
+                "owner", "client", "owner", "102", true)).thenReturn(deletedLocked);
+
+        assertThrows(OutputAuthorizationException.class,
+                () -> authorizer.lockAndAuthorize(
+                        "owner", "client", "102", "agent-1"));
+    }
+
+    @Test
     void rejectsTenantZeroCaseVariantsTargetMismatchAndChangedTask() {
         ConversationOutputSourceAuthorizer authorizer =
                 new ConversationOutputSourceAuthorizer(conversationDao, taskAccessService);

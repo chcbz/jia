@@ -77,7 +77,8 @@ public final class ConversationOutputSourceAuthorizer implements OutputSourceAut
                 || !Objects.equals(tenantId, conversation.getTenantId())
                 || !Objects.equals(clientId, conversation.getClientId())
                 || !Objects.equals(tenantId, conversation.getJiacn())
-                || !Objects.equals(Long.toString(conversation.getId()), sourceId)) {
+                || !Objects.equals(Long.toString(conversation.getId()), sourceId)
+                || conversation.getDeletedAt() != null) {
             throw denied();
         }
         if (conversation.getTargetAgentId() != null

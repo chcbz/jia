@@ -534,6 +534,7 @@ class OutputDeliveryRealDependenciesHttpIntegrationTest {
                   conversation_type VARCHAR(30),conversation_scope_type VARCHAR(30),
                   conversation_scope_key VARCHAR(200),task_id VARCHAR(100),target_agent_id VARCHAR(100),
                   status INT,tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,
+                  lifecycle_generation BIGINT NOT NULL DEFAULT 1,deleted_at BIGINT,
                   create_time BIGINT,update_time BIGINT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);

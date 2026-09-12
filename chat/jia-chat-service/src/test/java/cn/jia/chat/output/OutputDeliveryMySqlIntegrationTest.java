@@ -23,6 +23,7 @@ import cn.jia.agent.output.dao.impl.OutputUploadDaoImpl;
 import cn.jia.agent.output.dto.OutputPublishDTO;
 import cn.jia.agent.output.service.OutputDeliveryServiceImpl;
 import cn.jia.agent.output.service.TaskOutputVersionProvider;
+import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
 import cn.jia.agent.service.impl.AgentTaskEventWriterImpl;
 import cn.jia.chat.config.ChatOutputSchemaInitializer;
@@ -81,6 +82,7 @@ class OutputDeliveryMySqlIntegrationTest {
     private OutputRunAuthorizationService authorization;
     private TaskOutputVersionProvider taskProvider;
     private ConversationOutputVersionProvider chatProvider;
+    private ConversationOutputSourceAuthorizer chatSourceAuthorizer;
 
     @BeforeEach void setup() throws Exception {
         String base=env("OD02_MYSQL_URL");admin=new JdbcTemplate(ds(base));
@@ -100,6 +102,8 @@ class OutputDeliveryMySqlIntegrationTest {
                 sql.getMapper(AgentTaskOutputMapper.class),eventWriter);
         ChatConversationDao conversationDao=wire(new ChatConversationDaoImpl(),
                 sql.getMapper(ChatConversationMapper.class));
+        chatSourceAuthorizer=new ConversationOutputSourceAuthorizer(conversationDao,
+                mock(AgentTaskCollaborationAccessService.class));
         ChatOutputDao chatOutputDao=new ChatOutputDaoImpl(jdbc);
         chatProvider=new ConversationOutputVersionProvider(conversationDao,chatOutputDao);
         authorization=mock(OutputRunAuthorizationService.class);
@@ -176,6 +180,41 @@ class OutputDeliveryMySqlIntegrationTest {
             assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM output_object_reference WHERE output_id='race-output'",Integer.class));
             assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM output_mutation_receipt WHERE operation='publishTaskOutput' AND idempotency_key LIKE 'race-key-publish-%'",Integer.class));
         }finally{pool.shutdownNow();}
+    }
+
+    @Test void deletedConversationRejectsTicketSourceAuthorizationPublishAndEveryOwnerRead() {
+        service.publish(CHAT_BEARER,"deleted-chat-live-key","CONVERSATION","101",
+                request("chat-run","deleted-output","chat-object",null));
+        jdbc.update("""
+                UPDATE chat_conversation
+                SET deleted_at=?,lifecycle_generation=lifecycle_generation+1
+                WHERE id=101 AND deleted_at IS NULL
+                """,System.currentTimeMillis());
+
+        assertThrows(cn.jia.agent.output.OutputAuthorizationException.class,
+                () -> chatSourceAuthorizer.lockAndAuthorize(
+                        "owner","client","101","agent-1",
+                        cn.jia.agent.output.OutputSourceAccessMode.MUTATION));
+        assertThrows(cn.jia.agent.output.OutputAuthorizationException.class,
+                () -> chatSourceAuthorizer.lockAndAuthorize(
+                        "owner","client","101","agent-1",
+                        cn.jia.agent.output.OutputSourceAccessMode.RECEIPT_READ));
+
+        assertNotFound(() -> service.publish(CHAT_BEARER,"deleted-chat-publish-key",
+                "CONVERSATION","101",request("chat-run","deleted-output-2","chat-object",null)));
+        assertNotFound(() -> service.list(
+                "owner","client","owner","CONVERSATION","101",null,20));
+        assertNotFound(() -> service.listVersions(
+                "owner","client","owner","CONVERSATION","101","deleted-output",null,20));
+        assertNotFound(() -> service.getVersion(
+                "owner","client","owner","CONVERSATION","101","deleted-output","1"));
+        assertNotFound(() -> service.downloadVersion(
+                "owner","client","owner","CONVERSATION","101","deleted-output","1"));
+
+        assertEquals(0,jdbc.queryForObject(
+                "SELECT COUNT(*) FROM chat_output WHERE output_id='deleted-output-2'",Integer.class));
+        assertEquals(0,jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_mutation_receipt WHERE idempotency_key='deleted-chat-publish-key'",Integer.class));
     }
 
     @Test void publicationFailureRollsBackArtifactReferenceEventAndReceiptTogether() {
@@ -290,6 +329,12 @@ class OutputDeliveryMySqlIntegrationTest {
             key,"TASK","task-1",request("task-run","race-output","task-object",true));return 200;}
         catch(cn.jia.agent.output.OutputDeliveryException e){return e.status();}}
 
+    private void assertNotFound(ThrowingRunnable action){
+        cn.jia.agent.output.OutputDeliveryException failure=assertThrows(
+                cn.jia.agent.output.OutputDeliveryException.class,action::run);
+        assertEquals(404,failure.status());
+    }
+
     private boolean claimForGc(String objectId){TransactionTemplate tx=new TransactionTemplate(
             new DataSourceTransactionManager(dataSource));Boolean claimed=tx.execute(status->{long now=System.currentTimeMillis();
         outputDao.lockScopeQuota("owner","client");OutputUploadDao.ObjectRow object=outputDao.findObject(
@@ -393,6 +438,7 @@ class OutputDeliveryMySqlIntegrationTest {
                 CREATE TABLE chat_conversation(id BIGINT AUTO_INCREMENT PRIMARY KEY,title VARCHAR(200),jiacn VARCHAR(50),
                 conversation_type VARCHAR(30),conversation_scope_type VARCHAR(30),conversation_scope_key VARCHAR(200),task_id VARCHAR(100),
                 target_agent_id VARCHAR(100),status INT,tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,
+                lifecycle_generation BIGINT NOT NULL DEFAULT 1,deleted_at BIGINT,
                 create_time BIGINT,update_time BIGINT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         jdbc.update("INSERT INTO agent_task_meta(task_id,reward_status,collaboration_mode,risk_level,max_agents,review_required,task_version,current_event_version,tenant_id,client_id,create_time,update_time) VALUES ('task-1','running','single','low',1,0,0,0,'owner','client',1,1)");
@@ -408,4 +454,6 @@ class OutputDeliveryMySqlIntegrationTest {
     private DriverManagerDataSource ds(String url){DriverManagerDataSource d=new DriverManagerDataSource();d.setDriverClassName("com.mysql.cj.jdbc.Driver");d.setUrl(url);d.setUsername(env("OD02_MYSQL_USER"));d.setPassword(env("OD02_MYSQL_PASSWORD"));return d;}
     private static String url(String base,String db){int q=base.indexOf('?');String h=q<0?base:base.substring(0,q),tail=q<0?"":base.substring(q);int slash=h.indexOf('/',"jdbc:mysql://".length());return(slash<0?h+"/":h.substring(0,slash+1))+db+tail;}
     private static String env(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" missing");return v;}
+
+    @FunctionalInterface private interface ThrowingRunnable{void run() throws Exception;}
 }
