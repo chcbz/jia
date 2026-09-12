@@ -15,7 +15,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationConsentAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationConsentAuthenticationConverter;
-import org.springframework.web.client.RestTemplate;
+import cn.jia.oauth.config.OauthExternalHttpClient;
 import org.springframework.web.servlet.ModelAndView;
 import org.thymeleaf.spring6.SpringTemplateEngine;
 import org.thymeleaf.context.WebContext;
@@ -107,7 +107,7 @@ class OauthConsentTemplateTest {
     void controllerBuildsConsentModelFromStandardQueryParametersWithoutNimbusSessionModel() {
         OauthController controller = new OauthController(
                 mock(ClientService.class), mock(UserService.class), mock(AccountSecurityService.class),
-                mock(PermsService.class), mock(RestTemplate.class), mock(ThirdPartyLoginTransactionService.class));
+                mock(PermsService.class), mock(OauthExternalHttpClient.class), mock(ThirdPartyLoginTransactionService.class));
 
         ModelAndView view = controller.getAccessConfirmation(
                 "public-web", "consent-state", "openid profile openid");

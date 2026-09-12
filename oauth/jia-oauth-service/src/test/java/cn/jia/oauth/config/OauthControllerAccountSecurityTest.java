@@ -2,6 +2,7 @@ package cn.jia.oauth.config;
 
 import cn.jia.core.redis.ThirdPartyLoginTransactionService;
 import cn.jia.oauth.api.OauthController;
+import cn.jia.oauth.config.OauthExternalHttpClient;
 import cn.jia.oauth.service.ClientService;
 import cn.jia.test.BaseMockTest;
 import cn.jia.user.entity.CustomUserDetails;
@@ -17,8 +18,6 @@ import org.mockito.Mock;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.web.client.RestTemplate;
-
 import java.util.List;
 import java.util.Optional;
 
@@ -30,7 +29,7 @@ class OauthControllerAccountSecurityTest extends BaseMockTest {
     @Mock UserService userService;
     @Mock AccountSecurityService accountSecurityService;
     @Mock PermsService permsService;
-    @Mock RestTemplate restTemplate;
+    @Mock OauthExternalHttpClient externalHttpClient;
     @Mock ThirdPartyLoginTransactionService transactions;
 
     @AfterEach
@@ -75,7 +74,7 @@ class OauthControllerAccountSecurityTest extends BaseMockTest {
 
     private String complete(UserEntity user) {
         OauthController controller = new OauthController(clientService, userService, accountSecurityService,
-                permsService, restTemplate, transactions);
+                permsService, externalHttpClient, transactions);
         MockHttpServletRequest request = new MockHttpServletRequest();
         ThirdPartyLoginTransactionService.Transaction transaction =
                 new ThirdPartyLoginTransactionService.Transaction("github",
