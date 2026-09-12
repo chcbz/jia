@@ -30,10 +30,24 @@ public class UriAccessLogFilter implements Filter {
 			return;
 		}
 
-		EsRequestWrapper esRequestWrapper = new EsRequestWrapper((HttpServletRequest) request);
+		EsRequestWrapper esRequestWrapper = isStreamingOutputUpload(httpRequest)
+				? EsRequestWrapper.metadataOnly(httpRequest)
+				: new EsRequestWrapper(httpRequest);
 		LogService logService = SpringContextHolder.getBean(LogService.class);
 		logService.addLog(esRequestWrapper);
 		filterChain.doFilter(esRequestWrapper, response);
+	}
+
+	static boolean isStreamingOutputUpload(HttpServletRequest request) {
+		if (!"PUT".equalsIgnoreCase(request.getMethod())) {
+			return false;
+		}
+		String path = request.getRequestURI();
+		String contextPath = request.getContextPath();
+		if (contextPath != null && !contextPath.isEmpty() && path.startsWith(contextPath)) {
+			path = path.substring(contextPath.length());
+		}
+		return path.matches("/agent/output-uploads/[^/]+/content");
 	}
 
 	@Override

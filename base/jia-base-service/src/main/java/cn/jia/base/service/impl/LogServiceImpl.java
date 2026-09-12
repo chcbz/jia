@@ -86,9 +86,13 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
 
         String body = request.getBody();
         Map<String, Object> query;
-        if (request.getQueryString() != null) {
+        if (body == null) {
+            query = request.getQueryString() == null
+                    ? Map.of()
+                    : parseUrlEncoded(request.getQueryString());
+        } else if (request.getQueryString() != null) {
             query = parseUrlEncoded(request.getQueryString());
-        } else if (body == null || body.isBlank() || "GET".equalsIgnoreCase(request.getMethod())) {
+        } else if (body.isBlank() || "GET".equalsIgnoreCase(request.getMethod())) {
             query = sanitizeServletParameters(request);
         } else {
             query = Map.of();
