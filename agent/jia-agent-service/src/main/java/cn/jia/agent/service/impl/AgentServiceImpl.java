@@ -2670,6 +2670,11 @@ public class AgentServiceImpl implements AgentService {
         dto.setStatus(meta.getRewardStatus());
         dto.setRequiredAbilities(parseList(meta.getRequiredAbilities()));
         dto.setReward(meta.getReward());
+        if (meta.getCoordinatorAgentId() != null) {
+            require(isExactStoredText(meta.getCoordinatorAgentId(), 100),
+                    "Persisted task coordinatorAgentId is invalid");
+            dto.setCoordinatorAgentId(meta.getCoordinatorAgentId());
+        }
         List<String> assignedAgentIds = resolveTaskAssigneeIds(meta);
         applyTaskAssignees(dto, assignedAgentIds);
         dto.setCreatedAt(meta.getCreateTime());

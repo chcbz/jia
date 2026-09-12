@@ -3094,6 +3094,29 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void getTaskProjectsExactStoredCoordinatorWithoutInferringOrWriting() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setTaskId("task-coordinator");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(4L);
+        meta.setCoordinatorAgentId("agent-coordinator");
+        when(agentTaskMetaDao.findByTaskId(
+                "juyiting", "jia_client", "task-coordinator")).thenReturn(meta);
+
+        AgentTaskDTO task = agentService.getTask("task-coordinator");
+
+        assertEquals("agent-coordinator", task.getCoordinatorAgentId());
+        assertEquals(List.of(), task.getAssignedAgentIds());
+        verify(agentTaskMetaDao).findByTaskId(
+                "juyiting", "jia_client", "task-coordinator");
+        verify(agentTaskMetaDao, never()).updateById(any());
+        verify(agentRuntimeDao, never()).updateById(any());
+        verifyNoInteractions(taskEventWriter, eventPublisherProvider, apiKeyServiceProvider);
+    }
+
+    @Test
     void scopedTaskProjectionRejectsCaseDriftFromPersistence() {
         AgentTaskMetaEntity drifted = new AgentTaskMetaEntity();
         drifted.setTaskId("task-001");
