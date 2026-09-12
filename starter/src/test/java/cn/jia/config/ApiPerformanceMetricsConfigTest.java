@@ -14,8 +14,13 @@ import org.springframework.boot.micrometer.metrics.MaximumAllowableTagsMeterFilt
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.http.server.observation.ServerRequestObservationContext;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -23,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ApiPerformanceMetricsConfigTest {
@@ -117,6 +123,49 @@ class ApiPerformanceMetricsConfigTest {
     }
 
     @Test
+    void observesInflightSlowAndDeadlineCountersWithoutRouteTags() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AtomicLong now = new AtomicLong();
+        ApiPerformanceMetricsConfig.HttpServerObservationHandler handler =
+                new ApiPerformanceMetricsConfig.HttpServerObservationHandler(registry, 1000, 3000, now::get);
+        ServerRequestObservationContext slowContext = new ServerRequestObservationContext(
+                new MockHttpServletRequest(), new MockHttpServletResponse());
+        handler.onStart(slowContext);
+        assertEquals(1.0, registry.find(ApiPerformanceMetricsConfig.HTTP_INFLIGHT).gauge().value());
+        now.addAndGet(TimeUnit.MILLISECONDS.toNanos(1000));
+        handler.onStop(slowContext);
+
+        ServerRequestObservationContext exhaustedContext = new ServerRequestObservationContext(
+                new MockHttpServletRequest(), new MockHttpServletResponse());
+        handler.onStart(exhaustedContext);
+        now.addAndGet(TimeUnit.MILLISECONDS.toNanos(3000));
+        handler.onStop(exhaustedContext);
+        handler.onStop(exhaustedContext);
+
+        assertEquals(0.0, registry.find(ApiPerformanceMetricsConfig.HTTP_INFLIGHT).gauge().value());
+        assertEquals(2.0, registry.find(ApiPerformanceMetricsConfig.HTTP_SLOW).counter().count());
+        assertEquals(1.0, registry.find(ApiPerformanceMetricsConfig.HTTP_DEADLINE_EXHAUSTED).counter().count());
+        assertTrue(registry.find(ApiPerformanceMetricsConfig.HTTP_INFLIGHT).gauge().getId().getTags().isEmpty());
+        assertTrue(registry.find(ApiPerformanceMetricsConfig.HTTP_SLOW).counter().getId().getTags().isEmpty());
+        assertTrue(registry.find(ApiPerformanceMetricsConfig.HTTP_DEADLINE_EXHAUSTED).counter().getId().getTags().isEmpty());
+        assertTrue(handler.supportsContext(slowContext));
+        assertFalse(handler.supportsContext(new io.micrometer.observation.Observation.Context()));
+    }
+
+    @Test
+    void rejectsInvalidLowCardinalityMetricThresholds() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ApiPerformanceMetricsConfig.HttpServerObservationHandler(
+                        new SimpleMeterRegistry(), 0, 3000, System::nanoTime));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ApiPerformanceMetricsConfig.HttpServerObservationHandler(
+                        new SimpleMeterRegistry(), 1000, 0, System::nanoTime));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ApiPerformanceMetricsConfig.HttpServerObservationHandler(
+                        new SimpleMeterRegistry(), 3001, 3000, System::nanoTime));
+    }
+
+    @Test
     void leavesUnrelatedMetersAndDisabledBootBaselineUntouched() {
         contextRunner.run(context -> {
             MeterRegistry registry = context.getBean(MeterRegistry.class);
@@ -132,6 +181,7 @@ class ApiPerformanceMetricsConfigTest {
         contextRunner.withPropertyValues("jia.metrics.http.enabled=false").run(context -> {
             assertFalse(context.containsBean("apiPerformanceMetricsDefaults"));
             assertFalse(context.containsBean("apiPerformanceHttpServerRequestsMeterFilter"));
+            assertFalse(context.containsBean("apiPerformanceHttpObservationHandler"));
             assertNull(context.getEnvironment().getProperty(ApiPerformanceMetricsConfig.MAX_URI_TAGS_PROPERTY));
         });
 
