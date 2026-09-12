@@ -60,10 +60,8 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
 
     @Override
     public List<AgentRuntimeEntity> findMapVisible(String clientId) {
-        return baseMapper.selectList(new LambdaQueryWrapper<AgentRuntimeEntity>()
-                .eq(AgentRuntimeEntity::getClientId, clientId)
-                .in(AgentRuntimeEntity::getStatus, AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY)
-                .orderByDesc(AgentRuntimeEntity::getLastSeenAt));
+        requireExactId(clientId, "clientId");
+        return baseMapper.findMapVisibleByExactClient(clientId);
     }
 
     @Override

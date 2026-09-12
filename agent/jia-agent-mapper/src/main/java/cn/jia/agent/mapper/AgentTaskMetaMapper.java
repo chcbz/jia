@@ -145,6 +145,57 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("limit") int limit);
 
     @Select("""
+            <script>
+            SELECT task.tenant_id AS tenantId,
+                   task.client_id AS clientId,
+                   task.assigned_agent_id AS agentId,
+                   COUNT(*) AS taskCount,
+                   SUM(CASE
+                         WHEN CAST(task.reward_status AS BINARY) = CAST('completed' AS BINARY)
+                          AND OCTET_LENGTH(task.reward_status) = OCTET_LENGTH('completed')
+                         THEN 1 ELSE 0 END) AS completedTaskCount,
+                   SUM(CASE
+                         WHEN CAST(task.reward_status AS BINARY) = CAST('failed' AS BINARY)
+                          AND OCTET_LENGTH(task.reward_status) = OCTET_LENGTH('failed')
+                         THEN 1 ELSE 0 END) AS failedTaskCount,
+                   SUM(CASE
+                         WHEN CAST(task.reward_status AS BINARY) = CAST('completed' AS BINARY)
+                          AND OCTET_LENGTH(task.reward_status) = OCTET_LENGTH('completed')
+                          AND task.started_at IS NOT NULL
+                          AND task.completed_at IS NOT NULL
+                          AND task.completed_at &gt;= task.started_at
+                         THEN 1 ELSE 0 END) AS completedDurationCount,
+                   COALESCE(SUM(CASE
+                         WHEN CAST(task.reward_status AS BINARY) = CAST('completed' AS BINARY)
+                          AND OCTET_LENGTH(task.reward_status) = OCTET_LENGTH('completed')
+                          AND task.started_at IS NOT NULL
+                          AND task.completed_at IS NOT NULL
+                          AND task.completed_at &gt;= task.started_at
+                         THEN FLOOR((task.completed_at - task.started_at) / 1000)
+                         ELSE 0 END), 0) AS completedDurationSeconds
+            FROM agent_task_meta task
+            WHERE
+            <foreach collection="scopes" item="scope" open="(" separator=" OR " close=")">
+              (task.tenant_id = #{scope.tenantId}
+               AND task.client_id = #{scope.clientId}
+               AND task.assigned_agent_id = #{scope.agentId}
+               AND CAST(task.tenant_id AS BINARY) = CAST(#{scope.tenantId} AS BINARY)
+               AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{scope.tenantId})
+               AND CAST(task.client_id AS BINARY) = CAST(#{scope.clientId} AS BINARY)
+               AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{scope.clientId})
+               AND CAST(task.assigned_agent_id AS BINARY) = CAST(#{scope.agentId} AS BINARY)
+               AND OCTET_LENGTH(task.assigned_agent_id) = OCTET_LENGTH(#{scope.agentId}))
+            </foreach>
+            GROUP BY task.tenant_id, CAST(task.tenant_id AS BINARY), OCTET_LENGTH(task.tenant_id),
+                     task.client_id, CAST(task.client_id AS BINARY), OCTET_LENGTH(task.client_id),
+                     task.assigned_agent_id, CAST(task.assigned_agent_id AS BINARY),
+                     OCTET_LENGTH(task.assigned_agent_id)
+            </script>
+            """)
+    List<AgentTaskStatsRow> selectStatsByAgentScopes(
+            @Param("scopes") List<AgentTaskStatsScope> scopes);
+
+    @Select("""
             SELECT task.*
             FROM agent_task_meta task
             WHERE task.tenant_id = #{tenantId}

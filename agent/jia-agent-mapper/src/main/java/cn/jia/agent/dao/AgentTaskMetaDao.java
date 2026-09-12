@@ -2,6 +2,8 @@ package cn.jia.agent.dao;
 
 import cn.jia.agent.entity.AgentTaskAggregationSnapshotRow;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.mapper.AgentTaskStatsRow;
+import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.core.dao.IBaseDao;
 
 import java.util.List;
@@ -42,6 +44,8 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
 
     List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit);
+
+    List<AgentTaskStatsRow> findStatsByAgents(List<AgentTaskStatsScope> scopes);
 
     List<AgentTaskMetaEntity> search(
             String tenantId, String clientId, String status, String ability);

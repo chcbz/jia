@@ -41,6 +41,8 @@ import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
+import cn.jia.agent.mapper.AgentTaskStatsRow;
+import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentHostedBindingTransaction;
 import cn.jia.agent.service.AgentHostedRuntimePublicationWorker;
@@ -363,16 +365,26 @@ public class AgentServiceImpl implements AgentService {
         PageHelper.startPage(pageNum, pageSize);
         PageInfo<AgentRuntimeEntity> agents = PageInfo.of(
                 agentRuntimeDao.findRosterByOwner(clientId, ownerJiacn, status, ability));
-        return agents.convert(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn));
+        agents.getList().forEach(runtime -> requireBatchRuntimeScope(
+                runtime, clientId, ownerJiacn));
+        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(agents.getList(), false);
+        return agents.convert(runtime -> toRuntimeDTO(
+                runtime, clientId, ownerJiacn, enrichment));
     }
 
     @Override
     public List<AgentRuntimeDTO> listMapAgents() {
-        List<AgentRuntimeDTO> agents = new ArrayList<>(agentRuntimeDao.findMapVisible(resolveCurrentClientId())
-                .stream()
-                .map(this::toRuntimeDTO)
+        String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
+        List<AgentRuntimeEntity> visible = Optional.ofNullable(agentRuntimeDao.findMapVisible(clientId))
+                .orElseGet(Collections::emptyList);
+        visible.forEach(runtime -> requireBatchRuntimeScope(runtime, clientId, null));
+        RuntimeBatchEnrichment enrichment = loadRuntimeBatchEnrichment(visible, true);
+        List<AgentRuntimeDTO> agents = new ArrayList<>(visible.stream()
+                .map(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn, enrichment))
                 .toList());
-        agents.add(buildSongjiangDTO());
+        agents.add(buildSongjiangDTO(enrichment.personaByCode(
+                AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE)));
         return agents;
     }
 
@@ -1553,6 +1565,49 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
+    private AgentRuntimeDTO toRuntimeDTO(
+            AgentRuntimeEntity entity, String clientId, String ownerJiacn,
+            RuntimeBatchEnrichment enrichment) {
+        AgentRuntimeDTO dto = new AgentRuntimeDTO();
+        dto.setAgentId(entity.getAgentId());
+        dto.setName(entity.getName());
+        dto.setAvatar(entity.getAvatar());
+        dto.setOwnerJiacn(entity.getOwnerJiacn());
+        dto.setPersonaCode(entity.getPersonaCode());
+        dto.setPersonaName(entity.getPersonaName());
+        AgentPersonaEntity persona = enrichment.resolvePersona(entity);
+        if (persona != null) {
+            dto.setName(StringUtil.isBlank(dto.getName()) ? persona.getName() : dto.getName());
+            dto.setAvatar(StringUtil.isBlank(dto.getAvatar()) ? persona.getAvatar() : dto.getAvatar());
+            dto.setPersonaCode(persona.getPersonaCode());
+            dto.setPersonaName(persona.getName());
+            dto.setTitle(persona.getTitle());
+            dto.setStarName(persona.getStarName());
+            dto.setRankNo(persona.getRankNo());
+            dto.setVisualConfig(persona.getVisualConfig());
+            dto.setSystemAgent(Boolean.TRUE.equals(persona.getSystemAgent()));
+            dto.setAbilities(parseList(StringUtil.isBlank(entity.getAbilities())
+                    ? persona.getAbilities() : entity.getAbilities()));
+        } else {
+            dto.setSystemAgent(false);
+            dto.setAbilities(parseList(entity.getAbilities()));
+        }
+        dto.setStatus(entity.getStatus());
+        dto.setEndpoint(entity.getEndpoint());
+        dto.setCurrentTaskId(entity.getCurrentTaskId());
+        dto.setCurrentTaskTitle(entity.getCurrentTaskTitle());
+        dto.setLastSeenAt(entity.getLastSeenAt());
+        dto.setErrorMessage(entity.getErrorMessage());
+        dto.setBound(!StringUtil.isBlank(entity.getOwnerJiacn()));
+        dto.setBoundToMe(Objects.equals(clientId, entity.getClientId())
+                && Objects.equals(ownerJiacn, entity.getOwnerJiacn()));
+        dto.setCanBind(false);
+        dto.setCanOperate(Boolean.TRUE.equals(dto.getBoundToMe())
+                && !Boolean.TRUE.equals(dto.getSystemAgent()));
+        dto.setStats(buildStats(entity, persona, enrichment.taskStats(entity)));
+        return dto;
+    }
+
     private AgentRuntimeDTO toCatalogDTO(AgentPersonaEntity persona, String clientId, String jiacn) {
         AgentPersonaBindingEntity binding = Boolean.TRUE.equals(persona.getSystemAgent())
                 ? null
@@ -1594,7 +1649,11 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentRuntimeDTO buildSongjiangDTO() {
-        AgentPersonaEntity persona = agentPersonaDao.findByCode(AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE);
+        return buildSongjiangDTO(agentPersonaDao.findByCode(
+                AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE));
+    }
+
+    private AgentRuntimeDTO buildSongjiangDTO(AgentPersonaEntity persona) {
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID);
         dto.setPersonaCode(AgentConstants.BUILTIN_SONGJIANG_PERSONA_CODE);
@@ -1618,7 +1677,7 @@ public class AgentServiceImpl implements AgentService {
             statsEntity.setAgentId(dto.getAgentId());
             statsEntity.setPersonaCode(persona.getPersonaCode());
             statsEntity.setPersonaName(persona.getName());
-            dto.setStats(buildStats(statsEntity));
+            dto.setStats(buildStats(statsEntity, persona, null));
         } else {
             dto.setName("宋江");
             dto.setPersonaName("宋江");
@@ -1636,6 +1695,172 @@ public class AgentServiceImpl implements AgentService {
             }
         }
         return StringUtil.isBlank(entity.getPersonaName()) ? null : agentPersonaDao.findByName(entity.getPersonaName());
+    }
+
+    private RuntimeBatchEnrichment loadRuntimeBatchEnrichment(
+            List<AgentRuntimeEntity> runtimes, boolean includeSongjiang) {
+        if (runtimes.isEmpty() && !includeSongjiang) {
+            return RuntimeBatchEnrichment.empty();
+        }
+        List<AgentPersonaEntity> personas = Optional.ofNullable(
+                agentPersonaDao.findRuntimeProjection()).orElseGet(Collections::emptyList);
+        LinkedHashMap<String, AgentPersonaEntity> personasByCode = new LinkedHashMap<>();
+        LinkedHashMap<String, AgentPersonaEntity> personasByName = new LinkedHashMap<>();
+        for (AgentPersonaEntity persona : personas) {
+            if (persona == null) {
+                throw new IllegalArgumentException("Runtime persona projection contains a null row");
+            }
+            putUniquePersona(personasByCode, persona.getPersonaCode(), persona, "personaCode");
+            putUniquePersona(personasByName, persona.getName(), persona, "personaName");
+        }
+
+        LinkedHashMap<RuntimeScopeKey, AgentTaskStatsScope> scopes = new LinkedHashMap<>();
+        for (AgentRuntimeEntity runtime : runtimes) {
+            RuntimeScopeKey key = RuntimeScopeKey.from(runtime);
+            if (key != null) {
+                scopes.putIfAbsent(key, new AgentTaskStatsScope(
+                        key.tenantId(), key.clientId(), key.agentId()));
+            }
+        }
+        List<AgentTaskStatsRow> rows = scopes.isEmpty()
+                ? List.of()
+                : Optional.ofNullable(agentTaskMetaDao.findStatsByAgents(
+                        new ArrayList<>(scopes.values())))
+                        .orElseGet(Collections::emptyList);
+        LinkedHashMap<RuntimeScopeKey, AgentTaskStatsRow> statsByScope = new LinkedHashMap<>();
+        for (AgentTaskStatsRow row : rows) {
+            RuntimeScopeKey key = RuntimeScopeKey.from(row);
+            if (!scopes.containsKey(key)) {
+                throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                        "Agent task statistics escaped the byte-exact runtime scope");
+            }
+            validateTaskStatsRow(row);
+            if (statsByScope.putIfAbsent(key, row) != null) {
+                throw new IllegalArgumentException(
+                        "Agent task statistics returned duplicate byte-exact scope rows");
+            }
+        }
+        return new RuntimeBatchEnrichment(
+                Map.copyOf(personasByCode), Map.copyOf(personasByName),
+                Map.copyOf(statsByScope));
+    }
+
+    private void putUniquePersona(Map<String, AgentPersonaEntity> target, String key,
+            AgentPersonaEntity persona, String field) {
+        if (StringUtil.isBlank(key)) {
+            return;
+        }
+        AgentPersonaEntity previous = target.putIfAbsent(key, persona);
+        if (previous != null && previous != persona) {
+            throw new IllegalArgumentException(
+                    "Runtime persona projection contains duplicate " + field);
+        }
+    }
+
+    private void requireBatchRuntimeScope(
+            AgentRuntimeEntity runtime, String expectedClientId, String expectedOwnerJiacn) {
+        boolean valid = runtime != null
+                && isExactStoredText(runtime.getAgentId(), 100)
+                && isExactStoredText(runtime.getClientId(), 50)
+                && isExactStoredText(runtime.getOwnerJiacn(), 50)
+                && runtime.getBindingId() != null
+                && runtime.getBindingId() > 0
+                && Objects.equals(expectedClientId, runtime.getClientId())
+                && (expectedOwnerJiacn == null
+                        || Objects.equals(expectedOwnerJiacn, runtime.getOwnerJiacn()));
+        if (!valid) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Agent runtime batch row is outside the byte-exact requested scope");
+        }
+    }
+
+    private void validateTaskStatsRow(AgentTaskStatsRow row) {
+        if (row == null || !isExactStoredText(row.getTenantId(), 50)
+                || !isExactStoredText(row.getClientId(), 50)
+                || !isExactStoredText(row.getAgentId(), 100)
+                || negative(row.getTaskCount())
+                || negative(row.getCompletedTaskCount())
+                || negative(row.getFailedTaskCount())
+                || negative(row.getCompletedDurationCount())
+                || negative(row.getCompletedDurationSeconds())) {
+            throw new IllegalArgumentException("Agent task statistics row is invalid");
+        }
+        require(row.getTaskCount() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
+                "Agent task statistics snapshot exceeds the safe limit");
+        require(row.getCompletedTaskCount() <= row.getTaskCount()
+                        && row.getFailedTaskCount() <= row.getTaskCount()
+                        && row.getCompletedDurationCount() <= row.getCompletedTaskCount(),
+                "Agent task statistics aggregate is inconsistent");
+    }
+
+    private boolean negative(Long value) {
+        return value == null || value < 0;
+    }
+
+    private AgentStatsDTO buildStats(AgentRuntimeEntity entity, AgentPersonaEntity persona,
+            AgentTaskStatsRow taskStats) {
+        AgentStatsDTO stats = new AgentStatsDTO();
+        if (persona != null) {
+            stats.setPower(persona.getPower());
+            stats.setIntelligence(persona.getIntelligence());
+            stats.setLeadership(persona.getLeadership());
+        }
+        if (taskStats == null) {
+            stats.setCompletedTaskCount(0);
+            stats.setFailedTaskCount(0);
+            return stats;
+        }
+        stats.setCompletedTaskCount(Math.toIntExact(taskStats.getCompletedTaskCount()));
+        stats.setFailedTaskCount(Math.toIntExact(taskStats.getFailedTaskCount()));
+        if (taskStats.getCompletedDurationCount() > 0) {
+            stats.setAverageDurationSeconds(taskStats.getCompletedDurationSeconds()
+                    / taskStats.getCompletedDurationCount());
+        }
+        return stats;
+    }
+
+    private record RuntimeScopeKey(String tenantId, String clientId, String agentId) {
+        private static RuntimeScopeKey from(AgentRuntimeEntity runtime) {
+            if (runtime == null || StringUtil.isBlank(runtime.getOwnerJiacn())
+                    || StringUtil.isBlank(runtime.getClientId())
+                    || StringUtil.isBlank(runtime.getAgentId())) {
+                return null;
+            }
+            return new RuntimeScopeKey(
+                    runtime.getOwnerJiacn(), runtime.getClientId(), runtime.getAgentId());
+        }
+
+        private static RuntimeScopeKey from(AgentTaskStatsRow row) {
+            if (row == null) {
+                return null;
+            }
+            return new RuntimeScopeKey(row.getTenantId(), row.getClientId(), row.getAgentId());
+        }
+    }
+
+    private record RuntimeBatchEnrichment(
+            Map<String, AgentPersonaEntity> personasByCode,
+            Map<String, AgentPersonaEntity> personasByName,
+            Map<RuntimeScopeKey, AgentTaskStatsRow> statsByScope) {
+        private static RuntimeBatchEnrichment empty() {
+            return new RuntimeBatchEnrichment(Map.of(), Map.of(), Map.of());
+        }
+
+        private AgentPersonaEntity resolvePersona(AgentRuntimeEntity runtime) {
+            AgentPersonaEntity byCode = StringUtil.isBlank(runtime.getPersonaCode())
+                    ? null : personasByCode.get(runtime.getPersonaCode());
+            return byCode != null || StringUtil.isBlank(runtime.getPersonaName())
+                    ? byCode : personasByName.get(runtime.getPersonaName());
+        }
+
+        private AgentPersonaEntity personaByCode(String personaCode) {
+            return personasByCode.get(personaCode);
+        }
+
+        private AgentTaskStatsRow taskStats(AgentRuntimeEntity runtime) {
+            RuntimeScopeKey key = RuntimeScopeKey.from(runtime);
+            return key == null ? null : statsByScope.get(key);
+        }
     }
 
     private AgentStatsDTO buildStats(AgentRuntimeEntity entity) {

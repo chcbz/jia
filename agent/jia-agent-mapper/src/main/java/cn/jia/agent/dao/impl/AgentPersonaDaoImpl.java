@@ -7,6 +7,8 @@ import cn.jia.common.dao.BaseDaoImpl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
+import java.util.List;
+
 @Named
 public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPersonaEntity> implements AgentPersonaDao {
     @Override
@@ -21,5 +23,10 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
         return baseMapper.selectOne(new LambdaQueryWrapper<AgentPersonaEntity>()
                 .eq(AgentPersonaEntity::getPersonaCode, personaCode)
                 .last("limit 1"));
+    }
+
+    @Override
+    public List<AgentPersonaEntity> findRuntimeProjection() {
+        return baseMapper.selectRuntimeProjection();
     }
 }

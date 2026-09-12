@@ -4,6 +4,8 @@ import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.entity.AgentTaskAggregationSnapshotRow;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
+import cn.jia.agent.mapper.AgentTaskStatsRow;
+import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.util.DateUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -129,6 +131,21 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
         requireExactId(agentId, "agentId", 100);
         return baseMapper.selectByAgentInScope(
                 tenantId, clientId, agentId, TaskCollaborationDaoSupport.boundedLimit(limit));
+    }
+
+    @Override
+    public List<AgentTaskStatsRow> findStatsByAgents(List<AgentTaskStatsScope> scopes) {
+        if (scopes == null || scopes.isEmpty()) {
+            return List.of();
+        }
+        for (AgentTaskStatsScope scope : scopes) {
+            if (scope == null) {
+                throw new IllegalArgumentException("Agent task statistics scope is required");
+            }
+            TaskCollaborationDaoSupport.requireScope(scope.getTenantId(), scope.getClientId());
+            requireExactId(scope.getAgentId(), "agentId", 100);
+        }
+        return baseMapper.selectStatsByAgentScopes(scopes);
     }
 
     private void requireExactId(String value, String name, int maxLength) {
