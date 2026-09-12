@@ -10,6 +10,7 @@ import cn.jia.agent.entity.AgentSceneStateEntity;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.mapper.AgentSceneEventMapper;
 import cn.jia.agent.mapper.AgentScenePhaseReportMapper;
+import cn.jia.agent.mapper.AgentSceneSnapshotRow;
 import cn.jia.agent.mapper.AgentSceneStateMapper;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
@@ -151,6 +152,52 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
+    void snapshotQueryBuildsOneConsistentAllowlistedByteExactProjection() throws Exception {
+        Method method = AgentSceneStateMapper.class.getDeclaredMethod(
+                "selectSnapshotRows", String.class, String.class, String.class, long.class);
+        String sql = normalizeSql(method.getAnnotation(Select.class).value());
+
+        assertTrue(sql.contains("select snapshot_scope.scopetenantid"), sql);
+        assertTrue(sql.contains("from agent_scene_version"), sql);
+        assertTrue(sql.contains("coalesce(( select"), sql);
+        assertTrue(sql.contains("left join agent_runtime"), sql);
+        assertTrue(sql.contains("left join agent_scene_state"), sql);
+        assertTrue(sql.contains("agent_persona_binding"), sql);
+        assertTrue(sql.contains("agent_identity_registry"), sql);
+        assertTrue(sql.contains("agent_identity_alias"), sql);
+        assertTrue(sql.contains("runtime.status in ('online', 'busy')"), sql);
+        assertTrue(sql.contains("state.expires_at is null or state.expires_at > #{activeat}"), sql);
+        assertTrue(sql.contains("identity.owner_jiacn = #{tenantid}"), sql);
+        assertTrue(sql.contains("cast(identity.owner_jiacn as binary) = cast(#{tenantid} as binary)"), sql);
+        assertTrue(sql.contains("octet_length(identity.owner_jiacn) = octet_length(#{tenantid})"), sql);
+        assertTrue(sql.contains("cast(state.agent_id as binary) = cast(runtime.agent_id as binary)"), sql);
+        assertTrue(sql.contains("cast(state.persona_code as binary) = cast(runtime.persona_code as binary)"), sql);
+        assertFalse(sql.contains("agent_scene_event"), sql);
+        assertFalse(sql.contains("/agent/active"), sql);
+        assertFalse(sql.contains("select *"), sql);
+        for (String forbidden : List.of(
+                "runtime.name", "runtime.avatar", "runtime.token_hash", "runtime.endpoint",
+                "runtime.abilities", "runtime.current_task", "runtime.error_message")) {
+            assertFalse(sql.contains(forbidden), forbidden + ": " + sql);
+        }
+
+        assertEquals(Set.of(
+                "scopeTenantId", "scopeClientId", "scopeSceneId", "sceneVersion",
+                "agentId", "personaCode", "status", "stateAgentId", "statePersonaCode",
+                "behavior", "originRegionId", "targetRegionId", "relatedType", "relatedId",
+                "phase", "stateVersion", "startedAt", "expectedArrivalAt", "expiresAt"),
+                Arrays.stream(AgentSceneSnapshotRow.class.getDeclaredFields())
+                        .map(Field::getName).collect(java.util.stream.Collectors.toSet()));
+
+        AgentSceneStateMapper mapper = mock(AgentSceneStateMapper.class);
+        AgentSceneStateDao dao = new AgentSceneStateDaoImpl(mapper);
+        dao.findSnapshotRows("tenant-a", "client-a", "juyiting-main", 1234L);
+        verify(mapper).selectSnapshotRows("tenant-a", "client-a", "juyiting-main", 1234L);
+        verify(mapper, never()).selectList(any());
+        verify(mapper, never()).selectOne(any());
+    }
+
+    @Test
     void stateUpsertUsesAtomicMonotonicDuplicateKeyUpdate() throws Exception {
         Method method = AgentSceneStateMapper.class.getDeclaredMethod(
                 "upsertMonotonic", String.class, String.class, String.class, AgentSceneStateEntity.class);
@@ -228,6 +275,9 @@ class AgentSceneScopedDaoTest {
         assertTrue(sql.contains("tenant_id = #{tenantid}"), sql);
         assertTrue(sql.contains("client_id = #{clientid}"), sql);
         assertTrue(sql.contains("scene_id = #{sceneid}"), sql);
+        assertByteExactSqlScope(sql);
+        assertFalse(sql.contains("tenant_id = '0'"), sql);
+        assertFalse(sql.contains(" or "), sql);
 
         AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
         when(mapper.selectCurrentVersion("tenant-a", "client-a", "juyiting-main")).thenReturn(88L);
@@ -238,33 +288,33 @@ class AgentSceneScopedDaoTest {
     }
 
     @Test
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    void retainedEventBoundariesAndBacklogAreScopedAndOrdered() {
+    void retainedEventBoundariesAndBacklogUseByteExactScopedMapperQueries() throws Exception {
+        for (String methodName : List.of(
+                "selectEarliestVersion", "selectLatestVersion", "selectAfterVersion")) {
+            Method method = Arrays.stream(AgentSceneEventMapper.class.getDeclaredMethods())
+                    .filter(candidate -> candidate.getName().equals(methodName))
+                    .findFirst().orElseThrow();
+            String sql = normalizeSql(method.getAnnotation(Select.class).value());
+            assertByteExactSqlScope(sql);
+            assertFalse(sql.contains("tenant_id = '0'"), sql);
+        }
+        Method backlog = AgentSceneEventMapper.class.getDeclaredMethod(
+                "selectAfterVersion", String.class, String.class, String.class, long.class, int.class);
+        String backlogSql = normalizeSql(backlog.getAnnotation(Select.class).value());
+        assertTrue(backlogSql.contains("scene_version > #{sinceversion}"), backlogSql);
+        assertTrue(backlogSql.contains("order by scene_version asc"), backlogSql);
+        assertTrue(backlogSql.contains("limit #{limit}"), backlogSql);
+
         AgentSceneEventMapper mapper = mock(AgentSceneEventMapper.class);
         AgentSceneEventDao dao = new AgentSceneEventDaoImpl(mapper);
-
         dao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main");
         dao.findLatestSceneVersion("tenant-a", "client-a", "juyiting-main");
         dao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 39L, 50);
-
-        ArgumentCaptor<Wrapper<AgentSceneEventEntity>> boundaryCaptor = ArgumentCaptor.forClass(Wrapper.class);
-        verify(mapper, org.mockito.Mockito.times(2)).selectOne(boundaryCaptor.capture());
-        List<Wrapper<AgentSceneEventEntity>> boundaries = boundaryCaptor.getAllValues();
-        assertScoped(boundaries.get(0), "tenant-a", "client-a", "juyiting-main");
-        assertScoped(boundaries.get(1), "tenant-a", "client-a", "juyiting-main");
-        assertTrue(boundaries.get(0).getSqlSegment().toLowerCase(Locale.ROOT)
-                .contains("order by scene_version asc"));
-        assertTrue(boundaries.get(1).getSqlSegment().toLowerCase(Locale.ROOT)
-                .contains("order by scene_version desc"));
-
-        ArgumentCaptor<Wrapper<AgentSceneEventEntity>> backlogCaptor = ArgumentCaptor.forClass(Wrapper.class);
-        verify(mapper).selectList(backlogCaptor.capture());
-        String backlogSql = backlogCaptor.getValue().getSqlSegment().toLowerCase(Locale.ROOT);
-        assertScoped(backlogCaptor.getValue(), "tenant-a", "client-a", "juyiting-main");
-        assertTrue(backlogSql.contains("scene_version"), backlogSql);
-        assertTrue(backlogSql.contains(">"), backlogSql);
-        assertTrue(backlogSql.contains("order by scene_version asc"), backlogSql);
-        assertTrue(backlogSql.contains("limit 50"), backlogSql);
+        verify(mapper).selectEarliestVersion("tenant-a", "client-a", "juyiting-main");
+        verify(mapper).selectLatestVersion("tenant-a", "client-a", "juyiting-main");
+        verify(mapper).selectAfterVersion("tenant-a", "client-a", "juyiting-main", 39L, 50);
+        verify(mapper, never()).selectOne(any());
+        verify(mapper, never()).selectList(any());
     }
 
     @Test
@@ -325,9 +375,8 @@ class AgentSceneScopedDaoTest {
         AgentSceneEventMapper eventMapper = mock(AgentSceneEventMapper.class);
         new AgentSceneEventDaoImpl(eventMapper)
                 .findAfterVersion("tenant-b", "client-b", "juyiting-main", 12L, 50);
-        ArgumentCaptor<Wrapper<AgentSceneEventEntity>> eventCaptor = ArgumentCaptor.forClass(Wrapper.class);
-        verify(eventMapper).selectList(eventCaptor.capture());
-        assertScoped(eventCaptor.getValue(), "tenant-b", "client-b", "juyiting-main");
+        verify(eventMapper).selectAfterVersion(
+                "tenant-b", "client-b", "juyiting-main", 12L, 50);
 
         AgentScenePhaseReportMapper reportMapper = mock(AgentScenePhaseReportMapper.class);
         new AgentScenePhaseReportDaoImpl(reportMapper)
@@ -421,6 +470,18 @@ class AgentSceneScopedDaoTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> dao.findByAgent("", "client-a", "juyiting-main", "agent-songjiang"));
+    }
+
+    private void assertByteExactSqlScope(String sql) {
+        for (String dimension : List.of("tenant_id", "client_id", "scene_id")) {
+            String parameter = switch (dimension) {
+                case "tenant_id" -> "tenantid";
+                case "client_id" -> "clientid";
+                default -> "sceneid";
+            };
+            assertTrue(sql.contains("cast(" + dimension + " as binary) = cast(#{" + parameter + "} as binary)"), sql);
+            assertTrue(sql.contains("octet_length(" + dimension + ") = octet_length(#{" + parameter + "})"), sql);
+        }
     }
 
     private void assertScoped(Wrapper<?> wrapper, String tenantId, String clientId, String sceneId) {

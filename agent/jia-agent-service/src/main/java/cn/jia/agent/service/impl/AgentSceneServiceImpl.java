@@ -16,6 +16,7 @@ import cn.jia.agent.entity.AgentScenePhaseResultDTO;
 import cn.jia.agent.entity.AgentSceneSnapshotDTO;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentSceneStateEntity;
+import cn.jia.agent.mapper.AgentSceneSnapshotRow;
 import cn.jia.agent.service.AgentSceneEventBroker;
 import cn.jia.agent.service.AgentSceneEventBroker.SceneScope;
 import cn.jia.agent.service.AgentSceneService;
@@ -88,33 +89,53 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     public AgentSceneSnapshotDTO snapshot(String sceneId) {
         SceneScope scope = requireScope(sceneId);
         long now = System.currentTimeMillis();
-        List<AgentRuntimeEntity> roster = scopedRoster(scope);
-        Map<String, AgentRuntimeEntity> visibleByAgent = new HashMap<>();
-        List<AgentSceneAgentDTO> agents = new ArrayList<>();
-        for (AgentRuntimeEntity runtime : roster) {
-            if (!VISIBLE_STATUSES.contains(runtime.getStatus())
-                    || StringUtil.isBlank(runtime.getAgentId())
-                    || StringUtil.isBlank(runtime.getPersonaCode())) {
+        List<AgentSceneSnapshotRow> rows = safeList(stateDao.findSnapshotRows(
+                scope.tenantId(), scope.clientId(), scope.sceneId(), now));
+        if (rows.isEmpty()) {
+            throw new IllegalStateException("Scoped scene snapshot query returned no fence row");
+        }
+
+        Long sceneVersion = null;
+        Map<String, AgentSceneAgentDTO> agentsById = new HashMap<>();
+        List<AgentSceneStateDTO> states = new ArrayList<>();
+        for (AgentSceneSnapshotRow row : rows) {
+            requireSnapshotScope(scope, row);
+            if (sceneVersion == null) {
+                sceneVersion = row.getSceneVersion();
+            } else if (!sceneVersion.equals(row.getSceneVersion())) {
+                throw new IllegalStateException("Scoped scene snapshot contains inconsistent versions");
+            }
+            if (row.getAgentId() == null) {
+                requireEmptySnapshotAgentRow(row);
                 continue;
             }
-            visibleByAgent.put(runtime.getAgentId(), runtime);
-            agents.add(toAgentDTO(runtime));
+            if (StringUtil.isBlank(row.getAgentId())
+                    || StringUtil.isBlank(row.getPersonaCode())
+                    || !VISIBLE_STATUSES.contains(row.getStatus())
+                    || agentsById.putIfAbsent(row.getAgentId(), toAgentDTO(row)) != null) {
+                throw new IllegalStateException("Scoped scene snapshot contains an invalid Agent projection");
+            }
+            if (row.getStateAgentId() != null) {
+                if (!row.getAgentId().equals(row.getStateAgentId())
+                        || !row.getPersonaCode().equals(row.getStatePersonaCode())
+                        || (row.getExpiresAt() != null && row.getExpiresAt() <= now)) {
+                    throw new IllegalStateException("Scoped scene snapshot contains an invalid state projection");
+                }
+                states.add(toStateDTO(row));
+            } else {
+                requireEmptySnapshotStateRow(row);
+            }
         }
+        if (sceneVersion == null || sceneVersion < 0) {
+            throw new IllegalStateException("Scoped scene snapshot contains an invalid version");
+        }
+
+        List<AgentSceneAgentDTO> agents = new ArrayList<>(agentsById.values());
         agents.sort(Comparator.comparing(AgentSceneAgentDTO::getAgentId));
-
-        List<AgentSceneStateDTO> states = safeList(stateDao.findActiveByScene(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), now)).stream()
-                .filter(entity -> isActive(entity, now))
-                .filter(entity -> stateMatchesVisibleAgent(entity, visibleByAgent))
-                .map(AgentSceneServiceImpl::toStateDTO)
-                .sorted(Comparator.comparing(AgentSceneStateDTO::getAgentId))
-                .toList();
-
-        Long currentVersion = eventDao.findLatestSceneVersion(
-                scope.tenantId(), scope.clientId(), scope.sceneId());
+        states.sort(Comparator.comparing(AgentSceneStateDTO::getAgentId));
         AgentSceneSnapshotDTO snapshot = new AgentSceneSnapshotDTO();
         snapshot.setSceneId(scope.sceneId());
-        snapshot.setSceneVersion(currentVersion == null ? 0L : currentVersion);
+        snapshot.setSceneVersion(sceneVersion);
         snapshot.setGeneratedAt(now);
         snapshot.setAgents(agents);
         snapshot.setStates(states);
@@ -684,15 +705,25 @@ public class AgentSceneServiceImpl implements AgentSceneService {
 
     private SceneScope requireScope(String sceneId) {
         EsContext context = EsContextHolder.getContext();
-        String tenantId = trim(context.getJiacn());
-        String clientId = trim(context.getClientId());
+        if (context == null) {
+            throw new IllegalArgumentException("tenant jiacn, clientId and sceneId are required");
+        }
+        String tenantId = requireExactScopeId(context.getJiacn(), "tenant jiacn");
+        String clientId = requireExactScopeId(context.getClientId(), "clientId");
         String normalizedSceneId = trim(sceneId);
-        if (StringUtil.isBlank(tenantId)
-                || StringUtil.isBlank(clientId)
-                || StringUtil.isBlank(normalizedSceneId)) {
+        if (StringUtil.isBlank(normalizedSceneId)) {
             throw new IllegalArgumentException("tenant jiacn, clientId and sceneId are required");
         }
         return new SceneScope(tenantId, clientId, normalizedSceneId);
+    }
+
+    private static String requireExactScopeId(String value, String field) {
+        if (StringUtil.isBlank(value) || value.length() > 50
+                || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        return value;
     }
 
     private void requireText(String value, String field) {
@@ -701,22 +732,40 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         }
     }
 
-    private static boolean stateMatchesVisibleAgent(
-            AgentSceneStateEntity state,
-            Map<String, AgentRuntimeEntity> visibleByAgent) {
-        AgentRuntimeEntity runtime = visibleByAgent.get(state.getAgentId());
-        return runtime != null && runtime.getPersonaCode().equals(state.getPersonaCode());
+    private static void requireSnapshotScope(SceneScope scope, AgentSceneSnapshotRow row) {
+        if (row == null
+                || !scope.tenantId().equals(row.getScopeTenantId())
+                || !scope.clientId().equals(row.getScopeClientId())
+                || !scope.sceneId().equals(row.getScopeSceneId())
+                || row.getSceneVersion() == null
+                || row.getSceneVersion() < 0) {
+            throw new IllegalStateException("Scoped scene snapshot projection escaped its exact scope");
+        }
     }
 
-    private static boolean isActive(AgentSceneStateEntity state, long now) {
-        return state != null && (state.getExpiresAt() == null || state.getExpiresAt() > now);
+    private static void requireEmptySnapshotAgentRow(AgentSceneSnapshotRow row) {
+        if (row.getPersonaCode() != null || row.getStatus() != null || row.getStateAgentId() != null) {
+            throw new IllegalStateException("Scoped scene snapshot contains an orphan projection");
+        }
+        requireEmptySnapshotStateRow(row);
     }
 
-    private static AgentSceneAgentDTO toAgentDTO(AgentRuntimeEntity runtime) {
+    private static void requireEmptySnapshotStateRow(AgentSceneSnapshotRow row) {
+        if (row.getStatePersonaCode() != null || row.getBehavior() != null
+                || row.getOriginRegionId() != null || row.getTargetRegionId() != null
+                || row.getRelatedType() != null || row.getRelatedId() != null
+                || row.getPhase() != null || row.getStateVersion() != null
+                || row.getStartedAt() != null || row.getExpectedArrivalAt() != null
+                || row.getExpiresAt() != null) {
+            throw new IllegalStateException("Scoped scene snapshot contains a partial state projection");
+        }
+    }
+
+    private static AgentSceneAgentDTO toAgentDTO(AgentSceneSnapshotRow row) {
         AgentSceneAgentDTO agent = new AgentSceneAgentDTO();
-        agent.setAgentId(runtime.getAgentId());
-        agent.setPersonaCode(runtime.getPersonaCode());
-        agent.setStatus(runtime.getStatus());
+        agent.setAgentId(row.getAgentId());
+        agent.setPersonaCode(row.getPersonaCode());
+        agent.setStatus(row.getStatus());
         return agent;
     }
 
@@ -735,6 +784,23 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         entity.setExpectedArrivalAt(state.getExpectedArrivalAt());
         entity.setExpiresAt(state.getExpiresAt());
         return entity;
+    }
+
+    private static AgentSceneStateDTO toStateDTO(AgentSceneSnapshotRow row) {
+        AgentSceneStateDTO state = new AgentSceneStateDTO();
+        state.setAgentId(row.getStateAgentId());
+        state.setPersonaCode(row.getStatePersonaCode());
+        state.setBehavior(row.getBehavior());
+        state.setOriginRegionId(row.getOriginRegionId());
+        state.setTargetRegionId(row.getTargetRegionId());
+        state.setRelatedType(row.getRelatedType());
+        state.setRelatedId(row.getRelatedId());
+        state.setPhase(row.getPhase());
+        state.setStateVersion(row.getStateVersion());
+        state.setStartedAt(row.getStartedAt());
+        state.setExpectedArrivalAt(row.getExpectedArrivalAt());
+        state.setExpiresAt(row.getExpiresAt());
+        return state;
     }
 
     private static AgentSceneStateDTO toStateDTO(AgentSceneStateEntity entity) {
