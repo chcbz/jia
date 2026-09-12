@@ -1569,6 +1569,34 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void recommendTaskAssigneesPreservesRosterOrderWhenEligibilityAndScoresTie() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-001");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(0L);
+        meta.setRequiredAbilities("[\"planning\",\"execution\"]");
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
+                .thenReturn(meta);
+        AgentRuntimeEntity planner = ownedAgent("agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE,
+                "[\"planning\"]");
+        AgentRuntimeEntity executor = ownedAgent("agent-linchong", "林冲", AgentConstants.STATUS_ONLINE,
+                "[\"execution\"]");
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
+                .thenReturn(List.of(planner, executor));
+
+        List<AgentTaskRecommendationDTO> result = agentService.recommendTaskAssignees("task-001");
+
+        assertEquals(2, result.size());
+        assertTrue(result.stream().allMatch(candidate -> Boolean.TRUE.equals(candidate.getEligible())));
+        assertEquals(result.get(0).getScore(), result.get(1).getScore());
+        assertEquals(List.of("agent-wuyong", "agent-linchong"), result.stream()
+                .map(candidate -> candidate.getAgent().getAgentId()).toList());
+    }
+
+    @Test
     void autoAssignTaskSelectsOnlineAgentsThatCoverRequiredAbilities() {
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setId(1L);

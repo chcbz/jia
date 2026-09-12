@@ -1228,10 +1228,9 @@ public class AgentServiceImpl implements AgentService {
                     int eligibility = Boolean.compare(Boolean.TRUE.equals(right.getEligible()),
                             Boolean.TRUE.equals(left.getEligible()));
                     if (eligibility != 0) return eligibility;
-                    int score = Integer.compare(right.getScore(), left.getScore());
-                    if (score != 0) return score;
-                    return String.valueOf(left.getAgent().getAgentId())
-                            .compareTo(String.valueOf(right.getAgent().getAgentId()));
+                    // Stream sorting is stable: preserve the existing roster order on score ties.
+                    // Reordering tied candidates changes legacy team/leader assignment semantics.
+                    return Integer.compare(right.getScore(), left.getScore());
                 })
                 .limit(5)
                 .toList();
