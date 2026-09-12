@@ -145,6 +145,36 @@ class AgentCommandOperationsRealTransactionTest {
                 "SELECT COUNT(*) FROM agent_command_redrive_operation", Integer.class));
     }
 
+    @Test
+    void generatedGuardRetainsTerminalNullAndActiveUniquenessAcrossConnections() {
+        var accepted = service(true).acceptBrokerRedriveV1(
+                request(1L, "11111111-1111-1111-1111-111111111111", "guard regression"),
+                "guard-key-0001", NOW);
+        for (String state : List.of("PENDING", "SOURCE_REQUEUED", "NOT_ACQUIRED", "FAILED")) {
+            jdbc.update("UPDATE agent_command_redrive_operation SET settlement_state=? WHERE operation_id=?",
+                    state, accepted.operationId());
+            Integer expected = state.equals("SOURCE_REQUEUED") || state.equals("NOT_ACQUIRED") ? null : 1;
+            assertEquals(expected, jdbc.queryForObject(
+                    "SELECT redrive_guard FROM agent_command_redrive_operation WHERE operation_id=?",
+                    Integer.class, accepted.operationId()));
+        }
+        String duplicate = """
+                INSERT INTO agent_command_redrive_operation(
+                  operation_id,delivery_id,task_id,target_agent_id,command_id,source_event_id,source_message_id,
+                  source_attempt,wire_hash,requester_id,reason,ticket_reference,outcome_state,settlement_state,
+                  requested_at,version,tenant_id,client_id,create_time,update_time)
+                SELECT ?,delivery_id,task_id,target_agent_id,command_id,source_event_id,source_message_id,
+                  source_attempt,wire_hash,requester_id,reason,ticket_reference,outcome_state,settlement_state,
+                  requested_at,version,tenant_id,client_id,create_time,update_time
+                FROM agent_command_redrive_operation WHERE operation_id=?
+                """;
+        assertThrows(org.springframework.dao.DataIntegrityViolationException.class,
+                () -> jdbc.update(duplicate, "guard-duplicate", accepted.operationId()));
+        jdbc.update("UPDATE agent_command_redrive_operation SET settlement_state='SOURCE_REQUEUED'"
+                + " WHERE operation_id=?", accepted.operationId());
+        assertEquals(1, jdbc.update(duplicate, "guard-terminal-duplicate", accepted.operationId()));
+    }
+
     private AgentCommandOperationsServiceImpl service() {
         return service(false);
     }
@@ -340,6 +370,8 @@ class AgentCommandOperationsRealTransactionTest {
                   created_by VARCHAR(100) NOT NULL, created_at BIGINT NOT NULL,
                   UNIQUE(operation_id, phase))
                 """);
+        // H2 2.4.240 retains the closed DDL session for an optimized generated IN expression.
+        // Simple CASE preserves the production guard semantics across independent JDBC connections.
         jdbc.execute("""
                 CREATE TABLE agent_command_redrive_operation(
                   id BIGINT AUTO_INCREMENT PRIMARY KEY, operation_id VARCHAR(100) NOT NULL,
@@ -354,8 +386,8 @@ class AgentCommandOperationsRealTransactionTest {
                   disposition_guard INT GENERATED ALWAYS AS
                     (CASE WHEN outcome_state='PENDING' THEN 1 ELSE NULL END),
                   redrive_guard INT GENERATED ALWAYS AS
-                    (CASE WHEN settlement_state IN ('SOURCE_REQUEUED','NOT_ACQUIRED')
-                          THEN NULL ELSE 1 END),
+                    (CASE settlement_state WHEN 'SOURCE_REQUEUED' THEN NULL
+                          WHEN 'NOT_ACQUIRED' THEN NULL ELSE 1 END),
                   tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                   create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
                   UNIQUE(tenant_id, client_id, operation_id),
