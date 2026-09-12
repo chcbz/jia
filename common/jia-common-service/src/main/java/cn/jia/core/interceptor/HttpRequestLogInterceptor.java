@@ -1,94 +1,111 @@
 package cn.jia.core.interceptor;
 
-import cn.jia.core.security.SensitiveSanitizeConfig;
-import cn.jia.core.util.JsonUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.NamedThreadLocal;
+import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.HandlerMapping;
 
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
+/**
+ * Emits one bounded completion summary for slow or failed Spring MVC handler requests.
+ * This interceptor deliberately does not observe request headers, query parameters, or bodies.
+ */
 @Slf4j
 public class HttpRequestLogInterceptor implements HandlerInterceptor {
-    private static final ThreadLocal<Map<String, Long>> startTimeThreadLocal =
-            new NamedThreadLocal<>("HttpRequestLog StartTime");
-    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
-            .withZone(ZoneId.systemDefault());
-    private static final SensitiveSanitizeConfig REQUEST_LOG_SANITIZE_CONFIG = requestLogSanitizeConfig();
+    static final String REQUEST_LOG_STATE_ATTRIBUTE = HttpRequestLogInterceptor.class.getName() + ".state";
+    static final String REQUEST_CORRELATION_ID_ATTRIBUTE = HttpRequestLogInterceptor.class.getName() + ".requestId";
 
-    private static SensitiveSanitizeConfig requestLogSanitizeConfig() {
-        SensitiveSanitizeConfig config = SensitiveSanitizeConfig.defaults();
-        Set<String> secretFields = new LinkedHashSet<>(config.getSecretFields());
-        secretFields.addAll(Set.of("code", "code_verifier", "state"));
-        config.setSecretFields(secretFields);
-        return config;
+    private static final String UNMAPPED_ROUTE = "unmapped";
+    private static final String UNKNOWN_METHOD = "UNKNOWN";
+    private static final int MAX_ROUTE_LENGTH = 256;
+    private static final Pattern SAFE_METHOD = Pattern.compile("[A-Z]{1,16}");
+
+    private final long slowThresholdMillis;
+
+    public HttpRequestLogInterceptor() {
+        this(1000L);
+    }
+
+    public HttpRequestLogInterceptor(long slowThresholdMillis) {
+        this.slowThresholdMillis = Math.max(0L, slowThresholdMillis);
     }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        final long beginTime = System.currentTimeMillis();
-        startTimeThreadLocal.set(Optional.ofNullable(startTimeThreadLocal.get()).map(map -> {
-            map.put(handler.getClass().getName(), beginTime);
-            return map;
-        }).orElseGet(() -> {
-            Map<String, Long> map = new HashMap<>();
-            map.put(handler.getClass().getName(), beginTime);
-            return map;
-        }));
-        log.info("URI: {}  开始计时: {}  参数: {}",
-                request.getRequestURI(),
-                TIME_FORMATTER.format(Instant.ofEpochMilli(beginTime)),
-                requestParams(request));
+        synchronized (request) {
+            RequestLogState state = request.getAttribute(REQUEST_LOG_STATE_ATTRIBUTE) instanceof RequestLogState
+                    ? (RequestLogState) request.getAttribute(REQUEST_LOG_STATE_ATTRIBUTE)
+                    : new RequestLogState(nanoTime(), UUID.randomUUID().toString());
+            request.setAttribute(REQUEST_LOG_STATE_ATTRIBUTE, state);
+            request.setAttribute(REQUEST_CORRELATION_ID_ATTRIBUTE, state.requestId);
+        }
         return true;
     }
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
-        try {
-            final long beginTime = Optional.ofNullable(startTimeThreadLocal.get()).map(map ->
-                    map.get(handler.getClass().getName())).orElse(0L);
-            final long endTime = System.currentTimeMillis();
-            final Runtime runtime = Runtime.getRuntime();
-
-            log.info("URI: {}  计时结束：{}  耗时：{}ms  内存状态[最大:{}m 已分配:{}m 剩余可用:{}m]",
-                    request.getRequestURI(),
-                    TIME_FORMATTER.format(Instant.ofEpochMilli(endTime)),
-                    endTime - beginTime,
-                    runtime.maxMemory() / 1048576L,
-                    runtime.totalMemory() / 1048576L,
-                    (runtime.freeMemory() + (runtime.maxMemory() - runtime.totalMemory())) / 1048576L);
-        } finally {
-            Optional.ofNullable(startTimeThreadLocal.get()).ifPresent(map -> {
-                map.remove(handler.getClass().getName());
-                if (map.isEmpty()) {
-                    startTimeThreadLocal.remove();
-                }
-            });
+        RequestLogState state;
+        synchronized (request) {
+            Object candidate = request.getAttribute(REQUEST_LOG_STATE_ATTRIBUTE);
+            if (!(candidate instanceof RequestLogState)) {
+                return;
+            }
+            state = (RequestLogState) candidate;
+            if (state.completed) {
+                return;
+            }
+            state.completed = true;
         }
+
+        long durationMillis = TimeUnit.NANOSECONDS.toMillis(Math.max(0L, nanoTime() - state.startNanos));
+        int status = response.getStatus();
+        boolean failed = ex != null || status >= 400;
+        if (!failed && durationMillis < slowThresholdMillis) {
+            return;
+        }
+
+        log.warn("http_request_complete request_id={} method={} route={} status={} duration_ms={} outcome={}",
+                state.requestId, safeMethod(request.getMethod()), trustedRouteTemplate(request, handler), status,
+                durationMillis, failed ? "ERROR" : "SLOW");
     }
 
-    private String requestParams(HttpServletRequest httpRequest) {
-        try {
-            Map<String, String> paramMap = new HashMap<>();
-            Enumeration<String> enums = httpRequest.getParameterNames();
-            while (enums.hasMoreElements()) {
-                String paramName = enums.nextElement();
-                paramMap.put(paramName, httpRequest.getParameter(paramName));
-            }
-            return JsonUtil.toSafeJson(Map.of("param", paramMap), REQUEST_LOG_SANITIZE_CONFIG);
-        } catch (Exception e) {
-            log.warn("请求参数序列化失败", e);
-            return "{}";
+    protected long nanoTime() {
+        return System.nanoTime();
+    }
+
+    private String safeMethod(String method) {
+        return method != null && SAFE_METHOD.matcher(method).matches() ? method : UNKNOWN_METHOD;
+    }
+
+    private String trustedRouteTemplate(HttpServletRequest request, Object handler) {
+        if (!(handler instanceof HandlerMethod)) {
+            return UNMAPPED_ROUTE;
+        }
+        Object pattern = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        if (!(pattern instanceof String)) {
+            return UNMAPPED_ROUTE;
+        }
+        String route = (String) pattern;
+        if (route.isEmpty() || route.length() > MAX_ROUTE_LENGTH || route.indexOf('\r') >= 0 || route.indexOf('\n') >= 0
+                || route.indexOf('?') >= 0 || !route.startsWith("/")) {
+            return UNMAPPED_ROUTE;
+        }
+        return route;
+    }
+
+    private static final class RequestLogState {
+        private final long startNanos;
+        private final String requestId;
+        private boolean completed;
+
+        private RequestLogState(long startNanos, String requestId) {
+            this.startNanos = startNanos;
+            this.requestId = requestId;
         }
     }
 }
