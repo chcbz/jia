@@ -1,8 +1,10 @@
 package cn.jia.isp.service.impl;
 
 import cn.jia.core.exception.EsRuntimeException;
+import cn.jia.core.ldap.LdapFailureClassifier;
 import cn.jia.core.util.DataUtil;
 import cn.jia.isp.common.IspErrorConstants;
+import cn.jia.isp.ldap.LdapFailureException;
 import cn.jia.isp.entity.LdapUser;
 import cn.jia.isp.service.LdapUserService;
 import jakarta.inject.Inject;
@@ -32,8 +34,8 @@ public class LdapUserServiceImpl implements LdapUserService {
         try {
             return ldapTemplate.findOne(query().base("ou=users")
                     .where("uid").is(uid), LdapUser.class);
-        } catch (Exception e) {
-            throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
+        } catch (RuntimeException exception) {
+            throw classifiedReadFailure(exception);
         }
     }
 
@@ -68,8 +70,8 @@ public class LdapUserServiceImpl implements LdapUserService {
                 criteria.and("email").is(person.getEmail());
             }
             return ldapTemplate.findOne(criteria, LdapUser.class);
-        } catch (Exception e) {
-            throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
+        } catch (RuntimeException exception) {
+            throw classifiedReadFailure(exception);
         }
     }
 
@@ -105,9 +107,20 @@ public class LdapUserServiceImpl implements LdapUserService {
             }
             criteria.and(subCriteria);
             return ldapTemplate.find(criteria, LdapUser.class);
-        } catch (Exception e) {
-            throw new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
+        } catch (RuntimeException exception) {
+            throw classifiedReadFailure(exception);
         }
+    }
+
+    private EsRuntimeException classifiedReadFailure(RuntimeException exception) {
+        LdapFailureClassifier.Failure failure = LdapFailureClassifier.classify(exception);
+        if (failure == LdapFailureClassifier.Failure.TIMEOUT) {
+            return LdapFailureException.timeout();
+        }
+        if (failure == LdapFailureClassifier.Failure.UNAVAILABLE) {
+            return LdapFailureException.unavailable();
+        }
+        return new EsRuntimeException(IspErrorConstants.USER_NOT_EXIST);
     }
 
 }
