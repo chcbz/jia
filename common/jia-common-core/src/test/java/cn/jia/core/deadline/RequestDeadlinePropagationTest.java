@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,6 +48,44 @@ class RequestDeadlinePropagationTest {
         }
 
         assertEquals(Map.of(RequestDeadlinePropagation.HEADER_NAME, "500"), headers);
+    }
+
+    @Test
+    void strictHeaderPropagationUsesOneRemainingValueAndFailsBeforeWritingWhenExhausted() {
+        AtomicLong clock = new AtomicLong();
+        RequestDeadline deadline = RequestDeadline.start(700, clock::get);
+        Map<String, String> headers = new LinkedHashMap<>();
+
+        try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(deadline)) {
+            clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(200));
+            assertTrue(RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
+                    headers::put, SafeRequestTimeoutException.Dependency.HTTP));
+            assertEquals(Map.of(RequestDeadlinePropagation.HEADER_NAME, "500"), headers);
+
+            clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(500));
+            AtomicBoolean writerCalled = new AtomicBoolean();
+            SafeRequestTimeoutException exception = assertThrows(SafeRequestTimeoutException.class,
+                    () -> RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
+                            (name, value) -> writerCalled.set(true), SafeRequestTimeoutException.Dependency.HTTP));
+            assertFalse(writerCalled.get());
+            assertEquals(SafeRequestTimeoutException.Failure.REQUEST_DEADLINE_EXCEEDED, exception.failure());
+            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, exception.workState());
+            assertEquals(SafeRequestTimeoutException.Dependency.HTTP, exception.dependency());
+            assertFalse(exception.retryable());
+        }
+    }
+
+    @Test
+    void strictHeaderPropagationPreservesLegacyCallersAndRejectsInvalidArguments() {
+        AtomicBoolean writerCalled = new AtomicBoolean();
+
+        assertFalse(RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
+                (name, value) -> writerCalled.set(true), SafeRequestTimeoutException.Dependency.HTTP));
+        assertFalse(writerCalled.get());
+        assertThrows(IllegalArgumentException.class, () -> RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
+                null, SafeRequestTimeoutException.Dependency.HTTP));
+        assertThrows(NullPointerException.class, () -> RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
+                (name, value) -> { }, null));
     }
 
     @Test

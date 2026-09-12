@@ -26,6 +26,29 @@ public final class RequestDeadlinePropagation {
     }
 
     /**
+     * Writes the current remaining budget immediately before a downstream call starts. If a request context exists
+     * but no time remains, the call fails with the common safe-before-work timeout contract and the writer is not
+     * invoked. An absent context preserves legacy non-request callers.
+     */
+    public static boolean writeCurrentHeaderBeforeNewWork(BiConsumer<String, String> headerWriter,
+            SafeRequestTimeoutException.Dependency dependency) {
+        if (headerWriter == null) {
+            throw new IllegalArgumentException("headerWriter must not be null");
+        }
+        Objects.requireNonNull(dependency, "dependency");
+        Optional<RequestDeadline> current = RequestDeadlineContext.current();
+        if (current.isEmpty()) {
+            return false;
+        }
+        long remainingMillis = current.orElseThrow().remainingMillis();
+        if (remainingMillis <= 0) {
+            throw SafeRequestTimeoutException.deadlineBeforeWork(dependency);
+        }
+        headerWriter.accept(HEADER_NAME, Long.toString(remainingMillis));
+        return true;
+    }
+
+    /**
      * Explicit adoption point for a caller that has proven it is safe to fail before starting new work. An absent
      * request context preserves the dependency's legacy timeout. Merely installing the shadow filter never calls
      * this method and therefore cannot change existing request, transaction, or idempotency behavior.
