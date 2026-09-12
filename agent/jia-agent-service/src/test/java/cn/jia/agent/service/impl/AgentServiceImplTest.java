@@ -1770,9 +1770,11 @@ class AgentServiceImplTest extends BaseMockTest {
         meta.setReviewRequired(false);
         when(agentTaskMetaDao.findByTaskId(
                 "juyiting", "jia_client", "task-zero-budget")).thenReturn(meta);
+        // ownedAgent also stubs persona lookup; complete that before opening the roster stub.
+        AgentRuntimeEntity backendAgent = ownedAgent(
+                "agent-back", "后端", AgentConstants.STATUS_ONLINE, "[\"backend\"]");
         when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
-                .thenReturn(List.of(ownedAgent(
-                        "agent-back", "后端", AgentConstants.STATUS_ONLINE, "[\"backend\"]")));
+                .thenReturn(List.of(backendAgent));
         AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
         request.setMaxTeamSize(1);
         request.setBudgetUnits(0);
@@ -3109,7 +3111,8 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("agent-coordinator", task.getCoordinatorAgentId());
         assertEquals(List.of(), task.getAssignedAgentIds());
-        verify(agentTaskMetaDao).findByTaskId(
+        // Existing getTask reads the root and rechecks scope while projecting memberships.
+        verify(agentTaskMetaDao, times(2)).findByTaskId(
                 "juyiting", "jia_client", "task-coordinator");
         verify(agentTaskMetaDao, never()).updateById(any());
         verify(agentRuntimeDao, never()).updateById(any());
