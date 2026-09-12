@@ -88,6 +88,33 @@
             or update_time = #{updateTime,jdbcType=BIGINT}
         </if>
     </select>
+    <select id="selectRelationsByUserIds" resultType="cn.jia.user.dao.UserRelationRow">
+        SELECT relation_user_id AS userId, relation_type AS relationType, relation_id AS relationId
+        FROM (
+            SELECT user_id AS relation_user_id, 'ROLE' AS relation_type, role_id AS relation_id, id AS relation_row_id
+            FROM user_role_rel
+            WHERE user_id IN
+            <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                #{userId,jdbcType=BIGINT}
+            </foreach>
+            UNION ALL
+            SELECT user_id AS relation_user_id, 'ORG' AS relation_type, org_id AS relation_id, id AS relation_row_id
+            FROM user_org_rel
+            WHERE user_id IN
+            <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                #{userId,jdbcType=BIGINT}
+            </foreach>
+            UNION ALL
+            SELECT user_id AS relation_user_id, 'GROUP' AS relation_type, group_id AS relation_id, id AS relation_row_id
+            FROM user_group_rel
+            WHERE user_id IN
+            <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                #{userId,jdbcType=BIGINT}
+            </foreach>
+        ) relation_rows
+        ORDER BY relation_user_id, relation_type, relation_row_id
+    </select>
+
     <select id="selectSecurityById" resultType="cn.jia.user.entity.UserEntity">
         SELECT id, jiacn, account_state, auth_epoch
         FROM user_info

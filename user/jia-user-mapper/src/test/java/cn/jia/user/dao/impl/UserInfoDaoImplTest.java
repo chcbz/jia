@@ -1,7 +1,9 @@
 package cn.jia.user.dao.impl;
 
 import cn.jia.test.BaseDbUnitTest;
+import cn.jia.user.dao.UserRelationRow;
 import cn.jia.user.entity.UserEntity;
+import cn.jia.user.entity.UserVO;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -103,4 +105,46 @@ class UserInfoDaoImplTest extends BaseDbUnitTest {
         assertEquals(7L, updatedSecurity.getAuthEpoch());
         assertEquals("safe-profile-update", userInfoDao.selectById(1L).getNickname());
     }
+    @Test
+    void selectForListUsesByteExactScopeWithoutLegacyTenantFallback() {
+        jdbcTemplate.update("INSERT INTO user_info (id, username, jiacn, tenant_id, client_id) VALUES "
+                + "(100, 'exact-a', 'exact-a', 'Tenant-A', 'Client-A'), "
+                + "(101, 'case-tenant', 'case-tenant', 'tenant-a', 'Client-A'), "
+                + "(102, 'case-client', 'case-client', 'Tenant-A', 'client-a'), "
+                + "(103, 'legacy', 'legacy', '0', 'Client-A')");
+        UserVO query = new UserVO();
+        query.setTenantId("Tenant-A");
+        query.setClientId("Client-A");
+
+        List<UserEntity> exact = userInfoDao.selectForList(query);
+
+        assertEquals(List.of(100L), exact.stream().map(UserEntity::getId).toList());
+        assertEquals("Tenant-A", query.getTenantId());
+        assertEquals("Client-A", query.getClientId());
+
+        query.setTenantId("0");
+        assertEquals(List.of(103L), userInfoDao.selectForList(query).stream().map(UserEntity::getId).toList());
+
+        query.setTenantId("tenant-a");
+        assertEquals(List.of(101L), userInfoDao.selectForList(query).stream().map(UserEntity::getId).toList());
+
+        query.setTenantId("Tenant-A");
+        query.setClientId("client-a");
+        assertEquals(List.of(102L), userInfoDao.selectForList(query).stream().map(UserEntity::getId).toList());
+    }
+
+    @Test
+    void selectRelationsByUserIdsIsBoundedAndExcludesUnrequestedUsers() {
+        jdbcTemplate.update("INSERT INTO user_role_rel (user_id, role_id, client_id) VALUES (1, 1, 'duplicate')");
+        jdbcTemplate.update("INSERT INTO user_group_rel (user_id, group_id) VALUES (999, 999)");
+
+        List<UserRelationRow> rows = userInfoDao.selectRelationsByUserIds(List.of(1L));
+
+        assertEquals(4, rows.size());
+        assertEquals(2, rows.stream().filter(row -> "ROLE".equals(row.relationType())).count());
+        assertEquals(1, rows.stream().filter(row -> "ORG".equals(row.relationType())).count());
+        assertEquals(1, rows.stream().filter(row -> "GROUP".equals(row.relationType())).count());
+        assertTrue(rows.stream().allMatch(row -> row.userId().equals(1L)));
+    }
+
 }

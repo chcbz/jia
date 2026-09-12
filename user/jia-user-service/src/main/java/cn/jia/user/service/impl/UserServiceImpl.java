@@ -19,6 +19,7 @@ import cn.jia.user.dao.UserGroupRelDao;
 import cn.jia.user.dao.UserInfoDao;
 import cn.jia.user.dao.UserOrgRelDao;
 import cn.jia.user.dao.UserRoleRelDao;
+import cn.jia.user.dao.UserRelationRow;
 import cn.jia.user.entity.*;
 import cn.jia.user.service.UserService;
 import com.github.pagehelper.PageHelper;
@@ -32,7 +33,9 @@ import cn.jia.core.util.CollectionUtil;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -199,6 +202,48 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     @Override
     public PageInfo<UserEntity> search(UserEntity user, int pageNum, int pageSize, String orderBy) {
         return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.searchByExample(user));
+    }
+
+    @Override
+    public PageInfo<UserEntity> findListPage(UserVO user, int pageNum, int pageSize, String orderBy) {
+        return getPageInfo(pageNum, pageSize, orderBy, () -> baseDao.selectForList(user));
+    }
+
+    @Override
+    public Map<Long, UserRelationIds> findRelationIds(List<Long> userIds) {
+        if (CollectionUtil.isNullOrEmpty(userIds)) {
+            return Map.of();
+        }
+        List<Long> boundedIds = userIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (boundedIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<Long, MutableRelationIds> relations = new LinkedHashMap<>();
+        boundedIds.forEach(userId -> relations.put(userId, new MutableRelationIds()));
+        for (UserRelationRow row : baseDao.selectRelationsByUserIds(boundedIds)) {
+            if (row == null || row.userId() == null || row.relationType() == null || row.relationId() == null) {
+                throw new IllegalStateException("invalid user relation row");
+            }
+            MutableRelationIds target = relations.get(row.userId());
+            if (target == null) {
+                throw new IllegalStateException("relation query returned an unrequested user");
+            }
+            switch (row.relationType()) {
+                case "ROLE" -> target.roleIds.add(row.relationId());
+                case "ORG" -> target.orgIds.add(row.relationId());
+                case "GROUP" -> target.groupIds.add(row.relationId());
+                default -> throw new IllegalStateException("unknown user relation type");
+            }
+        }
+
+        Map<Long, UserRelationIds> result = new LinkedHashMap<>();
+        relations.forEach((userId, ids) -> result.put(userId,
+                new UserRelationIds(ids.roleIds, ids.orgIds, ids.groupIds)));
+        return Map.copyOf(result);
     }
 
     @Override
@@ -584,4 +629,11 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
         }
         return ids;
     }
+
+    private static final class MutableRelationIds {
+        private final List<Long> roleIds = new ArrayList<>();
+        private final List<Long> orgIds = new ArrayList<>();
+        private final List<Long> groupIds = new ArrayList<>();
+    }
+
 }

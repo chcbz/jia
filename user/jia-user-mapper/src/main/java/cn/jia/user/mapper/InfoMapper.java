@@ -1,9 +1,11 @@
 package cn.jia.user.mapper;
 
+import cn.jia.user.dao.UserRelationRow;
 import cn.jia.user.entity.UserEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -22,6 +24,8 @@ public interface InfoMapper extends BaseMapper<UserEntity> {
     List<UserEntity> selectByOrg(Long orgId);
 
     List<UserEntity> searchByExample(UserEntity user);
+
+    List<UserRelationRow> selectRelationsByUserIds(@Param("userIds") Collection<Long> userIds);
 
     UserEntity selectSecurityById(@Param("userId") long userId);
 
