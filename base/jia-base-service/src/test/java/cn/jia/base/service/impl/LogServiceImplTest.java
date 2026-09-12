@@ -14,15 +14,19 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +43,31 @@ class LogServiceImplTest extends BaseMockTest {
     @AfterEach
     void clearContext() {
         EsContextHolder.clearContext();
+    }
+
+    @Test
+    void captureSanitizesWithoutDatabaseWriteAndPersistUsesRequiresNewBoundary() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/tasks");
+        request.addHeader("Authorization", "Bearer capture-secret");
+        request.setContentType("application/json");
+        request.setContent("{\"password\":\"capture-body-secret\",\"safe\":\"kept\"}"
+                .getBytes(StandardCharsets.UTF_8));
+        setIdentity("Jia-Capture", "alice");
+        ReflectionTestUtils.setField(logService, "baseDao", logDao);
+
+        LogEntity captured = logService.captureLog(new EsRequestWrapper(request));
+
+        verify(logDao, never()).insert(any());
+        assertEquals("/api/tasks", captured.getUri());
+        assertTrue(captured.getParam().contains("kept"));
+        assertNoSecret(captured, "capture-secret", "capture-body-secret");
+
+        when(logDao.insert(captured)).thenReturn(1);
+        assertEquals(captured, logService.persistLog(captured));
+        verify(logDao).insert(captured);
+
+        assertRequiresNew("persistLog", LogEntity.class);
+        assertRequiresNew("addLog", EsRequestWrapper.class);
     }
 
     @Test
@@ -304,6 +333,14 @@ class LogServiceImplTest extends BaseMockTest {
         assertEquals("Jia-G", persisted.getJiacn());
         assertEquals(REDACTED_CREDENTIAL, persisted.getUsername());
         assertNoSecret(persisted, username);
+    }
+
+    private void assertRequiresNew(String methodName, Class<?> parameterType) throws Exception {
+        Transactional transactional = LogServiceImpl.class
+                .getMethod(methodName, parameterType)
+                .getAnnotation(Transactional.class);
+        assertNotNull(transactional);
+        assertEquals(Propagation.REQUIRES_NEW, transactional.propagation());
     }
 
     private LogEntity persist(MockHttpServletRequest request) throws Exception {
