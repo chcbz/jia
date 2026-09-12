@@ -38,4 +38,8 @@ public class AgentTaskMetaEntity extends BaseEntity {
     private Boolean reviewRequired;
     private Long taskVersion;
     private Long currentEventVersion;
+    private Integer deliveryPolicyVersion;
+    private String currentDeliveryId;
+    private Long deliveryRevision;
+    private String deliveryRequirementJson;
 }

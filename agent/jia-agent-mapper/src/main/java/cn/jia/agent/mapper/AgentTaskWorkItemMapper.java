@@ -13,13 +13,15 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 (work_item_id, task_id, title, description, work_type, required_abilities,
                  assignee_agent_id, status, priority, required_item, dependency_json,
                  lease_token, lease_until, attempt_count, max_attempts,
-                 result_artifact_id, submitted_at, completed_at, version,
+                 result_artifact_id, result_delivery_id, execution_run_id, dispatched_run_id,
+                 submitted_at, completed_at, version,
                  tenant_id, client_id, create_time, update_time)
             SELECT #{item.workItemId}, #{item.taskId}, #{item.title}, #{item.description},
                    #{item.workType}, #{item.requiredAbilities}, #{item.assigneeAgentId},
                    #{item.status}, #{item.priority}, #{item.requiredItem},
                    #{item.dependencyJson}, #{item.leaseToken}, #{item.leaseUntil},
                    #{item.attemptCount}, #{item.maxAttempts}, #{item.resultArtifactId},
+                   #{item.resultDeliveryId}, #{item.executionRunId}, #{item.dispatchedRunId},
                    #{item.submittedAt}, #{item.completedAt}, #{item.version},
                    #{tenantId}, #{clientId}, #{item.createTime}, #{item.updateTime}
             FROM agent_task_meta parent
@@ -72,6 +74,9 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 attempt_count = #{item.attemptCount},
                 max_attempts = #{item.maxAttempts},
                 result_artifact_id = #{item.resultArtifactId},
+                result_delivery_id = #{item.resultDeliveryId},
+                execution_run_id = #{item.executionRunId},
+                dispatched_run_id = #{item.dispatchedRunId},
                 submitted_at = #{item.submittedAt},
                 completed_at = #{item.completedAt},
                 update_time = #{updateTime},
@@ -104,6 +109,9 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 dependency_json = #{item.dependencyJson}, lease_token = #{item.leaseToken},
                 lease_until = #{item.leaseUntil}, attempt_count = #{item.attemptCount},
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
+                result_delivery_id = #{item.resultDeliveryId},
+                execution_run_id = #{item.executionRunId},
+                dispatched_run_id = #{item.dispatchedRunId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}
@@ -144,6 +152,9 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 dependency_json = #{item.dependencyJson}, lease_token = #{item.leaseToken},
                 lease_until = #{item.leaseUntil}, attempt_count = #{item.attemptCount},
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
+                result_delivery_id = #{item.resultDeliveryId},
+                execution_run_id = #{item.executionRunId},
+                dispatched_run_id = #{item.dispatchedRunId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}
@@ -187,6 +198,9 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 dependency_json = #{item.dependencyJson}, lease_token = #{item.leaseToken},
                 lease_until = #{item.leaseUntil}, attempt_count = #{item.attemptCount},
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
+                result_delivery_id = #{item.resultDeliveryId},
+                execution_run_id = #{item.executionRunId},
+                dispatched_run_id = #{item.dispatchedRunId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}
@@ -237,6 +251,9 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 dependency_json = #{item.dependencyJson}, lease_token = #{item.leaseToken},
                 lease_until = #{item.leaseUntil}, attempt_count = #{item.attemptCount},
                 max_attempts = #{item.maxAttempts}, result_artifact_id = #{item.resultArtifactId},
+                result_delivery_id = #{item.resultDeliveryId},
+                execution_run_id = #{item.executionRunId},
+                dispatched_run_id = #{item.dispatchedRunId},
                 submitted_at = #{item.submittedAt}, completed_at = #{item.completedAt},
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}

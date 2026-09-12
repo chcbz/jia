@@ -278,6 +278,9 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
                 .setLeaseToken(item.getLeaseToken())
                 .setLeaseUntil(item.getLeaseUntil())
                 .setResultArtifactId(item.getResultArtifactId())
+                .setResultDeliveryId(item.getResultDeliveryId())
+                .setExecutionRunId(item.getExecutionRunId())
+                .setDispatchedRunId(item.getDispatchedRunId())
                 .setSubmittedAt(item.getSubmittedAt())
                 .setCompletedAt(item.getCompletedAt());
     }

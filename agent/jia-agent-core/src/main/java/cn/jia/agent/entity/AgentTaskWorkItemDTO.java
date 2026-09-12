@@ -26,6 +26,9 @@ public class AgentTaskWorkItemDTO implements Serializable {
     private Integer attemptCount;
     private Integer maxAttempts;
     private String resultArtifactId;
+    private String resultDeliveryId;
+    private String executionRunId;
+    private String dispatchedRunId;
     private Long submittedAt;
     private Long completedAt;
     private Long version;
