@@ -3,11 +3,12 @@ package cn.jia.agent.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
-/** Independent D09 safe gate; all values default fail-closed. */
+/** Independent D09 safe gates; asynchronous redrive acceptance defaults fail-closed. */
 @ConfigurationProperties(prefix = "agent.rabbit-operations")
 public record AgentCommandOperationsProperties(
         boolean readEnabled,
         boolean redriveEnabled,
+        boolean asyncRedriveEnabled,
         boolean reissueEnabled,
         Integer maxPageSize,
         Integer dlqScanLimit,
@@ -25,12 +26,24 @@ public record AgentCommandOperationsProperties(
                 || expiryProximityMillis < 1_000 || expiryProximityMillis > 86_400_000) {
             throw new IllegalStateException("Invalid D09 Rabbit operations bounds");
         }
-        if ((redriveEnabled || reissueEnabled) && !readEnabled) {
+        if ((redriveEnabled || asyncRedriveEnabled || reissueEnabled) && !readEnabled) {
             throw new IllegalStateException("D09 write operations require read-enabled");
         }
     }
 
+    public AgentCommandOperationsProperties(
+            boolean readEnabled,
+            boolean redriveEnabled,
+            boolean reissueEnabled,
+            Integer maxPageSize,
+            Integer dlqScanLimit,
+            Long confirmTimeoutMillis,
+            Long expiryProximityMillis) {
+        this(readEnabled, redriveEnabled, false, reissueEnabled,
+                maxPageSize, dlqScanLimit, confirmTimeoutMillis, expiryProximityMillis);
+    }
+
     public boolean anyEnabled() {
-        return readEnabled || redriveEnabled || reissueEnabled;
+        return readEnabled || redriveEnabled || asyncRedriveEnabled || reissueEnabled;
     }
 }

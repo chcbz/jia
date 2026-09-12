@@ -158,6 +158,109 @@ class AgentCommandOperationsControllerTest {
     }
 
     @Test
+    void redriveV1RequiresExactAuthorityAndIdempotencyKeyAndReturns202StatusView() throws Exception {
+        String operationId = "aaaaaaaa-aaaa-8aaa-aaaa-aaaaaaaaaaaa";
+        String statusUrl = "/agent/internal/command-operations/v1/operations/" + operationId;
+        when(service.acceptBrokerRedriveV1(any(),
+                org.mockito.ArgumentMatchers.eq("redrive-key-0001"), anyLong()))
+                .thenReturn(new AgentCommandOperationV1View(
+                        operationId, "BROKER_REDRIVE", "ACCEPTED", "0",
+                        1_700_000_000_000L, null, null, 1_700_000_000_000L,
+                        statusUrl, null, null, false));
+        String body = """
+                {"taskId":"task-1","targetAgentId":"agent-a","sourceMessageId":"message-1",
+                 "reason":"incident recovery","ticketReference":"INC-42"}
+                """;
+
+        mvc.perform(post("/agent/internal/command-operations/v1/dlq/7/redrive")
+                        .header("Idempotency-Key", "redrive-key-0001")
+                        .contentType(MediaType.APPLICATION_JSON).content(body)
+                        .principal(jwt("operator-a", "approver-b",
+                                AgentCommandOperationsController.AUTHORITY_REDRIVE)))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(header().string(HttpHeaders.LOCATION, statusUrl))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"operationId\":\"" + operationId + "\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"status\":\"ACCEPTED\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"version\":\"0\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("tenant-a"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("incident recovery"))));
+
+        var request = org.mockito.ArgumentCaptor.forClass(AgentCommandOperationRequest.class);
+        verify(service).acceptBrokerRedriveV1(
+                request.capture(), org.mockito.ArgumentMatchers.eq("redrive-key-0001"), anyLong());
+        assertEquals("tenant-a", request.getValue().tenantId());
+        assertEquals("client-a", request.getValue().clientId());
+        assertEquals("operator-a", request.getValue().requesterId());
+        assertEquals(null, request.getValue().approverId());
+
+        mvc.perform(post("/agent/internal/command-operations/v1/dlq/7/redrive")
+                        .contentType(MediaType.APPLICATION_JSON).content(body)
+                        .principal(jwt("operator-a", "approver-b",
+                                AgentCommandOperationsController.AUTHORITY_REDRIVE)))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/agent/internal/command-operations/v1/dlq/7/redrive")
+                        .header("Idempotency-Key", "redrive-key-0002")
+                        .contentType(MediaType.APPLICATION_JSON).content(body)
+                        .principal(jwt("operator-a", "approver-b", "agent-task-read")))
+                .andExpect(status().isForbidden());
+        verify(service, org.mockito.Mockito.times(1)).acceptBrokerRedriveV1(
+                any(), any(), anyLong());
+    }
+
+    @Test
+    void redriveV1DisabledUsesExisting503FeatureContract() throws Exception {
+        when(service.acceptBrokerRedriveV1(any(), any(), anyLong()))
+                .thenThrow(new AgentCommandOperationsException(
+                        AgentCommandOperationsException.Reason.OPERATION_DISABLED));
+        String body = """
+                {"taskId":"task-1","targetAgentId":"agent-a","sourceMessageId":"message-1",
+                 "reason":"incident recovery","ticketReference":"INC-42"}
+                """;
+
+        mvc.perform(post("/agent/internal/command-operations/v1/dlq/7/redrive")
+                        .header("Idempotency-Key", "redrive-key-0001")
+                        .contentType(MediaType.APPLICATION_JSON).content(body)
+                        .principal(jwt("operator-a", "approver-b",
+                                AgentCommandOperationsController.AUTHORITY_REDRIVE)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"code\":\"COMMAND_OPERATIONS_DISABLED\"")));
+    }
+
+    @Test
+    void redriveV1TerminalIdempotentReplayReturns200() throws Exception {
+        String operationId = "bbbbbbbb-bbbb-8bbb-abbb-bbbbbbbbbbbb";
+        String statusUrl = "/agent/internal/command-operations/v1/operations/" + operationId;
+        when(service.acceptBrokerRedriveV1(any(), any(), anyLong())).thenReturn(
+                new AgentCommandOperationV1View(
+                        operationId, "BROKER_REDRIVE", "FAILED", "1",
+                        1_700_000_000_000L, null, 1_700_000_000_100L,
+                        1_700_000_000_100L, statusUrl, null,
+                        new AgentCommandOperationV1View.Error(
+                                "COMMAND_OPERATION_PUBLISH_FAILED",
+                                "Command operation could not be published", true), true));
+        String body = """
+                {"taskId":"task-1","targetAgentId":"agent-a","sourceMessageId":"message-1",
+                 "reason":"incident recovery","ticketReference":"INC-42"}
+                """;
+
+        mvc.perform(post("/agent/internal/command-operations/v1/dlq/7/redrive")
+                        .header("Idempotency-Key", "redrive-key-0001")
+                        .contentType(MediaType.APPLICATION_JSON).content(body)
+                        .principal(jwt("operator-a", "approver-b",
+                                AgentCommandOperationsController.AUTHORITY_REDRIVE)))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.LOCATION, statusUrl));
+    }
+
+    @Test
     void auditIdsAndCursorAreQuotedDecimalWithoutGlobalNumericStringification() throws Exception {
         when(service.listAudit("tenant-a", "client-a", 0, 50)).thenReturn(
                 new AgentCommandOperationAuditPage(List.of(

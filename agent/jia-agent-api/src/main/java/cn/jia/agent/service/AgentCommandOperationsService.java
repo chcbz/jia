@@ -27,6 +27,13 @@ public interface AgentCommandOperationsService {
     AgentCommandOperationV1View getOperationV1(
             String tenantId, String clientId, String requesterId, String operationId, long now);
 
+    /**
+     * Versioned asynchronous acceptance only, independently default-off from synchronous
+     * redrive. The durable operation row is transactionally polled; no broker I/O occurs here.
+     */
+    AgentCommandOperationV1View acceptBrokerRedriveV1(
+            AgentCommandOperationRequest request, String idempotencyKey, long now);
+
     AgentCommandOperationResult brokerRedrive(AgentCommandOperationRequest request, long now);
 
     AgentCommandOperationResult manualReissue(AgentCommandOperationRequest request, long now);

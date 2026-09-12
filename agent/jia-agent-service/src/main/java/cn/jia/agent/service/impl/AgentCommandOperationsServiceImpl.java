@@ -19,6 +19,8 @@ import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
 import cn.jia.agent.entity.AgentCommandOperationV1View;
 import cn.jia.agent.entity.AgentCommandOperationType;
+import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
+import cn.jia.agent.entity.AgentCommandRedriveOperationState;
 import cn.jia.agent.entity.AgentCommandOperationsException;
 import cn.jia.agent.entity.AgentCommandOpsMetrics;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
@@ -34,6 +36,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -255,6 +258,68 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
     }
 
     @Override
+    public AgentCommandOperationV1View acceptBrokerRedriveV1(
+            AgentCommandOperationRequest request, String idempotencyKey, long now) {
+        validateRequest(request, false, now);
+        requireWriteEnabled(settings.asyncRedriveEnabled(),
+                request.tenantId(), request.clientId());
+        requireIdempotencyKey(idempotencyKey);
+        String operationId = idempotentOperationId(request, idempotencyKey);
+
+        AgentCommandRedriveOperationEntity existing = requiresNew.execute(status ->
+                dao.lockRedriveOperation(request.tenantId(), request.clientId(), operationId));
+        if (existing != null) {
+            requireIdempotentReplay(existing, request, operationId, now);
+            return replayView(request, operationId, now);
+        }
+
+        boolean created;
+        try {
+            // Frozen create lock order: delivery -> active outbox -> current attempt outbox ->
+            // previous attempt outbox -> inbox -> active redrive reservation -> operation id.
+            // The pending reservation and immutable REQUEST audit commit together; no broker I/O
+            // is allowed in this acceptance transaction.
+            Boolean accepted = requiresNew.execute(status -> {
+                Source source = lockAndValidateSource(
+                        operationId, request, now, true, settings.asyncRedriveEnabled());
+                AgentCommandRedriveOperationEntity raced = dao.lockRedriveOperation(
+                        request.tenantId(), request.clientId(), operationId);
+                if (raced != null) {
+                    requireIdempotentReplay(raced, request, operationId, now);
+                    return false;
+                }
+                insertPendingRedriveOperation(pendingRedriveOperation(
+                        operationId, request, source, now));
+                insertAudit(requestAudit(operationId,
+                        AgentCommandOperationType.BROKER_REDRIVE, request, source, now));
+                return true;
+            });
+            if (accepted == null) {
+                throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+            }
+            created = accepted;
+        } catch (AgentCommandOperationsException failure) {
+            throw failure;
+        } catch (RuntimeException concurrentOrUnavailable) {
+            AgentCommandRedriveOperationEntity raced = requiresNew.execute(status ->
+                    dao.lockRedriveOperation(
+                            request.tenantId(), request.clientId(), operationId));
+            if (raced == null) {
+                throw failure(AgentCommandOperationsException.Reason.AUDIT_UNAVAILABLE);
+            }
+            requireIdempotentReplay(raced, request, operationId, now);
+            created = false;
+        }
+
+        if (!created) return replayView(request, operationId, now);
+        return new AgentCommandOperationV1View(
+                operationId, AgentCommandOperationType.BROKER_REDRIVE.name(),
+                "ACCEPTED", "0", now, null, null, now,
+                AgentCommandOperationV1Projector.STATUS_PATH_PREFIX + operationId,
+                null, null, false);
+    }
+
+    @Override
     public AgentCommandOperationResult brokerRedrive(
             AgentCommandOperationRequest request, long now) {
         validateRequest(request, false, now);
@@ -365,8 +430,19 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
             AgentCommandOperationRequest request,
             long now,
             boolean redrive) {
-        requireWriteEnabled(redrive ? settings.redriveEnabled() : settings.reissueEnabled(),
-                request.tenantId(), request.clientId());
+        Source source = lockAndValidateSource(operationId, request, now, redrive,
+                redrive ? settings.redriveEnabled() : settings.reissueEnabled());
+        insertAudit(requestAudit(operationId, type, request, source, now));
+        return source;
+    }
+
+    private Source lockAndValidateSource(
+            String operationId,
+            AgentCommandOperationRequest request,
+            long now,
+            boolean redrive,
+            boolean enabled) {
+        requireWriteEnabled(enabled, request.tenantId(), request.clientId());
         AgentCommandDeliveryEntity delivery = dao.lockDelivery(
                 request.tenantId(), request.clientId(), request.deliveryId());
         if (delivery == null
@@ -417,7 +493,6 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
             source = validateManualSource(
                     delivery, activeOutboxes.getFirst(), inbox, request, now);
         }
-        insertAudit(requestAudit(operationId, type, request, source, now));
         return source;
     }
 
@@ -509,6 +584,104 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
                     requestedAt, completedAt)));
         } catch (RuntimeException auditFailure) {
             throw failure(AgentCommandOperationsException.Reason.AUDIT_UNAVAILABLE);
+        }
+    }
+
+    private AgentCommandOperationV1View replayView(
+            AgentCommandOperationRequest request, String operationId, long now) {
+        try {
+            return getOperationV1(request.tenantId(), request.clientId(),
+                    request.requesterId(), operationId, now);
+        } catch (AgentCommandOperationsException unavailable) {
+            if (unavailable.reason() == AgentCommandOperationsException.Reason.NOT_FOUND_OR_FORBIDDEN) {
+                throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+            }
+            throw unavailable;
+        }
+    }
+
+    private AgentCommandRedriveOperationEntity pendingRedriveOperation(
+            String operationId, AgentCommandOperationRequest request, Source source, long now) {
+        AgentCommandRedriveOperationEntity operation = new AgentCommandRedriveOperationEntity()
+                .setOperationId(operationId)
+                .setDeliveryId(source.deliveryId())
+                .setTaskId(source.taskId())
+                .setTargetAgentId(source.targetAgentId())
+                .setCommandId(source.commandId())
+                .setSourceEventId(source.eventId())
+                .setSourceMessageId(source.messageId())
+                .setSourceAttempt(source.activeAttempt())
+                .setWireHash(source.wireHash())
+                .setRequesterId(request.requesterId())
+                .setReason(request.reason())
+                .setTicketReference(request.ticketReference())
+                .setOutcomeState(AgentCommandRedriveOperationState.PENDING.outcome())
+                .setSettlementState(AgentCommandRedriveOperationState.PENDING.settlement())
+                .setRequestedAt(now)
+                .setVersion(0L);
+        operation.setTenantId(request.tenantId());
+        operation.setClientId(request.clientId());
+        operation.setCreateTime(now);
+        operation.setUpdateTime(now);
+        return operation;
+    }
+
+    private void insertPendingRedriveOperation(AgentCommandRedriveOperationEntity operation) {
+        if (dao.insertPendingRedriveOperation(operation) != 1
+                || operation.getId() == null || operation.getId() <= 0) {
+            throw failure(AgentCommandOperationsException.Reason.AUDIT_UNAVAILABLE);
+        }
+    }
+
+    private void requireIdempotentReplay(
+            AgentCommandRedriveOperationEntity operation,
+            AgentCommandOperationRequest request,
+            String operationId,
+            long now) {
+        if (operation.getId() == null || operation.getId() <= 0
+                || !operationId.equals(operation.getOperationId())
+                || !request.tenantId().equals(operation.getTenantId())
+                || !request.clientId().equals(operation.getClientId())
+                || !Objects.equals(request.deliveryId(), operation.getDeliveryId())
+                || !request.taskId().equals(operation.getTaskId())
+                || !request.targetAgentId().equals(operation.getTargetAgentId())
+                || !request.sourceMessageId().equals(operation.getSourceMessageId())
+                || !request.requesterId().equals(operation.getRequesterId())
+                || !request.reason().equals(operation.getReason())
+                || !request.ticketReference().equals(operation.getTicketReference())
+                || !exact(operation.getCommandId(), 100)
+                || !exact(operation.getSourceEventId(), 100)
+                || operation.getSourceAttempt() == null || operation.getSourceAttempt() <= 0
+                || operation.getWireHash() == null || operation.getWireHash().length != 32
+                || operation.getRequestedAt() == null || operation.getRequestedAt() <= 0
+                || operation.getRequestedAt() > now
+                || operation.getCreateTime() == null
+                || !Objects.equals(operation.getCreateTime(), operation.getRequestedAt())
+                || operation.getUpdateTime() == null
+                || operation.getUpdateTime() < operation.getRequestedAt()
+                || operation.getVersion() == null) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+
+        AgentCommandRedriveOperationState state;
+        try {
+            state = operation.state();
+        } catch (RuntimeException corrupt) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+        boolean pendingShape = !state.terminal()
+                && operation.getCompletedAt() == null && operation.getErrorCode() == null
+                && operation.getVersion() == 0;
+        boolean terminalShape = state.terminal()
+                && operation.getCompletedAt() != null
+                && operation.getCompletedAt() >= operation.getRequestedAt()
+                && operation.getVersion() > 0
+                && (AgentCommandRedriveOperationState.SUCCEEDED.equals(state)
+                    ? operation.getErrorCode() == null
+                    : operation.getErrorCode() != null
+                        && operation.getErrorCode().matches("[A-Z0-9_]{1,200}"));
+        if (!pendingShape && !terminalShape) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
         }
     }
 
@@ -946,6 +1119,40 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
             throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
         }
         return Math.max(requestedAt, completedAt);
+    }
+
+    private void requireIdempotencyKey(String key) {
+        if (key == null || !key.matches("[A-Za-z0-9._~:/+\\-]{8,128}")) {
+            throw failure(AgentCommandOperationsException.Reason.INVALID_REQUEST);
+        }
+    }
+
+    private String idempotentOperationId(
+            AgentCommandOperationRequest request, String idempotencyKey) {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (java.security.NoSuchAlgorithmException unavailable) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+        digestField(digest, "cyf-agent-command-operation-v1:broker-redrive");
+        digestField(digest, request.tenantId());
+        digestField(digest, request.clientId());
+        digestField(digest, request.requesterId());
+        digestField(digest, idempotencyKey);
+        byte[] value = digest.digest();
+        value[6] = (byte) ((value[6] & 0x0f) | 0x80);
+        value[8] = (byte) ((value[8] & 0x3f) | 0x80);
+        long most = 0;
+        long least = 0;
+        for (int index = 0; index < 8; index++) most = (most << 8) | (value[index] & 0xffL);
+        for (int index = 8; index < 16; index++) least = (least << 8) | (value[index] & 0xffL);
+        return new UUID(most, least).toString();
+    }
+
+    private void digestField(MessageDigest digest, String value) {
+        digest.update(value.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0);
     }
 
     private String nextOperationId() {

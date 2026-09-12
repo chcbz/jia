@@ -13,6 +13,8 @@ import cn.jia.agent.entity.AgentCommandDlqEntry;
 import cn.jia.agent.entity.AgentCommandManualReissueResult;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
+import cn.jia.agent.entity.AgentCommandOperationStatusRow;
+import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
 import cn.jia.agent.entity.AgentCommandOperationsException;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentHallCommandPayload;
@@ -39,10 +41,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentCommandOperationsServiceImplTest {
@@ -89,6 +93,122 @@ class AgentCommandOperationsServiceImplTest {
         assertEquals(NOW, audits.getAllValues().getLast().getRequestedAt());
         assertEquals(NOW + 500L, audits.getAllValues().getLast().getCompletedAt());
         assertEquals("SUCCEEDED", audits.getAllValues().getLast().getOutcome());
+    }
+
+    @Test
+    void redriveV1IsDefaultOffBeforeAnyDatabaseOrBrokerInteraction() {
+        Fixture fixture = fixture();
+        AgentCommandDlqRedriver redriver = mock(AgentCommandDlqRedriver.class);
+        clearInvocations(fixture.dao);
+        AgentCommandOperationsServiceImpl service = service(
+                fixture, redriver, null, true, false);
+
+        AgentCommandOperationsException disabled = assertThrows(
+                AgentCommandOperationsException.class,
+                () -> service.acceptBrokerRedriveV1(
+                        request(null), "redrive-key-0001", NOW));
+
+        assertEquals(AgentCommandOperationsException.Reason.OPERATION_DISABLED,
+                disabled.reason());
+        verifyNoInteractions(fixture.dao, redriver);
+    }
+
+    @Test
+    void redriveV1AcceptanceAtomicallyPersistsPendingIntentAndAuditWithoutBrokerIo() {
+        Fixture fixture = fixture();
+        AgentCommandDlqRedriver redriver = mock(AgentCommandDlqRedriver.class);
+        AgentCommandOperationsServiceImpl service = service(
+                fixture, redriver, null, false, true, false);
+
+        var view = service.acceptBrokerRedriveV1(
+                request(null), "redrive-key-0001", NOW);
+
+        assertEquals("48d2609b-ad5b-83e4-8b66-5dcd1fa8fd29", view.operationId());
+        assertEquals("BROKER_REDRIVE", view.operationType());
+        assertEquals("ACCEPTED", view.status());
+        assertEquals("0", view.version());
+        assertEquals(NOW, view.submittedAt());
+        assertEquals("/agent/internal/command-operations/v1/operations/"
+                + view.operationId(), view.statusUrl());
+        assertEquals(8, UUID.fromString(view.operationId()).version());
+        verify(redriver, never()).redrive(any(), anyLong(), anyInt());
+
+        ArgumentCaptor<AgentCommandRedriveOperationEntity> operation =
+                ArgumentCaptor.forClass(AgentCommandRedriveOperationEntity.class);
+        verify(fixture.dao).insertPendingRedriveOperation(operation.capture());
+        assertEquals(view.operationId(), operation.getValue().getOperationId());
+        assertEquals(1L, operation.getValue().getDeliveryId());
+        assertEquals("operator-a", operation.getValue().getRequesterId());
+        assertEquals("incident recovery", operation.getValue().getReason());
+        assertArrayEquals(fixture.outbox.getWirePayloadHash(),
+                operation.getValue().getWireHash());
+        assertEquals(0L, operation.getValue().getVersion());
+
+        ArgumentCaptor<AgentCommandOperationAuditEntity> audit =
+                ArgumentCaptor.forClass(AgentCommandOperationAuditEntity.class);
+        verify(fixture.dao).insertAudit(audit.capture());
+        assertEquals(view.operationId(), audit.getValue().getOperationId());
+        assertEquals("REQUEST", audit.getValue().getPhase());
+        assertEquals("REQUESTED", audit.getValue().getOutcome());
+    }
+
+    @Test
+    void redriveV1ReplayIsStableWithLegacyRedriveDisabledAndDifferentPayloadConflicts() {
+        Fixture fixture = fixture();
+        AgentCommandOperationsServiceImpl enabled = service(
+                fixture, mock(AgentCommandDlqRedriver.class), null, false, true, false);
+        var accepted = enabled.acceptBrokerRedriveV1(
+                request(null), "redrive-key-0001", NOW);
+        ArgumentCaptor<AgentCommandRedriveOperationEntity> operation =
+                ArgumentCaptor.forClass(AgentCommandRedriveOperationEntity.class);
+        verify(fixture.dao).insertPendingRedriveOperation(operation.capture());
+        AgentCommandRedriveOperationEntity stored = operation.getValue();
+        when(fixture.dao.lockRedriveOperation(
+                "tenant-a", "client-a", accepted.operationId())).thenReturn(stored);
+        when(fixture.dao.findOperationStatusRows(
+                "tenant-a", "client-a", "operator-a", accepted.operationId()))
+                .thenReturn(List.of(new AgentCommandOperationStatusRow(
+                        21L, accepted.operationId(), "REQUEST", "BROKER_REDRIVE",
+                        1L, MESSAGE, null, 1, null, "operator-a", NOW, null,
+                        "REQUESTED", null, NOW, "tenant-a", "client-a")));
+
+        AgentCommandOperationsServiceImpl legacyRedriveDisabled = service(
+                fixture, null, null, false, true, false);
+        var replay = legacyRedriveDisabled.acceptBrokerRedriveV1(
+                request(null), "redrive-key-0001", SERVICE_NOW);
+        assertEquals(accepted.operationId(), replay.operationId());
+        assertEquals("ACCEPTED", replay.status());
+        verify(fixture.dao, org.mockito.Mockito.times(1)).insertPendingRedriveOperation(any());
+        verify(fixture.dao, org.mockito.Mockito.times(1)).insertAudit(any());
+
+        AgentCommandOperationRequest changed = new AgentCommandOperationRequest(
+                "tenant-a", "client-a", 1L, "task-1", "agent-a", MESSAGE,
+                "operator-a", null, "different recovery", "INC-42");
+        AgentCommandOperationsException conflict = assertThrows(
+                AgentCommandOperationsException.class,
+                () -> legacyRedriveDisabled.acceptBrokerRedriveV1(
+                        changed, "redrive-key-0001", SERVICE_NOW));
+        assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
+                conflict.reason());
+        verify(fixture.dao, org.mockito.Mockito.times(1)).insertPendingRedriveOperation(any());
+    }
+
+    @Test
+    void redriveV1RejectsMalformedIdempotencyKeyBeforeSourceLocks() {
+        Fixture fixture = fixture();
+        AgentCommandOperationsException missing = assertThrows(
+                AgentCommandOperationsException.class,
+                () -> service(fixture, null, null, false, true, false)
+                        .acceptBrokerRedriveV1(request(null), null, NOW));
+        AgentCommandOperationsException unsafe = assertThrows(
+                AgentCommandOperationsException.class,
+                () -> service(fixture, null, null, false, true, false)
+                        .acceptBrokerRedriveV1(request(null), "short", NOW));
+
+        assertEquals(AgentCommandOperationsException.Reason.INVALID_REQUEST, missing.reason());
+        assertEquals(AgentCommandOperationsException.Reason.INVALID_REQUEST, unsafe.reason());
+        verify(fixture.dao, never()).lockDelivery(any(), any(), anyLong());
+        verify(fixture.dao, never()).insertPendingRedriveOperation(any());
     }
 
     @Test
@@ -474,10 +594,19 @@ class AgentCommandOperationsServiceImplTest {
     private AgentCommandOperationsServiceImpl service(
             Fixture fixture, AgentCommandDlqRedriver redriver,
             AgentCommandReissueService reissue, boolean redriveEnabled, boolean reissueEnabled) {
+        return service(fixture, redriver, reissue,
+                redriveEnabled, false, reissueEnabled);
+    }
+
+    private AgentCommandOperationsServiceImpl service(
+            Fixture fixture, AgentCommandDlqRedriver redriver,
+            AgentCommandReissueService reissue, boolean redriveEnabled,
+            boolean asyncRedriveEnabled, boolean reissueEnabled) {
         return new AgentCommandOperationsServiceImpl(
                 fixture.dao, enabledGate(), AgentRabbitTopologyManifest.canonical(), redriver,
                 reissue, new AgentCommandOperationsProperties(
-                        true, redriveEnabled, reissueEnabled, null, null, null, null),
+                        true, redriveEnabled, asyncRedriveEnabled, reissueEnabled,
+                        null, null, null, null),
                 transactionManager(), () -> UUID.fromString(
                         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), () -> SERVICE_NOW);
     }
@@ -536,6 +665,11 @@ class AgentCommandOperationsServiceImplTest {
                 .thenReturn(null);
         when(dao.oldestOutboxEpoch("tenant-a", "client-a")).thenReturn(null);
         AtomicLong ids = new AtomicLong(10);
+        doAnswer(invocation -> {
+            ((AgentCommandRedriveOperationEntity) invocation.getArgument(0))
+                    .setId(ids.incrementAndGet());
+            return 1;
+        }).when(dao).insertPendingRedriveOperation(any());
         doAnswer(invocation -> {
             ((AgentCommandOperationAuditEntity) invocation.getArgument(0)).setId(ids.incrementAndGet());
             return 1;

@@ -6,6 +6,7 @@ import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
 import cn.jia.agent.entity.AgentCommandOperationAuditPage;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
+import cn.jia.agent.entity.AgentCommandOperationV1View;
 import cn.jia.agent.entity.AgentCommandOperationsException;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.agent.service.AgentCommandOperationsService;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -103,6 +105,20 @@ public class AgentCommandOperationsController {
         Scope scope = requireScope(authentication, AUTHORITY_READ, false);
         return ok(JsonResult.success(operationsService.getOperationV1(
                 scope.tenantId(), scope.clientId(), scope.requesterId(), operationId, now())));
+    }
+
+    @PostMapping(value = "/v1/dlq/{deliveryId}/redrive",
+            consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> redriveV1(
+            @PathVariable String deliveryId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestBody byte[] rawBody,
+            Authentication authentication) {
+        Scope scope = requireScope(authentication, AUTHORITY_REDRIVE, false);
+        OperationBody body = requireBody(rawBody);
+        String key = requireIdempotencyKey(idempotencyKey);
+        return operationAccepted(operationsService.acceptBrokerRedriveV1(command(
+                scope, positiveLong(deliveryId), body, null), key, now()));
     }
 
     @PostMapping(value = "/dlq/{deliveryId}/redrive",
@@ -257,6 +273,13 @@ public class AgentCommandOperationsController {
                 approverId, body.reason(), body.ticketReference());
     }
 
+    private String requireIdempotencyKey(String value) {
+        if (value == null || !value.matches("[A-Za-z0-9._~:/+\\-]{8,128}")) {
+            throw new RequestFailure();
+        }
+        return value;
+    }
+
     private OperationBody requireBody(byte[] raw) {
         if (raw == null || raw.length == 0 || raw.length > MAX_OPERATION_BODY_BYTES) {
             throw new RequestFailure();
@@ -334,6 +357,19 @@ public class AgentCommandOperationsController {
         long now = clock.millis();
         if (now <= 0) throw new IllegalStateException("clock unavailable");
         return now;
+    }
+
+    private ResponseEntity<?> operationAccepted(AgentCommandOperationV1View view) {
+        if (view == null) throw new IllegalStateException("Operation acceptance unavailable");
+        HttpStatus status = switch (view.status()) {
+            case "SUCCEEDED", "FAILED" -> HttpStatus.OK;
+            case "ACCEPTED" -> HttpStatus.ACCEPTED;
+            default -> throw new IllegalStateException("Unsupported operation status");
+        };
+        return ResponseEntity.status(status)
+                .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .header(HttpHeaders.LOCATION, view.statusUrl())
+                .body(JsonResult.success(view));
     }
 
     private ResponseEntity<?> ok(Object body) {
