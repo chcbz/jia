@@ -14,6 +14,8 @@ public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
 
     List<AgentRuntimeEntity> findRosterByOwner(String clientId, String jiacn, String status, String ability);
 
+    List<AgentRuntimeEntity> findCandidateRosterByOwner(String clientId, String jiacn);
+
     int clearBindingAfterUnbind(long runtimeId, String agentId, long bindingId,
             String clientId, String ownerJiacn, long detachedAt);
 

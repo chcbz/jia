@@ -1217,18 +1217,22 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId) {
         AgentTaskDTO task = getTask(taskId);
+        String clientId = resolveCurrentClientId();
+        String tenantId = resolveCurrentJiacn();
         List<AgentRuntimeEntity> candidates = Optional.ofNullable(agentRuntimeDao
-                .findRosterByOwner(resolveCurrentClientId(), resolveCurrentJiacn(), null, null))
-                .orElseGet(Collections::emptyList)
-                .stream()
-                .filter(agent -> !AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId()))
-                .filter(agent -> !AgentConstants.STATUS_ERROR.equals(agent.getStatus()))
-                .filter(agent -> !AgentConstants.STATUS_OFFLINE.equals(agent.getStatus()))
-                .toList();
+                .findCandidateRosterByOwner(clientId, tenantId))
+                .orElseGet(Collections::emptyList);
         return candidates.stream()
-                .map(agent -> buildTaskRecommendation(task, agent))
-                .filter(recommendation -> recommendation.getAbilityScore() > 0 || task.getRequiredAbilities().isEmpty())
-                .sorted((left, right) -> Integer.compare(right.getScore(), left.getScore()))
+                .map(agent -> evaluateTaskCandidate(task, agent))
+                .sorted((left, right) -> {
+                    int eligibility = Boolean.compare(Boolean.TRUE.equals(right.getEligible()),
+                            Boolean.TRUE.equals(left.getEligible()));
+                    if (eligibility != 0) return eligibility;
+                    int score = Integer.compare(right.getScore(), left.getScore());
+                    if (score != 0) return score;
+                    return String.valueOf(left.getAgent().getAgentId())
+                            .compareTo(String.valueOf(right.getAgent().getAgentId()));
+                })
                 .limit(5)
                 .toList();
     }
@@ -2101,6 +2105,34 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
+    private AgentTaskRecommendationDTO evaluateTaskCandidate(AgentTaskDTO task, AgentRuntimeEntity entity) {
+        AgentTaskRecommendationDTO dto = buildTaskRecommendation(task, entity);
+        List<String> exclusions = new ArrayList<>();
+        AgentRuntimeDTO agent = dto.getAgent();
+        if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId())
+                || Boolean.TRUE.equals(agent.getSystemAgent())
+                || !Boolean.TRUE.equals(agent.getCanOperate())) {
+            exclusions.add(AgentErrorConstants.AGENT_FORBIDDEN);
+        }
+        if (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())) {
+            exclusions.add(AgentErrorConstants.AGENT_OFFLINE);
+        } else if (AgentConstants.STATUS_ERROR.equals(agent.getStatus())) {
+            exclusions.add(AgentErrorConstants.AGENT_ERROR);
+        } else if (AgentConstants.STATUS_BUSY.equals(agent.getStatus())) {
+            exclusions.add(AgentErrorConstants.AGENT_BUSY);
+        }
+        if (!Optional.ofNullable(task.getRequiredAbilities()).orElseGet(Collections::emptyList).isEmpty()
+                && dto.getMatchedAbilities().isEmpty()) {
+            exclusions.add(AgentErrorConstants.AGENT_ABILITY_MISMATCH);
+        }
+        dto.setEligible(exclusions.isEmpty());
+        dto.setExclusionReasons(List.copyOf(exclusions));
+        if (!exclusions.isEmpty()) {
+            dto.setReason("宋江首领不建议：" + String.join("、", exclusions) + "。");
+        }
+        return dto;
+    }
+
     private AgentTaskRecommendationDTO buildTaskRecommendation(AgentTaskDTO task, AgentRuntimeEntity entity) {
         AgentRuntimeDTO agent = toRuntimeDTO(entity);
         AgentCapabilityDTO capability = toCapabilityDTO(agent);
@@ -2111,8 +2143,14 @@ public class AgentServiceImpl implements AgentService {
         int successScore = clamp((int) Math.round(Optional.ofNullable(capability.getSuccessRate()).orElse(0.75D) * 100));
         int loadScore = Optional.ofNullable(capability.getCurrentLoad()).orElse(0) > 0 ? 20 : 100;
         int recentScore = Optional.ofNullable(capability.getRecentScore()).orElse(75);
-        int totalScore = clamp(Math.round(abilityScore * 0.4F + statusScore * 0.2F
-                + successScore * 0.2F + loadScore * 0.1F + recentScore * 0.1F));
+        Map<String, Integer> scoreParts = new LinkedHashMap<>();
+        scoreParts.put("ability", Math.round(abilityScore * 0.4F));
+        scoreParts.put("availability", Math.round(statusScore * 0.2F));
+        scoreParts.put("success", Math.round(successScore * 0.15F));
+        scoreParts.put("load", Math.round(loadScore * 0.15F));
+        scoreParts.put("context", Math.round(recentScore * 0.1F));
+        scoreParts.put("riskPenalty", 0);
+        int totalScore = clamp(scoreParts.values().stream().mapToInt(Integer::intValue).sum());
 
         AgentTaskRecommendationDTO dto = new AgentTaskRecommendationDTO();
         dto.setTaskId(task.getId());
@@ -2124,6 +2162,7 @@ public class AgentServiceImpl implements AgentService {
         dto.setSuccessScore(successScore);
         dto.setLoadScore(loadScore);
         dto.setRecentScore(recentScore);
+        dto.setScoreParts(Map.copyOf(scoreParts));
         dto.setMatchedAbilities(matchedAbilities);
         dto.setReason(recommendationReason(capability, matchedAbilities, required, totalScore));
         return dto;
@@ -2166,7 +2205,8 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private boolean isOnlineRecommendation(AgentTaskRecommendationDTO recommendation) {
-        return recommendation.getAgent() != null
+        return Boolean.TRUE.equals(recommendation.getEligible())
+                && recommendation.getAgent() != null
                 && AgentConstants.STATUS_ONLINE.equals(recommendation.getAgent().getStatus());
     }
 

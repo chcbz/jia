@@ -1506,7 +1506,7 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void recommendTaskAssigneesRanksByAbilityAndAvailability() {
+    void recommendTaskAssigneesReturnsEligibleScoresAndExcludedCandidates() {
         AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
         meta.setId(1L);
         meta.setTaskId("task-001");
@@ -1518,19 +1518,54 @@ class AgentServiceImplTest extends BaseMockTest {
         when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-001"))
                 .thenReturn(meta);
 
-        AgentRuntimeEntity planner = runtimeAgent("agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\",\"analysis\"]");
-        AgentRuntimeEntity executor = runtimeAgent("agent-linchong", "林冲", AgentConstants.STATUS_ONLINE, "[\"execution\"]");
-        AgentRuntimeEntity busyPlanner = runtimeAgent("agent-busy", "忙碌好汉", AgentConstants.STATUS_BUSY, "[\"planning\"]");
-        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
-                .thenReturn(List.of(executor, busyPlanner, planner));
+        AgentRuntimeEntity planner = ownedAgent("agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE,
+                "[\"planning\",\"analysis\"]");
+        AgentRuntimeEntity executor = ownedAgent("agent-linchong", "林冲", AgentConstants.STATUS_ONLINE,
+                "[\"execution\"]");
+        AgentRuntimeEntity busyPlanner = ownedAgent("agent-busy", "忙碌好汉", AgentConstants.STATUS_BUSY,
+                "[\"planning\"]");
+        AgentRuntimeEntity offlinePlanner = ownedAgent("agent-offline", "离线好汉", AgentConstants.STATUS_OFFLINE,
+                "[\"planning\"]");
+        AgentRuntimeEntity erroredPlanner = ownedAgent("agent-error", "故障好汉", AgentConstants.STATUS_ERROR,
+                "[\"planning\"]");
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
+                .thenReturn(List.of(executor, offlinePlanner, erroredPlanner, busyPlanner, planner));
 
         List<AgentTaskRecommendationDTO> result = agentService.recommendTaskAssignees("task-001");
 
-        assertEquals(2, result.size());
-        assertEquals("agent-wuyong", result.getFirst().getAgent().getAgentId());
-        assertEquals(100, result.getFirst().getAbilityScore());
-        assertTrue(result.getFirst().getReason().contains("宋江首领建议"));
-        assertEquals("agent-busy", result.get(1).getAgent().getAgentId());
+        assertEquals(5, result.size());
+        AgentTaskRecommendationDTO selected = result.getFirst();
+        assertEquals("agent-wuyong", selected.getAgent().getAgentId());
+        assertTrue(selected.getEligible());
+        assertEquals(List.of(), selected.getExclusionReasons());
+        assertEquals(Map.of("ability", 40, "availability", 20, "success", 11,
+                "load", 15, "context", 8, "riskPenalty", 0), selected.getScoreParts());
+        assertEquals(94, selected.getScore());
+        assertEquals(100, selected.getAbilityScore());
+        assertTrue(selected.getReason().contains("宋江首领建议"));
+
+        AgentTaskRecommendationDTO busy = result.stream()
+                .filter(candidate -> "agent-busy".equals(candidate.getAgent().getAgentId()))
+                .findFirst().orElseThrow();
+        assertFalse(busy.getEligible());
+        assertEquals(List.of(AgentErrorConstants.AGENT_BUSY), busy.getExclusionReasons());
+        AgentTaskRecommendationDTO unmatched = result.stream()
+                .filter(candidate -> "agent-linchong".equals(candidate.getAgent().getAgentId()))
+                .findFirst().orElseThrow();
+        assertFalse(unmatched.getEligible());
+        assertEquals(List.of(AgentErrorConstants.AGENT_ABILITY_MISMATCH), unmatched.getExclusionReasons());
+        AgentTaskRecommendationDTO offline = result.stream()
+                .filter(candidate -> "agent-offline".equals(candidate.getAgent().getAgentId()))
+                .findFirst().orElseThrow();
+        assertFalse(offline.getEligible());
+        assertEquals(List.of(AgentErrorConstants.AGENT_OFFLINE), offline.getExclusionReasons());
+        AgentTaskRecommendationDTO errored = result.stream()
+                .filter(candidate -> "agent-error".equals(candidate.getAgent().getAgentId()))
+                .findFirst().orElseThrow();
+        assertFalse(errored.getEligible());
+        assertEquals(List.of(AgentErrorConstants.AGENT_ERROR), errored.getExclusionReasons());
+        verify(agentRuntimeDao).findCandidateRosterByOwner("jia_client", "juyiting");
+        verify(agentRuntimeDao, never()).findRosterByOwner("jia_client", "juyiting", null, null);
     }
 
     @Test
@@ -1548,7 +1583,7 @@ class AgentServiceImplTest extends BaseMockTest {
 
         AgentRuntimeEntity planner = ownedAgent("agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
         AgentRuntimeEntity executor = ownedAgent("agent-linchong", "林冲", AgentConstants.STATUS_ONLINE, "[\"execution\"]");
-        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null)).thenReturn(List.of(planner, executor));
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting")).thenReturn(List.of(planner, executor));
         when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(planner);
         when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(executor);
 
@@ -1580,7 +1615,7 @@ class AgentServiceImplTest extends BaseMockTest {
                 "agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
         AgentRuntimeEntity recommendedExecutor = ownedAgent(
                 "agent-linchong", "林冲", AgentConstants.STATUS_ONLINE, "[\"execution\"]");
-        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
                 .thenReturn(List.of(recommendedPlanner, recommendedExecutor));
         when(agentRuntimeDao.findByAgentId("agent-wuyong")).thenReturn(recommendedPlanner);
         when(agentRuntimeDao.findByAgentId("agent-linchong")).thenReturn(recommendedExecutor);
@@ -1617,7 +1652,7 @@ class AgentServiceImplTest extends BaseMockTest {
                 .thenReturn(meta);
         AgentRuntimeEntity planner = ownedAgent(
                 "agent-wuyong", "吴用", AgentConstants.STATUS_ONLINE, "[\"planning\"]");
-        when(agentRuntimeDao.findRosterByOwner("jia_client", "juyiting", null, null))
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
                 .thenReturn(List.of(planner));
 
         IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,

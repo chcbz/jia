@@ -43,6 +43,34 @@ class AgentRuntimeMapperContractTest {
     }
 
     @Test
+    void candidateRosterPreservesExactActiveScopeButDoesNotHideExcludedStatuses() throws Exception {
+        String sql = selectSql("findCandidateRosterByOwner");
+
+        assertRuntimeProjection(sql);
+        assertTrue(sql.contains("and exists ( select 1 from agent_persona_binding b"));
+        assertTrue(sql.contains("inner join agent_identity_registry i on i.binding_id = b.id"));
+        assertTrue(sql.contains("b.id = r.binding_id"));
+        assertTrue(sql.contains("b.status = 1"));
+        assertTrue(sql.contains("i.lifecycle_status = 'active'"));
+        assertTrue(sql.contains("i.canonical_agent_id = r.agent_id"));
+        assertTrue(sql.contains("order by r.persona_code asc"));
+        assertFalse(sql.contains("r.status in ('online', 'busy')"));
+        assertFalse(sql.contains("and r.status = #{status}"));
+        assertFalse(sql.contains("r.abilities like"));
+        assertFalse(sql.contains("for update"));
+        assertFalse(sql.contains(" limit "));
+        assertExactParameter(sql, "r.client_id", "clientid");
+        assertExactParameter(sql, "r.owner_jiacn", "ownerjiacn");
+        assertExactParameter(sql, "b.client_id", "clientid");
+        assertExactParameter(sql, "b.jiacn", "ownerjiacn");
+        assertExactParameter(sql, "i.tenant_id", "ownerjiacn");
+        assertExactParameter(sql, "i.client_id", "clientid");
+        assertExactParameter(sql, "i.owner_jiacn", "ownerjiacn");
+        assertExactColumns(sql, "i.canonical_agent_id", "r.agent_id");
+        assertExactColumns(sql, "b.persona_code", "r.persona_code");
+    }
+
+    @Test
     void mapRequiresExactClientAndActiveByteExactIdentityWithoutOwnerCoalescing() throws Exception {
         String sql = selectSql("findMapVisibleByExactClient");
 
