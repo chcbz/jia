@@ -40,11 +40,15 @@ import cn.jia.agent.entity.AgentTaskNoteEntity;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
+import cn.jia.agent.entity.funding.AgentSkillRequirementDTO;
+import cn.jia.agent.entity.funding.AgentTaskFundingDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.mapper.AgentPersonaCatalogBindingRow;
+import cn.jia.agent.mapper.AgentTaskSearchRow;
 import cn.jia.agent.mapper.AgentTaskStatsRow;
+import cn.jia.agent.mapper.AgentTaskStatusCountRow;
 import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentHostedBindingTransaction;
@@ -779,90 +783,60 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request) {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated()
-                || !(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
-                    "Authenticated task search scope is required");
-        }
-        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
-        Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
-        if (!(tenantClaim instanceof String tenantId)
-                || !(clientClaim instanceof String clientId)
-                || tenantId.isEmpty() || clientId.isEmpty()
-                || !StandardCharsets.UTF_8.newEncoder().canEncode(tenantId)
-                || !StandardCharsets.UTF_8.newEncoder().canEncode(clientId)
-                || tenantId.codePointCount(0, tenantId.length()) > 50
-                || clientId.codePointCount(0, clientId.length()) > 50
-                || Character.isWhitespace(tenantId.codePointAt(0))
-                || Character.isSpaceChar(tenantId.codePointAt(0))
-                || Character.isWhitespace(tenantId.codePointBefore(tenantId.length()))
-                || Character.isSpaceChar(tenantId.codePointBefore(tenantId.length()))
-                || Character.isWhitespace(clientId.codePointAt(0))
-                || Character.isSpaceChar(clientId.codePointAt(0))
-                || Character.isWhitespace(clientId.codePointBefore(clientId.length()))
-                || Character.isSpaceChar(clientId.codePointBefore(clientId.length()))
-                || tenantId.codePoints().allMatch(codePoint ->
-                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
-                || clientId.codePoints().allMatch(codePoint ->
-                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
-                || tenantId.codePoints().anyMatch(Character::isISOControl)
-                || clientId.codePoints().anyMatch(Character::isISOControl)
-                || "0".equals(tenantId) || "0".equals(clientId)) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
-                    "Authenticated task search scope is invalid");
+        TaskSearchScope scope = authenticatedTaskSearchScope("search");
+        AgentTaskSearchDTO filters = request == null ? new AgentTaskSearchDTO() : request;
+        int pageNum = Math.max(Optional.ofNullable(filters.getPageNum()).orElse(1), 1);
+        int pageSize = Math.min(Math.max(
+                Optional.ofNullable(filters.getPageSize()).orElse(20), 1),
+                TASK_MEMBERSHIP_SNAPSHOT_LIMIT);
+        long offset = ((long) pageNum - 1L) * pageSize;
+        String keyword = StringUtil.isBlank(filters.getKeyword())
+                ? null : filters.getKeyword().trim();
+
+        long total = agentTaskMetaDao.countSearch(scope.tenantId(), scope.clientId(),
+                filters.getStatus(), filters.getAbility(), keyword);
+        require(total >= 0, "Persisted task search total is invalid");
+        List<AgentTaskSearchRow> rows = total == 0 ? List.of()
+                : Optional.ofNullable(agentTaskMetaDao.searchPage(
+                        scope.tenantId(), scope.clientId(), filters.getStatus(),
+                        filters.getAbility(), keyword, offset, pageSize))
+                        .orElseGet(Collections::emptyList);
+        require(rows.size() <= pageSize,
+                "Persisted task search page exceeds the requested bound");
+        LinkedHashSet<String> exactTaskIds = new LinkedHashSet<>();
+        for (AgentTaskSearchRow row : rows) {
+            requireScopedTaskProjection(row, scope.tenantId(), scope.clientId(),
+                    row == null ? null : row.getTaskId());
+            require(isExactStoredText(row.getTaskId(), 100)
+                            && exactTaskIds.add(row.getTaskId()),
+                    "Persisted task search page contains an invalid or duplicate task ID");
         }
 
-        int pageNum = Optional.ofNullable(request.getPageNum()).orElse(1);
-        int pageSize = Optional.ofNullable(request.getPageSize()).orElse(20);
-        String keyword = request.getKeyword();
-        List<AgentTaskDTO> tasks = agentTaskMetaDao.search(
-                        tenantId, clientId, request.getStatus(), request.getAbility())
-                .stream()
-                .peek(task -> requireScopedTaskProjection(
-                        task, tenantId, clientId, task == null ? null : task.getTaskId()))
-                .map(this::toTaskDTO)
-                .filter(task -> matchesTaskKeyword(task, keyword))
+        List<String> taskIds = List.copyOf(exactTaskIds);
+        Map<String, List<AgentTaskMemberEntity>> membersByTask = searchMembersByTask(
+                scope, taskIds);
+        LinkedHashSet<String> agentIds = new LinkedHashSet<>();
+        for (AgentTaskSearchRow row : rows) {
+            agentIds.addAll(searchAssigneeIds(row, membersByTask.get(row.getTaskId())));
+        }
+        Map<String, AgentRuntimeEntity> runtimesById = searchRuntimesById(agentIds);
+        List<AgentTaskDTO> tasks = rows.stream()
+                .map(row -> toSearchTaskDTO(row,
+                        searchAssigneeIds(row, membersByTask.get(row.getTaskId())),
+                        runtimesById))
                 .toList();
-        return pageTasks(tasks, pageNum, pageSize);
+
+        PageInfo<AgentTaskDTO> page = PageInfo.of(tasks);
+        page.setPageNum(pageNum);
+        page.setPageSize(pageSize);
+        page.setTotal(total);
+        return page;
     }
 
     @Override
     public Map<String, Long> countTasksByStatus(AgentTaskSearchDTO request) {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated()
-                || !(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
-                    "Authenticated task count scope is required");
-        }
-        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
-        Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
-        if (!(tenantClaim instanceof String tenantId)
-                || !(clientClaim instanceof String clientId)
-                || tenantId.isEmpty() || clientId.isEmpty()
-                || !StandardCharsets.UTF_8.newEncoder().canEncode(tenantId)
-                || !StandardCharsets.UTF_8.newEncoder().canEncode(clientId)
-                || tenantId.codePointCount(0, tenantId.length()) > 50
-                || clientId.codePointCount(0, clientId.length()) > 50
-                || Character.isWhitespace(tenantId.codePointAt(0))
-                || Character.isSpaceChar(tenantId.codePointAt(0))
-                || Character.isWhitespace(tenantId.codePointBefore(tenantId.length()))
-                || Character.isSpaceChar(tenantId.codePointBefore(tenantId.length()))
-                || Character.isWhitespace(clientId.codePointAt(0))
-                || Character.isSpaceChar(clientId.codePointAt(0))
-                || Character.isWhitespace(clientId.codePointBefore(clientId.length()))
-                || Character.isSpaceChar(clientId.codePointBefore(clientId.length()))
-                || tenantId.codePoints().allMatch(codePoint ->
-                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
-                || clientId.codePoints().allMatch(codePoint ->
-                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
-                || tenantId.codePoints().anyMatch(Character::isISOControl)
-                || clientId.codePoints().anyMatch(Character::isISOControl)
-                || "0".equals(tenantId) || "0".equals(clientId)) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
-                    "Authenticated task count scope is invalid");
-        }
-
+        TaskSearchScope scope = authenticatedTaskSearchScope("count");
+        AgentTaskSearchDTO filters = request == null ? new AgentTaskSearchDTO() : request;
         Map<String, Long> counts = new LinkedHashMap<>();
         counts.put("total", 0L);
         List.of(AgentConstants.TASK_STATUS_OPEN, AgentConstants.TASK_STATUS_ASSIGNED,
@@ -870,48 +844,118 @@ public class AgentServiceImpl implements AgentService {
                 AgentConstants.TASK_STATUS_FAILED, AgentConstants.TASK_STATUS_ARCHIVED)
                 .forEach(status -> counts.put(status, 0L));
 
-        String ability = request == null ? null : request.getAbility();
-        String keyword = request == null ? null : request.getKeyword();
-        agentTaskMetaDao.search(tenantId, clientId, null, ability).stream()
-                .peek(task -> requireScopedTaskProjection(
-                        task, tenantId, clientId, task == null ? null : task.getTaskId()))
-                .filter(task -> StringUtil.isBlank(keyword)
-                        || String.valueOf(task.getTaskId()).contains(keyword))
-                .forEach(task -> {
-                    String status = Optional.ofNullable(task.getRewardStatus())
-                            .orElse(AgentConstants.TASK_STATUS_OPEN);
-                    counts.put("total", counts.get("total") + 1);
-                    counts.put(status, counts.getOrDefault(status, 0L) + 1);
-                });
+        List<AgentTaskStatusCountRow> rows = Optional.ofNullable(
+                agentTaskMetaDao.countSearchByStatus(scope.tenantId(), scope.clientId(),
+                        filters.getAbility(), filters.getKeyword()))
+                .orElseGet(Collections::emptyList);
+        long total = 0L;
+        for (AgentTaskStatusCountRow row : rows) {
+            require(row != null
+                            && Objects.equals(scope.tenantId(), row.getTenantId())
+                            && Objects.equals(scope.clientId(), row.getClientId())
+                            && isExactStoredText(row.getStatus(), 20)
+                            && row.getTaskCount() != null && row.getTaskCount() >= 0,
+                    "Persisted task status count is outside the authenticated scope");
+            total = Math.addExact(total, row.getTaskCount());
+            counts.put(row.getStatus(), Math.addExact(
+                    counts.getOrDefault(row.getStatus(), 0L), row.getTaskCount()));
+        }
+        counts.put("total", total);
         return counts;
     }
 
-    private boolean matchesTaskKeyword(AgentTaskDTO task, String keyword) {
-        if (StringUtil.isBlank(keyword)) {
-            return true;
+    private TaskSearchScope authenticatedTaskSearchScope(String operation) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task " + operation + " scope is required");
         }
-        String normalizedKeyword = keyword.trim().toLowerCase();
-        return containsIgnoreCase(task.getId(), normalizedKeyword)
-                || containsIgnoreCase(task.getTitle(), normalizedKeyword)
-                || containsIgnoreCase(task.getDescription(), normalizedKeyword)
-                || containsIgnoreCase(task.getAssignedAgentName(), normalizedKeyword)
-                || task.getRequiredAbilities().stream().anyMatch(ability -> containsIgnoreCase(ability, normalizedKeyword));
+        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
+        Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
+        if (!(tenantClaim instanceof String tenantId)
+                || !(clientClaim instanceof String clientId)
+                || !isExactAuthenticatedScopeId(tenantId)
+                || !isExactAuthenticatedScopeId(clientId)
+                || "0".equals(tenantId) || "0".equals(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task " + operation + " scope is invalid");
+        }
+        return new TaskSearchScope(tenantId, clientId);
     }
 
-    private boolean containsIgnoreCase(String value, String normalizedKeyword) {
-        return value != null && value.toLowerCase().contains(normalizedKeyword);
+    private boolean isExactAuthenticatedScopeId(String value) {
+        return value != null && !value.isEmpty()
+                && StandardCharsets.UTF_8.newEncoder().canEncode(value)
+                && value.codePointCount(0, value.length()) <= 50
+                && !Character.isWhitespace(value.codePointAt(0))
+                && !Character.isSpaceChar(value.codePointAt(0))
+                && !Character.isWhitespace(value.codePointBefore(value.length()))
+                && !Character.isSpaceChar(value.codePointBefore(value.length()))
+                && !value.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                && value.codePoints().noneMatch(Character::isISOControl);
     }
 
-    private PageInfo<AgentTaskDTO> pageTasks(List<AgentTaskDTO> tasks, int pageNum, int pageSize) {
-        int safePageNum = Math.max(pageNum, 1);
-        int safePageSize = Math.max(pageSize, 1);
-        int fromIndex = Math.min((safePageNum - 1) * safePageSize, tasks.size());
-        int toIndex = Math.min(fromIndex + safePageSize, tasks.size());
-        PageInfo<AgentTaskDTO> pageInfo = PageInfo.of(tasks.subList(fromIndex, toIndex));
-        pageInfo.setPageNum(safePageNum);
-        pageInfo.setPageSize(safePageSize);
-        pageInfo.setTotal(tasks.size());
-        return pageInfo;
+    private Map<String, List<AgentTaskMemberEntity>> searchMembersByTask(
+            TaskSearchScope scope, List<String> taskIds) {
+        Map<String, List<AgentTaskMemberEntity>> byTask = new LinkedHashMap<>();
+        Set<String> requestedTaskIds = new LinkedHashSet<>(taskIds);
+        List<AgentTaskMemberEntity> members = Optional.ofNullable(
+                agentTaskMetaDao.findSearchMembers(
+                        scope.tenantId(), scope.clientId(), taskIds))
+                .orElseGet(Collections::emptyList);
+        for (AgentTaskMemberEntity member : members) {
+            require(member != null
+                            && Objects.equals(scope.tenantId(), member.getTenantId())
+                            && Objects.equals(scope.clientId(), member.getClientId())
+                            && requestedTaskIds.contains(member.getTaskId())
+                            && isExactStoredText(member.getTaskId(), 100)
+                            && isExactStoredText(member.getAgentId(), 100),
+                    "Persisted task member is outside the authenticated search scope");
+            AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus());
+            byTask.computeIfAbsent(member.getTaskId(), ignored -> new ArrayList<>())
+                    .add(member);
+        }
+        return byTask;
+    }
+
+    private List<String> searchAssigneeIds(
+            AgentTaskSearchRow task, List<AgentTaskMemberEntity> members) {
+        if (members == null || members.isEmpty()) {
+            return parseAssignedAgentIds(task.getAssignedAgentId());
+        }
+        LinkedHashSet<String> agentIds = new LinkedHashSet<>();
+        for (AgentTaskMemberEntity member : members) {
+            AgentTaskMemberStatus status =
+                    AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus());
+            if (status != AgentTaskMemberStatus.REJECTED
+                    && status != AgentTaskMemberStatus.LEFT) {
+                agentIds.add(member.getAgentId());
+            }
+        }
+        return List.copyOf(agentIds);
+    }
+
+    private Map<String, AgentRuntimeEntity> searchRuntimesById(Set<String> agentIds) {
+        if (agentIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, AgentRuntimeEntity> byId = new LinkedHashMap<>();
+        List<AgentRuntimeEntity> runtimes = Optional.ofNullable(
+                agentTaskMetaDao.findSearchRuntimes(new ArrayList<>(agentIds)))
+                .orElseGet(Collections::emptyList);
+        for (AgentRuntimeEntity runtime : runtimes) {
+            require(runtime != null && agentIds.contains(runtime.getAgentId())
+                            && isExactStoredText(runtime.getAgentId(), 100)
+                            && !byId.containsKey(runtime.getAgentId()),
+                    "Persisted Agent runtime is outside the task search projection");
+            byId.put(runtime.getAgentId(), runtime);
+        }
+        return byId;
+    }
+
+    private record TaskSearchScope(String tenantId, String clientId) {
     }
 
     @Override
@@ -2230,6 +2274,93 @@ public class AgentServiceImpl implements AgentService {
 
     private int clamp(int value) {
         return Math.max(0, Math.min(100, value));
+    }
+
+    private AgentTaskDTO toSearchTaskDTO(AgentTaskSearchRow row,
+            List<String> assignedAgentIds, Map<String, AgentRuntimeEntity> runtimesById) {
+        AgentTaskDTO dto = new AgentTaskDTO();
+        dto.setId(row.getTaskId());
+        dto.setTenantId(row.getTenantId());
+        dto.setClientId(row.getClientId());
+        dto.setTitle(StringUtil.isBlank(row.getPlanTitle())
+                ? row.getTaskId() : row.getPlanTitle());
+        dto.setDescription(row.getPlanDescription());
+        dto.setStatus(row.getRewardStatus());
+        dto.setRequiredAbilities(parseList(row.getRequiredAbilities()));
+        dto.setReward(row.getReward() == null ? row.getPlanReward() : row.getReward());
+        List<String> exactAgentIds = assignedAgentIds == null
+                ? List.of() : List.copyOf(new LinkedHashSet<>(assignedAgentIds));
+        List<AgentTaskAssigneeDTO> assignees = new ArrayList<>();
+        for (String agentId : exactAgentIds) {
+            require(isExactStoredText(agentId, 100),
+                    "Persisted task assignee ID is invalid");
+            AgentRuntimeEntity runtime = runtimesById.get(agentId);
+            AgentTaskAssigneeDTO assignee = new AgentTaskAssigneeDTO();
+            assignee.setAgentId(agentId);
+            assignee.setAgentName(runtime == null ? null : runtime.getName());
+            assignee.setStatus(runtime == null ? null : runtime.getStatus());
+            assignees.add(assignee);
+        }
+        dto.setAssignedAgentIds(exactAgentIds);
+        dto.setAssignees(List.copyOf(assignees));
+        dto.setAssignedAgentId(exactAgentIds.isEmpty() ? null : exactAgentIds.getFirst());
+        dto.setAssignedAgentName(assignees.isEmpty()
+                ? null : assignees.getFirst().getAgentName());
+        dto.setCreatedAt(row.getCreateTime() == null
+                ? row.getPlanCreateTime() : row.getCreateTime());
+        dto.setUpdatedAt(row.getUpdateTime() == null
+                ? row.getPlanUpdateTime() : row.getUpdateTime());
+        dto.setAssignedAt(row.getAssignedAt());
+        dto.setStartedAt(row.getStartedAt());
+        dto.setCompletedAt(row.getCompletedAt());
+        dto.setFailureReason(row.getFailureReason());
+        dto.setTaskVersion(row.getTaskVersion() == null
+                ? null : Long.toString(row.getTaskVersion()));
+        applySearchFundingProjection(dto, row);
+        return dto;
+    }
+
+    private void applySearchFundingProjection(AgentTaskDTO dto, AgentTaskSearchRow row) {
+        if (Integer.valueOf(0).equals(row.getFundingPresent())) {
+            require(row.getFundingProjectionValid() == null
+                            && row.getFundingMode() == null
+                            && row.getFundingStatus() == null
+                            && row.getEscrowId() == null
+                            && row.getGrossBountyAmountMicro() == null
+                            && row.getRemainingMicro() == null
+                            && row.getRequiredSkillRequirements() == null,
+                    "Persisted unfunded task search projection is contaminated");
+            dto.setRequiredSkillRequirements(List.of());
+            return;
+        }
+        require(Integer.valueOf(1).equals(row.getFundingPresent())
+                        && Integer.valueOf(1).equals(row.getFundingProjectionValid())
+                        && "FUNDED_SINGLE_AGENT".equals(row.getFundingMode())
+                        && ("FUNDS_HELD".equals(row.getFundingStatus())
+                            || "REFUNDED".equals(row.getFundingStatus())
+                            || "SETTLED".equals(row.getFundingStatus()))
+                        && !StringUtil.isBlank(row.getEscrowId())
+                        && row.getGrossBountyAmountMicro() != null
+                        && row.getGrossBountyAmountMicro() > 0
+                        && row.getRemainingMicro() != null
+                        && row.getRemainingMicro() >= 0
+                        && row.getRemainingMicro() <= row.getGrossBountyAmountMicro(),
+                "Persisted funded task search projection is corrupt");
+        String requirementsJson = row.getRequiredSkillRequirements();
+        List<AgentSkillRequirementDTO> requirements = JsonUtil.jsonToList(
+                requirementsJson, AgentSkillRequirementDTO.class);
+        require(requirements != null
+                        && (!requirements.isEmpty() || "[]".equals(requirementsJson)),
+                "Persisted funded task skill requirements are corrupt");
+        AgentTaskFundingDTO funding = new AgentTaskFundingDTO();
+        funding.setMode(row.getFundingMode());
+        funding.setStatus(row.getFundingStatus());
+        funding.setEscrowId(row.getEscrowId());
+        funding.setGrossBountyAmountMicro(
+                Long.toString(row.getGrossBountyAmountMicro()));
+        funding.setRemainingMicro(Long.toString(row.getRemainingMicro()));
+        dto.setFunding(funding);
+        dto.setRequiredSkillRequirements(List.copyOf(requirements));
     }
 
     private AgentTaskDTO toTaskDTO(AgentTaskMetaEntity meta) {

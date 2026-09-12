@@ -144,26 +144,72 @@ class AgentTaskMetaScopedDaoTest {
 
 
     @Test
-    void taskSearchSqlUsesByteExactTenantAndClientWithoutLegacyFallback()
+    void taskSearchSqlPushesExactScopeFiltersOrderingAndPaginationToDatabase()
             throws Exception {
+        Method count = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "countSearchExactInScope", String.class, String.class,
+                String.class, String.class, String.class);
+        Method page = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "searchPageExactInScope", String.class, String.class,
+                String.class, String.class, String.class, long.class, int.class);
+        String countSql = normalize(String.join(" ", count.getAnnotation(Select.class).value()));
+        String pageSql = normalize(String.join(" ", page.getAnnotation(Select.class).value()));
+
+        for (String sql : List.of(countSql, pageSql)) {
+            assertTrue(sql.contains("task.tenant_id = #{tenantid}"), sql);
+            assertTrue(sql.contains("task.client_id = #{clientid}"), sql);
+            assertTrue(sql.contains("cast(task.tenant_id as binary(200)) "
+                    + "= cast(#{tenantid} as binary(200))"), sql);
+            assertTrue(sql.contains(
+                    "octet_length(task.tenant_id) = octet_length(#{tenantid})"), sql);
+            assertTrue(sql.contains("cast(task.client_id as binary(200)) "
+                    + "= cast(#{clientid} as binary(200))"), sql);
+            assertTrue(sql.contains(
+                    "octet_length(task.client_id) = octet_length(#{clientid})"), sql);
+            assertTrue(sql.contains("task.reward_status = #{status}"), sql);
+            assertTrue(sql.contains("task.required_abilities like concat")
+                    && sql.contains("#{ability}"), sql);
+            assertTrue(sql.contains("lower(task.task_id) like"), sql);
+            assertTrue(sql.contains("lower(coalesce(plan.name, '')) like"), sql);
+            assertTrue(sql.contains("lower(coalesce(plan.description, '')) like"), sql);
+            assertTrue(sql.contains("from agent_runtime runtime"), sql);
+            assertFalse(sql.contains("tenant_id = '0'"), sql);
+            assertFalse(sql.contains("tenant_id is null"), sql);
+        }
+        assertTrue(pageSql.contains(
+                "order by task.update_time desc, task.task_id asc, task.id asc"), pageSql);
+        assertTrue(pageSql.contains("limit #{limit} offset #{offset}"), pageSql);
+        assertTrue(pageSql.contains("plan.jiacn = #{tenantid}"), pageSql);
+        assertTrue(pageSql.contains("plan.client_id = #{clientid}"), pageSql);
+        assertTrue(pageSql.contains("funding.tenant_id = #{tenantid}"), pageSql);
+        assertTrue(pageSql.contains("funding.client_id = #{clientid}"), pageSql);
+        assertFalse(pageSql.contains("payer_principal"), pageSql);
+        assertFalse(pageSql.contains("idempotency"), pageSql);
+        assertFalse(pageSql.contains("request_hash"), pageSql);
+        assertFalse(pageSql.contains("transaction_id"), pageSql);
+    }
+
+    @Test
+    void taskStatusCountsUseSameExactScopeAndDatabaseAggregation() throws Exception {
         Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
-                "searchExactInScope", String.class, String.class,
+                "countSearchByStatusExactInScope", String.class, String.class,
                 String.class, String.class);
         String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
 
-        assertTrue(sql.contains("where tenant_id = #{tenantid}"), sql);
-        assertTrue(sql.contains("client_id = #{clientid}"), sql);
-        assertTrue(sql.contains("cast(tenant_id as binary(200)) "
-                + "= cast(#{tenantid} as binary(200))"), sql);
-        assertTrue(sql.contains("octet_length(tenant_id) = octet_length(#{tenantid})"), sql);
-        assertTrue(sql.contains("cast(client_id as binary(200)) "
-                + "= cast(#{clientid} as binary(200))"), sql);
-        assertTrue(sql.contains("octet_length(client_id) = octet_length(#{clientid})"), sql);
-        assertTrue(sql.contains("reward_status = #{status}"), sql);
-        assertTrue(sql.contains("required_abilities like concat('%', '\"', #{ability}, '\"', '%')"), sql);
+        assertTrue(sql.contains("task.tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("task.client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("cast(task.tenant_id as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(task.tenant_id)"), sql);
+        assertTrue(sql.contains("cast(task.client_id as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(task.client_id)"), sql);
+        assertTrue(sql.contains("task.required_abilities like concat")
+                    && sql.contains("#{ability}"), sql);
+        assertTrue(sql.contains("locate(cast(#{keyword} as binary), "
+                + "cast(task.task_id as binary)) &gt; 0"), sql);
+        assertTrue(sql.contains("count(*) as taskcount"), sql);
+        assertTrue(sql.contains("group by task.tenant_id"), sql);
+        assertFalse(sql.contains("#{status}"), sql);
         assertFalse(sql.contains("tenant_id = '0'"), sql);
-        assertFalse(sql.contains("tenant_id is null"), sql);
-        assertTrue(sql.contains("order by update_time desc"), sql);
     }
 
     @Test
@@ -214,7 +260,7 @@ class AgentTaskMetaScopedDaoTest {
     }
 
     @Test
-    void daoPushesScopeAndBoundedLimitIntoMapper() throws Exception {
+    void daoPushesExactScopePaginationAndBatchBoundsIntoMapper() throws Exception {
         AgentTaskMetaMapper mapper = mock(AgentTaskMetaMapper.class);
         when(mapper.selectByAgentInScope("tenant-a", "client-a", "agent-a", 500))
                 .thenReturn(List.of());
@@ -224,19 +270,39 @@ class AgentTaskMetaScopedDaoTest {
                 "tenant-a", "client-a", "agent-a", 9999));
         verify(mapper).selectByAgentInScope("tenant-a", "client-a", "agent-a", 500);
 
-        when(mapper.searchExactInScope(
-                "tenant-a", "client-a", "open", "planning"))
+        when(mapper.countSearchExactInScope(
+                "tenant-a", "client-a", "open", "planning", "reward"))
+                .thenReturn(2L);
+        assertEquals(2L, dao.countSearch(
+                "tenant-a", "client-a", "open", "planning", "reward"));
+        verify(mapper).countSearchExactInScope(
+                "tenant-a", "client-a", "open", "planning", "reward");
+
+        when(mapper.searchPageExactInScope(
+                "tenant-a", "client-a", "open", "planning", "reward", 500L, 500))
                 .thenReturn(List.of());
-        assertEquals(List.of(), dao.search(
-                "tenant-a", "client-a", "open", "planning"));
-        verify(mapper).searchExactInScope(
-                "tenant-a", "client-a", "open", "planning");
+        assertEquals(List.of(), dao.searchPage(
+                "tenant-a", "client-a", "open", "planning", "reward", 500L, 9999));
+        verify(mapper).searchPageExactInScope(
+                "tenant-a", "client-a", "open", "planning", "reward", 500L, 500);
+
+        dao.findSearchMembers("tenant-a", "client-a", List.of("task-a", "task-a"));
+        verify(mapper).selectSearchMembersExactInScope(
+                "tenant-a", "client-a", List.of("task-a"));
+        dao.findSearchRuntimes(List.of("agent-a", "agent-a"));
+        verify(mapper).selectSearchRuntimesExact(List.of("agent-a"));
+        dao.countSearchByStatus("tenant-a", "client-a", "planning", "reward");
+        verify(mapper).countSearchByStatusExactInScope(
+                "tenant-a", "client-a", "planning", "reward");
+
         assertThrows(IllegalArgumentException.class,
-                () -> dao.search("0", "client-a", null, null));
+                () -> dao.countSearch("0", "client-a", null, null, null));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.search("tenant-a", "0", null, null));
+                () -> dao.searchPage("tenant-a", "0", null, null, null, 0, 20));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.search(" tenant-a", "client-a", null, null));
+                () -> dao.countSearchByStatus(" tenant-a", "client-a", null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.searchPage("tenant-a", "client-a", null, null, null, -1, 20));
 
         dao.reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);
         verify(mapper).reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);

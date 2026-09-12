@@ -268,28 +268,277 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
 
     @Select("""
             <script>
-            SELECT *
-            FROM agent_task_meta
-            WHERE tenant_id = #{tenantId}
-              AND client_id = #{clientId}
-              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
-              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
-              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
-              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+            SELECT COUNT(*)
+            FROM agent_task_meta task
+            LEFT JOIN task_plan plan
+              ON task.task_id REGEXP '^[0-9]+$'
+             AND plan.id = CAST(task.task_id AS UNSIGNED)
+             AND plan.jiacn = #{tenantId}
+             AND plan.client_id = #{clientId}
+             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
+             AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+             AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+            WHERE task.tenant_id = #{tenantId}
+              AND task.client_id = #{clientId}
+              AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
             <if test="status != null and status.trim() != ''">
-              AND reward_status = #{status}
+              AND task.reward_status = #{status}
             </if>
             <if test="ability != null and ability.trim() != ''">
-              AND required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
+              AND task.required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
             </if>
-            ORDER BY update_time DESC
+            <if test="keyword != null and keyword.trim() != ''">
+              AND (
+                    LOWER(task.task_id) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(plan.name, '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(plan.description, '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(task.required_abilities, '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(
+                      (
+                          SELECT runtime.name
+                          FROM agent_task_member member
+                          LEFT JOIN agent_runtime runtime
+                            ON runtime.agent_id = member.agent_id
+                           AND CAST(runtime.agent_id AS BINARY(400)) = CAST(member.agent_id AS BINARY(400))
+                           AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(member.agent_id)
+                          WHERE member.tenant_id = #{tenantId}
+                            AND member.client_id = #{clientId}
+                            AND member.task_id = task.task_id
+                            AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                            AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
+                            AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND CAST(member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
+                            AND OCTET_LENGTH(member.task_id) = OCTET_LENGTH(task.task_id)
+                            AND member.member_status NOT IN ('rejected', 'left')
+                          ORDER BY member.member_role ASC, member.agent_id ASC, member.id ASC
+                          LIMIT 1
+                      ),
+                      CASE WHEN NOT EXISTS (
+                          SELECT 1
+                          FROM agent_task_member any_member
+                          WHERE any_member.tenant_id = #{tenantId}
+                            AND any_member.client_id = #{clientId}
+                            AND any_member.task_id = task.task_id
+                            AND CAST(any_member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                            AND OCTET_LENGTH(any_member.tenant_id) = OCTET_LENGTH(#{tenantId})
+                            AND CAST(any_member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND OCTET_LENGTH(any_member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND CAST(any_member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
+                            AND OCTET_LENGTH(any_member.task_id) = OCTET_LENGTH(task.task_id)
+                      ) THEN (
+                          SELECT runtime.name
+                          FROM agent_runtime runtime
+                          WHERE runtime.agent_id = task.assigned_agent_id
+                            AND CAST(runtime.agent_id AS BINARY(400)) = CAST(task.assigned_agent_id AS BINARY(400))
+                            AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(task.assigned_agent_id)
+                          LIMIT 1
+                      ) END,
+                      '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+              )
+            </if>
             </script>
             """)
-    List<AgentTaskMetaEntity> searchExactInScope(
+    long countSearchExactInScope(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("status") String status,
-            @Param("ability") String ability);
+            @Param("ability") String ability,
+            @Param("keyword") String keyword);
+
+    @Select("""
+            <script>
+            SELECT task.task_id, task.reward_status, task.assigned_agent_id,
+                   task.required_abilities, task.reward, task.assigned_at, task.started_at,
+                   task.completed_at, task.failure_reason, task.task_version,
+                   task.create_time, task.update_time, task.tenant_id, task.client_id,
+                   plan.name AS planTitle, plan.description AS planDescription,
+                   CAST(plan.amount AS SIGNED) AS planReward,
+                   plan.create_time AS planCreateTime, plan.update_time AS planUpdateTime,
+                   CASE WHEN funding.task_id IS NULL THEN 0 ELSE 1 END AS fundingPresent,
+                   funding.funding_mode AS fundingMode, funding.funding_status AS fundingStatus,
+                   funding.escrow_id AS escrowId,
+                   funding.gross_bounty_amount_micro AS grossBountyAmountMicro,
+                   funding.remaining_micro AS remainingMicro,
+                   funding.required_skill_requirements AS requiredSkillRequirements,
+                   CASE
+                     WHEN funding.task_id IS NULL THEN NULL
+                     WHEN funding.funding_mode = 'FUNDED_SINGLE_AGENT'
+                      AND funding.funding_status IN ('FUNDS_HELD', 'REFUNDED', 'SETTLED')
+                      AND funding.gross_bounty_amount_micro &gt; 0
+                      AND funding.remaining_micro &gt;= 0
+                      AND funding.remaining_micro &lt;= funding.gross_bounty_amount_micro
+                      AND funding.escrow_id IS NOT NULL
+                     THEN 1 ELSE 0 END AS fundingProjectionValid
+            FROM agent_task_meta task
+            LEFT JOIN task_plan plan
+              ON task.task_id REGEXP '^[0-9]+$'
+             AND plan.id = CAST(task.task_id AS UNSIGNED)
+             AND plan.jiacn = #{tenantId}
+             AND plan.client_id = #{clientId}
+             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
+             AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+             AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+            LEFT JOIN agent_task_funding funding
+              ON funding.tenant_id = #{tenantId}
+             AND funding.client_id = #{clientId}
+             AND funding.task_id = task.task_id
+             AND CAST(funding.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+             AND OCTET_LENGTH(funding.tenant_id) = OCTET_LENGTH(#{tenantId})
+             AND CAST(funding.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+             AND OCTET_LENGTH(funding.client_id) = OCTET_LENGTH(#{clientId})
+             AND CAST(funding.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
+             AND OCTET_LENGTH(funding.task_id) = OCTET_LENGTH(task.task_id)
+            WHERE task.tenant_id = #{tenantId}
+              AND task.client_id = #{clientId}
+              AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+            <if test="status != null and status.trim() != ''">
+              AND task.reward_status = #{status}
+            </if>
+            <if test="ability != null and ability.trim() != ''">
+              AND task.required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
+            </if>
+            <if test="keyword != null and keyword.trim() != ''">
+              AND (
+                    LOWER(task.task_id) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(plan.name, '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(plan.description, '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(task.required_abilities, '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+                 OR LOWER(COALESCE(
+                      (
+                          SELECT runtime.name
+                          FROM agent_task_member member
+                          LEFT JOIN agent_runtime runtime
+                            ON runtime.agent_id = member.agent_id
+                           AND CAST(runtime.agent_id AS BINARY(400)) = CAST(member.agent_id AS BINARY(400))
+                           AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(member.agent_id)
+                          WHERE member.tenant_id = #{tenantId}
+                            AND member.client_id = #{clientId}
+                            AND member.task_id = task.task_id
+                            AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                            AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
+                            AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND CAST(member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
+                            AND OCTET_LENGTH(member.task_id) = OCTET_LENGTH(task.task_id)
+                            AND member.member_status NOT IN ('rejected', 'left')
+                          ORDER BY member.member_role ASC, member.agent_id ASC, member.id ASC
+                          LIMIT 1
+                      ),
+                      CASE WHEN NOT EXISTS (
+                          SELECT 1
+                          FROM agent_task_member any_member
+                          WHERE any_member.tenant_id = #{tenantId}
+                            AND any_member.client_id = #{clientId}
+                            AND any_member.task_id = task.task_id
+                            AND CAST(any_member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                            AND OCTET_LENGTH(any_member.tenant_id) = OCTET_LENGTH(#{tenantId})
+                            AND CAST(any_member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND OCTET_LENGTH(any_member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND CAST(any_member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
+                            AND OCTET_LENGTH(any_member.task_id) = OCTET_LENGTH(task.task_id)
+                      ) THEN (
+                          SELECT runtime.name
+                          FROM agent_runtime runtime
+                          WHERE runtime.agent_id = task.assigned_agent_id
+                            AND CAST(runtime.agent_id AS BINARY(400)) = CAST(task.assigned_agent_id AS BINARY(400))
+                            AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(task.assigned_agent_id)
+                          LIMIT 1
+                      ) END,
+                      '')) LIKE CONCAT('%', LOWER(#{keyword}), '%')
+              )
+            </if>
+            ORDER BY task.update_time DESC, task.task_id ASC, task.id ASC
+            LIMIT #{limit} OFFSET #{offset}
+            </script>
+            """)
+    List<AgentTaskSearchRow> searchPageExactInScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("status") String status,
+            @Param("ability") String ability,
+            @Param("keyword") String keyword,
+            @Param("offset") long offset,
+            @Param("limit") int limit);
+
+    @Select("""
+            <script>
+            SELECT member.tenant_id, member.client_id, member.task_id,
+                   member.agent_id, member.member_status
+            FROM agent_task_member member
+            WHERE member.tenant_id = #{tenantId}
+              AND member.client_id = #{clientId}
+              AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+              AND (
+              <foreach collection="taskIds" item="taskId" separator=" OR ">
+                (member.task_id = #{taskId}
+                 AND CAST(member.task_id AS BINARY(400)) = CAST(#{taskId} AS BINARY(400))
+                 AND OCTET_LENGTH(member.task_id) = OCTET_LENGTH(#{taskId}))
+              </foreach>
+              )
+            ORDER BY member.task_id ASC, member.member_role ASC, member.agent_id ASC, member.id ASC
+            </script>
+            """)
+    List<cn.jia.agent.entity.AgentTaskMemberEntity> selectSearchMembersExactInScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskIds") List<String> taskIds);
+
+    @Select("""
+            <script>
+            SELECT runtime.agent_id, runtime.name, runtime.status
+            FROM agent_runtime runtime
+            WHERE
+            <foreach collection="agentIds" item="agentId" open="(" separator=" OR " close=")">
+              (runtime.agent_id = #{agentId}
+               AND CAST(runtime.agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
+               AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(#{agentId}))
+            </foreach>
+            ORDER BY runtime.agent_id ASC
+            </script>
+            """)
+    List<cn.jia.agent.entity.AgentRuntimeEntity> selectSearchRuntimesExact(
+            @Param("agentIds") List<String> agentIds);
+
+    @Select("""
+            <script>
+            SELECT task.tenant_id AS tenantId, task.client_id AS clientId,
+                   COALESCE(task.reward_status, 'open') AS status, COUNT(*) AS taskCount
+            FROM agent_task_meta task
+            WHERE task.tenant_id = #{tenantId}
+              AND task.client_id = #{clientId}
+              AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+            <if test="ability != null and ability.trim() != ''">
+              AND task.required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
+            </if>
+            <if test="keyword != null and keyword.trim() != ''">
+              AND LOCATE(CAST(#{keyword} AS BINARY), CAST(task.task_id AS BINARY)) &gt; 0
+            </if>
+            GROUP BY task.tenant_id, CAST(task.tenant_id AS BINARY), OCTET_LENGTH(task.tenant_id),
+                     task.client_id, CAST(task.client_id AS BINARY), OCTET_LENGTH(task.client_id),
+                     COALESCE(task.reward_status, 'open')
+            ORDER BY status ASC
+            </script>
+            """)
+    List<AgentTaskStatusCountRow> countSearchByStatusExactInScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ability") String ability,
+            @Param("keyword") String keyword);
 
     @Select("""
             SELECT parent.*
