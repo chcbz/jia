@@ -26,6 +26,8 @@ import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentStatsDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
@@ -103,6 +105,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentServiceImplTest extends BaseMockTest {
@@ -1594,6 +1597,281 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals(result.get(0).getScore(), result.get(1).getScore());
         assertEquals(List.of("agent-wuyong", "agent-linchong"), result.stream()
                 .map(candidate -> candidate.getAgent().getAgentId()).toList());
+    }
+
+    @Test
+    void recommendTaskTeamUsesExactScopeAndOnlyEligibleCandidates() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-team");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(7L);
+        meta.setRequiredAbilities("[\"backend\",\"frontend\"]");
+        meta.setRiskLevel("high");
+        meta.setMaxAgents(2);
+        meta.setReviewRequired(true);
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-team"))
+                .thenReturn(meta);
+
+        AgentRuntimeEntity producer = ownedAgent(
+                "agent-producer", "产出者", AgentConstants.STATUS_ONLINE,
+                "[\"backend\",\"frontend\",\"execution\"]");
+        AgentRuntimeEntity reviewer = ownedAgent(
+                "agent-reviewer", "复核者", AgentConstants.STATUS_ONLINE,
+                "[\"backend\",\"review\"]");
+        AgentRuntimeEntity busyFrontend = ownedAgent(
+                "agent-busy", "忙碌者", AgentConstants.STATUS_BUSY,
+                "[\"frontend\",\"review\"]");
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
+                .thenReturn(List.of(reviewer, busyFrontend, producer, producer));
+
+        AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
+        request.setMaxTeamSize(3);
+        request.setBudgetUnits(2);
+        request.setHighRisk(true);
+        AgentTaskTeamRecommendationDTO result = agentService.recommendTaskTeam(
+                "juyiting", "jia_client", "task-team", request);
+
+        assertEquals("TASK_REQUIRED_ABILITIES", result.getRequirementSource());
+        assertEquals("7", result.getTaskVersion());
+        assertEquals("high", result.getRiskLevel());
+        assertTrue(result.getHighRisk());
+        assertTrue(result.getTaskReviewRequired());
+        assertEquals(3, result.getRequestedMaxTeamSize());
+        assertEquals(2, result.getTaskMaxAgents());
+        assertEquals(2, result.getMaxTeamSize());
+        assertEquals(List.of("backend", "frontend"), result.getCoveredAbilities());
+        assertEquals(List.of(), result.getMissingAbilities());
+        assertEquals(List.of("agent-producer", "agent-reviewer"), result.getMembers().stream()
+                .map(member -> member.getAgentId()).toList());
+        assertEquals(List.of("PRODUCER", "REVIEWER"), result.getMembers().stream()
+                .map(member -> member.getRole()).toList());
+        assertTrue(result.getIndependentReviewerRequired());
+        assertTrue(result.getIndependentReviewerSatisfied());
+        assertTrue(result.getConstraintsSatisfied());
+        assertTrue(result.getReadyForConfirmation());
+        assertTrue(result.getPreviewOnly());
+        assertFalse(result.getAutoDispatchAllowed());
+        assertEquals("NON_MONETARY_TEAM_SLOT", result.getCostModel());
+        assertFalse(result.getMonetaryCostKnown());
+        assertEquals(2, result.getTotalCostUnits());
+        assertEquals(List.of("RECOMMENDATION_PREVIEW_ONLY"), result.getAutoDispatchReasons());
+        assertEquals(List.of("agent-producer"), result.getDuplicateCandidateAgentIds());
+        assertEquals(3, result.getCandidates().size());
+        var busyView = result.getCandidates().stream()
+                .filter(candidate -> "agent-busy".equals(candidate.getAgentId()))
+                .findFirst().orElseThrow();
+        assertFalse(busyView.getEligible());
+        assertFalse(busyView.getSelected());
+        assertEquals(List.of(AgentErrorConstants.AGENT_BUSY), busyView.getExclusionReasons());
+        verify(agentTaskMetaDao).findByTaskId("juyiting", "jia_client", "task-team");
+        verify(agentRuntimeDao).findCandidateRosterByOwner("jia_client", "juyiting");
+        verify(agentRuntimeDao, never()).findRosterByOwner(any(), any(), any(), any());
+        verify(legacyTaskCompatibilityService, never()).assignResolved(
+                any(), any(), any(), any(), anyBoolean(),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
+    }
+
+    @Test
+    void recommendTaskTeamRequiresExplicitRiskBeforeAnyRead() {
+        AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
+        request.setMaxTeamSize(1);
+        request.setBudgetUnits(0);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> agentService.recommendTaskTeam(
+                        "juyiting", "jia_client", "task-team", request));
+
+        assertEquals("highRisk must be explicitly provided", failure.getMessage());
+        verify(agentTaskMetaDao, never()).findByTaskId(any(), any(), any());
+        verify(agentRuntimeDao, never()).findCandidateRosterByOwner(any(), any());
+    }
+
+    @Test
+    void recommendTaskTeamCannotDowngradeAuthoritativeHighRisk() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setTaskId("task-high-risk");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setTaskVersion(1L);
+        meta.setRequiredAbilities("[\"backend\"]");
+        meta.setRiskLevel("high");
+        meta.setMaxAgents(2);
+        meta.setReviewRequired(true);
+        when(agentTaskMetaDao.findByTaskId(
+                "juyiting", "jia_client", "task-high-risk")).thenReturn(meta);
+        AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
+        request.setMaxTeamSize(2);
+        request.setBudgetUnits(2);
+        request.setHighRisk(false);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> agentService.recommendTaskTeam(
+                        "juyiting", "jia_client", "task-high-risk", request));
+
+        assertEquals("highRisk does not match authoritative task riskLevel",
+                failure.getMessage());
+        verify(agentRuntimeDao, never()).findCandidateRosterByOwner(any(), any());
+    }
+
+    @Test
+    void recommendTaskTeamFailsClosedOnInvalidAuthoritativeConstraints() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setTaskId("task-invalid-constraints");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setTaskVersion(1L);
+        meta.setRequiredAbilities("[\"backend\"]");
+        meta.setRiskLevel("HIGH");
+        meta.setMaxAgents(2);
+        meta.setReviewRequired(false);
+        when(agentTaskMetaDao.findByTaskId(
+                "juyiting", "jia_client", "task-invalid-constraints")).thenReturn(meta);
+        AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
+        request.setMaxTeamSize(2);
+        request.setBudgetUnits(2);
+        request.setHighRisk(false);
+
+        IllegalArgumentException invalidRisk = assertThrows(IllegalArgumentException.class,
+                () -> agentService.recommendTaskTeam(
+                        "juyiting", "jia_client", "task-invalid-constraints", request));
+        assertEquals("Persisted task riskLevel is invalid", invalidRisk.getMessage());
+
+        meta.setRiskLevel("low");
+        meta.setReviewRequired(null);
+        IllegalArgumentException invalidReview = assertThrows(IllegalArgumentException.class,
+                () -> agentService.recommendTaskTeam(
+                        "juyiting", "jia_client", "task-invalid-constraints", request));
+        assertEquals("Persisted task reviewRequired is invalid", invalidReview.getMessage());
+
+        meta.setReviewRequired(false);
+        meta.setMaxAgents(null);
+        IllegalArgumentException invalidMaxAgents = assertThrows(IllegalArgumentException.class,
+                () -> agentService.recommendTaskTeam(
+                        "juyiting", "jia_client", "task-invalid-constraints", request));
+        assertEquals("Persisted task maxAgents is invalid", invalidMaxAgents.getMessage());
+        verify(agentTaskMetaDao, times(3)).findByTaskId(
+                "juyiting", "jia_client", "task-invalid-constraints");
+        verify(agentRuntimeDao, never()).findCandidateRosterByOwner(any(), any());
+    }
+
+    @Test
+    void recommendTaskTeamAcceptsZeroSlotBudgetButReturnsBlockedPreview() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setTaskId("task-zero-budget");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setTaskVersion(1L);
+        meta.setRequiredAbilities("[\"backend\"]");
+        meta.setRiskLevel("low");
+        meta.setMaxAgents(1);
+        meta.setReviewRequired(false);
+        when(agentTaskMetaDao.findByTaskId(
+                "juyiting", "jia_client", "task-zero-budget")).thenReturn(meta);
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
+                .thenReturn(List.of(ownedAgent(
+                        "agent-back", "后端", AgentConstants.STATUS_ONLINE, "[\"backend\"]")));
+        AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
+        request.setMaxTeamSize(1);
+        request.setBudgetUnits(0);
+        request.setHighRisk(false);
+
+        AgentTaskTeamRecommendationDTO result = agentService.recommendTaskTeam(
+                "juyiting", "jia_client", "task-zero-budget", request);
+
+        assertEquals(0, result.getTotalCostUnits());
+        assertEquals(List.of(), result.getMembers());
+        assertEquals(List.of("backend"), result.getMissingAbilities());
+        assertTrue(result.getBlockingReasons().contains("NO_ELIGIBLE_PRODUCER"));
+        assertTrue(result.getBlockingReasons().contains("BUDGET_LIMIT_REACHED"));
+        assertFalse(result.getConstraintsSatisfied());
+        assertFalse(result.getReadyForConfirmation());
+        assertFalse(result.getAutoDispatchAllowed());
+    }
+
+    @Test
+    void recommendTaskTeamReportsGapsAndNeverAssigns() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setId(1L);
+        meta.setTaskId("task-gap");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(2L);
+        meta.setRequiredAbilities("[\"backend\",\"frontend\"]");
+        meta.setRiskLevel("low");
+        meta.setMaxAgents(1);
+        meta.setReviewRequired(false);
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-gap"))
+                .thenReturn(meta);
+        AgentRuntimeEntity backend = ownedAgent(
+                "agent-back", "后端", AgentConstants.STATUS_ONLINE, "[\"backend\"]");
+        AgentRuntimeEntity busyFrontend = ownedAgent(
+                "agent-front", "前端", AgentConstants.STATUS_BUSY, "[\"frontend\"]");
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
+                .thenReturn(List.of(backend, busyFrontend));
+
+        AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
+        request.setMaxTeamSize(1);
+        request.setBudgetUnits(1);
+        request.setHighRisk(false);
+        AgentTaskTeamRecommendationDTO result = agentService.recommendTaskTeam(
+                "juyiting", "jia_client", "task-gap", request);
+
+        assertEquals(List.of("backend"), result.getCoveredAbilities());
+        assertEquals(List.of("frontend"), result.getMissingAbilities());
+        assertFalse(result.getConstraintsSatisfied());
+        assertFalse(result.getReadyForConfirmation());
+        assertFalse(result.getAutoDispatchAllowed());
+        assertTrue(result.getBlockingReasons().contains("ABILITY_COVERAGE_INCOMPLETE"));
+        assertTrue(result.getBlockingReasons().contains(
+                "NO_ELIGIBLE_CANDIDATE_FOR_MISSING_ABILITIES"));
+        assertTrue(result.getAutoDispatchReasons().contains("RECOMMENDATION_PREVIEW_ONLY"));
+        assertTrue(result.getAutoDispatchReasons().contains("ABILITY_COVERAGE_INCOMPLETE"));
+        verify(legacyTaskCompatibilityService, never()).assignResolved(
+                any(), any(), any(), any(), anyBoolean(),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
+        verify(agentRuntimeDao, never()).updateById(any());
+        verify(agentTaskMetaDao, never()).updateById(any());
+        verifyNoInteractions(taskEventWriter, eventPublisherProvider,
+                taskServiceProvider, apiKeyServiceProvider);
+    }
+
+    @Test
+    void recommendTaskTeamRejectsCandidateOutsideExactScope() {
+        AgentTaskMetaEntity meta = new AgentTaskMetaEntity();
+        meta.setTaskId("task-scope");
+        meta.setTenantId("juyiting");
+        meta.setClientId("jia_client");
+        meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
+        meta.setTaskVersion(1L);
+        meta.setRequiredAbilities("[\"backend\"]");
+        meta.setRiskLevel("low");
+        meta.setMaxAgents(1);
+        meta.setReviewRequired(false);
+        when(agentTaskMetaDao.findByTaskId("juyiting", "jia_client", "task-scope"))
+                .thenReturn(meta);
+        AgentRuntimeEntity foreign = ownedAgent(
+                "agent-foreign", "越界", AgentConstants.STATUS_ONLINE, "[\"backend\"]");
+        foreign.setOwnerJiacn("Juyiting");
+        when(agentRuntimeDao.findCandidateRosterByOwner("jia_client", "juyiting"))
+                .thenReturn(List.of(foreign));
+        AgentTaskTeamRecommendationRequestDTO request = new AgentTaskTeamRecommendationRequestDTO();
+        request.setMaxTeamSize(1);
+        request.setBudgetUnits(1);
+        request.setHighRisk(false);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> agentService.recommendTaskTeam(
+                        "juyiting", "jia_client", "task-scope", request));
+
+        assertEquals("Persisted recommendation candidate is outside the byte-exact scope",
+                failure.getMessage());
+        verify(legacyTaskCompatibilityService, never()).assignResolved(
+                any(), any(), any(), any(), anyBoolean(),
+                any(AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator.class));
     }
 
     @Test

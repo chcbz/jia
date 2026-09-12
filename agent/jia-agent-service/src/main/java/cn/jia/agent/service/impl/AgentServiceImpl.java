@@ -39,6 +39,10 @@ import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskNoteEntity;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationCandidateDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationMemberDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.funding.AgentSkillRequirementDTO;
 import cn.jia.agent.entity.funding.AgentTaskFundingDTO;
@@ -112,6 +116,14 @@ public class AgentServiceImpl implements AgentService {
     private static final int TASK_MEMBERSHIP_SNAPSHOT_LIMIT = 500;
     private static final int MAX_RUNTIME_ABILITIES = 128;
     private static final int MAX_RUNTIME_ABILITY_LENGTH = 100;
+    private static final int MAX_TEAM_RECOMMENDATION_CANDIDATES = 500;
+    private static final int MAX_TEAM_SIZE = 20;
+    private static final int MAX_TEAM_BUDGET_UNITS = 100;
+    private static final int TEAM_SLOT_COST_UNITS = 1;
+    private static final String TEAM_COST_MODEL = "NON_MONETARY_TEAM_SLOT";
+    private static final String TEAM_REQUIREMENT_SOURCE = "TASK_REQUIRED_ABILITIES";
+    private static final String TEAM_PREVIEW_ONLY_REASON = "RECOMMENDATION_PREVIEW_ONLY";
+    private static final Set<String> TEAM_RISK_LEVELS = Set.of("low", "medium", "high");
     private static final Pattern OPAQUE_AGENT_ID = Pattern.compile("agt_[0-9a-f]{32}");
     private static final Set<String> AGENT_RUNTIME_STATUSES = Set.of(
             AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY,
@@ -1237,6 +1249,243 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public AgentTaskTeamRecommendationDTO recommendTaskTeam(
+            String tenantId, String clientId, String taskId,
+            AgentTaskTeamRecommendationRequestDTO request) {
+        requireExactTeamScope(tenantId, clientId);
+        require(isExactStoredText(taskId, 100), "taskId is invalid");
+        require(request != null, "team recommendation request is required");
+        require(request.getMaxTeamSize() != null
+                        && request.getMaxTeamSize() > 0
+                        && request.getMaxTeamSize() <= MAX_TEAM_SIZE,
+                "maxTeamSize must be between 1 and " + MAX_TEAM_SIZE);
+        require(request.getBudgetUnits() != null
+                        && request.getBudgetUnits() >= 0
+                        && request.getBudgetUnits() <= MAX_TEAM_BUDGET_UNITS,
+                "budgetUnits must be between 0 and " + MAX_TEAM_BUDGET_UNITS);
+        require(request.getHighRisk() != null, "highRisk must be explicitly provided");
+
+        AgentTaskMetaEntity meta = Optional.ofNullable(
+                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
+                new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
+        requireScopedTaskProjection(meta, tenantId, clientId, taskId);
+        require(meta.getRiskLevel() != null && TEAM_RISK_LEVELS.contains(meta.getRiskLevel()),
+                "Persisted task riskLevel is invalid");
+        require(meta.getReviewRequired() != null,
+                "Persisted task reviewRequired is invalid");
+        require(meta.getMaxAgents() != null && meta.getMaxAgents() > 0,
+                "Persisted task maxAgents is invalid");
+        boolean authoritativeHighRisk = "high".equals(meta.getRiskLevel());
+        require(request.getHighRisk() == authoritativeHighRisk,
+                "highRisk does not match authoritative task riskLevel");
+        int effectiveMaxTeamSize = Math.min(
+                request.getMaxTeamSize(), meta.getMaxAgents());
+        AgentTaskDTO task = toTeamRecommendationTask(meta);
+        TaskRecommendationCandidates candidates = loadTaskRecommendationCandidates(
+                task, tenantId, clientId);
+
+        boolean reviewerRequired = authoritativeHighRisk
+                || Boolean.TRUE.equals(meta.getReviewRequired())
+                || Boolean.TRUE.equals(request.getIndependentReviewerRequired());
+        List<AgentTaskTeamRecommendationGreedy.Candidate> eligibleCandidates =
+                candidates.recommendations().stream()
+                        .filter(recommendation -> Boolean.TRUE.equals(recommendation.getEligible()))
+                        .map(this::toGreedyCandidate)
+                        .toList();
+        AgentTaskTeamRecommendationGreedy.Result selection =
+                AgentTaskTeamRecommendationGreedy.select(
+                        Optional.ofNullable(task.getRequiredAbilities())
+                                .orElseGet(Collections::emptyList),
+                        eligibleCandidates,
+                        new AgentTaskTeamRecommendationGreedy.Constraints(
+                                effectiveMaxTeamSize, request.getBudgetUnits(), reviewerRequired));
+
+        LinkedHashMap<String, AgentTaskTeamRecommendationGreedy.SelectedMember> selectedById =
+                new LinkedHashMap<>();
+        for (AgentTaskTeamRecommendationGreedy.SelectedMember member : selection.members()) {
+            selectedById.put(member.candidate().agentId(), member);
+        }
+        List<AgentTaskTeamRecommendationMemberDTO> members = selection.members().stream()
+                .map(this::toTeamMemberDTO)
+                .toList();
+        List<AgentTaskTeamRecommendationCandidateDTO> candidateViews =
+                candidates.recommendations().stream()
+                        .map(recommendation -> toTeamCandidateDTO(
+                                recommendation, selectedById.get(
+                                        recommendation.getAgent().getAgentId())))
+                        .toList();
+
+        LinkedHashSet<String> duplicateAgentIds = new LinkedHashSet<>(
+                candidates.duplicateAgentIds());
+        duplicateAgentIds.addAll(selection.duplicateAgentIds());
+        List<String> autoDispatchReasons = new ArrayList<>();
+        autoDispatchReasons.add(TEAM_PREVIEW_ONLY_REASON);
+        autoDispatchReasons.addAll(selection.blockingReasons());
+
+        AgentTaskTeamRecommendationDTO result = new AgentTaskTeamRecommendationDTO();
+        result.setTaskId(task.getId());
+        result.setTaskVersion(task.getTaskVersion());
+        result.setRequirementSource(TEAM_REQUIREMENT_SOURCE);
+        result.setRequiredAbilities(List.copyOf(Optional.ofNullable(task.getRequiredAbilities())
+                .orElseGet(Collections::emptyList)));
+        result.setCoveredAbilities(selection.coveredAbilities());
+        result.setMissingAbilities(selection.missingAbilities());
+        result.setRequestedMaxTeamSize(request.getMaxTeamSize());
+        result.setTaskMaxAgents(meta.getMaxAgents());
+        result.setMaxTeamSize(effectiveMaxTeamSize);
+        result.setBudgetUnits(request.getBudgetUnits());
+        result.setTotalCostUnits(selection.totalCostUnits());
+        result.setCostModel(TEAM_COST_MODEL);
+        result.setMonetaryCostKnown(false);
+        result.setRiskLevel(meta.getRiskLevel());
+        result.setHighRisk(authoritativeHighRisk);
+        result.setTaskReviewRequired(meta.getReviewRequired());
+        result.setIndependentReviewerRequired(reviewerRequired);
+        result.setIndependentReviewerSatisfied(selection.independentReviewerSatisfied());
+        result.setConstraintsSatisfied(selection.constraintsSatisfied());
+        result.setReadyForConfirmation(selection.constraintsSatisfied());
+        result.setPreviewOnly(true);
+        result.setAutoDispatchAllowed(false);
+        result.setBlockingReasons(selection.blockingReasons());
+        result.setAutoDispatchReasons(List.copyOf(autoDispatchReasons));
+        result.setDuplicateCandidateAgentIds(List.copyOf(duplicateAgentIds));
+        result.setMembers(members);
+        result.setCandidates(candidateViews);
+        return result;
+    }
+
+    private TaskRecommendationCandidates loadTaskRecommendationCandidates(
+            AgentTaskDTO task, String tenantId, String clientId) {
+        List<AgentRuntimeEntity> rows;
+        PageHelper.startPage(1, MAX_TEAM_RECOMMENDATION_CANDIDATES + 1);
+        try {
+            rows = Optional.ofNullable(
+                    agentRuntimeDao.findCandidateRosterByOwner(clientId, tenantId))
+                    .orElseGet(Collections::emptyList);
+        } finally {
+            PageHelper.clearPage();
+        }
+        require(rows.size() <= MAX_TEAM_RECOMMENDATION_CANDIDATES,
+                "Agent team recommendation candidate limit exceeded");
+        LinkedHashMap<String, AgentRuntimeEntity> uniqueRows = new LinkedHashMap<>();
+        LinkedHashSet<String> duplicates = new LinkedHashSet<>();
+        for (AgentRuntimeEntity row : rows) {
+            require(row != null
+                            && Objects.equals(clientId, row.getClientId())
+                            && Objects.equals(tenantId, row.getOwnerJiacn())
+                            && isExactStoredText(row.getAgentId(), 100),
+                    "Persisted recommendation candidate is outside the byte-exact scope");
+            if (uniqueRows.putIfAbsent(row.getAgentId(), row) != null) {
+                duplicates.add(row.getAgentId());
+            }
+        }
+        List<AgentTaskRecommendationDTO> recommendations = uniqueRows.values().stream()
+                .map(agent -> evaluateTaskCandidate(task, agent, clientId, tenantId))
+                .sorted((left, right) -> {
+                    int eligibility = Boolean.compare(Boolean.TRUE.equals(right.getEligible()),
+                            Boolean.TRUE.equals(left.getEligible()));
+                    if (eligibility != 0) return eligibility;
+                    // Stream sorting is stable: preserve roster order when E01 scores tie.
+                    return Integer.compare(right.getScore(), left.getScore());
+                })
+                .toList();
+        return new TaskRecommendationCandidates(recommendations, List.copyOf(duplicates));
+    }
+
+    private AgentTaskDTO toTeamRecommendationTask(AgentTaskMetaEntity meta) {
+        AgentTaskDTO task = new AgentTaskDTO();
+        task.setId(meta.getTaskId());
+        task.setTaskVersion(meta.getTaskVersion() == null
+                ? null : Long.toString(meta.getTaskVersion()));
+        task.setRequiredAbilities(parseList(meta.getRequiredAbilities()));
+        return task;
+    }
+
+    private AgentTaskTeamRecommendationGreedy.Candidate toGreedyCandidate(
+            AgentTaskRecommendationDTO recommendation) {
+        require(recommendation.getAgent() != null
+                        && isExactStoredText(recommendation.getAgent().getAgentId(), 100)
+                        && recommendation.getCapability() != null
+                        && recommendation.getScore() != null,
+                "Eligible recommendation is incomplete");
+        return new AgentTaskTeamRecommendationGreedy.Candidate(
+                recommendation.getAgent().getAgentId(),
+                recommendation.getAgent().getName(),
+                Optional.ofNullable(recommendation.getMatchedAbilities())
+                        .orElseGet(Collections::emptyList),
+                Optional.ofNullable(recommendation.getCapability().getRoles())
+                        .orElseGet(Collections::emptyList),
+                recommendation.getScore(), TEAM_SLOT_COST_UNITS);
+    }
+
+    private AgentTaskTeamRecommendationMemberDTO toTeamMemberDTO(
+            AgentTaskTeamRecommendationGreedy.SelectedMember selected) {
+        AgentTaskTeamRecommendationGreedy.Candidate candidate = selected.candidate();
+        AgentTaskTeamRecommendationMemberDTO dto = new AgentTaskTeamRecommendationMemberDTO();
+        dto.setAgentId(candidate.agentId());
+        dto.setName(candidate.name());
+        dto.setRole(selected.role());
+        dto.setScore(candidate.score());
+        dto.setMatchedAbilities(candidate.matchedAbilities());
+        dto.setMarginalCoveredAbilities(selected.marginalCoveredAbilities());
+        dto.setCostUnits(candidate.costUnits());
+        if (AgentTaskTeamRecommendationGreedy.ROLE_REVIEWER.equals(selected.role())) {
+            dto.setReason("独立 reviewer；agentId 与全部产出者不同，TEAM_SLOT 成本 "
+                    + candidate.costUnits() + "。E01 综合分 " + candidate.score() + "。");
+        } else {
+            String coverage = selected.marginalCoveredAbilities().isEmpty()
+                    ? "任务未声明能力要求"
+                    : "新增覆盖 " + String.join("、", selected.marginalCoveredAbilities());
+            dto.setReason(coverage + "；TEAM_SLOT 成本 " + candidate.costUnits()
+                    + "。E01 综合分 " + candidate.score() + "。");
+        }
+        return dto;
+    }
+
+    private AgentTaskTeamRecommendationCandidateDTO toTeamCandidateDTO(
+            AgentTaskRecommendationDTO recommendation,
+            AgentTaskTeamRecommendationGreedy.SelectedMember selected) {
+        AgentTaskTeamRecommendationCandidateDTO dto =
+                new AgentTaskTeamRecommendationCandidateDTO();
+        dto.setAgentId(recommendation.getAgent().getAgentId());
+        dto.setName(recommendation.getAgent().getName());
+        dto.setScore(recommendation.getScore());
+        dto.setRoles(recommendation.getCapability() == null
+                ? List.of()
+                : List.copyOf(Optional.ofNullable(recommendation.getCapability().getRoles())
+                        .orElseGet(Collections::emptyList)));
+        dto.setMatchedAbilities(List.copyOf(Optional.ofNullable(
+                recommendation.getMatchedAbilities()).orElseGet(Collections::emptyList)));
+        dto.setEligible(Boolean.TRUE.equals(recommendation.getEligible()));
+        dto.setExclusionReasons(List.copyOf(Optional.ofNullable(
+                recommendation.getExclusionReasons()).orElseGet(Collections::emptyList)));
+        dto.setSelected(selected != null);
+        dto.setSelectionRole(selected == null ? null : selected.role());
+        dto.setCostUnits(TEAM_SLOT_COST_UNITS);
+        dto.setReason(recommendation.getReason());
+        return dto;
+    }
+
+    private void requireExactTeamScope(String tenantId, String clientId) {
+        if (!isExactAuthenticatedScopeId(tenantId)
+                || !isExactAuthenticatedScopeId(clientId)
+                || "0".equals(tenantId) || "0".equals(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated team recommendation scope is invalid");
+        }
+    }
+
+    private record TaskRecommendationCandidates(
+            List<AgentTaskRecommendationDTO> recommendations,
+            List<String> duplicateAgentIds) {
+        private TaskRecommendationCandidates {
+            recommendations = List.copyOf(recommendations);
+            duplicateAgentIds = List.copyOf(duplicateAgentIds);
+        }
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request) {
         requireLegacyAssignmentAllowed(resolveCurrentJiacn(), resolveCurrentClientId(), taskId, true, 1);
@@ -2105,7 +2354,15 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentTaskRecommendationDTO evaluateTaskCandidate(AgentTaskDTO task, AgentRuntimeEntity entity) {
-        AgentTaskRecommendationDTO dto = buildTaskRecommendation(task, entity);
+        return evaluateTaskCandidate(
+                task, entity, resolveCurrentClientId(), resolveCurrentJiacn());
+    }
+
+    private AgentTaskRecommendationDTO evaluateTaskCandidate(
+            AgentTaskDTO task, AgentRuntimeEntity entity,
+            String clientId, String ownerJiacn) {
+        AgentTaskRecommendationDTO dto = buildTaskRecommendation(
+                task, entity, clientId, ownerJiacn);
         List<String> exclusions = new ArrayList<>();
         AgentRuntimeDTO agent = dto.getAgent();
         if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(agent.getAgentId())
@@ -2132,8 +2389,10 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
-    private AgentTaskRecommendationDTO buildTaskRecommendation(AgentTaskDTO task, AgentRuntimeEntity entity) {
-        AgentRuntimeDTO agent = toRuntimeDTO(entity);
+    private AgentTaskRecommendationDTO buildTaskRecommendation(
+            AgentTaskDTO task, AgentRuntimeEntity entity,
+            String clientId, String ownerJiacn) {
+        AgentRuntimeDTO agent = toRuntimeDTO(entity, clientId, ownerJiacn);
         AgentCapabilityDTO capability = toCapabilityDTO(agent);
         List<String> required = Optional.ofNullable(task.getRequiredAbilities()).orElseGet(Collections::emptyList);
         List<String> matchedAbilities = matchedAbilities(required, capability.getAbilities());
