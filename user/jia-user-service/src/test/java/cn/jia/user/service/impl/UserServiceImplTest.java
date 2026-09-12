@@ -78,6 +78,42 @@ class UserServiceImplTest extends BaseMockTest {
         Assertions.assertEquals(UserErrorConstants.POINT_NO_ENOUGH.getMessage(), exception.getMessage());
     }
 
+
+    @Test
+    void changePointAndGetUsesAtomicIncrementAndReturnsCommittedBalance() {
+        when(userInfoDao.incrementPoint(eq("jiacn"), eq(2), anyLong())).thenReturn(1);
+        when(userInfoDao.selectPointByJiacn("jiacn")).thenReturn(7);
+
+        int balance = userServiceImpl.changePointAndGet("jiacn", 2);
+
+        Assertions.assertEquals(7, balance);
+        verify(userInfoDao).incrementPoint(eq("jiacn"), eq(2), anyLong());
+        verify(userInfoDao).selectPointByJiacn("jiacn");
+        verify(userInfoDao, never()).selectByJiacn("jiacn");
+        verify(userInfoDao, never()).updateById(any());
+    }
+
+    @Test
+    void changePointAndGetFailsClosedForMissingInsufficientOrAmbiguousIdentity() {
+        when(userInfoDao.incrementPoint(eq("missing"), eq(1), anyLong())).thenReturn(0);
+        when(userInfoDao.selectPointByJiacn("missing")).thenReturn(null);
+        EsRuntimeException missing = assertThrows(EsRuntimeException.class,
+                () -> userServiceImpl.changePointAndGet("missing", 1));
+        Assertions.assertEquals(UserErrorConstants.USER_NOT_EXIST.getMessage(), missing.getMessage());
+
+        when(userInfoDao.incrementPoint(eq("poor"), eq(-2), anyLong())).thenReturn(0);
+        when(userInfoDao.selectPointByJiacn("poor")).thenReturn(1);
+        EsRuntimeException insufficient = assertThrows(EsRuntimeException.class,
+                () -> userServiceImpl.changePointAndGet("poor", -2));
+        Assertions.assertEquals(UserErrorConstants.POINT_NO_ENOUGH.getMessage(), insufficient.getMessage());
+
+        when(userInfoDao.incrementPoint(eq("duplicate"), eq(1), anyLong())).thenReturn(2);
+        assertThrows(IllegalStateException.class,
+                () -> userServiceImpl.changePointAndGet("duplicate", 1));
+        verify(userInfoDao, never()).selectPointByJiacn("duplicate");
+        verify(userInfoDao, never()).selectByJiacn(anyString());
+    }
+
     @Test
     void testChangeRole() {
         RoleRelEntity roleRelEntity = new RoleRelEntity().setRoleId(1L);

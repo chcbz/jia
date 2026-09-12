@@ -26,6 +26,8 @@ public interface UserService extends IBaseService<UserEntity> {
 	void sync(List<UserEntity> userList);
 
 	void changePoint(String jiacn, int add);
+
+	int changePointAndGet(String jiacn, int add);
 	
 	void changeRole(UserVO user);
 

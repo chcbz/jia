@@ -21,6 +21,8 @@ public interface MatVoteService {
 
 	boolean tick(MatVoteTickEntity voteTick);
 
+	MatDailyVoteAnswerResult answerDaily(long questionId, String jiacn, String answer);
+
 	MatVoteQuestionVO findOneQuestion(String jiacn);
 
 	MatVoteQuestionEntity findQuestion(Long id);

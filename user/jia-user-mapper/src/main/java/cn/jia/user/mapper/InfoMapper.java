@@ -28,4 +28,9 @@ public interface InfoMapper extends BaseMapper<UserEntity> {
     List<UserEntity> selectSecurityByExactJiacn(@Param("jiacn") String jiacn);
 
     int incrementAuthEpoch(@Param("userId") long userId, @Param("expectedEpoch") long expectedEpoch);
+
+    int incrementPoint(@Param("jiacn") String jiacn, @Param("add") int add,
+                       @Param("updateTime") long updateTime);
+
+    Integer selectPointByJiacn(@Param("jiacn") String jiacn);
 }

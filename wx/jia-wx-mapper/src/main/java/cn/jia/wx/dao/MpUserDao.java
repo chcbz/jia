@@ -3,6 +3,8 @@ package cn.jia.wx.dao;
 import cn.jia.core.dao.IBaseDao;
 import cn.jia.wx.entity.MpUserEntity;
 
+import java.util.List;
+
 /**
  * <p>
  *  服务类
@@ -13,4 +15,6 @@ import cn.jia.wx.entity.MpUserEntity;
  */
 public interface MpUserDao extends IBaseDao<MpUserEntity> {
     int unsubscribe(MpUserEntity example);
+
+    List<MpUserEntity> selectByAppIdAndOpenIdExact(String appid, String openId);
 }

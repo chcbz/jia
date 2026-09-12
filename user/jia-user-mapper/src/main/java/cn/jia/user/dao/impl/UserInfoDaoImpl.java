@@ -75,4 +75,14 @@ public class UserInfoDaoImpl extends BaseDaoImpl<InfoMapper, UserEntity> impleme
     public int incrementAuthEpoch(long userId, long expectedEpoch) {
         return baseMapper.incrementAuthEpoch(userId, expectedEpoch);
     }
+
+    @Override
+    public int incrementPoint(String jiacn, int add, long updateTime) {
+        return baseMapper.incrementPoint(jiacn, add, updateTime);
+    }
+
+    @Override
+    public Integer selectPointByJiacn(String jiacn) {
+        return baseMapper.selectPointByJiacn(jiacn);
+    }
 }

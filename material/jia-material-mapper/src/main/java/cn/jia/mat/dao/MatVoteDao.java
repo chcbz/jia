@@ -12,4 +12,6 @@ import cn.jia.mat.entity.MatVoteEntity;
  * @since 2021-10-29
  */
 public interface MatVoteDao extends IBaseDao<MatVoteEntity> {
+
+    int incrementNum(long voteId);
 }

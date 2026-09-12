@@ -7,4 +7,17 @@
         id, client_id, appid, subscribe, open_id, jiacn, subscribe_time, email, sex, language, nickname, head_img_url, city, country, province, union_id, group_id, subscribe_scene, qr_scene, qr_scene_str, subscribe_items, status, remark, create_time, update_time
     </sql>
 
+    <select id="selectByAppIdAndOpenIdExact" resultType="cn.jia.wx.entity.MpUserEntity">
+        SELECT <include refid="Base_Column_List" />
+        FROM wx_mp_user
+        WHERE appid = #{appid,jdbcType=VARCHAR}
+          AND open_id = #{openId,jdbcType=VARCHAR}
+          AND OCTET_LENGTH(appid) = OCTET_LENGTH(#{appid,jdbcType=VARCHAR})
+          AND CAST(appid AS BINARY) = CAST(#{appid,jdbcType=VARCHAR} AS BINARY)
+          AND OCTET_LENGTH(open_id) = OCTET_LENGTH(#{openId,jdbcType=VARCHAR})
+          AND CAST(open_id AS BINARY) = CAST(#{openId,jdbcType=VARCHAR} AS BINARY)
+        ORDER BY id
+        LIMIT 2
+    </select>
+
 </mapper>

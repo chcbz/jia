@@ -17,6 +17,7 @@ import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -112,33 +113,47 @@ public class MatVoteServiceImpl implements MatVoteService {
 	}
 
 	@Override
+	@Transactional(rollbackFor = Exception.class)
 	public boolean tick(MatVoteTickEntity voteTick) {
-		MatVoteQuestionEntity question = matVoteQuestionDao.selectById(voteTick.getQuestionId());
-		voteTick.setVoteId(question.getVoteId());
-		char[] questionOption = question.getOpt().toCharArray();
-		Arrays.sort(questionOption);
-		char[] tickOption = voteTick.getOpt().toCharArray();
-		Arrays.sort(tickOption);
-		boolean tick = String.valueOf(questionOption).equalsIgnoreCase(String.valueOf(tickOption));
-		voteTick.setTick(tick ? MatConstants.COMMON_YES : MatConstants.COMMON_NO);
-		matVoteTickDao.insert(voteTick);
-		//增加投票数
-		MatVoteEntity vote = matVoteDao.selectById(voteTick.getVoteId());
-		MatVoteEntity upVote = new MatVoteEntity();
-		upVote.setId(voteTick.getVoteId());
-		upVote.setNum(vote.getNum() + 1);
-		matVoteDao.updateById(upVote);
-		List<MatVoteItemEntity> itemList = matVoteItemDao.selectByQuestionId(voteTick.getQuestionId());
-		for(MatVoteItemEntity item : itemList) {
-			if(item.getOpt().equalsIgnoreCase(voteTick.getOpt())) {
-				MatVoteItemEntity upItem = new MatVoteItemEntity();
-				upItem.setId(item.getId());
-				upItem.setNum(item.getNum() + 1);
-				matVoteItemDao.updateById(upItem);
-			}
+		return answerDaily(voteTick.getQuestionId(), voteTick.getJiacn(), voteTick.getOpt()).correct();
+	}
+
+	@Override
+	@Transactional(rollbackFor = Exception.class)
+	public MatDailyVoteAnswerResult answerDaily(long questionId, String jiacn, String answer) {
+		if (jiacn == null || jiacn.isBlank() || answer == null) {
+			throw new IllegalArgumentException("daily vote identity and answer are required");
+		}
+		MatVoteQuestionEntity question = matVoteQuestionDao.selectById(questionId);
+		if (question == null || question.getVoteId() == null || question.getOpt() == null
+				|| question.getPoint() == null) {
+			throw new IllegalStateException("daily vote question is incomplete");
 		}
 
-		return tick;
+		boolean correct = sameOptions(question.getOpt(), answer);
+		MatVoteTickEntity voteTick = new MatVoteTickEntity();
+		voteTick.setQuestionId(questionId);
+		voteTick.setVoteId(question.getVoteId());
+		voteTick.setJiacn(jiacn);
+		voteTick.setOpt(answer);
+		voteTick.setTick(correct ? MatConstants.COMMON_YES : MatConstants.COMMON_NO);
+		if (matVoteTickDao.insert(voteTick) != 1) {
+			throw new IllegalStateException("daily vote answer insert failed");
+		}
+
+		if (matVoteDao.incrementNum(question.getVoteId()) != 1) {
+			throw new IllegalStateException("daily vote aggregate is missing");
+		}
+		matVoteItemDao.incrementNum(questionId, answer);
+		return new MatDailyVoteAnswerResult(questionId, correct, question.getPoint(), question.getOpt());
+	}
+
+	private boolean sameOptions(String expected, String actual) {
+		char[] expectedOptions = expected.toCharArray();
+		Arrays.sort(expectedOptions);
+		char[] actualOptions = actual.toCharArray();
+		Arrays.sort(actualOptions);
+		return String.valueOf(expectedOptions).equalsIgnoreCase(String.valueOf(actualOptions));
 	}
 
 	@Override

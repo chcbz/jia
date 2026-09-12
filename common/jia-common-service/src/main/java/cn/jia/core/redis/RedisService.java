@@ -55,6 +55,22 @@ public class RedisService {
     }
 
     /**
+     * Deletes a key only while it still contains the expected value.
+     *
+     * @param key key to inspect
+     * @param expectedValue value observed by the caller
+     * @return whether the matching key was deleted
+     */
+    public boolean deleteIfValueEquals(String key, String expectedValue) {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>(
+                "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                        + "return redis.call('DEL', KEYS[1]); end; return 0",
+                Long.class);
+        Long deleted = redisTemplate.execute(script, List.of(key), expectedValue);
+        return Long.valueOf(1L).equals(deleted);
+    }
+
+    /**
      * 获取Redis中指定键的值并转换为指定类型的对象
      *
      * @param key 键

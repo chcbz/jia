@@ -110,4 +110,24 @@
           AND account_state = _ascii'ACTIVE' COLLATE ascii_bin
           AND auth_epoch &lt; 9223372036854775807
     </update>
+
+    <update id="incrementPoint">
+        UPDATE user_info
+        SET point = COALESCE(point, 0) + #{add,jdbcType=INTEGER},
+            update_time = #{updateTime,jdbcType=BIGINT}
+        WHERE jiacn = #{jiacn,jdbcType=VARCHAR}
+          AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn,jdbcType=VARCHAR})
+          AND CAST(jiacn AS BINARY) = CAST(#{jiacn,jdbcType=VARCHAR} AS BINARY)
+          AND COALESCE(point, 0) + #{add,jdbcType=INTEGER} &gt;= 0
+    </update>
+
+    <select id="selectPointByJiacn" resultType="java.lang.Integer">
+        SELECT point
+        FROM user_info
+        WHERE jiacn = #{jiacn,jdbcType=VARCHAR}
+          AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn,jdbcType=VARCHAR})
+          AND CAST(jiacn AS BINARY) = CAST(#{jiacn,jdbcType=VARCHAR} AS BINARY)
+        ORDER BY id
+        LIMIT 2
+    </select>
 </mapper>

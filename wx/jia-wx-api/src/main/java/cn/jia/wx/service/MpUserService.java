@@ -8,6 +8,8 @@ import java.util.List;
 public interface MpUserService extends IBaseService<MpUserEntity> {
     MpUserEntity findByOpenId(String openId);
 
+    MpUserEntity findByAppIdAndOpenId(String appid, String openId);
+
     MpUserEntity findByJiacn(String jiacn);
 
     void sync(List<MpUserEntity> userList);

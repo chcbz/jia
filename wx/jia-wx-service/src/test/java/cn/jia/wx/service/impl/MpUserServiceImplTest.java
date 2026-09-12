@@ -20,8 +20,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -80,6 +79,26 @@ class MpUserServiceImplTest extends BaseMockTest {
         when(mpUserDao.selectByEntity(any())).thenReturn(Collections.emptyList());
         mpUserEntity = mpUserService.findByOpenId("openId");
         assertNull(mpUserEntity);
+    }
+
+
+    @Test
+    void findByAppIdAndOpenIdUsesExactScopedLookupAndRejectsAmbiguity() {
+        MpUserEntity expected = new MpUserEntity().setAppid("wx-app").setOpenId("OpenId");
+        when(mpUserDao.selectByAppIdAndOpenIdExact("wx-app", "OpenId"))
+                .thenReturn(List.of(expected));
+
+        assertEquals(expected, mpUserService.findByAppIdAndOpenId("wx-app", "OpenId"));
+        verify(mpUserDao).selectByAppIdAndOpenIdExact("wx-app", "OpenId");
+        verify(mpUserDao, never()).selectByEntity(argThat(user ->
+                "wx-app".equals(user.getAppid()) && "OpenId".equals(user.getOpenId())));
+
+        when(mpUserDao.selectByAppIdAndOpenIdExact("wx-app", "duplicate"))
+                .thenReturn(List.of(new MpUserEntity(), new MpUserEntity()));
+        assertThrows(IllegalStateException.class,
+                () -> mpUserService.findByAppIdAndOpenId("wx-app", "duplicate"));
+        assertThrows(IllegalArgumentException.class,
+                () -> mpUserService.findByAppIdAndOpenId("", "OpenId"));
     }
 
     @Test

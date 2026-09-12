@@ -37,4 +37,8 @@ public interface UserInfoDao extends IBaseDao<UserEntity> {
     List<UserEntity> selectSecurityByExactJiacn(String jiacn);
 
     int incrementAuthEpoch(long userId, long expectedEpoch);
+
+    int incrementPoint(String jiacn, int add, long updateTime);
+
+    Integer selectPointByJiacn(String jiacn);
 }

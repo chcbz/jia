@@ -96,6 +96,26 @@ public class UserServiceImpl extends BaseServiceImpl<UserInfoDao, UserEntity> im
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int changePointAndGet(String jiacn, int add) {
+        if (jiacn == null || jiacn.isBlank()) {
+            throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
+        }
+        int changed = baseDao.incrementPoint(jiacn, add, cn.jia.core.util.DateUtil.nowTime());
+        if (changed > 1) {
+            throw new IllegalStateException("ambiguous user point identity");
+        }
+        Integer point = baseDao.selectPointByJiacn(jiacn);
+        if (point == null) {
+            throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
+        }
+        if (changed == 0) {
+            throw new EsRuntimeException(UserErrorConstants.POINT_NO_ENOUGH);
+        }
+        return point;
+    }
+
+    @Override
     public void changeRole(UserVO user) {
         handleChangeRelation(user.getId(), user.getRoleIds(), 
             userRoleRelDao::selectByUserId,

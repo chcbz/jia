@@ -6,4 +6,10 @@
     <sql id="Base_Column_List">
         id, client_id, name, start_time, close_time, num
     </sql>
+
+    <update id="incrementNum">
+        UPDATE mat_vote
+        SET num = COALESCE(num, 0) + 1
+        WHERE id = #{voteId,jdbcType=BIGINT}
+    </update>
 </mapper>

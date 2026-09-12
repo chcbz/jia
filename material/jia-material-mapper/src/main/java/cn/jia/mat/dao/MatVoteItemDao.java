@@ -18,4 +18,6 @@ public interface MatVoteItemDao extends IBaseDao<MatVoteItemEntity> {
     List<MatVoteItemEntity> selectByQuestionId(Long questionId);
 
     void deleteByVoteId(Long voteId);
+
+    int incrementNum(long questionId, String opt);
 }

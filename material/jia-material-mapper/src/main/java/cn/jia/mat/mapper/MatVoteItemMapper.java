@@ -2,6 +2,7 @@ package cn.jia.mat.mapper;
 
 import cn.jia.mat.entity.MatVoteItemEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
 
 /**
  * <p>
@@ -14,4 +15,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 public interface MatVoteItemMapper extends BaseMapper<MatVoteItemEntity> {
 
     void deleteByVoteId(Long voteId);
+
+    int incrementNum(@Param("questionId") long questionId, @Param("opt") String opt);
 }
