@@ -17,6 +17,7 @@ import cn.jia.core.util.StringUtil;
 import cn.jia.chat.memory.MemoryDocument;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ChatStreamPolicy;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.JuyitingAgentRelayResult;
@@ -42,13 +43,11 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
-import reactor.core.publisher.FluxSink;
-import reactor.core.scheduler.Schedulers;
-import reactor.core.Disposable;
 
 import java.util.HashMap;
 import java.util.List;
@@ -123,47 +122,74 @@ public class ChatController {
                         resolveConversationType(conversation), needSummary, summary,
                         skipAdvisorUserPersistence));
 
-        return Flux.create(emitter -> {
-            Flux<String> backendStream = agentDelivery.stream()
-                    .concatWith(aiStream)
-                    .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
-                    .concatWith(Flux.defer(() -> handleSummary(
-                            needSummary, chatMessage.getContent(), summary.toString(),
-                            conversationId, ownerJiacn, ownerClientId)))
-                    .takeUntilOther(cancelSignal)
-                    .takeUntilOther(chatConversationEventBroker.deletionSignal(
-                            conversationId, generation,
-                            () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation)))
-                    .doOnNext(value -> chatConversationEventBroker.runIfLive(
+        Flux<String> backendStream = agentDelivery.stream()
+                .concatWith(aiStream)
+                .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
+                .concatWith(Flux.defer(() -> handleSummary(
+                        needSummary, chatMessage.getContent(), summary.toString(),
+                        conversationId, ownerJiacn, ownerClientId)))
+                .takeUntilOther(cancelSignal)
+                .takeUntilOther(chatConversationEventBroker.deletionSignal(
+                        conversationId, generation,
+                        () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, conversationId, generation)))
+                .transform(ChatStreamPolicy::bounded)
+                .handle((value, sink) -> {
+                    boolean live = chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
                                     ownerJiacn, ownerClientId, conversationId, generation),
-                            () -> emitter.next(value)))
-                    .doOnError(error -> {
-                        log.error("Error processing chat response", error);
-                        String errorMsg = error.getMessage() != null ? error.getMessage() : "Stream error";
-                        String escapedMsg = errorMsg.replace("\\", "\\\\").replace("\"", "\\\"");
-                        chatConversationEventBroker.runIfLive(
-                                conversationId, generation,
-                                () -> chatConversationService.isLiveGeneration(
-                                        ownerJiacn, ownerClientId, conversationId, generation),
-                                () -> emitter.next("{\"error\": \"" + escapedMsg
-                                        + "\", \"conversationId\": \"" + conversationId
-                                        + "\", \"conversationType\": \""
-                                        + resolveConversationType(conversation) + "\"}"));
-                        emitter.complete();
-                    })
-                    .doOnComplete(emitter::complete)
-                    .subscribeOn(Schedulers.boundedElastic());
+                            () -> sink.next(value));
+                    if (!live) {
+                        sink.complete();
+                    }
+                })
+                .onErrorResume(error -> {
+                    log.error("Error processing chat response", error);
+                    return liveErrorFrame(
+                            conversation, conversationId, ownerJiacn, ownerClientId, generation,
+                            safeStreamErrorMessage(error));
+                })
+                .doOnCancel(() -> log.debug(
+                        "Client disconnected, backend processing stopped for conversation: {}",
+                        conversationId))
+                .subscribeOn(Schedulers.boundedElastic());
 
-            Disposable backendSubscription = backendStream.subscribe();
+        return ChatStreamPolicy.firstFrame(backendStream)
+                .onErrorResume(error -> ChatStreamPolicy.isFirstFrameTimeout(error)
+                        ? liveErrorFrame(
+                                conversation, conversationId, ownerJiacn, ownerClientId, generation,
+                                "Stream first frame deadline exceeded")
+                        : Flux.error(error));
+    }
 
-            emitter.onDispose(() -> {
-                backendSubscription.dispose();
-                log.debug("Client disconnected, backend processing stopped for conversation: {}", conversationId);
-            });
-        }, FluxSink.OverflowStrategy.BUFFER);
+    private Flux<String> liveErrorFrame(
+            ChatConversationEntity conversation, String conversationId,
+            String ownerJiacn, String ownerClientId, long generation, String message) {
+        String payload = streamErrorJson(conversation, conversationId, message);
+        return Flux.just(payload).handle((value, sink) -> {
+            boolean live = chatConversationEventBroker.runIfLive(
+                    conversationId, generation,
+                    () -> chatConversationService.isLiveGeneration(
+                            ownerJiacn, ownerClientId, conversationId, generation),
+                    () -> sink.next(value));
+            if (!live) {
+                sink.complete();
+            }
+        });
+    }
+
+    private String safeStreamErrorMessage(Throwable error) {
+        String message = error == null ? null : error.getMessage();
+        return StringUtil.isBlank(message) ? "Stream error" : message;
+    }
+
+    private String streamErrorJson(
+            ChatConversationEntity conversation, String conversationId, String message) {
+        return "{\"error\": \"" + escapeJson(message)
+                + "\", \"conversationId\": \"" + escapeJson(conversationId)
+                + "\", \"conversationType\": \""
+                + escapeJson(resolveConversationType(conversation)) + "\"}";
     }
 
     private ChatConversationEntity getOrCreateConversation(ChatMessageDTO chatMessage) {
@@ -512,10 +538,15 @@ public class ChatController {
         long generation = lifecycleGeneration(conversation);
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
         String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
-        return chatConversationEventBroker.stream(
+        Flux<String> events = chatConversationEventBroker.stream(
                         id, generation, () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, id, generation))
+                                ownerJiacn, ownerClientId, id, generation),
+                        "{\"type\":\"stream_ready\"}")
                 .map(event -> "data: " + event + "\n\n");
+        return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(events))
+                .onErrorResume(error -> ChatStreamPolicy.isFirstFrameTimeout(error)
+                        ? Flux.just("data: {\"error\":\"Stream first frame deadline exceeded\"}\n\n")
+                        : Flux.error(error));
     }
 
     @RequestMapping(value = "/conversation/list", method = RequestMethod.POST)

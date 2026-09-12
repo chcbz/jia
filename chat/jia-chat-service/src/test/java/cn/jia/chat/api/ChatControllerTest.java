@@ -14,6 +14,7 @@ import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.JuyitingAgentRelayService;
+import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.core.context.EsContext;
@@ -30,6 +31,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
@@ -127,6 +129,49 @@ class ChatControllerTest extends BaseMockTest {
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"conversationId\": \"1001\"")));
     }
 
+
+    @Test
+    void chatStreamFirstFrameDeadlineCancelsBackendAndReturnsLegacyErrorEnvelope() throws Exception {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+
+        ChatConversationEntity conversation = new ChatConversationEntity()
+                .setId(1001L)
+                .setTitle("聚义厅议事")
+                .setConversationType(ChatController.CONVERSATION_TYPE_JUYITING)
+                .setLifecycleGeneration(1L);
+        when(chatConversationService.get("1001")).thenReturn(conversation);
+        when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
+        when(chatConversationEventBroker.deletionSignal(eq("1001"), eq(1L), any()))
+                .thenReturn(Flux.never());
+        when(chatConversationEventBroker.runIfLive(eq("1001"), eq(1L), any(), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    ((Runnable) invocation.getArgument(3)).run();
+                    return true;
+                });
+        java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
+        JuyitingAgentRelayService relay = org.mockito.Mockito.mock(JuyitingAgentRelayService.class);
+        when(relay.relay(any(), eq("1001"), any())).thenReturn(new JuyitingAgentRelayResult(
+                true, Mono.just(true), Flux.<String>never().doOnCancel(cancelled::countDown)));
+
+        ChatController controller = new ChatController(
+                chatClient, chatConversationService, redisService, chatClientBuilder,
+                chatConversationEventBroker, builtinHallAgentSupport,
+                new JuyitingConversationScopeService(builtinHallAgentSupport, agentService),
+                relay, memoryRepository, taskThreadMemoryGuard);
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setConversationId("1001");
+        request.setContent("请回报");
+
+        String frame = controller.handleChat(request).blockFirst(Duration.ofSeconds(4));
+
+        assertTrue(frame.contains("\"error\": \"Stream first frame deadline exceeded\""));
+        assertTrue(frame.contains("\"conversationId\": \"1001\""));
+        assertTrue(cancelled.await(1, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
     @Test
     void genericChatCannotCreateReservedTaskThreadScope() {
         ChatMessageDTO request = new ChatMessageDTO();
@@ -166,6 +211,8 @@ class ChatControllerTest extends BaseMockTest {
         verify(redisService, never()).publishSignal("77");
         verify(chatConversationEventBroker, never()).stream(
                 eq("77"), org.mockito.ArgumentMatchers.anyLong(), any());
+        verify(chatConversationEventBroker, never()).stream(
+                eq("77"), org.mockito.ArgumentMatchers.anyLong(), any(), anyString());
     }
 
     @Test
@@ -408,19 +455,21 @@ class ChatControllerTest extends BaseMockTest {
                         agentWebSocketHandler, broker, builtinHallAgentSupport,
                         chatConversationService, agentService, scopeService),
                 memoryRepository, taskThreadMemoryGuard);
-        java.util.concurrent.atomic.AtomicInteger events =
-                new java.util.concurrent.atomic.AtomicInteger();
+        java.util.List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch completed =
                 new java.util.concurrent.CountDownLatch(1);
         controller.conversationEvents("5001").subscribe(
-                ignored -> events.incrementAndGet(), ignored -> { }, completed::countDown);
+                event -> { events.add(event); ready.countDown(); },
+                ignored -> { }, completed::countDown);
+        assertTrue(ready.await(2, java.util.concurrent.TimeUnit.SECONDS));
 
         try (ChatConversationEventBroker.DeletionFence fence = broker.beginDeletion("5001")) {
             fence.commitDeleted(1L);
         }
 
         assertTrue(completed.await(2, java.util.concurrent.TimeUnit.SECONDS));
-        assertEquals(0, events.get());
+        assertEquals(List.of("data: {\"type\":\"stream_ready\"}\n\n"), events);
         assertTrue(!broker.publishIfLive("5001", 1L, () -> false,
                 Map.of("type", "agent_message")));
     }

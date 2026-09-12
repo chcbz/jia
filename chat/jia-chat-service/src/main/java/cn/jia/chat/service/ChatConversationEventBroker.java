@@ -4,9 +4,12 @@ import cn.jia.core.util.JsonUtil;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.core.Disposable;
+import reactor.core.publisher.FluxSink;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
@@ -38,14 +41,40 @@ public class ChatConversationEventBroker {
 
     public Flux<String> stream(
             String conversationId, long generation, BooleanSupplier persistentLiveCheck) {
+        return stream(conversationId, generation, persistentLiveCheck, null);
+    }
+
+    /**
+     * Registers the live subscriber before emitting an optional transport control frame. This keeps
+     * the subscription window closed without introducing replay or changing durable event order.
+     */
+    public Flux<String> stream(
+            String conversationId, long generation, BooleanSupplier persistentLiveCheck,
+            String initialFrame) {
         return Flux.defer(() -> {
             EventSink eventSink = retain(
                     conversationId, generation, false, persistentLiveCheck);
             if (eventSink == null) {
                 return Flux.empty();
             }
-            return eventSink.events.asFlux()
-                    .doFinally(ignored -> release(conversationId, eventSink, false));
+            AtomicBoolean released = new AtomicBoolean();
+            Runnable cleanup = () -> {
+                if (released.compareAndSet(false, true)) {
+                    release(conversationId, eventSink, false);
+                }
+            };
+            Flux<String> live = ChatStreamPolicy.bounded(
+                    eventSink.events.asFlux(), ignored -> cleanup.run());
+            if (initialFrame == null) {
+                return live.doFinally(ignored -> cleanup.run());
+            }
+            return Flux.<String>create(emitter -> {
+                Disposable subscription = live.subscribe(
+                        emitter::next, emitter::error, emitter::complete);
+                emitter.onDispose(subscription);
+                emitter.next(initialFrame);
+            }, FluxSink.OverflowStrategy.ERROR)
+                    .doFinally(ignored -> cleanup.run());
         });
     }
 
