@@ -20,6 +20,7 @@ import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -91,6 +92,7 @@ public class DefaultSecurityConfig {
     @DependsOn("userPermitProperties")
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) {
         http.authorizeHttpRequests((authorize) -> {
+                    authorize.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll();
                     List<String> ignoreUris = SpringContextHolder.getBean(UserPermitProperties.class).getIgnoreUris();
                     if (CollectionUtil.isNotNullOrEmpty(ignoreUris)) {
                         authorize.requestMatchers(ignoreUris.toArray(new String[0])).permitAll();
