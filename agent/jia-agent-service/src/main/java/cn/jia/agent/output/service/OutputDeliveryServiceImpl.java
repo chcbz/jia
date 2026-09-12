@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -517,13 +518,27 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
         return bearer.substring(7);
     }
     private static byte[] canonical(OutputPublishDTO r, String type, String sourceId) {
-        String value = String.join("\0", type, sourceId, value(r.runId()),
-                value(r.expectedPreviousVersion()), value(r.title()), value(r.artifactType()),
-                value(r.content()), value(r.objectId()), value(r.outputId()), value(r.version()),
-                value(r.workItemId()), value(r.visibility()), value(r.publishToOwner()));
-        return value.getBytes(StandardCharsets.UTF_8);
+        Map<String, Object> fields = new TreeMap<>();
+        fields.put("artifactType", r.artifactType());
+        fields.put("content", r.content());
+        fields.put("expectedPreviousVersion", r.expectedPreviousVersion());
+        fields.put("objectId", r.objectId());
+        fields.put("outputId", r.outputId());
+        fields.put("publishToOwner", r.publishToOwner());
+        fields.put("runId", r.runId());
+        fields.put("sourceId", sourceId);
+        fields.put("sourceType", type);
+        fields.put("title", r.title());
+        fields.put("version", r.version());
+        fields.put("visibility", r.visibility());
+        fields.put("workItemId", r.workItemId());
+        try {
+            // RFC 8785 for this scalar-only envelope: sorted keys, UTF-8 JSON and explicit nulls.
+            return JSON.writeValueAsBytes(fields);
+        } catch (Exception impossible) {
+            throw new IllegalStateException("Unable to canonicalize output publication", impossible);
+        }
     }
-    private static String value(Object value) { return value == null ? "<null>" : value.toString(); }
     private static byte[] referenceKey(String tenant, String client, String type, String source,
             String output, long version, String kind, String nonce) {
         return sha256(String.join("\0", tenant, client, type, source, output,

@@ -79,9 +79,10 @@ public final class ChatOutputDaoImpl implements ChatOutputDao {
                        WHERE n.tenant_id=o.tenant_id AND n.client_id=o.client_id
                          AND n.conversation_id=o.conversation_id AND n.output_id=o.output_id
                          AND n.state='AVAILABLE' AND n.retain_until>?
+                         AND n.created_at<=?
                          AND n.output_version>o.output_version)
                     """);
-            args.add(System.currentTimeMillis());
+            args.add(System.currentTimeMillis()); args.add(snapshotAt);
         }
         if (afterCreatedAt != null) {
             sql.append("""

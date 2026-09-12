@@ -2,7 +2,6 @@ package cn.jia.oauth.config;
 
 import cn.jia.oauth.security.AccountSecurityJwtValidator;
 import cn.jia.user.security.AccountSecurityService;
-import jakarta.servlet.DispatcherType;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
@@ -101,7 +100,6 @@ public class ResourceServerConfig {
         }
         http
                 .authorizeHttpRequests(authorize -> authorize
-                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers(WX_MP_CHECK_SIGNATURE_PATH).permitAll()
                         .requestMatchers("/dwz/view/**").permitAll()
                         .anyRequest().authenticated())

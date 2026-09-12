@@ -144,6 +144,24 @@ class OutputDeliveryServiceImplTest {
                 "publish-key-00005","TASK","task-1",request("new-1","1",true,"New",null,"x"))).status());
     }
 
+    @Test void canonicalReceiptHashDistinguishesNullFromLiteralNullString() {
+        OutputPublishDTO literalNull = request("null-collision","1",true,
+                "Literal null",null,"<null>");
+        OutputPublishDTO actualNull = request("null-collision","1",true,
+                "Literal null","<null>",null);
+
+        var published = service.publish(BEARER,"publish-null-key01","TASK","task-1",literalNull);
+
+        assertEquals(published,service.publish(BEARER,"publish-null-key01",
+                "TASK","task-1",literalNull));
+        OutputDeliveryException conflict = assertThrows(OutputDeliveryException.class,
+                () -> service.publish(BEARER,"publish-null-key01",
+                        "TASK","task-1",actualNull));
+        assertEquals(409,conflict.status());
+        assertEquals("OUTPUT_IDEMPOTENCY_CONFLICT",conflict.code());
+        assertEquals(1,provider.rows.size());
+    }
+
     @Test void signedCursorTraversesMoreThanOneHundredAndRejectsTampering() {
         long now=System.currentTimeMillis();
         for(int i=0;i<105;i++)provider.rows.add(new OutputVersionProvider.PublishRow("owner","client",

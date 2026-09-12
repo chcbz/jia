@@ -142,6 +142,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -314,8 +315,28 @@ class OutputDeliveryRealDependenciesHttpIntegrationTest {
         String chatToken = ticket(CHAT_RUN, "chat-ticket");
         assertSourceRoundTrip(taskToken, "TASK", "task-1", "task-artifact", "task.txt", true);
         assertSourceRoundTrip(chatToken, "CONVERSATION", "101", "chat-output", "chat.txt", false);
-        mvc.perform(get("/agent/tasks/task-1/artifacts"))
-                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/agent/output-capabilities")
+                        .header("X-Request-ID", "missing-output-jwt"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(header().string("X-Request-ID", "missing-output-jwt"))
+                .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED"))
+                .andExpect(jsonPath("$.message").value("Output access is unavailable"))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.requestId").value("missing-output-jwt"));
+        mvc.perform(get("/agent/tasks/task-1/artifacts")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + expiredUserJwt())
+                        .header("X-Request-ID", "expired-output-jwt"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(header().string("X-Request-ID", "expired-output-jwt"))
+                .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED"))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.requestId").value("expired-output-jwt"));
+        mvc.perform(get("/resource"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().doesNotExist("X-Request-ID"))
+                .andExpect(content().string(""));
         assertEquals(2, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM output_access_ticket", Integer.class));
         assertEquals(2, jdbc.queryForObject(
@@ -393,17 +414,26 @@ class OutputDeliveryRealDependenciesHttpIntegrationTest {
     }
 
     private String userJwt() throws Exception {
+        long now = System.currentTimeMillis();
+        return userJwt(now, now + 60_000);
+    }
+
+    private String expiredUserJwt() throws Exception {
+        long now = System.currentTimeMillis();
+        return userJwt(now - 180_000, now - 120_000);
+    }
+
+    private String userJwt(long issuedAt, long expiresAt) throws Exception {
         @SuppressWarnings("unchecked")
         JWKSource<SecurityContext> source = context.getBean(JWKSource.class);
         RSAKey key = (RSAKey) source.get(new JWKSelector(
                 new JWKMatcher.Builder().privateOnly(true).build()), null).getFirst();
-        long now = System.currentTimeMillis();
         SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256)
                 .keyID(key.getKeyID()).build(), new JWTClaimsSet.Builder()
                 .subject("user-1").claim("client_id", "client").claim("token_kind", "user")
                 .claim("uid", "1").claim("username", "owner").claim("jiacn", "owner")
                 .claim("auth_epoch", 0L)
-                .issueTime(new Date(now)).expirationTime(new Date(now + 60_000)).build());
+                .issueTime(new Date(issuedAt)).expirationTime(new Date(expiresAt)).build());
         jwt.sign(new RSASSASigner(key));
         return jwt.serialize();
     }
@@ -628,7 +658,8 @@ class OutputDeliveryRealDependenciesHttpIntegrationTest {
     @EnableConfigurationProperties
     @EnableWebSecurity
     @EnableWebMvc
-    @Import({OutputUploadSecurityConfiguration.class, ResourceServerConfig.class})
+    @Import({OutputUploadSecurityConfiguration.class, OutputReadSecurityConfiguration.class,
+            ResourceServerConfig.class})
     static class TestWebConfiguration {
         @Bean
         AccountSecurityService accountSecurityService() {

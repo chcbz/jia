@@ -50,6 +50,7 @@ public interface AgentTaskOutputMapper {
                   AND CAST(n.artifact_id AS BINARY)=CAST(a.artifact_id AS BINARY)
                   AND OCTET_LENGTH(n.artifact_id)=OCTET_LENGTH(a.artifact_id)
                   AND n.owner_shared_at IS NOT NULL AND n.retain_until&gt;#{now}
+                  AND n.created_at&lt;=#{snapshotAt}
                   AND n.artifact_version&gt;a.artifact_version)
             </if>
             <if test="afterCreatedAt != null">

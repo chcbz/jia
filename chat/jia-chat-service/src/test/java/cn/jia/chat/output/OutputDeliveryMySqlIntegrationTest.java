@@ -258,6 +258,34 @@ class OutputDeliveryMySqlIntegrationTest {
         }finally{release.countDown();pool.shutdownNow();}
     }
 
+    @Test void snapshotPaginationKeepsOlderTaskAndChatVersionWhenNewVersionArrives() {
+        long base=System.currentTimeMillis()-10_000;
+        insertTaskOutput("task-page-a",1,base+200);
+        insertTaskOutput("task-page-b",1,base+100);
+        insertChatOutput("chat-page-a",1,base+200);
+        insertChatOutput("chat-page-b",1,base+100);
+
+        var taskFirst=service.list("owner","client","owner","TASK","task-1",null,1);
+        assertEquals(List.of("task-page-a"),taskFirst.items().stream()
+                .map(item->item.outputId()).toList());
+        long taskSnapshot=Long.parseLong(taskFirst.snapshotAt());
+        insertTaskOutput("task-page-b",2,taskSnapshot+1);
+        var taskSecond=service.list("owner","client","owner","TASK","task-1",
+                taskFirst.nextCursor(),1);
+        assertEquals(List.of("task-page-b:1"),taskSecond.items().stream()
+                .map(item->item.outputId()+":"+item.version()).toList());
+
+        var chatFirst=service.list("owner","client","owner","CONVERSATION","101",null,1);
+        assertEquals(List.of("chat-page-a"),chatFirst.items().stream()
+                .map(item->item.outputId()).toList());
+        long chatSnapshot=Long.parseLong(chatFirst.snapshotAt());
+        insertChatOutput("chat-page-b",2,chatSnapshot+1);
+        var chatSecond=service.list("owner","client","owner","CONVERSATION","101",
+                chatFirst.nextCursor(),1);
+        assertEquals(List.of("chat-page-b:1"),chatSecond.items().stream()
+                .map(item->item.outputId()+":"+item.version()).toList());
+    }
+
     private int publishStatus(CountDownLatch start,String key){await(start);try{service.publish(TASK_BEARER,
             key,"TASK","task-1",request("task-run","race-output","task-object",true));return 200;}
         catch(cn.jia.agent.output.OutputDeliveryException e){return e.status();}}
@@ -276,6 +304,30 @@ class OutputDeliveryMySqlIntegrationTest {
     private OutputPublishDTO request(String run,String id,String object,Boolean share){return new OutputPublishDTO(
             run,"0","hello output","document",null,object,id,"1",null,
             "TASK".equals(run.startsWith("task")?"TASK":"CHAT")?"task_members":null,share);}
+
+    private void insertTaskOutput(String outputId,int version,long createdAt){
+        jdbc.update("""
+                INSERT INTO agent_task_artifact(
+                  artifact_id,task_id,producer_agent_id,artifact_type,title,content,run_id,
+                  content_byte_length,mime_type,owner_shared_at,retain_until,content_hash,
+                  artifact_version,visibility,created_at,tenant_id,client_id,create_time,update_time)
+                VALUES (?,'task-1','agent-1','document',?,'snapshot body','task-run',
+                  13,'text/plain',?,?,?,?,'task_members',?,'owner','client',?,?)
+                """,outputId,outputId,createdAt,createdAt+600_000,HASH,version,
+                createdAt,createdAt,createdAt);
+    }
+
+    private void insertChatOutput(String outputId,long version,long createdAt){
+        jdbc.update("""
+                INSERT INTO chat_output(
+                  tenant_id,client_id,conversation_id,output_id,output_version,run_id,
+                  producer_agent_id,title,artifact_type,content,content_hash,content_byte_length,
+                  mime_type,state,retain_until,created_at,updated_at,row_version)
+                VALUES ('owner','client',101,?,?,'chat-run','agent-1',?,'document',
+                  'snapshot body',?,13,'text/plain','AVAILABLE',?,?,?,0)
+                """,outputId,version,outputId,java.util.HexFormat.of().parseHex(HASH),
+                createdAt+600_000,createdAt,createdAt);
+    }
 
     private void insertReady(OutputUploadDao dao,String object,String run,String name)throws Exception{long now=System.currentTimeMillis();byte[] hash=MessageDigest.getInstance("SHA-256").digest(BYTES);
         dao.insertObject(new OutputUploadDao.ObjectRow("owner","client",object,run,"bucket",object,null,
