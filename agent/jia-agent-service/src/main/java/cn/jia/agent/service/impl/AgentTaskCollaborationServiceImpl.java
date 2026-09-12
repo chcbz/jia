@@ -7,6 +7,7 @@ import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskRequestDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.entity.AgentTaskArtifactContentDTO;
 import cn.jia.agent.entity.AgentTaskArtifactDTO;
 import cn.jia.agent.entity.AgentTaskArtifactEntity;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
@@ -21,9 +22,12 @@ import cn.jia.agent.entity.AgentTaskRequestQueryDTO;
 import cn.jia.agent.entity.AgentTaskRequestTransitionDTO;
 import cn.jia.agent.entity.AgentTaskRequestViewDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.exception.AgentTaskArtifactStorageException;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
+import cn.jia.agent.service.AgentTaskArtifactContentService;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentTaskArtifactStorage;
 import cn.jia.agent.service.AgentTaskRequestService;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
@@ -44,6 +48,7 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -55,7 +60,8 @@ import java.util.regex.Pattern;
 @Named
 @Transactional(rollbackFor = Exception.class)
 public class AgentTaskCollaborationServiceImpl
-        implements AgentTaskRequestService, AgentTaskArtifactService {
+        implements AgentTaskRequestService, AgentTaskArtifactService,
+        AgentTaskArtifactContentService {
     private static final Set<String> MEMBER_ROLES =
             Set.of("coordinator", "worker", "reviewer", "observer");
     private static final Set<String> REQUEST_TYPES = Set.of(
@@ -77,12 +83,15 @@ public class AgentTaskCollaborationServiceImpl
     private static final int MAX_MEDIUMTEXT_BYTES = 16_777_215;
     private static final int MAX_STORAGE_URI_CHARS = 1_000;
     private static final int MAX_LIST_LIMIT = 500;
+    private static final String MANAGED_STORAGE_METADATA = "_cyfArtifactStorageV1";
+    private static final String INLINE_CONTENT_MIME = "text/plain";
 
     private final AgentTaskMetaDao taskMetaDao;
     private final AgentTaskMemberDao memberDao;
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskRequestDao requestDao;
     private final AgentTaskArtifactDao artifactDao;
+    private final AgentTaskArtifactStorage artifactStorage;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
@@ -91,10 +100,21 @@ public class AgentTaskCollaborationServiceImpl
     public AgentTaskCollaborationServiceImpl(
             AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
             AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
+            AgentTaskArtifactDao artifactDao, AgentTaskArtifactStorage artifactStorage,
+            AgentTaskMutationTransaction mutationTransaction, AgentTaskEventWriter eventWriter) {
+        this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao, artifactStorage,
+                mutationTransaction, eventWriter, System::currentTimeMillis);
+    }
+
+    /** Retains the B06 construction contract with managed file storage fail-closed. */
+    public AgentTaskCollaborationServiceImpl(
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
             AgentTaskArtifactDao artifactDao, AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter eventWriter) {
         this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao,
-                mutationTransaction, eventWriter, System::currentTimeMillis);
+                new DisabledAgentTaskArtifactStorage(), mutationTransaction, eventWriter,
+                System::currentTimeMillis);
     }
 
     AgentTaskCollaborationServiceImpl(
@@ -102,7 +122,7 @@ public class AgentTaskCollaborationServiceImpl
             AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
             AgentTaskArtifactDao artifactDao) {
         this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao,
-                System::currentTimeMillis);
+                new DisabledAgentTaskArtifactStorage(), System::currentTimeMillis);
     }
 
     AgentTaskCollaborationServiceImpl(
@@ -110,6 +130,15 @@ public class AgentTaskCollaborationServiceImpl
             AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
             AgentTaskArtifactDao artifactDao, LongSupplier clock) {
         this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao,
+                new DisabledAgentTaskArtifactStorage(), clock);
+    }
+
+    AgentTaskCollaborationServiceImpl(
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
+            AgentTaskArtifactDao artifactDao, AgentTaskArtifactStorage artifactStorage,
+            LongSupplier clock) {
+        this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao, artifactStorage,
                 directTransaction(taskMetaDao), command -> null, clock);
     }
 
@@ -118,11 +147,22 @@ public class AgentTaskCollaborationServiceImpl
             AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
             AgentTaskArtifactDao artifactDao, AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter eventWriter, LongSupplier clock) {
+        this(taskMetaDao, memberDao, workItemDao, requestDao, artifactDao,
+                new DisabledAgentTaskArtifactStorage(), mutationTransaction, eventWriter, clock);
+    }
+
+    AgentTaskCollaborationServiceImpl(
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskRequestDao requestDao,
+            AgentTaskArtifactDao artifactDao, AgentTaskArtifactStorage artifactStorage,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter, LongSupplier clock) {
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
         this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.requestDao = Objects.requireNonNull(requestDao, "requestDao");
         this.artifactDao = Objects.requireNonNull(artifactDao, "artifactDao");
+        this.artifactStorage = Objects.requireNonNull(artifactStorage, "artifactStorage");
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
         this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -272,6 +312,8 @@ public class AgentTaskCollaborationServiceImpl
 
     private AgentTaskArtifactViewDTO publishLocked(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
+        // Frozen order: task-root lock -> ACL/work-item validation -> artifact-version lock ->
+        // bounded filesystem write -> artifact row -> ARTIFACT_PUBLISHED event.
         requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("artifact command is required");
@@ -292,7 +334,7 @@ public class AgentTaskCollaborationServiceImpl
         if (!VISIBILITIES.contains(visibility)) {
             throw invalid("visibility is not supported");
         }
-        ArtifactEventDigest contentDigest = validateArtifactPayload(command);
+        ArtifactPayloadMode payloadMode = validateArtifactPayloadShape(command);
         int expectedPrevious = requireArtifactVersions(command);
 
         AgentTaskArtifactEntity latest = artifactDao.findLatestVersionForUpdate(
@@ -305,6 +347,8 @@ public class AgentTaskCollaborationServiceImpl
             throw notFound();
         }
 
+        ArtifactPayload payload = materializeArtifactPayload(
+                tenantId, clientId, taskId, command, payloadMode);
         AgentTaskArtifactDTO insert = new AgentTaskArtifactDTO();
         insert.setArtifactId(command.getArtifactId());
         insert.setTaskId(taskId);
@@ -312,16 +356,19 @@ public class AgentTaskCollaborationServiceImpl
         insert.setProducerAgentId(actorAgentId);
         insert.setArtifactType(artifactType);
         insert.setTitle(command.getTitle().trim());
-        insert.setContent(command.getContent());
-        insert.setStorageUri(trimToNull(command.getStorageUri()));
-        insert.setContentHash(command.getContentHash());
+        insert.setContent(payload.content());
+        insert.setStorageUri(payload.storageUri());
+        insert.setContentHash(payload.sha256());
         insert.setArtifactVersion(command.getArtifactVersion());
         insert.setVisibility(visibility);
-        insert.setMetadataJson(serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES));
+        insert.setMetadataJson(payload.metadataJson());
         insert.setCreatedAt(now());
         try {
             requireSingleInsert(artifactDao.insert(tenantId, clientId, insert));
         } catch (RuntimeException e) {
+            // Managed bytes are already an immutable scoped digest at this point. If the database
+            // transaction fails, retaining that digest is safer than deleting content another
+            // transaction/version may reference; it is reusable and safe for reference-scan GC.
             if (isDuplicateConflict(e)) {
                 throw conflict("Artifact version changed concurrently", null);
             }
@@ -340,11 +387,19 @@ public class AgentTaskCollaborationServiceImpl
                 || !artifactType.equals(stored.getArtifactType())
                 || !command.getArtifactVersion().equals(stored.getArtifactVersion())
                 || !visibility.equals(stored.getVisibility())
-                || !command.getContentHash().equals(stored.getContentHash())) {
+                || !payload.sha256().equals(stored.getContentHash())
+                || !Objects.equals(payload.storageUri(), stored.getStorageUri())
+                || !Objects.equals(payload.content(), stored.getContent())) {
             throw invalidPersisted("Inserted artifact does not match its persisted event metadata");
         }
+        ArtifactMaterial persistedMaterial = artifactMaterial(stored);
+        if (!Objects.equals(persistedMaterial.byteLength(), payload.byteLength())
+                || persistedMaterial.managedStorage() != payload.managedStorage()
+                || !Objects.equals(persistedMaterial.mimeType(), payload.mimeType())) {
+            throw invalidPersisted("Inserted artifact storage metadata does not match its content");
+        }
         appendArtifactEvent(tenantId, clientId, taskId, actorAgentId, stored,
-                contentDigest, now());
+                new ArtifactEventDigest(payload.sha256(), payload.byteLength()), now());
         return artifactView(stored);
     }
 
@@ -375,6 +430,51 @@ public class AgentTaskCollaborationServiceImpl
             throw notFound();
         }
         return artifactView(entity);
+    }
+
+    @Override
+    public AgentTaskArtifactContentDTO readContent(String tenantId, String clientId, String taskId,
+            String actorAgentId, String artifactId, int artifactVersion) {
+        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, false);
+        requireId(artifactId, "artifactId", 100);
+        if (artifactVersion < 1) {
+            throw invalid("artifactVersion must be positive");
+        }
+        AgentTaskArtifactEntity entity = artifactDao.findVersion(
+                tenantId, clientId, taskId, artifactId, artifactVersion);
+        if (entity == null || !canReadArtifact(access, entity)) {
+            throw notFound();
+        }
+        ArtifactMaterial material = artifactMaterial(entity);
+        byte[] content;
+        if (material.inlineContent() != null) {
+            content = material.inlineContent();
+        } else if (material.managedStorage()) {
+            try {
+                AgentTaskArtifactStorage.StoredContent stored = artifactStorage.read(
+                        new AgentTaskArtifactStorage.Scope(tenantId, clientId, taskId),
+                        entity.getStorageUri(), entity.getContentHash(), material.byteLength(),
+                        material.mimeType());
+                content = stored == null ? null : stored.content();
+                if (content == null || !entity.getContentHash().equals(stored.sha256())
+                        || material.byteLength() != stored.byteLength()
+                        || !material.mimeType().equals(stored.mimeType())
+                        || content.length != stored.byteLength()
+                        || !stored.sha256().equals(sha256(content))) {
+                    throw invalidPersisted(
+                            "Managed artifact storage returned inconsistent content");
+                }
+            } catch (AgentTaskArtifactStorageException failure) {
+                throw invalidPersisted(
+                        "Managed artifact storage is unavailable or corrupt");
+            }
+        } else {
+            // Legacy external URIs are metadata-only. This service intentionally performs no
+            // outbound fetch, so they cannot become an SSRF or arbitrary local-file read surface.
+            throw invalid("Artifact content is not managed by this service");
+        }
+        return new AgentTaskArtifactContentDTO(entity.getArtifactId(), entity.getArtifactVersion(),
+                entity.getContentHash(), material.byteLength(), material.mimeType(), content);
     }
 
     @Override
@@ -667,43 +767,146 @@ public class AgentTaskCollaborationServiceImpl
         return workItemId;
     }
 
-    private ArtifactEventDigest validateArtifactPayload(AgentTaskArtifactPublishDTO command) {
-        boolean hasContent = command.getContent() != null && !command.getContent().isEmpty();
-        boolean hasStorage = !StringUtil.isBlank(command.getStorageUri());
-        if (hasContent == hasStorage) {
-            throw invalid("Exactly one of content or storageUri is required");
+    private ArtifactPayloadMode validateArtifactPayloadShape(
+            AgentTaskArtifactPublishDTO command) {
+        boolean hasInline = command.getContent() != null && !command.getContent().isEmpty();
+        boolean hasManagedBytes = command.hasContentBytes();
+        boolean hasExternalStorage = !StringUtil.isBlank(command.getStorageUri());
+        int modeCount = (hasInline ? 1 : 0) + (hasManagedBytes ? 1 : 0)
+                + (hasExternalStorage ? 1 : 0);
+        if (modeCount != 1) {
+            throw invalid("Exactly one of content, contentBytes, or storageUri is required");
         }
-        String hash = command.getContentHash();
-        if (hash == null || !SHA256.matcher(hash).matches()) {
+        String expectedHash = command.getContentHash();
+        if (expectedHash == null || !SHA256.matcher(expectedHash).matches()) {
             throw invalid("contentHash must be lowercase SHA-256 hex");
         }
-        ArtifactEventDigest digest;
-        if (hasContent) {
-            byte[] contentBytes = utf8Bytes(command.getContent(), "content");
-            if (contentBytes.length > MAX_INLINE_CONTENT_BYTES) {
-                throw invalid("Inline artifact content exceeds the B06 limit; use external storage");
+        if (command.getContentByteLength() != null && command.getContentByteLength() < 0) {
+            throw invalid("contentByteLength must not be negative");
+        }
+        if (hasManagedBytes) {
+            if (StringUtil.isBlank(command.getContentMimeType())) {
+                throw invalid("contentMimeType is required for managed artifact content");
             }
-            if (!hash.equals(sha256(contentBytes))) {
-                throw invalid("contentHash does not match inline content");
-            }
-            long exactLength = contentBytes.length;
-            digest = new ArtifactEventDigest(hash, exactLength);
-            if (command.getContentByteLength() != null
-                    && command.getContentByteLength() != exactLength) {
-                throw invalid("contentByteLength does not match inline content");
-            }
-        } else {
-            validateStorageUri(command.getStorageUri().trim());
-            Long byteLength = command.getContentByteLength();
-            if (byteLength != null && byteLength < 0) {
-                throw invalid("contentByteLength must not be negative");
-            }
-            digest = new ArtifactEventDigest(hash, byteLength);
+        } else if (!StringUtil.isBlank(command.getContentMimeType())) {
+            throw invalid("contentMimeType is only valid with managed artifact contentBytes");
         }
         if (command.getMetadata() != null) {
+            if (command.getMetadata().containsKey(MANAGED_STORAGE_METADATA)) {
+                throw invalid("metadata contains a reserved artifact storage key");
+            }
             serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES);
         }
-        return digest;
+        if (hasInline) return ArtifactPayloadMode.INLINE;
+        if (hasManagedBytes) return ArtifactPayloadMode.MANAGED;
+        return ArtifactPayloadMode.LEGACY_EXTERNAL;
+    }
+
+    private ArtifactPayload materializeArtifactPayload(String tenantId, String clientId,
+            String taskId, AgentTaskArtifactPublishDTO command, ArtifactPayloadMode mode) {
+        return switch (mode) {
+            case INLINE -> inlinePayload(command);
+            case LEGACY_EXTERNAL -> legacyExternalPayload(command);
+            case MANAGED -> managedPayload(tenantId, clientId, taskId, command);
+        };
+    }
+
+    private ArtifactPayload inlinePayload(AgentTaskArtifactPublishDTO command) {
+        byte[] contentBytes = utf8Bytes(command.getContent(), "content");
+        if (contentBytes.length > MAX_INLINE_CONTENT_BYTES) {
+            throw invalid("Inline artifact content exceeds the B06 limit; use managed storage");
+        }
+        String actualHash = sha256(contentBytes);
+        requireMatchingExpectation(command.getContentHash(), actualHash,
+                "contentHash does not match inline content");
+        requireMatchingLength(command.getContentByteLength(), contentBytes.length,
+                "contentByteLength does not match inline content");
+        return new ArtifactPayload(command.getContent(), null, actualHash,
+                (long) contentBytes.length, INLINE_CONTENT_MIME, false,
+                serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES));
+    }
+
+    private ArtifactPayload legacyExternalPayload(AgentTaskArtifactPublishDTO command) {
+        String storageUri = command.getStorageUri().trim();
+        validateStorageUri(storageUri);
+        return new ArtifactPayload(null, storageUri, command.getContentHash(),
+                command.getContentByteLength(), null, false,
+                serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES));
+    }
+
+    private ArtifactPayload managedPayload(String tenantId, String clientId, String taskId,
+            AgentTaskArtifactPublishDTO command) {
+        byte[] content = command.getContentBytes();
+        String actualHash = sha256(content);
+        long actualLength = content.length;
+        requireMatchingExpectation(command.getContentHash(), actualHash,
+                "contentHash does not match managed content");
+        requireMatchingLength(command.getContentByteLength(), actualLength,
+                "contentByteLength does not match managed content");
+        String metadataJson = serializeManagedMetadata(
+                command.getMetadata(), actualHash, actualLength, command.getContentMimeType());
+        AgentTaskArtifactStorage.Scope scope =
+                new AgentTaskArtifactStorage.Scope(tenantId, clientId, taskId);
+        AgentTaskArtifactStorage.StoredObject stored;
+        try {
+            stored = artifactStorage.store(scope, content, command.getContentMimeType());
+        } catch (AgentTaskArtifactStorageException failure) {
+            throw storageFailure(failure);
+        }
+        if (stored == null || !actualHash.equals(stored.sha256())
+                || actualLength != stored.byteLength()
+                || !command.getContentMimeType().equals(stored.mimeType())
+                || !artifactStorage.owns(stored.storageUri())
+                || !artifactStorage.matches(scope, stored.storageUri(), actualHash)) {
+            throw invalidPersisted("Managed artifact storage returned inconsistent metadata");
+        }
+        return new ArtifactPayload(null, stored.storageUri(), actualHash,
+                actualLength, stored.mimeType(), true, metadataJson);
+    }
+
+    private String serializeManagedMetadata(Map<String, Object> userMetadata,
+            String sha256, long byteLength, String mimeType) {
+        Map<String, Object> combined = new LinkedHashMap<>();
+        if (userMetadata != null) {
+            combined.putAll(userMetadata);
+        }
+        Map<String, Object> internal = new LinkedHashMap<>();
+        internal.put("schemaVersion", 1);
+        internal.put("sha256", sha256);
+        internal.put("byteLength", byteLength);
+        internal.put("mimeType", mimeType);
+        combined.put(MANAGED_STORAGE_METADATA, internal);
+        return serializeObject(combined, "metadata", MAX_TEXT_BYTES);
+    }
+
+    private void requireMatchingExpectation(String expected, String actual, String message) {
+        if (expected != null && !expected.equals(actual)) {
+            throw invalid(message);
+        }
+    }
+
+    private void requireMatchingLength(Long expected, long actual, String message) {
+        if (expected != null && expected != actual) {
+            throw invalid(message);
+        }
+    }
+
+    private AgentTaskCollaborationException storageFailure(
+            AgentTaskArtifactStorageException failure) {
+        if (failure.getReason() == AgentTaskArtifactStorageException.Reason.INVALID_REQUEST) {
+            return invalid(failure.getMessage());
+        }
+        return invalidPersisted("Managed artifact storage is unavailable or corrupt");
+    }
+
+    private record ArtifactPayload(String content, String storageUri, String sha256,
+            Long byteLength, String mimeType, boolean managedStorage, String metadataJson) {
+    }
+
+    private enum ArtifactPayloadMode {
+        INLINE,
+        MANAGED,
+        LEGACY_EXTERNAL
     }
 
     private record ArtifactEventDigest(String sha256, Long byteLength) {
@@ -733,6 +936,8 @@ public class AgentTaskCollaborationServiceImpl
             if (!"https".equals(scheme) && StringUtil.isBlank(uri.getSchemeSpecificPart())) {
                 throw invalid("storageUri is incomplete");
             }
+        } catch (AgentTaskCollaborationException e) {
+            throw e;
         } catch (IllegalArgumentException e) {
             throw invalid("storageUri is invalid");
         }
@@ -819,6 +1024,7 @@ public class AgentTaskCollaborationServiceImpl
         if (!VISIBILITIES.contains(entity.getVisibility())) {
             throw invalidPersisted("Persisted artifact visibility is invalid");
         }
+        ArtifactMaterial material = artifactMaterial(entity);
         AgentTaskArtifactViewDTO dto = new AgentTaskArtifactViewDTO();
         dto.setArtifactId(entity.getArtifactId());
         dto.setTaskId(entity.getTaskId());
@@ -829,11 +1035,114 @@ public class AgentTaskCollaborationServiceImpl
         dto.setContent(entity.getContent());
         dto.setStorageUri(entity.getStorageUri());
         dto.setContentHash(entity.getContentHash());
+        dto.setContentByteLength(material.byteLength());
+        dto.setContentMimeType(material.mimeType());
+        dto.setManagedStorage(material.managedStorage());
         dto.setArtifactVersion(entity.getArtifactVersion());
         dto.setVisibility(entity.getVisibility());
-        dto.setMetadata(parseObject(entity.getMetadataJson(), "metadata"));
+        dto.setMetadata(material.userMetadata());
         dto.setCreatedAt(entity.getCreatedAt());
         return dto;
+    }
+
+    private ArtifactMaterial artifactMaterial(AgentTaskArtifactEntity entity) {
+        if (entity.getContentHash() == null || !SHA256.matcher(entity.getContentHash()).matches()) {
+            throw invalidPersisted("Persisted artifact content hash is invalid");
+        }
+        Map<String, Object> persistedMetadata = parseArtifactMetadata(entity.getMetadataJson());
+        boolean hasInline = entity.getContent() != null;
+        boolean hasStorage = !StringUtil.isBlank(entity.getStorageUri());
+        if (hasInline == hasStorage) {
+            throw invalidPersisted("Persisted artifact content location is invalid");
+        }
+        if (hasInline) {
+            if (entity.getContent().isEmpty()) {
+                throw invalidPersisted("Persisted inline artifact metadata is invalid");
+            }
+            byte[] content = persistedUtf8Bytes(
+                    entity.getContent(), "persisted artifact content");
+            Map<String, Object> userMetadata = persistedMetadata.isEmpty()
+                    ? null : new LinkedHashMap<>(persistedMetadata);
+            if (content.length > MAX_INLINE_CONTENT_BYTES) {
+                throw invalidPersisted("Persisted inline artifact exceeds the supported limit");
+            }
+            if (!entity.getContentHash().equals(sha256(content))) {
+                throw invalidPersisted("Persisted inline artifact failed integrity verification");
+            }
+            return new ArtifactMaterial(content, (long) content.length,
+                    INLINE_CONTENT_MIME, false, userMetadata);
+        }
+        String storageUri = entity.getStorageUri().trim();
+        if (artifactStorage.owns(storageUri)) {
+            Object internalStorage = persistedMetadata.remove(MANAGED_STORAGE_METADATA);
+            Map<String, Object> userMetadata = persistedMetadata.isEmpty()
+                    ? null : new LinkedHashMap<>(persistedMetadata);
+            ManagedStorageMetadata managed = managedStorageMetadata(internalStorage, entity);
+            AgentTaskArtifactStorage.Scope scope = new AgentTaskArtifactStorage.Scope(
+                    entity.getTenantId(), entity.getClientId(), entity.getTaskId());
+            if (!artifactStorage.matches(scope, storageUri, entity.getContentHash())) {
+                throw invalidPersisted("Persisted managed artifact URI escaped its exact scope");
+            }
+            return new ArtifactMaterial(null, managed.byteLength(), managed.mimeType(),
+                    true, userMetadata);
+        }
+        if (storageUri.startsWith(FileSystemAgentTaskArtifactStorage.URI_SCHEME + ":")) {
+            throw invalidPersisted("Persisted managed artifact metadata is invalid");
+        }
+        try {
+            validateStorageUri(storageUri);
+        } catch (AgentTaskCollaborationException invalid) {
+            throw invalidPersisted("Persisted external artifact URI is invalid");
+        }
+        Map<String, Object> userMetadata = persistedMetadata.isEmpty()
+                ? null : new LinkedHashMap<>(persistedMetadata);
+        return new ArtifactMaterial(null, null, null, false, userMetadata);
+    }
+
+    private Map<String, Object> parseArtifactMetadata(String metadataJson) {
+        Map<String, Object> parsed = parseObject(metadataJson, "metadata");
+        return parsed == null ? new LinkedHashMap<>() : new LinkedHashMap<>(parsed);
+    }
+
+    private ManagedStorageMetadata managedStorageMetadata(
+            Object rawMetadata, AgentTaskArtifactEntity entity) {
+        if (!(rawMetadata instanceof Map<?, ?> metadata) || metadata.size() != 4
+                || !metadata.keySet().equals(Set.of(
+                        "schemaVersion", "sha256", "byteLength", "mimeType"))) {
+            throw invalidPersisted("Persisted managed artifact metadata is invalid");
+        }
+        Object schemaVersion = metadata.get("schemaVersion");
+        Object rawByteLength = metadata.get("byteLength");
+        Object rawHash = metadata.get("sha256");
+        Object rawMime = metadata.get("mimeType");
+        if (!(schemaVersion instanceof Integer version) || version != 1
+                || !(rawByteLength instanceof Integer || rawByteLength instanceof Long)
+                || !(rawHash instanceof String hash) || !entity.getContentHash().equals(hash)
+                || !(rawMime instanceof String mimeType) || mimeType.isEmpty()
+                || mimeType.length() > 129 || !mimeType.equals(mimeType.trim())
+                || mimeType.codePoints().anyMatch(Character::isISOControl)) {
+            throw invalidPersisted("Persisted managed artifact metadata is invalid");
+        }
+        long byteLength = ((Number) rawByteLength).longValue();
+        if (byteLength < 0) {
+            throw invalidPersisted("Persisted managed artifact byte length is invalid");
+        }
+        return new ManagedStorageMetadata(byteLength, mimeType);
+    }
+
+    private record ManagedStorageMetadata(long byteLength, String mimeType) {
+    }
+
+    private record ArtifactMaterial(byte[] inlineContent, Long byteLength, String mimeType,
+            boolean managedStorage, Map<String, Object> userMetadata) {
+        private ArtifactMaterial {
+            inlineContent = inlineContent == null ? null : inlineContent.clone();
+        }
+
+        @Override
+        public byte[] inlineContent() {
+            return inlineContent == null ? null : inlineContent.clone();
+        }
     }
 
     private AgentTaskRequestStatus requestStatus(String status) {
@@ -879,10 +1188,6 @@ public class AgentTaskCollaborationServiceImpl
         } catch (Exception e) {
             throw invalidPersisted("Persisted " + name + " is invalid JSON");
         }
-    }
-
-    private String sha256(String content) {
-        return sha256(content.getBytes(StandardCharsets.UTF_8));
     }
 
     private String sha256(byte[] content) {
@@ -1000,6 +1305,14 @@ public class AgentTaskCollaborationServiceImpl
             }
         }
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private byte[] persistedUtf8Bytes(String value, String name) {
+        try {
+            return utf8Bytes(value, name);
+        } catch (AgentTaskCollaborationException invalid) {
+            throw invalidPersisted("Persisted " + name + " contains invalid Unicode");
+        }
     }
 
     private String canonical(String value, String name) {
