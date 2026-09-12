@@ -750,6 +750,12 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         requireEmptySnapshotStateRow(row);
     }
 
+    // Mutation handling still needs the state expiry check after snapshot reads
+    // moved to the database projection.
+    private static boolean isActive(AgentSceneStateEntity state, long now) {
+        return state != null && (state.getExpiresAt() == null || state.getExpiresAt() > now);
+    }
+
     private static void requireEmptySnapshotStateRow(AgentSceneSnapshotRow row) {
         if (row.getStatePersonaCode() != null || row.getBehavior() != null
                 || row.getOriginRegionId() != null || row.getTargetRegionId() != null
