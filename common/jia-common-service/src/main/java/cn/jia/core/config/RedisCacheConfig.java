@@ -7,6 +7,7 @@ import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.interceptor.KeyGenerator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.PropertySource;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
@@ -24,6 +25,7 @@ import java.time.Duration;
  * @author chc
  */
 @Configuration(proxyBeanMethods = false)
+@PropertySource("classpath:META-INF/jia-redis-budget-defaults.properties")
 @EnableCaching
 @ConditionalOnClass(RedisSerializer.class)
 public class RedisCacheConfig implements CachingConfigurer {
