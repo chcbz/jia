@@ -143,7 +143,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         }
         safe.setJiacn(context.getJiacn());
         safe.setClientId(context.getClientId());
-        safe.setTenantId(TenantScopeHelper.DEFAULT_TENANT);
+        safe.setTenantId(context.getJiacn());
         safe.setDeletedAt(null);
         safe.setLifecycleGeneration(1L);
         if (chatConversationDao.insert(safe) != 1) {

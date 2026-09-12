@@ -81,6 +81,32 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
     }
 
     @Test
+    void createPinsEveryIdentityFieldToAuthenticatedOwnerTenant() {
+        ChatConversationEntity requested = new ChatConversationEntity()
+                .setTitle("ordinary")
+                .setJiacn("attacker")
+                .setConversationType("normal")
+                .setDeletedAt(99L)
+                .setLifecycleGeneration(88L);
+        requested.setTenantId("attacker-tenant");
+        requested.setClientId("attacker-client");
+        when(conversationDao.insert(any())).thenReturn(1);
+
+        ChatConversationEntity saved = service().create(requested);
+
+        assertEquals(OWNER, saved.getTenantId());
+        assertEquals(OWNER, saved.getJiacn());
+        assertEquals(CLIENT, saved.getClientId());
+        assertEquals(1L, saved.getLifecycleGeneration());
+        assertNull(saved.getDeletedAt());
+        assertEquals("normal", saved.getConversationType());
+        verify(conversationDao).insert(saved);
+        assertEquals("attacker-tenant", requested.getTenantId());
+        assertEquals("attacker", requested.getJiacn());
+        assertEquals("attacker-client", requested.getClientId());
+    }
+
+    @Test
     void malformedOrMissingAuthenticatedIdentityFailsBeforeDao() {
         EsContextHolder.clearContext();
         assertUnavailable(() -> service().findPage(null, 1, 20, null));
