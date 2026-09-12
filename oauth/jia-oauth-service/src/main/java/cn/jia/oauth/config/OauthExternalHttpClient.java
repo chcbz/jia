@@ -1,11 +1,14 @@
 package cn.jia.oauth.config;
 
+import cn.jia.core.deadline.RequestDeadlinePropagation;
+import cn.jia.core.deadline.SafeRequestTimeoutException;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestTemplate;
 
@@ -13,9 +16,9 @@ import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Creates a request-scoped third-party HTTP client from the remaining callback
- * budget. It never retries, and it does not expose request URLs or response
- * bodies to logs.
+ * Creates a callback-scoped third-party HTTP client from both the local OAuth
+ * budget and the request's remaining deadline. Provider calls are single-shot,
+ * run outside database transactions, and never expose URLs or bodies in errors.
  */
 @Component
 public class OauthExternalHttpClient {
@@ -30,25 +33,26 @@ public class OauthExternalHttpClient {
     }
 
     public ResponseEntity<String> exchange(CallbackBudget budget, String url, HttpMethod method, HttpEntity<?> entity) {
-        return restTemplate(budget).exchange(url, method, entity, String.class);
+        return requireSuccess(restTemplate(budget).exchange(url, method, entity, String.class));
     }
 
     public ResponseEntity<String> postForEntity(CallbackBudget budget, String url, HttpEntity<?> entity) {
-        return restTemplate(budget).postForEntity(url, entity, String.class);
+        return requireSuccess(restTemplate(budget).postForEntity(url, entity, String.class));
     }
 
     private RestTemplate restTemplate(CallbackBudget budget) {
-        long availableMillis = budget.remainingForNewCallMillis();
-        int connectTimeoutMillis = (int) Math.min(timeouts.getConnectTimeoutMillis(), availableMillis - 1);
-        int readTimeoutMillis = (int) Math.min(timeouts.getReadTimeoutMillis(), availableMillis - connectTimeoutMillis);
-        if (connectTimeoutMillis <= 0 || readTimeoutMillis <= 0) {
-            throw new OauthExternalBudgetExhaustedException();
+        if (budget == null) {
+            throw new IllegalArgumentException("OAuth callback budget is required");
         }
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new OauthExternalCallRejectedException("OAuth provider calls are forbidden inside a transaction");
+        }
+        CallTimeouts callTimeouts = budget.nextCallTimeouts();
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(connectTimeoutMillis);
-        factory.setReadTimeout(readTimeoutMillis);
+        factory.setConnectTimeout(callTimeouts.connectTimeoutMillis());
+        factory.setReadTimeout(callTimeouts.readTimeoutMillis());
         RestTemplate restTemplate = new RestTemplate(factory);
-        // Keep the shared legacy client behavior: provider status responses are parsed by the existing callback code.
+        // Preserve body parsing for provider-specific 2xx responses. Non-2xx is rejected below without exposing it.
         restTemplate.setErrorHandler(new ResponseErrorHandler() {
             @Override
             public boolean hasError(ClientHttpResponse response) throws IOException {
@@ -56,6 +60,16 @@ public class OauthExternalHttpClient {
             }
         });
         return restTemplate;
+    }
+
+    private ResponseEntity<String> requireSuccess(ResponseEntity<String> response) {
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new OauthExternalCallRejectedException("OAuth provider returned a non-success status");
+        }
+        return response;
+    }
+
+    record CallTimeouts(int connectTimeoutMillis, int readTimeoutMillis) {
     }
 
     public static final class CallbackBudget {
@@ -70,20 +84,41 @@ public class OauthExternalHttpClient {
         }
 
         long remainingForNewCallMillis() {
+            long requestAvailableMillis = RequestDeadlinePropagation.requireBudgetBeforeNewWork(
+                    timeouts.getTotalTimeoutMillis(), timeouts.getSafetyMarginMillis(),
+                    SafeRequestTimeoutException.Dependency.HTTP);
             long elapsedNanos = monotonicClock.getAsLong() - startedNanos;
             long elapsedMillis = elapsedNanos <= 0 ? 0 : TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
-            long remainingMillis = (long) timeouts.getTotalTimeoutMillis() - elapsedMillis;
-            long availableMillis = remainingMillis - timeouts.getSafetyMarginMillis();
+            long localAvailableMillis = (long) timeouts.getTotalTimeoutMillis() - elapsedMillis
+                    - timeouts.getSafetyMarginMillis();
+            long availableMillis = Math.min(localAvailableMillis, requestAvailableMillis);
             if (availableMillis <= 1) {
                 throw new OauthExternalBudgetExhaustedException();
             }
-            return Math.min(availableMillis, timeouts.getTotalTimeoutMillis());
+            return availableMillis;
+        }
+
+        CallTimeouts nextCallTimeouts() {
+            long availableMillis = remainingForNewCallMillis();
+            int connectTimeoutMillis = (int) Math.min(timeouts.getConnectTimeoutMillis(), availableMillis - 1);
+            int readTimeoutMillis = (int) Math.min(timeouts.getReadTimeoutMillis(),
+                    availableMillis - connectTimeoutMillis);
+            if (connectTimeoutMillis <= 0 || readTimeoutMillis <= 0) {
+                throw new OauthExternalBudgetExhaustedException();
+            }
+            return new CallTimeouts(connectTimeoutMillis, readTimeoutMillis);
         }
     }
 
     public static final class OauthExternalBudgetExhaustedException extends RuntimeException {
         public OauthExternalBudgetExhaustedException() {
             super("OAuth provider request budget exhausted before work started");
+        }
+    }
+
+    public static final class OauthExternalCallRejectedException extends RuntimeException {
+        public OauthExternalCallRejectedException(String safeMessage) {
+            super(safeMessage);
         }
     }
 }

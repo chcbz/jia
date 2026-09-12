@@ -11,8 +11,8 @@ public class SmsConfiguration {
 
     @Bean("aliyunSmsService")
     @ConditionalOnProperty(name = "sms.provider.type", havingValue = "aliyun")
-    public AliyunSmsServiceImpl aliyunSmsService(SmsExternalHttpTimeouts timeouts) {
-        return new AliyunSmsServiceImpl(timeouts);
+    public AliyunSmsServiceImpl aliyunSmsService(SmsExternalHttpClient externalHttpClient) {
+        return new AliyunSmsServiceImpl(externalHttpClient);
     }
 
     @Bean("zthySmsService")

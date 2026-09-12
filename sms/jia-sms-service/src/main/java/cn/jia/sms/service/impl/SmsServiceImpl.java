@@ -158,6 +158,12 @@ public class SmsServiceImpl implements SmsService {
     }
 
     @Override
+    public SmsReplyEntity findReply(SmsReplyEntity smsReply) {
+        List<SmsReplyEntity> replies = smsReplyDao.selectByEntity(smsReply);
+        return replies.isEmpty() ? null : replies.getFirst();
+    }
+
+    @Override
     public PageInfo<SmsReplyEntity> listReply(SmsReplyEntity example, int pageNum, int pageSize, String orderBy) {
         PageHelper.startPage(pageNum, pageSize, Optional.ofNullable(orderBy).orElse("update_time desc"));
         return PageInfo.of(smsReplyDao.selectByEntity(example));

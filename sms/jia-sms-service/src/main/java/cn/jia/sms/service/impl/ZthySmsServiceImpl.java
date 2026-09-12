@@ -1,11 +1,11 @@
 package cn.jia.sms.service.impl;
 
 import cn.jia.core.util.*;
+import cn.jia.sms.config.SmsExternalHttpClient;
 import cn.jia.sms.entity.SmsBatchRecord;
 import cn.jia.sms.entity.SmsSendResult;
 import cn.jia.sms.service.SmsServiceProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -13,16 +13,14 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 public class ZthySmsServiceImpl implements SmsServiceProvider {
-    @Autowired(required = false)
-    @Qualifier("smsExternalRestTemplate")
-    private RestTemplate restTemplate;
+    @Autowired
+    private SmsExternalHttpClient externalHttpClient;
 
     @Value("${sms.provider.zthy.send-sms-url:https://api-shss.zthysms.com/v2/sendSms}")
     private String sendSmsUrl;
@@ -60,7 +58,9 @@ public class ZthySmsServiceImpl implements SmsServiceProvider {
 
             HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(map, headers);
 
-            ResponseEntity<String> response = restTemplate.postForEntity(sendSmsUrl, request, String.class);
+            SmsExternalHttpClient.OperationBudget budget = externalHttpClient.beginOperation();
+            ResponseEntity<String> response = externalHttpClient.postForEntity(
+                    budget, sendSmsUrl, request, String.class);
             String responseBody = response.getBody();
             SmsSendResult resultMap = JsonUtil.fromJson(responseBody, SmsSendResult.class);
 
@@ -69,7 +69,7 @@ public class ZthySmsServiceImpl implements SmsServiceProvider {
             result.setSuccess("200".equals(code));
             return result;
         } catch (Exception e) {
-            return buildErrorResult("发送异常: " + e.getMessage());
+            return buildErrorResult("短信依赖调用失败");
         }
     }
 
@@ -84,13 +84,15 @@ public class ZthySmsServiceImpl implements SmsServiceProvider {
 
             HttpEntity<String> request = createJsonRequest(requestBody);
 
-            ResponseEntity<String> response = restTemplate.postForEntity(sendSmsBatchUrl, request, String.class);
+            SmsExternalHttpClient.OperationBudget budget = externalHttpClient.beginOperation();
+            ResponseEntity<String> response = externalHttpClient.postForEntity(
+                    budget, sendSmsBatchUrl, request, String.class);
 
             // 解析响应JSON
             Map<String, Object> resultMap = JsonUtil.jsonToMap(response.getBody());
             return buildResultFromMap(resultMap);
         } catch (Exception e) {
-            return buildErrorResult("发送异常: " + e.getMessage());
+            return buildErrorResult("短信依赖调用失败");
         }
     }
 
@@ -106,7 +108,9 @@ public class ZthySmsServiceImpl implements SmsServiceProvider {
 
             HttpEntity<String> request = createJsonRequest(requestBody);
 
-            ResponseEntity<String> response = restTemplate.postForEntity(balanceUrl, request, String.class);
+            SmsExternalHttpClient.OperationBudget budget = externalHttpClient.beginOperation();
+            ResponseEntity<String> response = externalHttpClient.postForEntity(
+                    budget, balanceUrl, request, String.class);
 
             // 解析响应JSON
             Map<String, Object> stringObjectMap = JsonUtil.jsonToMap(response.getBody());
@@ -140,13 +144,15 @@ public class ZthySmsServiceImpl implements SmsServiceProvider {
 
             HttpEntity<String> request = createJsonRequest(requestBody);
 
-            ResponseEntity<String> response = restTemplate.postForEntity(sendSmsTemplateUrl, request, String.class);
+            SmsExternalHttpClient.OperationBudget budget = externalHttpClient.beginOperation();
+            ResponseEntity<String> response = externalHttpClient.postForEntity(
+                    budget, sendSmsTemplateUrl, request, String.class);
 
             // 解析响应JSON
             Map<String, Object> resultMap = JsonUtil.jsonToMap(response.getBody());
             return buildResultFromMap(resultMap);
         } catch (Exception e) {
-            return buildErrorResult("发送异常: " + e.getMessage());
+            return buildErrorResult("短信依赖调用失败");
         }
     }
 

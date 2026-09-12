@@ -47,7 +47,6 @@ import org.springframework.security.web.savedrequest.RequestCache;
 import org.springframework.security.web.savedrequest.SavedRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.servlet.ModelAndView;
 
 import java.net.URLEncoder;
@@ -122,31 +121,23 @@ public class OauthController {
             ResponseEntity<String> responseEntity = externalHttpClient.exchange(callbackBudget, url, HttpMethod.GET, entity);
             String tokenStr = responseEntity.getBody();
             tokenDTO = JsonUtil.fromJson(tokenStr, WeiXinOauthTokenDTO.class);
-        } catch (Exception e) {
-            if (e instanceof HttpClientErrorException) {
-                String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
-                log.warn("微信公众号 token 请求被第三方拒绝");
-                Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
-                throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("errcode")));
-            } else {
-                log.warn("微信公众号 token 请求失败");
-                throw new EsRuntimeException();
-            }
+        } catch (RuntimeException exception) {
+            return providerFailure("wxmp", "token", exception);
         }
-        
-        if (StringUtil.isNotEmpty(Objects.requireNonNull(tokenDTO).getErrCode())) {
-            log.error("获取微信公众号token失败，错误码: {}, 错误信息: {}", tokenDTO.getErrCode(), tokenDTO.getErrMsg());
-            throw new EsRuntimeException(null, tokenDTO.getErrMsg());
+
+        if (tokenDTO == null || StringUtil.isNotEmpty(tokenDTO.getErrCode())
+                || StringUtil.isEmpty(tokenDTO.getAccessToken()) || StringUtil.isEmpty(tokenDTO.getOpenId())) {
+            return providerFailure("wxmp", "token-response", null);
         }
         String accessToken = tokenDTO.getAccessToken();
         String openid = tokenDTO.getOpenId();
         String scope = tokenDTO.getScope();
-        log.debug("微信公众号 token 获取成功，scope: {}", scope);
+        log.debug("微信公众号 token 获取成功");
         //保存用户信息
         UserEntity user = new UserEntity();
         user.setOpenid(openid);
         //获取用户信息
-        if (scope.contains("snsapi_userinfo")) {
+        if (StringUtil.isNotEmpty(scope) && scope.contains("snsapi_userinfo")) {
             url = base_url + "/sns/userinfo?access_token=" + accessToken + "&openid=" + openid;
             log.debug("请求微信公众号 API 获取用户信息");
             
@@ -155,21 +146,12 @@ public class OauthController {
                 ResponseEntity<String> userResponseEntity = externalHttpClient.exchange(callbackBudget, url, HttpMethod.GET, entity);
                 String userStr = userResponseEntity.getBody();
                 userDTO = JsonUtil.fromJson(userStr, WeiXinOauthUserDTO.class);
-            } catch (Exception e) {
-                if (e instanceof HttpClientErrorException) {
-                    String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
-                    log.warn("微信公众号用户信息请求被第三方拒绝");
-                    Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
-                    throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("errcode")));
-                } else {
-                    log.warn("微信公众号用户信息请求失败");
-                    throw new EsRuntimeException();
-                }
+            } catch (RuntimeException exception) {
+                return providerFailure("wxmp", "user", exception);
             }
-            
-            if (StringUtil.isNotEmpty(Objects.requireNonNull(userDTO).getErrCode())) {
-                log.error("获取微信公众号用户信息失败，错误码: {}, 错误信息: {}", userDTO.getErrCode(), userDTO.getErrMsg());
-                throw new EsRuntimeException(null, userDTO.getErrMsg());
+
+            if (userDTO == null || StringUtil.isNotEmpty(userDTO.getErrCode())) {
+                return providerFailure("wxmp", "user-response", null);
             }
             user.setWeixinid(userDTO.getUnionId());
             String country = userDTO.getCountry();
@@ -181,7 +163,7 @@ public class OauthController {
             user.setNickname(userDTO.getNickname());
             user.setSex(userDTO.getSex());
             user.setAvatar(userDTO.getHeadImgUrl());
-            log.debug("微信公众号用户信息获取成功，昵称: {}", user.getNickname());
+            log.debug("微信公众号用户信息获取成功");
         }
 
         log.info("微信公众号第三方登录回调处理完成");
@@ -220,21 +202,13 @@ public class OauthController {
             ResponseEntity<String> responseEntity = externalHttpClient.exchange(callbackBudget, url, HttpMethod.GET, entity);
             String tokenStr = responseEntity.getBody();
             tokenDTO = JsonUtil.fromJson(tokenStr, WeiXinOauthTokenDTO.class);
-        } catch (Exception e) {
-            if (e instanceof HttpClientErrorException) {
-                String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
-                log.warn("微信 token 请求被第三方拒绝");
-                Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
-                throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("errcode")));
-            } else {
-                log.warn("微信 token 请求失败");
-                throw new EsRuntimeException();
-            }
+        } catch (RuntimeException exception) {
+            return providerFailure("weixin", "token", exception);
         }
-        
-        if (Objects.requireNonNull(tokenDTO).getErrCode() != null && !tokenDTO.getErrCode().isEmpty()) {
-            log.error("获取微信token失败，错误码: {}, 错误信息: {}", tokenDTO.getErrCode(), tokenDTO.getErrMsg());
-            throw new EsRuntimeException(null, tokenDTO.getErrMsg());
+
+        if (tokenDTO == null || StringUtil.isNotEmpty(tokenDTO.getErrCode())
+                || StringUtil.isEmpty(tokenDTO.getOpenId())) {
+            return providerFailure("weixin", "token-response", null);
         }
         String openid = tokenDTO.getOpenId();
         String unionid = StringUtil.isEmpty(tokenDTO.getUnionId()) ? openid : tokenDTO.getUnionId();
@@ -284,19 +258,14 @@ public class OauthController {
             ResponseEntity<String> responseEntity = externalHttpClient.postForEntity(callbackBudget, url, entity);
             String tokenStr = responseEntity.getBody();
             tokenDTO = JsonUtil.fromJson(tokenStr, WeiBoOauthTokenDTO.class);
-        } catch (Exception e) {
-            if (e instanceof HttpClientErrorException) {
-                String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
-                log.warn("微博 token 请求被第三方拒绝");
-                Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
-                throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("error")));
-            } else {
-                log.warn("微博 token 请求失败");
-                throw new EsRuntimeException();
-            }
+        } catch (RuntimeException exception) {
+            return providerFailure("weibo", "token", exception);
         }
 
-        String accessToken = Objects.requireNonNull(tokenDTO).getAccessToken();
+        if (tokenDTO == null || StringUtil.isEmpty(tokenDTO.getAccessToken()) || StringUtil.isEmpty(tokenDTO.getUid())) {
+            return providerFailure("weibo", "token-response", null);
+        }
+        String accessToken = tokenDTO.getAccessToken();
         String uid = tokenDTO.getUid();
         log.debug("微博 token 获取成功");
         // 获取用户信息
@@ -311,22 +280,17 @@ public class OauthController {
             ResponseEntity<String> userResponseEntity = externalHttpClient.exchange(callbackBudget, url, HttpMethod.GET, userEntity);
             String userStr = userResponseEntity.getBody();
             userDTO = JsonUtil.fromJson(userStr, WeiBoOauthUserDTO.class);
-        } catch (Exception e) {
-            if (e instanceof HttpClientErrorException) {
-                String errMsg = ((HttpClientErrorException) e).getResponseBodyAsString();
-                log.warn("微博用户信息请求被第三方拒绝");
-                Map<String, Object> errMap = JsonUtil.jsonToMap(errMsg);
-                throw new EsRuntimeException(null, String.valueOf(Objects.requireNonNull(errMap).get("error")));
-            } else {
-                log.warn("微博用户信息请求失败");
-                throw new EsRuntimeException();
-            }
+        } catch (RuntimeException exception) {
+            return providerFailure("weibo", "user", exception);
         }
-        
+        if (userDTO == null) {
+            return providerFailure("weibo", "user-response", null);
+        }
+
         // 保存用户信息
         UserEntity user = new UserEntity();
         user.setWeiboid(uid);
-        String location = Objects.requireNonNull(userDTO).getLocation();
+        String location = userDTO.getLocation();
         user.setLocation(StringUtil.isEmpty(location) ? null : location);
         String province = userDTO.getProvince();
         user.setProvince(StringUtil.isEmpty(province) ? null : province);
@@ -338,7 +302,7 @@ public class OauthController {
         String sex = userDTO.getGender();
         user.setSex("m".equals(sex) ? 1 : ("f".equals(sex) ? 2 : 0));
         Optional.ofNullable(userDTO.getProfileImageUrl()).ifPresent(user::setAvatar);
-        log.debug("微博用户信息获取成功，昵称: {}", user.getNickname());
+        log.debug("微博用户信息获取成功");
         
         log.info("微博第三方登录回调处理完成");
         return completeThirdPartyLogin(user, transaction, state, request);
@@ -376,7 +340,10 @@ public class OauthController {
             ResponseEntity<String> responseEntity = externalHttpClient.postForEntity(callbackBudget, url, entity);
             String tokenStr = responseEntity.getBody();
             GithubOauthTokenDTO tokenDTO = JsonUtil.fromJson(tokenStr, GithubOauthTokenDTO.class);
-            String accessToken = Objects.requireNonNull(tokenDTO).getAccessToken();
+            if (tokenDTO == null || StringUtil.isEmpty(tokenDTO.getAccessToken())) {
+                return providerFailure("github", "token-response", null);
+            }
+            String accessToken = tokenDTO.getAccessToken();
             log.debug("GitHub token获取成功");
             // 获取用户信息
             url = apiBaseUrl + "/user";
@@ -390,12 +357,10 @@ public class OauthController {
             String userStr = userResponseEntity.getBody();
             userDTO = JsonUtil.fromJson(userStr, GithubOauthUserDTO.class);
         } catch (RuntimeException exception) {
-            log.warn("GitHub第三方请求失败");
-            throw new EsRuntimeException();
+            return providerFailure("github", "provider", exception);
         }
-        if (userDTO == null) {
-            log.warn("GitHub用户信息获取失败，返回空数据");
-            return "redirect:/login/index.html";
+        if (userDTO == null || userDTO.getId() == null || userDTO.getId() <= 0) {
+            return providerFailure("github", "user-response", null);
         }
         // 保存用户信息
         UserEntity user = new UserEntity();
@@ -406,7 +371,7 @@ public class OauthController {
         Optional.ofNullable(userDTO.getAvatar_url()).ifPresent(user::setAvatar);
         user.setLocation(userDTO.getLocation());
         user.setRemark(userDTO.getBio());
-        log.debug("GitHub用户信息获取成功，用户名: {}", user.getUsername());
+        log.debug("GitHub用户信息获取成功");
 
         log.info("GitHub第三方登录回调处理完成");
         return completeThirdPartyLogin(user, transaction, state, request);
@@ -449,6 +414,12 @@ public class OauthController {
     private String thirdPartyLoginFailed(String provider) {
         log.warn("第三方登录回调未完成，返回不可自动重试的登录页，provider: {}", provider);
         return "redirect:/login/index.html?thirdPartyLoginError=1";
+    }
+
+    private String providerFailure(String provider, String stage, RuntimeException exception) {
+        String failureClass = exception == null ? "invalid_response" : exception.getClass().getSimpleName();
+        log.warn("第三方登录依赖明确失败，provider: {}, stage: {}, failure: {}", provider, stage, failureClass);
+        return thirdPartyLoginFailed(provider);
     }
 
     /**
@@ -512,7 +483,12 @@ public class OauthController {
         context.setUsername(authUsername);
         context.setJiacn(account.jiacn());
         if (StringUtil.isNotEmpty(state)) {
-            thirdPartyLoginTransactionService.markCompleted(state, transaction);
+            try {
+                thirdPartyLoginTransactionService.markCompleted(state, transaction);
+            } catch (RuntimeException exception) {
+                log.warn("第三方登录完成标记不可用；原回调保持成功，重复回调将明确失败，provider: {}",
+                        transaction.getProvider());
+            }
         }
         log.info("第三方登录自动登录完成，clientId: {}", clientId);
         return "redirect:" + redirectUrl;

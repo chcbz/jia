@@ -8,6 +8,8 @@ import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.*;
 import cn.jia.sms.common.SmsConstants;
 import cn.jia.sms.common.SmsErrorConstants;
+import cn.jia.sms.config.SmsExternalEmailClient;
+import cn.jia.sms.config.SmsExternalHttpClient;
 import cn.jia.sms.dao.SmsConfigDao;
 import cn.jia.sms.dao.SmsMessageDao;
 import cn.jia.sms.dao.SmsSendDao;
@@ -18,7 +20,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitHandler;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -26,7 +27,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.RestTemplate;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -47,13 +47,14 @@ public class SmsReceiver {
 	@Autowired(required = false)
 	private DictService dictService;
 	@Inject
-	@Qualifier("smsExternalRestTemplate")
-	private RestTemplate restTemplate;
+	private SmsExternalHttpClient externalHttpClient;
+	@Inject
+	private SmsExternalEmailClient externalEmailClient;
 
 	@RabbitHandler
     public void process(String msg) {
 		try {
-			log.info(msg);
+			log.debug("收到短信异步消息");
 			SmsMessageVO smsMessage = JsonUtil.fromJson(msg, SmsMessageVO.class);
 			if(smsMessage == null) {
 				throw new EsRuntimeException(SmsErrorConstants.DATA_NOT_FOUND);
@@ -62,8 +63,9 @@ public class SmsReceiver {
 			String jiaUrl = dictService.selectByTypeAndValue(SmsConstants.DICT_TYPE_JIA_CONFIG,
 					SmsConstants.JIA_CONFIG_SERVER_URL).getName();
 			
+			SmsExternalHttpClient.OperationBudget operationBudget = externalHttpClient.beginOperation();
 			@SuppressWarnings("unchecked")
-			Map<String, Object> tokenResult = restTemplate.getForObject(jiaUrl +
+			Map<String, Object> tokenResult = externalHttpClient.getForObject(operationBudget, jiaUrl +
 					"/oauth/user?access_token=" + smsMessage.getToken(), Map.class);
 			if(tokenResult == null || tokenResult.get("name") == null) {
 				throw new EsRuntimeException(SmsErrorConstants.UNAUTHORIZED);
@@ -96,7 +98,8 @@ public class SmsReceiver {
 				String name = dictService.selectByTypeAndValue(SmsConstants.DICT_TYPE_EMAIL_SERVER, SmsConstants.EMAIL_SERVER_NAME).getName();
 				String password = dictService.selectByTypeAndValue(SmsConstants.DICT_TYPE_EMAIL_SERVER, SmsConstants.EMAIL_SERVER_PASSWORD).getName();
 				String smtp = dictService.selectByTypeAndValue(SmsConstants.DICT_TYPE_EMAIL_SERVER, SmsConstants.EMAIL_SERVER_SMTP).getName();
-				if(EmailUtil.doSend(title, content, from, smsMessage.getReceiver(), name, password, smtp)) {
+				if(externalEmailClient.send(operationBudget, title, content, from, smsMessage.getReceiver(),
+						name, password, smtp)) {
 					SmsMessageEntity upSmsMessage = new SmsMessageEntity();
 					upSmsMessage.setId(smsMessage.getId());
 					upSmsMessage.setStatus(SmsConstants.COMMON_ENABLE);
@@ -138,7 +141,8 @@ public class SmsReceiver {
 				HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(map, headers);
 
 				String sendSmsBatchURL = "http://hy.mix2.zthysms.com/sendSmsBatch.do";
-				ResponseEntity<String> response = restTemplate.postForEntity(sendSmsBatchURL, request , String.class);
+				ResponseEntity<String> response = externalHttpClient.postForEntity(
+                        operationBudget, sendSmsBatchURL, request, String.class);
 				
 				if("1".equals(response.getBody().split(",")[0])){
 					for(String m : mobile.split(",")) {
@@ -159,7 +163,7 @@ public class SmsReceiver {
 					upSmsMessage.setStatus(SmsConstants.COMMON_ENABLE);
 					smsMessageDao.updateById(upSmsMessage);
 				}else {
-					log.error(response.getBody());
+					log.warn("短信供应商返回业务失败");
 				}
 			}
 			else if(SmsConstants.MSG_TYPE_WX.equals(smsMessage.getMsgType())) {
@@ -170,7 +174,7 @@ public class SmsReceiver {
 				message.put("url", smsMessage.getUrl());
 				
 				@SuppressWarnings("unchecked")
-				JsonResult<Map<String, Object>> result = restTemplate.postForObject(
+				JsonResult<Map<String, Object>> result = externalHttpClient.postForObject(operationBudget,
 						jiaUrl + "/wx/mp/message/template/send?appid="+smsMessage.getAppid(),
 						EsHandler.genRestEntity(message, smsMessage.getToken()), JsonResult.class);
 				if(SmsErrorConstants.SUCCESS.getCode().equals(result.getCode())) {
@@ -179,11 +183,11 @@ public class SmsReceiver {
 					upSmsMessage.setStatus(SmsConstants.COMMON_ENABLE);
 					smsMessageDao.updateById(upSmsMessage);
 				}else {
-					log.error(result.getMsg());
+					log.warn("微信模板消息返回业务失败");
 				}
 			}
 		} catch(Exception e) {
-			log.error("SmsReceiver", e);
+			log.warn("短信异步消息明确失败，failure: {}", e.getClass().getSimpleName());
 		}
     }
 }

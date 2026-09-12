@@ -1,6 +1,7 @@
 package cn.jia.sms.service.impl;
 
 import cn.jia.core.util.JsonUtil;
+import cn.jia.sms.config.SmsExternalHttpClient;
 import cn.jia.sms.config.SmsExternalHttpTimeouts;
 import cn.jia.sms.entity.SmsBatchRecord;
 import cn.jia.sms.entity.SmsSendResult;
@@ -35,26 +36,27 @@ public class AliyunSmsServiceImpl implements SmsServiceProvider {
     
     private static final String PRODUCT = "Dysmsapi";
 
-    private final SmsExternalHttpTimeouts timeouts;
+    private final SmsExternalHttpClient externalHttpClient;
 
     public AliyunSmsServiceImpl() {
-        this(new SmsExternalHttpTimeouts());
+        this(new SmsExternalHttpClient(new SmsExternalHttpTimeouts()));
     }
 
-    public AliyunSmsServiceImpl(SmsExternalHttpTimeouts timeouts) {
-        this.timeouts = timeouts;
+    public AliyunSmsServiceImpl(SmsExternalHttpClient externalHttpClient) {
+        this.externalHttpClient = externalHttpClient;
     }
     
     /**
      * 初始化阿里云ACS客户端
      * @return ACS客户端实例
      */
-    private IAcsClient initializeClient() {
-        // Bind SDK timeouts to this SMS client instead of changing JVM-wide defaults.
+    private IAcsClient initializeClient(SmsExternalHttpClient.OperationBudget budget) {
+        // Bind SDK timeouts to this call instead of changing JVM-wide defaults.
+        SmsExternalHttpClient.CallTimeouts callTimeouts = externalHttpClient.prepareSdkCall(budget);
         HttpClientConfig httpClientConfig = HttpClientConfig.getDefault();
-        httpClientConfig.setConnectionTimeoutMillis(timeouts.getConnectTimeoutMillis());
-        httpClientConfig.setReadTimeoutMillis(timeouts.getReadTimeoutMillis());
-        httpClientConfig.setWriteTimeoutMillis(timeouts.getConnectionRequestTimeoutMillis());
+        httpClientConfig.setConnectionTimeoutMillis(callTimeouts.connectTimeoutMillis());
+        httpClientConfig.setReadTimeoutMillis(callTimeouts.readTimeoutMillis());
+        httpClientConfig.setWriteTimeoutMillis(callTimeouts.connectionRequestTimeoutMillis());
 
         // 初始化ascClient
         DefaultProfile profile = DefaultProfile.getProfile(endpoint, accessKeyId, accessKeySecret);
@@ -86,22 +88,22 @@ public class AliyunSmsServiceImpl implements SmsServiceProvider {
      * @return 错误结果
      */
     private SmsSendResult handleException(Exception e, String operation) {
-        log.error(operation, e);
+        log.warn("{}: {}", operation, e.getClass().getSimpleName());
         SmsSendResult result = new SmsSendResult();
         result.setSuccess(false);
-        result.setMessage("发送异常: " + e.getMessage());
+        result.setMessage("短信依赖调用失败");
         return result;
     }
     
     @Override
     public SmsSendResult sendSms(String signature, String mobile, String content, String ext) {
-        log.info("使用阿里云短信服务发送短信: mobile={}, content={}, xh={}", mobile, content, ext);
+        log.info("使用阿里云短信服务发送短信");
         throw new UnsupportedOperationException("阿里云不支持单条发送短信");
     }
     
     @Override
     public SmsSendResult sendSmsBatch(String signature, List<SmsBatchRecord> records, String time) {
-        log.info("使用阿里云短信服务批量发送短信: signature={}, records={}, time={}", signature, records, time);
+        log.info("使用阿里云短信服务批量发送短信");
         throw new UnsupportedOperationException("阿里云不支持批量发送短信");
     }
     
@@ -126,10 +128,11 @@ public class AliyunSmsServiceImpl implements SmsServiceProvider {
     @Override
     public SmsSendResult sendSmsTemplate(String mobile, String templateId, String signature,
             Map<String, String> tpContent, String ext, String extend, String time) {
-        log.info("使用阿里云短信服务发送模板短信: mobile={}, tpId={}, signature={}", mobile, templateId, signature);
+        log.info("使用阿里云短信服务发送模板短信");
         
         try {
-            IAcsClient acsClient = initializeClient();
+            SmsExternalHttpClient.OperationBudget budget = externalHttpClient.beginOperation();
+            IAcsClient acsClient = initializeClient(budget);
             
             // 组装请求对象
             SendSmsRequest request = new SendSmsRequest();

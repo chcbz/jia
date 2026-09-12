@@ -143,6 +143,14 @@ class SmsServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void testFindReply() {
+        SmsReplyEntity smsReplyEntity = new SmsReplyEntity();
+        when(smsReplyDao.selectByEntity(any())).thenReturn(List.of(smsReplyEntity));
+
+        Assertions.assertEquals(smsReplyEntity, smsServiceImpl.findReply(new SmsReplyEntity()));
+    }
+
+    @Test
     void testListReply() {
         SmsReplyEntity smsReplyEntity = new SmsReplyEntity();
         when(smsReplyDao.selectByEntity(any())).thenReturn(List.of(smsReplyEntity));

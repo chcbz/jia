@@ -87,6 +87,9 @@ public interface SmsService {
 	 * @param smsReply 短信回复实体
 	 */
 	void reply(SmsReplyEntity smsReply);
+
+    /** Finds an exact previously accepted provider callback payload. */
+    SmsReplyEntity findReply(SmsReplyEntity smsReply);
 	
 	/**
 	 * 获取短信回复记录列表
