@@ -6,7 +6,12 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.elasticsearch.autoconfigure.health.ElasticsearchRestHealthContributorAutoConfiguration;
 import org.springframework.boot.health.contributor.HealthContributor;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.support.PropertiesLoaderUtils;
 
+import java.util.Properties;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -20,11 +25,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 class ElasticsearchProductionHealthIsolationTest {
 
     @Test
-    void disabledElasticsearchHealthDoesNotRegisterAContributorThatCouldMakeAggregateHealthDown() {
+    void productionDefaultDoesNotRegisterAContributorThatCouldMakeAggregateHealthDown() throws Exception {
+        String productionHealthEnabled = productionHealthEnabled();
+        assertEquals("false", productionHealthEnabled);
         Rest5Client unreachableClient = mock(Rest5Client.class);
 
         contextWith(unreachableClient)
-                .withPropertyValues("management.health.elasticsearch.enabled=false")
+                .withPropertyValues("management.health.elasticsearch.enabled=" + productionHealthEnabled)
                 .run(context -> {
                     assertFalse(context.containsBean("elasticsearchHealthContributor"));
                     assertTrue(context.getBeansOfType(HealthContributor.class).isEmpty());
@@ -43,6 +50,12 @@ class ElasticsearchProductionHealthIsolationTest {
                     assertFalse(context.getBeansOfType(HealthContributor.class).isEmpty());
                     verifyNoInteractions(unreachableClient);
                 });
+    }
+
+    private String productionHealthEnabled() throws Exception {
+        Properties properties = PropertiesLoaderUtils.loadProperties(
+                new ClassPathResource("application-prod.properties"));
+        return properties.getProperty("management.health.elasticsearch.enabled");
     }
 
     private ApplicationContextRunner contextWith(Rest5Client client) {
