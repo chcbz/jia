@@ -1,6 +1,7 @@
 package cn.jia.agent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 @ConfigurationProperties(prefix = "agent.output-delivery")
 public record OutputDeliveryProperties(
@@ -39,6 +40,7 @@ public record OutputDeliveryProperties(
                 archiveTempDirectory, false, null);
     }
 
+    @ConstructorBinding
     public OutputDeliveryProperties {
         storageBucket = storageBucket == null ? "cyf-agent-outputs" : storageBucket;
         scannerHost = scannerHost == null ? "127.0.0.1" : scannerHost;
