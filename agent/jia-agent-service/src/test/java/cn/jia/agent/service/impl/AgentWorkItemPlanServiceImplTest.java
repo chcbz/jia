@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.calls;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -179,13 +180,18 @@ class AgentWorkItemPlanServiceImplTest {
         order.verify(identityService).lockActiveCanonicalAgentIdsInScope(
                 TENANT, CLIENT, TENANT, List.of(ACTOR));
         order.verify(memberDao).findByTaskAndAgent(TENANT, CLIENT, TASK, ACTOR);
-        order.verify(workItemDao).findByTaskAndWorkItemId(
+        // Three existence probes precede writes; the same method is used for readback after CAS.
+        order.verify(workItemDao, calls(3)).findByTaskAndWorkItemId(
                 eq(TENANT), eq(CLIENT), eq(TASK), any());
         order.verify(eventDao, times(3)).findByEventId(eq(TENANT), eq(CLIENT), any());
         order.verify(workItemDao, times(3)).insert(eq(TENANT), eq(CLIENT), any());
         order.verify(eventWriter, times(3)).append(any());
         order.verify(taskDao).updateStatusByVersion(eq(TENANT), eq(CLIENT), eq(TASK),
                 eq(7L), eq("planning"), any(), any(), any());
+        order.verify(workItemDao, calls(3)).findByTaskAndWorkItemId(
+                eq(TENANT), eq(CLIENT), eq(TASK), any());
+        verify(workItemDao, times(6)).findByTaskAndWorkItemId(
+                eq(TENANT), eq(CLIENT), eq(TASK), any());
     }
 
     @Test

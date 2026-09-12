@@ -21,6 +21,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -60,7 +62,7 @@ class AgentWorkItemPlanControllerTest {
 
         var request = org.mockito.ArgumentCaptor.forClass(
                 AgentWorkItemPlanSuggestRequestDTO.class);
-        verify(service).suggest("Tenant-A", "Client-A", "task-1", ACTOR, request.capture());
+        verify(service).suggest(eq("Tenant-A"), eq("Client-A"), eq("task-1"), eq(ACTOR), request.capture());
         assertEquals("Implement endpoint", request.getValue().getObjective());
     }
 
@@ -179,9 +181,9 @@ class AgentWorkItemPlanControllerTest {
 
     @Test
     void serviceFailuresMapToNonLeakingFrozenStatuses() throws Exception {
-        when(service.suggest(anyString(), anyString(), anyString(), anyString(), any()))
-                .thenThrow(new AgentWorkItemPlanException(
-                        AgentWorkItemPlanException.Reason.NOT_FOUND_OR_FORBIDDEN, "secret scope"));
+        doThrow(new AgentWorkItemPlanException(
+                AgentWorkItemPlanException.Reason.NOT_FOUND_OR_FORBIDDEN, "secret scope"))
+                .when(service).suggest(anyString(), anyString(), anyString(), anyString(), any());
         var missing = mvc.perform(post("/agent/tasks/task-1/work-item-plans/suggest")
                         .queryParam("actorAgentId", ACTOR)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -195,9 +197,9 @@ class AgentWorkItemPlanControllerTest {
         assertEquals("private, no-store",
                 missing.getResponse().getHeader(HttpHeaders.CACHE_CONTROL));
 
-        when(service.suggest(anyString(), anyString(), anyString(), anyString(), any()))
-                .thenThrow(new AgentWorkItemPlanException(
-                        AgentWorkItemPlanException.Reason.INVALID_PERSISTED_STATE, "database detail"));
+        doThrow(new AgentWorkItemPlanException(
+                AgentWorkItemPlanException.Reason.INVALID_PERSISTED_STATE, "database detail"))
+                .when(service).suggest(anyString(), anyString(), anyString(), anyString(), any());
         mvc.perform(post("/agent/tasks/task-1/work-item-plans/suggest")
                         .queryParam("actorAgentId", ACTOR)
                         .contentType(MediaType.APPLICATION_JSON)
