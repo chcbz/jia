@@ -7,7 +7,9 @@ CREATE TABLE agent_task_meta(
     completed_at BIGINT,failure_reason VARCHAR(500),collaboration_mode VARCHAR(16) NOT NULL,
     risk_level VARCHAR(16) NOT NULL,max_agents INT NOT NULL,coordinator_agent_id VARCHAR(100),
     review_required BOOLEAN NOT NULL,task_version BIGINT NOT NULL,
-    current_event_version BIGINT NOT NULL,tenant_id VARCHAR(50) NOT NULL,
+    current_event_version BIGINT NOT NULL,delivery_policy_version INT NOT NULL DEFAULT 0,
+    current_delivery_id VARBINARY(100),delivery_revision BIGINT NOT NULL DEFAULT 0,
+    delivery_requirement_json VARCHAR(4000),tenant_id VARCHAR(50) NOT NULL,
     client_id VARCHAR(50) NOT NULL,create_time BIGINT NOT NULL,update_time BIGINT NOT NULL,
     UNIQUE(tenant_id,client_id,task_id));
 
@@ -189,7 +191,8 @@ CREATE TABLE agent_task_event (
 CREATE TABLE agent_task_member(id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100),
     agent_id VARCHAR(100), tenant_id VARCHAR(50), client_id VARCHAR(50));
 CREATE TABLE agent_task_work_item(id BIGINT AUTO_INCREMENT PRIMARY KEY, work_item_id VARCHAR(100),
-    task_id VARCHAR(100), tenant_id VARCHAR(50), client_id VARCHAR(50));
+    task_id VARCHAR(100), result_delivery_id VARBINARY(100), execution_run_id VARBINARY(100),
+    dispatched_run_id VARBINARY(100), tenant_id VARCHAR(50), client_id VARCHAR(50));
 CREATE TABLE task_plan(id BIGINT AUTO_INCREMENT PRIMARY KEY, jiacn VARCHAR(50), type INT,
     period INT, crond VARCHAR(100), name VARCHAR(100), description VARCHAR(200), lunar INT,
     start_time BIGINT, end_time BIGINT, amount DECIMAL(20,2), remind INT, remind_phone VARCHAR(100),

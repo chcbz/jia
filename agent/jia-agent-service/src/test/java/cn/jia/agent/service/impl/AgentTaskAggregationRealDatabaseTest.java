@@ -541,6 +541,8 @@ class AgentTaskAggregationRealDatabaseTest {
                     risk_level VARCHAR(20) NOT NULL DEFAULT 'low', max_agents INT NOT NULL DEFAULT 2,
                     coordinator_agent_id VARCHAR_IGNORECASE(100), review_required TINYINT NOT NULL DEFAULT 1,
                     task_version BIGINT NOT NULL DEFAULT 0, current_event_version BIGINT NOT NULL DEFAULT 0,
+                    delivery_policy_version INT NOT NULL DEFAULT 0, current_delivery_id VARBINARY(100),
+                    delivery_revision BIGINT NOT NULL DEFAULT 0, delivery_requirement_json VARCHAR(4000),
                     create_time BIGINT, update_time BIGINT,
                     tenant_id VARCHAR_IGNORECASE(50), client_id VARCHAR_IGNORECASE(50)
                 )""");
@@ -578,7 +580,9 @@ class AgentTaskAggregationRealDatabaseTest {
                     priority INT NOT NULL DEFAULT 0, required_item TINYINT NOT NULL DEFAULT 1,
                     dependency_json TEXT, lease_token VARCHAR(100), lease_until BIGINT,
                     attempt_count INT NOT NULL DEFAULT 0, max_attempts INT NOT NULL DEFAULT 3,
-                    result_artifact_id VARCHAR_IGNORECASE(100), submitted_at BIGINT, completed_at BIGINT,
+                    result_artifact_id VARCHAR_IGNORECASE(100), result_delivery_id VARBINARY(100),
+                    execution_run_id VARBINARY(100), dispatched_run_id VARBINARY(100),
+                    submitted_at BIGINT, completed_at BIGINT,
                     version BIGINT NOT NULL DEFAULT 0, tenant_id VARCHAR_IGNORECASE(50) NOT NULL,
                     client_id VARCHAR_IGNORECASE(50) NOT NULL, create_time BIGINT, update_time BIGINT,
                     UNIQUE (tenant_id, client_id, work_item_id)
