@@ -17,6 +17,7 @@ import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
 import cn.jia.agent.entity.AgentCommandOperationAuditPage;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
+import cn.jia.agent.entity.AgentCommandOperationV1View;
 import cn.jia.agent.entity.AgentCommandOperationType;
 import cn.jia.agent.entity.AgentCommandOperationsException;
 import cn.jia.agent.entity.AgentCommandOpsMetrics;
@@ -71,6 +72,7 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
     private final TransactionTemplate requiresNew;
     private final TransactionTemplate readSnapshot;
     private final AgentCommandBrokerRedrivePolicy redrivePolicy;
+    private final AgentCommandOperationV1Projector operationV1Projector;
     private final Supplier<UUID> operationIds;
     private final LongSupplier clock;
 
@@ -126,6 +128,7 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         this.readSnapshot.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
         this.readSnapshot.setReadOnly(true);
         this.redrivePolicy = new AgentCommandBrokerRedrivePolicy();
+        this.operationV1Projector = new AgentCommandOperationV1Projector();
     }
 
     @Override
@@ -223,6 +226,32 @@ public final class AgentCommandOperationsServiceImpl implements AgentCommandOper
         });
         if (page == null) throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
         return page;
+    }
+
+    @Override
+    public AgentCommandOperationV1View getOperationV1(
+            String tenantId,
+            String clientId,
+            String requesterId,
+            String operationId,
+            long now) {
+        requireReadScope(tenantId, clientId);
+        requireNow(now);
+        if (!exact(requesterId, 100)) {
+            throw failure(AgentCommandOperationsException.Reason.INVALID_REQUEST);
+        }
+        if (!uuid(operationId)) {
+            throw failure(AgentCommandOperationsException.Reason.NOT_FOUND_OR_FORBIDDEN);
+        }
+        AgentCommandOperationV1View view = readSnapshot.execute(status ->
+                operationV1Projector.project(
+                        dao.findOperationStatusRows(
+                                tenantId, clientId, requesterId, operationId),
+                        tenantId, clientId, requesterId, operationId, now));
+        if (view == null) {
+            throw failure(AgentCommandOperationsException.Reason.OPERATION_CONFLICT);
+        }
+        return view;
     }
 
     @Override

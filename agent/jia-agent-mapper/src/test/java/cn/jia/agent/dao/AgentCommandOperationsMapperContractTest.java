@@ -36,6 +36,27 @@ class AgentCommandOperationsMapperContractTest {
     }
 
     @Test
+    void operationV1StatusReadIsByteExactPrincipalScopedBoundedAndPayloadFree() throws Exception {
+        String sql = select("findOperationStatusRows");
+        assertExactScope(sql);
+        assertTrue(sql.contains(
+                "cast(requester_id as binary)=cast(#{requesterid} as binary)"), sql);
+        assertTrue(sql.contains(
+                "octet_length(requester_id)=octet_length(#{requesterid})"), sql);
+        assertTrue(sql.contains(
+                "cast(operation_id as binary)=cast(#{operationid} as binary)"), sql);
+        assertTrue(sql.contains(
+                "octet_length(operation_id)=octet_length(#{operationid})"), sql);
+        assertTrue(sql.endsWith("order by id asc limit 3"), sql);
+        assertFalse(sql.contains("for update"), sql);
+        for (String forbidden : new String[] {
+                "wire_payload", "command_payload", "wire_hash", "task_id", "target_agent_id",
+                "command_id", "approver_id", "reason", "ticket_reference", "created_by"}) {
+            assertFalse(sql.contains(forbidden), forbidden + ": " + sql);
+        }
+    }
+
+    @Test
     void dlqDiscoveryIsDeliveryOnlyBroadBoundedStableAndHasNoMinAuthorization() throws Exception {
         String count = select("countDlqBroad");
         String page = select("listDlqBroad");

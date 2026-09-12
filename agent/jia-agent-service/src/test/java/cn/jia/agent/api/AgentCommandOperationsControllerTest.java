@@ -7,6 +7,8 @@ import cn.jia.agent.entity.AgentCommandOperationAuditPage;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
 import cn.jia.agent.entity.AgentCommandOperationType;
+import cn.jia.agent.entity.AgentCommandOperationV1View;
+import cn.jia.agent.entity.AgentCommandOperationsException;
 import cn.jia.agent.service.AgentCommandOperationsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +24,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.time.Instant;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -76,6 +79,82 @@ class AgentCommandOperationsControllerTest {
                         org.hamcrest.Matchers.containsString("commandPayload"))));
 
         verify(service).listDlq("tenant-a", "client-a", 0, 50);
+    }
+
+    @Test
+    void operationV1UsesExactJwtPrincipalAndReturnsOnlyWrappedRedactedStatusView() throws Exception {
+        String operationId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        when(service.getOperationV1(
+                org.mockito.ArgumentMatchers.eq("tenant-a"),
+                org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("operator-a"),
+                org.mockito.ArgumentMatchers.eq(operationId),
+                anyLong())).thenReturn(new AgentCommandOperationV1View(
+                        operationId, "BROKER_REDRIVE", "SUCCEEDED", "1",
+                        1_699_999_999_500L, null, 1_700_000_000_000L,
+                        1_700_000_000_000L,
+                        "/agent/internal/command-operations/v1/operations/" + operationId,
+                        new AgentCommandOperationV1View.Result(
+                                "9007199254740993", "message-1", 1),
+                        null, false));
+
+        mvc.perform(get("/agent/internal/command-operations/v1/operations/{operationId}",
+                        operationId)
+                        .principal(jwt("operator-a", "approver-b",
+                                AgentCommandOperationsController.AUTHORITY_READ)))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"data\":{")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"operationId\":\"" + operationId + "\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"version\":\"1\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                        "\"deliveryId\":\"9007199254740993\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("tenant-a"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("client-a"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("operator-a"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("ticketReference"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("reason"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("wire"))));
+
+        verify(service).getOperationV1(
+                org.mockito.ArgumentMatchers.eq("tenant-a"),
+                org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("operator-a"),
+                org.mockito.ArgumentMatchers.eq(operationId), anyLong());
+    }
+
+    @Test
+    void missingAndCrossPrincipalOperationV1ReadsHaveIdenticalNotFoundResponse() throws Exception {
+        String operationId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        when(service.getOperationV1(any(), any(), any(), any(), anyLong()))
+                .thenThrow(new AgentCommandOperationsException(
+                        AgentCommandOperationsException.Reason.NOT_FOUND_OR_FORBIDDEN));
+
+        var missing = mvc.perform(get(
+                        "/agent/internal/command-operations/v1/operations/{operationId}", operationId)
+                        .principal(jwt("operator-a", "approver-b",
+                                AgentCommandOperationsController.AUTHORITY_READ)))
+                .andExpect(status().isNotFound()).andReturn();
+        var crossPrincipal = mvc.perform(get(
+                        "/agent/internal/command-operations/v1/operations/{operationId}", operationId)
+                        .principal(jwt("operator-b", "approver-c",
+                                AgentCommandOperationsController.AUTHORITY_READ)))
+                .andExpect(status().isNotFound()).andReturn();
+
+        assertEquals(missing.getResponse().getContentAsString(),
+                crossPrincipal.getResponse().getContentAsString());
+        assertEquals("private, no-store", missing.getResponse().getHeader(HttpHeaders.CACHE_CONTROL));
+        assertEquals("private, no-store",
+                crossPrincipal.getResponse().getHeader(HttpHeaders.CACHE_CONTROL));
     }
 
     @Test

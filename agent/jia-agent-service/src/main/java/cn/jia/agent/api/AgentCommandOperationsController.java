@@ -7,6 +7,7 @@ import cn.jia.agent.entity.AgentCommandOperationAuditPage;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
 import cn.jia.agent.entity.AgentCommandOperationsException;
+import cn.jia.core.entity.JsonResult;
 import cn.jia.agent.service.AgentCommandOperationsService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -92,6 +93,16 @@ public class AgentCommandOperationsController {
         Scope scope = requireScope(authentication, AUTHORITY_READ, false);
         return ok(auditWire(operationsService.listAudit(scope.tenantId(), scope.clientId(),
                 nonNegativeLong(afterId), positiveInt(limit))));
+    }
+
+    @GetMapping(value = "/v1/operations/{operationId}",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> operationV1(
+            @PathVariable String operationId,
+            Authentication authentication) {
+        Scope scope = requireScope(authentication, AUTHORITY_READ, false);
+        return ok(JsonResult.success(operationsService.getOperationV1(
+                scope.tenantId(), scope.clientId(), scope.requesterId(), operationId, now())));
     }
 
     @PostMapping(value = "/dlq/{deliveryId}/redrive",

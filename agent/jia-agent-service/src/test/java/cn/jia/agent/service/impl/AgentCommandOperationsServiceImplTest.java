@@ -379,6 +379,32 @@ class AgentCommandOperationsServiceImplTest {
     }
 
     @Test
+    void operationV1ReadUsesOneExactPrincipalQueryInsideRepeatableReadSnapshot() {
+        Fixture fixture = fixture();
+        String operationId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        when(fixture.dao.findOperationStatusRows(
+                "tenant-a", "client-a", "operator-a", operationId))
+                .thenAnswer(invocation -> {
+                    assertTrue(TransactionSynchronizationManager.isCurrentTransactionReadOnly());
+                    assertEquals(
+                            org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ,
+                            TransactionSynchronizationManager.getCurrentTransactionIsolationLevel());
+                    return List.of(new cn.jia.agent.entity.AgentCommandOperationStatusRow(
+                            1, operationId, "REQUEST", "BROKER_REDRIVE", 7, MESSAGE,
+                            null, 1, null, "operator-a", NOW, null, "REQUESTED", null,
+                            NOW, "tenant-a", "client-a"));
+                });
+
+        var view = service(fixture, null, null, false, false).getOperationV1(
+                "tenant-a", "client-a", "operator-a", operationId, SERVICE_NOW);
+
+        assertEquals("ACCEPTED", view.status());
+        assertEquals("0", view.version());
+        verify(fixture.dao).findOperationStatusRows(
+                "tenant-a", "client-a", "operator-a", operationId);
+    }
+
+    @Test
     void internalCallsRejectMalformedPagesAndReadInsideRepeatableReadSnapshot() {
         Fixture fixture = fixture();
         AgentCommandOperationsServiceImpl service = service(fixture, null, null, false, false);

@@ -4,6 +4,7 @@ import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandOperationStatusRow;
 import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
@@ -202,6 +203,31 @@ public interface AgentCommandOperationsMapper {
     List<AgentCommandOperationAuditEntry> listAudit(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("afterId") long afterId, @Param("limit") int limit);
+
+    @Select("""
+            SELECT id,operation_id AS operationId,phase,operation_type AS operationType,
+                   delivery_id AS deliveryId,source_message_id AS sourceMessageId,
+                   new_message_id AS newMessageId,source_attempt AS sourceAttempt,
+                   new_attempt AS newAttempt,requester_id AS requesterId,
+                   requested_at AS requestedAt,completed_at AS completedAt,outcome,
+                   error_code AS errorCode,created_at AS createdAt,
+                   tenant_id AS tenantId,client_id AS clientId
+            FROM agent_command_operation_audit
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+              AND requester_id=#{requesterId} AND operation_id=#{operationId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(requester_id AS BINARY)=CAST(#{requesterId} AS BINARY)
+              AND OCTET_LENGTH(requester_id)=OCTET_LENGTH(#{requesterId})
+              AND CAST(operation_id AS BINARY)=CAST(#{operationId} AS BINARY)
+              AND OCTET_LENGTH(operation_id)=OCTET_LENGTH(#{operationId})
+            ORDER BY id ASC LIMIT 3
+            """)
+    List<AgentCommandOperationStatusRow> findOperationStatusRows(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("requesterId") String requesterId, @Param("operationId") String operationId);
 
     @Select("SELECT " + AgentCommandRecoveryMapper.DELIVERY_COLUMNS
             + " FROM agent_command_delivery WHERE id=#{deliveryId} AND " + EXACT_SCOPE
