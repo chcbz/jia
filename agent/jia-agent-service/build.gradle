@@ -36,3 +36,20 @@ dependencies {
 
 version = '1.1.2-SNAPSHOT'
 description = 'jia-agent-service'
+
+// This isolated fixture reports sanitized DAO stage/reason/key shapes. Emit its
+// assertion message even under Flow's short test logging; do not dump other tests,
+// runtime environment, request bodies, or database connection properties.
+tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+    afterTest { descriptor, result ->
+        if (descriptor.className == 'cn.jia.agent.service.impl.AgentCommandOperationsRealTransactionTest'
+                && result.resultType == org.gradle.api.tasks.testing.TestResult.ResultType.FAILURE) {
+            result.exceptions.each { failure ->
+                String diagnostic = failure.message ?: ''
+                if (diagnostic.startsWith('Initial async acceptance rejected: reason=')) {
+                    logger.lifecycle('CYF_A16_TX_DIAGNOSTIC ' + diagnostic.take(8192))
+                }
+            }
+        }
+    }
+}
