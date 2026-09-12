@@ -34,9 +34,11 @@ class UserInfoDaoImplTest extends BaseDbUnitTest {
     }
 
     @Test
-    void selectByUsername() {
+    void selectByUsernameIncludesTheAtomicAccountSecuritySnapshot() {
         UserEntity username = userInfoDao.selectByUsername("oH2zD1El9hvjnWu-LRmCr-JiTuXI");
         assertNotNull(username);
+        assertEquals("ACTIVE", username.getAccountState());
+        assertEquals(0L, username.getAuthEpoch());
     }
 
     @Test

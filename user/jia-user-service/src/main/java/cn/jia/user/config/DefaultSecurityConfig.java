@@ -18,8 +18,8 @@ import cn.jia.user.entity.PermsVO;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
-import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
+import cn.jia.user.security.AccountState;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -68,8 +68,6 @@ public class DefaultSecurityConfig {
     private UserService userService;
     @Autowired
     private PermsService permsService;
-    @Autowired
-    private AccountSecurityService accountSecurityService;
     @Autowired(required = false)
     private SmsService smsService;
 
@@ -125,6 +123,7 @@ public class DefaultSecurityConfig {
     @Bean
     public UserDetailsService userDetailsService() {
         return username -> {
+            String stage = "identity";
             try {
                 UserEntity user;
                 if (username.startsWith("wx-")) {
@@ -135,8 +134,10 @@ public class DefaultSecurityConfig {
                     user = userService.findByUsername(username);
                 }
 
+                stage = "account";
                 AccountSecuritySnapshot account = currentAuthenticatableAccount(user);
 
+                stage = "permissions";
                 Collection<GrantedAuthority> grantedAuthorities = new ArrayList<>();
                 List<PermsEntity> authList = permsService.findByUserId(account.userId());
                 if (CollectionUtil.isNotNullOrEmpty(authList)) {
@@ -151,6 +152,7 @@ public class DefaultSecurityConfig {
                     }
                 }
 
+                stage = "credentials";
                 String password = user.getPassword();
                 if (username.startsWith("wx-")) {
                     password = PasswordUtil.encode("wxpwd");
@@ -169,7 +171,8 @@ public class DefaultSecurityConfig {
                 return new CustomUserDetails(account.userId(), account.jiacn(), account.authEpoch(),
                         username, password, grantedAuthorities);
             } catch (RuntimeException exception) {
-                log.warn("Account authentication lookup failed");
+                log.warn("Account authentication lookup failed at stage={}, failure={}",
+                        stage, exception.getClass().getSimpleName());
                 throw authenticationFailed();
             }
         };
@@ -179,10 +182,12 @@ public class DefaultSecurityConfig {
         if (user == null || user.getId() == null || user.getId() <= 0) {
             throw authenticationFailed();
         }
-        AccountSecuritySnapshot account = accountSecurityService.findByUserId(user.getId())
-                .filter(AccountSecuritySnapshot::isAuthenticatable)
-                .filter(snapshot -> snapshot.jiacn().equals(user.getJiacn()))
-                .orElseThrow(DefaultSecurityConfig::authenticationFailed);
+        long authEpoch = user.getAuthEpoch() == null ? -1 : user.getAuthEpoch();
+        AccountSecuritySnapshot account = new AccountSecuritySnapshot(
+                user.getId(), user.getJiacn(), AccountState.fromDatabaseValue(user.getAccountState()), authEpoch);
+        if (!account.isAuthenticatable()) {
+            throw authenticationFailed();
+        }
         return account;
     }
 
