@@ -9,8 +9,11 @@ import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.dao.impl.AgentCommandOperationsDaoImpl;
 import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
+import cn.jia.agent.entity.AgentCommandOperationV1View;
 import cn.jia.agent.entity.AgentCommandOperationsException;
+import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
 import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.mapper.AgentCommandOperationsMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -26,7 +29,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -84,12 +92,13 @@ class AgentCommandOperationsRealTransactionTest {
 
     @Test
     void redriveV1AcceptanceAndAuditCommitTogetherReplayWithoutDuplicateAndRollbackTogether() {
-        AgentCommandOperationsServiceImpl service = service(true);
+        DaoDiagnostics diagnostics = new DaoDiagnostics();
+        AgentCommandOperationsServiceImpl service = service(true, diagnostics.observe(dao));
 
-        var accepted = service.acceptBrokerRedriveV1(
+        var accepted = diagnostics.requireAcceptance(() -> service.acceptBrokerRedriveV1(
                 request(1L, "11111111-1111-1111-1111-111111111111",
                         "incident recovery"),
-                "redrive-key-0001", NOW);
+                "redrive-key-0001", NOW));
 
         assertEquals("ACCEPTED", accepted.status());
         assertEquals(1, jdbc.queryForObject(
@@ -141,11 +150,86 @@ class AgentCommandOperationsRealTransactionTest {
     }
 
     private AgentCommandOperationsServiceImpl service(boolean asyncRedriveEnabled) {
+        return service(asyncRedriveEnabled, dao);
+    }
+
+    private AgentCommandOperationsServiceImpl service(
+            boolean asyncRedriveEnabled, AgentCommandOperationsDao operationsDao) {
         return new AgentCommandOperationsServiceImpl(
-                dao, gate(), AgentRabbitTopologyManifest.canonical(), null, null,
+                operationsDao, gate(), AgentRabbitTopologyManifest.canonical(), null, null,
                 new AgentCommandOperationsProperties(
                         true, false, asyncRedriveEnabled, false, 20, 20, null, null),
                 manager, java.util.UUID::randomUUID, () -> NOW);
+    }
+
+    /** Observe the real DAO without replacing SQL, return values, exceptions or transactions. */
+    private static final class DaoDiagnostics {
+        private final List<String> stages = new ArrayList<>();
+        private Throwable firstDaoFailure;
+
+        private AgentCommandOperationsDao observe(AgentCommandOperationsDao realDao) {
+            return (AgentCommandOperationsDao) Proxy.newProxyInstance(
+                    AgentCommandOperationsDao.class.getClassLoader(),
+                    new Class<?>[]{AgentCommandOperationsDao.class}, (proxy, method, args) -> {
+                        try {
+                            Object result = method.invoke(realDao, args);
+                            String shape = result == null ? "null"
+                                    : result instanceof List<?> rows ? "rows=" + rows.size()
+                                    : result instanceof Number count ? "count=" + count
+                                    : "present";
+                            stages.add(method.getName() + ":" + shape + generatedKey(args));
+                            return result;
+                        } catch (InvocationTargetException invocation) {
+                            Throwable cause = invocation.getCause();
+                            if (firstDaoFailure == null) firstDaoFailure = cause;
+                            stages.add(method.getName() + ":" + exceptionCodes(cause)
+                                    + generatedKey(args));
+                            // Preserve the exact exception so production rollback/sanitization runs.
+                            throw cause;
+                        }
+                    });
+        }
+
+        private AgentCommandOperationV1View requireAcceptance(
+                Supplier<AgentCommandOperationV1View> acceptance) {
+            try {
+                return acceptance.get();
+            } catch (RuntimeException rejected) {
+                String reason = rejected instanceof AgentCommandOperationsException operation
+                        ? operation.reason().name() : rejected.getClass().getSimpleName();
+                AssertionError diagnostic = new AssertionError(
+                        "Initial async acceptance rejected: reason=" + reason + "; dao=" + stages);
+                // Only after the service/transaction boundary has failed: retain the fixture's
+                // original mapper cause in the test report, not in the production HTTP exception.
+                diagnostic.initCause(firstDaoFailure == null ? rejected : firstDaoFailure);
+                if (firstDaoFailure != null) diagnostic.addSuppressed(rejected);
+                throw diagnostic;
+            }
+        }
+
+        private static String generatedKey(Object[] args) {
+            if (args == null || args.length != 1) return "";
+            Long id;
+            if (args[0] instanceof AgentCommandRedriveOperationEntity operation) {
+                id = operation.getId();
+            } else if (args[0] instanceof AgentCommandOperationAuditEntity audit) {
+                id = audit.getId();
+            } else {
+                return "";
+            }
+            return ",generatedKey=" + (id == null ? "null" : id > 0 ? "positive" : "nonPositive");
+        }
+
+        private static String exceptionCodes(Throwable failure) {
+            List<String> codes = new ArrayList<>();
+            for (Throwable cause = failure; cause != null && codes.size() < 8;
+                    cause = cause.getCause()) {
+                codes.add(cause.getClass().getName() + (cause instanceof SQLException sql
+                        ? "[SQLState=" + sql.getSQLState() + ",errorCode=" + sql.getErrorCode() + "]"
+                        : ""));
+            }
+            return String.join(" -> ", codes);
+        }
     }
 
     private AgentCommandOperationRequest request(
