@@ -380,9 +380,8 @@ class AgentWorkItemPlanServiceImplTest {
                 () -> service.confirm(TENANT, CLIENT, TASK, ACTOR,
                         "confirm-key-0004", command));
 
-        command = confirmation(suggestion);
-        command.getItems().get(0).setDependsOn(List.of("item-2"));
-        AgentWorkItemPlanConfirmRequestDTO cycle = command;
+        AgentWorkItemPlanConfirmRequestDTO cycle = confirmation(suggestion);
+        cycle.getItems().get(0).setDependsOn(List.of("item-2"));
         assertReason(AgentWorkItemPlanException.Reason.INVALID_REQUEST,
                 () -> service.confirm(TENANT, CLIENT, TASK, ACTOR,
                         "confirm-key-0004", cycle));
