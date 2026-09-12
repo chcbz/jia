@@ -42,6 +42,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetails;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.savedrequest.RequestCache;
 import org.springframework.security.web.savedrequest.SavedRequest;
@@ -64,6 +65,8 @@ import java.util.stream.Collectors;
 @RequestMapping("/oauth")
 @RequiredArgsConstructor
 public class OauthController {
+    private static final SecurityContextRepository SECURITY_CONTEXT_REPOSITORY =
+            new HttpSessionSecurityContextRepository();
     private final ClientService clientService;
     private final UserService userService;
     private final AccountSecurityService accountSecurityService;
@@ -97,7 +100,8 @@ public class OauthController {
      * @return 重定向到自动登录处理
      */
     @GetMapping("/third-party/wxmp")
-    public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
+    public String thirdPartyWxMp(@RequestParam String code, @RequestParam String state,
+                                 HttpServletRequest request, HttpServletResponse response) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("wxmp", state);
         if (transaction == null) {
             return resumeCompletedThirdPartyLogin("wxmp", state);
@@ -167,7 +171,7 @@ public class OauthController {
         }
 
         log.info("微信公众号第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction, state, request);
+        return completeThirdPartyLogin(user, transaction, state, request, response);
     }
 
     /**
@@ -179,7 +183,8 @@ public class OauthController {
      * @return 重定向到自动登录处理
      */
     @GetMapping("/third-party/weixin")
-    public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
+    public String thirdPartyWeiXin(@RequestParam String code, @RequestParam String state,
+                                   HttpServletRequest request, HttpServletResponse response) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("weixin", state);
         if (transaction == null) {
             return resumeCompletedThirdPartyLogin("weixin", state);
@@ -220,7 +225,7 @@ public class OauthController {
         user.setOpenid(openid);
         
         log.info("微信第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction, state, request);
+        return completeThirdPartyLogin(user, transaction, state, request, response);
     }
 
     /**
@@ -232,7 +237,8 @@ public class OauthController {
      * @return 重定向到原始授权请求
      */
     @GetMapping("/third-party/weibo")
-    public String thirdPartyWeiBo(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
+    public String thirdPartyWeiBo(@RequestParam String code, @RequestParam String state,
+                                  HttpServletRequest request, HttpServletResponse response) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("weibo", state);
         if (transaction == null) {
             return resumeCompletedThirdPartyLogin("weibo", state);
@@ -305,7 +311,7 @@ public class OauthController {
         log.debug("微博用户信息获取成功");
         
         log.info("微博第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction, state, request);
+        return completeThirdPartyLogin(user, transaction, state, request, response);
     }
 
     /**
@@ -317,7 +323,8 @@ public class OauthController {
      * @return 重定向到原始授权请求
      */
     @GetMapping("/third-party/github")
-    public String thirdPartyGithub(@RequestParam String code, @RequestParam String state, HttpServletRequest request) {
+    public String thirdPartyGithub(@RequestParam String code, @RequestParam String state,
+                                   HttpServletRequest request, HttpServletResponse response) {
         ThirdPartyLoginTransactionService.Transaction transaction = consumeTransaction("github", state);
         if (transaction == null) {
             return resumeCompletedThirdPartyLogin("github", state);
@@ -374,7 +381,7 @@ public class OauthController {
         log.debug("GitHub用户信息获取成功");
 
         log.info("GitHub第三方登录回调处理完成");
-        return completeThirdPartyLogin(user, transaction, state, request);
+        return completeThirdPartyLogin(user, transaction, state, request, response);
     }
 
     /**
@@ -394,7 +401,8 @@ public class OauthController {
             log.warn("兼容第三方登录流程缺少用户或原始授权请求");
             return thirdPartyLoginFailed("legacy");
         }
-        return completeThirdPartyLogin(user, new ThirdPartyLoginTransactionService.Transaction("legacy", savedRequest.getRedirectUrl()), null, request);
+        return completeThirdPartyLogin(user, new ThirdPartyLoginTransactionService.Transaction("legacy", savedRequest.getRedirectUrl()),
+                null, request, response);
     }
 
     private ThirdPartyLoginTransactionService.Transaction consumeTransaction(String provider, String state) {
@@ -428,7 +436,8 @@ public class OauthController {
     private String completeThirdPartyLogin(UserEntity user,
                                            ThirdPartyLoginTransactionService.Transaction transaction,
                                            String state,
-                                           HttpServletRequest request) {
+                                           HttpServletRequest request,
+                                           HttpServletResponse response) {
         String redirectUrl = transaction == null ? null : transaction.getRedirectUrl();
         if (user == null || StringUtil.isEmpty(redirectUrl)) {
             log.warn("第三方登录缺少用户或授权跳转地址");
@@ -476,9 +485,10 @@ public class OauthController {
                 authUsername, null, authorities);
         UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(userDetails, null, authorities);
         authToken.setDetails(new WebAuthenticationDetails(request));
-        SecurityContextHolder.getContext().setAuthentication(authToken);
-        request.getSession().setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
-                SecurityContextHolder.getContext());
+        var securityContext = SecurityContextHolder.createEmptyContext();
+        securityContext.setAuthentication(authToken);
+        SecurityContextHolder.setContext(securityContext);
+        SECURITY_CONTEXT_REPOSITORY.saveContext(securityContext, request, response);
         EsContext context = EsContextHolder.getContext();
         context.setUsername(authUsername);
         context.setJiacn(account.jiacn());

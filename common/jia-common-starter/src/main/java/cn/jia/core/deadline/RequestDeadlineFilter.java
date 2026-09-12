@@ -42,6 +42,24 @@ public final class RequestDeadlineFilter extends OncePerRequestFilter {
     }
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String contextPath = request.getContextPath();
+        String requestUri = request.getRequestURI();
+        String path = contextPath == null || contextPath.isEmpty()
+                ? requestUri
+                : requestUri.substring(Math.min(contextPath.length(), requestUri.length()));
+        return isAuthenticationPath(path);
+    }
+
+    /** Authentication endpoints retain their dependency-specific limits but must not inherit the generic 3s budget. */
+    private boolean isAuthenticationPath(String path) {
+        return path.equals("/login") || path.startsWith("/login/")
+                || path.equals("/oauth/confirm_access")
+                || path.equals("/oauth/third-party") || path.startsWith("/oauth/third-party/")
+                || path.equals("/oauth2/authorize");
+    }
+
+    @Override
     protected boolean shouldNotFilterAsyncDispatch() {
         return false;
     }

@@ -112,6 +112,52 @@ class RequestDeadlineFilterTest {
     }
 
     @Test
+    void authenticationBrowserFlowsAreNotBoundByTheGenericShadowDeadline() throws Exception {
+        RequestDeadlineFilter filter = new RequestDeadlineFilter(3000, () -> 0L);
+        for (String path : new String[]{
+                "/login", "/login/index.html", "/oauth/third-party/github",
+                "/oauth/confirm_access", "/oauth2/authorize"}) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+            AtomicReference<Boolean> chainCalled = new AtomicReference<>(false);
+
+            filter.doFilter(request, new MockHttpServletResponse(), (ignoredRequest, ignoredResponse) -> {
+                chainCalled.set(true);
+                assertFalse(RequestDeadlineContext.current().isPresent(), path);
+            });
+
+            assertTrue(chainCalled.get(), path);
+            assertEquals(null, request.getAttribute(RequestDeadlineFilter.DEADLINE_ATTRIBUTE), path);
+        }
+    }
+
+    @Test
+    void authenticationPathIsResolvedAfterTheServletContextPath() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/jia/login");
+        request.setContextPath("/jia");
+        AtomicReference<Boolean> sawDeadline = new AtomicReference<>(true);
+
+        new RequestDeadlineFilter(3000, () -> 0L)
+                .doFilter(request, new MockHttpServletResponse(), (ignoredRequest, ignoredResponse) ->
+                        sawDeadline.set(RequestDeadlineContext.current().isPresent()));
+
+        assertFalse(sawDeadline.get());
+    }
+
+    @Test
+    void unrelatedOauthRoutesKeepTheGenericShadowDeadline() throws Exception {
+        RequestDeadlineFilter filter = new RequestDeadlineFilter(3000, () -> 0L);
+        for (String path : new String[]{"/oauth/clientid", "/oauth2/token", "/oauth2/jwks"}) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+            AtomicReference<Boolean> sawDeadline = new AtomicReference<>(false);
+
+            filter.doFilter(request, new MockHttpServletResponse(), (ignoredRequest, ignoredResponse) ->
+                    sawDeadline.set(RequestDeadlineContext.current().isPresent()));
+
+            assertTrue(sawDeadline.get(), path);
+        }
+    }
+
+    @Test
     void readsOnlyTheAllowlistedDeadlineHeader() throws Exception {
         NoSensitiveAccessRequest request = new NoSensitiveAccessRequest();
         request.addHeader(RequestDeadlinePropagation.HEADER_NAME, "2500");
