@@ -134,7 +134,7 @@ public class ChatController {
                         () -> chatConversationService.isLiveGeneration(
                                 ownerJiacn, ownerClientId, conversationId, generation)))
                 .transform(ChatStreamPolicy::bounded)
-                .handle((value, sink) -> {
+                .<String>handle((value, sink) -> {
                     boolean live = chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
