@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitHandler;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -46,6 +47,7 @@ public class SmsReceiver {
 	@Autowired(required = false)
 	private DictService dictService;
 	@Inject
+	@Qualifier("smsExternalRestTemplate")
 	private RestTemplate restTemplate;
 
 	@RabbitHandler

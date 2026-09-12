@@ -5,6 +5,7 @@ import cn.jia.sms.entity.SmsBatchRecord;
 import cn.jia.sms.entity.SmsSendResult;
 import cn.jia.sms.service.SmsServiceProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -20,6 +21,7 @@ import java.util.Optional;
 
 public class ZthySmsServiceImpl implements SmsServiceProvider {
     @Autowired(required = false)
+    @Qualifier("smsExternalRestTemplate")
     private RestTemplate restTemplate;
 
     @Value("${sms.provider.zthy.send-sms-url:https://api-shss.zthysms.com/v2/sendSms}")

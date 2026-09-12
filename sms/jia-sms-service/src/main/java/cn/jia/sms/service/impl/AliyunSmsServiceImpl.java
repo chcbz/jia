@@ -1,6 +1,7 @@
 package cn.jia.sms.service.impl;
 
 import cn.jia.core.util.JsonUtil;
+import cn.jia.sms.config.SmsExternalHttpTimeouts;
 import cn.jia.sms.entity.SmsBatchRecord;
 import cn.jia.sms.entity.SmsSendResult;
 import cn.jia.sms.service.SmsServiceProvider;
@@ -8,6 +9,7 @@ import com.aliyuncs.DefaultAcsClient;
 import com.aliyuncs.IAcsClient;
 import com.aliyuncs.dysmsapi.model.v20170525.SendSmsRequest;
 import com.aliyuncs.dysmsapi.model.v20170525.SendSmsResponse;
+import com.aliyuncs.http.HttpClientConfig;
 import com.aliyuncs.http.MethodType;
 import com.aliyuncs.profile.DefaultProfile;
 import lombok.extern.slf4j.Slf4j;
@@ -32,18 +34,31 @@ public class AliyunSmsServiceImpl implements SmsServiceProvider {
     private String domain;
     
     private static final String PRODUCT = "Dysmsapi";
+
+    private final SmsExternalHttpTimeouts timeouts;
+
+    public AliyunSmsServiceImpl() {
+        this(new SmsExternalHttpTimeouts());
+    }
+
+    public AliyunSmsServiceImpl(SmsExternalHttpTimeouts timeouts) {
+        this.timeouts = timeouts;
+    }
     
     /**
      * 初始化阿里云ACS客户端
      * @return ACS客户端实例
      */
     private IAcsClient initializeClient() {
-        // 设置超时时间
-        System.setProperty("sun.net.client.defaultConnectTimeout", "10000");
-        System.setProperty("sun.net.client.defaultReadTimeout", "10000");
-        
+        // Bind SDK timeouts to this SMS client instead of changing JVM-wide defaults.
+        HttpClientConfig httpClientConfig = HttpClientConfig.getDefault();
+        httpClientConfig.setConnectionTimeoutMillis(timeouts.getConnectTimeoutMillis());
+        httpClientConfig.setReadTimeoutMillis(timeouts.getReadTimeoutMillis());
+        httpClientConfig.setWriteTimeoutMillis(timeouts.getConnectionRequestTimeoutMillis());
+
         // 初始化ascClient
         DefaultProfile profile = DefaultProfile.getProfile(endpoint, accessKeyId, accessKeySecret);
+        profile.setHttpClientConfig(httpClientConfig);
         DefaultProfile.addEndpoint(endpoint, PRODUCT, domain);
         return new DefaultAcsClient(profile);
     }

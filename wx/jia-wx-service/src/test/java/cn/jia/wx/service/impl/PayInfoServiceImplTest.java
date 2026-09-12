@@ -40,6 +40,8 @@ class PayInfoServiceImplTest extends BaseMockTest {
         payInfoService.init();
         WxPayService wxPayService = payInfoService.findWxPayService("appid");
         assertNotNull(wxPayService);
+        assertEquals(250, wxPayService.getConfig().getHttpConnectionTimeout());
+        assertEquals(1750, wxPayService.getConfig().getHttpTimeout());
     }
 
     @Test
