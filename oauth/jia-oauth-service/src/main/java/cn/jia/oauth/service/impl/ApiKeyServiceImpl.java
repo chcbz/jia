@@ -23,4 +23,22 @@ public class ApiKeyServiceImpl extends BaseServiceImpl<OauthApiKeyDao, OauthApiK
     public OauthApiKeyEntity findByApiKey(String apiKey) {
         return baseDao.selectByApiKey(apiKey);
     }
+
+    @Override
+    public boolean disableManagedKey(
+            String keyId, String tenantId, String clientId, String jiacn, String keyName) {
+        requireExact(keyId, "keyId");
+        requireExact(tenantId, "tenantId");
+        requireExact(clientId, "clientId");
+        requireExact(jiacn, "jiacn");
+        requireExact(keyName, "keyName");
+        return baseDao.disableManagedKey(
+                keyId, tenantId, clientId, jiacn, keyName, System.currentTimeMillis()) == 1;
+    }
+
+    private static void requireExact(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " is required");
+        }
+    }
 }

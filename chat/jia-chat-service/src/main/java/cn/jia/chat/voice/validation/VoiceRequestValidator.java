@@ -50,7 +50,8 @@ public final class VoiceRequestValidator {
         }
         String requestId = requestId(request.requestId());
         String text = request.text();
-        if (text == null || text.isBlank() || text.codePointCount(0, text.length()) > 2_000) {
+        if (!VoiceUnicode.isWellFormedUtf16(text)
+                || text.isBlank() || text.codePointCount(0, text.length()) > 2_000) {
             throw VoiceException.of(VoiceErrorCode.INVALID_REQUEST, requestId);
         }
         if (!allowed(properties.getVoices(), request.voice())

@@ -6,7 +6,8 @@ import cn.jia.agent.output.OutputRunRequest;
 import cn.jia.agent.output.dto.OutputContextDTO;
 import cn.jia.agent.output.dto.OutputSourceDTO;
 import cn.jia.agent.service.AgentService;
-import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.context.EsContext;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -36,7 +38,7 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
     @Mock AgentWebSocketHandler webSocketHandler;
     @Mock ChatConversationEventBroker eventBroker;
     @Mock BuiltinHallAgentSupport builtinSupport;
-    @Mock ChatMessageDao chatMessageDao;
+    @Mock ChatConversationService chatConversationService;
     @Mock AgentService agentService;
     @Mock OutputRunAuthorizationService outputAuthorizationService;
 
@@ -56,11 +58,11 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
     @Test
     void connectedUnknownSendResultKeepsServerCreatedConversationRun() {
         String runId = "00000000000000000000000000000003";
+        stubLiveConversation();
         when(webSocketHandler.isAgentConnected("agent-1")).thenReturn(true);
         when(webSocketHandler.sendDirectMessageToAgent(
-                eq("agent-1"), any(Map.class), eq("owner"), eq("client")))
+                eq("owner"), eq("client"), eq("agent-1"), any(Map.class)))
                 .thenReturn(false);
-        when(eventBroker.stream("101")).thenReturn(Flux.never());
         when(outputAuthorizationService.createOrRecoverRun(any())).thenReturn(Optional.of(
                 new OutputContextDTO(1, runId,
                         new OutputSourceDTO(OutputConstants.SOURCE_CONVERSATION, "101"),
@@ -72,11 +74,11 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
                 request(), "101", Flux::empty);
         List<String> events = result.stream().collectList().block();
 
-        assertEquals(true, result.delivered());
+        assertFalse(result.delivered().block());
         assertTrue(events.getFirst().contains("\"delivered\":false"));
         ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
         verify(webSocketHandler).sendDirectMessageToAgent(
-                eq("agent-1"), payload.capture(), eq("owner"), eq("client"));
+                eq("owner"), eq("client"), eq("agent-1"), payload.capture());
         OutputContextDTO context = (OutputContextDTO) payload.getValue().get("outputContext");
         assertEquals(runId, context.runId());
         ArgumentCaptor<OutputRunRequest> request = ArgumentCaptor.forClass(OutputRunRequest.class);
@@ -88,6 +90,7 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
 
     @Test
     void definitelyOfflineConversationCreatesNoRun() {
+        stubLiveConversation();
         when(webSocketHandler.isAgentConnected("agent-1")).thenReturn(false);
         JuyitingAgentRelayService service = service();
 
@@ -97,18 +100,39 @@ class JuyitingAgentRelayOutputContextTest extends BaseMockTest {
 
         verify(outputAuthorizationService, never()).createOrRecoverRun(any());
         verify(webSocketHandler, never()).sendDirectMessageToAgent(
-                any(), any(Map.class), any(), any());
+                any(), any(), any(), any(Map.class));
     }
 
     private JuyitingAgentRelayService service() {
         JuyitingConversationScopeService scopeService =
-                new JuyitingConversationScopeService(builtinSupport);
+                new JuyitingConversationScopeService(builtinSupport, agentService);
         JuyitingAgentRelayService service = new JuyitingAgentRelayService(
                 webSocketHandler, eventBroker, builtinSupport,
-                chatMessageDao, agentService, scopeService);
+                chatConversationService, agentService, scopeService);
         ReflectionTestUtils.setField(
                 service, "outputRunAuthorizationService", outputAuthorizationService);
         return service;
+    }
+
+    private void stubLiveConversation() {
+        ChatConversationEntity conversation = new ChatConversationEntity()
+                .setId(101L).setJiacn("owner").setConversationType("juyiting")
+                .setConversationScopeType("public").setConversationScopeKey("public")
+                .setTargetAgentIds("[\"agent-1\"]").setLifecycleGeneration(1L);
+        conversation.setTenantId("0");
+        conversation.setClientId("client");
+        when(chatConversationService.getOwned("owner", "client", "101"))
+                .thenReturn(conversation);
+        when(chatConversationService.appendOwnedMessage(
+                eq("owner"), eq("client"), any(ChatMessageEntity.class), eq(1L)))
+                .thenAnswer(invocation -> invocation.getArgument(2));
+        when(eventBroker.stream(eq("101"), eq(1L), any())).thenReturn(Flux.never());
+        when(eventBroker.deletionSignal(eq("101"), eq(1L), any())).thenReturn(Flux.never());
+        when(eventBroker.runIfLive(eq("101"), eq(1L), any(), any()))
+                .thenAnswer(invocation -> {
+                    ((Runnable) invocation.getArgument(3)).run();
+                    return true;
+                });
     }
 
     private ChatMessageDTO request() {

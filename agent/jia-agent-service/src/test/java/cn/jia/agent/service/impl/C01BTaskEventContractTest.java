@@ -72,6 +72,9 @@ class C01BTaskEventContractTest {
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskEventWriterImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/output/service/TaskOutputVersionProvider.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountyServiceImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountySettlementServiceImpl.java",
             "chat/jia-chat-service/src/main/java/cn/jia/chat/service/impl/AgentTaskThreadCreationTransaction.java");
 
     @Test

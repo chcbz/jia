@@ -1,0 +1,147 @@
+/* FLOW-CI-01: fixed consumer repositories, source-built settings plugin,
+ * pre-consumption OpenCV pin, external scratch, no publishing credentials. */
+import groovy.json.JsonOutput
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.testing.Test
+import org.gradle.authentication.http.BasicAuthentication
+
+if (System.getenv('CYF_FLOW_GRADLE_ACTIVE') != '1') {
+    throw new GradleException('CYF_FLOW_GRADLE_ACTIVE must be set by flow_remote')
+}
+def externalBuildRoot = System.getenv('CYF_FLOW_BUILD_ROOT')
+if (!externalBuildRoot) {
+    throw new GradleException('CYF_FLOW_BUILD_ROOT is required')
+}
+def consumerUsername = System.getenv('CYF_MAVEN_USERNAME')
+def consumerPassword = System.getenv('CYF_MAVEN_PASSWORD')
+if (!consumerUsername?.trim() || !consumerPassword?.trim()) {
+    throw new GradleException('Both CYF Maven consumer environment variables are required')
+}
+
+def releaseRepository = 'https://packages.aliyun.com/5fb7d76ee6f9d07f148529c7/maven/2049636-release-r6d3t8'
+def snapshotRepository = 'https://packages.aliyun.com/5fb7d76ee6f9d07f148529c7/maven/2049636-snapshot-tdmfld'
+def privateRepositories = { handler ->
+    [releaseRepository, snapshotRepository].eachWithIndex { endpoint, index ->
+        handler.maven {
+            name = index == 0 ? 'cyfOriginalRelease' : 'cyfOriginalSnapshot'
+            // Explicit effective HTTPS port avoids an ANY_PORT auth scope.
+            url = new URI(endpoint.replace('https://packages.aliyun.com/', 'https://packages.aliyun.com:443/'))
+            allowInsecureProtocol = false
+            credentials {
+                username = consumerUsername
+                password = consumerPassword
+            }
+            // PasswordCredentials + BasicAuthentication use Gradle's host/port
+            // AuthScope, NOT a manually injected Authorization HTTP header.
+            authentication { basic(BasicAuthentication) }
+        }
+    }
+}
+def consumerRepositories = { handler, pluginResolution ->
+    privateRepositories(handler)
+    handler.maven { url = uri('https://maven.aliyun.com/repository/public') }
+    if (pluginResolution) {
+        handler.maven { url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
+        handler.gradlePluginPortal()
+    }
+    handler.mavenCentral()
+    // Only the provenance repository may supply this pinned module, including
+    // when the source-built settings plugin appends public repositories.
+    handler.all { repository ->
+        if (repository.name != 'cyfOriginalRelease') {
+            repository.content { excludeModule('org.opencv', 'opencv') }
+        }
+    }
+}
+
+beforeSettings { settings ->
+    settings.pluginManagement {
+        def localPlugin = new File(settings.settingsDir, 'plugin')
+        if (new File(localPlugin, 'settings.gradle').isFile()) {
+            includeBuild(localPlugin.absolutePath)
+        }
+        consumerRepositories(repositories, true)
+    }
+    settings.dependencyResolutionManagement {
+        consumerRepositories(repositories, false)
+    }
+}
+
+def pinnedOpenCvSha256 = '323d40119548134b0966d3735e97a78d1edbc79bd91e7fb1074e5152392095f4'
+def pinnedOpenCvSize = 722802L
+// Verify at resolution, before a file collection can deliver a JAR to compile,
+// tests or packaging. A task doLast check would be too late.
+def verifyOpenCv = { artifact ->
+    def component = artifact.id.componentIdentifier
+    if (component instanceof ModuleComponentIdentifier && component.group == 'org.opencv' && component.module == 'opencv') {
+        if (component.version != '4.5.5') {
+            throw new GradleException('OpenCV coordinate drift rejected')
+        }
+        def jar = artifact.file
+        def digest = MessageDigest.getInstance('SHA-256')
+        jar.withInputStream { stream ->
+            byte[] buffer = new byte[65536]
+            int count
+            while ((count = stream.read(buffer)) != -1) {
+                digest.update(buffer, 0, count)
+            }
+        }
+        def actualSha256 = digest.digest().encodeHex().toString()
+        if (jar.length() != pinnedOpenCvSize || actualSha256 != pinnedOpenCvSha256) {
+            throw new GradleException('Resolved OpenCV JAR SHA-256/size drift rejected before consumption')
+        }
+        def record = [coordinate: 'org.opencv:opencv:4.5.5', jar_sha256: actualSha256,
+                      jar_size: jar.length(), resolved_file: jar.canonicalPath]
+        def target = new File(externalBuildRoot, 'opencv-resolved.json').toPath()
+        def temporary = Files.createTempFile(target.parent, 'opencv-', '.json')
+        try {
+            Files.write(temporary, JsonOutput.toJson(record).getBytes('UTF-8'))
+            Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
+    }
+}
+
+gradle.beforeProject { project ->
+    def rootKey = project.rootProject.name.replaceAll('[^A-Za-z0-9_.-]', '_')
+    def projectKey = project.path == ':' ? '_root' : project.path.substring(1).replace(':', '__')
+    project.layout.buildDirectory.set(new File(externalBuildRoot, "${rootKey}/${projectKey}"))
+    consumerRepositories(project.repositories, false)
+    project.configurations.configureEach { configuration ->
+        configuration.incoming.afterResolve { incoming ->
+            incoming.artifacts.artifacts.each { artifact -> verifyOpenCv(artifact) }
+        }
+    }
+    // These properties belong to the pinned source's publishing DSL, NOT
+    // dependency consumption. No secret and no private publish destination.
+    if (project == project.rootProject) {
+        project.ext.snapshotsRepoUrl = 'https://maven.aliyun.com/repository/public'
+        project.ext.releasesRepoUrl = 'https://maven.aliyun.com/repository/public'
+        project.ext.repoUsername = ''
+        project.ext.repoPassword = ''
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    graph.allTasks.each { task ->
+        if (task instanceof Test || task instanceof JavaExec || task instanceof Exec) {
+            def childEnvironment = new HashMap(task.environment)
+            childEnvironment.remove('CYF_MAVEN_USERNAME')
+            childEnvironment.remove('CYF_MAVEN_PASSWORD')
+            task.setEnvironment(childEnvironment)
+        }
+        if (task instanceof Exec) {
+            def executableName = String.valueOf(task.executable ?: '').toLowerCase(Locale.ROOT)
+            def command = task.commandLine.collect { String.valueOf(it).toLowerCase(Locale.ROOT) }
+            if (executableName.contains('gradle') || command.any { it.contains('gradle') || it.contains('gradlew') }) {
+                throw new GradleException("Nested Gradle Exec task is forbidden: ${task.path}")
+            }
+        }
+    }
+}

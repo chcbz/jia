@@ -27,8 +27,14 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     AgentTaskMetaEntity findByWorkItemIdForUpdate(
             String tenantId, String clientId, String workItemId);
 
+    AgentTaskMetaEntity findDurableActiveAssignmentByAgentForUpdate(
+            String tenantId, String clientId, String agentId);
+
     List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
             String tenantId, String clientId, String taskId);
+
+    int updateAssignmentByVersion(AgentTaskMetaEntity task, long expectedVersion,
+            long resultVersion, long updateTime);
 
     int updateStatusByVersion(String tenantId, String clientId, String taskId,
             long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
@@ -37,5 +43,6 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit);
 
-    List<AgentTaskMetaEntity> search(String status, String ability);
+    List<AgentTaskMetaEntity> search(
+            String tenantId, String clientId, String status, String ability);
 }

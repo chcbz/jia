@@ -71,7 +71,9 @@ public class ChatTools {
     @Tool(name = "syncConversationMemory", description = "将会话同步到长期记忆向量库")
     public Map<String, Object> syncConversationMemory(
             @ToolParam(description = "会话ID") String conversationId) {
-        longTermMemoryService.syncConversation(conversationId);
+        EsContext context = EsContextHolder.getContext();
+        longTermMemoryService.syncOwnedConversation(
+                context.getJiacn(), context.getClientId(), conversationId);
         return Map.of("conversationId", conversationId, "synced", true);
     }
 

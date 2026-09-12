@@ -7,6 +7,7 @@ public record JuyitingConversationScope(
         String scopeKey,
         String taskId,
         String targetAgentId,
-        List<String> targetAgentIds
+        List<String> targetAgentIds,
+        List<String> authoritativeAgentIds
 ) {
 }

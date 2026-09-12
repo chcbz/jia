@@ -1,0 +1,71 @@
+package cn.jia.chat.archive.config;
+
+import cn.jia.chat.archive.service.ArchiveContentImporter;
+import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import org.springframework.boot.ApplicationArguments;
+
+import java.util.List;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+
+class ArchiveBootstrapTest {
+    @Test
+    void enabledBootstrapCreatesBothSchemasBeforeContentImportSideEffects() {
+        ArchiveSchemaInitializer h02 = mock(ArchiveSchemaInitializer.class);
+        ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
+        ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
+        ArchiveBootstrap bootstrap = new ArchiveBootstrap(enabledPolicy(), h02, h03, importer);
+
+        bootstrap.run(mock(ApplicationArguments.class));
+
+        InOrder order = inOrder(h02, h03, importer);
+        order.verify(h02).initialize();
+        order.verify(h03).initialize();
+        order.verify(importer).importAndActivate(any(), anyString());
+    }
+
+    @Test
+    void h03SchemaFailurePreventsImportAndActivationSideEffects() {
+        ArchiveSchemaInitializer h02 = mock(ArchiveSchemaInitializer.class);
+        ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
+        ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
+        doThrow(new IllegalStateException("h03 drift")).when(h03).initialize();
+        ArchiveBootstrap bootstrap = new ArchiveBootstrap(enabledPolicy(), h02, h03, importer);
+
+        assertThrows(IllegalStateException.class,
+                () -> bootstrap.run(mock(ApplicationArguments.class)));
+
+        verify(h02).initialize();
+        verify(h03).initialize();
+        verify(importer, never()).importAndActivate(any(), anyString());
+    }
+
+    @Test
+    void disabledBootstrapTouchesNeitherSchemaNorContent() {
+        ArchiveSchemaInitializer h02 = mock(ArchiveSchemaInitializer.class);
+        ArchiveReaderDataSchemaInitializer h03 = mock(ArchiveReaderDataSchemaInitializer.class);
+        ArchiveContentImporter importer = mock(ArchiveContentImporter.class);
+        new ArchiveBootstrap(ArchiveReaderAccessPolicy.from(new ArchiveReaderProperties()), h02, h03, importer)
+                .run(mock(ApplicationArguments.class));
+        verify(h02, never()).initialize();
+        verify(h03, never()).initialize();
+        verify(importer, never()).importAndActivate(any(), anyString());
+    }
+
+    private ArchiveReaderAccessPolicy enabledPolicy() {
+        ArchiveReaderProperties properties = new ArchiveReaderProperties();
+        properties.setEnabled(true);
+        ArchiveReaderProperties.AllowedScope scope = new ArchiveReaderProperties.AllowedScope();
+        scope.setTenantId("owner-a"); scope.setClientId("client-a");
+        properties.setAllowedScopes(new java.util.ArrayList<>(List.of(scope)));
+        return ArchiveReaderAccessPolicy.from(properties);
+    }
+}

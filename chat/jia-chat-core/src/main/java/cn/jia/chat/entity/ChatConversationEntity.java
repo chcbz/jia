@@ -61,6 +61,18 @@ public class ChatConversationEntity extends BaseEntity {
     @TableField("target_agent_id")
     private String targetAgentId;
 
+    @Schema(description = "persisted JSON array of allowed juyiting target agent ids")
+    @TableField("target_agent_ids")
+    private String targetAgentIds;
+
     @Schema(description = "会话状态（ACTIVE/CLOSED）")
     private Integer status;
+
+    @Schema(description = "durable deletion tombstone timestamp in epoch milliseconds")
+    @TableField("deleted_at")
+    private Long deletedAt;
+
+    @Schema(description = "monotonic lifecycle generation incremented by deletion")
+    @TableField("lifecycle_generation")
+    private Long lifecycleGeneration;
 }

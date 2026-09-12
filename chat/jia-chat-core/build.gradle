@@ -3,6 +3,7 @@ dependencies {
     api(libs.swagger.annotations)
     api(libs.mybatis.plus.annotation)
     api libs.jackson.databind
+    api libs.jackson.annotations
     testImplementation libs.junit.jupiter
     testRuntimeOnly libs.mybatis.core
     testRuntimeOnly libs.junit.platform.launcher

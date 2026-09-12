@@ -21,7 +21,20 @@ class VoiceGlobalMultipartBudgetTest {
         Path repository = repositoryRoot();
         for (String profile : STARTER_PROFILES) {
             String properties = Files.readString(repository.resolve(profile));
-            assertTrue(properties.contains("jia.chat.voice.enabled=false"), profile);
+            assertTrue(properties.contains(
+                    "jia.chat.voice.enabled=${JIA_CHAT_VOICE_ENABLED:false}"), profile);
+            assertTrue(properties.contains(
+                    "jia.chat.voice.transcription.enabled=${JIA_CHAT_VOICE_TRANSCRIPTION_ENABLED:false}"),
+                    profile);
+            assertTrue(properties.contains(
+                    "jia.chat.voice.transcription.provider=${JIA_CHAT_VOICE_TRANSCRIPTION_PROVIDER:disabled}"),
+                    profile);
+            assertTrue(properties.contains(
+                    "jia.chat.voice.synthesis.enabled=${JIA_CHAT_VOICE_SYNTHESIS_ENABLED:false}"),
+                    profile);
+            assertTrue(properties.contains(
+                    "jia.chat.voice.synthesis.provider=${JIA_CHAT_VOICE_SYNTHESIS_PROVIDER:disabled}"),
+                    profile);
             assertTrue(properties.contains("spring.servlet.multipart.max-file-size=10MB"), profile);
             assertTrue(properties.contains("spring.servlet.multipart.max-request-size=50MB"), profile);
         }

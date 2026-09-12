@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -71,6 +72,81 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         assertDoesNotThrow(() -> new ChatSchemaInitializer(template).run(null));
     }
 
+
+    @Test
+    void mysqlAddsDurableConversationTombstoneAndLiveOwnerIndex() throws Exception {
+        List<String> executed = new ArrayList<>();
+        JdbcTemplate template = new JdbcTemplate(dialectDataSource("MySQL")) {
+            @Override
+            public void execute(String sql) {
+                executed.add(normalize(sql));
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public <T> T queryForObject(String sql, Class<T> requiredType, Object... args) {
+                String normalized = normalize(sql);
+                if (normalized.contains("from information_schema.columns")) {
+                    return (T) Integer.valueOf(List.of(
+                            "target_agent_ids", "deleted_at", "lifecycle_generation")
+                            .contains(String.valueOf(args[0])) ? 0 : 1);
+                }
+                if (normalized.contains("from information_schema.statistics")) {
+                    return (T) Integer.valueOf("idx_chat_conversation_live_owner".equals(args[1]) ? 0 : 1);
+                }
+                return (T) Integer.valueOf(1);
+            }
+
+            @Override
+            public List<Map<String, Object>> queryForList(String sql) {
+                String normalized = normalize(sql);
+                if (normalized.contains("table_name = 'chat_conversation'")
+                        && normalized.contains("from information_schema.columns")) {
+                    return validConversationFenceColumns();
+                }
+                if (normalized.contains("table_name = 'chat_conversation'")
+                        && normalized.contains("from information_schema.statistics")) {
+                    return List.of();
+                }
+                return normalized.contains("from information_schema.columns")
+                        ? validTaskThreadColumns() : validTaskThreadIndexes();
+            }
+        };
+
+        new ChatSchemaInitializer(template).run(null);
+
+        assertTrue(executed.stream().anyMatch(sql -> sql.contains(
+                "alter table chat_conversation add column deleted_at bigint")), executed.toString());
+        assertTrue(executed.stream().anyMatch(sql -> sql.contains(
+                "alter table chat_conversation add column target_agent_ids varchar(2000)")), executed.toString());
+        assertTrue(executed.stream().anyMatch(sql -> sql.contains(
+                "alter table chat_conversation add column lifecycle_generation bigint not null default 1")), executed.toString());
+        assertTrue(executed.stream().anyMatch(sql -> sql.contains(
+                "create index idx_chat_conversation_live_owner on chat_conversation (jiacn, client_id, deleted_at, lifecycle_generation, update_time)")),
+                executed.toString());
+    }
+
+    @Test
+    void migrationResourceDeclaresDurableTombstoneAndOwnerIndex() throws Exception {
+        try (var stream = getClass().getResourceAsStream(
+                "/db/conversation-delete-fence-migration.sql")) {
+            if (stream == null) {
+                throw new AssertionError("conversation delete migration resource is missing");
+            }
+            String sql = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            String normalized = normalize(sql);
+            assertTrue(normalized.contains("from information_schema.columns"), normalized);
+            assertTrue(normalized.contains("add column deleted_at bigint"), normalized);
+            assertTrue(normalized.contains("add column target_agent_ids varchar(2000)"), normalized);
+            assertTrue(normalized.contains("add column lifecycle_generation bigint not null default 1"), normalized);
+            assertTrue(normalized.contains("modify column lifecycle_generation bigint not null default 1"), normalized);
+            assertTrue(normalized.contains("from information_schema.statistics"), normalized);
+            assertTrue(normalized.contains("drop index idx_chat_conversation_live_owner"), normalized);
+            assertTrue(normalized.contains("jiacn, client_id, deleted_at, lifecycle_generation, update_time"), normalized);
+            assertTrue(!normalized.contains("create index if not exists"), normalized);
+        }
+    }
+
     @Test
     void mysqlRejectsWrongSameNameNonUniqueTaskThreadIndex() throws Exception {
         JdbcTemplate template = new JdbcTemplate(dialectDataSource("MySQL")) {
@@ -88,6 +164,14 @@ class ChatSchemaInitializerTest extends BaseMockTest {
             @Override
             public List<Map<String, Object>> queryForList(String sql) {
                 String normalized = normalize(sql);
+                if (normalized.contains("table_name = 'chat_conversation'")
+                        && normalized.contains("from information_schema.columns")) {
+                    return validConversationFenceColumns();
+                }
+                if (normalized.contains("table_name = 'chat_conversation'")
+                        && normalized.contains("from information_schema.statistics")) {
+                    return validLiveOwnerIndex();
+                }
                 if (normalized.contains("from information_schema.columns")) {
                     return validTaskThreadColumns();
                 }
@@ -118,6 +202,21 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         assertThrows(IllegalStateException.class, () -> new ChatSchemaInitializer(template).run(null));
     }
 
+    private List<Map<String, Object>> validConversationFenceColumns() {
+        return List.of(
+                column("target_agent_ids", "varchar", 2000L, "YES", null,
+                        "utf8mb4_0900_bin", ""),
+                column("deleted_at", "bigint", null, "YES", null, null, ""),
+                column("lifecycle_generation", "bigint", null, "NO", "1", null, ""));
+    }
+
+    private List<Map<String, Object>> validLiveOwnerIndex() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        addIndex(rows, "idx_chat_conversation_live_owner", 1,
+                "jiacn", "client_id", "deleted_at", "lifecycle_generation", "update_time");
+        return rows;
+    }
+
     private List<Map<String, Object>> validTaskThreadColumns() {
         List<Map<String, Object>> rows = new ArrayList<>();
         rows.add(column("id", "bigint", null, "NO", null, null, "auto_increment"));
@@ -146,6 +245,18 @@ class ChatSchemaInitializerTest extends BaseMockTest {
         row.put("collation_name", collation);
         row.put("extra", extra);
         return row;
+    }
+
+    private List<Map<String, Object>> validTaskThreadIndexes() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        addIndex(rows, "PRIMARY", 0, "id");
+        addIndex(rows, "uk_task_thread_scope", 0,
+                "tenant_id", "client_id", "task_id", "thread_type", "thread_key");
+        addIndex(rows, "uk_task_thread_conversation", 0,
+                "tenant_id", "client_id", "conversation_id");
+        addIndex(rows, "idx_task_thread_task", 1,
+                "tenant_id", "client_id", "task_id", "status", "create_time");
+        return rows;
     }
 
     private List<Map<String, Object>> wrongTaskThreadIndexes() {

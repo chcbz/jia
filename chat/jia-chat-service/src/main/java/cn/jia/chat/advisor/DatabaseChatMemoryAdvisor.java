@@ -1,6 +1,7 @@
 package cn.jia.chat.advisor;
 
-import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ConversationMetadataPolicy;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
@@ -72,28 +73,29 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
 
     private final int order;
 
-    private final ChatMessageDao chatMessageDao;
+    private final ChatConversationService chatConversationService;
 
     private final int maxMessages;
 
     private final Scheduler scheduler;
 
     private DatabaseChatMemoryAdvisor(PromptTemplate systemPromptTemplate, String defaultConversationId,
-                                       int order, ChatMessageDao chatMessageDao, int maxMessages, Scheduler scheduler) {
+                                       int order, ChatConversationService chatConversationService,
+                                       int maxMessages, Scheduler scheduler) {
         Assert.notNull(systemPromptTemplate, "systemPromptTemplate cannot be null");
         Assert.hasText(defaultConversationId, "defaultConversationId cannot be null or empty");
-        Assert.notNull(chatMessageDao, "chatMessageDao cannot be null");
+        Assert.notNull(chatConversationService, "chatConversationService cannot be null");
         Assert.isTrue(maxMessages > 0, "maxMessages must be greater than 0");
         this.systemPromptTemplate = systemPromptTemplate;
         this.defaultConversationId = defaultConversationId;
         this.order = order;
-        this.chatMessageDao = chatMessageDao;
+        this.chatConversationService = chatConversationService;
         this.maxMessages = maxMessages;
         this.scheduler = scheduler;
     }
 
-    public static Builder builder(ChatMessageDao chatMessageDao) {
-        return new Builder(chatMessageDao);
+    public static Builder builder(ChatConversationService chatConversationService) {
+        return new Builder(chatConversationService);
     }
 
     @Override
@@ -121,7 +123,10 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
                 .map(AbstractMessage::getText).orElse("");
         
         // 查询最近 maxMessages 条历史消息用于增强上下文
-        List<ChatMessageEntity> historyMessages = chatMessageDao.findByConversationIdWithLimit(conversationId, maxMessages);
+        String ownerJiacn = requireIdentity(request.context(), "jiacn");
+        String ownerClientId = requireIdentity(request.context(), "clientId");
+        List<ChatMessageEntity> historyMessages = chatConversationService.findOwnedMessages(
+                ownerJiacn, ownerClientId, conversationId, maxMessages);
 
         // 构建内存文本
         String memory = historyMessages.stream()
@@ -195,10 +200,11 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
         context.putIfAbsent(ChatMemory.CONVERSATION_ID, defaultConversationId);
         String conversationId = getConversationId(context);
         try {
+            String ownerJiacn = requireIdentity(context, "jiacn");
+            String ownerClientId = requireIdentity(context, "clientId");
             ChatMessageEntity entity = new ChatMessageEntity();
-            entity.init4Creation();
-            entity.setJiacn(String.valueOf(context.get("jiacn")));
-            entity.setClientId(String.valueOf(context.get("clientId")));
+            entity.setJiacn(ownerJiacn);
+            entity.setClientId(ownerClientId);
             entity.setConversationId(conversationId);
             entity.setMessageType(message.getMessageType().name());
             entity.setContent(message.getText());
@@ -208,16 +214,28 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             entity.setSenderType(String.valueOf(context.getOrDefault("senderType", "")));
             entity.setSenderName(String.valueOf(context.getOrDefault("senderName", "")));
 
-            Map<String, Object> metadata = new HashMap<>(context);
-            Optional.of(message.getMetadata()).ifPresent(metadata::putAll);
+            Map<String, Object> metadata = Optional.ofNullable(message.getMetadata())
+                    .map(ConversationMetadataPolicy::copyAllowed)
+                    .orElseGet(HashMap::new);
+            // Advisor context contains the captured conversation scope and must win on conflicts.
+            metadata.putAll(ConversationMetadataPolicy.copyAllowed(context));
             entity.setMetadata(JsonUtil.toJson(metadata));
 
-            chatMessageDao.insert(entity);
+            chatConversationService.appendOwnedMessage(ownerJiacn, ownerClientId, entity);
             log.debug("Saved message to conversation: {}", conversationId);
         } catch (Exception e) {
             log.error("Failed to save message for conversation ID: {}", conversationId, e);
             throw new RuntimeException("Failed to save message for conversation ID: " + conversationId, e);
         }
+    }
+
+    private String requireIdentity(Map<String, Object> context, String field) {
+        Object raw = context.get(field);
+        if (!(raw instanceof String value) || value.isBlank() || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalStateException("Missing exact conversation " + field + " scope");
+        }
+        return value;
     }
 
     /**
@@ -231,7 +249,7 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
 
         private int order = Advisor.DEFAULT_CHAT_MEMORY_PRECEDENCE_ORDER;
 
-        private final ChatMessageDao chatMessageDao;
+        private final ChatConversationService chatConversationService;
 
         private int maxMessages = 20;
 
@@ -239,10 +257,10 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
 
         /**
          * Creates a new builder instance.
-         * @param chatMessageDao the chat message DAO
+         * @param chatConversationService the authenticated conversation service
          */
-        protected Builder(ChatMessageDao chatMessageDao) {
-            this.chatMessageDao = chatMessageDao;
+        protected Builder(ChatConversationService chatConversationService) {
+            this.chatConversationService = chatConversationService;
         }
 
         /**
@@ -301,7 +319,7 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
          */
         public DatabaseChatMemoryAdvisor build() {
             return new DatabaseChatMemoryAdvisor(this.systemPromptTemplate, this.conversationId,
-                    this.order, this.chatMessageDao, this.maxMessages, this.scheduler);
+                    this.order, this.chatConversationService, this.maxMessages, this.scheduler);
         }
     }
 }

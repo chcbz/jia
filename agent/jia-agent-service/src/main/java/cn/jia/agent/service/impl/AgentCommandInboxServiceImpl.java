@@ -52,7 +52,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     public static final int MAX_WIRE_BYTES = 16_777_215;
 
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandInboxServiceImpl.class);
-    private static final Set<String> COMMAND_TYPES = Set.of(
+    private static final Set<String> COMMAND_TYPES = Set.of("SKILL_INSTALL",
             AgentProtocolConstants.COMMAND_TASK_INVITE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME,

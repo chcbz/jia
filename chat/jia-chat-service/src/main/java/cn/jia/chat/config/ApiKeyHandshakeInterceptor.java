@@ -75,6 +75,7 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
         attributes.put("clientId", apiKeyEntity.getClientId());
         attributes.put("jiacn", apiKeyEntity.getJiacn());
         attributes.put("apiKeyName", apiKeyEntity.getKeyName());
+        attributes.put("managedApiKeyId", apiKeyEntity.getId()); // private authenticated ID, never a key secret
         attributes.put("agentId", agentId);
         EsContext context = EsContextHolder.getContext();
         context.setClientId(apiKeyEntity.getClientId());

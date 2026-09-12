@@ -25,4 +25,10 @@ public class OauthApiKeyDaoImpl extends BaseDaoImpl<OauthApiKeyMapper, OauthApiK
         return baseMapper.selectOne(Wrappers.lambdaQuery(OauthApiKeyEntity.class)
                 .eq(OauthApiKeyEntity::getApiKey, apiKey));
     }
+
+    @Override
+    public int disableManagedKey(
+            String keyId, String tenantId, String clientId, String jiacn, String keyName, long now) {
+        return baseMapper.disableManagedKey(keyId, tenantId, clientId, jiacn, keyName, now);
+    }
 }

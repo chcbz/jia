@@ -2,7 +2,6 @@ package cn.jia.agent.service;
 
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
-import cn.jia.agent.entity.AgentPersonaBindResultDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRuntimeDTO;
@@ -21,6 +20,8 @@ import java.util.List;
 import java.util.Map;
 
 public interface AgentService {
+    void requireHostingNewWork(String tenantId, String clientId, String canonicalAgentId);
+
     AgentRegisterResultDTO register(AgentRegisterDTO request);
 
     PageInfo<AgentRuntimeDTO> list(String status, String ability, int pageNum, int pageSize);
@@ -33,11 +34,7 @@ public interface AgentService {
 
     List<AgentRuntimeDTO> listPersonaCatalog();
 
-    AgentRuntimeDTO bindPersona(String personaCode);
-
-    AgentPersonaBindResultDTO bindPersona(String personaCode, String mode);
-
-    void unbindPersona(String personaCode);
+    AgentRuntimeDTO bindPersona(String tenantId, String clientId, String ownerJiacn, String personaCode);
 
     AgentRuntimeDTO requireApiKeyOwnedAgent(String clientId, String jiacn, String agentId);
 
@@ -66,6 +63,9 @@ public interface AgentService {
     AgentTaskDTO getTask(String taskId);
 
     List<String> listTaskMemberAgentIds(String tenantId, String clientId, String taskId);
+
+    /** Returns only canonical members currently allowed to append task conversation messages. */
+    List<String> listTaskWritableMemberAgentIds(String tenantId, String clientId, String taskId);
 
     AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
 

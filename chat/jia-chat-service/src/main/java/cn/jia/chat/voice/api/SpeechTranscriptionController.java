@@ -2,8 +2,6 @@ package cn.jia.chat.voice.api;
 
 import cn.jia.chat.voice.VoiceIdentity;
 import cn.jia.chat.voice.service.SpeechTranscriptionService;
-import cn.jia.chat.voice.validation.VoiceAudioUpload;
-import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
@@ -32,19 +30,16 @@ public class SpeechTranscriptionController {
     private final VoiceIdentityResolver identityResolver;
     private final VoiceRequestValidator validator;
     private final VoiceSpeechProperties properties;
-    private final VoiceAudioUploadFactory uploadFactory;
     private final SpeechTranscriptionService service;
 
     public SpeechTranscriptionController(
             VoiceIdentityResolver identityResolver,
             VoiceRequestValidator validator,
             VoiceSpeechProperties properties,
-            VoiceAudioUploadFactory uploadFactory,
             SpeechTranscriptionService service) {
         this.identityResolver = identityResolver;
         this.validator = validator;
         this.properties = properties;
-        this.uploadFactory = uploadFactory;
         this.service = service;
     }
 
@@ -63,10 +58,8 @@ public class SpeechTranscriptionController {
         validator.clientDuration(single(request.getParameterMap(), "durationMs", requestId), requestId);
         service.requireAvailable(requestId);
         MultipartFile audio = singleAudio(request.getMultiFileMap(), requestId);
-        try (VoiceAudioUpload upload = uploadFactory.create(audio, requestId)) {
-            VoiceTranscriptionResponse data = service.transcribe(identity, requestId, language, upload);
-            return ResponseEntity.ok(JsonResult.success(data));
-        }
+        VoiceTranscriptionResponse data = service.transcribe(identity, requestId, language, audio);
+        return ResponseEntity.ok(JsonResult.success(data));
     }
 
     private String validatedSingleRequestId(Map<String, String[]> parameters) {

@@ -15,4 +15,7 @@ public interface OauthApiKeyDao extends IBaseDao<OauthApiKeyEntity> {
      * @return API密钥实体，未找到返回null
      */
     OauthApiKeyEntity selectByApiKey(String apiKey);
+
+    int disableManagedKey(
+            String keyId, String tenantId, String clientId, String jiacn, String keyName, long now);
 }

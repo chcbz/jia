@@ -97,6 +97,26 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void expiredHostingDeniesNewClaimBeforeCasButDoesNotKillRunningWork() {
+        var gate = org.mockito.Mockito.mock(cn.jia.agent.service.AgentHostingWorkAdmission.class);
+        service.setHostingWorkAdmission(gate);
+        org.mockito.Mockito.doThrow(new cn.jia.agent.hosting.HostingRentApplicationException(409,
+                "HOSTING_RENT_RENEWAL_REQUIRED")).when(gate).requireNewWork(TENANT, CLIENT, AGENT);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK))
+                .thenReturn(item("ready", 3L, null, null, null, 0, 3));
+        assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,
+                () -> service.claim(TENANT, CLIENT, TASK, WORK, claimCommand(AGENT, 3L, 200L)));
+        verify(workItemDao, never()).claimReadyByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verifyNoInteractions(eventWriter);
+        org.mockito.Mockito.clearInvocations(gate);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK))
+                .thenReturn(item("running", 5L, AGENT, TOKEN, 1_300L, 0, 3));
+        assertEquals(1_300L, service.heartbeat(TENANT, CLIENT, TASK, WORK,
+                heartbeatCommand(AGENT, TOKEN, 5L, 100L)).getLeaseUntil());
+        verifyNoInteractions(gate); // Existing execution is not killed by rental expiry.
+    }
+
+    @Test
     void orchestratorAssignedReadyItemCanOnlyBeClaimedByItsTarget() {
         AgentTaskWorkItemEntity current = item("ready", 3L, AGENT, null, null, 0, 3);
         when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(current);

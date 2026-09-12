@@ -1,5 +1,6 @@
 package cn.jia.core.interceptor;
 
+import cn.jia.core.security.SensitiveSanitizeConfig;
 import cn.jia.core.util.JsonUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -12,8 +13,10 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 public class HttpRequestLogInterceptor implements HandlerInterceptor {
@@ -21,6 +24,15 @@ public class HttpRequestLogInterceptor implements HandlerInterceptor {
             new NamedThreadLocal<>("HttpRequestLog StartTime");
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
             .withZone(ZoneId.systemDefault());
+    private static final SensitiveSanitizeConfig REQUEST_LOG_SANITIZE_CONFIG = requestLogSanitizeConfig();
+
+    private static SensitiveSanitizeConfig requestLogSanitizeConfig() {
+        SensitiveSanitizeConfig config = SensitiveSanitizeConfig.defaults();
+        Set<String> secretFields = new LinkedHashSet<>(config.getSecretFields());
+        secretFields.addAll(Set.of("code", "code_verifier", "state"));
+        config.setSecretFields(secretFields);
+        return config;
+    }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -73,7 +85,7 @@ public class HttpRequestLogInterceptor implements HandlerInterceptor {
                 String paramName = enums.nextElement();
                 paramMap.put(paramName, httpRequest.getParameter(paramName));
             }
-            return JsonUtil.toSafeJson(Map.of("param", paramMap));
+            return JsonUtil.toSafeJson(Map.of("param", paramMap), REQUEST_LOG_SANITIZE_CONFIG);
         } catch (Exception e) {
             log.warn("请求参数序列化失败", e);
             return "{}";

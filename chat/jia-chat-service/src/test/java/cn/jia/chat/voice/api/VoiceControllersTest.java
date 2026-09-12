@@ -6,7 +6,6 @@ import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import cn.jia.chat.voice.service.SpeechSynthesisService;
 import cn.jia.chat.voice.service.SpeechTranscriptionService;
 import cn.jia.chat.voice.validation.AudioDurationInspector;
-import cn.jia.chat.voice.validation.VoiceAudioUpload;
 import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
@@ -53,8 +52,7 @@ class VoiceControllersTest {
         when(service.transcribe(any(), eq(REQUEST_ID), eq("zh-CN"), any()))
                 .thenReturn(new VoiceTranscriptionResponse(REQUEST_ID, "请林教头查看榜文", "zh", 1200));
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
         MockMultipartHttpServletRequest request = validMultipart(
                 "mediarecorder-valid.webm", "audio/webm;codecs=opus");
 
@@ -69,12 +67,10 @@ class VoiceControllersTest {
     }
 
     @Test
-    void transcriptionRejectsNonUniqueMimeProfilesBeforeProviderDispatch() throws Exception {
-        VoiceSpeechProperties properties = properties();
-        SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
-        SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+    void transcriptionUploadFactoryRejectsNonUniqueMimeProfilesBeforeReadingContent()
+            throws Exception {
+        VoiceAudioUploadFactory factory =
+                new VoiceAudioUploadFactory(new AudioDurationInspector());
 
         for (String mediaType : List.of(
                 "audio/webm",
@@ -86,13 +82,10 @@ class VoiceControllersTest {
             MockMultipartHttpServletRequest request = validMultipart(
                     "mediarecorder-valid.webm", mediaType);
             VoiceException error = assertThrows(VoiceException.class,
-                    () -> controller.transcribe(request, jwt("tenant", "client", "subject")),
-                    mediaType);
+                    () -> factory.create(request.getFile("audio"), REQUEST_ID), mediaType);
             assertEquals(VoiceErrorCode.UNSUPPORTED_MEDIA, error.error(), mediaType);
             assertEquals(REQUEST_ID, error.requestId(), mediaType);
         }
-
-        verify(service, never()).transcribe(any(), any(), any(), any());
     }
 
     @Test
@@ -100,8 +93,7 @@ class VoiceControllersTest {
         VoiceSpeechProperties properties = properties();
         SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
         MockMultipartHttpServletRequest request = validMultipart(
                 "mediarecorder-valid.webm", "audio/webm;codecs=opus");
         request.addParameter("provider", "forged");
@@ -119,8 +111,7 @@ class VoiceControllersTest {
         VoiceSpeechProperties properties = properties();
         SpeechTranscriptionService service = mock(SpeechTranscriptionService.class);
         SpeechTranscriptionController controller = new SpeechTranscriptionController(
-                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties,
-                new VoiceAudioUploadFactory(new AudioDurationInspector()), service);
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
         MockMultipartHttpServletRequest request = validMultipart(
                 "mediarecorder-valid.webm", "audio/webm;codecs=opus");
         request.addParameter("audio", "not-a-file");
@@ -143,6 +134,48 @@ class VoiceControllersTest {
                         "audio", "private-name.webm", "audio/webm;codecs=opus", tooLarge),
                         REQUEST_ID));
         assertEquals(VoiceErrorCode.TOO_LARGE, error.error());
+    }
+
+    @Test
+    void synthesisRejectsLoneHighSurrogateBeforeValidationAndDigest() {
+        VoiceRequestValidator validator = new VoiceRequestValidator();
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> validator.synthesis(new VoiceSynthesisRequest(
+                                REQUEST_ID, "林冲\uD83D", "juyiting-default", "mp3"),
+                        properties().getSynthesis()));
+
+        assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
+        assertEquals(REQUEST_ID, error.requestId());
+        assertSynthesisDigestRejects("林冲\uD83D");
+    }
+
+    @Test
+    void synthesisRejectsLoneLowSurrogateBeforeValidationAndDigest() {
+        VoiceRequestValidator validator = new VoiceRequestValidator();
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> validator.synthesis(new VoiceSynthesisRequest(
+                                REQUEST_ID, "林冲\uDE00", "juyiting-default", "mp3"),
+                        properties().getSynthesis()));
+
+        assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
+        assertEquals(REQUEST_ID, error.requestId());
+        assertSynthesisDigestRejects("林冲\uDE00");
+    }
+
+    @Test
+    void synthesisAcceptsValidSurrogatePairAndDigestKeepsExactUtf8() {
+        VoiceRequestValidator validator = new VoiceRequestValidator();
+        VoiceSynthesisRequest request = new VoiceSynthesisRequest(
+                REQUEST_ID, "林冲\uD83D\uDE00", "juyiting-default", "mp3");
+
+        assertEquals(request, validator.synthesis(request, properties().getSynthesis()));
+        VoiceSpeechProperties digestProperties = properties();
+        digestProperties.setIdentityHmacSecret("01234567890123456789012345678901");
+        String paired = new cn.jia.chat.voice.state.VoiceDigests(digestProperties)
+                .synthesis(request.text(), request.voice(), request.format());
+        String replaced = new cn.jia.chat.voice.state.VoiceDigests(digestProperties)
+                .synthesis("林冲?", request.voice(), request.format());
+        assertFalse(paired.equals(replaced));
     }
 
     @Test
@@ -240,6 +273,13 @@ class VoiceControllersTest {
                         || type.contains("taskservice") || type.contains("messagedao"), type);
             }
         }
+    }
+
+    private static void assertSynthesisDigestRejects(String text) {
+        VoiceException error = assertThrows(VoiceException.class,
+                () -> new cn.jia.chat.voice.state.VoiceDigests(properties())
+                        .synthesis(text, "juyiting-default", "mp3"));
+        assertEquals(VoiceErrorCode.INVALID_REQUEST, error.error());
     }
 
     private MockMultipartHttpServletRequest validMultipart(String fixture, String mediaType)

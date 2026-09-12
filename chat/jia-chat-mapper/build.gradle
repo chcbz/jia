@@ -2,7 +2,7 @@ dependencies {
     api project(':chat:jia-chat-api')
     api project(':common:jia-common-mapper')
     implementation platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}")
-    implementation 'org.springframework:spring-jdbc'
+    implementation libs.spring.jdbc
     testImplementation project(':common:jia-common-test')
     testImplementation libs.mybatis.plus.generator
     testImplementation libs.spring.boot.starter.freemarker

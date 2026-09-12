@@ -94,7 +94,7 @@ main: BEGIN
            client_settings = JSON_SET(client_settings,
                '$."settings.client.require-proof-key"', CAST('true' AS JSON)),
            token_settings = JSON_SET(token_settings,
-               '$."settings.token.access-token-time-to-live"', 'PT10M',
+               '$."settings.token.access-token-time-to-live"', 'PT24H',
                '$."settings.token.authorization-code-time-to-live"', 'PT5M')
      WHERE OCTET_LENGTH(client_id) = OCTET_LENGTH(_ascii'jiafewnnv58ec2379c')
        AND HEX(client_id) = HEX(_ascii'jiafewnnv58ec2379c')
@@ -154,8 +154,8 @@ main: BEGIN
        AND HEX(scopes) = HEX(_ascii'openid')
        AND OCTET_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(client_settings, '$."settings.client.require-proof-key"'))) = OCTET_LENGTH(_ascii'true')
        AND HEX(JSON_UNQUOTE(JSON_EXTRACT(client_settings, '$."settings.client.require-proof-key"'))) = HEX(_ascii'true')
-       AND OCTET_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(token_settings, '$."settings.token.access-token-time-to-live"'))) = OCTET_LENGTH(_ascii'PT10M')
-       AND HEX(JSON_UNQUOTE(JSON_EXTRACT(token_settings, '$."settings.token.access-token-time-to-live"'))) = HEX(_ascii'PT10M')
+       AND OCTET_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(token_settings, '$."settings.token.access-token-time-to-live"'))) = OCTET_LENGTH(_ascii'PT24H')
+       AND HEX(JSON_UNQUOTE(JSON_EXTRACT(token_settings, '$."settings.token.access-token-time-to-live"'))) = HEX(_ascii'PT24H')
        AND OCTET_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(token_settings, '$."settings.token.authorization-code-time-to-live"'))) = OCTET_LENGTH(_ascii'PT5M')
        AND HEX(JSON_UNQUOTE(JSON_EXTRACT(token_settings, '$."settings.token.authorization-code-time-to-live"'))) = HEX(_ascii'PT5M');
 

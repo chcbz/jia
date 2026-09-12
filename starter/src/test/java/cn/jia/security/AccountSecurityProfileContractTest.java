@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class AccountSecurityProfileContractTest {
     private static final String CORS_ORIGIN =
-            "cors.allowed.origin.patterns=https://kit.chaoyoufan.cn";
+            "cors.allowed.origin.patterns=https://kit.chaoyoufan.cn,https://api.chaoyoufan.cn";
 
     @Test
     void productionProfilesUseCredentialSafeCorsProperty() throws IOException {

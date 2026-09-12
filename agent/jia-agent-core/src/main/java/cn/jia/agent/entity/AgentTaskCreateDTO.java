@@ -1,5 +1,7 @@
 package cn.jia.agent.entity;
 
+import cn.jia.agent.entity.funding.AgentSkillRequirementDTO;
+
 import lombok.Data;
 
 import java.io.Serial;
@@ -15,4 +17,7 @@ public class AgentTaskCreateDTO implements Serializable {
     private String description;
     private List<String> requiredAbilities;
     private Integer reward;
+    private String grossBountyAmountMicro;
+    private String settlementPolicy;
+    private List<AgentSkillRequirementDTO> requiredSkillRequirements;
 }

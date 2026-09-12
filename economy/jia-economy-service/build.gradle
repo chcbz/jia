@@ -1,0 +1,14 @@
+dependencies {
+    api project(':economy:jia-economy-api')
+    implementation project(':economy:jia-economy-mapper')
+    implementation project(':common:jia-common-service')
+    compileOnly libs.spring.security.oauth2.resource.server
+    compileOnly libs.spring.security.oauth2.jose
+    testImplementation project(':common:jia-common-test')
+    testImplementation libs.spring.security.oauth2.resource.server
+    testImplementation libs.spring.security.oauth2.jose
+    testRuntimeOnly libs.mysql
+}
+
+version = '1.1.2-SNAPSHOT'
+description = 'jia-economy-service'

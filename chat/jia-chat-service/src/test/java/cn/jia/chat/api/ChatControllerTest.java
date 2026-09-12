@@ -1,7 +1,6 @@
 package cn.jia.chat.api;
 
 import cn.jia.agent.service.AgentService;
-import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -20,13 +19,19 @@ import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.redis.RedisService;
+import cn.jia.core.security.SensitiveResponseBodyAdvice;
+import cn.jia.core.security.SensitiveResponseProperties;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.core.MethodParameter;
+import org.springframework.http.MediaType;
 import reactor.core.publisher.Flux;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -63,8 +68,6 @@ class ChatControllerTest extends BaseMockTest {
     @Mock
     BuiltinHallAgentSupport builtinHallAgentSupport;
     @Mock
-    ChatMessageDao chatMessageDao;
-    @Mock
     MemoryRepository memoryRepository;
     @Mock
     AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
@@ -90,9 +93,11 @@ class ChatControllerTest extends BaseMockTest {
 
         when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
-        when(agentWebSocketHandler.isAgentConnected("agent-wuyong")).thenReturn(true);
-        when(agentWebSocketHandler.sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class))).thenReturn(true);
-        when(chatConversationEventBroker.stream("1001")).thenReturn(Flux.just("""
+        when(agentWebSocketHandler.sendDirectMessageToAgent(
+                eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class))).thenReturn(true);
+        when(chatConversationEventBroker.stream(
+                org.mockito.ArgumentMatchers.eq("1001"),
+                org.mockito.ArgumentMatchers.eq(1L), any())).thenReturn(Flux.just("""
                 {"type":"agent_message","conversationId":"1001","conversationType":"juyiting","agentId":"agent-wuyong","senderType":"agent","senderName":"Wu Yong","content":"ok"}
                 """).delayElements(Duration.ofMillis(10)));
 
@@ -108,8 +113,10 @@ class ChatControllerTest extends BaseMockTest {
         List<String> chunks = controller.handleChat(request).collectList().block();
 
         ArgumentCaptor<ChatMessageEntity> messageCaptor = ArgumentCaptor.forClass(ChatMessageEntity.class);
-        verify(chatMessageDao).insert(messageCaptor.capture());
-        verify(agentWebSocketHandler).sendDirectMessageToAgent(eq("agent-wuyong"), any(Map.class));
+        verify(chatConversationService).appendOwnedMessage(
+                eq("tester"), eq("web-client"), messageCaptor.capture(), eq(1L));
+        verify(agentWebSocketHandler).sendDirectMessageToAgent(
+                eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class));
 
         ChatMessageEntity saved = messageCaptor.getValue();
         assertTrue("1001".equals(saved.getConversationId()));
@@ -157,7 +164,66 @@ class ChatControllerTest extends BaseMockTest {
         assertThrows(AgentTaskThreadException.class, () -> controller.conversationEvents("77"));
 
         verify(redisService, never()).publishSignal("77");
-        verify(chatConversationEventBroker, never()).stream("77");
+        verify(chatConversationEventBroker, never()).stream(
+                eq("77"), org.mockito.ArgumentMatchers.anyLong(), any());
+    }
+
+    @Test
+    void conversationContentKeepsExactMessageIdsAfterSensitiveResponseAdvice() throws Exception {
+        long userMessageId = 9_007_199_254_740_993L;
+        long agentMessageId = 9_007_199_254_740_995L;
+        String userMetadata = "{\"scene\":\"juyiting\",\"selectedAgentId\":\"agent-wuyong\"}";
+        String agentMetadata = "{\"messageId\":\"9007199254740995\",\"agentId\":\"agent-wuyong\"}";
+        ChatMessageEntity userMessage = new ChatMessageEntity()
+                .setId(userMessageId)
+                .setConversationId("1001")
+                .setMessageType("USER")
+                .setContent("请回报 password=hunter2")
+                .setMetadata(userMetadata)
+                .setJiacn("tester")
+                .setSyncStatus("SYNCED")
+                .setConversationType("juyiting")
+                .setSenderType("user")
+                .setSenderName("测试用户");
+        userMessage.setCreateTime(100L);
+        userMessage.setUpdateTime(101L);
+        userMessage.setTenantId("0");
+        userMessage.setClientId("web-client");
+        ChatMessageEntity agentMessage = new ChatMessageEntity()
+                .setId(agentMessageId)
+                .setConversationId("1001")
+                .setMessageType("ASSISTANT")
+                .setContent("已收到")
+                .setMetadata(agentMetadata)
+                .setJiacn("tester")
+                .setSyncStatus("SYNCED")
+                .setConversationType("juyiting")
+                .setSenderType("agent")
+                .setSenderName("吴用");
+        when(chatConversationService.findByConversationId("1001"))
+                .thenReturn(List.of(userMessage, agentMessage));
+
+        Object controllerBody = newController().getConversationContent("1001");
+        SensitiveResponseBodyAdvice advice =
+                new SensitiveResponseBodyAdvice(new SensitiveResponseProperties());
+        Method method = ChatController.class.getDeclaredMethod("getConversationContent", String.class);
+        Object sanitizedBody = advice.beforeBodyWrite(
+                controllerBody, new MethodParameter(method, -1), MediaType.APPLICATION_JSON,
+                null, null, null);
+        String json = new ObjectMapper().writeValueAsString(sanitizedBody);
+        Map<String, Object> wire = new ObjectMapper().readValue(json, new TypeReference<>() { });
+        List<Map<String, Object>> messages = (List<Map<String, Object>>) wire.get("data");
+
+        assertEquals(2, messages.size());
+        assertEquals("9007199254740993", messages.get(0).get("id"));
+        assertEquals("9007199254740995", messages.get(1).get("id"));
+        assertEquals(userMetadata, messages.get(0).get("metadata"));
+        assertEquals(agentMetadata, messages.get(1).get("metadata"));
+        assertEquals("user", messages.get(0).get("senderType"));
+        assertEquals("agent", messages.get(1).get("senderType"));
+        assertTrue(String.valueOf(messages.get(0).get("content")).contains("password=******"));
+        assertTrue(!json.contains("hunter2"));
+        verify(chatConversationService).findByConversationId("1001");
     }
 
     @Test
@@ -174,7 +240,9 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "conversationScopeType", "bounty");
         setObjectField(request, "conversationScopeKey", "task:372");
         setObjectField(request, "taskId", "372");
-        setObjectField(request, "targetAgentId", "agent-wuyong");
+        setObjectField(request, "targetAgentIds", List.of("agent-wuyong", "agent-linchong"));
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
+                .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         when(chatConversationService.create(any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -188,7 +256,10 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals("bounty", getObjectField(captured, "conversationScopeType"));
         assertEquals("task:372", getObjectField(captured, "conversationScopeKey"));
         assertEquals("372", getObjectField(captured, "taskId"));
-        assertEquals("agent-wuyong", getObjectField(captured, "targetAgentId"));
+        assertEquals(null, getObjectField(captured, "targetAgentId"));
+        assertEquals("[\"agent-wuyong\",\"agent-linchong\"]",
+                getObjectField(captured, "targetAgentIds"));
+        assertEquals(1L, getObjectField(captured, "lifecycleGeneration"));
         assertEquals(created, captured);
     }
 
@@ -228,7 +299,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "conversationScopeType", "public");
         setObjectField(request, "conversationScopeKey", "public");
 
-        JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport);
+        JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         assertEquals(List.of("songjiang"), scopeService.resolve(request).targetAgentIds());
     }
 
@@ -238,15 +309,6 @@ class ChatControllerTest extends BaseMockTest {
         context.setJiacn("tester");
         context.setClientId("web-client");
         EsContextHolder.setContext(context);
-
-        ChatConversationEntity conversation = new ChatConversationEntity();
-        conversation.setId(372L);
-        conversation.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
-        setObjectField(conversation, "conversationScopeType", "bounty");
-        setObjectField(conversation, "conversationScopeKey", "task:372");
-
-        when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
-        when(redisService.subscribeToChannel("372")).thenReturn(Flux.never());
 
         ChatController controller = newController();
 
@@ -259,10 +321,108 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "targetAgentIds", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-wuyong")));
 
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
+                .thenReturn(List.of("agent-wuyong"));
+
+        assertThrows(AgentTaskThreadException.class,
+                () -> controller.handleChat(request).collectList().block());
+        verify(chatConversationService, org.mockito.Mockito.never()).create(any());
+        verify(chatConversationService, org.mockito.Mockito.never()).appendOwnedMessage(
+                any(), any(), any(ChatMessageEntity.class),
+                org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void createsTwoTargetBountyAndRelaysBothThroughControllerChain() {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+        List<String> members = List.of("agent-wuyong", "agent-linchong");
+        ChatController controller = newController();
+        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
+                .thenReturn(members);
+        when(chatConversationService.create(any(ChatConversationEntity.class)))
+                .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(0))
+                        .setId(1001L));
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenAnswer(invocation -> {
+                    ChatConversationEntity value = new ChatConversationEntity()
+                            .setId(1001L).setJiacn("tester").setConversationType("juyiting")
+                            .setConversationScopeType("bounty")
+                            .setConversationScopeKey("task:task-7")
+                            .setTaskId("task-7")
+                            .setTargetAgentIds("[\"agent-wuyong\",\"agent-linchong\"]")
+                            .setLifecycleGeneration(1L);
+                    value.setClientId("web-client");
+                    value.setTenantId("0");
+                    return value;
+                });
+        when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
+        for (String member : members) {
+            when(agentWebSocketHandler.sendDirectMessageToAgent(
+                    eq("tester"), eq("web-client"), eq(member), any(Map.class)))
+                    .thenReturn(true);
+        }
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setContent("两位都回报");
+        request.setConversationType("juyiting");
+        request.setConversationScopeType("bounty");
+        request.setConversationScopeKey("task:task-7");
+        request.setTaskId("task-7");
+        request.setTargetAgentIds(members);
+
         List<String> chunks = controller.handleChat(request).collectList().block();
 
-        assertTrue(chunks.stream().anyMatch(item -> item.contains("target outside bounty participants")));
-        verify(chatMessageDao, org.mockito.Mockito.never()).insert(any());
+        ArgumentCaptor<ChatConversationEntity> created =
+                ArgumentCaptor.forClass(ChatConversationEntity.class);
+        verify(chatConversationService).create(created.capture());
+        assertEquals(null, created.getValue().getTargetAgentId());
+        assertEquals("[\"agent-wuyong\",\"agent-linchong\"]",
+                created.getValue().getTargetAgentIds());
+        for (String member : members) {
+            verify(agentWebSocketHandler).sendDirectMessageToAgent(
+                    eq("tester"), eq("web-client"), eq(member), any(Map.class));
+        }
+        assertEquals(2, chunks.stream().filter(value -> value.contains("agentDelivery")).count());
+    }
+
+    @Test
+    void deletingConversationCompletesExistingSseSubscriberWithoutEvent() throws Exception {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        ChatConversationEntity conversation = new ChatConversationEntity()
+                .setId(5001L).setLifecycleGeneration(1L);
+        when(chatConversationService.get("5001")).thenReturn(conversation);
+        when(chatConversationService.isLiveGeneration(
+                "tester", "web-client", "5001", 1L)).thenReturn(true);
+        JuyitingConversationScopeService scopeService =
+                new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
+        ChatController controller = new ChatController(
+                chatClient, chatConversationService, redisService, chatClientBuilder,
+                broker, builtinHallAgentSupport, scopeService,
+                new JuyitingAgentRelayService(
+                        agentWebSocketHandler, broker, builtinHallAgentSupport,
+                        chatConversationService, agentService, scopeService),
+                memoryRepository, taskThreadMemoryGuard);
+        java.util.concurrent.atomic.AtomicInteger events =
+                new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.CountDownLatch completed =
+                new java.util.concurrent.CountDownLatch(1);
+        controller.conversationEvents("5001").subscribe(
+                ignored -> events.incrementAndGet(), ignored -> { }, completed::countDown);
+
+        try (ChatConversationEventBroker.DeletionFence fence = broker.beginDeletion("5001")) {
+            fence.commitDeleted(1L);
+        }
+
+        assertTrue(completed.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(0, events.get());
+        assertTrue(!broker.publishIfLive("5001", 1L, () -> false,
+                Map.of("type", "agent_message")));
     }
 
     @Test
@@ -325,12 +485,34 @@ class ChatControllerTest extends BaseMockTest {
     private ChatController newController() {
         org.mockito.Mockito.lenient().when(taskThreadMemoryGuard.excludeProtected(any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport);
+        ChatConversationEntity publicConversation = new ChatConversationEntity()
+                .setId(1001L).setJiacn("tester").setConversationType("juyiting")
+                .setConversationScopeType("public").setConversationScopeKey("public")
+                .setTargetAgentIds("[\"agent-wuyong\"]");
+        publicConversation.setTenantId("0"); publicConversation.setClientId("web-client");
+        org.mockito.Mockito.lenient().when(chatConversationService.getOwned(
+                "tester", "web-client", "1001")).thenReturn(publicConversation);
+        org.mockito.Mockito.lenient().when(chatConversationService.appendOwnedMessage(
+                anyString(), anyString(), any(ChatMessageEntity.class),
+                org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(invocation -> invocation.getArgument(2));
+        org.mockito.Mockito.lenient().when(chatConversationService.isLiveGeneration(
+                anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(true);
+        org.mockito.Mockito.lenient().when(chatConversationEventBroker.deletionSignal(
+                anyString(), org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(Flux.never());
+        org.mockito.Mockito.lenient().when(chatConversationEventBroker.runIfLive(
+                anyString(), org.mockito.ArgumentMatchers.anyLong(), any(), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    ((Runnable) invocation.getArgument(3)).run();
+                    return true;
+                });
+        JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 agentWebSocketHandler,
                 chatConversationEventBroker,
                 builtinHallAgentSupport,
-                chatMessageDao,
+                chatConversationService,
                 agentService,
                 scopeService
         );
@@ -343,7 +525,6 @@ class ChatControllerTest extends BaseMockTest {
                 builtinHallAgentSupport,
                 scopeService,
                 relayService,
-                chatMessageDao,
                 memoryRepository,
                 taskThreadMemoryGuard
         );

@@ -19,7 +19,6 @@ import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
 import cn.jia.agent.entity.AgentActionIntentDTO;
-import cn.jia.agent.entity.AgentPersonaBindResultDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
@@ -44,10 +43,16 @@ import cn.jia.agent.entity.DialogueTemplateEntity;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.output.dto.OutputContextDTO;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.service.AgentHostedRuntimePublicationWorker;
+import cn.jia.agent.service.AgentHostingWorkAdmission;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.HostingRentAdmissionService;
+import cn.jia.agent.service.funding.FundedBountyLegacyGuard;
+import cn.jia.agent.service.funding.FundedBountyService;
 import cn.jia.agent.state.AgentTaskMemberStatus;
 import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.service.AgentService;
@@ -55,10 +60,9 @@ import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
-import cn.jia.oauth.entity.OauthApiKeyEntity;
-import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.common.TaskConstants;
 import cn.jia.task.entity.TaskPlanEntity;
+import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.task.service.TaskService;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
@@ -66,17 +70,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -90,16 +92,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
 
 @Service
 @Slf4j
 public class AgentServiceImpl implements AgentService {
-    private static final String BIND_MODE_SERVER = "server";
-    private static final String BIND_MODE_LOCAL = "local";
-    private static final Path CODEX_WS_AGENT_DIR = Path.of("/home/isp/apps/codex-ws-agent");
-    private static final Path CODEX_WS_PROFILES_FILE = CODEX_WS_AGENT_DIR.resolve("codex-profiles.conf");
-    private static final Path AGENT_CLIENTS_DIR = Path.of("/home/isp/hosts/cyf/agent-clients");
     private static final String REGION_BOUNTY_BOARD = "bounty-board";
     private static final String REGION_COUNCIL_TABLE = "council-table";
     private static final String REGION_MAIN_SEAT = "main-seat";
@@ -108,6 +104,13 @@ public class AgentServiceImpl implements AgentService {
     private static final int TASK_MEMBERSHIP_SNAPSHOT_LIMIT = 500;
     private static final int MAX_RUNTIME_ABILITIES = 128;
     private static final int MAX_RUNTIME_ABILITY_LENGTH = 100;
+    private static final Set<AgentTaskMemberStatus> TASK_CONVERSATION_WRITABLE_STATUSES = Set.of(
+            AgentTaskMemberStatus.ACCEPTED, AgentTaskMemberStatus.WORKING,
+            AgentTaskMemberStatus.BLOCKED);
+    private static final Set<String> TASK_MEMBER_ROLES = Set.of(
+            "coordinator", "worker", "reviewer", "observer");
+    private static final Set<String> TASK_ASSIGNMENT_SOURCES = Set.of(
+            "manual", "auto", "migration", "legacy");
 
     private final AgentRuntimeDao agentRuntimeDao;
     private final AgentIdentityService agentIdentityService;
@@ -123,10 +126,37 @@ public class AgentServiceImpl implements AgentService {
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     private final ObjectProvider<AgentSceneService> sceneServiceProvider;
     private final AgentScopePublicationCoordinator scopePublicationCoordinator;
+    private final AgentHostedRuntimePublicationWorker runtimePublicationWorker;
     private final AgentSceneFeatureFlags sceneFeatureFlags;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter taskEventWriter;
     private final AgentCommandTransportCapture commandTransportCapture;
+    private final HostingRentAdmissionService hostingRentAdmissionService;
+    // Direct legacy test construction has no managed leases. Spring requires the real gate bean.
+    private AgentHostingWorkAdmission hostingWorkAdmission = (tenant, client, agent) -> { };
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setHostingWorkAdmission(AgentHostingWorkAdmission admission) {
+        this.hostingWorkAdmission = Objects.requireNonNull(admission);
+    }
+
+    @Override
+    public void requireHostingNewWork(String tenantId, String clientId, String canonicalAgentId) {
+        hostingWorkAdmission.requireNewWork(tenantId, clientId, canonicalAgentId);
+    }
+
+    private cn.jia.agent.skill.SkillAgentVersions skillAgentVersions;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkillAgentVersions(cn.jia.agent.skill.SkillAgentVersions versions) {
+        this.skillAgentVersions = versions;
+    }
+    private void observeSkillLifecycle(AgentRuntimeEntity row) {
+        if (skillAgentVersions != null) skillAgentVersions.observe(row);
+    }
+
+    private volatile FundedBountyService fundedBountyService;
+    private volatile FundedBountyLegacyGuard fundedBountyLegacyGuard =
+            FundedBountyLegacyGuard.unconfigured();
 
     @Value("${agent.output-delivery.enabled:false}")
     private boolean outputDeliveryEnabled;
@@ -154,11 +184,11 @@ public class AgentServiceImpl implements AgentService {
                 agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
                 agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
                 taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
-                scopePublicationCoordinator, sceneFeatureFlags, mutationTransaction,
-                taskEventWriter, AgentCommandTransportCapture.disabledForLegacyConstruction());
+                scopePublicationCoordinator, new AgentHostedRuntimePublicationWorker(agentRuntimeDao),
+                sceneFeatureFlags, mutationTransaction, taskEventWriter,
+                AgentCommandTransportCapture.disabledForLegacyConstruction());
     }
 
-    @Autowired
     public AgentServiceImpl(
             AgentRuntimeDao agentRuntimeDao,
             AgentIdentityService agentIdentityService,
@@ -178,6 +208,65 @@ public class AgentServiceImpl implements AgentService {
             AgentTaskMutationTransaction mutationTransaction,
             AgentTaskEventWriter taskEventWriter,
             AgentCommandTransportCapture commandTransportCapture) {
+        this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
+                agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
+                taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
+                scopePublicationCoordinator, new AgentHostedRuntimePublicationWorker(agentRuntimeDao),
+                sceneFeatureFlags, mutationTransaction, taskEventWriter, commandTransportCapture);
+    }
+
+    public AgentServiceImpl(
+            AgentRuntimeDao agentRuntimeDao,
+            AgentIdentityService agentIdentityService,
+            AgentPersonaDao agentPersonaDao,
+            AgentPersonaBindingDao agentPersonaBindingDao,
+            AgentTaskMetaDao agentTaskMetaDao,
+            AgentTaskMemberDao agentTaskMemberDao,
+            AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService,
+            AgentTaskNoteDao agentTaskNoteDao,
+            DialogueTemplateDao dialogueTemplateDao,
+            ObjectProvider<AgentEventPublisher> eventPublisherProvider,
+            ObjectProvider<TaskService> taskServiceProvider,
+            ObjectProvider<ApiKeyService> apiKeyServiceProvider,
+            ObjectProvider<AgentSceneService> sceneServiceProvider,
+            AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentHostedRuntimePublicationWorker runtimePublicationWorker,
+            AgentSceneFeatureFlags sceneFeatureFlags,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter taskEventWriter,
+            AgentCommandTransportCapture commandTransportCapture) {
+        this(agentRuntimeDao, agentIdentityService, agentPersonaDao, agentPersonaBindingDao,
+                agentTaskMetaDao, agentTaskMemberDao, legacyTaskCompatibilityService,
+                agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider,
+                taskServiceProvider, apiKeyServiceProvider, sceneServiceProvider,
+                scopePublicationCoordinator, runtimePublicationWorker, sceneFeatureFlags,
+                mutationTransaction, taskEventWriter, commandTransportCapture,
+                HostingRentAdmissionService.unconfigured());
+    }
+
+    @Autowired
+    public AgentServiceImpl(
+            AgentRuntimeDao agentRuntimeDao,
+            AgentIdentityService agentIdentityService,
+            AgentPersonaDao agentPersonaDao,
+            AgentPersonaBindingDao agentPersonaBindingDao,
+            AgentTaskMetaDao agentTaskMetaDao,
+            AgentTaskMemberDao agentTaskMemberDao,
+            AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService,
+            AgentTaskNoteDao agentTaskNoteDao,
+            DialogueTemplateDao dialogueTemplateDao,
+            ObjectProvider<AgentEventPublisher> eventPublisherProvider,
+            ObjectProvider<TaskService> taskServiceProvider,
+            ObjectProvider<ApiKeyService> apiKeyServiceProvider,
+            ObjectProvider<AgentSceneService> sceneServiceProvider,
+            AgentScopePublicationCoordinator scopePublicationCoordinator,
+            AgentHostedRuntimePublicationWorker runtimePublicationWorker,
+            AgentSceneFeatureFlags sceneFeatureFlags,
+            AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter taskEventWriter,
+            AgentCommandTransportCapture commandTransportCapture,
+            HostingRentAdmissionService hostingRentAdmissionService) {
         this.agentRuntimeDao = agentRuntimeDao;
         this.agentIdentityService = agentIdentityService;
         this.agentPersonaDao = agentPersonaDao;
@@ -192,10 +281,24 @@ public class AgentServiceImpl implements AgentService {
         this.apiKeyServiceProvider = apiKeyServiceProvider;
         this.sceneServiceProvider = sceneServiceProvider;
         this.scopePublicationCoordinator = scopePublicationCoordinator;
+        this.runtimePublicationWorker = runtimePublicationWorker;
         this.sceneFeatureFlags = sceneFeatureFlags;
         this.mutationTransaction = mutationTransaction;
         this.taskEventWriter = taskEventWriter;
         this.commandTransportCapture = commandTransportCapture;
+        this.hostingRentAdmissionService = Objects.requireNonNull(
+                hostingRentAdmissionService, "hostingRentAdmissionService");
+    }
+
+    @Autowired
+    void configureFundedBountyService(ObjectProvider<FundedBountyService> provider) {
+        this.fundedBountyService = Objects.requireNonNull(provider, "provider").getIfAvailable();
+    }
+
+    @Autowired
+    void configureFundedBountyLegacyGuard(ObjectProvider<FundedBountyLegacyGuard> provider) {
+        this.fundedBountyLegacyGuard = Objects.requireNonNull(provider, "provider")
+                .getIfAvailable(FundedBountyLegacyGuard::failClosed);
     }
 
     @Override
@@ -238,8 +341,10 @@ public class AgentServiceImpl implements AgentService {
 
         if (entity.getId() == null) {
             agentRuntimeDao.insert(entity);
+            observeSkillLifecycle(entity);
         } else {
             agentRuntimeDao.updateById(entity);
+            observeSkillLifecycle(entity);
         }
         if (outputDeliveryEnabled) {
             require(agentRuntimeDao.replaceOutputCapabilities(
@@ -247,7 +352,8 @@ public class AgentServiceImpl implements AgentService {
                     token, null, null, System.currentTimeMillis()) == 1,
                     "Agent output runtime generation reset failed");
         }
-        publishAgentSnapshotAfterCommit("agent-register", clientId, jiacn, toRuntimeDTO(entity));
+        publishAgentSnapshotAfterCommit("agent-register", jiacn, clientId, jiacn,
+                entity.getAgentId(), requireBindingId(entity));
         return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());
     }
 
@@ -263,12 +369,12 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public PageInfo<AgentRuntimeDTO> listRoster(String status, String ability, int pageNum, int pageSize) {
+        String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
         PageHelper.startPage(pageNum, pageSize);
-        List<AgentRuntimeDTO> agents = agentRuntimeDao.findRosterByOwner(resolveCurrentClientId(), resolveCurrentJiacn(), status, ability)
-                .stream()
-                .map(this::toRuntimeDTO)
-                .toList();
-        return PageInfo.of(agents);
+        PageInfo<AgentRuntimeEntity> agents = PageInfo.of(
+                agentRuntimeDao.findRosterByOwner(clientId, ownerJiacn, status, ability));
+        return agents.convert(runtime -> toRuntimeDTO(runtime, clientId, ownerJiacn));
     }
 
     @Override
@@ -312,32 +418,30 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentRuntimeDTO bindPersona(String personaCode) {
-        String clientId = resolveCurrentClientId();
-        String jiacn = resolveCurrentJiacn();
+    public AgentRuntimeDTO bindPersona(String tenantId, String clientId, String jiacn, String personaCode) {
+        AgentHostedBindingTransaction.Scope exactScope =
+                new AgentHostedBindingTransaction.Scope(tenantId, clientId, jiacn);
         AgentPersonaEntity persona = requirePersona(personaCode);
         if (Boolean.TRUE.equals(persona.getSystemAgent())) {
             throw new AgentBizException(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be bound");
         }
-        AgentPersonaBindingEntity bound = agentPersonaBindingDao.findActiveByClientAndPersona(clientId, persona.getPersonaCode());
+        AgentPersonaBindingEntity bound = agentPersonaBindingDao.findExactActiveByScopeAndPersonaForUpdate(
+                exactScope.tenantId(), exactScope.clientId(), exactScope.ownerJiacn(), persona.getPersonaCode());
         if (bound != null) {
-            if (jiacn.equals(bound.getJiacn())) {
-                AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
-                        jiacn, clientId, jiacn, bound.getAgentId());
-                agentIdentityService.requireActiveBinding(identity, null);
-                AgentRuntimeEntity existing = agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId());
-                return existing == null
-                        ? createRuntimeFromBinding(bound, identity.getCanonicalAgentId(), persona, AgentConstants.STATUS_OFFLINE)
-                        : toRuntimeDTO(requireExactRuntime(existing, identity.getCanonicalAgentId(),
-                                clientId, jiacn, bound.getId()));
-            }
-            throw new AgentBizException(AgentErrorConstants.PERSONA_BOUND, "Persona has been bound in this client");
+            AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
+                    exactScope.tenantId(), exactScope.clientId(), exactScope.ownerJiacn(), bound.getAgentId());
+            agentIdentityService.requireActiveBinding(identity, null);
+            AgentRuntimeEntity existing = agentRuntimeDao.findByAgentId(identity.getCanonicalAgentId());
+            return existing == null
+                    ? createRuntimeFromBinding(bound, identity.getCanonicalAgentId(), persona, AgentConstants.STATUS_OFFLINE)
+                    : toRuntimeDTO(requireExactRuntime(existing, identity.getCanonicalAgentId(),
+                            exactScope.clientId(), exactScope.ownerJiacn(), bound.getId()));
         }
 
         AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
-        binding.setClientId(clientId);
-        binding.setTenantId(jiacn);
-        binding.setJiacn(jiacn);
+        binding.setClientId(exactScope.clientId());
+        binding.setTenantId(exactScope.tenantId());
+        binding.setJiacn(exactScope.ownerJiacn());
         binding.setPersonaCode(persona.getPersonaCode());
         binding.setAgentId(generateAgentId());
         binding.setBoundAt(System.currentTimeMillis());
@@ -347,51 +451,6 @@ public class AgentServiceImpl implements AgentService {
                 binding, "A08 persona bind: " + persona.getPersonaCode());
         return createRuntimeFromBinding(binding, identity.getCanonicalAgentId(),
                 persona, AgentConstants.STATUS_OFFLINE);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public AgentPersonaBindResultDTO bindPersona(String personaCode, String mode) {
-        AgentRuntimeDTO agent = bindPersona(personaCode);
-        AgentPersonaEntity persona = requirePersona(personaCode);
-        String normalizedMode = StringUtil.isBlank(mode) ? BIND_MODE_LOCAL : mode.trim().toLowerCase();
-        if (BIND_MODE_SERVER.equals(normalizedMode)) {
-            return buildServerHostedBinding(agent, persona);
-        }
-        if (BIND_MODE_LOCAL.equals(normalizedMode)) {
-            return buildLocalBindingGuide(agent, persona);
-        }
-        throw new IllegalArgumentException("Unsupported bind mode: " + mode);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void unbindPersona(String personaCode) {
-        String clientId = resolveCurrentClientId();
-        String jiacn = resolveCurrentJiacn();
-        AgentPersonaEntity persona = requirePersona(personaCode);
-        if (Boolean.TRUE.equals(persona.getSystemAgent())) {
-            throw new AgentBizException(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be unbound");
-        }
-        AgentPersonaBindingEntity binding = agentPersonaBindingDao.findActiveByClientJiacnAndPersona(clientId, jiacn, persona.getPersonaCode());
-        if (binding == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Persona is not bound to current user");
-        }
-        AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
-                jiacn, clientId, jiacn, binding.getAgentId());
-        binding.setStatus(AgentConstants.BINDING_STATUS_INACTIVE);
-        agentPersonaBindingDao.updateById(binding);
-        agentIdentityService.suspendForBinding(jiacn, clientId, jiacn, binding.getId());
-        disableServerHostedProfile(persona);
-        AgentRuntimeEntity runtime = agentRuntimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
-        if (runtime != null) {
-            runtime = requireExactRuntime(runtime, identity.getCanonicalAgentId(),
-                    clientId, jiacn, binding.getId());
-            runtime.setStatus(AgentConstants.STATUS_OFFLINE);
-            runtime.setLastSeenAt(System.currentTimeMillis());
-            require(agentRuntimeDao.updateById(runtime) == 1, "Agent runtime update failed");
-            publishAgentSnapshotAfterCommit("agent-unbind", clientId, jiacn, toRuntimeDTO(runtime));
-        }
     }
 
     @Override
@@ -493,8 +552,10 @@ public class AgentServiceImpl implements AgentService {
         }
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
+        observeSkillLifecycle(entity);
         AgentRuntimeDTO dto = toRuntimeDTO(entity);
-        publishAgentSnapshotAfterCommit("agent-presence", clientId, jiacn, dto);
+        publishAgentSnapshotAfterCommit("agent-presence", jiacn, clientId, jiacn,
+                entity.getAgentId(), requireBindingId(entity));
         return dto;
     }
 
@@ -583,11 +644,48 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public PageInfo<AgentTaskDTO> searchTasks(AgentTaskSearchDTO request) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task search scope is required");
+        }
+        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
+        Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
+        if (!(tenantClaim instanceof String tenantId)
+                || !(clientClaim instanceof String clientId)
+                || tenantId.isEmpty() || clientId.isEmpty()
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(tenantId)
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(clientId)
+                || tenantId.codePointCount(0, tenantId.length()) > 50
+                || clientId.codePointCount(0, clientId.length()) > 50
+                || Character.isWhitespace(tenantId.codePointAt(0))
+                || Character.isSpaceChar(tenantId.codePointAt(0))
+                || Character.isWhitespace(tenantId.codePointBefore(tenantId.length()))
+                || Character.isSpaceChar(tenantId.codePointBefore(tenantId.length()))
+                || Character.isWhitespace(clientId.codePointAt(0))
+                || Character.isSpaceChar(clientId.codePointAt(0))
+                || Character.isWhitespace(clientId.codePointBefore(clientId.length()))
+                || Character.isSpaceChar(clientId.codePointBefore(clientId.length()))
+                || tenantId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || clientId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || tenantId.codePoints().anyMatch(Character::isISOControl)
+                || clientId.codePoints().anyMatch(Character::isISOControl)
+                || "0".equals(tenantId) || "0".equals(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task search scope is invalid");
+        }
+
         int pageNum = Optional.ofNullable(request.getPageNum()).orElse(1);
         int pageSize = Optional.ofNullable(request.getPageSize()).orElse(20);
         String keyword = request.getKeyword();
-        List<AgentTaskDTO> tasks = agentTaskMetaDao.search(request.getStatus(), request.getAbility())
+        List<AgentTaskDTO> tasks = agentTaskMetaDao.search(
+                        tenantId, clientId, request.getStatus(), request.getAbility())
                 .stream()
+                .peek(task -> requireScopedTaskProjection(
+                        task, tenantId, clientId, task == null ? null : task.getTaskId()))
                 .map(this::toTaskDTO)
                 .filter(task -> matchesTaskKeyword(task, keyword))
                 .toList();
@@ -596,6 +694,40 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public Map<String, Long> countTasksByStatus(AgentTaskSearchDTO request) {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task count scope is required");
+        }
+        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
+        Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
+        if (!(tenantClaim instanceof String tenantId)
+                || !(clientClaim instanceof String clientId)
+                || tenantId.isEmpty() || clientId.isEmpty()
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(tenantId)
+                || !StandardCharsets.UTF_8.newEncoder().canEncode(clientId)
+                || tenantId.codePointCount(0, tenantId.length()) > 50
+                || clientId.codePointCount(0, clientId.length()) > 50
+                || Character.isWhitespace(tenantId.codePointAt(0))
+                || Character.isSpaceChar(tenantId.codePointAt(0))
+                || Character.isWhitespace(tenantId.codePointBefore(tenantId.length()))
+                || Character.isSpaceChar(tenantId.codePointBefore(tenantId.length()))
+                || Character.isWhitespace(clientId.codePointAt(0))
+                || Character.isSpaceChar(clientId.codePointAt(0))
+                || Character.isWhitespace(clientId.codePointBefore(clientId.length()))
+                || Character.isSpaceChar(clientId.codePointBefore(clientId.length()))
+                || tenantId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || clientId.codePoints().allMatch(codePoint ->
+                        Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint))
+                || tenantId.codePoints().anyMatch(Character::isISOControl)
+                || clientId.codePoints().anyMatch(Character::isISOControl)
+                || "0".equals(tenantId) || "0".equals(clientId)) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated task count scope is invalid");
+        }
+
         Map<String, Long> counts = new LinkedHashMap<>();
         counts.put("total", 0L);
         List.of(AgentConstants.TASK_STATUS_OPEN, AgentConstants.TASK_STATUS_ASSIGNED,
@@ -605,10 +737,14 @@ public class AgentServiceImpl implements AgentService {
 
         String ability = request == null ? null : request.getAbility();
         String keyword = request == null ? null : request.getKeyword();
-        agentTaskMetaDao.search(null, ability).stream()
-                .filter(task -> StringUtil.isBlank(keyword) || String.valueOf(task.getTaskId()).contains(keyword))
+        agentTaskMetaDao.search(tenantId, clientId, null, ability).stream()
+                .peek(task -> requireScopedTaskProjection(
+                        task, tenantId, clientId, task == null ? null : task.getTaskId()))
+                .filter(task -> StringUtil.isBlank(keyword)
+                        || String.valueOf(task.getTaskId()).contains(keyword))
                 .forEach(task -> {
-                    String status = Optional.ofNullable(task.getRewardStatus()).orElse(AgentConstants.TASK_STATUS_OPEN);
+                    String status = Optional.ofNullable(task.getRewardStatus())
+                            .orElse(AgentConstants.TASK_STATUS_OPEN);
                     counts.put("total", counts.get("total") + 1);
                     counts.put(status, counts.getOrDefault(status, 0L) + 1);
                 });
@@ -647,6 +783,9 @@ public class AgentServiceImpl implements AgentService {
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO createTask(AgentTaskCreateDTO request) {
         require(request != null && !StringUtil.isBlank(request.getTitle()), "title is required");
+        require(request.getGrossBountyAmountMicro() == null && request.getSettlementPolicy() == null
+                        && request.getRequiredSkillRequirements() == null,
+                "funded task fields require the funded bounty endpoint");
 
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
@@ -775,6 +914,47 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    public List<String> listTaskWritableMemberAgentIds(
+            String tenantId, String clientId, String taskId) {
+        require(!StringUtil.isBlank(tenantId), "tenantId is required");
+        require(!StringUtil.isBlank(clientId), "clientId is required");
+        require(!StringUtil.isBlank(taskId), "taskId is required");
+
+        AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        if (task == null || !Objects.equals(tenantId, task.getTenantId())
+                || !Objects.equals(clientId, task.getClientId())
+                || !Objects.equals(taskId, task.getTaskId())) {
+            return List.of();
+        }
+        try {
+            AgentTaskStatus.fromPersistedValue(task.getRewardStatus());
+        } catch (IllegalArgumentException invalidTaskStatus) {
+            return List.of();
+        }
+
+        List<AgentTaskMemberEntity> members = Optional.ofNullable(
+                agentTaskMemberDao.listByTask(tenantId, clientId, taskId))
+                .orElseGet(Collections::emptyList);
+        LinkedHashSet<String> writableAgentIds = new LinkedHashSet<>();
+        for (AgentTaskMemberEntity member : members) {
+            require(member != null
+                            && Objects.equals(tenantId, member.getTenantId())
+                            && Objects.equals(clientId, member.getClientId())
+                            && Objects.equals(taskId, member.getTaskId())
+                            && isExactStoredText(member.getAgentId(), 100)
+                            && TASK_MEMBER_ROLES.contains(member.getMemberRole())
+                            && TASK_ASSIGNMENT_SOURCES.contains(member.getAssignmentSource()),
+                    "Persisted task member is outside the writable task scope");
+            AgentTaskMemberStatus status =
+                    AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus());
+            if (TASK_CONVERSATION_WRITABLE_STATUSES.contains(status)) {
+                writableAgentIds.add(member.getAgentId());
+            }
+        }
+        return List.copyOf(writableAgentIds);
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request) {
         return assignTaskInternal(taskId, request, false);
@@ -786,6 +966,7 @@ public class AgentServiceImpl implements AgentService {
         require(!requestedAgentIds.isEmpty(), "agentId is required");
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
+        requireLegacyAssignmentAllowed(tenantId, clientId, taskId, automatic, requestedAgentIds.size());
         List<String> agentIds = legacyTaskCompatibilityService.resolveAgentIds(
                 tenantId, clientId, tenantId, requestedAgentIds);
         boolean allowQueue = Boolean.TRUE.equals(request.getAllowQueue());
@@ -807,21 +988,38 @@ public class AgentServiceImpl implements AgentService {
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
                         tenantId, clientId, taskId, agentIds, automatic,
-                        (lockedTask, canonicalAgentIds) -> {
-                            assignmentOutputContexts.set(
-                                    commandTransportCapture.prepareTaskOutputContexts(
-                                            tenantId, clientId, taskId, canonicalAgentIds));
-                            List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
-                                    .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
-                                    .toList();
-                            for (AgentRuntimeEntity agent : runtimes) {
-                                validateAssignableAgent(agent, allowQueue);
-                                validateAbility(agent, lockedTask);
+                        new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
+                            @Override
+                            public void beforeIdentityLock(
+                                    AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
+                                requireLegacyAssignmentAllowedLocked(tenantId, clientId,
+                                        lockedTask.getTaskId(), automatic, canonicalAgentIds.size());
                             }
-                            if (automatic) {
-                                validateCompleteAbilityCoverage(runtimes, lockedTask);
+
+                            @Override
+                            public void validate(
+                                    AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
+                                List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
+                                        .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
+                                        .toList();
+                                for (AgentRuntimeEntity agent : runtimes) {
+                                    requireHostingNewWork(tenantId, clientId, agent.getAgentId());
+                                    validateAssignableAgent(agent, allowQueue);
+                                    validateAbility(agent, lockedTask);
+                                }
+                                if (automatic) {
+                                    validateCompleteAbilityCoverage(runtimes, lockedTask);
+                                }
+                                lockedAssignedAgents.set(List.copyOf(runtimes));
                             }
-                            lockedAssignedAgents.set(List.copyOf(runtimes));
+
+                            @Override
+                            public void afterAssignmentRows(
+                                    AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
+                                assignmentOutputContexts.set(
+                                        commandTransportCapture.prepareTaskOutputContexts(
+                                                tenantId, clientId, taskId, canonicalAgentIds));
+                            }
                         });
         AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
                 agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
@@ -870,6 +1068,7 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request) {
+        requireLegacyAssignmentAllowed(resolveCurrentJiacn(), resolveCurrentClientId(), taskId, true, 1);
         AgentTaskDTO task = getTask(taskId);
         List<AgentTaskRecommendationDTO> recommendations = recommendTaskAssignees(taskId);
         List<String> selectedAgentIds = selectAutoAssignAgentIds(task, recommendations);
@@ -888,6 +1087,7 @@ public class AgentServiceImpl implements AgentService {
         require(!StringUtil.isBlank(request.getAgentId()), "agentId is required");
         String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
+        requireLegacyLifecycleAllowed(tenantId, clientId, taskId);
         String reportingAgentId = legacyTaskCompatibilityService.resolveAgentId(
                 tenantId, clientId, tenantId, request.getAgentId());
         requireOwnedAgent(requireAgent(reportingAgentId));
@@ -983,6 +1183,7 @@ public class AgentServiceImpl implements AgentService {
         return mutationTransaction.executeWithLockedTaskRoot(
                 tenantId, clientId, taskId, taskRoot -> {
                     requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
+                    requireLegacyLifecycleAllowedLocked(tenantId, clientId, taskId);
                     AgentTaskStatus currentStatus;
                     try {
                         currentStatus = AgentTaskStatus.fromPersistedValue(
@@ -1306,257 +1507,12 @@ public class AgentServiceImpl implements AgentService {
         runtime.setErrorMessage(null);
         if (runtime.getId() == null) {
             agentRuntimeDao.insert(runtime);
+            observeSkillLifecycle(runtime);
         } else {
             agentRuntimeDao.updateById(runtime);
+            observeSkillLifecycle(runtime);
         }
         return toRuntimeDTO(runtime);
-    }
-
-    private AgentPersonaBindResultDTO buildServerHostedBinding(AgentRuntimeDTO agent, AgentPersonaEntity persona) {
-        String profileId = safeProfileId(persona.getPersonaCode());
-        Path workdir = AGENT_CLIENTS_DIR.resolve(safePathName(agent.getAgentId()));
-        Path codexHome = CODEX_WS_AGENT_DIR.resolve(".codex-" + profileId);
-        ServerProfileWriteResult writeResult;
-        String profileApiKey;
-        try {
-            Files.createDirectories(workdir);
-            Files.createDirectories(codexHome);
-            copyCodexBootstrapFile("config.toml", codexHome);
-            copyCodexBootstrapFile("auth.json", codexHome);
-            if (!Files.exists(CODEX_WS_PROFILES_FILE)) {
-                Files.createDirectories(CODEX_WS_PROFILES_FILE.getParent());
-                Files.writeString(CODEX_WS_PROFILES_FILE, defaultProfileSection(), StandardCharsets.UTF_8);
-            }
-            String profiles = Files.readString(CODEX_WS_PROFILES_FILE, StandardCharsets.UTF_8);
-            profileApiKey = ensureAgentApiKey();
-            String section = serverProfileSection(profileId, agent, persona, workdir, codexHome, true, profileApiKey);
-            writeResult = upsertServerProfileSection(profiles, profileId, section);
-            if (writeResult.changed) {
-                Files.writeString(CODEX_WS_PROFILES_FILE, writeResult.profiles, StandardCharsets.UTF_8);
-            }
-        } catch (IOException e) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "Failed to provision server agent: " + e.getMessage());
-        }
-
-        AgentPersonaBindResultDTO result = baseBindResult(agent, BIND_MODE_SERVER, profileId, workdir, codexHome);
-        result.setApiKey(profileApiKey);
-        result.setProfilesFile(CODEX_WS_PROFILES_FILE.toString());
-        result.setServerProfileAlreadyExists(writeResult.existed);
-        result.setServerProfileCreated(!writeResult.existed);
-        result.setMessage(!writeResult.existed
-                ? "已创建服务器代管 profile，codex-ws-agent 会自动检测后上线"
-                : "服务器代管 profile 已启用，codex-ws-agent 会自动检测配置变化");
-        result.setCommands(List.of(
-                "tail -f /home/isp/apps/codex-ws-agent/logs/startlog_*.log",
-                "journalctl -u codex-ws-agent -f"
-        ));
-        return result;
-    }
-
-    private void disableServerHostedProfile(AgentPersonaEntity persona) {
-        String profileId = safeProfileId(persona.getPersonaCode());
-        if (!Files.exists(CODEX_WS_PROFILES_FILE)) {
-            return;
-        }
-        try {
-            String profiles = Files.readString(CODEX_WS_PROFILES_FILE, StandardCharsets.UTF_8);
-            ServerProfileRange range = findServerProfileRange(profiles, profileId);
-            if (range == null) {
-                return;
-            }
-            String section = profiles.substring(range.start, range.end);
-            String disabledSection = setProfileEnabled(section, false);
-            if (!section.equals(disabledSection)) {
-                Files.writeString(CODEX_WS_PROFILES_FILE,
-                        profiles.substring(0, range.start) + disabledSection + profiles.substring(range.end),
-                        StandardCharsets.UTF_8);
-            }
-        } catch (IOException e) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "Failed to disable server agent: " + e.getMessage());
-        }
-    }
-
-    private String serverProfileSection(String profileId, AgentRuntimeDTO agent, AgentPersonaEntity persona,
-            Path workdir, Path codexHome, boolean enabled, String apiKey) {
-        return """
-
-[agent.%s]
-agentId=%s
-codexWorkdir=%s
-agentName=%s
-personaName=%s
-codexHome=%s
-enabled=%s
-apiKey=%s
-""".formatted(profileId, agent.getAgentId(), workdir, persona.getName(), personaDisplayTitle(persona), codexHome, enabled, apiKey);
-    }
-
-    private String ensureAgentApiKey() {
-        ApiKeyService apiKeyService = apiKeyServiceProvider.getIfAvailable();
-        if (apiKeyService == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "ApiKeyService is unavailable");
-        }
-        String clientId = resolveCurrentClientId();
-        String jiacn = resolveCurrentJiacn();
-        long now = System.currentTimeMillis();
-
-        OauthApiKeyEntity query = new OauthApiKeyEntity();
-        query.setClientId(clientId);
-        query.setJiacn(jiacn);
-        return apiKeyService.findList(query).stream()
-                .filter(key -> key.getStatus() == null || key.getStatus() == 1)
-                .filter(key -> key.getExpireTime() == null || key.getExpireTime() > now)
-                .filter(key -> !StringUtil.isBlank(key.getApiKey()))
-                .findFirst()
-                .map(OauthApiKeyEntity::getApiKey)
-                .orElseGet(() -> createAgentApiKey(apiKeyService, clientId, jiacn));
-    }
-
-    private String createAgentApiKey(ApiKeyService apiKeyService, String clientId, String jiacn) {
-        OauthApiKeyEntity apiKey = new OauthApiKeyEntity();
-        apiKey.setClientId(clientId);
-        apiKey.setJiacn(jiacn);
-        apiKey.setApiKey("cdx_" + UUID.randomUUID().toString().replace("-", ""));
-        apiKey.setKeyName("codex-ws-agent");
-        apiKey.setStatus(1);
-        apiKey.setDescription("Auto-created for Codex WebSocket agent profile binding");
-        OauthApiKeyEntity saved = apiKeyService.create(apiKey);
-        if (saved == null || StringUtil.isBlank(saved.getApiKey())) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "Failed to create Codex agent API key");
-        }
-        return saved.getApiKey();
-    }
-
-    private ServerProfileWriteResult upsertServerProfileSection(String profiles, String profileId, String section) {
-        ServerProfileRange range = findServerProfileRange(profiles, profileId);
-        if (range == null) {
-            String nextProfiles = profiles.stripTrailing() + section;
-            return new ServerProfileWriteResult(false, true, nextProfiles);
-        }
-        String nextProfiles = profiles.substring(0, range.start) + section + profiles.substring(range.end);
-        return new ServerProfileWriteResult(true, !profiles.equals(nextProfiles), nextProfiles);
-    }
-
-    private ServerProfileRange findServerProfileRange(String profiles, String profileId) {
-        String header = "[agent." + profileId + "]";
-        int headerStart = profiles.indexOf(header);
-        if (headerStart < 0) {
-            return null;
-        }
-        int sectionStart = headerStart;
-        while (sectionStart > 0 && profiles.charAt(sectionStart - 1) != '\n') {
-            sectionStart--;
-        }
-        int nextAgent = profiles.indexOf("\n[agent.", headerStart + header.length());
-        int nextProfile = profiles.indexOf("\n[profile.", headerStart + header.length());
-        int sectionEnd = Stream.of(nextAgent, nextProfile)
-                .filter(index -> index >= 0)
-                .min(Integer::compareTo)
-                .orElse(profiles.length());
-        return new ServerProfileRange(sectionStart, sectionEnd);
-    }
-
-    private String setProfileEnabled(String section, boolean enabled) {
-        String value = "enabled=" + enabled;
-        if (section.lines().anyMatch(line -> line.trim().startsWith("enabled="))) {
-            return section.replaceAll("(?m)^\\s*enabled\\s*=.*$", value);
-        }
-        String suffix = section.endsWith("\n") ? "" : "\n";
-        return section + suffix + value + "\n";
-    }
-
-    private static class ServerProfileRange {
-        private final int start;
-        private final int end;
-
-        private ServerProfileRange(int start, int end) {
-            this.start = start;
-            this.end = end;
-        }
-    }
-
-    private static class ServerProfileWriteResult {
-        private final boolean existed;
-        private final boolean changed;
-        private final String profiles;
-
-        private ServerProfileWriteResult(boolean existed, boolean changed, String profiles) {
-            this.existed = existed;
-            this.changed = changed;
-            this.profiles = profiles;
-        }
-    }
-
-    private AgentPersonaBindResultDTO buildLocalBindingGuide(AgentRuntimeDTO agent, AgentPersonaEntity persona) {
-        String profileId = safeProfileId(persona.getPersonaCode());
-        Path workdir = Path.of("$HOME/cyf-agent-clients").resolve(safePathName(agent.getAgentId()));
-        Path codexHome = Path.of("$HOME/.codex-" + profileId);
-        AgentPersonaBindResultDTO result = baseBindResult(agent, BIND_MODE_LOCAL, profileId, workdir, codexHome);
-        String apiKey = ensureAgentApiKey();
-        String wsUrl = Optional.ofNullable(System.getenv("WS_URL"))
-                .filter(value -> !StringUtil.isBlank(value))
-                .orElse("ws://<当前服务地址>:10018/ws/agent/channel");
-        result.setApiKey(apiKey);
-        result.setMessage("已入名册，请在本机安装 codex-ws-agent 并用下列配置连接");
-        result.setEnvExample("""
-WS_URL=%s
-OPENCLAW_API_KEY=%s
-DEFAULT_CODEX_PROFILE=%s
-CODEX_PROFILES_FILE=$PWD/codex-profiles.conf
-HEARTBEAT_MS=30000
-RECONNECT_MAX_MS=1800000
-""".formatted(wsUrl, apiKey, profileId).stripTrailing());
-        result.setProfileExample((defaultProfileSection() + """
-
-[agent.%s]
-agentId=%s
-codexWorkdir=%s
-agentName=%s
-personaName=%s
-codexHome=%s
-isDefault=true
-""").formatted(profileId, agent.getAgentId(), workdir, persona.getName(), personaDisplayTitle(persona), codexHome).stripTrailing());
-        result.setCommands(List.of(
-                "mkdir -p ~/apps/codex-ws-agent && cd ~/apps/codex-ws-agent",
-                "cp /path/to/agent-client.mjs /path/to/package.json .",
-                "npm install",
-                "codex login",
-                "node agent-client.mjs"
-        ));
-        return result;
-    }
-
-    private AgentPersonaBindResultDTO baseBindResult(AgentRuntimeDTO agent, String mode, String profileId, Path workdir, Path codexHome) {
-        AgentPersonaBindResultDTO result = new AgentPersonaBindResultDTO();
-        result.setAgent(agent);
-        result.setMode(mode);
-        result.setAgentId(agent.getAgentId());
-        result.setProfileId(profileId);
-        result.setWorkdir(workdir.toString());
-        result.setCodexHome(codexHome.toString());
-        result.setServerProfileCreated(false);
-        result.setServerProfileAlreadyExists(false);
-        return result;
-    }
-
-    private void copyCodexBootstrapFile(String filename, Path codexHome) throws IOException {
-        Path source = CODEX_WS_AGENT_DIR.resolve(".codex").resolve(filename);
-        Path target = codexHome.resolve(filename);
-        if (Files.exists(source) && !Files.exists(target)) {
-            Files.copy(source, target, StandardCopyOption.COPY_ATTRIBUTES);
-        }
-    }
-
-    private String defaultProfileSection() {
-        return """
-[default]
-codexBin=/usr/local/bin/codex
-codexWorkdir=/home/isp
-codexSandbox=workspace-write
-codexApproval=never
-codexSessionMode=resume
-codexTimeoutMs=900000
-""".stripTrailing();
     }
 
     private String personaDisplayTitle(AgentPersonaEntity persona) {
@@ -1576,6 +1532,11 @@ codexTimeoutMs=900000
     }
 
     private AgentRuntimeDTO toRuntimeDTO(AgentRuntimeEntity entity) {
+        return toRuntimeDTO(entity, resolveCurrentClientId(), resolveCurrentJiacn());
+    }
+
+    private AgentRuntimeDTO toRuntimeDTO(
+            AgentRuntimeEntity entity, String clientId, String ownerJiacn) {
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(entity.getAgentId());
         dto.setName(entity.getName());
@@ -1606,8 +1567,8 @@ codexTimeoutMs=900000
         dto.setLastSeenAt(entity.getLastSeenAt());
         dto.setErrorMessage(entity.getErrorMessage());
         dto.setBound(!StringUtil.isBlank(entity.getOwnerJiacn()));
-        dto.setBoundToMe(Objects.equals(resolveCurrentClientId(), entity.getClientId())
-                && Objects.equals(resolveCurrentJiacn(), entity.getOwnerJiacn()));
+        dto.setBoundToMe(Objects.equals(clientId, entity.getClientId())
+                && Objects.equals(ownerJiacn, entity.getOwnerJiacn()));
         dto.setCanBind(false);
         dto.setCanOperate(Boolean.TRUE.equals(dto.getBoundToMe()) && !Boolean.TRUE.equals(dto.getSystemAgent()));
         dto.setStats(buildStats(entity));
@@ -1617,7 +1578,8 @@ codexTimeoutMs=900000
     private AgentRuntimeDTO toCatalogDTO(AgentPersonaEntity persona, String clientId, String jiacn) {
         AgentPersonaBindingEntity binding = Boolean.TRUE.equals(persona.getSystemAgent())
                 ? null
-                : agentPersonaBindingDao.findActiveByClientAndPersona(clientId, persona.getPersonaCode());
+                : agentPersonaBindingDao.findExactActiveByScopeAndPersona(
+                        jiacn, clientId, jiacn, persona.getPersonaCode());
         boolean boundToMe = binding != null && jiacn.equals(binding.getJiacn());
         String catalogAgentId = null;
         if (boundToMe) {
@@ -1953,8 +1915,35 @@ codexTimeoutMs=900000
         dto.setStartedAt(meta.getStartedAt());
         dto.setCompletedAt(meta.getCompletedAt());
         dto.setFailureReason(meta.getFailureReason());
+        dto.setTaskVersion(meta.getTaskVersion() == null ? null : Long.toString(meta.getTaskVersion()));
+        FundedBountyService fundingService = this.fundedBountyService;
+        if (fundingService != null) {
+            dto.setFunding(fundingService.findFunding(meta.getTenantId(), meta.getClientId(), meta.getTaskId()));
+            dto.setRequiredSkillRequirements(fundingService.requiredSkills(
+                    meta.getTenantId(), meta.getClientId(), meta.getTaskId()));
+        }
         enrichTaskPlan(dto, meta.getTaskId());
         return dto;
+    }
+
+    private void requireLegacyAssignmentAllowed(String tenantId, String clientId, String taskId,
+            boolean automatic, int targetCount) {
+        fundedBountyLegacyGuard.requireAssignmentAllowed(
+                tenantId, clientId, taskId, automatic, targetCount, false);
+    }
+
+    private void requireLegacyAssignmentAllowedLocked(String tenantId, String clientId, String taskId,
+            boolean automatic, int targetCount) {
+        fundedBountyLegacyGuard.requireAssignmentAllowed(
+                tenantId, clientId, taskId, automatic, targetCount, true);
+    }
+
+    private void requireLegacyLifecycleAllowed(String tenantId, String clientId, String taskId) {
+        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, false);
+    }
+
+    private void requireLegacyLifecycleAllowedLocked(String tenantId, String clientId, String taskId) {
+        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
     }
 
     private void applyAssignmentProjection(
@@ -2115,6 +2104,7 @@ codexTimeoutMs=900000
                 ? failureReason : null);
         entity.setLastSeenAt(System.currentTimeMillis());
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
+        observeSkillLifecycle(entity);
         return toRuntimeDTO(entity);
     }
 
@@ -2317,9 +2307,21 @@ codexTimeoutMs=900000
     }
 
     private void publishAgentSnapshotAfterCommit(
-            String operation, String clientId, String ownerJiacn, AgentRuntimeDTO agent) {
-        publishOptionalAfterCommit(operation,
-                () -> publishScopedAgentSnapshots(clientId, ownerJiacn, List.of(agent)));
+            String operation, String tenantId, String clientId, String ownerJiacn,
+            String agentId, long bindingId) {
+        publishOptionalAfterCommit(operation, () ->
+                scopePublicationCoordinator.execute(clientId, ownerJiacn, () -> {
+                    AgentHostedBindingTransaction.Scope scope =
+                            new AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
+                    AgentRuntimeEntity current = runtimePublicationWorker
+                            .revalidateForPublication(scope, agentId, bindingId);
+                    if (current == null) {
+                        return;
+                    }
+                    publishAgentSnapshots(clientId, ownerJiacn,
+                            List.of(toRuntimeDTO(current, clientId, ownerJiacn)),
+                            listCapabilities(clientId, ownerJiacn));
+                }));
     }
 
     private void publishScopedAgentSnapshots(

@@ -4,6 +4,7 @@ import cn.jia.chat.voice.VoiceIdentity;
 import cn.jia.chat.voice.api.VoiceErrorCode;
 import cn.jia.chat.voice.api.VoiceException;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
+import cn.jia.chat.voice.validation.VoiceUnicode;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -15,7 +16,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 public final class VoiceDigests {
-    private static final byte[] CONTRACT = "cyf-voice-v1".getBytes(StandardCharsets.UTF_8);
     private final byte[] identityHmacSecret;
 
     public VoiceDigests(VoiceSpeechProperties properties) {
@@ -31,6 +31,12 @@ public final class VoiceDigests {
         if (!available()) {
             throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, null);
         }
+        if (identity == null
+                || !VoiceUnicode.isWellFormedUtf16(identity.jiacn())
+                || !VoiceUnicode.isWellFormedUtf16(identity.clientId())
+                || !VoiceUnicode.isWellFormedUtf16(identity.subject())) {
+            throw VoiceException.of(VoiceErrorCode.UNAUTHORIZED, null);
+        }
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(identityHmacSecret, "HmacSHA256"));
@@ -45,7 +51,7 @@ public final class VoiceDigests {
 
     public String transcription(String language, String mediaType, byte[] audioDigest) {
         MessageDigest digest = sha256();
-        updateLengthPrefixed(digest, CONTRACT);
+        updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.TRANSCRIPTION.namespace().getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, language.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, mediaType.getBytes(StandardCharsets.UTF_8));
@@ -54,8 +60,13 @@ public final class VoiceDigests {
     }
 
     public String synthesis(String text, String voice, String format) {
+        if (!VoiceUnicode.isWellFormedUtf16(text)
+                || !VoiceUnicode.isWellFormedUtf16(voice)
+                || !VoiceUnicode.isWellFormedUtf16(format)) {
+            throw VoiceException.of(VoiceErrorCode.INVALID_REQUEST, null);
+        }
         MessageDigest digest = sha256();
-        updateLengthPrefixed(digest, CONTRACT);
+        updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.SYNTHESIS.namespace().getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, voice.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, format.getBytes(StandardCharsets.UTF_8));

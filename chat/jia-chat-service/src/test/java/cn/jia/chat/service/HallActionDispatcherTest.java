@@ -221,6 +221,23 @@ class HallActionDispatcherTest extends BaseMockTest {
     }
 
     @Test
+    void expiredHostingRejectsNewInviteBeforeDurableWriterOrLegacyQueue() {
+        org.mockito.Mockito.doThrow(new IllegalStateException("HOSTING_RENT_RENEWAL_REQUIRED"))
+                .when(agentService).requireHostingNewWork("tenant-a", "client-a", "agent-target");
+        var intent = durableIntent("intent-expired-rent", "agent-target", "task-1");
+        intent.setActionType("task_briefing");
+        var durable = dispatcher(AgentRabbitActivationState.DISPATCH_CANARY, true);
+        assertEquals(HallActionDispatcher.STATUS_FAILED, durable.dispatch(intent,
+                new HallTrustedCaller("tenant-a", "client-a", "caller-agent")).getStatus());
+        verify(writerProvider, never()).getIfAvailable();
+        setScope("tenant-a", "client-a");
+        var legacy = dispatcher(AgentRabbitActivationState.OFF, true);
+        assertEquals(HallActionDispatcher.STATUS_FAILED, legacy.dispatch(intent).getStatus());
+        assertTrue(legacy.mailbox("agent-target").isEmpty());
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
+    }
+
+    @Test
     void taskBriefingEndpointShapeDurablyDispatchesIntentScopedTaskInvite() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);

@@ -26,9 +26,13 @@ import tools.jackson.databind.json.JsonMapper;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -50,6 +54,9 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
     private static final Set<String> TYPES = Set.of("summary", "document", "patch", "commit",
             "test_report", "analysis", "dataset", "link");
     private static final Set<String> VISIBILITIES = Set.of("task_members", "reviewer", "private");
+    private static final Set<String> TEXT_PREVIEW_MIME_TYPES = Set.of(
+            "text/plain", "text/markdown", "text/csv", "application/json");
+    private static final long MAX_TEXT_PREVIEW_BYTES = 262_144L;
     private static final ObjectMapper JSON = JsonMapper.builder().build();
     private final OutputRunAuthorizationService authorization;
     private final OutputUploadDao dao;
@@ -217,37 +224,20 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
     @Override
     public OutputDetailDTO getVersion(String tenantId, String clientId, String jiacn,
             String sourceType, String sourceId, String outputId, String version) {
-        OutputVersionProvider.PublishRow row = authorizedVersion(tenantId, clientId, jiacn,
-                sourceType, sourceId, outputId, version, false);
-        if (row.objectId() != null) requireReadyObject(tenantId, clientId, row, false);
-        return new OutputDetailDTO(summary(row), row.content());
+        ReadPlan plan = prepareReadPlan(tenantId, clientId, jiacn, sourceType,
+                sourceId, outputId, version, false);
+        String content = plan.row().content();
+        if (plan.object() != null && supportsUploadedTextPreview(plan.row())) {
+            content = readTextPreview(tenantId, clientId, plan);
+        }
+        return new OutputDetailDTO(summary(plan.row()), content);
     }
 
     @Override
     public OutputDownloadDTO downloadVersion(String tenantId, String clientId, String jiacn,
             String sourceType, String sourceId, String outputId, String version) {
-        long numeric = decimal(version, false);
-        DownloadPlan plan = tx.execute(status -> {
-            requireScope(tenantId, clientId, jiacn); requireSource(sourceType, sourceId);
-            requireId(outputId, 100);
-            OutputVersionProvider p = provider(sourceType);
-            p.requireOwner(tenantId, clientId, jiacn, sourceId, false);
-            OutputVersionProvider.PublishRow row = requireReadable(
-                    p.findVersion(tenantId, clientId, sourceId, outputId, numeric), sourceType);
-            if (row.retainUntil() <= System.currentTimeMillis()) throw gone();
-            if (row.objectId() == null) return new DownloadPlan(row, null, null);
-            OutputUploadDao.ObjectRow object = requireReadyObject(tenantId, clientId, row, true);
-            byte[] pin = referenceKey(tenantId, clientId, sourceType, sourceId, outputId,
-                    numeric, "READ_PIN", UUID.randomUUID().toString());
-            long now = System.currentTimeMillis();
-            OutputUploadDao.ReferenceRow reference = new OutputUploadDao.ReferenceRow(
-                    tenantId, clientId, pin, row.objectId(), sourceType, sourceId, outputId,
-                    numeric, "READ_PIN", null, "ACTIVE",
-                    Math.addExact(now, OutputConstants.READ_PIN_MILLIS), false, null, null);
-            if (dao.insertReference(reference, now) != 1) throw unavailable("OUTPUT_READ_PIN_FAILED");
-            return new DownloadPlan(row, object, pin);
-        });
-        if (plan == null) throw unavailable("OUTPUT_TRANSACTION_EMPTY");
+        ReadPlan plan = prepareReadPlan(tenantId, clientId, jiacn, sourceType,
+                sourceId, outputId, version, true);
         if (plan.object() == null) {
             byte[] bytes = plan.row().content().getBytes(StandardCharsets.UTF_8);
             return download(plan.row(), new ByteArrayInputStream(bytes));
@@ -263,20 +253,87 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
         }
     }
 
-    private OutputVersionProvider.PublishRow authorizedVersion(String tenantId, String clientId,
-            String jiacn, String sourceType, String sourceId, String outputId, String version,
-            boolean lockSource) {
-        long numeric = decimal(version, false); requireScope(tenantId, clientId, jiacn);
-        requireSource(sourceType, sourceId); requireId(outputId, 100);
-        OutputVersionProvider.PublishRow row = tx.execute(status -> {
+    private ReadPlan prepareReadPlan(String tenantId, String clientId, String jiacn,
+            String sourceType, String sourceId, String outputId, String version,
+            boolean download) {
+        long numeric = decimal(version, false);
+        ReadPlan plan = tx.execute(status -> {
+            requireScope(tenantId, clientId, jiacn); requireSource(sourceType, sourceId);
+            requireId(outputId, 100);
             OutputVersionProvider p = provider(sourceType);
-            p.requireOwner(tenantId, clientId, jiacn, sourceId, lockSource);
-            return requireReadable(p.findVersion(tenantId, clientId, sourceId, outputId, numeric),
-                    sourceType);
+            p.requireOwner(tenantId, clientId, jiacn, sourceId, false);
+            OutputVersionProvider.PublishRow row = requireReadable(
+                    p.findVersion(tenantId, clientId, sourceId, outputId, numeric), sourceType);
+            if (row.retainUntil() <= System.currentTimeMillis()) throw gone();
+            if (row.objectId() == null) return new ReadPlan(row, null, null);
+            OutputUploadDao.ObjectRow object = requireReadyObject(tenantId, clientId, row, true);
+            if (!download && !supportsUploadedTextPreview(row)) {
+                return new ReadPlan(row, object, null);
+            }
+            byte[] pin = referenceKey(tenantId, clientId, sourceType, sourceId, outputId,
+                    numeric, "READ_PIN", UUID.randomUUID().toString());
+            long now = System.currentTimeMillis();
+            OutputUploadDao.ReferenceRow reference = new OutputUploadDao.ReferenceRow(
+                    tenantId, clientId, pin, row.objectId(), sourceType, sourceId, outputId,
+                    numeric, "READ_PIN", null, "ACTIVE",
+                    Math.addExact(now, OutputConstants.READ_PIN_MILLIS), false, null, null);
+            if (dao.insertReference(reference, now) != 1) throw unavailable("OUTPUT_READ_PIN_FAILED");
+            return new ReadPlan(row, object, pin);
         });
-        if (row == null) throw hidden();
-        if (row.retainUntil() <= System.currentTimeMillis()) throw gone();
-        return row;
+        if (plan == null) throw unavailable("OUTPUT_TRANSACTION_EMPTY");
+        return plan;
+    }
+
+    private String readTextPreview(String tenantId, String clientId, ReadPlan plan) {
+        try {
+            InputStream raw = storage.open(plan.object().bucket(), plan.object().storageKey(),
+                    plan.object().storageVersion());
+            try (InputStream input = new PinnedInputStream(raw, tenantId, clientId,
+                    plan.row().objectId(), plan.pin())) {
+                byte[] bytes = readBoundedPreview(input, plan.row().contentByteLength());
+                if (!MessageDigest.isEqual(sha256(bytes), plan.row().contentHash())) {
+                    throw unavailable("OUTPUT_OBJECT_UNAVAILABLE");
+                }
+                return decodeUtf8(bytes);
+            }
+        } catch (OutputDeliveryException failure) {
+            throw failure;
+        } catch (IOException failure) {
+            releasePin(tenantId, clientId, plan.row().objectId(), plan.pin());
+            throw unavailable("OUTPUT_STORAGE_UNAVAILABLE");
+        }
+    }
+
+    private static byte[] readBoundedPreview(InputStream input, long expectedSize) throws IOException {
+        if (expectedSize < 0 || expectedSize > MAX_TEXT_PREVIEW_BYTES) {
+            throw unavailable("OUTPUT_OBJECT_UNAVAILABLE");
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.toIntExact(expectedSize));
+        byte[] buffer = new byte[8192];
+        long total = 0;
+        while (true) {
+            int count = input.read(buffer);
+            if (count < 0) break;
+            if (count == 0) continue;
+            total = Math.addExact(total, count);
+            if (total > expectedSize || total > MAX_TEXT_PREVIEW_BYTES) {
+                throw unavailable("OUTPUT_OBJECT_UNAVAILABLE");
+            }
+            output.write(buffer, 0, count);
+        }
+        if (total != expectedSize) throw unavailable("OUTPUT_OBJECT_UNAVAILABLE");
+        return output.toByteArray();
+    }
+
+    private static String decodeUtf8(byte[] bytes) {
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException invalid) {
+            throw unavailable("OUTPUT_OBJECT_UNAVAILABLE");
+        }
     }
 
     private OutputVersionProvider.PublishRow requireReadable(OutputVersionProvider.PublishRow row,
@@ -343,13 +400,20 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
 
     private OutputSummaryDTO summary(OutputVersionProvider.PublishRow row) {
         String state = row.retainUntil() <= System.currentTimeMillis() ? "EXPIRED" : "AVAILABLE";
-        String preview = row.content() != null ? "TEXT"
+        String preview = row.content() != null || supportsUploadedTextPreview(row) ? "TEXT"
                 : row.mimeType() != null && row.mimeType().startsWith("image/") ? "IMAGE" : "NONE";
         return new OutputSummaryDTO(new OutputSourceDTO(sourceType(row), row.sourceId()),
                 row.outputId(), Long.toString(row.version()), row.title(), row.fileName(),
                 row.mimeType(), Long.toString(row.contentByteLength()),
                 HexFormat.of().formatHex(row.contentHash()), Long.toString(row.createdAt()), state,
                 row.publicationKind(), preview, "AVAILABLE".equals(state), null);
+    }
+
+    private static boolean supportsUploadedTextPreview(OutputVersionProvider.PublishRow row) {
+        return row != null && row.objectId() != null
+                && TEXT_PREVIEW_MIME_TYPES.contains(row.mimeType())
+                && row.contentByteLength() >= 0
+                && row.contentByteLength() <= MAX_TEXT_PREVIEW_BYTES;
     }
 
     private OutputDownloadDTO download(OutputVersionProvider.PublishRow row, InputStream stream) {
@@ -586,8 +650,8 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
     }
     private record Material(byte[] hash, long size, String mime, String fileName,
                             OutputUploadDao.ObjectRow object) { }
-    private record DownloadPlan(OutputVersionProvider.PublishRow row,
-                                OutputUploadDao.ObjectRow object, byte[] pin) { }
+    private record ReadPlan(OutputVersionProvider.PublishRow row,
+            OutputUploadDao.ObjectRow object, byte[] pin) { }
     private record Cursor(long snapshotAt, long createdAt, String outputId,
                           long version, long expiresAt) { }
 }

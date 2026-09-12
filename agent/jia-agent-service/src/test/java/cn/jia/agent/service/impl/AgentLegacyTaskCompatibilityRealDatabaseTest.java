@@ -10,6 +10,7 @@ import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskEventEntity;
 import cn.jia.agent.entity.AgentTaskEventWriteResult;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
@@ -255,11 +256,19 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     void precommitFailureAfterMemberLocksRollsBackAssignmentRows() {
         assertThrows(IllegalStateException.class, () -> service.assignResolved(
                 TENANT, CLIENT, TASK, List.of(AGENT_A), false,
-                (lockedTask, agentIds) -> {
-                    assertEquals(1, count("agent_task_meta"));
-                    assertEquals(1, count("agent_task_member"));
-                    assertEquals(1, count("agent_task_work_item"));
-                    throw new IllegalStateException("forced output precommit failure");
+                new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
+                    @Override
+                    public void validate(AgentTaskMetaEntity lockedTask, List<String> agentIds) {
+                    }
+
+                    @Override
+                    public void afterAssignmentRows(
+                            AgentTaskMetaEntity lockedTask, List<String> agentIds) {
+                        assertEquals(1, count("agent_task_meta"));
+                        assertEquals(1, count("agent_task_member"));
+                        assertEquals(1, count("agent_task_work_item"));
+                        throw new IllegalStateException("forced output precommit failure");
+                    }
                 }));
 
         assertEquals(0, count("agent_task_meta"));

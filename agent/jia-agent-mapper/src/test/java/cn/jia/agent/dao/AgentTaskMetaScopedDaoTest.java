@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -86,6 +88,83 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(fallbackSql.endsWith("limit #{limit}"), fallbackSql);
     }
 
+    @Test
+    void durableActiveWorkGuardCoversTaskMemberAndWorkItemAssignmentsInExactScope()
+            throws Exception {
+        Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "findDurableActiveAssignmentByAgentForUpdate",
+                String.class, String.class, String.class);
+        String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
+
+        assertTrue(sql.contains("select task.* from agent_task_meta task"), sql);
+        assertTrue(sql.contains("task.tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("task.client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("task.assigned_agent_id = #{agentid}"), sql);
+        assertTrue(sql.contains("cast(task.assigned_agent_id as binary(400)) "), sql);
+        assertTrue(sql.contains("cast(task.reward_status as binary) in ("), sql);
+        String taskAssignment = sql.substring(
+                sql.indexOf("task.assigned_agent_id = #{agentid}"),
+                sql.indexOf("or exists ( select 1 from agent_task_member"));
+        for (String status : new String[]{
+                "open", "planning", "assigned", "running", "reviewing", "blocked"}) {
+            assertTrue(taskAssignment.contains("cast('" + status + "' as binary)"),
+                    status + ": " + taskAssignment);
+        }
+
+        assertTrue(sql.contains("from agent_task_member member"), sql);
+        assertTrue(sql.contains("member.agent_id = #{agentid}"), sql);
+        assertTrue(sql.contains("member.task_id = task.task_id"), sql);
+        assertTrue(sql.contains("cast(member.tenant_id as binary(200)) "), sql);
+        assertTrue(sql.contains("cast(member.client_id as binary(200)) "), sql);
+        String memberAssignment = sql.substring(
+                sql.indexOf("from agent_task_member member"),
+                sql.indexOf("or exists ( select 1 from agent_task_work_item"));
+        for (String status : new String[]{"accepted", "working", "blocked"}) {
+            assertTrue(memberAssignment.contains("cast('" + status + "' as binary)"),
+                    status + ": " + memberAssignment);
+        }
+
+        assertTrue(sql.contains("from agent_task_work_item work_item"), sql);
+        assertTrue(sql.contains("work_item.assignee_agent_id = #{agentid}"), sql);
+        assertTrue(sql.contains("work_item.task_id = task.task_id"), sql);
+        assertTrue(sql.contains("cast(work_item.tenant_id as binary(200)) "), sql);
+        assertTrue(sql.contains("cast(work_item.client_id as binary(200)) "), sql);
+        String workItemAssignment = sql.substring(
+                sql.indexOf("from agent_task_work_item work_item"),
+                sql.indexOf("order by task.task_id asc, task.id asc"));
+        for (String status : new String[]{
+                "pending", "ready", "claimed", "running", "blocked", "submitted"}) {
+            assertTrue(workItemAssignment.contains("cast('" + status + "' as binary)"),
+                    status + ": " + workItemAssignment);
+        }
+
+        assertTrue(sql.contains("order by task.task_id asc, task.id asc"), sql);
+        assertTrue(sql.endsWith("limit 1 for update"), sql);
+    }
+
+
+    @Test
+    void taskSearchSqlUsesByteExactTenantAndClientWithoutLegacyFallback()
+            throws Exception {
+        Method method = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "searchExactInScope", String.class, String.class,
+                String.class, String.class);
+        String sql = normalize(String.join(" ", method.getAnnotation(Select.class).value()));
+
+        assertTrue(sql.contains("where tenant_id = #{tenantid}"), sql);
+        assertTrue(sql.contains("client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("cast(tenant_id as binary(200)) "
+                + "= cast(#{tenantid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(tenant_id) = octet_length(#{tenantid})"), sql);
+        assertTrue(sql.contains("cast(client_id as binary(200)) "
+                + "= cast(#{clientid} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(client_id) = octet_length(#{clientid})"), sql);
+        assertTrue(sql.contains("reward_status = #{status}"), sql);
+        assertTrue(sql.contains("required_abilities like concat('%', '\"', #{ability}, '\"', '%')"), sql);
+        assertFalse(sql.contains("tenant_id = '0'"), sql);
+        assertFalse(sql.contains("tenant_id is null"), sql);
+        assertTrue(sql.contains("order by update_time desc"), sql);
+    }
 
     @Test
     void workItemRootLockUsesByteExactScopeChildAndTaskJoinWithDeterministicOrder()
@@ -144,6 +223,20 @@ class AgentTaskMetaScopedDaoTest {
         assertEquals(List.of(), dao.findByAgentId(
                 "tenant-a", "client-a", "agent-a", 9999));
         verify(mapper).selectByAgentInScope("tenant-a", "client-a", "agent-a", 500);
+
+        when(mapper.searchExactInScope(
+                "tenant-a", "client-a", "open", "planning"))
+                .thenReturn(List.of());
+        assertEquals(List.of(), dao.search(
+                "tenant-a", "client-a", "open", "planning"));
+        verify(mapper).searchExactInScope(
+                "tenant-a", "client-a", "open", "planning");
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.search("0", "client-a", null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.search("tenant-a", "0", null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.search(" tenant-a", "client-a", null, null));
 
         dao.reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);
         verify(mapper).reserveOpenTaskRoot("tenant-a", "client-a", "task-a", 1L);

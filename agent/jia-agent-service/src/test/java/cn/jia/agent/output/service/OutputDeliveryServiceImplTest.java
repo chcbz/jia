@@ -13,12 +13,15 @@ import cn.jia.agent.output.dao.impl.OutputUploadDaoImpl;
 import cn.jia.agent.output.dto.OutputPublishDTO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -34,6 +37,7 @@ import javax.crypto.spec.SecretKeySpec;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -45,7 +49,9 @@ class OutputDeliveryServiceImplTest {
     private OutputUploadDao dao;
     private FakeProvider provider;
     private OutputDeliveryServiceImpl service;
+    private OutputRunAuthorizationService auth;
     private JdbcTemplate jdbc;
+    @TempDir Path tempDirectory;
 
     @BeforeEach void setup() throws Exception {
         DriverManagerDataSource ds=new DriverManagerDataSource();
@@ -53,7 +59,7 @@ class OutputDeliveryServiceImplTest {
         ds.setUrl("jdbc:h2:mem:od03_"+System.nanoTime()+";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1");
         jdbc=new JdbcTemplate(ds);createTables();
         dao=new OutputUploadDaoImpl(jdbc);provider=new FakeProvider();
-        OutputRunAuthorizationService auth=mock(OutputRunAuthorizationService.class);
+        auth=mock(OutputRunAuthorizationService.class);
         when(auth.authorizeTicket("a".repeat(43),OutputConstants.OP_STATUS,true))
                 .thenReturn(new OutputTicketAuthorization("owner","client","run-1","TASK",
                         "task-1","agent-1","binding-1","runtime-1",
@@ -81,10 +87,12 @@ class OutputDeliveryServiceImplTest {
         assertEquals(1,provider.rows.size());
         var detail=service.getVersion("owner","client","owner","TASK","task-1","artifact-1","1");
         assertEquals("Object title",detail.item().title());
+        assertEquals(new String(BYTES, StandardCharsets.UTF_8), detail.content());
         var download=service.downloadVersion("owner","client","owner","TASK","task-1","artifact-1","1");
         try(InputStream in=download.stream()){assertArrayEquals(BYTES,in.readAllBytes());}
-        assertEquals("RELEASED",jdbc.queryForObject(
-                "SELECT state FROM output_object_reference WHERE reference_kind='READ_PIN'",String.class));
+        assertEquals(2,jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='READ_PIN' AND state='RELEASED'",
+                Integer.class));
         assertEquals(1,jdbc.queryForObject(
                 "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='OWNER_SHARE'",Integer.class));
     }
@@ -197,6 +205,124 @@ class OutputDeliveryServiceImplTest {
                 "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='READ_PIN'",Integer.class));
     }
 
+    @Test void uploadedMarkdownPreviewReadsARealFileWithBoundedUtf8AndReadPin() throws Exception {
+        byte[] markdown = "# 交付结果\n\n已完成授权后的 Markdown 预览。\n".getBytes(StandardCharsets.UTF_8);
+        Path stored = tempDirectory.resolve("uploaded-readme.md");
+        Files.write(stored, markdown);
+        insertReadyObject("object-md", "readme.md", markdown, "text/markdown");
+        OutputDeliveryServiceImpl fileService = new OutputDeliveryServiceImpl(auth, dao,
+                new PathStorage(stored),
+                new DataSourceTransactionManager(jdbc.getDataSource()),
+                properties(false), List.of(provider));
+
+        var published = fileService.publish(BEARER, "publish-markdown-01", "TASK", "task-1",
+                request("markdown-1", "1", true, "Markdown", "object-md", null));
+        var detail = fileService.getVersion(
+                "owner", "client", "owner", "TASK", "task-1", "markdown-1", "1");
+
+        assertEquals("TEXT", published.previewKind());
+        assertEquals("TEXT", detail.item().previewKind());
+        assertEquals(new String(markdown, StandardCharsets.UTF_8), detail.content());
+        assertEquals("RELEASED", jdbc.queryForObject(
+                "SELECT state FROM output_object_reference WHERE reference_kind='READ_PIN'",
+                String.class));
+    }
+
+    @Test void oversizedUploadedTextStaysDownloadOnlyWithoutOpeningStorageOrCreatingReadPin()
+            throws Exception {
+        byte[] digest = sha("oversized-text-placeholder");
+        long oversized = 262_145L;
+        long now = System.currentTimeMillis();
+        dao.insertObject(new OutputUploadDao.ObjectRow("owner", "client", "object-large", "run-1",
+                "bucket", "large-key", null, digest, oversized, "text/plain",
+                "PASSED", "READY", "test", now, now + 60_000, null, 0,
+                null, null, null, null), now);
+        dao.insertUpload(new OutputUploadDao.UploadRow("owner", "client", "upload-large", "run-1",
+                "binding-1", "object-large", "large.txt", oversized, digest, "text/plain",
+                "READY", 1L, now, null, now + 60_000, now + 60_000, oversized, true,
+                0, null, null, null, null), now);
+        OutputDeliveryServiceImpl unopened = new OutputDeliveryServiceImpl(auth, dao,
+                new OutputObjectStorage() {
+                    @Override public Stored putCreateOnly(String b,String k,InputStream i,long l,String t,long d){throw new UnsupportedOperationException();}
+                    @Override public InputStream open(String b,String k,String v){throw new AssertionError("oversized preview must not open storage");}
+                    @Override public void putTombstone(String b,String k,String t,long d){throw new UnsupportedOperationException();}
+                    @Override public Head head(String b,String k){throw new UnsupportedOperationException();}
+                    @Override public void delete(String b,String k,String v){throw new UnsupportedOperationException();}
+                }, new DataSourceTransactionManager(jdbc.getDataSource()),
+                properties(false), List.of(provider));
+
+        var published = unopened.publish(BEARER, "publish-large-text", "TASK", "task-1",
+                request("large-text", "1", true, "Large text", "object-large", null));
+        var detail = unopened.getVersion(
+                "owner", "client", "owner", "TASK", "task-1", "large-text", "1");
+
+        assertEquals("NONE", published.previewKind());
+        assertEquals("NONE", detail.item().previewKind());
+        assertNull(detail.content());
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='READ_PIN'",
+                Integer.class));
+    }
+
+    @Test void uploadedTextPreviewRejectsLengthAndHashDriftAndReleasesReadPins()
+            throws Exception {
+        byte[] expectedLength = "expected-length".getBytes(StandardCharsets.UTF_8);
+        insertReadyObject("object-length", "length.txt", expectedLength, "text/plain");
+        Path shortFile = tempDirectory.resolve("short.txt");
+        Files.write(shortFile, "short".getBytes(StandardCharsets.UTF_8));
+        OutputDeliveryServiceImpl shortService = fileService(shortFile);
+        shortService.publish(BEARER, "publish-length-drift", "TASK", "task-1",
+                request("length-drift", "1", true, "Length drift", "object-length", null));
+        assertPreviewFailure(shortService, "length-drift", "OUTPUT_OBJECT_UNAVAILABLE");
+
+        byte[] expectedHash = "same-size-good".getBytes(StandardCharsets.UTF_8);
+        byte[] wrongHash = "same-size-evil".getBytes(StandardCharsets.UTF_8);
+        assertEquals(expectedHash.length, wrongHash.length);
+        insertReadyObject("object-hash", "hash.txt", expectedHash, "text/plain");
+        Path changedFile = tempDirectory.resolve("changed.txt");
+        Files.write(changedFile, wrongHash);
+        OutputDeliveryServiceImpl changedService = fileService(changedFile);
+        changedService.publish(BEARER, "publish-hash-drift", "TASK", "task-1",
+                request("hash-drift", "1", true, "Hash drift", "object-hash", null));
+        assertPreviewFailure(changedService, "hash-drift", "OUTPUT_OBJECT_UNAVAILABLE");
+
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='READ_PIN' AND state='ACTIVE'",
+                Integer.class));
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='READ_PIN' AND state='RELEASED'",
+                Integer.class));
+    }
+
+    @Test void uploadedTextPreviewRejectsInvalidUtf8AndReadFailureWithoutLeakingPins()
+            throws Exception {
+        byte[] invalidUtf8 = {(byte) 0xc3, (byte) 0x28};
+        insertReadyObject("object-utf8", "invalid.txt", invalidUtf8, "text/plain");
+        Path invalidFile = tempDirectory.resolve("invalid.txt");
+        Files.write(invalidFile, invalidUtf8);
+        OutputDeliveryServiceImpl invalidService = fileService(invalidFile);
+        invalidService.publish(BEARER, "publish-invalid-utf8", "TASK", "task-1",
+                request("invalid-utf8", "1", true, "Invalid UTF-8", "object-utf8", null));
+        assertPreviewFailure(invalidService, "invalid-utf8", "OUTPUT_OBJECT_UNAVAILABLE");
+
+        byte[] readable = "read-failure".getBytes(StandardCharsets.UTF_8);
+        insertReadyObject("object-read", "read.txt", readable, "text/plain");
+        OutputDeliveryServiceImpl failingService = new OutputDeliveryServiceImpl(auth, dao,
+                new FailingReadStorage(),
+                new DataSourceTransactionManager(jdbc.getDataSource()),
+                properties(false), List.of(provider));
+        failingService.publish(BEARER, "publish-read-failure", "TASK", "task-1",
+                request("read-failure", "1", true, "Read failure", "object-read", null));
+        assertPreviewFailure(failingService, "read-failure", "OUTPUT_STORAGE_UNAVAILABLE");
+
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='READ_PIN' AND state='ACTIVE'",
+                Integer.class));
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_object_reference WHERE reference_kind='READ_PIN' AND state='RELEASED'",
+                Integer.class));
+    }
+
     @Test void expiredVersionStaysGoneEvenWhenSameObjectHasAnotherLiveReference() {
         long now=System.currentTimeMillis();
         provider.rows.add(new OutputVersionProvider.PublishRow("owner","client","task-1",
@@ -217,6 +343,31 @@ class OutputDeliveryServiceImplTest {
     private OutputPublishDTO request(String id,String version,boolean share,String title,
             String object,String content){return new OutputPublishDTO("run-1","0",title,"summary",
             content,object,id,version,null,"task_members",share);}
+    private void insertReadyObject(String objectId, String fileName, byte[] bytes, String mime)
+            throws Exception {
+        long now = System.currentTimeMillis();
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+        dao.insertObject(new OutputUploadDao.ObjectRow("owner", "client", objectId, "run-1",
+                "bucket", "key-" + objectId, null, digest, (long) bytes.length, mime,
+                "PASSED", "READY", "test", now, now + 60_000, null, 0,
+                null, null, null, null), now);
+        dao.insertUpload(new OutputUploadDao.UploadRow("owner", "client", "upload-" + objectId,
+                "run-1", "binding-1", objectId, fileName, bytes.length, digest, mime,
+                "READY", 1L, now, null, now + 60_000, now + 60_000, bytes.length, true,
+                0, null, null, null, null), now);
+    }
+    private OutputDeliveryServiceImpl fileService(Path path) {
+        return new OutputDeliveryServiceImpl(auth, dao, new PathStorage(path),
+                new DataSourceTransactionManager(jdbc.getDataSource()),
+                properties(false), List.of(provider));
+    }
+    private void assertPreviewFailure(
+            OutputDeliveryServiceImpl target, String outputId, String expectedCode) {
+        OutputDeliveryException failure = assertThrows(OutputDeliveryException.class,
+                () -> target.getVersion("owner", "client", "owner", "TASK", "task-1",
+                        outputId, "1"));
+        assertEquals(expectedCode, failure.code());
+    }
     private OutputDeliveryProperties properties(boolean paused){return new OutputDeliveryProperties(true,
             null,null,null,"bucket","localhost",3310,10,50L*1024*1024,90L*1024*1024,null,
             paused,"test-cursor-key-with-at-least-thirty-two-bytes");}
@@ -276,6 +427,30 @@ class OutputDeliveryServiceImplTest {
     private static final class MemoryStorage implements OutputObjectStorage {
         @Override public Stored putCreateOnly(String b,String k,InputStream i,long l,String t,long d){throw new UnsupportedOperationException();}
         @Override public InputStream open(String b,String k,String v){return new ByteArrayInputStream(BYTES);}
+        @Override public void putTombstone(String b,String k,String t,long d){throw new UnsupportedOperationException();}
+        @Override public Head head(String b,String k){throw new UnsupportedOperationException();}
+        @Override public void delete(String b,String k,String v){throw new UnsupportedOperationException();}
+    }
+
+    private static final class PathStorage implements OutputObjectStorage {
+        private final Path path;
+        private PathStorage(Path path) { this.path = path; }
+        @Override public Stored putCreateOnly(String b,String k,InputStream i,long l,String t,long d){throw new UnsupportedOperationException();}
+        @Override public InputStream open(String b,String k,String v) throws java.io.IOException { return Files.newInputStream(path); }
+        @Override public void putTombstone(String b,String k,String t,long d){throw new UnsupportedOperationException();}
+        @Override public Head head(String b,String k){throw new UnsupportedOperationException();}
+        @Override public void delete(String b,String k,String v){throw new UnsupportedOperationException();}
+    }
+
+    private static final class FailingReadStorage implements OutputObjectStorage {
+        @Override public Stored putCreateOnly(String b,String k,InputStream i,long l,String t,long d){throw new UnsupportedOperationException();}
+        @Override public InputStream open(String b,String k,String v) {
+            return new InputStream() {
+                @Override public int read() throws java.io.IOException {
+                    throw new java.io.IOException("injected preview read failure");
+                }
+            };
+        }
         @Override public void putTombstone(String b,String k,String t,long d){throw new UnsupportedOperationException();}
         @Override public Head head(String b,String k){throw new UnsupportedOperationException();}
         @Override public void delete(String b,String k,String v){throw new UnsupportedOperationException();}

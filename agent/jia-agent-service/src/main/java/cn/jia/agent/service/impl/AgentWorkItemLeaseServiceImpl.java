@@ -44,6 +44,12 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     private final LongSupplier clock;
     private final Supplier<String> tokenGenerator;
     private final long maxLeaseDurationMillis;
+    private cn.jia.agent.service.AgentHostingWorkAdmission hostingWorkAdmission = (tenant, client, agent) -> { };
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setHostingWorkAdmission(cn.jia.agent.service.AgentHostingWorkAdmission admission) {
+        this.hostingWorkAdmission = Objects.requireNonNull(admission);
+    }
 
     @Inject
     public AgentWorkItemLeaseServiceImpl(
@@ -110,6 +116,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             requireReadyLeaseState(current);
             requireClaimableAttempts(current);
             requireAssigneePermitsClaim(current.getAssigneeAgentId(), required.agentId());
+            hostingWorkAdmission.requireNewWork(tenantId, clientId, required.agentId());
             String leaseToken = generatedToken();
             long leaseUntil = addPositive(now, duration, "lease duration overflow");
             AgentTaskWorkItemDTO update = copyWorkItem(current);

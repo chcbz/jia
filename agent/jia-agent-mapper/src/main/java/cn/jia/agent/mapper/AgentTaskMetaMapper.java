@@ -145,6 +145,102 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("limit") int limit);
 
     @Select("""
+            SELECT task.*
+            FROM agent_task_meta task
+            WHERE task.tenant_id = #{tenantId}
+              AND task.client_id = #{clientId}
+              AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+              AND (
+                  (
+                      task.assigned_agent_id = #{agentId}
+                      AND CAST(task.assigned_agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
+                      AND OCTET_LENGTH(task.assigned_agent_id) = OCTET_LENGTH(#{agentId})
+                      AND CAST(task.reward_status AS BINARY) IN (
+                          CAST('open' AS BINARY), CAST('planning' AS BINARY),
+                          CAST('assigned' AS BINARY), CAST('running' AS BINARY),
+                          CAST('reviewing' AS BINARY), CAST('blocked' AS BINARY)
+                      )
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM agent_task_member member
+                      WHERE member.tenant_id = #{tenantId}
+                        AND member.client_id = #{clientId}
+                        AND member.agent_id = #{agentId}
+                        AND member.task_id = task.task_id
+                        AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                        AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
+                        AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                        AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+                        AND CAST(member.agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
+                        AND OCTET_LENGTH(member.agent_id) = OCTET_LENGTH(#{agentId})
+                        AND CAST(member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
+                        AND OCTET_LENGTH(member.task_id) = OCTET_LENGTH(task.task_id)
+                        AND CAST(member.member_status AS BINARY) IN (
+                            CAST('accepted' AS BINARY), CAST('working' AS BINARY),
+                            CAST('blocked' AS BINARY)
+                        )
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM agent_task_work_item work_item
+                      WHERE work_item.tenant_id = #{tenantId}
+                        AND work_item.client_id = #{clientId}
+                        AND work_item.assignee_agent_id = #{agentId}
+                        AND work_item.task_id = task.task_id
+                        AND CAST(work_item.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                        AND OCTET_LENGTH(work_item.tenant_id) = OCTET_LENGTH(#{tenantId})
+                        AND CAST(work_item.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                        AND OCTET_LENGTH(work_item.client_id) = OCTET_LENGTH(#{clientId})
+                        AND CAST(work_item.assignee_agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
+                        AND OCTET_LENGTH(work_item.assignee_agent_id) = OCTET_LENGTH(#{agentId})
+                        AND CAST(work_item.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
+                        AND OCTET_LENGTH(work_item.task_id) = OCTET_LENGTH(task.task_id)
+                        AND CAST(work_item.status AS BINARY) IN (
+                            CAST('pending' AS BINARY), CAST('ready' AS BINARY),
+                            CAST('claimed' AS BINARY), CAST('running' AS BINARY),
+                            CAST('blocked' AS BINARY), CAST('submitted' AS BINARY)
+                        )
+                  )
+              )
+            ORDER BY task.task_id ASC, task.id ASC
+            LIMIT 1
+            FOR UPDATE
+            """)
+    AgentTaskMetaEntity findDurableActiveAssignmentByAgentForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("agentId") String agentId);
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+            <if test="status != null and status.trim() != ''">
+              AND reward_status = #{status}
+            </if>
+            <if test="ability != null and ability.trim() != ''">
+              AND required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
+            </if>
+            ORDER BY update_time DESC
+            </script>
+            """)
+    List<AgentTaskMetaEntity> searchExactInScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("status") String status,
+            @Param("ability") String ability);
+
+    @Select("""
             SELECT parent.*
             FROM agent_task_meta parent
             WHERE parent.tenant_id = #{tenantId}
@@ -230,6 +326,35 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
             @Param("taskId") String taskId);
+
+    @Update("""
+            UPDATE agent_task_meta
+            SET assigned_agent_id=#{assignedAgentId}, reward_status=#{rewardStatus},
+                assigned_at=#{assignedAt}, collaboration_mode=#{collaborationMode},
+                max_agents=#{maxAgents}, coordinator_agent_id=#{coordinatorAgentId},
+                task_version=#{resultVersion}, update_time=#{updateTime}
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND task_id=#{taskId}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})
+              AND task_version=#{expectedVersion}
+            """)
+    int updateAssignmentByVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("resultVersion") long resultVersion,
+            @Param("assignedAgentId") String assignedAgentId,
+            @Param("rewardStatus") String rewardStatus,
+            @Param("assignedAt") Long assignedAt,
+            @Param("collaborationMode") String collaborationMode,
+            @Param("maxAgents") Integer maxAgents,
+            @Param("coordinatorAgentId") String coordinatorAgentId,
+            @Param("updateTime") long updateTime);
 
     @Update("""
             UPDATE agent_task_meta

@@ -26,6 +26,7 @@ import java.util.Locale;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ChatMessageScopedQueryTest {
     private static final String TENANT = "Tenant-A";
@@ -46,6 +47,25 @@ class ChatMessageScopedQueryTest {
         DataSource dataSource = source;
         jdbc = new JdbcTemplate(dataSource);
         jdbc.execute("DROP ALL OBJECTS");
+        jdbc.execute("""
+                CREATE TABLE chat_conversation (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    title VARCHAR(200),
+                    jiacn VARCHAR_IGNORECASE(50),
+                    status INT,
+                    conversation_type VARCHAR(20),
+                    conversation_scope_type VARCHAR(20),
+                    conversation_scope_key VARCHAR(120),
+                    task_id VARCHAR(64),
+                    target_agent_id VARCHAR(100),
+                    deleted_at BIGINT,
+                    create_time BIGINT,
+                    update_time BIGINT,
+                    tenant_id VARCHAR_IGNORECASE(50),
+                    client_id VARCHAR_IGNORECASE(50),
+                    PRIMARY KEY (id)
+                )
+                """);
         jdbc.execute("""
                 CREATE TABLE chat_message (
                     id BIGINT NOT NULL AUTO_INCREMENT,
@@ -147,6 +167,31 @@ class ChatMessageScopedQueryTest {
                 daoRows.stream().map(ChatMessageEntity::getContent).toList());
     }
 
+
+    @Test
+    void ownedReadJoinsLiveConversationAndFailsClosedOnCrossIdentityContamination() {
+        jdbc.update("""
+                INSERT INTO chat_conversation
+                    (id, jiacn, tenant_id, client_id, conversation_type, deleted_at)
+                VALUES (1, ?, ?, ?, 'normal', NULL),
+                       (2, 'Owner-B', 'Owner-B', ?, 'normal', NULL),
+                       (3, ?, ?, ?, 'normal', 999)
+                """, TENANT, TENANT, CLIENT, CLIENT, TENANT, TENANT, CLIENT);
+        insertOwned(301, "1", TENANT, TENANT, CLIENT, 100, "owned-old");
+        insertOwned(302, "1", TENANT, TENANT, CLIENT, 200, "owned-new");
+        insertOwned(401, "2", "Owner-B", "Owner-B", CLIENT, 300, "foreign");
+        insertOwned(501, "3", TENANT, TENANT, CLIENT, 400, "deleted");
+
+        assertEquals(List.of(301L, 302L), dao.findOwnedByConversationId(
+                TENANT, CLIENT, "1").stream().map(ChatMessageEntity::getId).toList());
+        assertEquals(List.of(), dao.findOwnedByConversationId(TENANT, CLIENT, "2"));
+        assertEquals(List.of(), dao.findOwnedByConversationId(TENANT, CLIENT, "3"));
+
+        insertOwned(303, "1", "tenant-a", TENANT, CLIENT, 500, "case-owner-injection");
+        assertThrows(IllegalStateException.class,
+                () -> dao.findOwnedByConversationId(TENANT, CLIENT, "1"));
+    }
+
     private void insert(
             long id, String tenantId, String clientId, String conversationId,
             long createTime, String content) {
@@ -156,6 +201,18 @@ class ChatMessageScopedQueryTest {
                  tenant_id, client_id)
                 VALUES (?, ?, 'USER', ?, ?, ?, ?, ?)
                 """, id, conversationId, content, createTime, createTime, tenantId, clientId);
+    }
+
+    private void insertOwned(
+            long id, String conversationId, String jiacn, String tenantId,
+            String clientId, long createTime, String content) {
+        jdbc.update("""
+                INSERT INTO chat_message
+                (id, conversation_id, message_type, content, create_time, update_time,
+                 jiacn, tenant_id, client_id)
+                VALUES (?, ?, 'USER', ?, ?, ?, ?, ?, ?)
+                """, id, conversationId, content, createTime, createTime,
+                jiacn, tenantId, clientId);
     }
 
     private void assertBefore(String sql, String first, String second) {

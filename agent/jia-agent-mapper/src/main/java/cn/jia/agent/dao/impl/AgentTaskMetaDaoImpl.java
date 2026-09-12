@@ -6,7 +6,6 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.util.DateUtil;
-import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
@@ -79,11 +78,36 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public AgentTaskMetaEntity findDurableActiveAssignmentByAgentForUpdate(
+            String tenantId, String clientId, String agentId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(agentId, "agentId", 100);
+        return baseMapper.findDurableActiveAssignmentByAgentForUpdate(
+                tenantId, clientId, agentId);
+    }
+
+    @Override
     public List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
             String tenantId, String clientId, String taskId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         return baseMapper.selectAggregationSnapshot(tenantId, clientId, taskId);
+    }
+
+    @Override
+    public int updateAssignmentByVersion(AgentTaskMetaEntity task, long expectedVersion,
+            long resultVersion, long updateTime) {
+        if (task == null) throw new IllegalArgumentException("task is required");
+        TaskCollaborationDaoSupport.requireScope(task.getTenantId(), task.getClientId());
+        requireExactId(task.getTaskId(), "taskId", 100);
+        TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
+        if (resultVersion != expectedVersion + 1 || updateTime <= 0) {
+            throw new IllegalArgumentException("assignment version transition is invalid");
+        }
+        return baseMapper.updateAssignmentByVersion(task.getTenantId(), task.getClientId(),
+                task.getTaskId(), expectedVersion, resultVersion, task.getAssignedAgentId(),
+                task.getRewardStatus(), task.getAssignedAt(), task.getCollaborationMode(),
+                task.getMaxAgents(), task.getCoordinatorAgentId(), updateTime);
     }
 
     @Override
@@ -117,15 +141,13 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
-    public List<AgentTaskMetaEntity> search(String status, String ability) {
-        LambdaQueryWrapper<AgentTaskMetaEntity> wrapper = new LambdaQueryWrapper<>();
-        if (!StringUtil.isBlank(status)) {
-            wrapper.eq(AgentTaskMetaEntity::getRewardStatus, status);
+    public List<AgentTaskMetaEntity> search(
+            String tenantId, String clientId, String status, String ability) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        if ("0".equals(tenantId) || "0".equals(clientId)) {
+            throw new IllegalArgumentException(
+                    "Legacy collaboration scope cannot be searched implicitly");
         }
-        if (!StringUtil.isBlank(ability)) {
-            wrapper.like(AgentTaskMetaEntity::getRequiredAbilities, "\"" + ability + "\"");
-        }
-        wrapper.orderByDesc(AgentTaskMetaEntity::getUpdateTime);
-        return baseMapper.selectList(wrapper);
+        return baseMapper.searchExactInScope(tenantId, clientId, status, ability);
     }
 }

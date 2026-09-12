@@ -6,8 +6,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.ReturnType;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
@@ -15,6 +19,7 @@ import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +29,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -44,6 +50,25 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RedisVoiceRequestCoordinatorContractTest {
+    @Test
+    void preAdmissionLuaOwnsRateAndConcurrencyBeforeAnyDigestOrRequestState() throws Exception {
+        String admit = script("ADMIT_SCRIPT");
+        assertTrue(!admit.contains("digest"));
+        assertTrue(!admit.contains("HGET"));
+        assertTrue(admit.indexOf("GET', KEYS[1]") < admit.indexOf("INCR', KEYS[1]"));
+        assertTrue(admit.indexOf("ZCARD', KEYS[3]") < admit.indexOf("INCR', KEYS[1]"));
+        assertTrue(admit.contains("ZADD', KEYS[3]"));
+        assertTrue(admit.contains("ZADD', KEYS[4]"));
+
+        String beginAdmitted = script("BEGIN_ADMITTED_SCRIPT");
+        assertTrue(beginAdmitted.indexOf("ZSCORE', KEYS[2], ARGV[2]")
+                < beginAdmitted.indexOf("HGET', KEYS[1], 'digest'"));
+        assertTrue(beginAdmitted.contains("ADMISSION_INVALID"));
+        assertTrue(beginAdmitted.contains("digest ~= ARGV[1]"));
+        assertTrue(beginAdmitted.contains("state', 'IN_PROGRESS'"));
+        assertTrue(!beginAdmitted.contains("INCR"));
+    }
+
     @Test
     void beginLuaChecksExactExistingStateBeforeAtomicQuotaAndLeaseReservation() throws Exception {
         String script = script("BEGIN_SCRIPT");
@@ -67,13 +92,13 @@ class RedisVoiceRequestCoordinatorContractTest {
         assertTrue(terminal.contains("state') ~= 'IN_PROGRESS'"));
         assertTrue(terminal.contains("digest') ~= ARGV[1]"));
         assertTrue(terminal.contains("lease') ~= ARGV[2]"));
-        assertTrue(release.contains("lease ~= ARGV[1]"));
         assertTrue(release.contains("state') == 'IN_PROGRESS'"));
         assertTrue(release.contains("state', 'FAILED_UNKNOWN'"));
         assertTrue(release.indexOf("state', 'FAILED_UNKNOWN'")
                 < release.indexOf("ZREM', KEYS[2], ARGV[1]"));
         assertTrue(release.contains("PEXPIRE', KEYS[1], ARGV[2]"));
         assertTrue(release.contains("ZREM', KEYS[2], ARGV[1]"));
+        assertTrue(!release.contains("lease ~= ARGV[1] then return"));
         assertEquals(Duration.ofMinutes(10).toMillis(), RedisVoiceRequestCoordinator.SUCCEEDED_TTL_MS);
         assertEquals(Duration.ofMinutes(2).toMillis(), RedisVoiceRequestCoordinator.FAILED_KNOWN_TTL_MS);
         assertEquals(Duration.ofMinutes(10).toMillis(), RedisVoiceRequestCoordinator.FAILED_UNKNOWN_TTL_MS);
@@ -98,7 +123,13 @@ class RedisVoiceRequestCoordinatorContractTest {
                 assertFailedUnknownReplay(coordinator);
                 assertTokenMismatchCannotTerminateOrRelease(coordinator);
                 assertConcurrentBeginIsAtomic(coordinator);
+                assertRedisReplayRejectsCiphertextTupleTransplants(factory, coordinator);
+                assertPreAdmissionIsBilledAndReleased(factory);
+                assertReplayAndConflictAdmissionsReleaseOwnLease(factory);
+                assertConcurrentPreAdmissionReleaseRestoresEverySlot(factory);
 
+                assertScriptLoaded(factory, "ADMIT_SCRIPT");
+                assertScriptLoaded(factory, "BEGIN_ADMITTED_SCRIPT");
                 assertScriptLoaded(factory, "BEGIN_SCRIPT");
                 assertScriptLoaded(factory, "TERMINAL_SCRIPT");
                 assertScriptLoaded(factory, "RELEASE_SCRIPT");
@@ -106,6 +137,122 @@ class RedisVoiceRequestCoordinatorContractTest {
                 factory.destroy();
             }
         }
+    }
+
+    private static void assertPreAdmissionIsBilledAndReleased(
+            LettuceConnectionFactory factory) {
+        VoiceSpeechProperties properties = new VoiceSpeechProperties();
+        properties.setPerMinute(2);
+        properties.setPerHour(2);
+        properties.setGlobalConcurrency(1);
+        properties.setCacheEncryptionKey(
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        RedisVoiceRequestCoordinator coordinator = new RedisVoiceRequestCoordinator(
+                factory, properties, new VoicePayloadCipher(properties));
+
+        VoiceAdmission first = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "billed-scope", "billed-request-1"));
+        assertEquals(VoiceAdmissionResult.Outcome.CONCURRENCY_LIMITED,
+                coordinator.admit(VoiceOperation.TRANSCRIPTION,
+                        "other-scope", "global-blocked").outcome());
+        coordinator.release(first);
+
+        VoiceAdmission second = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "billed-scope", "billed-request-2"));
+        VoiceBeginResult begun = coordinator.begin(second, "billed-digest-2");
+        assertEquals(VoiceBeginResult.Outcome.RESERVED, begun.outcome());
+        coordinator.failKnown(begun.reservation());
+        coordinator.release(second);
+
+        assertEquals(VoiceAdmissionResult.Outcome.RATE_LIMITED,
+                coordinator.admit(VoiceOperation.TRANSCRIPTION,
+                        "billed-scope", "billed-request-3").outcome());
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.begin(new VoiceAdmission(
+                        VoiceOperation.TRANSCRIPTION, "billed-scope",
+                        "forged-request", "forged-lease"), "forged-digest"));
+    }
+
+    private static void assertReplayAndConflictAdmissionsReleaseOwnLease(
+            LettuceConnectionFactory factory) {
+        VoiceSpeechProperties properties = new VoiceSpeechProperties();
+        properties.setPerMinute(10);
+        properties.setPerHour(10);
+        properties.setGlobalConcurrency(1);
+        properties.setCacheEncryptionKey(
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        RedisVoiceRequestCoordinator coordinator = new RedisVoiceRequestCoordinator(
+                factory, properties, new VoicePayloadCipher(properties));
+
+        String scope = "admitted-replay-scope";
+        String request = "admitted-replay-request";
+        String digest = "admitted-replay-digest";
+        VoiceAdmission original = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, scope, request));
+        VoiceBeginResult first = coordinator.begin(original, digest);
+        coordinator.succeed(first.reservation(),
+                new VoiceCachedResult(new byte[]{1}, "application/json"));
+        coordinator.release(original);
+
+        VoiceAdmission replayAdmission = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, scope, request));
+        assertEquals(VoiceBeginResult.Outcome.REPLAY,
+                coordinator.begin(replayAdmission, digest).outcome());
+        coordinator.release(replayAdmission);
+        VoiceAdmission afterReplay = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "after-replay-scope", "after-replay-request"));
+        coordinator.release(afterReplay);
+
+        VoiceAdmission conflictAdmission = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, scope, request));
+        assertEquals(VoiceBeginResult.Outcome.IDEMPOTENCY_CONFLICT,
+                coordinator.begin(conflictAdmission, "different-digest").outcome());
+        coordinator.release(conflictAdmission);
+        VoiceAdmission afterConflict = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "after-conflict-scope", "after-conflict-request"));
+        coordinator.release(afterConflict);
+    }
+
+    private static void assertConcurrentPreAdmissionReleaseRestoresEverySlot(
+            LettuceConnectionFactory factory) throws Exception {
+        VoiceSpeechProperties properties = new VoiceSpeechProperties();
+        properties.setPerMinute(10);
+        properties.setPerHour(10);
+        properties.setGlobalConcurrency(2);
+        properties.setCacheEncryptionKey(
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+        RedisVoiceRequestCoordinator coordinator = new RedisVoiceRequestCoordinator(
+                factory, properties, new VoicePayloadCipher(properties));
+        VoiceAdmission left = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "release-left", "release-request-left"));
+        VoiceAdmission right = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "release-right", "release-request-right"));
+        assertEquals(VoiceAdmissionResult.Outcome.CONCURRENCY_LIMITED,
+                coordinator.admit(VoiceOperation.TRANSCRIPTION,
+                        "release-blocked", "release-request-blocked").outcome());
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> leftRelease = executor.submit(() -> coordinator.release(left));
+            Future<?> rightRelease = executor.submit(() -> coordinator.release(right));
+            leftRelease.get(5, TimeUnit.SECONDS);
+            rightRelease.get(5, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+
+        VoiceAdmission nextLeft = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "release-next-left", "release-next-request-left"));
+        VoiceAdmission nextRight = admitted(coordinator.admit(
+                VoiceOperation.TRANSCRIPTION, "release-next-right", "release-next-request-right"));
+        coordinator.release(nextLeft);
+        coordinator.release(nextRight);
+    }
+
+    private static VoiceAdmission admitted(VoiceAdmissionResult result) {
+        assertEquals(VoiceAdmissionResult.Outcome.ADMITTED, result.outcome());
+        return result.admission();
     }
 
     private static void assertSucceededReplayAndConflicts(
@@ -197,17 +344,119 @@ class RedisVoiceRequestCoordinatorContractTest {
     }
 
     @Test
-    void encryptedPayloadRoundTripsAndTamperingFailsClosed() {
+    void encryptedPayloadBindsEveryReplayTupleFieldAndRejectsLegacyV1() throws Exception {
         VoiceSpeechProperties properties = new VoiceSpeechProperties();
         properties.setCacheEncryptionKey("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
         VoicePayloadCipher cipher = new VoicePayloadCipher(properties);
-        String encrypted = cipher.encrypt(new byte[]{1, 2, 3, 4});
+        byte[] payload = {1, 2, 3, 4};
+        String encrypted = cipher.encrypt(payload, VoiceOperation.TRANSCRIPTION,
+                "tenant-a", "request-a", "digest-a", "application/json");
         assertTrue(!encrypted.contains("AQIDBA=="));
-        assertEquals(4, cipher.decrypt(encrypted).length);
+        assertArrayEquals(payload, cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                "tenant-a", "request-a", "digest-a", "application/json"));
+
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-b", "request-a", "digest-a", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-b", "digest-a", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.SYNTHESIS,
+                        "tenant-a", "request-a", "digest-a", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-b", "application/json"));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(encrypted, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-a", "audio/mpeg"));
+
         char replacement = encrypted.charAt(encrypted.length() - 1) == 'A' ? 'B' : 'A';
         String tampered = encrypted.substring(0, encrypted.length() - 1) + replacement;
-        org.junit.jupiter.api.Assertions.assertThrows(
-                VoiceStateUnavailableException.class, () -> cipher.decrypt(tampered));
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(tampered, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-a", "application/json"));
+
+        String legacyV1 = encryptLegacyV1(properties.getCacheEncryptionKey(), payload);
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> cipher.decrypt(legacyV1, VoiceOperation.TRANSCRIPTION,
+                        "tenant-a", "request-a", "digest-a", "application/json"));
+    }
+
+    private static void assertRedisReplayRejectsCiphertextTupleTransplants(
+            LettuceConnectionFactory factory,
+            RedisVoiceRequestCoordinator coordinator) throws Exception {
+        VoiceOperation sourceOperation = VoiceOperation.TRANSCRIPTION;
+        String sourceScope = "cipher-source-scope";
+        String sourceRequest = "cipher-source-request";
+        String sourceDigest = "cipher-source-digest";
+        String sourceContentType = "application/json";
+        VoiceBeginResult source = coordinator.begin(
+                sourceOperation, sourceScope, sourceRequest, sourceDigest);
+        coordinator.succeed(source.reservation(),
+                new VoiceCachedResult(new byte[]{4, 3, 2, 1}, sourceContentType));
+        coordinator.release(source.reservation());
+
+        StringRedisTemplate redis = new StringRedisTemplate(factory);
+        redis.afterPropertiesSet();
+        String sourceKey = stateKey(sourceOperation, sourceScope, sourceRequest);
+        String encrypted = String.valueOf(redis.opsForHash().get(sourceKey, "payload"));
+
+        List<ReplayTuple> transplants = List.of(
+                new ReplayTuple(VoiceOperation.TRANSCRIPTION, "cipher-target-scope",
+                        sourceRequest, sourceDigest, sourceContentType),
+                new ReplayTuple(VoiceOperation.TRANSCRIPTION, sourceScope,
+                        "cipher-target-request", sourceDigest, sourceContentType),
+                new ReplayTuple(VoiceOperation.SYNTHESIS, sourceScope,
+                        sourceRequest, sourceDigest, sourceContentType),
+                new ReplayTuple(VoiceOperation.TRANSCRIPTION, sourceScope,
+                        "cipher-digest-request", "cipher-target-digest", sourceContentType));
+        for (ReplayTuple transplant : transplants) {
+            String targetKey = stateKey(
+                    transplant.operation(), transplant.identityScope(), transplant.requestId());
+            redis.opsForHash().putAll(targetKey, Map.of(
+                    "digest", transplant.digest(),
+                    "state", "SUCCEEDED",
+                    "payload", encrypted,
+                    "contentType", transplant.contentType()));
+            assertThrows(VoiceStateUnavailableException.class,
+                    () -> coordinator.begin(transplant.operation(), transplant.identityScope(),
+                            transplant.requestId(), transplant.digest()));
+            redis.delete(targetKey);
+        }
+
+        redis.opsForHash().put(sourceKey, "contentType", "audio/mpeg");
+        assertThrows(VoiceStateUnavailableException.class,
+                () -> coordinator.begin(
+                        sourceOperation, sourceScope, sourceRequest, sourceDigest));
+        redis.delete(sourceKey);
+    }
+
+    private static String encryptLegacyV1(String encodedKey, byte[] payload) throws Exception {
+        byte[] iv = new byte[12];
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE,
+                new SecretKeySpec(Base64.getDecoder().decode(encodedKey), "AES"),
+                new GCMParameterSpec(128, iv));
+        byte[] encrypted = cipher.doFinal(payload);
+        return Base64.getEncoder().encodeToString(ByteBuffer.allocate(1 + iv.length + encrypted.length)
+                .put((byte) 1).put(iv).put(encrypted).array());
+    }
+
+    private static String stateKey(
+            VoiceOperation operation, String identityScope, String requestId) throws Exception {
+        Method keysMethod = RedisVoiceRequestCoordinator.class.getDeclaredMethod(
+                "keys", VoiceOperation.class, String.class, String.class);
+        keysMethod.setAccessible(true);
+        return key(keysMethod.invoke(null, operation, identityScope, requestId), "stateKey");
+    }
+
+    private record ReplayTuple(
+            VoiceOperation operation,
+            String identityScope,
+            String requestId,
+            String digest,
+            String contentType) {
     }
 
     @Test
