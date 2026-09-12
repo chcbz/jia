@@ -11,9 +11,21 @@ import java.io.*;
  */
 public class EsRequestWrapper extends HttpServletRequestWrapper {
 	private final String body;
+	private final boolean containerManagedBody;
 
 	public EsRequestWrapper(HttpServletRequest request) throws IOException {
 	   super(request);
+		String contentType = request.getContentType();
+		String mediaType = contentType == null ? "" : contentType.split(";", 2)[0].trim();
+		containerManagedBody = "application/x-www-form-urlencoded".equalsIgnoreCase(mediaType)
+		        || mediaType.regionMatches(true, 0, "multipart/", 0, "multipart/".length());
+		// Servlet containers parse form parameters and multipart parts from the original stream.
+		// Reading it here first irreversibly hides login/token parameters from Spring Security.
+		// Leave parsing (including encoding, query merging and size limits) to the container.
+		if (containerManagedBody) {
+		    body = "";
+		    return;
+		}
 	   StringBuilder stringBuilder = new StringBuilder();
 	   BufferedReader bufferedReader = null;
 	   try {
@@ -44,6 +56,9 @@ public class EsRequestWrapper extends HttpServletRequestWrapper {
 
 	@Override
 	public ServletInputStream getInputStream() throws IOException {
+        if (containerManagedBody) {
+            return super.getInputStream();
+        }
 		final ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(body.getBytes());
 		return new ServletInputStream() {
 			@Override
@@ -70,6 +85,9 @@ public class EsRequestWrapper extends HttpServletRequestWrapper {
 
 	@Override
 	public BufferedReader getReader() throws IOException {
+        if (containerManagedBody) {
+            return super.getReader();
+        }
 		return new BufferedReader(new InputStreamReader(this.getInputStream()));
 	}
 

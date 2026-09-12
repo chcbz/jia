@@ -20,12 +20,12 @@ import java.util.Map;
 @ConditionalOnExpression("${cors.enabled:true}")
 public class CorsConfig {
     private static final List<String> REQUIRED_CREDENTIAL_HEADERS = List.of(
-            "Authorization", "Content-Type", "X-API-Key", "Idempotency-Key", "If-Match", "Last-Event-ID");
+            "Authorization", "Content-Type", "X-API-Key", "Idempotency-Key", "If-Match", "Last-Event-ID", "X-Request-Id");
     @Value("${cors.allowed.origin.patterns:}")
     private String[] allowedOriginPatterns;
     @Value("${cors.allowed.methods:GET,POST,PUT,DELETE,OPTIONS}")
     private String[] allowedMethods;
-    @Value("${cors.allowed.headers:Authorization,Content-Type,X-API-Key,Idempotency-Key,If-Match,Last-Event-ID}")
+    @Value("${cors.allowed.headers:Authorization,Content-Type,X-API-Key,Idempotency-Key,If-Match,Last-Event-ID,X-Request-Id}")
     private String[] allowedHeaders;
 
     CorsConfiguration buildConfig() {

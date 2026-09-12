@@ -172,6 +172,13 @@ class LogServiceImplTest extends BaseMockTest {
         request.setContent(("display_name=Song+Jiang&CoDe%5FVeRiFiEr=form-code-secret"
                 + "&CLIENT_SECRET=form-client-secret&refresh_token=form-refresh-secret"
                 + "&api_key=form-api-secret&note=mb-13800138000").getBytes(StandardCharsets.UTF_8));
+        // Mock requests do not run the container's form parser; supply its decoded parameter view.
+        request.setParameter("display_name", "Song Jiang");
+        request.setParameter("CoDe_VeRiFiEr", "form-code-secret");
+        request.setParameter("CLIENT_SECRET", "form-client-secret");
+        request.setParameter("refresh_token", "form-refresh-secret");
+        request.setParameter("api_key", "form-api-secret");
+        request.setParameter("note", "mb-13800138000");
         setIdentity("Jia-D", "alice");
 
         LogEntity persisted = persist(request);
