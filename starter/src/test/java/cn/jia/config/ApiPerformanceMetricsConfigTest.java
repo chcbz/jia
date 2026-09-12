@@ -39,7 +39,8 @@ class ApiPerformanceMetricsConfigTest {
             .withBean(MeterRegistry.class, SimpleMeterRegistry::new);
     private final ApplicationContextRunner bootBindingContextRunner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(MetricsAutoConfiguration.class))
-            .withUserConfiguration(ApiPerformanceMetricsConfig.class);
+            .withUserConfiguration(ApiPerformanceMetricsConfig.class)
+            .withBean(MeterRegistry.class, SimpleMeterRegistry::new);
 
     @Test
     void appliesThreeSecondSloBucketsToHttpServerTimersOnly() {
