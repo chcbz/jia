@@ -2,21 +2,25 @@ package cn.jia.oauth.config;
 
 import cn.jia.core.deadline.RequestDeadline;
 import cn.jia.core.deadline.RequestDeadlineContext;
-import cn.jia.core.deadline.SafeRequestTimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.client.ClientHttpRequestFactory;
+import org.springframework.mock.http.client.MockClientHttpRequest;
+import org.springframework.mock.http.client.MockClientHttpResponse;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.client.ResourceAccessException;
 
-import java.util.concurrent.TimeUnit;
-import java.util.function.LongSupplier;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
+/** Keep the existing Flow selector; replace the disproven budget with incident regressions. */
 class OauthExternalHttpTimeoutsTest {
     @AfterEach
     void clearTransactionFlag() {
@@ -24,69 +28,70 @@ class OauthExternalHttpTimeoutsTest {
     }
 
     @Test
-    void defaultsFitTheCallbackBudget() {
-        OauthExternalHttpTimeouts timeouts = new OauthExternalHttpTimeouts();
-
-        assertDoesNotThrow(timeouts::validate);
-        assertEquals(500, timeouts.getConnectTimeoutMillis());
-        assertEquals(1750, timeouts.getReadTimeoutMillis());
-        assertEquals(2500, timeouts.getTotalTimeoutMillis());
-        assertEquals(100, timeouts.getSafetyMarginMillis());
+    void slowTokenDoesNotPreventTheFollowingProfileRequest() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        ClientHttpRequestFactory factory = (uri, method) -> {
+            if (calls.getAndIncrement() == 0) {
+                // Reproduce token latency exceeding the removed 2.5s total budget.
+                try {
+                    Thread.sleep(2600);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new java.io.IOException(interrupted);
+                }
+            }
+            return response(HttpStatus.OK);
+        };
+        OauthExternalHttpClient client = new OauthExternalHttpClient(factory);
+        assertEquals(HttpStatus.OK, client.postForEntity("https://provider.example/token", HttpEntity.EMPTY).getStatusCode());
+        assertEquals(HttpStatus.OK, client.exchange("https://provider.example/user", HttpMethod.GET, HttpEntity.EMPTY).getStatusCode());
+        assertEquals(2, calls.get());
     }
 
     @Test
-    void rejectsPhaseBudgetsThatExceedTheTotalBudget() {
-        OauthExternalHttpTimeouts timeouts = new OauthExternalHttpTimeouts();
-        ReflectionTestUtils.setField(timeouts, "readTimeoutMillis", 2001);
-
-        assertThrows(IllegalStateException.class, timeouts::validate);
-    }
-
-    @Test
-    void doesNotStartAnotherProviderCallAfterTheLocalBudgetIsExhausted() {
-        OauthExternalHttpTimeouts timeouts = new OauthExternalHttpTimeouts();
-        MutableClock clock = new MutableClock();
-        OauthExternalHttpClient.CallbackBudget budget = new OauthExternalHttpClient.CallbackBudget(timeouts, clock);
-
-        assertEquals(2400, budget.remainingForNewCallMillis());
-        clock.advanceMillis(2399);
-        assertThrows(OauthExternalHttpClient.OauthExternalBudgetExhaustedException.class,
-                budget::remainingForNewCallMillis);
-    }
-
-    @Test
-    void requestDeadlineCapsEveryProviderCall() {
-        OauthExternalHttpTimeouts timeouts = new OauthExternalHttpTimeouts();
-        OauthExternalHttpClient.CallbackBudget budget = new OauthExternalHttpClient.CallbackBudget(timeouts, () -> 0L);
-
+    void ordinaryApiDeadlineIsNotAppliedOrForwardedToExternalAuthorization() {
+        MockClientHttpRequest request = response(HttpStatus.OK);
+        OauthExternalHttpClient client = new OauthExternalHttpClient((uri, method) -> request);
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
-            SafeRequestTimeoutException exception = assertThrows(SafeRequestTimeoutException.class,
-                    budget::remainingForNewCallMillis);
-            assertEquals(SafeRequestTimeoutException.Dependency.HTTP, exception.dependency());
-            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, exception.workState());
+            assertEquals(HttpStatus.OK, client.exchange("https://provider.example/user", HttpMethod.GET,
+                    HttpEntity.EMPTY).getStatusCode());
         }
+        assertFalse(request.getHeaders().containsKey("X-Request-Deadline-Ms"));
+    }
+
+    @Test
+    void retainsConfiguredNetworkTimeoutWithoutRetrying() throws Exception {
+        ClientHttpRequestFactory factory = mock(ClientHttpRequestFactory.class);
+        when(factory.createRequest(any(), any())).thenThrow(new SocketTimeoutException("transport timeout"));
+        OauthExternalHttpClient client = new OauthExternalHttpClient(factory);
+        assertThrows(ResourceAccessException.class,
+                () -> client.postForEntity("https://provider.example/token", HttpEntity.EMPTY));
+        verify(factory, times(1)).createRequest(any(), any());
+    }
+
+    @Test
+    void nonSuccessDoesNotExposeProviderSecrets() {
+        OauthExternalHttpClient client = new OauthExternalHttpClient((uri, method) -> response(HttpStatus.BAD_GATEWAY));
+        var failure = assertThrows(OauthExternalHttpClient.OauthExternalCallRejectedException.class,
+                () -> client.exchange("https://provider.example/user?access_token=secret", HttpMethod.GET,
+                        HttpEntity.EMPTY));
+        assertEquals("OAuth provider returned a non-success status", failure.getMessage());
+        assertNull(failure.getCause());
     }
 
     @Test
     void rejectsProviderNetworkCallsInsideTransactionsBeforeConnecting() {
-        OauthExternalHttpClient client = new OauthExternalHttpClient(new OauthExternalHttpTimeouts());
+        ClientHttpRequestFactory factory = mock(ClientHttpRequestFactory.class);
+        OauthExternalHttpClient client = new OauthExternalHttpClient(factory);
         TransactionSynchronizationManager.setActualTransactionActive(true);
-
         assertThrows(OauthExternalHttpClient.OauthExternalCallRejectedException.class,
-                () -> client.exchange(client.beginCallback(), "http://127.0.0.1:1", HttpMethod.GET,
-                        HttpEntity.EMPTY));
+                () -> client.exchange("http://127.0.0.1:1", HttpMethod.GET, HttpEntity.EMPTY));
+        verifyNoInteractions(factory);
     }
 
-    private static final class MutableClock implements LongSupplier {
-        private long now;
-
-        @Override
-        public long getAsLong() {
-            return now;
-        }
-
-        private void advanceMillis(long millis) {
-            now += TimeUnit.MILLISECONDS.toNanos(millis);
-        }
+    private static MockClientHttpRequest response(HttpStatus status) {
+        MockClientHttpRequest request = new MockClientHttpRequest();
+        request.setResponse(new MockClientHttpResponse("{}".getBytes(StandardCharsets.UTF_8), status));
+        return request;
     }
 }
