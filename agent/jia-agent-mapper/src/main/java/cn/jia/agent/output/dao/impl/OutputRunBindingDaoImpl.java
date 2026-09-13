@@ -30,4 +30,13 @@ public class OutputRunBindingDaoImpl implements OutputRunBindingDao {
                 producerAgentId, originType, originId);
     }
 
+    @Override
+    public int markResultSubmitted(OutputRunBindingEntity expected, long updatedAt) {
+        if (expected == null || expected.getRowVersion() == null
+                || expected.getRowVersion() < 0 || updatedAt <= 0) {
+            throw new IllegalArgumentException("expected active output run is invalid");
+        }
+        return mapper.markResultSubmitted(expected, updatedAt);
+    }
+
 }

@@ -46,6 +46,12 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
             long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
             String failureReason);
 
+    /** Policy-1 aggregate CAS that installs one current immutable delivery. */
+    int submitDeliveryByVersion(
+            String tenantId, String clientId, String taskId, String producerAgentId,
+            long expectedTaskVersion, long expectedDeliveryRevision,
+            String deliveryId, long updateTime);
+
     List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit);
 

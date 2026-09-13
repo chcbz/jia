@@ -11,6 +11,10 @@ public interface AgentTaskArtifactDao {
     AgentTaskArtifactEntity findVersion(
             String tenantId, String clientId, String taskId, String artifactId, int artifactVersion);
 
+    /** Exact immutable version lock; formal delivery must never resolve a moving latest row. */
+    AgentTaskArtifactEntity findVersionForUpdate(
+            String tenantId, String clientId, String taskId, String artifactId, int artifactVersion);
+
     AgentTaskArtifactEntity findLatestVersion(
             String tenantId, String clientId, String taskId, String artifactId);
 

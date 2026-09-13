@@ -223,6 +223,30 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public int submitActiveLeaseByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String assigneeAgentId, String runId, String leaseToken,
+            long expectedLeaseUntil, long expectedVersion, long operationTime,
+            String deliveryId, String manifestArtifactId) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
+        TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
+        TaskCollaborationDaoSupport.requireId(runId, "runId");
+        TaskCollaborationDaoSupport.requireId(leaseToken, "leaseToken");
+        TaskCollaborationDaoSupport.requireId(deliveryId, "deliveryId");
+        TaskCollaborationDaoSupport.requireId(manifestArtifactId, "manifestArtifactId");
+        TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
+        if (expectedLeaseUntil <= operationTime || operationTime <= 0) {
+            throw new IllegalArgumentException("formal submission requires an active exact lease");
+        }
+        return baseMapper.submitActiveLeaseByVersion(
+                tenantId, clientId, taskId, workItemId, assigneeAgentId, runId,
+                leaseToken, expectedLeaseUntil, expectedVersion, operationTime,
+                deliveryId, manifestArtifactId, DateUtil.nowTime());
+    }
+
+    @Override
     public int reassignExpiredLeaseByVersion(
             String tenantId, String clientId, String taskId, String workItemId,
             String previousAgentId, String previousLeaseToken, String expectedStatus,

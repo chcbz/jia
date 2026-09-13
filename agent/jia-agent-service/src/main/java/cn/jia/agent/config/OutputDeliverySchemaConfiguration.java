@@ -27,4 +27,11 @@ public class OutputDeliverySchemaConfiguration {
             JdbcTemplate jdbcTemplate) {
         return new OutputDeliveryLeaseSchemaInitializer(jdbcTemplate);
     }
+
+    @Bean
+    @DependsOn("outputDeliveryLeaseSchemaInitializer")
+    public OutputDeliverySubmissionSchemaInitializer outputDeliverySubmissionSchemaInitializer(
+            JdbcTemplate jdbcTemplate) {
+        return new OutputDeliverySubmissionSchemaInitializer(jdbcTemplate);
+    }
 }

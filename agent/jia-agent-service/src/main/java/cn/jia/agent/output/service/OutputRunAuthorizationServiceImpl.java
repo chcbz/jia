@@ -327,13 +327,14 @@ public class OutputRunAuthorizationServiceImpl implements OutputRunAuthorization
         boolean currentRuntimeTicket = Objects.equals(
                 runtime.getOutputCapabilitiesRuntimeId(), ticket.getIssuedRuntimeId())
                 && Objects.equals(run.getOriginalRuntimeId(), ticket.getIssuedRuntimeId());
-        if (OutputConstants.OP_LEASE.equals(requiredOperation)) {
+        if (OutputConstants.OP_LEASE.equals(requiredOperation)
+                || OutputConstants.OP_SUBMIT.equals(requiredOperation)) {
             if (!Objects.equals(run.getPolicyVersion(), 1)
                     || !OutputConstants.SOURCE_TASK.equals(run.getSourceType())
                     || run.getWorkItemId() == null || !currentRuntimeTicket
                     || !supportsCapabilitySnapshot(runtime, ticket.getIssuedRuntimeId(),
                             now, true, true)) {
-                throw denied("Output ticket does not authorize the current work lease runtime");
+                throw denied("Output ticket does not authorize the current work runtime");
             }
         }
         return new OutputTicketAuthorization(

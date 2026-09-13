@@ -685,4 +685,39 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("completedAt") Long completedAt,
             @Param("failureReason") String failureReason,
             @Param("updateTime") long updateTime);
+
+    @Update("""
+            UPDATE agent_task_meta
+            SET reward_status='reviewing',current_delivery_id=#{deliveryId},
+                delivery_revision=delivery_revision+1,task_version=task_version+1,
+                completed_at=NULL,failure_reason=NULL,update_time=#{updateTime}
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND task_id=#{taskId}
+              AND assigned_agent_id=#{producerAgentId}
+              AND delivery_policy_version=1 AND delivery_requirement_json IS NOT NULL
+              AND current_delivery_id IS NULL
+              AND delivery_revision=#{expectedDeliveryRevision}
+              AND task_version=#{expectedTaskVersion}
+              AND reward_status IN ('assigned','running')
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})
+              AND CAST(assigned_agent_id AS BINARY)=CAST(#{producerAgentId} AS BINARY)
+              AND OCTET_LENGTH(assigned_agent_id)=OCTET_LENGTH(#{producerAgentId})
+              AND ((CAST(reward_status AS BINARY)=CAST('assigned' AS BINARY)
+                    AND OCTET_LENGTH(reward_status)=OCTET_LENGTH('assigned'))
+                OR (CAST(reward_status AS BINARY)=CAST('running' AS BINARY)
+                    AND OCTET_LENGTH(reward_status)=OCTET_LENGTH('running')))
+            """)
+    int submitDeliveryByVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("producerAgentId") String producerAgentId,
+            @Param("expectedTaskVersion") long expectedTaskVersion,
+            @Param("expectedDeliveryRevision") long expectedDeliveryRevision,
+            @Param("deliveryId") String deliveryId,
+            @Param("updateTime") long updateTime);
 }

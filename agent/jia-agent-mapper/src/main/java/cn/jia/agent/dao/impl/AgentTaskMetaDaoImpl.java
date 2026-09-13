@@ -131,6 +131,24 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public int submitDeliveryByVersion(
+            String tenantId, String clientId, String taskId, String producerAgentId,
+            long expectedTaskVersion, long expectedDeliveryRevision,
+            String deliveryId, long updateTime) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(taskId, "taskId", 100);
+        requireExactId(producerAgentId, "producerAgentId", 100);
+        requireExactId(deliveryId, "deliveryId", 100);
+        TaskCollaborationDaoSupport.requireExpectedVersion(expectedTaskVersion);
+        if (expectedDeliveryRevision < 0 || updateTime <= 0) {
+            throw new IllegalArgumentException("delivery revision transition is invalid");
+        }
+        return baseMapper.submitDeliveryByVersion(
+                tenantId, clientId, taskId, producerAgentId, expectedTaskVersion,
+                expectedDeliveryRevision, deliveryId, updateTime);
+    }
+
+    @Override
     public List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

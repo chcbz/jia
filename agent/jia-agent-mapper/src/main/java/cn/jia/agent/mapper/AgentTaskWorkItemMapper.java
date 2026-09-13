@@ -390,6 +390,54 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
 
     @Update("""
             UPDATE agent_task_work_item
+            SET status='submitted',result_artifact_id=#{manifestArtifactId},
+                result_delivery_id=#{deliveryId},submitted_at=#{operationTime},
+                completed_at=NULL,lease_token=NULL,lease_until=NULL,
+                update_time=#{updateTime},version=version+1
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+              AND task_id=#{taskId} AND work_item_id=#{workItemId}
+              AND assignee_agent_id=#{assigneeAgentId}
+              AND execution_run_id=#{runId} AND dispatched_run_id=#{runId}
+              AND lease_token=#{leaseToken} AND lease_until=#{expectedLeaseUntil}
+              AND lease_until>#{operationTime} AND status='running'
+              AND required_item=TRUE AND result_delivery_id IS NULL
+              AND version=#{expectedVersion}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})
+              AND CAST(work_item_id AS BINARY)=CAST(#{workItemId} AS BINARY)
+              AND OCTET_LENGTH(work_item_id)=OCTET_LENGTH(#{workItemId})
+              AND CAST(assignee_agent_id AS BINARY)=CAST(#{assigneeAgentId} AS BINARY)
+              AND OCTET_LENGTH(assignee_agent_id)=OCTET_LENGTH(#{assigneeAgentId})
+              AND CAST(execution_run_id AS BINARY)=CAST(#{runId} AS BINARY)
+              AND OCTET_LENGTH(execution_run_id)=OCTET_LENGTH(#{runId})
+              AND CAST(dispatched_run_id AS BINARY)=CAST(#{runId} AS BINARY)
+              AND OCTET_LENGTH(dispatched_run_id)=OCTET_LENGTH(#{runId})
+              AND CAST(lease_token AS BINARY)=CAST(#{leaseToken} AS BINARY)
+              AND OCTET_LENGTH(lease_token)=OCTET_LENGTH(#{leaseToken})
+              AND CAST(status AS BINARY)=CAST('running' AS BINARY)
+              AND OCTET_LENGTH(status)=OCTET_LENGTH('running')
+            """)
+    int submitActiveLeaseByVersion(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("workItemId") String workItemId,
+            @Param("assigneeAgentId") String assigneeAgentId,
+            @Param("runId") String runId,
+            @Param("leaseToken") String leaseToken,
+            @Param("expectedLeaseUntil") long expectedLeaseUntil,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("operationTime") long operationTime,
+            @Param("deliveryId") String deliveryId,
+            @Param("manifestArtifactId") String manifestArtifactId,
+            @Param("updateTime") long updateTime);
+
+    @Update("""
+            UPDATE agent_task_work_item
             SET title = #{item.title}, description = #{item.description},
                 work_type = #{item.workType}, required_abilities = #{item.requiredAbilities},
                 assignee_agent_id = #{item.assigneeAgentId}, status = #{item.status},

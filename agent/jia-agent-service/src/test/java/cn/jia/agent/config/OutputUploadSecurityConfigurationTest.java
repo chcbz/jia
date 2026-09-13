@@ -37,19 +37,27 @@ class OutputUploadSecurityConfigurationTest {
     @AfterEach void close(){context.close();}
     @Test void exactUploadRoutesRejectCookiesUserBearerAndMissingTicket()throws Exception{mvc.perform(post("/agent/output-uploads")).andExpect(status().isUnauthorized());mvc.perform(post("/agent/output-uploads").header("Authorization","Bearer user-jwt-token-value-that-is-not-run-ticket")).andExpect(status().isUnauthorized());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization","Bearer terminal-ticket-value-that-is-long-enough-0000")).andExpect(status().isForbidden());}
     @Test void validTicketPassesExactMethodsAndOutputUserRouteIsNotCaptured()throws Exception{String active="Bearer active-ticket-value-that-is-long-enough-000000";mvc.perform(post("/agent/output-uploads").header("Authorization",active)).andExpect(status().isOk());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization",active)).andExpect(status().isOk());mvc.perform(get("/agent/output-uploads/u").header("Authorization",active)).andExpect(status().isOk());mvc.perform(get("/agent/outputs")).andExpect(status().isOk());}
-    @Test void runTicketMatcherOwnsOnlyTheNewTaskPublicationPost(){
+    @Test void runTicketMatcherOwnsOnlyExplicitTaskMutationPosts(){
         MockHttpServletRequest publication=new MockHttpServletRequest(
                 "POST","/agent/tasks/task-1/output-publications");
         MockHttpServletRequest legacyArtifact=new MockHttpServletRequest(
                 "POST","/agent/tasks/task-1/artifacts");
+        MockHttpServletRequest delivery=new MockHttpServletRequest(
+                "POST","/agent/tasks/task-1/deliveries");
         MockHttpServletRequest nestedPublication=new MockHttpServletRequest(
                 "POST","/agent/tasks/task-1/output-publications/extra");
+        MockHttpServletRequest nestedDelivery=new MockHttpServletRequest(
+                "POST","/agent/tasks/task-1/deliveries/extra");
         org.junit.jupiter.api.Assertions.assertTrue(
                 OutputUploadSecurityConfiguration.matches(publication));
+        org.junit.jupiter.api.Assertions.assertTrue(
+                OutputUploadSecurityConfiguration.matches(delivery));
         org.junit.jupiter.api.Assertions.assertFalse(
                 OutputUploadSecurityConfiguration.matches(legacyArtifact));
         org.junit.jupiter.api.Assertions.assertFalse(
                 OutputUploadSecurityConfiguration.matches(nestedPublication));
+        org.junit.jupiter.api.Assertions.assertFalse(
+                OutputUploadSecurityConfiguration.matches(nestedDelivery));
     }
     @Test void terminalStatusTicketCanReachReceiptPostsButCannotWriteBytes()throws Exception{String terminal="Bearer terminal-ticket-value-that-is-long-enough-0000";mvc.perform(get("/agent/output-uploads/u").header("Authorization",terminal)).andExpect(status().isOk());mvc.perform(post("/agent/output-uploads/u/complete").header("Authorization",terminal)).andExpect(status().isOk());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization",terminal)).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("OUTPUT_AUTH_FORBIDDEN")).andExpect(jsonPath("$.retryable").value(false));}
     @Test void publicationPostsAdmitStatusTicketForServerSideReceiptRecovery()throws Exception{
@@ -64,6 +72,12 @@ class OutputUploadSecurityConfigurationTest {
         mvc.perform(post("/agent/tasks/task-1/output-publications").header("Authorization",terminal)
                         .contentType("application/json"))
                 .andExpect(status().isOk());
+        mvc.perform(post("/agent/tasks/task-1/deliveries").header("Authorization",active)
+                        .contentType("application/json"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/agent/tasks/task-1/deliveries").header("Authorization",terminal)
+                        .contentType("application/json"))
+                .andExpect(status().isOk());
         mvc.perform(post("/chat/conversations/101/outputs"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED"));
@@ -76,6 +90,10 @@ class OutputUploadSecurityConfigurationTest {
                 .andExpect(header().string("X-Request-ID","mime-request-1"))
                 .andExpect(jsonPath("$.code").value("OUTPUT_MIME_UNSUPPORTED"))
                 .andExpect(jsonPath("$.message").value("Output MIME unsupported"));
+        mvc.perform(post("/agent/tasks/task-1/deliveries").header("Authorization",active)
+                        .contentType("text/plain").header("X-Request-ID","mime-request-2"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("OUTPUT_MIME_UNSUPPORTED"));
     }
     @Test void expectedAuthorizationDenialAndUnexpectedInfrastructureFailureAreSeparated()throws Exception{
         mvc.perform(get("/agent/output-uploads/u").header("Authorization","Bearer acl-ticket-value-that-is-long-enough-000000").header("X-Request-ID","acl-request-1"))
@@ -99,6 +117,7 @@ class OutputUploadSecurityConfigurationTest {
         @GetMapping("/agent/output-uploads/{id}")String status(){return "ok";}
         @GetMapping("/agent/outputs")String user(){return "ok";}
         @PostMapping("/agent/tasks/{taskId}/output-publications")String taskPublish(){return "ok";}
+        @PostMapping("/agent/tasks/{taskId}/deliveries")String taskDelivery(){return "ok";}
         @GetMapping("/agent/tasks/{taskId}/artifacts")String taskList(){return "ok";}
         @PostMapping("/chat/conversations/{conversationId}/outputs")String chatPublish(){return "ok";}
         @GetMapping("/chat/conversations/{conversationId}/outputs")String chatList(){return "ok";}

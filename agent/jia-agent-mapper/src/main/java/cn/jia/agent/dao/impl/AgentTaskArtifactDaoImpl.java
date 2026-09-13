@@ -50,6 +50,18 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
     }
 
     @Override
+    public AgentTaskArtifactEntity findVersionForUpdate(
+            String tenantId, String clientId, String taskId, String artifactId,
+            int artifactVersion) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
+        requireVersion(artifactVersion);
+        return baseMapper.selectVersionForUpdate(
+                tenantId, clientId, taskId, artifactId, artifactVersion);
+    }
+
+    @Override
     public AgentTaskArtifactEntity findLatestVersion(
             String tenantId, String clientId, String taskId, String artifactId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

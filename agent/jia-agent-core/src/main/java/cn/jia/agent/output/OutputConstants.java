@@ -26,9 +26,10 @@ public final class OutputConstants {
     public static final String OP_PUBLISH = "publish";
     public static final String OP_STATUS = "status";
     public static final String OP_LEASE = "lease";
+    public static final String OP_SUBMIT = "submit";
     public static final List<String> R1_TICKET_OPERATIONS = List.of(OP_UPLOAD, OP_PUBLISH, OP_STATUS);
     public static final List<String> R2_LEASE_TICKET_OPERATIONS =
-            List.of(OP_UPLOAD, OP_PUBLISH, OP_STATUS, OP_LEASE);
+            List.of(OP_UPLOAD, OP_PUBLISH, OP_STATUS, OP_LEASE, OP_SUBMIT);
 
     public static final long CAPABILITY_FRESHNESS_MILLIS = 90_000L;
     public static final long RUN_RECOVERY_MILLIS = 86_400_000L;

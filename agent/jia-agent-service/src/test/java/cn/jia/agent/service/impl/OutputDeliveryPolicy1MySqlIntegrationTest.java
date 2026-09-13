@@ -8,7 +8,9 @@ import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.config.OutputDeliveryLeaseSchemaInitializer;
+import cn.jia.agent.config.OutputDeliveryProperties;
 import cn.jia.agent.config.OutputDeliverySchemaInitializer;
+import cn.jia.agent.config.OutputDeliverySubmissionSchemaInitializer;
 import cn.jia.agent.config.OutputObjectSchemaInitializer;
 import cn.jia.agent.dao.AgentIdentityAliasDao;
 import cn.jia.agent.dao.AgentIdentityRegistryDao;
@@ -51,29 +53,41 @@ import cn.jia.agent.mapper.AgentTaskArtifactOutcomeMapper;
 import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
+import cn.jia.agent.mapper.AgentTaskOutputMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.output.OutputAuthorizationException;
 import cn.jia.agent.output.OutputConstants;
 import cn.jia.agent.output.OutputLeaseHttpResult;
+import cn.jia.agent.output.OutputDeliveryService;
+import cn.jia.agent.output.OutputObjectStorage;
 import cn.jia.agent.output.OutputRunAuthorizationService;
+import cn.jia.agent.output.TaskDeliveryHttpResult;
 import cn.jia.agent.output.OutputTicketAuthorization;
 import cn.jia.agent.output.dao.OutputAccessTicketDao;
 import cn.jia.agent.output.dao.OutputRunBindingDao;
 import cn.jia.agent.output.dao.OutputSourceBindingDao;
 import cn.jia.agent.output.dao.OutputUploadDao;
+import cn.jia.agent.output.dao.TaskDeliveryDao;
 import cn.jia.agent.output.dao.impl.OutputAccessTicketDaoImpl;
 import cn.jia.agent.output.dao.impl.OutputRunBindingDaoImpl;
 import cn.jia.agent.output.dao.impl.OutputSourceBindingDaoImpl;
 import cn.jia.agent.output.dao.impl.OutputUploadDaoImpl;
+import cn.jia.agent.output.dao.impl.TaskDeliveryDaoImpl;
 import cn.jia.agent.output.dto.OutputAuthReceiptDTO;
 import cn.jia.agent.output.dto.OutputLeaseRequestDTO;
+import cn.jia.agent.output.dto.OutputPublishDTO;
+import cn.jia.agent.output.dto.TaskDeliveryItemDTO;
+import cn.jia.agent.output.dto.TaskDeliverySubmitDTO;
 import cn.jia.agent.output.mapper.OutputAccessTicketMapper;
 import cn.jia.agent.output.mapper.OutputRunBindingMapper;
 import cn.jia.agent.output.mapper.OutputSourceBindingMapper;
 import cn.jia.agent.output.service.OutputLeaseServiceImpl;
+import cn.jia.agent.output.service.OutputDeliveryServiceImpl;
 import cn.jia.agent.output.service.OutputRunAuthorizationServiceImpl;
 import cn.jia.agent.output.service.OutputSourceAuthorizerRegistry;
+import cn.jia.agent.output.service.TaskDeliverySubmissionServiceImpl;
 import cn.jia.agent.output.service.TaskOutputSourceAuthorizer;
+import cn.jia.agent.output.service.TaskOutputVersionProvider;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
@@ -173,7 +187,12 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     private AgentTaskStateService stateService;
     private AgentTaskArtifactOutcomeService artifactOutcomeService;
     private OutputRunAuthorizationServiceImpl authorization;
+    private OutputRunBindingDao runDao;
     private OutputUploadDao receipts;
+    private AgentTaskArtifactDao artifactDao;
+    private TaskDeliveryDao deliveryDao;
+    private OutputDeliveryService outputDeliveryService;
+    private TaskDeliverySubmissionServiceImpl submissionService;
     private AgentServiceImpl agentService;
     private AgentCommandTransportWriter commandWriter;
     private AgentCommandTransportCapture commandCapture;
@@ -189,7 +208,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         admin = new JdbcTemplate(dataSource(baseUrl));
         String version = admin.queryForObject("SELECT VERSION()", String.class);
         assertTrue(version != null && version.startsWith("8.0."), version);
-        database = "cyf_od07_policy1_" + UUID.randomUUID().toString().replace("-", "");
+        database = "cyf_od08_policy1_" + UUID.randomUUID().toString().replace("-", "");
         admin.execute("CREATE DATABASE `" + database
                 + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         dataSource = dataSource(urlForDatabase(baseUrl, database));
@@ -204,6 +223,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                         "db/agent-task-artifact-outcome-f06.sql"))
                 .execute(dataSource);
         new OutputDeliveryLeaseSchemaInitializer(jdbc).afterPropertiesSet();
+        new OutputDeliverySubmissionSchemaInitializer(jdbc).afterPropertiesSet();
         new OutputDeliverySchemaInitializer(jdbc).afterPropertiesSet();
         new OutputObjectSchemaInitializer(jdbc).afterPropertiesSet();
         wireServices();
@@ -215,7 +235,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         SecurityContextHolder.clearContext();
         EsContextHolder.clearContext();
         if (admin != null && database != null) {
-            assertTrue(database.matches("cyf_od07_policy1_[0-9a-f]{32}"));
+            assertTrue(database.matches("cyf_od08_policy1_[0-9a-f]{32}"));
             admin.execute("DROP DATABASE IF EXISTS `" + database + "`");
         }
     }
@@ -370,6 +390,499 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         assertNull(exhaustedRow.get("assignee_agent_id"));
         assertNull(exhaustedRow.get("execution_run_id"));
         assertNull(exhaustedRow.get("dispatched_run_id"));
+    }
+
+    @Test
+    void formalSubmissionCommitsOneBatchAndTerminalTicketReplaysExactReceipt() throws Exception {
+        seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
+        AssignedTask assigned = createAndAssignPolicy1(AGENT_A, "text");
+        Ticket ticket = ticket(assigned, AGENT_A, "runtime-a");
+        OutputLeaseHttpResult claim = mutate(ticket, assigned, "claim",
+                request(assigned.runId(), "0", null, "120000"),
+                "idempotency-submit-claim-1", "req-submit-claim");
+        String leaseToken = field(claim, "leaseToken");
+        OutputLeaseHttpResult started = mutate(ticket, assigned, "start",
+                request(assigned.runId(), "1", leaseToken, null),
+                "idempotency-submit-start-1", "req-submit-start");
+        assertEquals("2", field(started, "version"));
+
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-publish-summary-1",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Final conclusion", "summary",
+                        "The requested work is complete with verified results.", null,
+                        "final-summary", "1", assigned.workItemId(), "private", false));
+        long taskVersion = jdbc.queryForObject("""
+                SELECT task_version FROM agent_task_meta
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                """, Long.class, TENANT, CLIENT, assigned.taskId());
+        TaskDeliverySubmitDTO request = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "Ready for owner review", List.of(
+                        new TaskDeliveryItemDTO("final-summary", "1", "conclusion")));
+
+        TaskDeliveryHttpResult submitted = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-formal-submit-1",
+                assigned.taskId(), request, "req-formal-submit");
+        assertEquals(200, submitted.status());
+        JsonNode response = JsonUtil.getMapper().readTree(submitted.responseJson());
+        String deliveryId = response.path("data").path("deliveryId").asText();
+        assertTrue(deliveryId.matches("[0-9a-f]{32}"));
+        assertEquals("SUBMITTED", response.path("data").path("state").asText());
+        assertEquals("1", response.path("data").path("revision").asText());
+        assertEquals(1, count("task_delivery", assigned.taskId()));
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM task_delivery_item
+                WHERE tenant_id=? AND client_id=? AND delivery_id=?
+                """, Integer.class, TENANT, CLIENT, deliveryId));
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_task_artifact
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                  AND artifact_id=? AND artifact_version=1
+                """, Integer.class, TENANT, CLIENT, assigned.taskId(),
+                "delivery-manifest-" + deliveryId));
+        Map<String, Object> work = jdbc.queryForMap("""
+                SELECT status,version,lease_token,lease_until,result_delivery_id,
+                       result_artifact_id,execution_run_id,dispatched_run_id
+                FROM agent_task_work_item
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, TENANT, CLIENT, assigned.workItemId());
+        assertEquals("submitted", work.get("status"));
+        assertEquals(3L, ((Number) work.get("version")).longValue());
+        assertNull(work.get("lease_token"));
+        assertNull(work.get("lease_until"));
+        assertEquals(deliveryId, dbString(work.get("result_delivery_id")));
+        assertEquals("delivery-manifest-" + deliveryId,
+                dbString(work.get("result_artifact_id")));
+        assertEquals(assigned.runId(), dbString(work.get("execution_run_id")));
+        assertEquals(assigned.runId(), dbString(work.get("dispatched_run_id")));
+        Map<String, Object> task = jdbc.queryForMap("""
+                SELECT reward_status,task_version,current_delivery_id,delivery_revision
+                FROM agent_task_meta
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                """, TENANT, CLIENT, assigned.taskId());
+        assertEquals("reviewing", task.get("reward_status"));
+        assertEquals(taskVersion + 1, ((Number) task.get("task_version")).longValue());
+        assertEquals(deliveryId, dbString(task.get("current_delivery_id")));
+        assertEquals(1L, ((Number) task.get("delivery_revision")).longValue());
+        assertEquals(OutputConstants.RUN_RESULT_SUBMITTED, jdbc.queryForObject("""
+                SELECT state FROM output_run_binding
+                WHERE tenant_id=? AND client_id=? AND run_id=?
+                """, String.class, TENANT, CLIENT, assigned.runId()));
+
+        TaskDeliveryHttpResult replay = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-formal-submit-1",
+                assigned.taskId(), request, "req-formal-replay");
+        assertEquals(submitted.responseJson(), replay.responseJson());
+        TaskDeliverySubmitDTO changed = new TaskDeliverySubmitDTO(
+                request.runId(), request.workItemId(), request.expectedTaskVersion(),
+                request.expectedWorkItemVersion(), request.leaseToken(),
+                "Changed after commit", request.items());
+        TaskDeliveryHttpResult conflict = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-formal-submit-1",
+                assigned.taskId(), changed, "req-formal-conflict");
+        assertEquals(409, conflict.status());
+        assertEquals("OUTPUT_IDEMPOTENCY_CONFLICT",
+                JsonUtil.getMapper().readTree(conflict.responseJson()).path("code").asText());
+        assertEquals(1, count("task_delivery", assigned.taskId()));
+        assertThrows(OutputAuthorizationException.class, () -> submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-formal-submit-2",
+                assigned.taskId(), request, "req-formal-second-key"));
+    }
+
+    @Test
+    void objectBackedSubmissionCreatesDeliveryPinAndSerializesWithGc() throws Exception {
+        seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
+        AssignedTask assigned = createAndAssignPolicy1(AGENT_A, "files");
+        Ticket ticket = ticket(assigned, AGENT_A, "runtime-a");
+        String leaseToken = field(mutate(ticket, assigned, "claim",
+                request(assigned.runId(), "0", null, "120000"),
+                "idempotency-file-claim-1", "req-file-claim"), "leaseToken");
+        mutate(ticket, assigned, "start", request(assigned.runId(), "1", leaseToken, null),
+                "idempotency-file-start-1", "req-file-start");
+
+        String objectId = seedReadyObject(assigned, "zip-result".getBytes(StandardCharsets.UTF_8),
+                "result.zip", "application/zip");
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-publish-file-1",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Result archive", "document", null,
+                        objectId, "result-file", "1", assigned.workItemId(), "private", false));
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM output_object_reference
+                WHERE tenant_id=? AND client_id=? AND object_id=?
+                  AND reference_kind='ROLE_CANDIDATE' AND state='ACTIVE' AND hold=FALSE
+                """, Integer.class, TENANT, CLIENT, objectId));
+        jdbc.update("""
+                UPDATE output_object_reference
+                SET state='RELEASED',retain_until=0,released_at=?,updated_at=?,row_version=row_version+1
+                WHERE tenant_id=? AND client_id=? AND object_id=?
+                  AND reference_kind='ROLE_CANDIDATE' AND state='ACTIVE'
+                """, System.currentTimeMillis(), System.currentTimeMillis(),
+                TENANT, CLIENT, objectId);
+
+        long taskVersion = jdbc.queryForObject("SELECT task_version FROM agent_task_meta "
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?", Long.class,
+                TENANT, CLIENT, assigned.taskId());
+        TaskDeliverySubmitDTO request = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "The exact result archive is ready", List.of(
+                        new TaskDeliveryItemDTO("result-file", "1", "archive")));
+
+        CountDownLatch pinInserted = new CountDownLatch(1);
+        CountDownLatch allowCommit = new CountDownLatch(1);
+        CountDownLatch gcStarted = new CountDownLatch(1);
+        OutputUploadDao blockingPins = blockingDeliveryPinDao(pinInserted, allowCommit);
+        TaskDeliverySubmissionServiceImpl pinningService = new TaskDeliverySubmissionServiceImpl(
+                authorization, taskTransactions, taskDao, workItemDao, artifactDao,
+                runDao, blockingPins, deliveryDao, eventWriter,
+                new OutputDeliveryProperties(true));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<TaskDeliveryHttpResult> submit = pool.submit(() -> pinningService.submit(
+                    ticket.projected(), ticket.bearer(), "idempotency-file-submit-1",
+                    assigned.taskId(), request, "req-file-submit"));
+            assertTrue(pinInserted.await(10, TimeUnit.SECONDS));
+
+            Future<Boolean> gcClaimed = pool.submit(() -> {
+                gcStarted.countDown();
+                OutputUploadDao gcDao = new OutputUploadDaoImpl(new JdbcTemplate(dataSource));
+                TransactionTemplate gcTransaction = new TransactionTemplate(
+                        new DataSourceTransactionManager(dataSource));
+                Boolean claimed = gcTransaction.execute(status -> {
+                    long now = System.currentTimeMillis();
+                    OutputUploadDao.ObjectRow locked = gcDao.findObject(
+                            TENANT, CLIENT, objectId, true);
+                    if (locked == null) return false;
+                    if ("READY".equals(locked.lifecycleStatus())
+                            && gcDao.activeObjectReferences(TENANT, CLIENT, objectId, now) > 0) {
+                        return false;
+                    }
+                    return gcDao.claimObjectDelete(TENANT, CLIENT, objectId,
+                            "od08-gc", now + 60_000, now) == 1;
+                });
+                return Boolean.TRUE.equals(claimed);
+            });
+            assertTrue(gcStarted.await(10, TimeUnit.SECONDS));
+            assertThrows(java.util.concurrent.TimeoutException.class,
+                    () -> gcClaimed.get(200, TimeUnit.MILLISECONDS));
+            allowCommit.countDown();
+
+            TaskDeliveryHttpResult submitted = submit.get(10, TimeUnit.SECONDS);
+            assertEquals(200, submitted.status());
+            assertTrue(!gcClaimed.get(10, TimeUnit.SECONDS));
+            String deliveryId = JsonUtil.getMapper().readTree(submitted.responseJson())
+                    .path("data").path("deliveryId").asText();
+            Map<String, Object> pin = jdbc.queryForMap("""
+                    SELECT reference_kind,delivery_id,state,hold,hold_reason,retain_until
+                    FROM output_object_reference
+                    WHERE tenant_id=? AND client_id=? AND object_id=?
+                      AND reference_kind='DELIVERY_PIN'
+                    """, TENANT, CLIENT, objectId);
+            assertEquals("DELIVERY_PIN", pin.get("reference_kind"));
+            assertEquals(deliveryId, dbString(pin.get("delivery_id")));
+            assertEquals("ACTIVE", pin.get("state"));
+            assertTrue(Boolean.TRUE.equals(pin.get("hold"))
+                    || pin.get("hold") instanceof Number value && value.intValue() == 1);
+            assertEquals("DELIVERY_SUBMITTED", pin.get("hold_reason"));
+            assertTrue(((Number) pin.get("retain_until")).longValue()
+                    > System.currentTimeMillis());
+            assertEquals("READY", jdbc.queryForObject("""
+                    SELECT lifecycle_status FROM output_object
+                    WHERE tenant_id=? AND client_id=? AND object_id=?
+                    """, String.class, TENANT, CLIENT, objectId));
+        } finally {
+            allowCommit.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void mixedRequirementsEnforceInlineConclusionFileCountAndRequiredNames()
+            throws Exception {
+        seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
+        AssignedTask assigned = createAndAssignPolicy1(AGENT_A, "mixed");
+        Ticket ticket = ticket(assigned, AGENT_A, "runtime-a");
+        String leaseToken = field(mutate(ticket, assigned, "claim",
+                request(assigned.runId(), "0", null, "120000"),
+                "idempotency-mixed-claim-1", "req-mixed-claim"), "leaseToken");
+        mutate(ticket, assigned, "start", request(assigned.runId(), "1", leaseToken, null),
+                "idempotency-mixed-start-1", "req-mixed-start");
+
+        String wrongNameObject = seedReadyObject(
+                assigned, "wrong-name".getBytes(StandardCharsets.UTF_8),
+                "other.zip", "application/zip");
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-mixed-wrong-file",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Wrong named archive", "document", null,
+                        wrongNameObject, "wrong-file", "1", assigned.workItemId(),
+                        "private", false));
+        long taskVersion = jdbc.queryForObject("SELECT task_version FROM agent_task_meta "
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?", Long.class,
+                TENANT, CLIENT, assigned.taskId());
+        TaskDeliverySubmitDTO fileOnly = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "File without conclusion", List.of(
+                        new TaskDeliveryItemDTO("wrong-file", "1", "archive")));
+        TaskDeliveryHttpResult missingText = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-mixed-no-text",
+                assigned.taskId(), fileOnly, "req-mixed-no-text");
+        assertEquals(422, missingText.status());
+        assertEquals("OUTPUT_DELIVERY_TEXT_REQUIRED", JsonUtil.getMapper()
+                .readTree(missingText.responseJson()).path("code").asText());
+
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-mixed-summary",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Mixed conclusion", "summary",
+                        "The mixed delivery includes a real inline conclusion.", null,
+                        "mixed-summary", "1", assigned.workItemId(), "private", false));
+        TaskDeliverySubmitDTO wrongName = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "Wrong required name", List.of(
+                        new TaskDeliveryItemDTO("mixed-summary", "1", "conclusion"),
+                        new TaskDeliveryItemDTO("wrong-file", "1", "archive")));
+        TaskDeliveryHttpResult missingName = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-mixed-wrong-name",
+                assigned.taskId(), wrongName, "req-mixed-wrong-name");
+        assertEquals(422, missingName.status());
+        assertEquals("OUTPUT_DELIVERY_REQUIRED_NAME_MISSING", JsonUtil.getMapper()
+                .readTree(missingName.responseJson()).path("code").asText());
+
+        String correctObject = seedReadyObject(
+                assigned, "correct-name".getBytes(StandardCharsets.UTF_8),
+                "result.zip", "application/zip");
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-mixed-correct-file",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Required result archive", "document", null,
+                        correctObject, "correct-file", "1", assigned.workItemId(),
+                        "private", false));
+        TaskDeliverySubmitDTO complete = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "Complete mixed delivery", List.of(
+                        new TaskDeliveryItemDTO("mixed-summary", "1", "conclusion"),
+                        new TaskDeliveryItemDTO("correct-file", "1", "archive")));
+        TaskDeliveryHttpResult submitted = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-mixed-complete",
+                assigned.taskId(), complete, "req-mixed-complete");
+        assertEquals(200, submitted.status());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM task_delivery_item",
+                Integer.class));
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM output_object_reference
+                WHERE tenant_id=? AND client_id=? AND object_id=?
+                  AND reference_kind='DELIVERY_PIN' AND state='ACTIVE' AND hold=TRUE
+                """, Integer.class, TENANT, CLIENT, correctObject));
+    }
+
+    @Test
+    void failureAfterDeliveryItemInsertRollsBackManifestBatchStateRunEventsAndReceipt()
+            throws Exception {
+        seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
+        AssignedTask assigned = createAndAssignPolicy1(AGENT_A, "text");
+        Ticket ticket = ticket(assigned, AGENT_A, "runtime-a");
+        String leaseToken = field(mutate(ticket, assigned, "claim",
+                request(assigned.runId(), "0", null, "120000"),
+                "idempotency-rollback-claim", "req-rollback-claim"), "leaseToken");
+        mutate(ticket, assigned, "start", request(assigned.runId(), "1", leaseToken, null),
+                "idempotency-rollback-start", "req-rollback-start");
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-rollback-publish",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Rollback conclusion", "summary",
+                        "This real published artifact must survive a failed submit.", null,
+                        "rollback-summary", "1", assigned.workItemId(), "private", false));
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-rollback-publish-details",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Rollback details", "analysis",
+                        "The second immutable item makes the partial-write boundary observable.",
+                        null, "rollback-details", "1", assigned.workItemId(), "private", false));
+        long taskVersion = jdbc.queryForObject("SELECT task_version FROM agent_task_meta "
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?", Long.class,
+                TENANT, CLIENT, assigned.taskId());
+        long beforeEvents = tableCount("agent_task_event");
+        int beforeReceipts = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_mutation_receipt", Integer.class);
+        TaskDeliveryDao failing = failAfterInvocationProxy(
+                TaskDeliveryDao.class, deliveryDao, "insertItem", 2);
+        TaskDeliverySubmissionServiceImpl failingService = new TaskDeliverySubmissionServiceImpl(
+                authorization, taskTransactions, taskDao, workItemDao, artifactDao,
+                runDao, receipts, failing, eventWriter, new OutputDeliveryProperties(true));
+        TaskDeliverySubmitDTO request = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "Rollback formal delivery", List.of(
+                        new TaskDeliveryItemDTO("rollback-summary", "1", null),
+                        new TaskDeliveryItemDTO("rollback-details", "1", "evidence")));
+
+        assertThrows(IllegalStateException.class, () -> failingService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-formal-rollback",
+                assigned.taskId(), request, "req-formal-rollback"));
+        assertEquals(0, count("task_delivery", assigned.taskId()));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM task_delivery_item",
+                Integer.class));
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_task_artifact
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                  AND artifact_id LIKE 'delivery-manifest-%'
+                """, Integer.class, TENANT, CLIENT, assigned.taskId()));
+        assertEquals("running", jdbc.queryForObject("""
+                SELECT status FROM agent_task_work_item
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, String.class, TENANT, CLIENT, assigned.workItemId()));
+        assertEquals(OutputConstants.RUN_ACTIVE, jdbc.queryForObject("""
+                SELECT state FROM output_run_binding
+                WHERE tenant_id=? AND client_id=? AND run_id=?
+                """, String.class, TENANT, CLIENT, assigned.runId()));
+        assertEquals(beforeEvents, tableCount("agent_task_event"));
+        assertEquals(beforeReceipts, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_mutation_receipt", Integer.class));
+    }
+
+    @Test
+    void failureAfterReceiptInsertRollsBackEntireFormalSubmission() throws Exception {
+        seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
+        AssignedTask assigned = createAndAssignPolicy1(AGENT_A, "text");
+        Ticket ticket = ticket(assigned, AGENT_A, "runtime-a");
+        String leaseToken = field(mutate(ticket, assigned, "claim",
+                request(assigned.runId(), "0", null, "120000"),
+                "idempotency-receipt-claim", "req-receipt-claim"), "leaseToken");
+        mutate(ticket, assigned, "start", request(assigned.runId(), "1", leaseToken, null),
+                "idempotency-receipt-start", "req-receipt-start");
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-receipt-publish",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Receipt rollback conclusion", "summary",
+                        "A failed receipt write must roll back every earlier submission mutation.",
+                        null, "receipt-summary", "1", assigned.workItemId(), "private", false));
+        long taskVersion = jdbc.queryForObject("SELECT task_version FROM agent_task_meta "
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?", Long.class,
+                TENANT, CLIENT, assigned.taskId());
+        long beforeEvents = tableCount("agent_task_event");
+        int beforeReceipts = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_mutation_receipt", Integer.class);
+        OutputUploadDao failingReceipts = failAfterSubmitReceiptInsertDao();
+        TaskDeliverySubmissionServiceImpl failingService = new TaskDeliverySubmissionServiceImpl(
+                authorization, taskTransactions, taskDao, workItemDao, artifactDao,
+                runDao, failingReceipts, deliveryDao, eventWriter,
+                new OutputDeliveryProperties(true));
+        TaskDeliverySubmitDTO request = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "Receipt rollback formal delivery", List.of(
+                        new TaskDeliveryItemDTO("receipt-summary", "1", "conclusion")));
+
+        assertThrows(IllegalStateException.class, () -> failingService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-formal-receipt-rollback",
+                assigned.taskId(), request, "req-formal-receipt-rollback"));
+        assertEquals(0, count("task_delivery", assigned.taskId()));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM task_delivery_item",
+                Integer.class));
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_task_artifact
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                  AND artifact_id LIKE 'delivery-manifest-%'
+                """, Integer.class, TENANT, CLIENT, assigned.taskId()));
+        assertEquals("running", jdbc.queryForObject("""
+                SELECT status FROM agent_task_work_item
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, String.class, TENANT, CLIENT, assigned.workItemId()));
+        assertEquals("assigned", jdbc.queryForObject("""
+                SELECT reward_status FROM agent_task_meta
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                """, String.class, TENANT, CLIENT, assigned.taskId()));
+        assertEquals(OutputConstants.RUN_ACTIVE, jdbc.queryForObject("""
+                SELECT state FROM output_run_binding
+                WHERE tenant_id=? AND client_id=? AND run_id=?
+                """, String.class, TENANT, CLIENT, assigned.runId()));
+        assertEquals(beforeEvents, tableCount("agent_task_event"));
+        assertEquals(beforeReceipts, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_mutation_receipt", Integer.class));
+    }
+
+    @Test
+    void submissionRejectsExpiredOrOldRunLeaseAndNonExactArtifactAuthority()
+            throws Exception {
+        seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
+        AssignedTask assigned = createAndAssignPolicy1(AGENT_A, "text");
+        Ticket ticket = ticket(assigned, AGENT_A, "runtime-a");
+        String leaseToken = field(mutate(ticket, assigned, "claim",
+                request(assigned.runId(), "0", null, "120000"),
+                "idempotency-negative-claim", "req-negative-claim"), "leaseToken");
+        mutate(ticket, assigned, "start", request(assigned.runId(), "1", leaseToken, null),
+                "idempotency-negative-start", "req-negative-start");
+        outputDeliveryService.publish(ticket.bearer(), "idempotency-negative-publish",
+                OutputConstants.SOURCE_TASK, assigned.taskId(), new OutputPublishDTO(
+                        assigned.runId(), "0", "Negative-path conclusion", "summary",
+                        "Only this exact producer, run and immutable version may be submitted.",
+                        null, "negative-summary", "1", assigned.workItemId(), "private", false));
+        long taskVersion = jdbc.queryForObject("SELECT task_version FROM agent_task_meta "
+                + "WHERE tenant_id=? AND client_id=? AND task_id=?", Long.class,
+                TENANT, CLIENT, assigned.taskId());
+
+        TaskDeliverySubmitDTO wrongVersion = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "Wrong immutable version", List.of(
+                        new TaskDeliveryItemDTO("negative-summary", "2", null)));
+        TaskDeliveryHttpResult missing = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-negative-version",
+                assigned.taskId(), wrongVersion, "req-negative-version");
+        assertEquals(404, missing.status());
+        assertEquals("OUTPUT_ARTIFACT_NOT_FOUND",
+                JsonUtil.getMapper().readTree(missing.responseJson()).path("code").asText());
+
+        TaskDeliverySubmitDTO exact = new TaskDeliverySubmitDTO(
+                assigned.runId(), assigned.workItemId(), Long.toString(taskVersion), "2",
+                leaseToken, "Exact authority", List.of(
+                        new TaskDeliveryItemDTO("negative-summary", "1", null)));
+        jdbc.update("""
+                UPDATE agent_task_artifact SET producer_agent_id=?
+                WHERE tenant_id=? AND client_id=? AND task_id=? AND artifact_id=?
+                """, AGENT_B, TENANT, CLIENT, assigned.taskId(), "negative-summary");
+        TaskDeliveryHttpResult wrongProducer = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-negative-producer",
+                assigned.taskId(), exact, "req-negative-producer");
+        assertEquals(409, wrongProducer.status());
+        assertEquals("OUTPUT_ARTIFACT_SCOPE_CONFLICT", JsonUtil.getMapper()
+                .readTree(wrongProducer.responseJson()).path("code").asText());
+        jdbc.update("""
+                UPDATE agent_task_artifact SET producer_agent_id=?
+                WHERE tenant_id=? AND client_id=? AND task_id=? AND artifact_id=?
+                """, AGENT_A, TENANT, CLIENT, assigned.taskId(), "negative-summary");
+
+        long leaseUntil = jdbc.queryForObject("""
+                SELECT lease_until FROM agent_task_work_item
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, Long.class, TENANT, CLIENT, assigned.workItemId());
+        jdbc.update("""
+                UPDATE agent_task_work_item SET lease_until=0
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, TENANT, CLIENT, assigned.workItemId());
+        TaskDeliveryHttpResult expired = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-negative-expired",
+                assigned.taskId(), exact, "req-negative-expired");
+        assertEquals(409, expired.status());
+        assertEquals("OUTPUT_DELIVERY_LEASE_CONFLICT", JsonUtil.getMapper()
+                .readTree(expired.responseJson()).path("code").asText());
+        jdbc.update("""
+                UPDATE agent_task_work_item SET lease_until=?
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, leaseUntil, TENANT, CLIENT, assigned.workItemId());
+
+        String oldRun = "f".repeat(32);
+        jdbc.update("""
+                UPDATE agent_task_work_item SET execution_run_id=?
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, oldRun, TENANT, CLIENT, assigned.workItemId());
+        TaskDeliveryHttpResult staleRun = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-negative-old-run",
+                assigned.taskId(), exact, "req-negative-old-run");
+        assertEquals(409, staleRun.status());
+        assertEquals("OUTPUT_DELIVERY_LEASE_CONFLICT", JsonUtil.getMapper()
+                .readTree(staleRun.responseJson()).path("code").asText());
+        jdbc.update("""
+                UPDATE agent_task_work_item SET execution_run_id=?
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, assigned.runId(), TENANT, CLIENT, assigned.workItemId());
+
+        TaskDeliveryHttpResult submitted = submissionService.submit(
+                ticket.projected(), ticket.bearer(), "idempotency-negative-final",
+                assigned.taskId(), exact, "req-negative-final");
+        assertEquals(200, submitted.status());
+        assertEquals(1, count("task_delivery", assigned.taskId()));
     }
 
     @Test
@@ -676,7 +1189,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         stateService = transactionalInterfaceProxy(new AgentTaskStateServiceImpl(
                 taskDao, memberDao, workItemDao, taskTransactions, eventWriter,
                 System::currentTimeMillis), AgentTaskStateService.class);
-        AgentTaskArtifactDao artifactDao = new AgentTaskArtifactDaoImpl(
+        artifactDao = new AgentTaskArtifactDaoImpl(
                 template.getMapper(AgentTaskArtifactMapper.class));
         AgentTaskArtifactOutcomeDao artifactOutcomeDao =
                 new AgentTaskArtifactOutcomeDaoImpl(
@@ -689,7 +1202,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
 
         OutputSourceBindingDao sourceDao = wire(new OutputSourceBindingDaoImpl(),
                 template.getMapper(OutputSourceBindingMapper.class));
-        OutputRunBindingDao runDao = wire(new OutputRunBindingDaoImpl(),
+        runDao = wire(new OutputRunBindingDaoImpl(),
                 template.getMapper(OutputRunBindingMapper.class));
         OutputAccessTicketDao ticketDao = wire(new OutputAccessTicketDaoImpl(),
                 template.getMapper(OutputAccessTicketMapper.class));
@@ -698,6 +1211,17 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                 new OutputSourceAuthorizerRegistry(List.of(new TaskOutputSourceAuthorizer(access))),
                 sourceDao, runDao, ticketDao, runtimeDao, identityService, true);
         receipts = new OutputUploadDaoImpl(jdbc);
+        deliveryDao = new TaskDeliveryDaoImpl(jdbc);
+        OutputDeliveryProperties outputProperties = new OutputDeliveryProperties(true);
+        TaskOutputVersionProvider taskOutputProvider = new TaskOutputVersionProvider(
+                taskDao, workItemDao, artifactDao,
+                template.getMapper(AgentTaskOutputMapper.class), eventWriter);
+        outputDeliveryService = new OutputDeliveryServiceImpl(
+                authorization, receipts, mock(OutputObjectStorage.class), transactionManager,
+                outputProperties, List.of(taskOutputProvider));
+        submissionService = new TaskDeliverySubmissionServiceImpl(
+                authorization, taskTransactions, taskDao, workItemDao, artifactDao,
+                runDao, receipts, deliveryDao, eventWriter, outputProperties);
 
         AtomicLong commandIds = new AtomicLong();
         commandWriter = new AgentCommandTransportWriterImpl(
@@ -751,7 +1275,11 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     }
 
     private AssignedTask createAndAssignPolicy1(String agentId) {
-        AgentTaskDTO created = createTask(true);
+        return createAndAssignPolicy1(agentId, "files");
+    }
+
+    private AssignedTask createAndAssignPolicy1(String agentId, String mode) {
+        AgentTaskDTO created = createTask(true, mode);
         AgentTaskAssignDTO request = new AgentTaskAssignDTO();
         request.setAgentId(agentId);
         AgentTaskDTO assigned = agentService.assignTask(created.getId(), request);
@@ -766,15 +1294,19 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     }
 
     private AgentTaskDTO createTask(boolean policy1) {
+        return createTask(policy1, "files");
+    }
+
+    private AgentTaskDTO createTask(boolean policy1, String mode) {
         authenticate();
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
         request.setTitle(policy1 ? "Policy 1 output" : "Policy 0 legacy");
         request.setRequiredAbilities(List.of("planning"));
         if (policy1) {
             AgentTaskDeliveryRequirementsDTO delivery = new AgentTaskDeliveryRequirementsDTO();
-            delivery.setMode("files");
-            delivery.setMinFiles(1);
-            delivery.setRequiredNames(List.of("result.zip"));
+            delivery.setMode(mode);
+            delivery.setMinFiles("text".equals(mode) ? 0 : 1);
+            delivery.setRequiredNames("text".equals(mode) ? List.of() : List.of("result.zip"));
             request.setDeliveryRequirements(delivery);
         }
         return agentService.createTask(request);
@@ -888,7 +1420,8 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     }
 
     private int count(String table, String taskId) {
-        if (!List.of("agent_task_member", "agent_task_work_item", "output_run_binding")
+        if (!List.of("agent_task_member", "agent_task_work_item", "output_run_binding",
+                "task_delivery")
                 .contains(table)) throw new IllegalArgumentException("unsupported table");
         String key = "output_run_binding".equals(table) ? "source_id" : "task_id";
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table
@@ -917,6 +1450,72 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                 """, artifactId, taskId, workItemId, AGENT_A, artifactId,
                 "object-" + artifactId, runId, now + 60_000L, "a".repeat(64), now,
                 TENANT, CLIENT, now, now);
+    }
+
+    private String seedReadyObject(
+            AssignedTask assigned, byte[] content, String fileName, String mime) throws Exception {
+        long now = System.currentTimeMillis();
+        byte[] hash = java.security.MessageDigest.getInstance("SHA-256").digest(content);
+        String objectId = "object-" + UUID.randomUUID().toString().replace("-", "");
+        String uploadId = "upload-" + UUID.randomUUID().toString().replace("-", "");
+        assertEquals(1, receipts.insertObject(new OutputUploadDao.ObjectRow(
+                TENANT, CLIENT, objectId, assigned.runId(), "od08-bucket",
+                "task/" + assigned.taskId() + "/" + objectId, "version-1", hash,
+                (long) content.length, mime, "PASSED", "READY", "od08-test-scanner",
+                now, now - 1, null, 0, now - 1, null, null, null), now));
+        assertEquals(1, receipts.insertUpload(new OutputUploadDao.UploadRow(
+                TENANT, CLIENT, uploadId, assigned.runId(), "7", objectId, fileName,
+                content.length, hash, mime, "READY", 1L, now, null, null,
+                now + 60_000, 0L, true, 0, null, null, null, null), now));
+        return objectId;
+    }
+
+    private OutputUploadDao blockingDeliveryPinDao(
+            CountDownLatch pinInserted, CountDownLatch allowCommit) {
+        return (OutputUploadDao) Proxy.newProxyInstance(
+                OutputUploadDao.class.getClassLoader(), new Class<?>[]{OutputUploadDao.class},
+                (proxy, method, arguments) -> {
+                    try {
+                        Object result = method.invoke(receipts, arguments);
+                        if ("insertReference".equals(method.getName())
+                                && arguments != null
+                                && arguments[0] instanceof OutputUploadDao.ReferenceRow reference
+                                && "DELIVERY_PIN".equals(reference.referenceKind())) {
+                            pinInserted.countDown();
+                            try {
+                                if (!allowCommit.await(10, TimeUnit.SECONDS)) {
+                                    throw new IllegalStateException("delivery pin test timed out");
+                                }
+                            } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                                throw new IllegalStateException(
+                                        "delivery pin test interrupted", interrupted);
+                            }
+                        }
+                        return result;
+                    } catch (InvocationTargetException failure) {
+                        throw failure.getCause();
+                    }
+                });
+    }
+
+    private OutputUploadDao failAfterSubmitReceiptInsertDao() {
+        return (OutputUploadDao) Proxy.newProxyInstance(
+                OutputUploadDao.class.getClassLoader(), new Class<?>[]{OutputUploadDao.class},
+                (proxy, method, arguments) -> {
+                    try {
+                        Object result = method.invoke(receipts, arguments);
+                        if ("insertReceipt".equals(method.getName())
+                                && arguments != null && arguments.length > 4
+                                && "submitDelivery".equals(arguments[4])) {
+                            throw new IllegalStateException(
+                                    "forced failure after formal submission receipt insert");
+                        }
+                        return result;
+                    } catch (InvocationTargetException failure) {
+                        throw failure.getCause();
+                    }
+                });
     }
 
     private AgentTaskArtifactAcceptDTO outcomeCommand(
@@ -1018,6 +1617,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         configuration.addMapper(AgentTaskEventMapper.class);
         configuration.addMapper(AgentTaskArtifactMapper.class);
         configuration.addMapper(AgentTaskArtifactOutcomeMapper.class);
+        configuration.addMapper(AgentTaskOutputMapper.class);
         configuration.addMapper(AgentCommandTransportMapper.class);
         configuration.addMapper(AgentRuntimeMapper.class);
         configuration.addMapper(AgentIdentityRegistryMapper.class);
@@ -1083,6 +1683,26 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                         if (failAfterDelegate && failMethod.equals(method.getName())) {
                             throw new IllegalStateException(
                                     "forced failure after " + failMethod);
+                        }
+                        return result;
+                    } catch (InvocationTargetException failure) {
+                        throw failure.getCause();
+                    }
+                });
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T failAfterInvocationProxy(
+            Class<T> type, T delegate, String failMethod, int failingInvocation) {
+        AtomicInteger invocations = new AtomicInteger();
+        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type},
+                (proxy, method, arguments) -> {
+                    try {
+                        Object result = method.invoke(delegate, arguments);
+                        if (failMethod.equals(method.getName())
+                                && invocations.incrementAndGet() == failingInvocation) {
+                            throw new IllegalStateException(
+                                    "forced failure after " + failMethod + " #" + failingInvocation);
                         }
                         return result;
                     } catch (InvocationTargetException failure) {
