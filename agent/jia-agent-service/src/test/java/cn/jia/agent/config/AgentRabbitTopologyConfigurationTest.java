@@ -18,6 +18,7 @@ import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.LifecycleProcessor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
@@ -25,9 +26,11 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class AgentRabbitTopologyConfigurationTest {
     private static final String[] BROKER = {
@@ -38,8 +41,11 @@ class AgentRabbitTopologyConfigurationTest {
             "agent.rabbit-broker.virtual-host=/d04-isolated"
     };
 
-    private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
-            .withUserConfiguration(AgentRabbitSafetyConfiguration.class);
+    private static final ApplicationContextRunner STARTUP_RUNNER =
+            new ApplicationContextRunner()
+                    .withUserConfiguration(AgentRabbitSafetyConfiguration.class);
+    private static final ApplicationContextRunner RUNNER =
+            STARTUP_RUNNER.withUserConfiguration(InspectionLifecycleConfiguration.class);
 
     @Test
     void offAndDbShadowRegisterNoTopologyInfrastructureBeans() {
@@ -49,7 +55,7 @@ class AgentRabbitTopologyConfigurationTest {
     }
 
     @Test
-    void topologyOnlyContextIsLazyDedicatedAndDoesNotRegisterDeclarablesOrTemplate() {
+    void topologyInfrastructureIsDedicatedAndDoesNotRegisterDeclarablesOrTemplate() {
         RUNNER.withPropertyValues(concat(BROKER,
                         "agent.rabbit-topology.enabled=true",
                         "spring.rabbitmq.host=must-not-be-read.invalid",
@@ -97,6 +103,18 @@ class AgentRabbitTopologyConfigurationTest {
                             readiness.coverage());
                     assertFalse(readiness.canonicalTopologyReady());
                 });
+    }
+
+    @Test
+    void enabledTopologyFailsApplicationStartupWhenActivationCannotReachBroker() {
+        STARTUP_RUNNER.withPropertyValues(
+                        "agent.rabbit-topology.enabled=true",
+                        "agent.rabbit-broker.host=127.0.0.1",
+                        "agent.rabbit-broker.port=1",
+                        "agent.rabbit-broker.username=d04-user",
+                        "agent.rabbit-broker.password=d04-password",
+                        "agent.rabbit-broker.virtual-host=/d04-unreachable")
+                .run(context -> assertNotNull(context.getStartupFailure()));
     }
 
     @Test
@@ -196,6 +214,14 @@ class AgentRabbitTopologyConfigurationTest {
         String[] result = java.util.Arrays.copyOf(base, base.length + extra.length);
         System.arraycopy(extra, 0, result, base.length, extra.length);
         return result;
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class InspectionLifecycleConfiguration {
+        @Bean("lifecycleProcessor")
+        LifecycleProcessor lifecycleProcessor() {
+            return mock(LifecycleProcessor.class);
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

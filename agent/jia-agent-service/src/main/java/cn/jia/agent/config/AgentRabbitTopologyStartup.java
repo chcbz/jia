@@ -1,29 +1,50 @@
 package cn.jia.agent.config;
 
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
-import org.springframework.core.Ordered;
+import org.springframework.context.SmartLifecycle;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Activates the dedicated Agent Rabbit topology before the application becomes ready. */
-public final class AgentRabbitTopologyStartup implements ApplicationRunner, Ordered {
+/** Activates the dedicated Agent Rabbit topology before publishers and listeners start. */
+public final class AgentRabbitTopologyStartup implements SmartLifecycle {
+    static final int PHASE = Integer.MAX_VALUE - 200;
+
     private final AgentRabbitTopologyProvisioner provisioner;
+    private final AtomicBoolean running = new AtomicBoolean();
 
     AgentRabbitTopologyStartup(AgentRabbitTopologyProvisioner provisioner) {
         this.provisioner = Objects.requireNonNull(provisioner, "provisioner");
     }
 
     @Override
-    public void run(ApplicationArguments arguments) {
+    public void start() {
+        if (running.get()) {
+            return;
+        }
         AgentRabbitTopologyReadiness.Snapshot activated = provisioner.activate();
         if (!activated.canonicalTopologyReady()) {
             throw new IllegalStateException("Agent Rabbit topology activation did not become ready");
         }
+        running.set(true);
     }
 
     @Override
-    public int getOrder() {
-        return Ordered.HIGHEST_PRECEDENCE;
+    public void stop() {
+        running.set(false);
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running.get();
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return true;
+    }
+
+    @Override
+    public int getPhase() {
+        return PHASE;
     }
 }
