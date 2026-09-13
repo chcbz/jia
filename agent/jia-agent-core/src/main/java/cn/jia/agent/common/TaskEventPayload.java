@@ -34,7 +34,9 @@ public final class TaskEventPayload {
     private static final Set<String> ID_KEYS = Set.of(
             Key.TASK_ID, Key.AGENT_ID, Key.MEMBER_ID, Key.WORK_ITEM_ID,
             Key.ASSIGNEE_AGENT_ID, Key.REQUEST_ID, Key.TARGET_ID,
-            Key.ARTIFACT_ID, Key.THREAD_ID, Key.CONVERSATION_ID,
+            Key.ARTIFACT_ID, Key.PRODUCER_AGENT_ID,
+            Key.SUPERSEDED_BY_ARTIFACT_ID, Key.DECISION_ID,
+            Key.THREAD_ID, Key.CONVERSATION_ID,
             Key.MESSAGE_ID, Key.SENDER_AGENT_ID, Key.NOTE_ID);
 
     private static final Set<String> STRING_KEYS = Set.of(
@@ -46,6 +48,7 @@ public final class TaskEventPayload {
 
     private static final Set<String> LONG_KEYS = Set.of(
             Key.EXPECTED_VERSION, Key.RESULT_VERSION, Key.ARTIFACT_VERSION,
+            Key.SUPERSEDED_BY_ARTIFACT_VERSION,
             Key.ATTEMPT_COUNT, Key.MAX_ATTEMPTS,
             Key.CONTENT_BYTE_LENGTH,
             Key.MEMBER_COUNT, Key.WORK_ITEM_COUNT,
@@ -316,6 +319,10 @@ public final class TaskEventPayload {
         public static final String ARTIFACT_ID = "artifactId";
         public static final String ARTIFACT_TYPE = "artifactType";
         public static final String ARTIFACT_VERSION = "artifactVersion";
+        public static final String PRODUCER_AGENT_ID = "producerAgentId";
+        public static final String SUPERSEDED_BY_ARTIFACT_ID = "supersededByArtifactId";
+        public static final String SUPERSEDED_BY_ARTIFACT_VERSION = "supersededByArtifactVersion";
+        public static final String DECISION_ID = "decisionId";
         public static final String VISIBILITY = "visibility";
 
         public static final String THREAD_ID = "threadId";

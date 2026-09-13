@@ -154,6 +154,61 @@ public final class AgentTaskWorkspaceEventValidator {
             return new ArtifactClaim(artifactId, (int) artifactVersion, artifactType,
                     visibility, workItemId, row.getActorId());
         }
+        if (TaskEventType.ARTIFACT_ACCEPTED.equals(eventType)
+                || TaskEventType.ARTIFACT_SUPERSEDED.equals(eventType)) {
+            requireAggregateType(row, TaskEventType.Aggregate.ARTIFACT);
+            requireAgentActor(row);
+            String artifactId = requireId(payload, TaskEventPayload.Key.ARTIFACT_ID);
+            String producerAgentId = requireId(
+                    payload, TaskEventPayload.Key.PRODUCER_AGENT_ID);
+            String artifactType = requireString(payload, TaskEventPayload.Key.ARTIFACT_TYPE);
+            long artifactVersion = requirePositiveLong(
+                    payload, TaskEventPayload.Key.ARTIFACT_VERSION);
+            if (artifactVersion > Integer.MAX_VALUE) {
+                throw invalid();
+            }
+            requireAggregate(row, TaskEventType.Aggregate.ARTIFACT,
+                    artifactOutcomeAggregateId(taskId, artifactId, (int) artifactVersion));
+            String visibility = requireString(payload, TaskEventPayload.Key.VISIBILITY);
+            if (!Set.of("task_members", "reviewer", "private").contains(visibility)) {
+                throw invalid();
+            }
+            String workItemId = payload.containsKey(TaskEventPayload.Key.WORK_ITEM_ID)
+                    ? requireId(payload, TaskEventPayload.Key.WORK_ITEM_ID) : null;
+            requireId(payload, TaskEventPayload.Key.DECISION_ID);
+            String from = requireString(payload, TaskEventPayload.Key.FROM_STATUS);
+            String to = requireString(payload, TaskEventPayload.Key.TO_STATUS);
+            long expected = requireLong(payload, TaskEventPayload.Key.EXPECTED_VERSION);
+            long result = requirePositiveLong(payload, TaskEventPayload.Key.RESULT_VERSION);
+            if (result != expected + 1 || !("draft".equals(from) && expected == 0
+                    || "accepted".equals(from) && expected > 0)) {
+                throw invalid();
+            }
+            if (TaskEventType.ARTIFACT_ACCEPTED.equals(eventType)) {
+                if (!"draft".equals(from) || expected != 0 || result != 1
+                        || !"accepted".equals(to)
+                        || payload.containsKey(TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_ID)
+                        || payload.containsKey(
+                        TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_VERSION)) {
+                    throw invalid();
+                }
+            } else {
+                if (!"superseded".equals(to)) {
+                    throw invalid();
+                }
+                String replacementId = requireId(
+                        payload, TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_ID);
+                long replacementVersion = requirePositiveLong(
+                        payload, TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_VERSION);
+                if (replacementVersion > Integer.MAX_VALUE
+                        || artifactId.equals(replacementId)
+                        && artifactVersion == replacementVersion) {
+                    throw invalid();
+                }
+            }
+            return new ArtifactClaim(artifactId, (int) artifactVersion, artifactType,
+                    visibility, workItemId, producerAgentId);
+        }
         if (TaskEventType.THREAD_CREATED.equals(eventType)) {
             requireAggregateType(row, TaskEventType.Aggregate.THREAD);
             requireAgentActor(row);
@@ -201,6 +256,18 @@ public final class AgentTaskWorkspaceEventValidator {
             return null;
         }
         throw invalid();
+    }
+
+    public static String artifactOutcomeAggregateId(
+            String taskId, String artifactId, int artifactVersion) {
+        requireIdValue(taskId);
+        requireIdValue(artifactId);
+        if (artifactVersion < 1) {
+            throw invalid();
+        }
+        String seed = "f06-artifact-version" + '\u0000' + taskId + '\u0000'
+                + artifactId + '\u0000' + artifactVersion;
+        return "av_" + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256();
     }
 
     private static void requireEventStatus(Map<String, Object> payload, String eventType) {

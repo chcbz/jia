@@ -65,6 +65,8 @@ public final class TaskEventType {
 
     // ── Artifact ──
     public static final String ARTIFACT_PUBLISHED = "ARTIFACT_PUBLISHED";
+    public static final String ARTIFACT_ACCEPTED = "ARTIFACT_ACCEPTED";
+    public static final String ARTIFACT_SUPERSEDED = "ARTIFACT_SUPERSEDED";
 
     // ── Infrastructure ──
     public static final String COMMAND_DELIVERY_FAILED = "COMMAND_DELIVERY_FAILED";
@@ -84,7 +86,7 @@ public final class TaskEventType {
             PROGRESS_REPORTED, HELP_REQUESTED, REVIEW_REQUESTED,
             REQUEST_CREATED, REQUEST_ACKNOWLEDGED, REQUEST_RESOLVED,
             REQUEST_REJECTED, REQUEST_CANCELLED, THREAD_CREATED, MESSAGE_POSTED,
-            ARTIFACT_PUBLISHED,
+            ARTIFACT_PUBLISHED, ARTIFACT_ACCEPTED, ARTIFACT_SUPERSEDED,
             COMMAND_DELIVERY_FAILED,
             HISTORICAL_BASELINE_IMPORTED
     );
