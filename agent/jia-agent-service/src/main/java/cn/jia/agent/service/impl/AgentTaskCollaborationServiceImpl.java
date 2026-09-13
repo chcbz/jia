@@ -791,6 +791,9 @@ public class AgentTaskCollaborationServiceImpl
         } else if (!StringUtil.isBlank(command.getContentMimeType())) {
             throw invalid("contentMimeType is only valid with managed artifact contentBytes");
         }
+        if (hasExternalStorage) {
+            validateStorageUri(command.getStorageUri().trim());
+        }
         if (command.getMetadata() != null) {
             if (command.getMetadata().containsKey(MANAGED_STORAGE_METADATA)) {
                 throw invalid("metadata contains a reserved artifact storage key");

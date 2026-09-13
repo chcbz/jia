@@ -86,6 +86,7 @@ class AgentTaskArtifactStorageF02Test {
         transaction = mock(AgentTaskMutationTransaction.class);
         eventWriter = mock(AgentTaskEventWriter.class);
         AgentTaskMetaEntity task = task();
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(task);
         when(transaction.executeWithLockedTaskRoot(
                 eq(TENANT), eq(CLIENT), eq(TASK), any())).thenAnswer(invocation -> {
             AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);

@@ -470,6 +470,8 @@ class AgentTaskCollaborationServiceImplTest {
                 () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
 
         assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        verify(artifactDao, never()).findLatestVersionForUpdate(any(), any(), any(), any());
+        verify(artifactDao, never()).insert(any(), any(), any());
     }
 
     @Test
