@@ -7,6 +7,7 @@ import cn.jia.agent.entity.AgentTaskContextPackTaskSourceRow;
 import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.service.AgentTaskArtifactOutcomeService;
 import cn.jia.agent.service.AgentTaskContextPackConversationSource;
+import cn.jia.agent.service.AgentTaskContextPackService;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -41,7 +42,7 @@ class AgentTaskContextPackRepeatableReadTest {
             JdbcTemplate jdbc = context.getBean(JdbcTemplate.class);
             jdbc.update("INSERT INTO f01_snapshot(id, snapshot_value) VALUES (1, 'old')");
 
-            var pack = context.getBean(AgentTaskContextPackServiceImpl.class)
+            var pack = context.getBean(AgentTaskContextPackService.class)
                     .generate("tenant", "client", "1", "actor", "1");
 
             assertEquals("old", pack.getTaskDescription().getTitle().getValue());
