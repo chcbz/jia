@@ -4,10 +4,7 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/**
- * Bounded phase budgets for SMS provider calls. The three phases intentionally
- * consume no more than the configured total budget.
- */
+/** Explicit per-transport protections plus a non-enforcing slow-call observation threshold. */
 @Component
 public class SmsExternalHttpTimeouts {
     @Value("${sms.external-http.connection-request-timeout-ms:250}")
@@ -19,23 +16,15 @@ public class SmsExternalHttpTimeouts {
     @Value("${sms.external-http.read-timeout-ms:1750}")
     private int readTimeoutMillis = 1750;
 
+    /** Backward-compatible property name; this threshold is observation-only. */
     @Value("${sms.external-http.total-timeout-ms:2500}")
     private int totalTimeoutMillis = 2500;
-
-    @Value("${sms.external-http.safety-margin-ms:100}")
-    private int safetyMarginMillis = 100;
 
     @PostConstruct
     public void validate() {
         if (connectionRequestTimeoutMillis <= 0 || connectTimeoutMillis <= 0 || readTimeoutMillis <= 0
-                || totalTimeoutMillis <= 0 || safetyMarginMillis < 0) {
-            throw new IllegalStateException("SMS external HTTP timeouts must be positive");
-        }
-        if ((long) connectionRequestTimeoutMillis + connectTimeoutMillis + readTimeoutMillis > totalTimeoutMillis) {
-            throw new IllegalStateException("SMS external HTTP phase timeouts exceed total timeout budget");
-        }
-        if (safetyMarginMillis >= totalTimeoutMillis) {
-            throw new IllegalStateException("SMS external HTTP safety margin must leave time for a request");
+                || totalTimeoutMillis <= 0) {
+            throw new IllegalStateException("SMS external HTTP timeouts and observation threshold must be positive");
         }
     }
 
@@ -53,9 +42,5 @@ public class SmsExternalHttpTimeouts {
 
     public int getTotalTimeoutMillis() {
         return totalTimeoutMillis;
-    }
-
-    public int getSafetyMarginMillis() {
-        return safetyMarginMillis;
     }
 }

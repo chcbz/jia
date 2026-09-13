@@ -155,12 +155,7 @@ public class ChatController {
                         conversationId))
                 .subscribeOn(Schedulers.boundedElastic());
 
-        return ChatStreamPolicy.firstFrame(backendStream)
-                .onErrorResume(error -> ChatStreamPolicy.isFirstFrameTimeout(error)
-                        ? liveErrorFrame(
-                                conversation, conversationId, ownerJiacn, ownerClientId, generation,
-                                "Stream first frame deadline exceeded")
-                        : Flux.error(error));
+        return ChatStreamPolicy.firstFrame(backendStream);
     }
 
     private Flux<String> liveErrorFrame(
@@ -543,10 +538,7 @@ public class ChatController {
                                 ownerJiacn, ownerClientId, id, generation),
                         "{\"type\":\"stream_ready\"}")
                 .map(event -> "data: " + event + "\n\n");
-        return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(events))
-                .onErrorResume(error -> ChatStreamPolicy.isFirstFrameTimeout(error)
-                        ? Flux.just("data: {\"error\":\"Stream first frame deadline exceeded\"}\n\n")
-                        : Flux.error(error));
+        return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(events));
     }
 
     @RequestMapping(value = "/conversation/list", method = RequestMethod.POST)

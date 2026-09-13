@@ -1,5 +1,8 @@
 package cn.jia.sms.service.impl;
 
+import cn.jia.core.deadline.RequestDeadline;
+import cn.jia.core.deadline.RequestDeadlineContext;
+import cn.jia.core.deadline.SafeRequestTimeoutException;
 import cn.jia.core.lock.IDistributedLock;
 import cn.jia.core.lock.ILock;
 import cn.jia.sms.config.SmsExternalHttpClient;
@@ -17,6 +20,7 @@ import org.mockito.Mock;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
@@ -71,13 +75,14 @@ class SmsReplyCallbackServiceTest extends BaseMockTest {
         when(smsService.selectSend("provider-1")).thenReturn(send);
         when(smsService.selectConfig("client-a")).thenReturn(new SmsConfigEntity()
                 .setClientId("client-a").setReplyUrl("https://client.example/sms/reply"));
-        when(externalHttpClient.beginOperation()).thenReturn(null);
-        when(externalHttpClient.getForObject(isNull(), anyString(), eq(String.class))).thenReturn("ok");
+        SmsExternalHttpClient.OperationBudget observation = mock(SmsExternalHttpClient.OperationBudget.class);
+        when(externalHttpClient.beginOperation()).thenReturn(observation);
+        when(externalHttpClient.getForObject(same(observation), anyString(), eq(String.class))).thenReturn("ok");
 
         callbackService.receive("13800000000", "YES", "provider-1", "01");
 
         InOrder order = inOrder(externalHttpClient, smsService);
-        order.verify(externalHttpClient).getForObject(isNull(), anyString(), eq(String.class));
+        order.verify(externalHttpClient).getForObject(same(observation), anyString(), eq(String.class));
         ArgumentCaptor<SmsReplyEntity> reply = ArgumentCaptor.forClass(SmsReplyEntity.class);
         order.verify(smsService).reply(reply.capture());
         org.junit.jupiter.api.Assertions.assertEquals("client-a", reply.getValue().getClientId());
@@ -91,14 +96,56 @@ class SmsReplyCallbackServiceTest extends BaseMockTest {
                 .setMsgid("provider-1").setClientId("client-a"));
         when(smsService.selectConfig("client-a")).thenReturn(new SmsConfigEntity()
                 .setClientId("client-a").setReplyUrl("https://client.example/sms/reply"));
-        when(externalHttpClient.beginOperation()).thenReturn(null);
-        when(externalHttpClient.getForObject(isNull(), anyString(), eq(String.class)))
+        SmsExternalHttpClient.OperationBudget observation = mock(SmsExternalHttpClient.OperationBudget.class);
+        when(externalHttpClient.beginOperation()).thenReturn(observation);
+        when(externalHttpClient.getForObject(same(observation), anyString(), eq(String.class)))
                 .thenThrow(new SmsExternalHttpClient.SmsExternalCallRejectedException("safe"));
 
         assertThrows(SmsExternalHttpClient.SmsExternalCallRejectedException.class,
                 () -> callbackService.receive("13800000000", "YES", "provider-1", null));
 
         verify(smsService, never()).reply(any());
+    }
+
+
+    @Test
+    void exhaustedRequestDeadlineDoesNotUnderflowCallbackLockOrExternalWork() throws Exception {
+        when(smsService.findReply(any())).thenReturn(null);
+        SmsSendEntity send = new SmsSendEntity().setMsgid("provider-1").setClientId("client-a");
+        send.setTenantId("tenant-a");
+        when(smsService.selectSend("provider-1")).thenReturn(send);
+        when(smsService.selectConfig("client-a")).thenReturn(new SmsConfigEntity()
+                .setClientId("client-a").setReplyUrl("https://client.example/sms/reply"));
+        SmsExternalHttpClient.OperationBudget observation = mock(SmsExternalHttpClient.OperationBudget.class);
+        when(externalHttpClient.beginOperation()).thenReturn(observation);
+        when(externalHttpClient.getForObject(same(observation), anyString(), eq(String.class))).thenReturn("ok");
+
+        try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
+            callbackService.receive("13800000000", "YES", "provider-1", "01");
+        }
+
+        verify(distributedLock).tryLock(anyString(), eq(1_000L), eq(5_000L), eq(TimeUnit.MILLISECONDS), eq(false));
+        verify(externalHttpClient).getForObject(same(observation), anyString(), eq(String.class));
+        verify(smsService).reply(any());
+    }
+
+    @Test
+    void unavailableOrUnacquiredLockFailsWithoutFakeSuccessOrSideEffects() throws Exception {
+        callbackService = new SmsReplyCallbackService(smsService, externalHttpClient, Optional.empty());
+        SafeRequestTimeoutException unavailable = assertThrows(SafeRequestTimeoutException.class,
+                () -> callbackService.receive("13800000000", "YES", "provider-1", null));
+        assertEquals(SafeRequestTimeoutException.Dependency.REDIS, unavailable.dependency());
+        verifyNoInteractions(smsService, externalHttpClient);
+
+        reset(smsService, externalHttpClient, distributedLock);
+        callbackService = new SmsReplyCallbackService(smsService, externalHttpClient, Optional.of(distributedLock));
+        when(distributedLock.tryLock(anyString(), eq(1_000L), eq(5_000L), eq(TimeUnit.MILLISECONDS), eq(false)))
+                .thenReturn(null);
+
+        SafeRequestTimeoutException notAcquired = assertThrows(SafeRequestTimeoutException.class,
+                () -> callbackService.receive("13800000000", "YES", "provider-1", null));
+        assertEquals(SafeRequestTimeoutException.Dependency.REDIS, notAcquired.dependency());
+        verifyNoInteractions(smsService, externalHttpClient);
     }
 
     @Test

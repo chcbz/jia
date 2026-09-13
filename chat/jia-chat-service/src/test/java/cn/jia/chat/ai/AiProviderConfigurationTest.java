@@ -1,16 +1,14 @@
 package cn.jia.chat.ai;
 
 import java.time.Duration;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiChatProperties;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
-import org.springframework.mock.env.MockEnvironment;
 import org.springframework.core.retry.RetryException;
+import org.springframework.mock.env.MockEnvironment;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -20,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AiProviderConfigurationTest {
     @Test
-    void defaultsAreDisabledAndBudgetOrderingIsValidated() {
+    void defaultsAreDisabledAndSlowThresholdsDoNotConstrainTransportOrdering() {
         AiProviderProperties properties = new AiProviderProperties();
         properties.validate();
 
@@ -31,7 +29,8 @@ class AiProviderConfigurationTest {
         assertEquals(Duration.ofSeconds(25), properties.getTotalBudget());
 
         properties.setConnectBudget(Duration.ofSeconds(3));
-        assertThrows(IllegalStateException.class, properties::validate);
+        assertTrue(properties.getConnectBudget().compareTo(properties.getFirstTokenBudget()) > 0);
+        properties.validate();
     }
 
     @Test
@@ -75,23 +74,20 @@ class AiProviderConfigurationTest {
     }
 
     @Test
-    void postProcessorForcesOpenAiTotalTimeoutAndZeroSdkRetries() {
+    void postProcessorPreservesConfiguredProviderTimeoutAndZeroSdkRetries() {
         AiProviderProperties properties = enabledProperties();
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        try {
-            AiModelBeanPostProcessor processor = new AiModelBeanPostProcessor(properties, executor);
-            OpenAiChatProperties openAi = new OpenAiChatProperties();
+        AiModelBeanPostProcessor processor = new AiModelBeanPostProcessor(properties);
+        OpenAiChatProperties openAi = new OpenAiChatProperties();
+        Duration configuredNetworkTimeout = Duration.ofSeconds(90);
+        openAi.setTimeout(configuredNetworkTimeout);
 
-            processor.postProcessBeforeInitialization(openAi, "openAiChatProperties");
+        processor.postProcessBeforeInitialization(openAi, "openAiChatProperties");
 
-            assertEquals(0, openAi.getMaxRetries());
-            assertEquals(properties.getTotalBudget(), openAi.getTimeout());
-            ChatModel wrapped = assertInstanceOf(ChatModel.class,
-                    processor.postProcessAfterInitialization((ChatModel) prompt -> null, "providerModel"));
-            assertInstanceOf(BudgetedChatModel.class, wrapped);
-        } finally {
-            executor.shutdownNow();
-        }
+        assertEquals(0, openAi.getMaxRetries());
+        assertEquals(configuredNetworkTimeout, openAi.getTimeout());
+        ChatModel wrapped = assertInstanceOf(ChatModel.class,
+                processor.postProcessAfterInitialization((ChatModel) prompt -> null, "providerModel"));
+        assertInstanceOf(BudgetedChatModel.class, wrapped);
     }
 
     @Test
@@ -133,7 +129,6 @@ class AiProviderConfigurationTest {
         properties.setConnectBudget(Duration.ofMillis(50));
         properties.setFirstTokenBudget(Duration.ofMillis(100));
         properties.setTotalBudget(Duration.ofMillis(200));
-        properties.setSafetyMargin(Duration.ZERO);
         properties.validate();
         return properties;
     }

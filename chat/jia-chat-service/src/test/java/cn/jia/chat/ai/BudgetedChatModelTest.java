@@ -4,19 +4,20 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import cn.jia.core.deadline.RequestDeadline;
 import cn.jia.core.deadline.RequestDeadlineContext;
-import cn.jia.core.deadline.SafeRequestTimeoutException;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -32,18 +33,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BudgetedChatModelTest {
-    private ExecutorService executor;
-
-    @BeforeEach
-    void setUp() {
-        executor = Executors.newFixedThreadPool(2);
-    }
-
-    @AfterEach
-    void tearDown() {
-        executor.shutdownNow();
-    }
-
     @Test
     void exactPromptAndProviderAreInvokedOnceForSyncAndStream() {
         Prompt prompt = new Prompt("private prompt");
@@ -65,7 +54,7 @@ class BudgetedChatModelTest {
                 return Flux.just(response("stream"));
             }
         };
-        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), executor);
+        BudgetedChatModel model = new BudgetedChatModel(delegate, properties());
 
         model.call(prompt);
         model.stream(prompt).blockLast(Duration.ofSeconds(2));
@@ -78,85 +67,80 @@ class BudgetedChatModelTest {
     }
 
     @Test
-    void exhaustedRequestDeadlineFailsBeforeProviderInvocation() {
+    void exhaustedRequestDeadlineDoesNotRefuseNewAiWork() {
         AtomicInteger calls = new AtomicInteger();
-        ChatModel delegate = prompt -> {
-            calls.incrementAndGet();
-            return response("never");
+        ChatModel delegate = new ChatModel() {
+            @Override
+            public ChatResponse call(Prompt prompt) {
+                calls.incrementAndGet();
+                return response("available-sync");
+            }
+
+            @Override
+            public Flux<ChatResponse> stream(Prompt prompt) {
+                calls.incrementAndGet();
+                return Flux.just(response("available-stream"));
+            }
         };
-        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), executor);
+        BudgetedChatModel model = new BudgetedChatModel(delegate, properties());
 
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
-            SafeRequestTimeoutException failure = assertThrows(SafeRequestTimeoutException.class,
-                    () -> model.call(new Prompt("private prompt")));
-            assertEquals(SafeRequestTimeoutException.Dependency.AI, failure.dependency());
-            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, failure.workState());
+            assertEquals("available-sync", model.call(new Prompt("private prompt"))
+                    .getResults().get(0).getOutput().getText());
+            assertEquals("available-stream", model.stream(new Prompt("private prompt"))
+                    .blockLast(Duration.ofSeconds(1)).getResults().get(0).getOutput().getText());
         }
 
-        assertEquals(0, calls.get());
+        assertEquals(2, calls.get());
         assertEquals(0, model.activeInvocationCount());
     }
 
     @Test
-    void remainingDeadlineCapsEveryBudgetSlice() {
-        AiProviderProperties properties = properties();
-        try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(90))) {
-            AiCallBudget budget = AiCallBudget.resolve(properties,
-                    RequestDeadlineContext.current().orElseThrow());
-            assertTrue(budget.connect().toMillis() <= 90);
-            assertTrue(budget.firstToken().toMillis() <= 90);
-            assertTrue(budget.total().toMillis() <= 90);
-            assertTrue(budget.connect().compareTo(budget.firstToken()) <= 0);
-            assertTrue(budget.firstToken().compareTo(budget.total()) <= 0);
-        }
+    void slowSynchronousCallCompletesAndEmitsOnlySafeObservation() {
+        MutableClock clock = new MutableClock();
+        ChatModel delegate = prompt -> {
+            clock.advanceMillis(250);
+            return response("slow-valid-result");
+        };
+        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), clock);
+
+        List<ILoggingEvent> events = captureLogs(() -> assertEquals("slow-valid-result",
+                model.call(new Prompt("private-prompt-value")).getResults().get(0).getOutput().getText()));
+
+        assertEquals(1, events.size());
+        String message = events.get(0).getFormattedMessage();
+        assertTrue(message.contains("phase=total"));
+        assertFalse(message.contains("private-prompt-value"));
+        assertFalse(message.contains("slow-valid-result"));
     }
 
     @Test
-    void metadataOnlyFramesDoNotSatisfyFirstTokenAndTimeoutCancelsUpstream() {
-        AtomicInteger calls = new AtomicInteger();
+    void slowFirstGeneratedTokenIsObservedWithoutCancellingUpstream() {
+        MutableClock clock = new MutableClock();
         AtomicBoolean cancelled = new AtomicBoolean();
-        ChatModel delegate = new StreamingOnlyModel(prompt -> {
-            calls.incrementAndGet();
-            return Flux.just(response(""))
-                    .concatWith(Flux.never())
-                    .doOnCancel(() -> cancelled.set(true));
-        });
-        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), executor);
+        ChatModel delegate = new StreamingOnlyModel(prompt -> Flux.defer(() -> {
+            clock.advanceMillis(150);
+            return Flux.just(response("token"), response("later"));
+        }).doOnCancel(() -> cancelled.set(true)));
+        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), clock);
 
-        AiProviderCallException failure = assertThrows(AiProviderCallException.class,
-                () -> model.stream(new Prompt("private prompt")).blockLast(Duration.ofSeconds(2)));
+        List<ILoggingEvent> events = captureLogs(() -> assertEquals("later",
+                model.stream(new Prompt("private prompt")).blockLast(Duration.ofSeconds(1))
+                        .getResults().get(0).getOutput().getText()));
 
-        assertEquals(AiFailureCategory.FIRST_TOKEN_TIMEOUT, failure.category());
-        assertEquals(1, calls.get());
-        assertTrue(cancelled.get());
+        assertFalse(cancelled.get());
         assertEquals(0, model.activeInvocationCount());
-        assertFalse(failure.getMessage().contains("private prompt"));
+        assertTrue(events.stream().anyMatch(event -> event.getFormattedMessage().contains("phase=first_token")));
     }
 
     @Test
-    void totalTimeoutAfterFirstTokenCancelsAndCleansUp() {
-        AtomicBoolean cancelled = new AtomicBoolean();
-        ChatModel delegate = new StreamingOnlyModel(prompt -> Flux.just(response("token"))
-                .concatWith(Flux.never())
-                .doOnCancel(() -> cancelled.set(true)));
-        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), executor);
-
-        AiProviderCallException failure = assertThrows(AiProviderCallException.class,
-                () -> model.stream(new Prompt("private prompt")).blockLast(Duration.ofSeconds(2)));
-
-        assertEquals(AiFailureCategory.TOTAL_TIMEOUT, failure.category());
-        assertTrue(cancelled.get());
-        assertEquals(0, model.activeInvocationCount());
-    }
-
-    @Test
-    void downstreamCancellationCancelsProviderAndCleansUp() throws Exception {
+    void downstreamCancellationStillCancelsProviderAndCleansUp() throws Exception {
         AtomicBoolean cancelled = new AtomicBoolean();
         CountDownLatch subscribed = new CountDownLatch(1);
         ChatModel delegate = new StreamingOnlyModel(prompt -> Flux.<ChatResponse>never()
                 .doOnSubscribe(ignored -> subscribed.countDown())
                 .doOnCancel(() -> cancelled.set(true)));
-        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), executor);
+        BudgetedChatModel model = new BudgetedChatModel(delegate, properties());
 
         Disposable subscription = model.stream(new Prompt("private prompt")).subscribe();
         assertTrue(subscribed.await(1, TimeUnit.SECONDS));
@@ -167,40 +151,11 @@ class BudgetedChatModelTest {
     }
 
     @Test
-    void synchronousTimeoutInterruptsTaskAndDoesNotRetry() throws Exception {
-        AtomicInteger calls = new AtomicInteger();
-        AtomicBoolean interrupted = new AtomicBoolean();
-        CountDownLatch started = new CountDownLatch(1);
-        ChatModel delegate = prompt -> {
-            calls.incrementAndGet();
-            started.countDown();
-            try {
-                new CountDownLatch(1).await();
-                return response("never");
-            } catch (InterruptedException exception) {
-                interrupted.set(true);
-                Thread.currentThread().interrupt();
-                throw new RuntimeException(exception);
-            }
-        };
-        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), executor);
-
-        AiProviderCallException failure = assertThrows(AiProviderCallException.class,
-                () -> model.call(new Prompt("private prompt")));
-
-        assertTrue(started.await(1, TimeUnit.SECONDS));
-        assertEquals(AiFailureCategory.TOTAL_TIMEOUT, failure.category());
-        assertEquals(1, calls.get());
-        awaitTrue(interrupted);
-        awaitActiveZero(model);
-    }
-
-    @Test
     void providerFailureIsClassifiedWithoutRetainingSensitiveCause() {
         ChatModel delegate = prompt -> {
             throw new TransientAiException("Authorization bearer-secret provider-body");
         };
-        BudgetedChatModel model = new BudgetedChatModel(delegate, properties(), executor);
+        BudgetedChatModel model = new BudgetedChatModel(delegate, properties());
 
         AiProviderCallException failure = assertThrows(AiProviderCallException.class,
                 () -> model.call(new Prompt("private prompt")));
@@ -228,8 +183,7 @@ class BudgetedChatModelTest {
         properties.setProvider(AiProviderProperties.Provider.OPENAI);
         properties.setConnectBudget(Duration.ofMillis(40));
         properties.setFirstTokenBudget(Duration.ofMillis(100));
-        properties.setTotalBudget(Duration.ofMillis(180));
-        properties.setSafetyMargin(Duration.ZERO);
+        properties.setTotalBudget(Duration.ofMillis(200));
         properties.validate();
         return properties;
     }
@@ -238,20 +192,34 @@ class BudgetedChatModelTest {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
     }
 
-    private static void awaitTrue(AtomicBoolean value) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
-        while (!value.get() && System.nanoTime() < deadline) {
-            Thread.sleep(5);
+    private static List<ILoggingEvent> captureLogs(Runnable action) {
+        Logger logger = (Logger) LoggerFactory.getLogger(BudgetedChatModel.class);
+        Level originalLevel = logger.getLevel();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(Level.WARN);
+        try {
+            action.run();
+            return List.copyOf(appender.list);
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(originalLevel);
+            appender.stop();
         }
-        assertTrue(value.get());
     }
 
-    private static void awaitActiveZero(BudgetedChatModel model) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
-        while (model.activeInvocationCount() != 0 && System.nanoTime() < deadline) {
-            Thread.sleep(5);
+    private static final class MutableClock implements LongSupplier {
+        private long now;
+
+        @Override
+        public long getAsLong() {
+            return now;
         }
-        assertEquals(0, model.activeInvocationCount());
+
+        private void advanceMillis(long millis) {
+            now += TimeUnit.MILLISECONDS.toNanos(millis);
+        }
     }
 
     private static final class StreamingOnlyModel implements ChatModel {

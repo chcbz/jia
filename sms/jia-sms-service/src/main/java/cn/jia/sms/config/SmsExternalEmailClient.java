@@ -22,6 +22,8 @@ public class SmsExternalEmailClient {
     public boolean send(SmsExternalHttpClient.OperationBudget budget, String title, String content,
             String from, String to, String username, String password, String smtpHost) {
         SmsExternalHttpClient.CallTimeouts callTimeouts = externalHttpClient.prepareSdkCall(budget);
+        long startedNanos = budget.markCallStarted();
+        String outcome = "success";
         Properties properties = new Properties();
         properties.setProperty("mail.smtp.host", smtpHost);
         properties.setProperty("mail.smtp.auth", "true");
@@ -46,9 +48,14 @@ public class SmsExternalEmailClient {
             transport.sendMessage(message, message.getRecipients(Message.RecipientType.TO));
             return true;
         } catch (MessagingException exception) {
+            outcome = "failure";
             throw new SmsExternalHttpClient.SmsExternalCallRejectedException("SMS email dependency failed");
+        } catch (RuntimeException | Error failure) {
+            outcome = "failure";
+            throw failure;
         } finally {
             closeQuietly(transport);
+            budget.observeIfSlow("smtp", startedNanos, outcome);
         }
     }
 

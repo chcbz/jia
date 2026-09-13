@@ -1,7 +1,7 @@
 package cn.jia.sms.config;
 
-import cn.jia.core.deadline.RequestDeadlinePropagation;
-import cn.jia.core.deadline.SafeRequestTimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
@@ -13,15 +13,20 @@ import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.function.LongSupplier;
 
 /**
- * Single-shot SMS HTTP boundary. Each operation is capped by the smaller of
- * its module budget and the current request deadline, and is rejected while a
- * database transaction is active.
+ * Single-shot SMS HTTP boundary. Explicit transport timeouts remain enforced,
+ * while the former API/operation total budget is retained only as a safe slow-call observation.
+ * Calls are rejected while a database transaction is active.
  */
 @Component
 public class SmsExternalHttpClient {
+    private static final Logger log = LoggerFactory.getLogger(SmsExternalHttpClient.class);
+
     private final SmsExternalHttpTimeouts timeouts;
 
     public SmsExternalHttpClient(SmsExternalHttpTimeouts timeouts) {
@@ -34,29 +39,46 @@ public class SmsExternalHttpClient {
 
     public <T> ResponseEntity<T> exchange(OperationBudget budget, String url, HttpMethod method,
             HttpEntity<?> entity, Class<T> responseType) {
-        return requireSuccess(restTemplate(budget).exchange(url, method, entity, responseType));
+        return observedHttpCall(budget,
+                template -> requireSuccess(template.exchange(url, method, entity, responseType)));
     }
 
     public <T> ResponseEntity<T> postForEntity(OperationBudget budget, String url, HttpEntity<?> entity,
             Class<T> responseType) {
-        return requireSuccess(restTemplate(budget).postForEntity(url, entity, responseType));
+        return observedHttpCall(budget,
+                template -> requireSuccess(template.postForEntity(url, entity, responseType)));
     }
 
     public <T> T getForObject(OperationBudget budget, String url, Class<T> responseType) {
-        return requireSuccess(restTemplate(budget).exchange(url, HttpMethod.GET, HttpEntity.EMPTY, responseType))
-                .getBody();
+        return observedHttpCall(budget, template -> requireSuccess(
+                template.exchange(url, HttpMethod.GET, HttpEntity.EMPTY, responseType)).getBody());
     }
 
     public <T> T postForObject(OperationBudget budget, String url, HttpEntity<?> entity, Class<T> responseType) {
-        return requireSuccess(restTemplate(budget).exchange(url, HttpMethod.POST, entity, responseType)).getBody();
+        return observedHttpCall(budget, template -> requireSuccess(
+                template.exchange(url, HttpMethod.POST, entity, responseType)).getBody());
     }
 
     public CallTimeouts prepareSdkCall(OperationBudget budget) {
         requireOutsideTransaction();
         if (budget == null) {
-            throw new IllegalArgumentException("SMS operation budget is required");
+            throw new IllegalArgumentException("SMS operation observation is required");
         }
         return budget.nextCallTimeouts();
+    }
+
+    private <T> T observedHttpCall(OperationBudget budget, Function<RestTemplate, T> call) {
+        RestTemplate template = restTemplate(budget);
+        long startedNanos = budget.markCallStarted();
+        String outcome = "success";
+        try {
+            return call.apply(template);
+        } catch (RuntimeException | Error failure) {
+            outcome = "failure";
+            throw failure;
+        } finally {
+            budget.observeIfSlow("http", startedNanos, outcome);
+        }
     }
 
     private RestTemplate restTemplate(OperationBudget budget) {
@@ -92,48 +114,29 @@ public class SmsExternalHttpClient {
 
     public static final class OperationBudget {
         private final SmsExternalHttpTimeouts timeouts;
-        private final long startedNanos;
-        private final java.util.function.LongSupplier monotonicClock;
+        private final LongSupplier monotonicClock;
 
-        OperationBudget(SmsExternalHttpTimeouts timeouts, java.util.function.LongSupplier monotonicClock) {
-            this.timeouts = timeouts;
-            this.monotonicClock = monotonicClock;
-            this.startedNanos = monotonicClock.getAsLong();
-        }
-
-        long remainingForNewCallMillis() {
-            long requestAvailableMillis = RequestDeadlinePropagation.requireBudgetBeforeNewWork(
-                    timeouts.getTotalTimeoutMillis(), timeouts.getSafetyMarginMillis(),
-                    SafeRequestTimeoutException.Dependency.SMS);
-            long elapsedNanos = monotonicClock.getAsLong() - startedNanos;
-            long elapsedMillis = elapsedNanos <= 0 ? 0 : TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
-            long localAvailableMillis = (long) timeouts.getTotalTimeoutMillis() - elapsedMillis
-                    - timeouts.getSafetyMarginMillis();
-            long availableMillis = Math.min(localAvailableMillis, requestAvailableMillis);
-            if (availableMillis <= 1) {
-                throw new SmsExternalBudgetExhaustedException();
-            }
-            return availableMillis;
+        OperationBudget(SmsExternalHttpTimeouts timeouts, LongSupplier monotonicClock) {
+            this.timeouts = Objects.requireNonNull(timeouts, "timeouts");
+            this.monotonicClock = Objects.requireNonNull(monotonicClock, "monotonicClock");
         }
 
         CallTimeouts nextCallTimeouts() {
-            long availableMillis = remainingForNewCallMillis();
-            int connectionRequestTimeoutMillis = (int) Math.min(timeouts.getConnectionRequestTimeoutMillis(),
-                    availableMillis - 1);
-            long afterPoolMillis = availableMillis - connectionRequestTimeoutMillis;
-            int connectTimeoutMillis = (int) Math.min(timeouts.getConnectTimeoutMillis(), afterPoolMillis - 1);
-            int readTimeoutMillis = (int) Math.min(timeouts.getReadTimeoutMillis(),
-                    afterPoolMillis - connectTimeoutMillis);
-            if (connectionRequestTimeoutMillis <= 0 || connectTimeoutMillis <= 0 || readTimeoutMillis <= 0) {
-                throw new SmsExternalBudgetExhaustedException();
-            }
-            return new CallTimeouts(connectionRequestTimeoutMillis, connectTimeoutMillis, readTimeoutMillis);
+            return new CallTimeouts(timeouts.getConnectionRequestTimeoutMillis(),
+                    timeouts.getConnectTimeoutMillis(), timeouts.getReadTimeoutMillis());
         }
-    }
 
-    public static final class SmsExternalBudgetExhaustedException extends RuntimeException {
-        public SmsExternalBudgetExhaustedException() {
-            super("SMS external request budget exhausted before work started");
+        long markCallStarted() {
+            return monotonicClock.getAsLong();
+        }
+
+        void observeIfSlow(String transport, long startedNanos, String outcome) {
+            long elapsedNanos = monotonicClock.getAsLong() - startedNanos;
+            long elapsedMillis = elapsedNanos <= 0 ? 0 : TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
+            if (elapsedMillis >= timeouts.getTotalTimeoutMillis()) {
+                log.warn("Slow SMS external call observed: transport={}, elapsedMs={}, thresholdMs={}, outcome={}",
+                        transport, elapsedMillis, timeouts.getTotalTimeoutMillis(), outcome);
+            }
         }
     }
 

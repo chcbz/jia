@@ -1,116 +1,93 @@
 package cn.jia.chat.ai;
 
+import java.time.Duration;
 import java.util.Objects;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongSupplier;
 
-import cn.jia.core.deadline.RequestDeadline;
-import cn.jia.core.deadline.RequestDeadlineContext;
 import cn.jia.core.deadline.SafeRequestTimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.core.publisher.Signal;
 
-/** One-shot provider wrapper with request-aware connect, first-token, and total budgets. */
+/** Single-shot provider wrapper that sanitizes failures and observes slow calls without cancelling valid work. */
 public final class BudgetedChatModel implements ChatModel {
+    private static final Logger log = LoggerFactory.getLogger(BudgetedChatModel.class);
+
     private final ChatModel delegate;
     private final AiProviderProperties properties;
-    private final ExecutorService synchronousExecutor;
+    private final LongSupplier monotonicClock;
     private final AtomicInteger activeInvocations = new AtomicInteger();
 
-    public BudgetedChatModel(ChatModel delegate, AiProviderProperties properties,
-            ExecutorService synchronousExecutor) {
+    public BudgetedChatModel(ChatModel delegate, AiProviderProperties properties) {
+        this(delegate, properties, System::nanoTime);
+    }
+
+    BudgetedChatModel(ChatModel delegate, AiProviderProperties properties, LongSupplier monotonicClock) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.properties = Objects.requireNonNull(properties, "properties");
-        this.synchronousExecutor = Objects.requireNonNull(synchronousExecutor, "synchronousExecutor");
+        this.monotonicClock = Objects.requireNonNull(monotonicClock, "monotonicClock");
+        properties.validate();
     }
 
     @Override
     public ChatResponse call(Prompt prompt) {
         Objects.requireNonNull(prompt, "prompt");
-        RequestDeadline deadline = RequestDeadlineContext.current().orElse(null);
-        AiCallBudget budget = AiCallBudget.resolve(properties, deadline);
-        RequestDeadlineContext.Snapshot context = RequestDeadlineContext.capture();
-        Future<ChatResponse> future;
+        long startedNanos = monotonicClock.getAsLong();
+        String outcome = "success";
         activeInvocations.incrementAndGet();
         try {
-            future = synchronousExecutor.submit(context.wrap(() -> {
-                try {
-                    return delegate.call(prompt);
-                } finally {
-                    activeInvocations.decrementAndGet();
-                }
-            }));
-        } catch (RejectedExecutionException exception) {
+            return delegate.call(prompt);
+        } catch (Throwable failure) {
+            outcome = "failure";
+            throw sanitize(failure);
+        } finally {
             activeInvocations.decrementAndGet();
-            throw new AiProviderCallException(AiFailureCategory.PROVIDER_UNAVAILABLE);
-        }
-        try {
-            return future.get(budget.total().toNanos(), TimeUnit.NANOSECONDS);
-        } catch (TimeoutException exception) {
-            future.cancel(true);
-            throw new AiProviderCallException(AiFailureCategory.TOTAL_TIMEOUT);
-        } catch (InterruptedException exception) {
-            future.cancel(true);
-            Thread.currentThread().interrupt();
-            throw new AiProviderCallException(AiFailureCategory.CANCELLED);
-        } catch (ExecutionException exception) {
-            Throwable cause = exception.getCause();
-            if (cause instanceof SafeRequestTimeoutException timeout) {
-                throw timeout;
-            }
-            throw AiFailureClassifier.sanitize(cause == null ? exception : cause);
+            observeSlow("total", startedNanos, properties.getTotalBudget(), outcome);
         }
     }
 
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         Objects.requireNonNull(prompt, "prompt");
-        RequestDeadline capturedDeadline = RequestDeadlineContext.current().orElse(null);
-        return Flux.defer(() -> streamOnce(prompt, capturedDeadline));
+        return Flux.defer(() -> streamOnce(prompt));
     }
 
-    private Flux<ChatResponse> streamOnce(Prompt prompt, RequestDeadline deadline) {
-        AiCallBudget budget = AiCallBudget.resolve(properties, deadline);
+    private Flux<ChatResponse> streamOnce(Prompt prompt) {
+        long startedNanos = monotonicClock.getAsLong();
         AtomicBoolean firstTokenSeen = new AtomicBoolean();
-        long startedNanos = System.nanoTime();
         activeInvocations.incrementAndGet();
         Flux<ChatResponse> source;
         try {
             source = Objects.requireNonNull(delegate.stream(prompt), "delegate stream");
         } catch (Throwable failure) {
             activeInvocations.decrementAndGet();
+            observeSlow("first_token", startedNanos, properties.getFirstTokenBudget(), "failure");
+            observeSlow("total", startedNanos, properties.getTotalBudget(), "failure");
             return Flux.error(sanitize(failure));
         }
 
-        Flux<ChatResponse> firstTokenBounded =
-                new FirstTokenTimeoutFlux(source, budget.firstToken(), firstTokenSeen);
-
-        Flux<Signal<ChatResponse>> totalBounded = firstTokenBounded
-                .materialize()
-                .takeUntilOther(Mono.delay(budget.total()))
-                .concatWith(Mono.just(Signal.error(
-                        new AiProviderCallException(AiFailureCategory.TOTAL_TIMEOUT))))
-                .takeUntil(signal -> signal.isOnComplete() || signal.isOnError());
-
-        return totalBounded
-                .<ChatResponse>dematerialize()
-                .concatWith(Flux.defer(() -> firstTokenSeen.get()
-                        ? Flux.empty()
-                        : Flux.error(new AiProviderCallException(AiFailureCategory.PROVIDER_REJECTED))))
+        return source
+                .doOnNext(response -> {
+                    if (hasGeneratedText(response) && firstTokenSeen.compareAndSet(false, true)) {
+                        observeSlow("first_token", startedNanos, properties.getFirstTokenBudget(), "success");
+                    }
+                })
                 .onErrorMap(BudgetedChatModel::sanitize)
-                .doFinally(ignored -> activeInvocations.decrementAndGet());
+                .doFinally(signal -> {
+                    if (!firstTokenSeen.get()) {
+                        observeSlow("first_token", startedNanos, properties.getFirstTokenBudget(), signal.name());
+                    }
+                    observeSlow("total", startedNanos, properties.getTotalBudget(), signal.name());
+                    activeInvocations.decrementAndGet();
+                });
     }
 
     static boolean hasGeneratedText(ChatResponse response) {
@@ -127,9 +104,21 @@ public final class BudgetedChatModel implements ChatModel {
         return false;
     }
 
-    private static Throwable sanitize(Throwable failure) {
-        if (failure instanceof SafeRequestTimeoutException || failure instanceof AiProviderCallException) {
-            return failure;
+    private void observeSlow(String phase, long startedNanos, Duration threshold, String outcome) {
+        long elapsedNanos = monotonicClock.getAsLong() - startedNanos;
+        long elapsedMillis = elapsedNanos <= 0 ? 0 : TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
+        if (elapsedMillis >= threshold.toMillis()) {
+            log.warn("Slow external AI call observed: phase={}, elapsedMs={}, thresholdMs={}, outcome={}",
+                    phase, elapsedMillis, threshold.toMillis(), outcome);
+        }
+    }
+
+    private static RuntimeException sanitize(Throwable failure) {
+        if (failure instanceof SafeRequestTimeoutException timeout) {
+            return timeout;
+        }
+        if (failure instanceof AiProviderCallException providerFailure) {
+            return providerFailure;
         }
         return AiFailureClassifier.sanitize(failure);
     }

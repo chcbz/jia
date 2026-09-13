@@ -131,7 +131,7 @@ class ChatControllerTest extends BaseMockTest {
 
 
     @Test
-    void chatStreamFirstFrameDeadlineCancelsBackendAndReturnsLegacyErrorEnvelope() throws Exception {
+    void clientCancellationStillCancelsSlowChatBackendWithoutSyntheticTimeout() throws Exception {
         EsContext context = new EsContext();
         context.setJiacn("tester");
         context.setClientId("web-client");
@@ -151,10 +151,14 @@ class ChatControllerTest extends BaseMockTest {
                     ((Runnable) invocation.getArgument(3)).run();
                     return true;
                 });
+        java.util.concurrent.CountDownLatch subscribed = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
         JuyitingAgentRelayService relay = org.mockito.Mockito.mock(JuyitingAgentRelayService.class);
         when(relay.relay(any(), eq("1001"), any())).thenReturn(new JuyitingAgentRelayResult(
-                true, Mono.just(true), Flux.<String>never().doOnCancel(cancelled::countDown)));
+                true, Mono.just(true), Flux.<String>never()
+                        .doOnSubscribe(ignored -> subscribed.countDown())
+                        .doOnCancel(cancelled::countDown)));
 
         ChatController controller = new ChatController(
                 chatClient, chatConversationService, redisService, chatClientBuilder,
@@ -165,11 +169,13 @@ class ChatControllerTest extends BaseMockTest {
         request.setConversationId("1001");
         request.setContent("请回报");
 
-        String frame = controller.handleChat(request).blockFirst(Duration.ofSeconds(4));
+        reactor.core.Disposable subscription = controller.handleChat(request)
+                .subscribe(ignored -> { }, failure::set);
+        assertTrue(subscribed.await(1, java.util.concurrent.TimeUnit.SECONDS));
+        subscription.dispose();
 
-        assertTrue(frame.contains("\"error\": \"Stream first frame deadline exceeded\""));
-        assertTrue(frame.contains("\"conversationId\": \"1001\""));
         assertTrue(cancelled.await(1, java.util.concurrent.TimeUnit.SECONDS));
+        org.junit.jupiter.api.Assertions.assertNull(failure.get());
     }
 
     @Test

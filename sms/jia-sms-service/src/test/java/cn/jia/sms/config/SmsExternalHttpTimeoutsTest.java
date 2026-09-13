@@ -1,20 +1,27 @@
 package cn.jia.sms.config;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import cn.jia.core.deadline.RequestDeadline;
 import cn.jia.core.deadline.RequestDeadlineContext;
-import cn.jia.core.deadline.SafeRequestTimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SmsExternalHttpTimeoutsTest {
     @AfterEach
@@ -23,7 +30,7 @@ class SmsExternalHttpTimeoutsTest {
     }
 
     @Test
-    void defaultsFitTheTotalBudget() {
+    void defaultsPreserveExplicitTransportTimeouts() {
         SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
 
         assertDoesNotThrow(timeouts::validate);
@@ -31,44 +38,57 @@ class SmsExternalHttpTimeoutsTest {
         assertEquals(500, timeouts.getConnectTimeoutMillis());
         assertEquals(1750, timeouts.getReadTimeoutMillis());
         assertEquals(2500, timeouts.getTotalTimeoutMillis());
-        assertEquals(100, timeouts.getSafetyMarginMillis());
     }
 
     @Test
-    void rejectsPhaseBudgetsThatExceedTheTotalBudget() {
+    void formerTotalBudgetIsObservationOnlyAndDoesNotShrinkTransportTimeouts() {
         SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
-        ReflectionTestUtils.setField(timeouts, "readTimeoutMillis", 1751);
-
-        assertThrows(IllegalStateException.class, timeouts::validate);
-    }
-
-    @Test
-    void capsEveryCallByTheRemainingOperationBudget() {
-        SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
+        ReflectionTestUtils.setField(timeouts, "totalTimeoutMillis", 1);
+        timeouts.validate();
         MutableClock clock = new MutableClock();
-        SmsExternalHttpClient.OperationBudget budget = new SmsExternalHttpClient.OperationBudget(timeouts, clock);
+        SmsExternalHttpClient.OperationBudget observation =
+                new SmsExternalHttpClient.OperationBudget(timeouts, clock);
+        clock.advanceMillis(10_000);
 
-        assertEquals(2400, budget.remainingForNewCallMillis());
-        SmsExternalHttpClient.CallTimeouts first = budget.nextCallTimeouts();
-        assertEquals(250, first.connectionRequestTimeoutMillis());
-        assertEquals(500, first.connectTimeoutMillis());
-        assertEquals(1650, first.readTimeoutMillis());
-        clock.advanceMillis(2399);
-        assertThrows(SmsExternalHttpClient.SmsExternalBudgetExhaustedException.class,
-                budget::remainingForNewCallMillis);
+        SmsExternalHttpClient.CallTimeouts callTimeouts =
+                new SmsExternalHttpClient(timeouts).prepareSdkCall(observation);
+
+        assertEquals(250, callTimeouts.connectionRequestTimeoutMillis());
+        assertEquals(500, callTimeouts.connectTimeoutMillis());
+        assertEquals(1750, callTimeouts.readTimeoutMillis());
     }
 
     @Test
-    void requestDeadlinePreventsStartingSmsDependencyWork() {
+    void exhaustedRequestDeadlineDoesNotRefuseSmsDependencyWork() {
         SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
-        SmsExternalHttpClient.OperationBudget budget = new SmsExternalHttpClient.OperationBudget(timeouts, () -> 0L);
+        SmsExternalHttpClient.OperationBudget observation =
+                new SmsExternalHttpClient.OperationBudget(timeouts, () -> 0L);
 
+        SmsExternalHttpClient client = new SmsExternalHttpClient(timeouts);
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
-            SafeRequestTimeoutException exception = assertThrows(SafeRequestTimeoutException.class,
-                    budget::remainingForNewCallMillis);
-            assertEquals(SafeRequestTimeoutException.Dependency.SMS, exception.dependency());
-            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, exception.workState());
+            SmsExternalHttpClient.CallTimeouts callTimeouts = client.prepareSdkCall(observation);
+            assertEquals(timeouts.getConnectTimeoutMillis(), callTimeouts.connectTimeoutMillis());
+            assertEquals(timeouts.getReadTimeoutMillis(), callTimeouts.readTimeoutMillis());
         }
+    }
+
+    @Test
+    void slowObservationContainsNoUrlOrPayload() {
+        SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
+        ReflectionTestUtils.setField(timeouts, "totalTimeoutMillis", 20);
+        MutableClock clock = new MutableClock();
+        SmsExternalHttpClient.OperationBudget observation =
+                new SmsExternalHttpClient.OperationBudget(timeouts, clock);
+        long started = observation.markCallStarted();
+        clock.advanceMillis(30);
+
+        List<ILoggingEvent> events = captureLogs(() -> observation.observeIfSlow("http", started, "success"));
+
+        assertEquals(1, events.size());
+        String message = events.get(0).getFormattedMessage();
+        assertTrue(message.contains("transport=http"));
+        assertFalse(message.contains("client.example"));
+        assertFalse(message.contains("sensitive"));
     }
 
     @Test
@@ -79,6 +99,23 @@ class SmsExternalHttpTimeoutsTest {
         assertThrows(SmsExternalHttpClient.SmsExternalCallRejectedException.class,
                 () -> client.postForEntity(client.beginOperation(), "http://127.0.0.1:1",
                         HttpEntity.EMPTY, String.class));
+    }
+
+    private static List<ILoggingEvent> captureLogs(Runnable action) {
+        Logger logger = (Logger) LoggerFactory.getLogger(SmsExternalHttpClient.class);
+        Level originalLevel = logger.getLevel();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(Level.WARN);
+        try {
+            action.run();
+            return List.copyOf(appender.list);
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(originalLevel);
+            appender.stop();
+        }
     }
 
     private static final class MutableClock implements LongSupplier {

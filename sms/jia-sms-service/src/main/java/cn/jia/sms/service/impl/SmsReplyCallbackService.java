@@ -1,6 +1,5 @@
 package cn.jia.sms.service.impl;
 
-import cn.jia.core.deadline.RequestDeadlinePropagation;
 import cn.jia.core.deadline.SafeRequestTimeoutException;
 import cn.jia.core.lock.IDistributedLock;
 import cn.jia.core.lock.ILock;
@@ -45,16 +44,13 @@ public class SmsReplyCallbackService {
         if (StringUtil.isBlank(mobile) || StringUtil.isBlank(content) || StringUtil.isBlank(msgid)) {
             throw new SmsReplyCallbackException("SMS callback fields are required");
         }
-        long lockWaitMillis = RequestDeadlinePropagation.requireBudgetBeforeNewWork(
-                LOCK_WAIT_MILLIS, 100, SafeRequestTimeoutException.Dependency.REDIS);
-
         if (distributedLock == null) {
             throw SafeRequestTimeoutException.dependencyUnavailableBeforeWork(
                     SafeRequestTimeoutException.Dependency.REDIS);
         }
         ILock callbackLock;
         try {
-            callbackLock = distributedLock.tryLock(lockKey(mobile, content, msgid, xh), lockWaitMillis,
+            callbackLock = distributedLock.tryLock(lockKey(mobile, content, msgid, xh), LOCK_WAIT_MILLIS,
                     LOCK_LEASE_MILLIS, TimeUnit.MILLISECONDS, false);
         } catch (Exception exception) {
             throw SafeRequestTimeoutException.dependencyUnavailableBeforeWork(

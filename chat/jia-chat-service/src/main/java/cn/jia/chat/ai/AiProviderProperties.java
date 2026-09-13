@@ -5,18 +5,17 @@ import java.util.Objects;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-/** Bounded, non-secret configuration for external chat model calls. */
+/** Non-secret configuration for external chat model transport and slow-call observations. */
 @ConfigurationProperties(prefix = "jia.chat.ai")
 public class AiProviderProperties {
-    static final Duration MAX_BUDGET = Duration.ofMinutes(5);
-
     private boolean enabled;
     private Provider provider = Provider.DISABLED;
+    /** Explicit connection-establishment protection enforced by the provider transport. */
     private Duration connectBudget = Duration.ofMillis(500);
+    /** Backward-compatible property name; this value is observation-only. */
     private Duration firstTokenBudget = Duration.ofMillis(2500);
+    /** Backward-compatible property name; this value is observation-only. */
     private Duration totalBudget = Duration.ofSeconds(25);
-    private Duration safetyMargin = Duration.ofMillis(100);
-    private int synchronousConcurrency = 16;
 
     public boolean isEnabled() {
         return enabled;
@@ -58,38 +57,12 @@ public class AiProviderProperties {
         this.totalBudget = totalBudget;
     }
 
-    public Duration getSafetyMargin() {
-        return safetyMargin;
-    }
-
-    public void setSafetyMargin(Duration safetyMargin) {
-        this.safetyMargin = safetyMargin;
-    }
-
-    public int getSynchronousConcurrency() {
-        return synchronousConcurrency;
-    }
-
-    public void setSynchronousConcurrency(int synchronousConcurrency) {
-        this.synchronousConcurrency = synchronousConcurrency;
-    }
-
     public void validate() {
         requirePositive("connect-budget", connectBudget);
         requirePositive("first-token-budget", firstTokenBudget);
         requirePositive("total-budget", totalBudget);
-        requireNonNegative("safety-margin", safetyMargin);
-        if (connectBudget.compareTo(firstTokenBudget) > 0) {
-            throw invalid("connect-budget must not exceed first-token-budget");
-        }
-        if (firstTokenBudget.compareTo(totalBudget) >= 0) {
-            throw invalid("first-token-budget must be less than total-budget");
-        }
-        if (safetyMargin.compareTo(totalBudget) >= 0) {
-            throw invalid("safety-margin must be less than total-budget");
-        }
-        if (synchronousConcurrency < 1 || synchronousConcurrency > 256) {
-            throw invalid("synchronous-concurrency must be between 1 and 256");
+        if (connectBudget.toMillis() > Integer.MAX_VALUE) {
+            throw invalid("connect-budget is too large for the provider transport");
         }
         provider = Objects.requireNonNull(provider, "provider");
         if (!enabled && provider != Provider.DISABLED) {
@@ -101,20 +74,13 @@ public class AiProviderProperties {
     }
 
     private static void requirePositive(String name, Duration value) {
-        requireNonNegative(name, value);
-        if (value.isZero()) {
+        if (value == null || value.isZero() || value.isNegative()) {
             throw invalid(name + " must be positive");
         }
     }
 
-    private static void requireNonNegative(String name, Duration value) {
-        if (value == null || value.isNegative() || value.compareTo(MAX_BUDGET) > 0) {
-            throw invalid(name + " must be between zero and five minutes");
-        }
-    }
-
     private static IllegalStateException invalid(String detail) {
-        return new IllegalStateException("Invalid external AI budget configuration: " + detail);
+        return new IllegalStateException("Invalid external AI configuration: " + detail);
     }
 
     @Override
@@ -122,10 +88,8 @@ public class AiProviderProperties {
         return "AiProviderProperties[enabled=" + enabled
                 + ", provider=" + provider.id
                 + ", connectBudget=" + connectBudget
-                + ", firstTokenBudget=" + firstTokenBudget
-                + ", totalBudget=" + totalBudget
-                + ", safetyMargin=" + safetyMargin
-                + ", synchronousConcurrency=" + synchronousConcurrency + "]";
+                + ", firstTokenObservationThreshold=" + firstTokenBudget
+                + ", totalObservationThreshold=" + totalBudget + "]";
     }
 
     public enum Provider {
