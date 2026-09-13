@@ -80,7 +80,7 @@ public class AgentWorkItemReassignmentController {
             @PathVariable String reassignmentId,
             HttpServletRequest request, Authentication authentication) {
         Principal principal = principal(authentication, false);
-        String actorAgentId = actor(request);
+        String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
         return ok(service.readLease(principal.tenantId(), principal.clientId(), actorAgentId,
                 taskId, workItemId, reassignmentId,
@@ -95,7 +95,7 @@ public class AgentWorkItemReassignmentController {
             @PathVariable String reassignmentId,
             HttpServletRequest request, Authentication authentication) {
         Principal principal = principal(authentication, false);
-        String actorAgentId = actor(request);
+        String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
         return ok(service.startLease(principal.tenantId(), principal.clientId(), actorAgentId,
                 taskId, workItemId, reassignmentId,
@@ -110,7 +110,7 @@ public class AgentWorkItemReassignmentController {
             @PathVariable String reassignmentId,
             HttpServletRequest request, Authentication authentication) {
         Principal principal = principal(authentication, false);
-        String actorAgentId = actor(request);
+        String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
         return ok(service.heartbeatLease(principal.tenantId(), principal.clientId(), actorAgentId,
                 taskId, workItemId, reassignmentId,
@@ -183,6 +183,15 @@ public class AgentWorkItemReassignmentController {
             throw new AuthenticationFailure(true);
         }
         return new Principal(tenantId, clientId, operatorSubject);
+    }
+
+    /** A query parameter can confirm, never select, the authenticated target. */
+    private static String targetActor(HttpServletRequest request, Principal principal) {
+        String requestedActor = actor(request);
+        if (!byteExact(requestedActor, principal.subject())) {
+            throw new AuthenticationFailure(true);
+        }
+        return principal.subject();
     }
 
     private static String actor(HttpServletRequest request) {

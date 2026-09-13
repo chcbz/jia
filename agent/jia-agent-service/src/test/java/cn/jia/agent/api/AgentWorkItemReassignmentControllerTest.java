@@ -150,7 +150,7 @@ class AgentWorkItemReassignmentControllerTest {
                         .queryParam("actorAgentId", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"commandId\":\"cmd-new\",\"expectedWorkItemVersion\":5}")
-                        .principal(jwt(true, false, "tenant-a", "client-a")))
+                        .principal(targetJwt("agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.leaseToken").value("secret-target-token"))
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
@@ -224,6 +224,55 @@ class AgentWorkItemReassignmentControllerTest {
                 .andExpect(jsonPath("$.code").value("WORK_ITEM_LEASE_LIVE"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("secret lease token"))));
+    }
+
+    @Test
+    void everyLeaseEndpointRejectsCallerSelectedTargetBeforeParsingOrService() throws Exception {
+        for (String suffix : List.of("", "/start", "/heartbeat")) {
+            for (JwtAuthenticationToken identity : List.of(
+                    jwt(true, false, "tenant-a", "client-a"),
+                    targetJwt("agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                    targetJwt("agt_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"))) {
+                mvc.perform(post("/agent/tasks/task-1/work-items/work-1/reassignments/rsn-1/lease" + suffix)
+                                .queryParam("actorAgentId", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                                .contentType(MediaType.APPLICATION_JSON).content("{")
+                                .principal(identity))
+                        .andExpect(status().isForbidden())
+                        .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                        .andExpect(content().string(org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("leaseToken"))));
+            }
+        }
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void leaseMutationsUseExactAuthenticatedTargetWithoutOperatorAuthority() throws Exception {
+        String target = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        mvc.perform(post("/agent/tasks/task-1/work-items/work-1/reassignments/rsn-1/lease/start")
+                        .queryParam("actorAgentId", target)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"commandId\":\"cmd-new\",\"expectedWorkItemVersion\":5}")
+                        .principal(targetJwt(target)))
+                .andExpect(status().isOk());
+        mvc.perform(post("/agent/tasks/task-1/work-items/work-1/reassignments/rsn-1/lease/heartbeat")
+                        .queryParam("actorAgentId", target)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"commandId\":\"cmd-new\",\"expectedWorkItemVersion\":6,\"leaseDurationMillis\":1000}")
+                        .principal(targetJwt(target)))
+                .andExpect(status().isOk());
+        verify(service).startLease(eq("tenant-a"), eq("client-a"), eq(target),
+                eq("task-1"), eq("work-1"), eq("rsn-1"), any());
+        verify(service).heartbeatLease(eq("tenant-a"), eq("client-a"), eq(target),
+                eq("task-1"), eq("work-1"), eq("rsn-1"), any());
+    }
+
+    private JwtAuthenticationToken targetJwt(String subject) {
+        Jwt token = Jwt.withTokenValue("test-target-token").header("alg", "none")
+                .claim("jiacn", "tenant-a").claim("client_id", "client-a")
+                .subject(subject).issuedAt(Instant.now())
+                .expiresAt(Instant.now().plusSeconds(60)).build();
+        return new JwtAuthenticationToken(token, List.of());
     }
 
     private JwtAuthenticationToken jwt(
