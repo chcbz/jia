@@ -459,6 +459,14 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 memberDao, workItemDao,
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager),
                 eventWriter, clock, tokenGenerator, maxDuration);
+        var identityAuthority = org.mockito.Mockito.mock(cn.jia.agent.service.AgentIdentityService.class);
+        for (String canonical : List.of(AGENT_A, AGENT_B)) {
+            org.mockito.Mockito.lenient().when(identityAuthority.requireCanonicalAgentIdInScope(
+                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+            org.mockito.Mockito.lenient().when(identityAuthority.requirePersistedCanonicalAgentIdInScope(
+                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+        }
+        raw.setIdentityService(identityAuthority);
         TransactionInterceptor interceptor = new TransactionInterceptor();
         interceptor.setTransactionManager(transactionManager);
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());

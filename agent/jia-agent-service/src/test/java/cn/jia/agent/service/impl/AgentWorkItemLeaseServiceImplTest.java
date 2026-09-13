@@ -67,6 +67,14 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         service = new AgentWorkItemLeaseServiceImpl(
                 memberDao, workItemDao, mutationTransaction, eventWriter,
                 () -> NOW, () -> TOKEN, MAX_DURATION);
+        var identityAuthority = org.mockito.Mockito.mock(cn.jia.agent.service.AgentIdentityService.class);
+        for (String canonical : List.of(AGENT, OTHER_AGENT)) {
+            org.mockito.Mockito.lenient().when(identityAuthority.requireCanonicalAgentIdInScope(
+                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+            org.mockito.Mockito.lenient().when(identityAuthority.requirePersistedCanonicalAgentIdInScope(
+                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+        }
+        service.setIdentityService(identityAuthority);
         lenient().when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, AGENT))
                 .thenReturn(member(AGENT, "accepted"));
     }
@@ -158,7 +166,7 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         AgentTaskStateException agent = assertThrows(AgentTaskStateException.class,
                 () -> service.claim(TENANT, CLIENT, TASK, WORK,
                         claimCommand("runtime-agent", 0L, 100L)));
-        assertEquals(Reason.INVALID_REQUEST, agent.getReason());
+        assertEquals(Reason.NOT_FOUND, agent.getReason());
         verifyNoInteractions(workItemDao);
     }
 

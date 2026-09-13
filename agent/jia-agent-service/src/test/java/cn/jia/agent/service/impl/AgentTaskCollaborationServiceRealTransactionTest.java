@@ -146,6 +146,14 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                 mutationTransaction,
                 command -> new cn.jia.agent.entity.AgentTaskEventWriteResult(),
                 () -> LEASE_NOW, () -> "lease_generated", 1_000L);
+        var identityAuthority = org.mockito.Mockito.mock(cn.jia.agent.service.AgentIdentityService.class);
+        for (String canonical : List.of(REQUESTER, TARGET)) {
+            org.mockito.Mockito.lenient().when(identityAuthority.requireCanonicalAgentIdInScope(
+                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+            org.mockito.Mockito.lenient().when(identityAuthority.requirePersistedCanonicalAgentIdInScope(
+                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+        }
+        rawLease.setIdentityService(identityAuthority);
         leaseService = (AgentWorkItemLeaseService) transactionalProxy(
                 rawLease, dataSource, AgentWorkItemLeaseService.class);
         AgentWorkItemResultCommitServiceImpl rawResult = new AgentWorkItemResultCommitServiceImpl(

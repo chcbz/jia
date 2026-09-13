@@ -145,7 +145,7 @@ class AgentWorkItemReassignmentServiceTest {
     }
 
     @Test
-    void persistedLegacyCanonicalAuthoritySupportsCreateLeaseAndRejectsRevokedReceiptReplay() {
+    void realLegacyCanonicalChainRunsReadStartCasHeartbeatCasAndRejectsRevokedReceiptReplay() {
         root.setCoordinatorAgentId(LEGACY_COORDINATOR);
         workItem.setAssigneeAgentId(LEGACY_PREVIOUS);
         source = sourceFor(LEGACY_PREVIOUS, "legacy-source-intent");
@@ -170,6 +170,44 @@ class AgentWorkItemReassignmentServiceTest {
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
         authority.addDirect(LEGACY_COORDINATOR, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+        AgentWorkItemLeaseServiceImpl actualLease = actualLease(authority.service());
+        leaseService = actualLease; // Real delegate, never mock away the active lease compatibility boundary.
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, LEGACY_TARGET))
+                .thenReturn(member(LEGACY_TARGET, LEGACY_COORDINATOR));
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenAnswer(inv -> workItem);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+                .thenAnswer(inv -> workItem);
+        when(workItemDao.updateActiveLeaseByVersion(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any()))
+                .thenAnswer(inv -> {
+                    // Persist only on an exact scoped/version/status/token/time CAS. Replacing the
+                    // row preserves the pre-mutation snapshot used by both real service layers.
+                    if (!TENANT.equals(inv.getArgument(0)) || !CLIENT.equals(inv.getArgument(1))
+                            || !TASK.equals(inv.getArgument(2)) || !WORK.equals(inv.getArgument(3))
+                            || !workItem.getAssigneeAgentId().equals(inv.getArgument(4))
+                            || !workItem.getLeaseToken().equals(inv.getArgument(5))
+                            || !workItem.getStatus().equals(inv.getArgument(6))
+                            || !workItem.getLeaseUntil().equals(inv.getArgument(7))
+                            || !workItem.getVersion().equals(inv.getArgument(8))
+                            || workItem.getLeaseUntil() <= (Long) inv.getArgument(9)) return 0;
+                    AgentTaskWorkItemDTO update = inv.getArgument(10);
+                    AgentTaskWorkItemEntity persisted = new AgentTaskWorkItemEntity()
+                            .setTaskId(update.getTaskId()).setWorkItemId(update.getWorkItemId())
+                            .setTitle(update.getTitle()).setDescription(update.getDescription())
+                            .setWorkType(update.getWorkType()).setRequiredAbilities(update.getRequiredAbilities())
+                            .setAssigneeAgentId(update.getAssigneeAgentId()).setStatus(update.getStatus())
+                            .setPriority(update.getPriority()).setRequiredItem(update.getRequiredItem())
+                            .setDependencyJson(update.getDependencyJson()).setLeaseToken(update.getLeaseToken())
+                            .setLeaseUntil(update.getLeaseUntil()).setAttemptCount(update.getAttemptCount())
+                            .setMaxAttempts(update.getMaxAttempts()).setResultArtifactId(update.getResultArtifactId())
+                            .setSubmittedAt(update.getSubmittedAt()).setCompletedAt(update.getCompletedAt());
+                    persisted.setTenantId(TENANT); persisted.setClientId(CLIENT);
+                    persisted.setVersion(workItem.getVersion() + 1);
+                    workItem = persisted;
+                    return 1;
+                });
         useIdentityAuthority(authority.service());
 
         AgentWorkItemReassignmentRequestDTO legacyRequest = request(
@@ -190,26 +228,26 @@ class AgentWorkItemReassignmentServiceTest {
         assertEquals(LEGACY_TARGET, lease.getAgentId());
         assertEquals(NEW_TOKEN, lease.getLeaseToken());
 
-        AgentWorkItemLeaseDTO started = leaseMutation(
-                LEGACY_TARGET, "running", NOW + 300_000, VERSION + 2);
-        when(leaseService.start(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
-                .thenReturn(started);
         var startedLease = service.startLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
                 receipt.getReassignmentId(), leaseRequest(receipt.getCommandId(), VERSION + 1));
         assertEquals("running", startedLease.getStatus());
-        workItem.setStatus("running").setVersion(VERSION + 2);
+        assertEquals("running", workItem.getStatus());
+        assertEquals(VERSION + 2, workItem.getVersion());
 
-        AgentWorkItemLeaseDTO renewed = leaseMutation(
-                LEGACY_TARGET, "running", NOW + 400_000, VERSION + 3);
-        when(leaseService.heartbeat(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
-                .thenReturn(renewed);
         AgentWorkItemReassignmentLeaseRequestDTO heartbeat =
                 leaseRequest(receipt.getCommandId(), VERSION + 2);
         heartbeat.setLeaseDurationMillis(400_000L);
         var renewedLease = service.heartbeatLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
                 receipt.getReassignmentId(), heartbeat);
         assertEquals(NOW + 400_000, renewedLease.getLeaseUntil());
-        workItem.setLeaseUntil(NOW + 400_000).setVersion(VERSION + 3);
+        assertEquals(NOW + 400_000, workItem.getLeaseUntil());
+        assertEquals(VERSION + 3, workItem.getVersion());
+        assertEquals(NEW_TOKEN, workItem.getLeaseToken());
+        assertEquals(LEGACY_TARGET, workItem.getAssigneeAgentId());
+        verify(workItemDao, org.mockito.Mockito.times(2)).updateActiveLeaseByVersion(
+                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(LEGACY_TARGET), eq(NEW_TOKEN),
+                anyString(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), eq(NOW), any());
 
         authority.suspend(LEGACY_TARGET);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
@@ -221,8 +259,83 @@ class AgentWorkItemReassignmentServiceTest {
                         () -> service.readLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
                                 receipt.getReassignmentId(),
                                 leaseRequest(receipt.getCommandId(), VERSION + 1))).getReason());
-        verify(leaseService).start(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any());
-        verify(leaseService).heartbeat(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any());
+        // Revocation is also enforced by the real delegate, even without its E05 wrapper.
+        var revokedCommand = new cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO();
+        revokedCommand.setAgentId(LEGACY_TARGET); revokedCommand.setLeaseToken(NEW_TOKEN);
+        revokedCommand.setExpectedVersion(VERSION + 3); revokedCommand.setLeaseDurationMillis(500_000L);
+        assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.NOT_FOUND,
+                assertThrows(cn.jia.agent.exception.AgentTaskStateException.class,
+                        () -> actualLease.heartbeat(TENANT, CLIENT, TASK, WORK, revokedCommand)).getReason());
+
+        // ACTIVE is required for execution, not system cleanup: revoked direct-canonical
+        // references still pass historical validation and can have their expired lease reclaimed.
+        workItem.setLeaseUntil(NOW - 1);
+        when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 1)).thenReturn(List.of(workItem));
+        when(workItemDao.expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK),
+                eq(LEGACY_TARGET), eq(NEW_TOKEN), eq("running"), eq(NOW - 1), eq(VERSION + 3), eq(NOW), any()))
+                .thenReturn(1);
+        var expired = actualLease.expireLeases(TENANT, CLIENT, 1);
+        assertEquals(1, expired.getExpiredCount());
+        assertEquals(1, expired.getRequeuedCount());
+        verify(workItemDao).expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK),
+                eq(LEGACY_TARGET), eq(NEW_TOKEN), eq("running"), eq(NOW - 1), eq(VERSION + 3), eq(NOW), any());
+    }
+
+    @Test
+    void realLeaseDelegateRejectsAliasSystemUnknownInactiveAndCrossScopeBeforeCas() {
+        for (String kind : List.of("alias", "system", "unknown", "classification", "inactive", "crossScope")) {
+            PersistedIdentityAuthority authority = new PersistedIdentityAuthority();
+            String agent = "jyt-denied-" + kind;
+            switch (kind) {
+                case "alias" -> authority.addAlias(agent, TARGET);
+                case "system" -> authority.addDirect(agent, AgentConstants.IDENTITY_TYPE_SYSTEM,
+                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                case "classification" -> authority.addDirect(agent, "ALIAS",
+                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                case "inactive" -> authority.addDirect(agent, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                        AgentConstants.IDENTITY_STATUS_SUSPENDED, AgentConstants.BINDING_STATUS_SUSPENDED, TENANT, CLIENT);
+                case "crossScope" -> authority.addDirect(agent, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, "client-other");
+                default -> { } // Unknown ID deliberately has no persisted identity.
+            }
+            when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, agent)).thenReturn(member(agent));
+            var command = new cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO();
+            command.setAgentId(agent); command.setLeaseToken(NEW_TOKEN); command.setExpectedVersion(VERSION + 1);
+            var actual = actualLease(authority.service());
+            assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.NOT_FOUND,
+                    assertThrows(cn.jia.agent.exception.AgentTaskStateException.class,
+                            () -> actual.start(TENANT, CLIENT, TASK, WORK, command)).getReason(), kind);
+        }
+        verify(workItemDao, never()).updateActiveLeaseByVersion(
+                any(), any(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), any());
+    }
+
+    @Test
+    void realExpiryDoesNotTreatUnknownOrCrossScopeHistoryAsCanonical() {
+        for (String scope : List.of(CLIENT, "client-other")) {
+            PersistedIdentityAuthority authority = new PersistedIdentityAuthority();
+            String unknown = "jyt-expiry-unknown";
+            if (!CLIENT.equals(scope)) authority.addDirect(unknown, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                    AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, scope);
+            workItem.setAssigneeAgentId(unknown);
+            when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 1)).thenReturn(List.of(workItem));
+            when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK)).thenReturn(workItem);
+            assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.INVALID_PERSISTED_STATE,
+                    assertThrows(cn.jia.agent.exception.AgentTaskStateException.class,
+                            () -> actualLease(authority.service()).expireLeases(TENANT, CLIENT, 1)).getReason());
+        }
+        verify(workItemDao, never()).expireLeaseByVersion(any(), any(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), any());
+    }
+
+    private AgentWorkItemLeaseServiceImpl actualLease(AgentIdentityService authority) {
+        var actual = new AgentWorkItemLeaseServiceImpl(memberDao, workItemDao, new InlineTransaction(root),
+                eventWriter, () -> NOW, () -> NEW_TOKEN, 900_000);
+        actual.setIdentityService(authority);
+        return actual;
     }
 
     @Test

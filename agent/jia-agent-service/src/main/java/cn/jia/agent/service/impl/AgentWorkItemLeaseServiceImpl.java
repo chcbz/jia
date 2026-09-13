@@ -13,6 +13,7 @@ import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.exception.AgentTaskStateException.Reason;
+import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
@@ -34,7 +35,8 @@ import java.util.regex.Pattern;
 
 @Named
 public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService {
-    private static final Pattern CANONICAL_AGENT_ID = Pattern.compile("^agt_[0-9a-f]{32}$");
+    // A bounded wire ID is not authority; all live Agent operations validate the registry below.
+    private static final Pattern AGENT_REFERENCE = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}");
     private static final int MAX_LEASE_TOKEN_LENGTH = 100;
 
     private final AgentTaskMemberDao memberDao;
@@ -44,6 +46,12 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     private final LongSupplier clock;
     private final Supplier<String> tokenGenerator;
     private final long maxLeaseDurationMillis;
+    private AgentIdentityService identityService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setIdentityService(AgentIdentityService identities) {
+        this.identityService = Objects.requireNonNull(identities);
+    }
     private cn.jia.agent.service.AgentHostingWorkAdmission hostingWorkAdmission = (tenant, client, agent) -> { };
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -104,13 +112,14 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             AgentWorkItemLeaseCommandDTO command) {
         requireScopeAndIds(tenantId, clientId, taskId, workItemId);
         RequiredCommand required = requireCommand(command, true, false);
-        requireCanonicalAgentId(required.agentId());
+        requireAgentReference(required.agentId());
         long duration = requireDuration(required.leaseDurationMillis());
         return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
             long now = now();
             requireActiveMember(tenantId, clientId, taskId, required.agentId());
+            requireActiveCanonicalAgent(tenantId, clientId, required.agentId());
             AgentTaskWorkItemEntity current = requireWorkItem(tenantId, clientId, taskId, workItemId);
-            requireCompleteSnapshot(current);
+            requireCompleteSnapshot(tenantId, clientId, current);
             requireVersion(current.getVersion(), required.expectedVersion());
             requireStatus(current, AgentTaskWorkItemStatus.READY);
             requireReadyLeaseState(current);
@@ -279,7 +288,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
                 || !Objects.equals(current.getStatus(), candidate.getStatus())) {
             return ExpiryOutcome.casConflict();
         }
-        requireCompleteSnapshot(current);
+        requireCompleteSnapshot(tenantId, clientId, current);
         AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
         if (status != AgentTaskWorkItemStatus.CLAIMED && status != AgentTaskWorkItemStatus.RUNNING) {
             throw invalidPersisted("Expiry scan returned a non-leased status");
@@ -352,12 +361,13 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             boolean requireDuration) {
         requireScopeAndIds(tenantId, clientId, taskId, workItemId);
         RequiredCommand required = requireCommand(command, requireDuration, true);
-        requireCanonicalAgentId(required.agentId());
+        requireAgentReference(required.agentId());
         long now = now();
         requireActiveMember(tenantId, clientId, taskId, required.agentId());
+        requireActiveCanonicalAgent(tenantId, clientId, required.agentId());
         AgentTaskWorkItemEntity current = requireWorkItem(
                 tenantId, clientId, taskId, workItemId);
-        requireCompleteSnapshot(current);
+        requireCompleteSnapshot(tenantId, clientId, current);
         requireVersion(current.getVersion(), required.expectedVersion());
         AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
         if (!allowedStatuses.contains(status)) {
@@ -423,8 +433,9 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         return current;
     }
 
-    private void requireCompleteSnapshot(AgentTaskWorkItemEntity current) {
-        if (current == null || StringUtil.isBlank(current.getWorkItemId())
+    private void requireCompleteSnapshot(String tenantId, String clientId, AgentTaskWorkItemEntity current) {
+        if (current == null || !tenantId.equals(current.getTenantId()) || !clientId.equals(current.getClientId())
+                || StringUtil.isBlank(current.getWorkItemId())
                 || StringUtil.isBlank(current.getTaskId())
                 || StringUtil.isBlank(current.getTitle())
                 || StringUtil.isBlank(current.getWorkType())
@@ -440,7 +451,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             throw invalidPersisted("Persisted assignee is blank");
         }
         if (current.getAssigneeAgentId() != null) {
-            requirePersistedCanonicalAgentId(current.getAssigneeAgentId());
+            requirePersistedAgentReference(tenantId, clientId, current.getAssigneeAgentId());
         }
     }
 
@@ -480,7 +491,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
                 || current.getLeaseUntil() == null || current.getLeaseUntil() <= 0) {
             throw invalidPersisted("Persisted active lease is incomplete");
         }
-        requirePersistedCanonicalAgentId(current.getAssigneeAgentId());
+        // The complete snapshot has already validated this direct historical identity.
     }
 
     private void requireAssigneePermitsClaim(String assigneeAgentId, String agentId) {
@@ -650,16 +661,42 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         }
     }
 
-    private void requireCanonicalAgentId(String agentId) {
-        if (!CANONICAL_AGENT_ID.matcher(agentId).matches()) {
-            throw invalidRequest("agentId must be a canonical stable Agent ID");
+    private void requireAgentReference(String agentId) {
+        if (agentId == null || !AGENT_REFERENCE.matcher(agentId).matches()) {
+            throw invalidRequest("agentId is not a bounded Agent reference");
         }
     }
 
-    private void requirePersistedCanonicalAgentId(String agentId) {
-        if (!CANONICAL_AGENT_ID.matcher(agentId).matches()) {
-            throw invalidPersisted("Persisted assignee Agent ID is non-canonical");
+    private void requireActiveCanonicalAgent(String tenantId, String clientId, String agentId) {
+        if (identityService == null) {
+            throw invalidPersisted("Canonical identity authority is unavailable");
         }
+        final String canonical;
+        try {
+            // Direct ACTIVE registry + binding, never alias resolution. E05 already holds the
+            // receipt-wide identity locks; this read check also works for read-only result validation.
+            canonical = identityService.requireCanonicalAgentIdInScope(
+                    tenantId, clientId, tenantId, agentId);
+        } catch (RuntimeException denied) {
+            throw notFound();
+        }
+        if (!agentId.equals(canonical)) throw notFound();
+    }
+
+    private void requirePersistedAgentReference(String tenantId, String clientId, String agentId) {
+        // History must be genuinely canonical, but system expiry must also reclaim revoked
+        // Agents' leases. Live operations separately require ACTIVE identity and binding.
+        if (identityService == null || agentId == null || !AGENT_REFERENCE.matcher(agentId).matches()) {
+            throw invalidPersisted("Persisted assignee Agent identity is invalid");
+        }
+        final String canonical;
+        try {
+            canonical = identityService.requirePersistedCanonicalAgentIdInScope(
+                    tenantId, clientId, tenantId, agentId);
+        } catch (RuntimeException denied) {
+            throw invalidPersisted("Persisted assignee is not a canonical identity in this scope");
+        }
+        if (!agentId.equals(canonical)) throw invalidPersisted("Persisted assignee identity changed");
     }
 
     private String nullIfBlank(String value) {
