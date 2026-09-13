@@ -1,5 +1,6 @@
 package cn.jia.user.config;
 
+import cn.jia.core.diagnostics.StartupTiming;
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.config.SpringContextHolder;
 import cn.jia.user.entity.PermsEntity;
@@ -31,6 +32,10 @@ public class PermsRefreshRunner implements CommandLineRunner {
 
     @Override
     public void run(String... arg0) {
+        StartupTiming.run("cyf.runner.permissions-refresh", () -> runTimed(arg0));
+    }
+
+    private void runTimed(String... arg0) {
         AtomicReference<RequestMapping> classUrlAnno = new AtomicReference<>();
         AtomicReference<PreAuthorize> methodPermsAnno = new AtomicReference<>();
         AtomicReference<RequestMapping> methodUrlAnno = new AtomicReference<>();

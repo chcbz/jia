@@ -1,5 +1,6 @@
 package cn.jia.chat.archive.config;
 
+import cn.jia.core.diagnostics.StartupTiming;
 import cn.jia.chat.archive.service.ArchiveQuestionWorker;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -26,8 +27,12 @@ public class ArchiveQuestionBootstrap implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        StartupTiming.run("cyf.runner.archive-question", () -> runTimed(args));
+    }
+
+    private void runTimed(ApplicationArguments args) {
         if (!accessPolicy.enabled()) return;
-        schemaInitializer.initialize();
-        worker.start();
+        StartupTiming.run("cyf.archive.question-schema", schemaInitializer::initialize);
+        StartupTiming.run("cyf.archive.question-worker-start", worker::start);
     }
 }
