@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /** Byte-exact canonical JSON codec for frozen TASK_INVITE and bounded Hall commands. */
 public final class AgentCommandCanonicalCodec {
@@ -33,6 +34,7 @@ public final class AgentCommandCanonicalCodec {
     public static final int MAX_CANONICAL_BYTES = 131_072;
     public static final String TASK_INVITE_COMMAND_ID_PREFIX = "cmd_task_invite_";
     public static final String HALL_COMMAND_ID_PREFIX = "cmd_hall_action_";
+    public static final String E05_REASSIGNMENT_BINDING_VERSION = "e05-reassignment-v1";
     private static final int MAX_COLLABORATORS = 128;
     private static final int MAX_ABILITIES = 128;
     private static final int MAX_HALL_LIST = 32;
@@ -46,6 +48,11 @@ public final class AgentCommandCanonicalCodec {
             AgentProtocolConstants.COMMAND_CONTEXT_REFRESH);
     private static final Set<String> AUTONOMY_LEVELS = Set.of(
             "assist", "manual", "supervised", "autonomous");
+    private static final Pattern E05_REASSIGNMENT_ID = Pattern.compile("rsn_[0-9a-f]{64}");
+    private static final Pattern E05_SOURCE_COMMAND_ID = Pattern.compile(
+            "cmd_hall_action_[0-9a-f]{64}");
+    private static final Pattern CANONICAL_AGENT_ID = Pattern.compile("agt_[0-9a-f]{32}");
+    private static final Pattern NON_NEGATIVE_DECIMAL = Pattern.compile("0|[1-9][0-9]*");
     private static final Comparator<String> UTF8_ORDER = AgentCommandCanonicalCodec::compareUtf8Unsigned;
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -370,11 +377,19 @@ public final class AgentCommandCanonicalCodec {
         if (payload.autonomyLevel() != null && !AUTONOMY_LEVELS.contains(payload.autonomyLevel())) {
             throw invalid("autonomyLevel is outside the frozen allowlist");
         }
-        validateHallContext(payload.context());
+        validateHallContext(payload.context(), payload, draft);
     }
 
-    private static void validateHallContext(AgentHallCommandContext context) {
-        if (context == null) return;
+    private static void validateHallContext(
+            AgentHallCommandContext context,
+            AgentHallCommandPayload payload,
+            AgentCommandDraft draft) {
+        if (context == null) {
+            if ("lease_expired_reassignment".equals(payload.reason())) {
+                throw invalid("E05 reassignment binding is missing");
+            }
+            return;
+        }
         optionalContent(context.taskTitle(), "context.taskTitle", 500);
         optionalContent(context.workItemTitle(), "context.workItemTitle", 500);
         optionalContent(context.requestSummary(), "context.requestSummary", 2_000);
@@ -384,6 +399,43 @@ public final class AgentCommandCanonicalCodec {
         List<String> tags = canonicalHallList(context.tags(), "context.tags");
         if (!references.equals(context.referenceIds()) || !tags.equals(context.tags())) {
             throw invalid("Hall context lists are not canonical");
+        }
+        validateE05ReassignmentBinding(context, payload, draft);
+    }
+
+    private static void validateE05ReassignmentBinding(
+            AgentHallCommandContext context,
+            AgentHallCommandPayload payload,
+            AgentCommandDraft draft) {
+        boolean signalled = context.bindingVersion() != null || context.reassignmentId() != null
+                || "lease_expired_reassignment".equals(payload.reason())
+                || context.tags().contains("lease-expired")
+                || context.tags().contains("reassignment");
+        if (!signalled) return;
+        if (!AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE.equals(draft.commandType())
+                || !"work_item_execute".equals(payload.actionType())
+                || !"lease_expired_reassignment".equals(payload.reason())
+                || !E05_REASSIGNMENT_BINDING_VERSION.equals(context.bindingVersion())
+                || context.reassignmentId() == null
+                || !E05_REASSIGNMENT_ID.matcher(context.reassignmentId()).matches()
+                || !CANONICAL_AGENT_ID.matcher(draft.targetAgentId()).matches()
+                || draft.workItemId() == null
+                || !List.of("lease-expired", "reassignment").equals(context.tags())
+                || context.referenceIds().size() != 1
+                || !E05_SOURCE_COMMAND_ID.matcher(context.referenceIds().getFirst()).matches()
+                || draft.commandId().equals(context.referenceIds().getFirst())
+                || !canonicalE05Version(context.contextVersion())) {
+            throw invalid("E05 reassignment binding is incomplete or inconsistent");
+        }
+    }
+
+    private static boolean canonicalE05Version(String value) {
+        if (value == null || !NON_NEGATIVE_DECIMAL.matcher(value).matches()) return false;
+        try {
+            long parsed = Long.parseLong(value);
+            return parsed >= 0 && parsed < Long.MAX_VALUE;
+        } catch (NumberFormatException invalid) {
+            return false;
         }
     }
 
@@ -403,12 +455,17 @@ public final class AgentCommandCanonicalCodec {
         if (context == null) throw invalid("context is missing");
         AgentHallCommandContext decodedContext = null;
         if (!context.isNull()) {
-            requireObjectSize(context, 7, "Hall context");
+            if (context.size() != 7 && context.size() != 9) {
+                throw invalid("Hall context contains unknown or missing fields");
+            }
+            boolean hasBinding = context.size() == 9;
             decodedContext = new AgentHallCommandContext(
                     nullableText(context, "taskTitle"), nullableText(context, "workItemTitle"),
                     nullableText(context, "requestSummary"), nullableText(context, "reviewSummary"),
                     nullableText(context, "contextVersion"),
-                    stringArray(context, "referenceIds"), stringArray(context, "tags"));
+                    stringArray(context, "referenceIds"), stringArray(context, "tags"),
+                    hasBinding ? text(context, "bindingVersion") : null,
+                    hasBinding ? text(context, "reassignmentId") : null);
         }
         JsonNode approval = node.get("requiresApproval");
         if (approval == null) throw invalid("requiresApproval is missing");
@@ -511,6 +568,10 @@ public final class AgentCommandCanonicalCodec {
         nullableString(json, "contextVersion", context.contextVersion());
         array(json, "referenceIds", context.referenceIds());
         array(json, "tags", context.tags());
+        if (context.bindingVersion() != null || context.reassignmentId() != null) {
+            string(json, "bindingVersion", context.bindingVersion());
+            string(json, "reassignmentId", context.reassignmentId());
+        }
         json.append('}');
     }
 

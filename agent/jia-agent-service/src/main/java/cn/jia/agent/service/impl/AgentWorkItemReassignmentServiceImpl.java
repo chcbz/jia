@@ -260,7 +260,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         }
 
         AgentCommandDraft draft = commandDraft(tenantId, clientId, taskId, workItemId,
-                required, current, intentId, commandId, eventId, now);
+                required, current, reassignmentId, intentId, commandId, eventId, now);
         AgentCommandTransportWriteResult transport = commandWriter.writeAuthorizedHall(
                 draft, required.coordinatorAgentId());
         if (transport == null || transport.duplicate()
@@ -409,14 +409,16 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     private AgentCommandDraft commandDraft(
             String tenantId, String clientId, String taskId, String workItemId,
             RequiredRequest required, AgentTaskWorkItemEntity current,
-            String intentId, String commandId, String eventId, long now) {
+            String reassignmentId, String intentId, String commandId, String eventId, long now) {
         String instruction = boundedInstruction(current.getTitle(), current.getDescription());
         AgentHallCommandPayload payload = new AgentHallCommandPayload(
                 "work_item_execute", instruction, "juyiting", "lease_expired_reassignment",
                 null, eventId, "autonomous", Boolean.FALSE,
                 new AgentHallCommandContext(null, current.getTitle(), null, null,
                         Long.toString(current.getVersion() + 1),
-                        List.of(required.sourceCommandId()), List.of("lease-expired", "reassignment")));
+                        List.of(required.sourceCommandId()), List.of("lease-expired", "reassignment"),
+                        AgentCommandCanonicalCodec.E05_REASSIGNMENT_BINDING_VERSION,
+                        reassignmentId));
         return new AgentCommandDraft(
                 AgentCommandCanonicalCodec.SCHEMA_VERSION, commandId, taskId, eventId,
                 tenantId, clientId, taskId, workItemId, required.targetAgentId(),

@@ -121,6 +121,51 @@ class AgentCommandCanonicalCodecTest {
     }
 
     @Test
+    void e05WireCarriesOnlyVersionedNonSecretReassignmentBinding() {
+        AgentCommandDraft draft = e05Draft("5", "cmd_hall_action_" + "a".repeat(64),
+                "rsn_" + "c".repeat(64));
+        byte[] business = AgentCommandCanonicalCodec.businessBytes(draft);
+        byte[] wire = AgentCommandCanonicalCodec.wireBytes(
+                draft, "00000000-0000-0000-0000-000000000005");
+        String wireJson = new String(wire, StandardCharsets.UTF_8);
+
+        assertEquals(draft, AgentCommandCanonicalCodec.decodeBusinessBytes(business));
+        assertTrue(wireJson.contains("\"bindingVersion\":\"e05-reassignment-v1\""));
+        assertTrue(wireJson.contains("\"reassignmentId\":\"rsn_" + "c".repeat(64) + "\""));
+        assertTrue(wireJson.contains("\"contextVersion\":\"5\""));
+        assertTrue(wireJson.contains("\"referenceIds\":[\"cmd_hall_action_"
+                + "a".repeat(64) + "\"]"));
+        assertFalse(wireJson.toLowerCase(java.util.Locale.ROOT).contains("bearer"));
+        assertFalse(wireJson.contains("leaseToken"));
+        assertFalse(wireJson.contains("apiKey"));
+    }
+
+    @Test
+    void e05OldMissingMismatchedAndUnknownBindingsFailClosed() {
+        AgentCommandDraft valid = e05Draft("5", "cmd_hall_action_" + "a".repeat(64),
+                "rsn_" + "c".repeat(64));
+        String canonical = new String(
+                AgentCommandCanonicalCodec.businessBytes(valid), StandardCharsets.UTF_8);
+        String oldE05 = canonical.replace(
+                ",\"bindingVersion\":\"e05-reassignment-v1\",\"reassignmentId\":\"rsn_"
+                        + "c".repeat(64) + "\"", "");
+        String unknown = canonical.replace(
+                "\"reassignmentId\":\"rsn_" + "c".repeat(64) + "\"",
+                "\"reassignmentId\":\"rsn_" + "c".repeat(64) + "\",\"leaseToken\":\"forged\"");
+
+        assertThrows(IllegalArgumentException.class, () ->
+                AgentCommandCanonicalCodec.decodeBusinessBytes(oldE05.getBytes(StandardCharsets.UTF_8)));
+        assertThrows(IllegalArgumentException.class, () ->
+                AgentCommandCanonicalCodec.decodeBusinessBytes(unknown.getBytes(StandardCharsets.UTF_8)));
+        assertThrows(IllegalArgumentException.class, () -> AgentCommandCanonicalCodec.businessBytes(
+                e05Draft("05", "cmd_hall_action_" + "a".repeat(64), "rsn_" + "c".repeat(64))));
+        assertThrows(IllegalArgumentException.class, () -> AgentCommandCanonicalCodec.businessBytes(
+                e05Draft("5", valid.commandId(), "rsn_" + "c".repeat(64))));
+        assertThrows(IllegalArgumentException.class, () -> AgentCommandCanonicalCodec.businessBytes(
+                e05Draft("5", "cmd_hall_action_" + "a".repeat(64), "rsn-invalid")));
+    }
+
+    @Test
     void rejectsUnknownDuplicateNestedOversizedAndCredentialContent() {
         AgentCommandDraft draft = hallDraft(
                 "execute", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
@@ -212,6 +257,27 @@ class AgentCommandCanonicalCodecTest {
                 intentId, new AgentHallCommandPayload(
                         actionType, instruction, "juyiting", "ready", "conversation-1",
                         triggerEventId, "supervised", true, context));
+    }
+
+    private AgentCommandDraft e05Draft(
+            String workItemVersion, String sourceCommandId, String reassignmentId) {
+        String target = "agt_" + "b".repeat(32);
+        String intentId = "rsi_" + "d".repeat(64);
+        String commandId = AgentCommandCanonicalCodec.hallCommandId(
+                "tenant-a", "client-a", "task-1", target, intentId,
+                AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
+        AgentHallCommandContext context = new AgentHallCommandContext(
+                null, "Work One", null, null, workItemVersion,
+                List.of(sourceCommandId), List.of("lease-expired", "reassignment"),
+                AgentCommandCanonicalCodec.E05_REASSIGNMENT_BINDING_VERSION, reassignmentId);
+        return new AgentCommandDraft(
+                1, commandId, "task-1", "evt-e05", "tenant-a", "client-a", "task-1",
+                "work-1", target, AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
+                1000L, 1000L + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS,
+                intentId, new AgentHallCommandPayload(
+                        "work_item_execute", "Execute reassigned work item", "juyiting",
+                        "lease_expired_reassignment", null, "evt-e05", "autonomous", false,
+                        context));
     }
 
     private AgentHallCommandContext canonicalContext() {

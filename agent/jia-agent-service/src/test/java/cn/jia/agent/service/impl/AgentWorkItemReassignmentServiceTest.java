@@ -160,9 +160,23 @@ class AgentWorkItemReassignmentServiceTest {
         assertFalse(commandBytes.contains("authoritative_lease_expired"));
         AgentHallCommandPayload payload = (AgentHallCommandPayload) draft.getValue().payload();
         assertEquals("evt_reassigned", payload.triggerEventId());
+        assertEquals(Long.toString(VERSION + 1), payload.context().contextVersion());
+        assertEquals(List.of(source.getCommandId()), payload.context().referenceIds());
+        assertEquals(List.of("lease-expired", "reassignment"), payload.context().tags());
+        assertEquals(AgentCommandCanonicalCodec.E05_REASSIGNMENT_BINDING_VERSION,
+                payload.context().bindingVersion());
+        assertEquals(inserted.get().getReassignmentId(), payload.context().reassignmentId());
         assertFalse(payload.instruction().codePoints().anyMatch(Character::isISOControl));
         assertTrue(payload.instruction().contains(workItem.getTitle()));
         assertTrue(payload.instruction().contains(workItem.getDescription()));
+        String wireBytes = new String(
+                AgentCommandCanonicalCodec.wireBytes(draft.getValue(), "msg-new"),
+                StandardCharsets.UTF_8);
+        assertTrue(wireBytes.contains("\"bindingVersion\":\"e05-reassignment-v1\""));
+        assertTrue(wireBytes.contains("\"reassignmentId\":\""
+                + inserted.get().getReassignmentId() + "\""));
+        assertFalse(wireBytes.contains(NEW_TOKEN));
+        assertFalse(wireBytes.contains("Authorization"));
     }
 
     @Test
