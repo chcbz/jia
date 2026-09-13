@@ -272,14 +272,24 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
                 TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                 transition("done", 3L, null), transition("completed", 7L, null));
 
+        ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> events =
+                ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
         InOrder order = inOrder(memberDao, workItemDao, eventWriter, dependencyService);
         order.verify(memberDao).updateByVersion(
                 eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
         order.verify(workItemDao).updateByVersion(
                 eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any());
-        order.verify(eventWriter).append(any());
-        order.verify(eventWriter).append(any());
+        order.verify(eventWriter, org.mockito.Mockito.times(2)).append(events.capture());
         order.verify(dependencyService).resolveReady(TENANT, CLIENT, TASK_ID);
+        assertEquals(TaskEventType.MEMBER_DONE, events.getAllValues().get(0).getEventType());
+        assertEquals(TaskEventType.Aggregate.MEMBER,
+                events.getAllValues().get(0).getAggregateType());
+        assertEquals(AGENT_ID, events.getAllValues().get(0).getAggregateId());
+        assertEquals(TaskEventType.WORK_ITEM_COMPLETED,
+                events.getAllValues().get(1).getEventType());
+        assertEquals(TaskEventType.Aggregate.WORK_ITEM,
+                events.getAllValues().get(1).getAggregateType());
+        assertEquals(WORK_ITEM_ID, events.getAllValues().get(1).getAggregateId());
     }
 
     @Test
