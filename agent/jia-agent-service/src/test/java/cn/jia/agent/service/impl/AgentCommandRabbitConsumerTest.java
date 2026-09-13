@@ -7,6 +7,7 @@ import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentInboxClaim;
 import cn.jia.agent.entity.AgentInboxClaimToken;
@@ -50,6 +51,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -101,6 +103,22 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         order.verify(inboxService).complete(any(), any(), anyLong());
         order.verify(channel).basicAck(77L, false);
         verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
+        verify(publisher, never()).publish(any(), anyLong());
+    }
+
+    @Test
+    void topologyNotReadyRequeuesWithoutClaimingOrDispatching() throws Exception {
+        AgentCommandRabbitConsumer consumer = new AgentCommandRabbitConsumer(
+                inboxService, accessService, dispatcher, publisher, allowedGate(), MANIFEST,
+                () -> NOW, "d05-test-consumer");
+        consumer.configureTopologyReadiness(readiness(false));
+
+        consumer.consume(message(0), channel);
+
+        verify(channel).basicNack(77L, false, true);
+        verify(inboxService, never()).claim(any(), any(), anyLong(), anyLong());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
+        verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
         verify(publisher, never()).publish(any(), anyLong());
     }
 
@@ -750,9 +768,11 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
             AgentRawCommandDispatcher exactDispatcher,
             AgentConfirmedRabbitPublisher confirmedPublisher,
             AtomicLong clock) {
-        return new AgentCommandRabbitConsumer(
+        AgentCommandRabbitConsumer consumer = new AgentCommandRabbitConsumer(
                 service, accessService, exactDispatcher, confirmedPublisher,
                 allowedGate(), MANIFEST, clock::get, "d05-stateful-consumer");
+        consumer.configureTopologyReadiness(readiness(true));
+        return consumer;
     }
 
     private Message redelivery(AgentConfirmedPublishRequest request, long deliveryTag) {
@@ -923,9 +943,24 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     }
 
     private AgentCommandRabbitConsumer consumer(AgentRabbitSafetyGate gate) {
-        return new AgentCommandRabbitConsumer(
+        AgentCommandRabbitConsumer consumer = new AgentCommandRabbitConsumer(
                 inboxService, accessService, dispatcher, publisher, gate, MANIFEST,
                 () -> NOW, "d05-test-consumer");
+        consumer.configureTopologyReadiness(readiness(true));
+        return consumer;
+    }
+
+    private AgentRabbitTopologyReadiness readiness(boolean ready) {
+        AgentRabbitTopologyReadiness readiness = mock(AgentRabbitTopologyReadiness.class);
+        lenient().when(readiness.snapshot()).thenReturn(new AgentRabbitTopologyReadiness.Snapshot(
+                ready ? AgentRabbitTopologyReadiness.Status.READY
+                        : AgentRabbitTopologyReadiness.Status.NOT_CHECKED,
+                ready ? AgentRabbitTopologyReadiness.Source.PROVISION
+                        : AgentRabbitTopologyReadiness.Source.NONE,
+                ready ? AgentRabbitTopologyReadiness.Coverage.CANONICAL_TOPOLOGY
+                        : AgentRabbitTopologyReadiness.Coverage.NONE,
+                MANIFEST.sha256(), ready ? 1L : 0L, null));
+        return readiness;
     }
 
     private void stubCompletion(

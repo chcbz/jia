@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
+import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentRuntimeEntity;
@@ -17,6 +18,7 @@ import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.core.util.JsonUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -43,6 +45,7 @@ public class AgentCommandTransportCapture {
     private final ObjectProvider<OutputRunAuthorizationService> outputRunProvider;
     private final boolean compatibilityDisabled;
     private AgentTaskWorkItemDao workItemDao;
+    private AgentRabbitTopologyReadiness topologyReadiness;
 
     public record PreparedTaskOutputContexts(
             Map<String, OutputContextDTO> contexts,
@@ -84,6 +87,13 @@ public class AgentCommandTransportCapture {
     @Autowired
     void configureWorkItemDao(ObjectProvider<AgentTaskWorkItemDao> provider) {
         this.workItemDao = provider == null ? null : provider.getIfAvailable();
+    }
+
+    @Autowired
+    void configureTopologyReadiness(
+            @Qualifier("agentRabbitTopologyReadiness")
+            ObjectProvider<AgentRabbitTopologyReadiness> provider) {
+        this.topologyReadiness = provider == null ? null : provider.getIfAvailable();
     }
 
     public boolean captureTaskInvites(
@@ -183,6 +193,8 @@ public class AgentCommandTransportCapture {
             String tenantId, String clientId) {
         if (compatibilityDisabled || gate == null || !gate.commandOutboxEnabled()
                 || !gate.allowsDispatch(tenantId, clientId)
+                || topologyReadiness == null
+                || !topologyReadiness.snapshot().canonicalTopologyReady()
                 || writerProvider == null || writerProvider.getIfAvailable() == null
                 || outputRunProvider == null || outputRunProvider.getIfAvailable() == null
                 || workItemDao == null) {

@@ -3,6 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentInboxClaim;
 import cn.jia.agent.entity.AgentInboxClaimToken;
@@ -65,8 +66,16 @@ public final class AgentCommandRabbitConsumer {
     private final LongSupplier nowMillis;
     private final String leaseOwner;
     private cn.jia.agent.skill.SkillInstallDispatchService skillDispatch;
+    private AgentRabbitTopologyReadiness topologyReadiness;
     @Autowired(required=false)
     public void setSkillDispatch(cn.jia.agent.skill.SkillInstallDispatchService skills) { this.skillDispatch=skills; }
+
+    @Autowired
+    void configureTopologyReadiness(
+            @Qualifier("agentRabbitTopologyReadiness")
+            AgentRabbitTopologyReadiness readiness) {
+        this.topologyReadiness = readiness;
+    }
 
     @Autowired
     public AgentCommandRabbitConsumer(
@@ -142,6 +151,10 @@ public final class AgentCommandRabbitConsumer {
     private Settlement process(DecodedAgentCommandMessage message) {
         if (!gate.allowsDispatch(message.tenantId(), message.clientId())) {
             return Settlement.NACK_DROP;
+        }
+        if (topologyReadiness == null
+                || !topologyReadiness.snapshot().canonicalTopologyReady()) {
+            return Settlement.NACK_REQUEUE;
         }
 
         long claimNow = positiveNow();

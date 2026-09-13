@@ -32,15 +32,7 @@ public final class AgentRabbitTopologyProvisioner {
     public AgentRabbitTopologyReadiness.Snapshot provision() {
         synchronized (operationLock) {
             try {
-                for (Exchange exchange : manifest.exchangeDeclarations()) {
-                    admin.declareExchange(exchange);
-                }
-                for (Queue queue : manifest.queueDeclarations()) {
-                    admin.declareQueue(queue);
-                }
-                for (Binding binding : manifest.bindingDeclarations()) {
-                    admin.declareBinding(binding);
-                }
+                declareCanonicalTopology();
                 readiness.markProvisioned();
                 return readiness.snapshot();
             } catch (RuntimeException failure) {
@@ -58,27 +50,69 @@ public final class AgentRabbitTopologyProvisioner {
      */
     public AgentRabbitTopologyReadiness.Snapshot passiveVerify() {
         synchronized (operationLock) {
-            Connection connection = null;
-            Channel channel = null;
             try {
-                connection = connectionFactory.createConnection();
-                channel = connection.createChannel(false);
-                for (AgentRabbitTopologyManifest.ExchangeSpec exchange : manifest.exchanges()) {
-                    channel.exchangeDeclarePassive(exchange.name());
-                }
-                for (AgentRabbitTopologyManifest.QueueSpec queue : manifest.queues()) {
-                    channel.queueDeclarePassive(queue.name());
-                }
+                verifyResourceExistence();
                 readiness.markExistenceConfirmed();
                 return readiness.snapshot();
             } catch (Exception failure) {
                 readiness.markFailed(
                         AgentRabbitTopologyReadiness.Source.PASSIVE_VERIFY, failure);
                 throw AgentRabbitTopologyOperationException.passiveVerifyFailed(failure);
-            } finally {
-                closeChannel(channel);
-                closeConnection(connection);
             }
+        }
+    }
+
+    /**
+     * Production startup activation. Canonical readiness is published only after declarations
+     * and a separate authenticated passive existence check both succeed.
+     */
+    public AgentRabbitTopologyReadiness.Snapshot activate() {
+        synchronized (operationLock) {
+            try {
+                declareCanonicalTopology();
+            } catch (RuntimeException failure) {
+                readiness.markFailed(AgentRabbitTopologyReadiness.Source.PROVISION, failure);
+                throw AgentRabbitTopologyOperationException.provisionFailed(failure);
+            }
+            try {
+                verifyResourceExistence();
+            } catch (Exception failure) {
+                readiness.markFailed(
+                        AgentRabbitTopologyReadiness.Source.PASSIVE_VERIFY, failure);
+                throw AgentRabbitTopologyOperationException.passiveVerifyFailed(failure);
+            }
+            readiness.markProvisioned();
+            return readiness.snapshot();
+        }
+    }
+
+    private void declareCanonicalTopology() {
+        for (Exchange exchange : manifest.exchangeDeclarations()) {
+            admin.declareExchange(exchange);
+        }
+        for (Queue queue : manifest.queueDeclarations()) {
+            admin.declareQueue(queue);
+        }
+        for (Binding binding : manifest.bindingDeclarations()) {
+            admin.declareBinding(binding);
+        }
+    }
+
+    private void verifyResourceExistence() throws Exception {
+        Connection connection = null;
+        Channel channel = null;
+        try {
+            connection = connectionFactory.createConnection();
+            channel = connection.createChannel(false);
+            for (AgentRabbitTopologyManifest.ExchangeSpec exchange : manifest.exchanges()) {
+                channel.exchangeDeclarePassive(exchange.name());
+            }
+            for (AgentRabbitTopologyManifest.QueueSpec queue : manifest.queues()) {
+                channel.queueDeclarePassive(queue.name());
+            }
+        } finally {
+            closeChannel(channel);
+            closeConnection(connection);
         }
     }
 

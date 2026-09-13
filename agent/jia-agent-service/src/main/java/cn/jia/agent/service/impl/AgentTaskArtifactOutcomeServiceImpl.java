@@ -120,6 +120,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     private AgentTaskArtifactOutcomeViewDTO acceptLocked(
             String tenantId, String clientId, String taskId, String actorAgentId,
             Decision decision, AgentTaskMetaEntity root) {
+        requireLegacyOutcomePolicy(root);
         Access access = requireAccess(
                 tenantId, clientId, taskId, actorAgentId, root, true);
 
@@ -234,6 +235,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
                     || !canReadArtifact(access, artifact)) {
                 throw notFound();
             }
+            requireLegacyOutcomeArtifact(artifact);
             artifacts.put(ref, artifact);
         }
         AgentTaskArtifactEntity target = artifacts.get(decision.accepted());
@@ -551,6 +553,25 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
             case "private" -> false;
             default -> false;
         };
+    }
+
+    private void requireLegacyOutcomePolicy(AgentTaskMetaEntity root) {
+        Integer policy = root.getDeliveryPolicyVersion();
+        if (policy == null || policy == 0) {
+            return;
+        }
+        if (policy == 1) {
+            throw new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                    "Delivery policy 1 outcomes are owned by the delivery review protocol");
+        }
+        throw unavailable("Persisted delivery policy is unsupported", null);
+    }
+
+    private void requireLegacyOutcomeArtifact(AgentTaskArtifactEntity artifact) {
+        if (artifact.getRunId() != null) {
+            throw new AgentTaskCollaborationException(Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                    "Run-backed artifacts are owned by the delivery review protocol");
+        }
     }
 
     private boolean validAcceptedRow(AgentTaskAcceptedArtifactRow row,

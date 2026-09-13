@@ -65,6 +65,7 @@ class AgentRabbitTopologyConfigurationTest {
                     assertTrue(context.containsBean("agentRabbitTopologyManifest"));
                     assertTrue(context.containsBean("agentRabbitTopologyProvisioner"));
                     assertTrue(context.containsBean("agentRabbitTopologyReadiness"));
+                    assertTrue(context.containsBean("agentRabbitTopologyStartup"));
                     assertFalse(context.containsBean("agentCommandListenerContainerFactory"));
 
                     CachingConnectionFactory factory = context.getBean(
@@ -173,6 +174,7 @@ class AgentRabbitTopologyConfigurationTest {
                 "agentRabbitTopologyManifest",
                 "agentRabbitTopologyProvisioner",
                 "agentRabbitTopologyReadiness",
+                "agentRabbitTopologyStartup",
                 "agentCommandListenerContainerFactory")) {
             assertFalse(context.containsBean(bean), bean);
         }

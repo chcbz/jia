@@ -4,6 +4,8 @@ import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
+import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
 import cn.jia.agent.config.OutputDeliveryLeaseSchemaInitializer;
 import cn.jia.agent.config.OutputDeliverySchemaInitializer;
@@ -12,6 +14,8 @@ import cn.jia.agent.dao.AgentIdentityAliasDao;
 import cn.jia.agent.dao.AgentIdentityRegistryDao;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentTaskArtifactDao;
+import cn.jia.agent.dao.AgentTaskArtifactOutcomeDao;
 import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
@@ -21,11 +25,15 @@ import cn.jia.agent.dao.impl.AgentIdentityAliasDaoImpl;
 import cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl;
 import cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl;
 import cn.jia.agent.dao.impl.AgentRuntimeDaoImpl;
+import cn.jia.agent.dao.impl.AgentTaskArtifactDaoImpl;
+import cn.jia.agent.dao.impl.AgentTaskArtifactOutcomeDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskEventDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMemberDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskMetaDaoImpl;
 import cn.jia.agent.dao.impl.AgentTaskWorkItemDaoImpl;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskArtifactAcceptDTO;
+import cn.jia.agent.entity.AgentTaskArtifactRefDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDeliveryRequirementsDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
@@ -38,6 +46,8 @@ import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import cn.jia.agent.mapper.AgentIdentityRegistryMapper;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
 import cn.jia.agent.mapper.AgentRuntimeMapper;
+import cn.jia.agent.mapper.AgentTaskArtifactMapper;
+import cn.jia.agent.mapper.AgentTaskArtifactOutcomeMapper;
 import cn.jia.agent.mapper.AgentTaskEventMapper;
 import cn.jia.agent.mapper.AgentTaskMemberMapper;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
@@ -67,6 +77,7 @@ import cn.jia.agent.output.service.TaskOutputSourceAuthorizer;
 import cn.jia.agent.service.AgentCommandTransportWriter;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskAggregationService;
+import cn.jia.agent.service.AgentTaskArtifactOutcomeService;
 import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
 import cn.jia.agent.service.AgentTaskEventBroker;
 import cn.jia.agent.service.AgentTaskEventWriter;
@@ -160,6 +171,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     private AgentTaskEventWriter eventWriter;
     private AgentLegacyTaskCompatibilityService legacy;
     private AgentTaskStateService stateService;
+    private AgentTaskArtifactOutcomeService artifactOutcomeService;
     private OutputRunAuthorizationServiceImpl authorization;
     private OutputUploadDao receipts;
     private AgentServiceImpl agentService;
@@ -186,6 +198,10 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         transaction = new TransactionTemplate(transactionManager);
         new ResourceDatabasePopulator(
                 new org.springframework.core.io.ClassPathResource("db/schema.sql"))
+                .execute(dataSource);
+        new ResourceDatabasePopulator(
+                new org.springframework.core.io.ClassPathResource(
+                        "db/agent-task-artifact-outcome-f06.sql"))
                 .execute(dataSource);
         new OutputDeliveryLeaseSchemaInitializer(jdbc).afterPropertiesSet();
         new OutputDeliverySchemaInitializer(jdbc).afterPropertiesSet();
@@ -446,6 +462,48 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     }
 
     @Test
+    void policy1AndRunBackedArtifactsCannotUseLegacyOutcomeTransaction() {
+        seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
+        AssignedTask policy1 = createAndAssignPolicy1(AGENT_A);
+        insertOutcomeArtifact(policy1.taskId(), policy1.workItemId(),
+                "artifact-policy1", policy1.runId());
+        long eventsBeforePolicy1 = taskEventCount(policy1.taskId());
+
+        AgentTaskCollaborationException policy1Denied = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> artifactOutcomeService.accept(
+                        TENANT, CLIENT, policy1.taskId(), AGENT_A,
+                        outcomeCommand("decision-policy1", "artifact-policy1")));
+
+        assertEquals(AgentTaskCollaborationException.Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                policy1Denied.getReason());
+        assertEquals(0, outcomeCount(policy1.taskId()));
+        assertEquals(eventsBeforePolicy1, taskEventCount(policy1.taskId()));
+
+        AgentTaskDTO policy0 = createTask(false);
+        AgentTaskAssignDTO assign = new AgentTaskAssignDTO();
+        assign.setAgentId(AGENT_A);
+        AgentTaskDTO assignedPolicy0 = agentService.assignTask(policy0.getId(), assign);
+        AgentTaskWorkItemEntity policy0Item = workItemDao.listByTask(
+                TENANT, CLIENT, policy0.getId(), null, 2).getFirst();
+        assertEquals("0", assignedPolicy0.getDeliveryPolicyVersion());
+        insertOutcomeArtifact(policy0.getId(), policy0Item.getWorkItemId(),
+                "artifact-run-backed", "fedcba9876543210fedcba9876543210");
+        long eventsBeforeRunBacked = taskEventCount(policy0.getId());
+
+        AgentTaskCollaborationException runBackedDenied = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> artifactOutcomeService.accept(
+                        TENANT, CLIENT, policy0.getId(), AGENT_A,
+                        outcomeCommand("decision-run-backed", "artifact-run-backed")));
+
+        assertEquals(AgentTaskCollaborationException.Reason.RESERVED_FOR_LEASE_PROTOCOL,
+                runBackedDenied.getReason());
+        assertEquals(0, outcomeCount(policy0.getId()));
+        assertEquals(eventsBeforeRunBacked, taskEventCount(policy0.getId()));
+    }
+
+    @Test
     void competingAssignmentAndClaimHaveOneWinnerAndInjectedFailuresRollbackEverything()
             throws Exception {
         seedAgent(7L, AGENT_A, "runtime-a", deliveryCapabilities());
@@ -618,6 +676,16 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         stateService = transactionalInterfaceProxy(new AgentTaskStateServiceImpl(
                 taskDao, memberDao, workItemDao, taskTransactions, eventWriter,
                 System::currentTimeMillis), AgentTaskStateService.class);
+        AgentTaskArtifactDao artifactDao = new AgentTaskArtifactDaoImpl(
+                template.getMapper(AgentTaskArtifactMapper.class));
+        AgentTaskArtifactOutcomeDao artifactOutcomeDao =
+                new AgentTaskArtifactOutcomeDaoImpl(
+                        template.getMapper(AgentTaskArtifactOutcomeMapper.class));
+        artifactOutcomeService = transactionalInterfaceProxy(
+                new AgentTaskArtifactOutcomeServiceImpl(
+                        artifactDao, artifactOutcomeDao, memberDao, taskDao,
+                        taskTransactions, eventWriter, System::currentTimeMillis),
+                AgentTaskArtifactOutcomeService.class);
 
         OutputSourceBindingDao sourceDao = wire(new OutputSourceBindingDaoImpl(),
                 template.getMapper(OutputSourceBindingMapper.class));
@@ -646,9 +714,19 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<AgentTaskWorkItemDao> workItemProvider = mock(ObjectProvider.class);
         when(workItemProvider.getIfAvailable()).thenReturn(workItemDao);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentRabbitTopologyReadiness> topologyProvider = mock(ObjectProvider.class);
+        AgentRabbitTopologyReadiness topologyReadiness = mock(AgentRabbitTopologyReadiness.class);
+        when(topologyReadiness.snapshot()).thenReturn(new AgentRabbitTopologyReadiness.Snapshot(
+                AgentRabbitTopologyReadiness.Status.READY,
+                AgentRabbitTopologyReadiness.Source.PROVISION,
+                AgentRabbitTopologyReadiness.Coverage.CANONICAL_TOPOLOGY,
+                AgentRabbitTopologyManifest.CANONICAL_SHA256, 1L, null));
+        when(topologyProvider.getIfAvailable()).thenReturn(topologyReadiness);
         commandCapture = new AgentCommandTransportCapture(
                 dispatchGate(), writerProvider, outputProvider);
         commandCapture.configureWorkItemDao(workItemProvider);
+        commandCapture.configureTopologyReadiness(topologyProvider);
 
         StaticListableBeanFactory empty = new StaticListableBeanFactory();
         AgentServiceImpl rawAgentService = new AgentServiceImpl(
@@ -825,6 +903,49 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
     }
 
+    private void insertOutcomeArtifact(
+            String taskId, String workItemId, String artifactId, String runId) {
+        long now = System.currentTimeMillis();
+        jdbc.update("""
+                INSERT INTO agent_task_artifact(
+                    artifact_id,task_id,work_item_id,producer_agent_id,artifact_type,title,
+                    object_id,run_id,file_name,content_byte_length,mime_type,retain_until,
+                    content_hash,artifact_version,visibility,created_at,
+                    tenant_id,client_id,create_time,update_time)
+                VALUES (?,?,?,?,'document',?, ?,?,'result.txt',4,'text/plain',?,
+                        ?,1,'private',?,?,?,?,?)
+                """, artifactId, taskId, workItemId, AGENT_A, artifactId,
+                "object-" + artifactId, runId, now + 60_000L, "a".repeat(64), now,
+                TENANT, CLIENT, now, now);
+    }
+
+    private AgentTaskArtifactAcceptDTO outcomeCommand(
+            String decisionId, String artifactId) {
+        AgentTaskArtifactRefDTO ref = new AgentTaskArtifactRefDTO();
+        ref.setArtifactId(artifactId);
+        ref.setArtifactVersion(1);
+        ref.setExpectedOutcomeVersion(0L);
+        AgentTaskArtifactAcceptDTO command = new AgentTaskArtifactAcceptDTO();
+        command.setDecisionId(decisionId);
+        command.setAcceptedArtifact(ref);
+        command.setSupersededArtifacts(List.of());
+        return command;
+    }
+
+    private int outcomeCount(String taskId) {
+        return jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_task_artifact_outcome
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                """, Integer.class, TENANT, CLIENT, taskId);
+    }
+
+    private long taskEventCount(String taskId) {
+        return jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_task_event
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                """, Long.class, TENANT, CLIENT, taskId);
+    }
+
     private AgentRabbitSafetyGate dispatchGate() {
         AgentRabbitSafetyGate gate = new AgentRabbitSafetyGate(
                 new AgentRabbitSafetyProperties(
@@ -895,6 +1016,8 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         configuration.addMapper(AgentTaskMemberMapper.class);
         configuration.addMapper(AgentTaskWorkItemMapper.class);
         configuration.addMapper(AgentTaskEventMapper.class);
+        configuration.addMapper(AgentTaskArtifactMapper.class);
+        configuration.addMapper(AgentTaskArtifactOutcomeMapper.class);
         configuration.addMapper(AgentCommandTransportMapper.class);
         configuration.addMapper(AgentRuntimeMapper.class);
         configuration.addMapper(AgentIdentityRegistryMapper.class);

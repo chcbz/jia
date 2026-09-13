@@ -4,6 +4,8 @@ import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
+import cn.jia.agent.config.AgentRabbitTopologyManifest;
+import cn.jia.agent.config.AgentRabbitTopologyReadiness;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskDTO;
@@ -129,6 +131,7 @@ class AgentCommandTransportCaptureTest {
                 gate(AgentRabbitActivationState.DISPATCH_CANARY),
                 writerProvider, outputRunProvider);
         capture.configureWorkItemDao(workItemProvider);
+        capture.configureTopologyReadiness(readyTopologyProvider());
 
         AgentTaskWorkItemEntity workItem = new AgentTaskWorkItemEntity()
                 .setWorkItemId("work-1").setTaskId("task-1")
@@ -193,6 +196,52 @@ class AgentCommandTransportCaptureTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> AgentCommandCanonicalCodec.wireBytes(draft, "msg-policy1", 1, context));
+    }
+
+    @Test
+    void policy1RefusesDispatchUntilCanonicalTopologyActivationCompletes() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentCommandTransportWriter> writerProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<OutputRunAuthorizationService> outputProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentTaskWorkItemDao> workItemProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentRabbitTopologyReadiness> topologyProvider = mock(ObjectProvider.class);
+        when(writerProvider.getIfAvailable()).thenReturn(mock(AgentCommandTransportWriter.class));
+        when(outputProvider.getIfAvailable()).thenReturn(mock(OutputRunAuthorizationService.class));
+        when(workItemProvider.getIfAvailable()).thenReturn(mock(AgentTaskWorkItemDao.class));
+        AgentRabbitTopologyReadiness readiness = mock(AgentRabbitTopologyReadiness.class);
+        when(readiness.snapshot()).thenReturn(new AgentRabbitTopologyReadiness.Snapshot(
+                AgentRabbitTopologyReadiness.Status.NOT_CHECKED,
+                AgentRabbitTopologyReadiness.Source.NONE,
+                AgentRabbitTopologyReadiness.Coverage.NONE,
+                AgentRabbitTopologyManifest.CANONICAL_SHA256, 0L, null));
+        when(topologyProvider.getIfAvailable()).thenReturn(readiness);
+        AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
+                gate(AgentRabbitActivationState.DISPATCH_CANARY),
+                writerProvider, outputProvider);
+        capture.configureWorkItemDao(workItemProvider);
+        capture.configureTopologyReadiness(topologyProvider);
+
+        assertThrows(IllegalStateException.class,
+                () -> capture.prepareTaskOutputDispatch(
+                        "tenant-a", "client-a", "task-1", List.of("agent-a"),
+                        1, "evt-policy1"));
+        verify(outputProvider, never()).getIfAvailable();
+    }
+
+    private ObjectProvider<AgentRabbitTopologyReadiness> readyTopologyProvider() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentRabbitTopologyReadiness> provider = mock(ObjectProvider.class);
+        AgentRabbitTopologyReadiness readiness = mock(AgentRabbitTopologyReadiness.class);
+        when(readiness.snapshot()).thenReturn(new AgentRabbitTopologyReadiness.Snapshot(
+                AgentRabbitTopologyReadiness.Status.READY,
+                AgentRabbitTopologyReadiness.Source.PROVISION,
+                AgentRabbitTopologyReadiness.Coverage.CANONICAL_TOPOLOGY,
+                AgentRabbitTopologyManifest.CANONICAL_SHA256, 1L, null));
+        when(provider.getIfAvailable()).thenReturn(readiness);
+        return provider;
     }
 
     private AgentTaskDTO task() {

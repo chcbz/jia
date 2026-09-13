@@ -34,6 +34,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -224,6 +226,39 @@ class AgentTaskArtifactOutcomeServiceImplTest {
     }
 
     @Test
+    void policy1TaskCannotUseLegacyOutcomeBeforeAclOrArtifactAccess() {
+        root.setDeliveryPolicyVersion(1);
+
+        AgentTaskCollaborationException failure = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                        command("decision-policy1", ref("artifact-a", 1, 0))));
+
+        assertEquals(Reason.RESERVED_FOR_LEASE_PROTOCOL, failure.getReason());
+        verify(memberDao, never()).findByTaskAndAgent(any(), any(), any(), any());
+        verify(artifactDao, never()).findLatestVersionForUpdate(any(), any(), any(), any());
+        verifyNoOutcomeWrites();
+    }
+
+    @Test
+    void runBackedArtifactCannotEnterLegacyOutcomeChain() {
+        root.setDeliveryPolicyVersion(0);
+        AgentTaskArtifactEntity artifact = artifact(
+                "artifact-run", 1, "work-1", "analysis", OTHER)
+                .setRunId("0123456789abcdef0123456789abcdef")
+                .setVisibility("private");
+        stubArtifacts(artifact);
+
+        AgentTaskCollaborationException failure = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                        command("decision-run", ref("artifact-run", 1, 0))));
+
+        assertEquals(Reason.RESERVED_FOR_LEASE_PROTOCOL, failure.getReason());
+        verifyNoOutcomeWrites();
+    }
+
+    @Test
     void supersededArtifactsMustShareConflictScopeAndCasZeroWritesNoEvent() {
         AgentTaskArtifactEntity accepted = artifact(
                 "artifact-new", 1, "work-1", "analysis", OTHER);
@@ -322,6 +357,16 @@ class AgentTaskArtifactOutcomeServiceImplTest {
             when(artifactDao.findVersion(TENANT, CLIENT, TASK,
                     artifact.getArtifactId(), artifact.getArtifactVersion())).thenReturn(artifact);
         }
+    }
+
+    private void verifyNoOutcomeWrites() {
+        verify(outcomeDao, never()).findDecisionForUpdate(any(), any(), any(), any());
+        verify(outcomeDao, never()).findForUpdate(any(), any(), any(), any(), anyInt());
+        verify(outcomeDao, never()).insert(any(), any(), any());
+        verify(outcomeDao, never()).insertDecision(any(), any(), any());
+        verify(outcomeDao, never()).updateByVersion(
+                any(), any(), any(), any(), anyInt(), any(), anyLong(), any());
+        verify(eventWriter, never()).append(any());
     }
 
     private AgentTaskArtifactAcceptDTO command(

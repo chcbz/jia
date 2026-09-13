@@ -57,6 +57,13 @@ public class AgentRabbitTopologyConfiguration {
                 manifest, admin, connectionFactory, readiness);
     }
 
+    @Bean(name = "agentRabbitTopologyStartup", defaultCandidate = false)
+    public AgentRabbitTopologyStartup agentRabbitTopologyStartup(
+            @Qualifier("agentRabbitTopologyProvisioner")
+            AgentRabbitTopologyProvisioner provisioner) {
+        return new AgentRabbitTopologyStartup(provisioner);
+    }
+
     @Bean(name = "agentCommandListenerContainerFactory", defaultCandidate = false)
     @Conditional(AgentRabbitConsumeEnabledCondition.class)
     public SimpleRabbitListenerContainerFactory agentCommandListenerContainerFactory(

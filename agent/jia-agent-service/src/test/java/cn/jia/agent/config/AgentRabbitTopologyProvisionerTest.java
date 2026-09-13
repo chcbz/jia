@@ -103,6 +103,70 @@ class AgentRabbitTopologyProvisionerTest {
     }
 
     @Test
+    void startupActivationDeclaresThenPassivelyVerifiesBeforePublishingReadiness()
+            throws Exception {
+        PassiveBroker broker = configurePassiveBroker();
+
+        AgentRabbitTopologyReadiness.Snapshot result = provisioner.activate();
+
+        var ordered = inOrder(admin, connectionFactory, broker.connection(), broker.channel());
+        for (var expected : manifest.exchanges()) {
+            ordered.verify(admin).declareExchange(argThat(actual ->
+                    expected.name().equals(actual.getName())));
+        }
+        for (var expected : manifest.queues()) {
+            ordered.verify(admin).declareQueue(argThat(actual ->
+                    expected.name().equals(actual.getName())));
+        }
+        for (var expected : manifest.bindings()) {
+            ordered.verify(admin).declareBinding(argThat(actual ->
+                    expected.exchange().equals(actual.getExchange())
+                            && expected.queue().equals(actual.getDestination())
+                            && expected.routingKey().equals(actual.getRoutingKey())));
+        }
+        ordered.verify(connectionFactory).createConnection();
+        ordered.verify(broker.connection()).createChannel(false);
+        for (var exchange : manifest.exchanges()) {
+            ordered.verify(broker.channel()).exchangeDeclarePassive(exchange.name());
+        }
+        for (var queue : manifest.queues()) {
+            ordered.verify(broker.channel()).queueDeclarePassive(queue.name());
+        }
+        ordered.verify(broker.channel()).close();
+        ordered.verify(broker.connection()).close();
+
+        assertEquals(AgentRabbitTopologyReadiness.Status.READY, result.status());
+        assertEquals(AgentRabbitTopologyReadiness.Source.PROVISION, result.source());
+        assertEquals(AgentRabbitTopologyReadiness.Coverage.CANONICAL_TOPOLOGY,
+                result.coverage());
+        assertTrue(result.canonicalTopologyReady());
+        assertEquals(1L, result.revision());
+    }
+
+    @Test
+    void startupActivationPassiveFailureNeverPublishesCanonicalReadiness()
+            throws Exception {
+        PassiveBroker broker = configurePassiveBroker();
+        when(broker.channel().queueDeclarePassive(
+                AgentRabbitTopologyManifest.RETRY_30S_QUEUE))
+                .thenThrow(new IOException("synthetic startup passive failure"));
+
+        AgentRabbitTopologyOperationException failure = assertThrows(
+                AgentRabbitTopologyOperationException.class, provisioner::activate);
+
+        assertEquals(AgentRabbitTopologyOperationException.ErrorCode.PASSIVE_VERIFY_FAILED,
+                failure.errorCode());
+        AgentRabbitTopologyReadiness.Snapshot result = readiness.snapshot();
+        assertEquals(AgentRabbitTopologyReadiness.Status.FAILED, result.status());
+        assertEquals(AgentRabbitTopologyReadiness.Source.PASSIVE_VERIFY, result.source());
+        assertEquals(AgentRabbitTopologyReadiness.Coverage.NONE, result.coverage());
+        assertFalse(result.canonicalTopologyReady());
+        assertEquals(1L, result.revision());
+        verify(broker.channel()).close();
+        verify(broker.connection()).close();
+    }
+
+    @Test
     void provisionFailureIsSanitizedFailClosedAndUpdatesReadiness() {
         String secret = "amqp://d04-user:d04-password@broker.internal/vhost reply=secret";
         doThrow(new AmqpIOException(new IOException(secret)))
