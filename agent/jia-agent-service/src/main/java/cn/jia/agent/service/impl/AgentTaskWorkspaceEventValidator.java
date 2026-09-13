@@ -26,7 +26,8 @@ public final class AgentTaskWorkspaceEventValidator {
             TaskEventType.WORK_ITEM_REQUEUED, TaskEventType.WORK_ITEM_BLOCKED,
             TaskEventType.WORK_ITEM_FAILED, TaskEventType.WORK_ITEM_CANCELLED,
             TaskEventType.WORK_ITEM_LEASE_RENEWED,
-            TaskEventType.WORK_ITEM_LEASE_RELEASED);
+            TaskEventType.WORK_ITEM_LEASE_RELEASED,
+            TaskEventType.WORK_ITEM_REASSIGNED);
     private static final Set<String> REQUEST_EVENTS = Set.of(
             TaskEventType.HELP_REQUESTED, TaskEventType.REVIEW_REQUESTED,
             TaskEventType.REQUEST_CREATED, TaskEventType.REQUEST_ACKNOWLEDGED,
@@ -95,6 +96,50 @@ public final class AgentTaskWorkspaceEventValidator {
             requireString(payload, TaskEventPayload.Key.ROLE);
             requireEventStatus(payload, eventType);
             requireLong(payload, TaskEventPayload.Key.RESULT_VERSION);
+            return null;
+        }
+        if (TaskEventType.WORK_ITEM_REASSIGNED.equals(eventType)) {
+            requireAggregateType(row, TaskEventType.Aggregate.WORK_ITEM);
+            requireAgentActor(row);
+            requireEqualId(payload, TaskEventPayload.Key.WORK_ITEM_ID, row.getAggregateId());
+            requireEqualId(payload, TaskEventPayload.Key.COORDINATOR_AGENT_ID, row.getActorId());
+            String previous = requireId(payload, TaskEventPayload.Key.PREVIOUS_AGENT_ID);
+            String target = requireId(payload, TaskEventPayload.Key.TARGET_AGENT_ID);
+            String from = requireString(payload, TaskEventPayload.Key.FROM_STATUS);
+            if (previous.equals(target)
+                    || !("claimed".equals(from) || "running".equals(from))
+                    || !"claimed".equals(requireString(payload, TaskEventPayload.Key.TO_STATUS))) {
+                throw invalid();
+            }
+            long expected = requireLong(payload, TaskEventPayload.Key.EXPECTED_VERSION);
+            long result = requirePositiveLong(payload, TaskEventPayload.Key.RESULT_VERSION);
+            long attempts = requirePositiveLong(payload, TaskEventPayload.Key.ATTEMPT_COUNT);
+            long maxAttempts = requirePositiveLong(payload, TaskEventPayload.Key.MAX_ATTEMPTS);
+            long previousExpiry = requirePositiveLong(
+                    payload, TaskEventPayload.Key.PREVIOUS_LEASE_EXPIRES_AT);
+            long leaseExpiry = requirePositiveLong(payload, TaskEventPayload.Key.LEASE_EXPIRES_AT);
+            requireId(payload, TaskEventPayload.Key.REASSIGNMENT_ID);
+            requireId(payload, TaskEventPayload.Key.SOURCE_COMMAND_ID);
+            requireId(payload, TaskEventPayload.Key.COMMAND_ID);
+            requireDigestValue(payload, TaskEventPayload.Key.REQUEST_DIGEST);
+            requireDigestValue(payload, TaskEventPayload.Key.LEASE_FENCE_SHA256);
+            if (result != expected + 1 || attempts >= maxAttempts
+                    || leaseExpiry <= previousExpiry || !payload.keySet().equals(Set.of(
+                    TaskEventPayload.Key.WORK_ITEM_ID,
+                    TaskEventPayload.Key.COORDINATOR_AGENT_ID,
+                    TaskEventPayload.Key.PREVIOUS_AGENT_ID,
+                    TaskEventPayload.Key.TARGET_AGENT_ID,
+                    TaskEventPayload.Key.FROM_STATUS, TaskEventPayload.Key.TO_STATUS,
+                    TaskEventPayload.Key.EXPECTED_VERSION, TaskEventPayload.Key.RESULT_VERSION,
+                    TaskEventPayload.Key.ATTEMPT_COUNT, TaskEventPayload.Key.MAX_ATTEMPTS,
+                    TaskEventPayload.Key.PREVIOUS_LEASE_EXPIRES_AT,
+                    TaskEventPayload.Key.LEASE_EXPIRES_AT,
+                    TaskEventPayload.Key.REASSIGNMENT_ID,
+                    TaskEventPayload.Key.SOURCE_COMMAND_ID, TaskEventPayload.Key.COMMAND_ID,
+                    TaskEventPayload.Key.REQUEST_DIGEST,
+                    TaskEventPayload.Key.LEASE_FENCE_SHA256))) {
+                throw invalid();
+            }
             return null;
         }
         if (WORK_ITEM_EVENTS.contains(eventType)) {
@@ -299,6 +344,7 @@ public final class AgentTaskWorkspaceEventValidator {
             case TaskEventType.WORK_ITEM_CANCELLED -> "cancelled";
             case TaskEventType.WORK_ITEM_LEASE_RENEWED -> null;
             case TaskEventType.WORK_ITEM_LEASE_RELEASED -> null;
+            case TaskEventType.WORK_ITEM_REASSIGNED -> "claimed";
             case TaskEventType.HELP_REQUESTED, TaskEventType.REVIEW_REQUESTED,
                     TaskEventType.REQUEST_CREATED -> "open";
             case TaskEventType.REQUEST_ACKNOWLEDGED -> "acknowledged";
@@ -446,6 +492,14 @@ public final class AgentTaskWorkspaceEventValidator {
     private static long requirePositiveLong(Map<String, Object> payload, String key) {
         long value = requireLong(payload, key);
         if (value <= 0) {
+            throw invalid();
+        }
+        return value;
+    }
+
+    private static String requireDigestValue(Map<String, Object> payload, String key) {
+        String value = requireString(payload, key);
+        if (!value.matches("[0-9a-f]{64}")) {
             throw invalid();
         }
         return value;

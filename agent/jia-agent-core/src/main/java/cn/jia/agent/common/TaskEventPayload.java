@@ -37,7 +37,10 @@ public final class TaskEventPayload {
             Key.ARTIFACT_ID, Key.PRODUCER_AGENT_ID,
             Key.SUPERSEDED_BY_ARTIFACT_ID, Key.DECISION_ID,
             Key.THREAD_ID, Key.CONVERSATION_ID,
-            Key.MESSAGE_ID, Key.SENDER_AGENT_ID, Key.NOTE_ID);
+            Key.MESSAGE_ID, Key.SENDER_AGENT_ID, Key.NOTE_ID,
+            Key.REASSIGNMENT_ID, Key.COORDINATOR_AGENT_ID,
+            Key.PREVIOUS_AGENT_ID, Key.TARGET_AGENT_ID,
+            Key.SOURCE_COMMAND_ID, Key.COMMAND_ID);
 
     private static final Set<String> STRING_KEYS = Set.of(
             Key.FROM_STATUS, Key.TO_STATUS, Key.STATUS, Key.REASON_CODE,
@@ -45,6 +48,9 @@ public final class TaskEventPayload {
             Key.TASK_TYPE, Key.REQUEST_TYPE, Key.TARGET_TYPE,
             Key.ARTIFACT_TYPE, Key.VISIBILITY, Key.THREAD_TYPE,
             Key.MESSAGE_TYPE, Key.NOTE_TYPE);
+
+    private static final Set<String> DIGEST_KEYS = Set.of(
+            Key.CONTENT_SHA256, Key.REQUEST_DIGEST, Key.LEASE_FENCE_SHA256);
 
     private static final Set<String> LONG_KEYS = Set.of(
             Key.EXPECTED_VERSION, Key.RESULT_VERSION, Key.ARTIFACT_VERSION,
@@ -65,7 +71,7 @@ public final class TaskEventPayload {
         ID_KEYS.forEach(key -> keys.put(key, Boolean.TRUE));
         STRING_KEYS.forEach(key -> keys.put(key, Boolean.TRUE));
         LONG_KEYS.forEach(key -> keys.put(key, Boolean.TRUE));
-        keys.put(Key.CONTENT_SHA256, Boolean.TRUE);
+        DIGEST_KEYS.forEach(key -> keys.put(key, Boolean.TRUE));
         ALLOWED_KEYS = Collections.unmodifiableSet(keys.keySet());
     }
 
@@ -212,10 +218,10 @@ public final class TaskEventPayload {
 
         public Builder put(String key, String value) {
             requireAllowedKey(key);
-            if (Key.CONTENT_SHA256.equals(key)) {
+            if (DIGEST_KEYS.contains(key)) {
                 if (value == null || !SHA_256.matcher(value).matches()) {
                     throw new IllegalArgumentException(
-                            "contentSha256 must be lowercase SHA-256 hex");
+                            key + " must be lowercase SHA-256 hex");
                 }
             } else {
                 if (!ID_KEYS.contains(key) && !STRING_KEYS.contains(key)) {
@@ -307,6 +313,14 @@ public final class TaskEventPayload {
         public static final String MEMBER_ID = "memberId";
         public static final String WORK_ITEM_ID = "workItemId";
         public static final String ASSIGNEE_AGENT_ID = "assigneeAgentId";
+        public static final String REASSIGNMENT_ID = "reassignmentId";
+        public static final String COORDINATOR_AGENT_ID = "coordinatorAgentId";
+        public static final String PREVIOUS_AGENT_ID = "previousAgentId";
+        public static final String TARGET_AGENT_ID = "targetAgentId";
+        public static final String SOURCE_COMMAND_ID = "sourceCommandId";
+        public static final String COMMAND_ID = "commandId";
+        public static final String REQUEST_DIGEST = "requestDigest";
+        public static final String LEASE_FENCE_SHA256 = "leaseFenceSha256";
         public static final String ROLE = "role";
         public static final String ATTEMPT_COUNT = "attemptCount";
         public static final String MAX_ATTEMPTS = "maxAttempts";
