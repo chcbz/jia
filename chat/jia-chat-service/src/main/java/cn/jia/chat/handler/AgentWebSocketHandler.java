@@ -2,6 +2,7 @@ package cn.jia.chat.handler;
 
 import cn.jia.chat.serialization.ExactWireIds;
 
+import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentCommandAck;
