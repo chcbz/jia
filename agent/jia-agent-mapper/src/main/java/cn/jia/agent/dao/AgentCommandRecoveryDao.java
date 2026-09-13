@@ -27,8 +27,6 @@ public interface AgentCommandRecoveryDao {
             String requestedBy, String approverId, String reason, String lastError, long now) {
         throw new UnsupportedOperationException("manual reissue is unavailable");
     }
-    int failRecoveryDelivery(AgentCommandDeliveryEntity delivery, String lastError, long now);
-    int failRecoveryInbox(AgentConsumerInboxEntity inbox, String lastError, long now);
     int expireDelivery(AgentCommandDeliveryEntity delivery, String lastError, long now);
     int expireWaitingInbox(AgentConsumerInboxEntity inbox, String lastError, long now);
     int insertOutbox(AgentOutboxEventEntity outbox);

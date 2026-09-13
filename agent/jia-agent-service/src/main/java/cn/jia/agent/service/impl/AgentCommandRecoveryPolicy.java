@@ -9,7 +9,8 @@ import java.util.Objects;
  */
 public final class AgentCommandRecoveryPolicy {
     // Initial delivery plus three automatic attempts is finite while retaining D06 recovery.
-    // A fifth and final attempt is reserved for the already-audited two-person manual lane.
+    // Up to five total attempts may use the existing terminal-source manual lane.
+    // Exhaustion is NOT proof of failure and does not make SENT manually reissuable.
     public static final int DEFAULT_MAX_AUTOMATIC_ATTEMPTS = 4;
     public static final int DEFAULT_MAX_TOTAL_ATTEMPTS = 5;
     // Reuse the provisioned D04 5s/30s retry tiers; 30s also matches the D06 ACK timeout.
@@ -105,7 +106,7 @@ public final class AgentCommandRecoveryPolicy {
             long now) {
         Objects.requireNonNull(scope, "scope");
         scope.validate();
-        if (activeAttempt <= 0 || activeAttempt > maxTotalAttempts
+        if (activeAttempt <= 0
                 || lastTransitionAt <= 0 || lastTransitionAt > now
                 || expiresAt <= 0 || lastTransitionAt >= expiresAt || now <= 0) {
             throw new IllegalArgumentException("invalid command recovery state");
@@ -115,6 +116,7 @@ public final class AgentCommandRecoveryPolicy {
     public enum Action {
         REISSUE,
         DEFER,
+        /** Stop automatic retries; this does not authorize reissue of an ambiguous delivery. */
         MANUAL_TAKEOVER_REQUIRED,
         ATTEMPTS_EXHAUSTED,
         DEADLINE_EXHAUSTED,

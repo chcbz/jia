@@ -10,6 +10,7 @@ import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentCommandReissueScanResult;
+import cn.jia.agent.entity.AgentCommandRecoveryDeferral;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentInboxConsumers;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
@@ -24,6 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -37,8 +39,6 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     public static final String AGENT_OFFLINE = AgentCommandRabbitConsumer.AGENT_OFFLINE;
     public static final String SENT_ACK_TIMEOUT = "SENT_ACK_TIMEOUT";
     public static final String MESSAGE_EXPIRED = AgentCommandInboxServiceImpl.MESSAGE_EXPIRED;
-    public static final String RECOVERY_ATTEMPTS_EXHAUSTED = "RECOVERY_ATTEMPTS_EXHAUSTED";
-    public static final String RECOVERY_DEADLINE_EXHAUSTED = "RECOVERY_DEADLINE_EXHAUSTED";
     private static final long DEFAULT_SENT_ACK_TIMEOUT_MILLIS = 30_000L;
     // Reserve all remaining delivery mutations: D06 reissue, D03 claim+settle,
     // D07 claim+complete, and A06 ACK RECEIVED+STARTED+terminal.
@@ -354,7 +354,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         }
         List<AgentWaitingCommandCandidate> candidates = dao.findReconnectCandidates(
                 scope.tenantId(), scope.clientId(), scope.targetAgentId(), now, 0, limit);
-        return process(candidates, scope.requestedBy(), scope.reason(), false, now);
+        return process(candidates, scope.requestedBy(), scope.reason(), false, now, scope);
     }
 
     @Override
@@ -369,7 +369,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (candidates.isEmpty() && afterDeliveryId > 0) {
             candidates = dao.findDueCandidates(now, sentBefore, 0, limit);
         }
-        return process(candidates, REQUESTER_SCHEDULER, REASON_SCHEDULER, true, now);
+        return process(candidates, REQUESTER_SCHEDULER, REASON_SCHEDULER, true, now, null);
     }
 
     private AgentCommandReissueScanResult process(
@@ -377,14 +377,21 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             String requestedBy,
             String reason,
             boolean requireDue,
-            long now) {
+            long now,
+            AgentCommandReconnectScope reconnectScope) {
+        List<AgentCommandRecoveryDeferral> deferrals = new ArrayList<>();
         int examined = 0;
         int reissued = 0;
         long cursor = 0;
         for (AgentWaitingCommandCandidate candidate : safeCandidates(candidates)) {
+            if (examined == 100) break; // Same bound as validated discovery limits.
             examined++;
+            if (!validCandidate(candidate)) continue;
             cursor = Math.max(cursor, candidate.deliveryId());
-            if (!validCandidate(candidate)
+            if ((reconnectScope != null
+                        && (!reconnectScope.tenantId().equals(candidate.tenantId())
+                            || !reconnectScope.clientId().equals(candidate.clientId())
+                            || !reconnectScope.targetAgentId().equals(candidate.targetAgentId())))
                     || !allows(candidate.tenantId(), candidate.clientId())
                     || (!candidate.expiryCandidate()
                         && !dispatcher.isExactAgentConnected(
@@ -393,17 +400,20 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 continue;
             }
             try {
-                Boolean won = transaction.execute(status -> reissueLocked(
+                RecoveryOutcome outcome = transaction.execute(status -> reissueLocked(
                         candidate, requestedBy, reason, requireDue, now));
-                if (Boolean.TRUE.equals(won)) reissued++;
+                if (outcome != null) {
+                    if (outcome.reissued()) reissued++;
+                    if (outcome.deferral() != null) deferrals.add(outcome.deferral());
+                }
             } catch (RecoveryConflictException conflict) {
                 LOG.warn("WAITING_AGENT reissue rejected, reason={}", conflict.reason);
             }
         }
-        return new AgentCommandReissueScanResult(examined, reissued, cursor);
+        return new AgentCommandReissueScanResult(examined, reissued, cursor, deferrals);
     }
 
-    private boolean reissueLocked(
+    private RecoveryOutcome reissueLocked(
             AgentWaitingCommandCandidate candidate,
             String requestedBy,
             String reason,
@@ -412,14 +422,19 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!allows(candidate.tenantId(), candidate.clientId())
                 || !AgentCommandAutomaticReplayProvenance.validRequesterBinding(
                         candidate.targetAgentId(), requestedBy, null, reason)) {
-            return false;
+            return new RecoveryOutcome(false, null);
         }
         AgentCommandDeliveryEntity delivery = dao.lockDelivery(
                 candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
-        if (delivery == null || !candidate.targetAgentId().equals(delivery.getTargetAgentId())) return false;
+        if (delivery == null || !Objects.equals(candidate.deliveryId(), delivery.getId())
+                || !candidate.tenantId().equals(delivery.getTenantId())
+                || !candidate.clientId().equals(delivery.getClientId())
+                || !candidate.targetAgentId().equals(delivery.getTargetAgentId())) {
+            return new RecoveryOutcome(false, null);
+        }
         // W10 installation identity is immutable. Never mint a generic task redrive attempt for it.
         // Preserve unknown escrow and permit the original durable result to reconcile.
-        if ("SKILL_INSTALL".equals(delivery.getCommandType())) return false;
+        if ("SKILL_INSTALL".equals(delivery.getCommandType())) return new RecoveryOutcome(false, null);
         validateRecoverableDelivery(delivery, requireDue, now);
 
         List<AgentOutboxEventEntity> activeRows = dao.lockActiveOutboxes(
@@ -455,12 +470,12 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
 
         if (now >= delivery.getExpiresAt()) {
             expireLocked(delivery, sourceInbox, now);
-            return false;
+            return new RecoveryOutcome(false, null);
         }
         if (requireDue && "SENT".equals(delivery.getStatus())) {
             Long updatedAt = delivery.getUpdateTime();
             long sentBefore = now > sentAckTimeoutMillis ? now - sentAckTimeoutMillis : 0L;
-            if (updatedAt == null || updatedAt <= 0 || updatedAt > sentBefore) return false;
+            if (updatedAt == null || updatedAt <= 0 || updatedAt > sentBefore) return new RecoveryOutcome(false, null);
         }
         AgentCommandRecoveryPolicy.Decision policyDecision;
         try {
@@ -471,16 +486,15 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             throw conflict("AUTOMATIC_REISSUE_POLICY_STATE_INVALID");
         }
         if (!policyDecision.permitsReissue()) {
-            if (policyDecision.action()
-                    == AgentCommandRecoveryPolicy.Action.MANUAL_TAKEOVER_REQUIRED) {
-                failForManualTakeoverLocked(
-                        delivery, sourceInbox, RECOVERY_ATTEMPTS_EXHAUSTED, now);
-            } else if (policyDecision.action()
-                    == AgentCommandRecoveryPolicy.Action.DEADLINE_EXHAUSTED) {
-                failForManualTakeoverLocked(
-                        delivery, sourceInbox, RECOVERY_DEADLINE_EXHAUSTED, now);
-            }
-            return false;
+            // A lost ACK is ambiguous, not failure. Keep all delivery/inbox/outbox bytes,
+            // timestamps and versions intact so D06 direct/parent terminal ACKs still reconcile.
+            // Readback is a scoped observation, never authority to use the manual endpoint.
+            return new RecoveryOutcome(false, new AgentCommandRecoveryDeferral(
+                    delivery.getTenantId(), delivery.getClientId(), delivery.getTaskId(),
+                    delivery.getWorkItemId(), delivery.getTargetAgentId(), delivery.getId(),
+                    delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                    delivery.getVersion(), policyDecision.action().name(), now,
+                    policyDecision.eligibleAt(), delivery.getExpiresAt()));
         }
 
         int nextAttempt;
@@ -504,13 +518,13 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!allows(delivery.getTenantId(), delivery.getClientId())
                 || !dispatcher.isExactAgentConnected(
                         delivery.getTenantId(), delivery.getClientId(), delivery.getTargetAgentId())) {
-            return false;
+            return new RecoveryOutcome(false, null);
         }
 
         int deliveryRows = dao.reissueDelivery(
                 delivery, newMessageId, requestedBy, reason,
                 AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER, now);
-        if (deliveryRows == 0) return false;
+        if (deliveryRows == 0) return new RecoveryOutcome(false, null);
         if (deliveryRows != 1) throw new IllegalStateException(
                 "delivery reissue CAS returned " + deliveryRows + " rows; expected 0 or 1");
 
@@ -546,7 +560,10 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (outbox.getId() == null || outbox.getId() <= 0) {
             throw new IllegalStateException("reissue outbox insert did not return a generated id");
         }
-        return true;
+        return new RecoveryOutcome(true, null);
+    }
+
+    private record RecoveryOutcome(boolean reissued, AgentCommandRecoveryDeferral deferral) {
     }
 
     private void validateRecoverableDelivery(
@@ -572,8 +589,6 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 || delivery.getAttemptCount() == null || delivery.getAttemptCount() <= 0
                 || delivery.getActiveAttempt() == null || delivery.getActiveAttempt() <= 0
                 || !delivery.getAttemptCount().equals(delivery.getActiveAttempt())
-                || (now < delivery.getExpiresAt()
-                    && delivery.getActiveAttempt() == Integer.MAX_VALUE)
                 || !exact(delivery.getActiveMessageId(), 100)
                 || delivery.getExpiresAt() == null || delivery.getExpiresAt() <= 0
                 || delivery.getLeaseOwner() != null || delivery.getLeaseUntil() != null
@@ -667,18 +682,6 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
                 delivery, outbox, previousAttempts)) {
             throw conflict("RECOVERABLE_SOURCE_REPLAY_PARENT_INVALID");
         }
-    }
-
-    private void failForManualTakeoverLocked(
-            AgentCommandDeliveryEntity delivery, AgentConsumerInboxEntity inbox,
-            String reason, long now) {
-        if (delivery.getVersion() == Long.MAX_VALUE || inbox.getVersion() == Long.MAX_VALUE) {
-            throw conflict("RECOVERY_FAILURE_VERSION_EXHAUSTED");
-        }
-        requireOne(dao.failRecoveryDelivery(delivery, reason, now),
-                "recovery delivery failure");
-        requireOne(dao.failRecoveryInbox(inbox, reason, now),
-                "recovery Inbox failure");
     }
 
     private void expireLocked(

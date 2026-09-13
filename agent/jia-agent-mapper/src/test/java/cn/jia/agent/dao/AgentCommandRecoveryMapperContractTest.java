@@ -73,33 +73,6 @@ class AgentCommandRecoveryMapperContractTest {
     }
 
     @Test
-    void recoveryExhaustionAtomicallyFencesDeliveryAndInboxForManualTakeover()
-            throws Exception {
-        String delivery = sql("failRecoveryDelivery");
-        for (String token : new String[] {"status='failed'",
-                "version=#{delivery.version}",
-                "active_message_id=#{delivery.activemessageid}",
-                "active_attempt=#{delivery.activeattempt}",
-                "attempt_count=#{delivery.attemptcount}", "status=#{delivery.status}"}) {
-            assertTrue(delivery.contains(token), token + ": " + delivery);
-        }
-        assertFalse(delivery.contains("command_payload="));
-        assertFalse(delivery.contains("set target_agent_id"));
-
-        String inbox = sql("failRecoveryInbox");
-        for (String token : new String[] {"status='failed'", "result_status='failed'",
-                "version=#{inbox.version}", "active_attempt=#{inbox.activeattempt}",
-                "attempt_count=#{inbox.attemptcount}", "status=#{inbox.status}",
-                "result_status=#{inbox.resultstatus}"}) {
-            assertTrue(inbox.contains(token), token + ": " + inbox);
-        }
-        for (String column : new String[] {"tenant_id", "client_id", "consumer_name",
-                "message_id", "event_id", "command_id", "status", "result_status"}) {
-            assertBinary(inbox, column);
-        }
-    }
-
-    @Test
     void expiryMutationsFenceBothDeliveryAndWaitingInbox() throws Exception {
         String delivery = sql("expireDelivery");
         for (String token : new String[] {"version=#{delivery.version}",

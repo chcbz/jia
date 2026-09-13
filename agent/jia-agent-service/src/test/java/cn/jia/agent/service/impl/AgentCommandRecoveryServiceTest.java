@@ -252,13 +252,13 @@ class AgentCommandRecoveryServiceTest {
                 .reissueForReconnect(reconnectScope(), 10, NOW);
 
         assertEquals(0, stopped.reissued());
-        assertEquals("FAILED", exhausted.delivery.getStatus());
-        assertEquals("FAILED", exhausted.inbox.getStatus());
-        assertEquals("FAILED", exhausted.inbox.getResultStatus());
-        assertEquals(AgentCommandReissueServiceImpl.RECOVERY_ATTEMPTS_EXHAUSTED,
+        assertEquals("WAITING_AGENT", exhausted.delivery.getStatus());
+        assertEquals("WAITING_AGENT", exhausted.inbox.getStatus());
+        assertEquals("WAITING_AGENT", exhausted.inbox.getResultStatus());
+        assertEquals(AgentCommandReissueServiceImpl.AGENT_OFFLINE,
                 exhausted.delivery.getLastError());
-        assertEquals(List.of("delivery", "outbox", "previous", "inbox",
-                "failDelivery", "failInbox"), exhausted.operations);
+        assertEquals("MANUAL_TAKEOVER_REQUIRED", stopped.deferrals().getFirst().reason());
+        assertEquals(List.of("delivery", "outbox", "previous", "inbox"), exhausted.operations);
         assertFalse(exhausted.operations.contains("reissue"));
         assertEquals(null, exhausted.inserted);
 
@@ -269,10 +269,124 @@ class AgentCommandRecoveryServiceTest {
         deadline.delivery.setUpdateTime(EXPIRES - 4_000L);
         assertEquals(0, reissue(deadline, new PresenceDispatcher(true))
                 .reissueForReconnect(reconnectScope(), 10, EXPIRES - 3_000L).reissued());
-        assertEquals("FAILED", deadline.delivery.getStatus());
-        assertEquals(AgentCommandReissueServiceImpl.RECOVERY_DEADLINE_EXHAUSTED,
+        assertEquals("WAITING_AGENT", deadline.delivery.getStatus());
+        assertEquals(AgentCommandReissueServiceImpl.AGENT_OFFLINE,
                 deadline.delivery.getLastError());
         assertEquals(null, deadline.inserted);
+    }
+
+    @Test
+    void exhaustedSentAndHistoricalAttemptsKeepExactStateThenAcceptDirectOrParentTerminal() {
+        for (int attempt : new int[] {4, 6, 9, Integer.MAX_VALUE}) {
+            for (String correlation : List.of(M3, M2)) {
+                for (String terminal : List.of("SUCCEEDED", "FAILED", "REJECTED")) {
+                    RecordingDao dao = sentDao();
+                    setAutomaticReplay(dao, attempt, M3, M2, M1);
+                    byte[] before = sourceSnapshot(dao);
+                    AgentCommandReissueServiceImpl service = reissue(dao, new PresenceDispatcher(true));
+                    for (AgentCommandReissueScanResult result : List.of(
+                            service.reissueForReconnect(reconnectScope(), 10, NOW),
+                            service.reissueDue(10, 0, NOW))) {
+                        assertEquals(0, result.reissued());
+                        var observation = result.deferrals().getFirst();
+                        assertEquals("MANUAL_TAKEOVER_REQUIRED", observation.reason());
+                        assertEquals("tenant-a", observation.tenantId());
+                        assertEquals("client-a", observation.clientId());
+                        assertEquals("task-1", observation.taskId());
+                        assertEquals(null, observation.workItemId());
+                        assertEquals("agent-a", observation.targetAgentId());
+                        assertEquals(1L, observation.deliveryId());
+                        assertEquals(M3, observation.activeMessageId());
+                        assertEquals(attempt, observation.activeAttempt());
+                        assertEquals(dao.delivery.getVersion().longValue(), observation.deliveryVersion());
+                        assertEquals(NOW, observation.observedAt());
+                        assertEquals(EXPIRES, observation.expiresAt());
+                    }
+                    assertEquals(List.of("delivery", "outbox", "previous", "inbox",
+                            "delivery", "outbox", "previous", "inbox"), dao.operations);
+                    assertArrayEquals(before, sourceSnapshot(dao));
+                    assertEquals(null, dao.inserted);
+                    assertEquals(0, dao.ackMutations);
+
+                    AgentCommandAckServiceImpl ack = ackService(dao, enabledGate());
+                    for (String nonterminal : List.of("RECEIVED", "STARTED")) {
+                        assertThrows(AgentCommandAckRejectedException.class, () -> ack.acknowledge(
+                                ack("ambiguous-" + nonterminal, nonterminal, correlation), NOW + 1));
+                        assertArrayEquals(before, sourceSnapshot(dao));
+                    }
+                    assertEquals(AgentCommandAckResult.Kind.ADVANCED, ack.acknowledge(
+                            ack("actual-terminal", terminal, correlation), NOW + 2).kind());
+                    assertEquals(terminal, dao.delivery.getStatus());
+                    assertEquals(AgentCommandAckResult.Kind.PRIOR, ack.acknowledge(
+                            ack("terminal-duplicate", terminal, correlation), NOW + 3).kind());
+                    assertEquals(1, dao.ackMutations);
+                }
+            }
+        }
+    }
+
+    @Test
+    void deadlineDeferralKeepsSentAckEligibleAndObservationDoesNotAuthorizeManualReissue() {
+        RecordingDao dao = sentDao();
+        setAutomaticReplay(dao);
+        dao.delivery.setUpdateTime(EXPIRES - 4_000L);
+        byte[] before = sourceSnapshot(dao);
+        var service = reissue(dao, new PresenceDispatcher(true));
+        var scan = service.reissueForReconnect(reconnectScope(), 10, EXPIRES - 3_000L);
+        assertEquals("DEADLINE_EXHAUSTED", scan.deferrals().getFirst().reason());
+        assertEquals(EXPIRES, scan.deferrals().getFirst().policyBoundaryAt());
+        assertEquals(0, scan.reissued());
+        assertArrayEquals(before, sourceSnapshot(dao));
+        AgentCommandOperationRequest request = new AgentCommandOperationRequest(
+                "tenant-a", "client-a", 1L, "task-1", "agent-a", M2,
+                "operator-a", "approver-b", "incident recovery", "INC-E05");
+        assertEquals("MANUAL_REISSUE_DELIVERY_FORBIDDEN", assertThrows(RuntimeException.class,
+                () -> service.reissueManually(request, EXPIRES - 2_000L)).getMessage());
+        assertArrayEquals(before, sourceSnapshot(dao));
+        assertEquals(null, dao.inserted);
+        assertEquals(AgentCommandAckResult.Kind.ADVANCED,
+                ackService(dao, enabledGate()).acknowledge(
+                        ack("late-real-terminal", "SUCCEEDED", M1), EXPIRES - 1_000L).kind());
+    }
+
+    @Test
+    void deferralReadbackRequiresExactScopeAndUnpoisonedLockedSource() {
+        List<java.util.function.Consumer<RecordingDao>> poisons = List.of(
+                dao -> dao.delivery.setTenantId("tenant-other"),
+                dao -> dao.delivery.setClientId("client-other"),
+                dao -> dao.delivery.setTargetAgentId("agent-other"),
+                dao -> dao.delivery.setId(99L),
+                dao -> dao.delivery.setTaskId("task-other"),
+                dao -> dao.delivery.setWorkItemId("work-other"),
+                dao -> dao.outbox.setWirePayloadHash(new byte[32]));
+        for (var poison : poisons) {
+            RecordingDao dao = sentDao();
+            setAutomaticReplay(dao, 6, M3, M2, M1);
+            poison.accept(dao);
+            byte[] before = sourceSnapshot(dao);
+            var scan = reissue(dao, new PresenceDispatcher(true))
+                    .reissueForReconnect(reconnectScope(), 10, NOW);
+            assertEquals(0, scan.reissued());
+            assertEquals(List.of(), scan.deferrals());
+            assertArrayEquals(before, sourceSnapshot(dao));
+            assertEquals(null, dao.inserted);
+        }
+    }
+
+    private static byte[] sourceSnapshot(RecordingDao dao) {
+        try {
+            var bytes = new java.io.ByteArrayOutputStream();
+            try (var stream = new java.io.ObjectOutputStream(bytes)) {
+                stream.writeObject(dao.delivery);
+                stream.writeObject(dao.outbox);
+                stream.writeObject(dao.inbox);
+                stream.writeObject(dao.parentInbox);
+                stream.writeObject(dao.previousAttempts);
+            }
+            return bytes.toByteArray();
+        } catch (java.io.IOException invalidFixture) {
+            throw new AssertionError("Cannot snapshot recovery fixture", invalidFixture);
+        }
     }
 
     @Test
@@ -283,16 +397,18 @@ class AgentCommandRecoveryServiceTest {
                 "tenant-a", "client-a", 1L, "task-1", "agent-a", M1,
                 "operator-a", "approver-b", "incident recovery", "INC-42");
 
-        assertThrows(RuntimeException.class, () -> reissue(
-                deferred, new PresenceDispatcher(false)).reissueManually(request, NOW));
+        assertEquals("MANUAL_REISSUE_POLICY_DEFER", assertThrows(RuntimeException.class,
+                () -> reissue(deferred, new PresenceDispatcher(false))
+                        .reissueManually(request, NOW)).getMessage());
         assertFalse(deferred.operations.contains("manualReissue"));
         assertEquals(null, deferred.inserted);
 
         RecordingDao exhausted = manualSourceDao(
                 AgentCommandRecoveryPolicy.DEFAULT_MAX_TOTAL_ATTEMPTS);
         exhausted.delivery.setUpdateTime(NOW - 60_000L);
-        assertThrows(RuntimeException.class, () -> reissue(
-                exhausted, new PresenceDispatcher(false)).reissueManually(request, NOW));
+        assertEquals("MANUAL_REISSUE_POLICY_ATTEMPTS_EXHAUSTED", assertThrows(RuntimeException.class,
+                () -> reissue(exhausted, new PresenceDispatcher(false))
+                        .reissueManually(request, NOW)).getMessage());
         assertFalse(exhausted.operations.contains("manualReissue"));
         assertEquals(null, exhausted.inserted);
     }
@@ -1093,6 +1209,11 @@ class AgentCommandRecoveryServiceTest {
                     .setPublishedAt(NOW - 19).setVersion(2L);
             parent.setTenantId("tenant-a");
             parent.setClientId("client-a");
+            if (attempt > 2) {
+                parent.setReplayParentMessageId("grandparent-message")
+                        .setReplayRequesterId("agent-a")
+                        .setReplayReason(AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+            }
             dao.previousAttempts = List.of(parent);
         }
     }
@@ -1353,25 +1474,6 @@ class AgentCommandRecoveryServiceTest {
             this.approverId = approverId;
             this.reason = reason;
             return reissueRows;
-        }
-
-        @Override
-        public int failRecoveryDelivery(
-                AgentCommandDeliveryEntity delivery, String lastError, long now) {
-            operations.add("failDelivery");
-            delivery.setStatus("FAILED").setNextRetryAt(null).setLastError(lastError)
-                    .setVersion(delivery.getVersion() + 1).setUpdateTime(now);
-            return 1;
-        }
-
-        @Override
-        public int failRecoveryInbox(
-                AgentConsumerInboxEntity inbox, String lastError, long now) {
-            operations.add("failInbox");
-            inbox.setStatus("FAILED").setResultStatus("FAILED").setNextRetryAt(null)
-                    .setProcessedAt(now).setLastError(lastError)
-                    .setVersion(inbox.getVersion() + 1).setUpdateTime(now);
-            return 1;
         }
 
         @Override
