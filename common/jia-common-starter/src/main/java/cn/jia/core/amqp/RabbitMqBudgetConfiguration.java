@@ -9,10 +9,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.convert.DurationStyle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.time.Duration;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
@@ -25,14 +25,18 @@ public class RabbitMqBudgetConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "jia.rabbitmq.budget", name = "enabled", havingValue = "true")
     static BeanPostProcessor rabbitMqBudgetBeanPostProcessor(
-            @Value("${jia.rabbitmq.budget.connection-timeout}") Duration connectionTimeout,
-            @Value("${jia.rabbitmq.budget.handshake-timeout}") Duration handshakeTimeout,
-            @Value("${jia.rabbitmq.budget.channel-rpc-timeout}") Duration channelRpcTimeout,
-            @Value("${jia.rabbitmq.budget.channel-checkout-timeout}") Duration channelCheckoutTimeout,
-            @Value("${jia.rabbitmq.budget.receive-timeout}") Duration receiveTimeout,
-            @Value("${jia.rabbitmq.budget.reply-timeout}") Duration replyTimeout) {
-        RabbitMqWaitBudget budget = new RabbitMqWaitBudget(connectionTimeout, handshakeTimeout, channelRpcTimeout,
-                channelCheckoutTimeout, receiveTimeout, replyTimeout);
+            @Value("${jia.rabbitmq.budget.connection-timeout}") String connectionTimeout,
+            @Value("${jia.rabbitmq.budget.handshake-timeout}") String handshakeTimeout,
+            @Value("${jia.rabbitmq.budget.channel-rpc-timeout}") String channelRpcTimeout,
+            @Value("${jia.rabbitmq.budget.channel-checkout-timeout}") String channelCheckoutTimeout,
+            @Value("${jia.rabbitmq.budget.receive-timeout}") String receiveTimeout,
+            @Value("${jia.rabbitmq.budget.reply-timeout}") String replyTimeout) {
+        // This static post-processor is created before normal application converters.
+        // Parse explicit Boot duration syntax here rather than relying on early @Value conversion.
+        RabbitMqWaitBudget budget = new RabbitMqWaitBudget(
+                DurationStyle.detectAndParse(connectionTimeout), DurationStyle.detectAndParse(handshakeTimeout),
+                DurationStyle.detectAndParse(channelRpcTimeout), DurationStyle.detectAndParse(channelCheckoutTimeout),
+                DurationStyle.detectAndParse(receiveTimeout), DurationStyle.detectAndParse(replyTimeout));
         return new RabbitMqBudgetBeanPostProcessor(budget);
     }
 

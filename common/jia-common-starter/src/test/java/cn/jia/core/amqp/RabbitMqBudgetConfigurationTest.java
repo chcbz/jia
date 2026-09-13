@@ -73,12 +73,13 @@ class RabbitMqBudgetConfigurationTest {
         RabbitMqBudgetConfiguration.RabbitMqBudgetBeanPostProcessor processor = processor();
         NoNetworkConnectionFactory defaultNative = new NoNetworkConnectionFactory();
         NoNetworkConnectionFactory dedicatedNative = new NoNetworkConnectionFactory();
+        CachingConnectionFactory defaultFactory = new CachingConnectionFactory(defaultNative);
+        CachingConnectionFactory dedicatedFactory = new CachingConnectionFactory(dedicatedNative);
+        // Spring may set its recovery policy during construction; configure the baseline afterward.
         defaultNative.setAutomaticRecoveryEnabled(true);
         defaultNative.setTopologyRecoveryEnabled(true);
         dedicatedNative.setAutomaticRecoveryEnabled(true);
         dedicatedNative.setTopologyRecoveryEnabled(true);
-        CachingConnectionFactory defaultFactory = new CachingConnectionFactory(defaultNative);
-        CachingConnectionFactory dedicatedFactory = new CachingConnectionFactory(dedicatedNative);
         dedicatedFactory.setPublisherConfirmType(CachingConnectionFactory.ConfirmType.CORRELATED);
         dedicatedFactory.setPublisherReturns(true);
         dedicatedFactory.setChannelCacheSize(7);
