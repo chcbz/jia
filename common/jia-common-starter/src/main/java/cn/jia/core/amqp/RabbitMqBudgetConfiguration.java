@@ -5,13 +5,13 @@ import org.springframework.amqp.rabbit.connection.AbstractConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.BeansException;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.convert.DurationStyle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -24,20 +24,21 @@ public class RabbitMqBudgetConfiguration {
 
     @Bean
     @ConditionalOnProperty(prefix = "jia.rabbitmq.budget", name = "enabled", havingValue = "true")
-    static BeanPostProcessor rabbitMqBudgetBeanPostProcessor(
-            @Value("${jia.rabbitmq.budget.connection-timeout}") String connectionTimeout,
-            @Value("${jia.rabbitmq.budget.handshake-timeout}") String handshakeTimeout,
-            @Value("${jia.rabbitmq.budget.channel-rpc-timeout}") String channelRpcTimeout,
-            @Value("${jia.rabbitmq.budget.channel-checkout-timeout}") String channelCheckoutTimeout,
-            @Value("${jia.rabbitmq.budget.receive-timeout}") String receiveTimeout,
-            @Value("${jia.rabbitmq.budget.reply-timeout}") String replyTimeout) {
-        // This static post-processor is created before normal application converters.
-        // Parse explicit Boot duration syntax here rather than relying on early @Value conversion.
+    static BeanPostProcessor rabbitMqBudgetBeanPostProcessor(Environment environment) {
+        // A static post-processor can be instantiated before embedded placeholder/conversion services.
+        // Read explicit values directly from the already available Environment instead.
         RabbitMqWaitBudget budget = new RabbitMqWaitBudget(
-                DurationStyle.detectAndParse(connectionTimeout), DurationStyle.detectAndParse(handshakeTimeout),
-                DurationStyle.detectAndParse(channelRpcTimeout), DurationStyle.detectAndParse(channelCheckoutTimeout),
-                DurationStyle.detectAndParse(receiveTimeout), DurationStyle.detectAndParse(replyTimeout));
+                configuredDuration(environment, "connection-timeout"),
+                configuredDuration(environment, "handshake-timeout"),
+                configuredDuration(environment, "channel-rpc-timeout"),
+                configuredDuration(environment, "channel-checkout-timeout"),
+                configuredDuration(environment, "receive-timeout"),
+                configuredDuration(environment, "reply-timeout"));
         return new RabbitMqBudgetBeanPostProcessor(budget);
+    }
+
+    private static java.time.Duration configuredDuration(Environment environment, String name) {
+        return DurationStyle.detectAndParse(environment.getRequiredProperty("jia.rabbitmq.budget." + name));
     }
 
     static final class RabbitMqBudgetBeanPostProcessor implements BeanPostProcessor {

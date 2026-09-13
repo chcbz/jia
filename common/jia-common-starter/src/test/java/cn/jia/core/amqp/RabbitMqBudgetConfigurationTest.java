@@ -46,8 +46,8 @@ class RabbitMqBudgetConfigurationTest {
                         "jia.rabbitmq.budget.receive-timeout=10s",
                         "jia.rabbitmq.budget.reply-timeout=90s")
                 .run(context -> {
+                    assertNull(context.getStartupFailure(), () -> String.valueOf(context.getStartupFailure()));
                     assertTrue(context.containsBean("rabbitMqBudgetBeanPostProcessor"));
-                    assertNull(context.getStartupFailure());
                 });
     }
 
