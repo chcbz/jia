@@ -19,6 +19,7 @@ public class AgentWorkItemReassignmentException extends RuntimeException {
     }
 
     public enum Reason {
+        TRANSPORT_DISABLED,
         INVALID_REQUEST,
         NOT_FOUND_OR_FORBIDDEN,
         VERSION_CONFLICT,

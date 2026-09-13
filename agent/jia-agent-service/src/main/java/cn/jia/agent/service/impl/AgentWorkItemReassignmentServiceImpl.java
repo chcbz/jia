@@ -41,6 +41,7 @@ import cn.jia.agent.state.AgentTaskStatus;
 import cn.jia.agent.state.AgentTaskWorkItemStatus;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -99,12 +100,12 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
             AgentIdentityService identityService,
             AgentService agentService,
             AgentTaskEventWriter eventWriter,
-            AgentCommandTransportWriter commandWriter,
+            ObjectProvider<AgentCommandTransportWriter> commandWriter,
             AgentWorkItemLeaseService leaseService,
             @Value("${jia.agent.work-item-reassignment.lease-duration-ms:300000}")
             long leaseDurationMillis) {
         this(reassignmentDao, memberDao, workItemDao, mutationTransaction, identityService,
-                agentService, eventWriter, commandWriter, leaseService,
+                agentService, eventWriter, commandWriter.getIfAvailable(), leaseService,
                 System::currentTimeMillis, AgentWorkItemReassignmentServiceImpl::secureToken,
                 leaseDurationMillis);
     }
@@ -127,7 +128,9 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         this.identityService = Objects.requireNonNull(identityService);
         this.agentService = Objects.requireNonNull(agentService);
         this.eventWriter = Objects.requireNonNull(eventWriter);
-        this.commandWriter = Objects.requireNonNull(commandWriter);
+        // The transport is intentionally absent when command outbox is disabled.
+        // Keep the facade available, but reject operations before any storage access.
+        this.commandWriter = commandWriter;
         this.leaseService = Objects.requireNonNull(leaseService);
         this.clock = Objects.requireNonNull(clock);
         this.tokenGenerator = Objects.requireNonNull(tokenGenerator);
@@ -137,12 +140,20 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         this.leaseDurationMillis = leaseDurationMillis;
     }
 
+    private void requireTransportAvailable() {
+        if (commandWriter == null) {
+            throw failure(Reason.TRANSPORT_DISABLED,
+                    "Work item reassignment transport is disabled");
+        }
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemReassignmentResultDTO reassign(
             String tenantId, String clientId, String operatorSubject,
             String coordinatorAgentId, String taskId, String workItemId,
             String idempotencyKey, AgentWorkItemReassignmentRequestDTO request) {
+        requireTransportAvailable();
         RequiredRequest required = requireRequest(tenantId, clientId, operatorSubject,
                 coordinatorAgentId, taskId, workItemId, idempotencyKey, request);
         return withRoot(tenantId, clientId, taskId, root -> reassignLocked(
@@ -335,6 +346,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
             String tenantId, String clientId, String targetAgentId,
             String taskId, String workItemId, String reassignmentId,
             AgentWorkItemReassignmentLeaseRequestDTO request, LeaseOperation operation) {
+        requireTransportAvailable();
         requireScope(tenantId, clientId, taskId, workItemId);
         requireAgent(targetAgentId, "targetAgentId");
         if (operation == null || !exact(reassignmentId, 100) || request == null

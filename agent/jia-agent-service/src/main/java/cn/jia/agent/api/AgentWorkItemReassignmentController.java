@@ -149,7 +149,7 @@ public class AgentWorkItemReassignmentController {
                     "WORK_ITEM_ATTEMPTS_EXHAUSTED", "No reassignment attempt remains");
             case INVALID_SOURCE_COMMAND -> error(HttpStatus.CONFLICT,
                     "WORK_ITEM_SOURCE_COMMAND_INVALID", "Source command is not current");
-            case INVALID_PERSISTED_STATE -> error(HttpStatus.SERVICE_UNAVAILABLE,
+            case TRANSPORT_DISABLED, INVALID_PERSISTED_STATE -> error(HttpStatus.SERVICE_UNAVAILABLE,
                     "WORK_ITEM_REASSIGNMENT_UNAVAILABLE",
                     "Work item reassignment is temporarily unavailable");
         };
