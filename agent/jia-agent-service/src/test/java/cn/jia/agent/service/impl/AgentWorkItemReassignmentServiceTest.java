@@ -160,6 +160,9 @@ class AgentWorkItemReassignmentServiceTest {
         assertFalse(commandBytes.contains("authoritative_lease_expired"));
         AgentHallCommandPayload payload = (AgentHallCommandPayload) draft.getValue().payload();
         assertEquals("evt_reassigned", payload.triggerEventId());
+        assertFalse(payload.instruction().codePoints().anyMatch(Character::isISOControl));
+        assertTrue(payload.instruction().contains(workItem.getTitle()));
+        assertTrue(payload.instruction().contains(workItem.getDescription()));
     }
 
     @Test
@@ -289,8 +292,8 @@ class AgentWorkItemReassignmentServiceTest {
                         () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-runtime", request(TARGET))).getReason());
 
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, TARGET))
-                .thenReturn(runtime(TARGET));
+        org.mockito.Mockito.doReturn(runtime(TARGET)).when(agentService)
+                .requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, TARGET);
         org.mockito.Mockito.doThrow(new IllegalStateException("hosting denied"))
                 .when(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,

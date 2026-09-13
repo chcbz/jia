@@ -17,8 +17,7 @@ public interface AgentWorkItemReassignmentMapper {
             attempt_count, max_attempts, tenant_id, client_id, create_time, update_time
             """;
 
-    @Select("""
-            SELECT """ + RECEIPT_COLUMNS + """
+    @Select("SELECT " + RECEIPT_COLUMNS + """
             FROM agent_work_item_reassignment
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
               AND task_id=#{taskId} AND work_item_id=#{workItemId}
@@ -40,8 +39,7 @@ public interface AgentWorkItemReassignmentMapper {
             @Param("taskId") String taskId, @Param("workItemId") String workItemId,
             @Param("reassignmentId") String reassignmentId);
 
-    @Select("""
-            SELECT """ + RECEIPT_COLUMNS + """
+    @Select("SELECT " + RECEIPT_COLUMNS + """
             FROM agent_work_item_reassignment
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
               AND task_id=#{taskId} AND work_item_id=#{workItemId}

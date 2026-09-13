@@ -19,6 +19,8 @@ class AgentWorkItemReassignmentMapperContractTest {
     @Test
     void receiptIdentityIsTaskRootSerializedExactScopedAndTargetIndependent() throws Exception {
         String receipt = sql(AgentWorkItemReassignmentMapper.class, "selectReceiptForUpdate");
+        assertTrue(receipt.startsWith("select id, "), receipt);
+        assertTrue(receipt.contains("update_time from agent_work_item_reassignment"), receipt);
         assertTrue(receipt.endsWith("for update"));
         for (String column : new String[] {
                 "tenant_id", "client_id", "task_id", "work_item_id", "reassignment_id"}) {
@@ -26,6 +28,7 @@ class AgentWorkItemReassignmentMapperContractTest {
         }
         String latest = sql(AgentWorkItemReassignmentMapper.class,
                 "selectLatestReceiptForUpdate");
+        assertTrue(latest.startsWith("select id, "), latest);
         assertTrue(latest.contains("order by id desc limit 1 for update"));
         assertFalse(receipt.contains("target_agent_id=#{targetagentid}"));
     }

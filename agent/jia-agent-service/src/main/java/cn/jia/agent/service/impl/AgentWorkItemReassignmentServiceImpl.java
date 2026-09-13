@@ -809,7 +809,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
 
     private String boundedInstruction(String title, String description) {
         String value = "Execute reassigned work item: " + title
-                + (description == null || description.isBlank() ? "" : "\n" + description);
+                + (description == null || description.isBlank() ? "" : " | " + description);
         return codePointPrefix(value, 8_000);
     }
 

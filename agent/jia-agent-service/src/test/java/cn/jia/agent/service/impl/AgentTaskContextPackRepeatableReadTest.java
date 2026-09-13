@@ -39,7 +39,7 @@ class AgentTaskContextPackRepeatableReadTest {
         try (AnnotationConfigApplicationContext context =
                      new AnnotationConfigApplicationContext(Config.class)) {
             JdbcTemplate jdbc = context.getBean(JdbcTemplate.class);
-            jdbc.update("INSERT INTO f01_snapshot(id, value) VALUES (1, 'old')");
+            jdbc.update("INSERT INTO f01_snapshot(id, snapshot_value) VALUES (1, 'old')");
 
             var pack = context.getBean(AgentTaskContextPackServiceImpl.class)
                     .generate("tenant", "client", "1", "actor", "1");
@@ -48,7 +48,7 @@ class AgentTaskContextPackRepeatableReadTest {
             assertEquals("old", pack.getAuthoritativeArtifacts()
                     .getItems().get(0).getTitle().getValue());
             assertEquals("new", jdbc.queryForObject(
-                    "SELECT value FROM f01_snapshot WHERE id=1", String.class));
+                    "SELECT snapshot_value FROM f01_snapshot WHERE id=1", String.class));
         }
     }
 
@@ -69,7 +69,7 @@ class AgentTaskContextPackRepeatableReadTest {
         JdbcTemplate jdbcTemplate(DataSource dataSource) {
             JdbcTemplate jdbc = new JdbcTemplate(dataSource);
             jdbc.execute("DROP TABLE IF EXISTS f01_snapshot");
-            jdbc.execute("CREATE TABLE f01_snapshot(id INT PRIMARY KEY, value VARCHAR(20))");
+            jdbc.execute("CREATE TABLE f01_snapshot(id INT PRIMARY KEY, snapshot_value VARCHAR(20))");
             return jdbc;
         }
 
@@ -81,7 +81,7 @@ class AgentTaskContextPackRepeatableReadTest {
         @Bean
         AgentTaskWorkspaceService workspaceService(JdbcTemplate jdbc) {
             return (tenantId, clientId, taskId, actorAgentId) -> {
-                jdbc.queryForObject("SELECT value FROM f01_snapshot WHERE id=1", String.class);
+                jdbc.queryForObject("SELECT snapshot_value FROM f01_snapshot WHERE id=1", String.class);
                 AgentTaskWorkspaceDTO result = new AgentTaskWorkspaceDTO();
                 AgentTaskWorkspaceDTO.Task task = new AgentTaskWorkspaceDTO.Task();
                 task.setTaskId(taskId);
@@ -101,7 +101,7 @@ class AgentTaskContextPackRepeatableReadTest {
                 JdbcTemplate jdbc, DataSource dataSource) {
             return (tenantId, clientId, taskId) -> {
                 String value = jdbc.queryForObject(
-                        "SELECT value FROM f01_snapshot WHERE id=1", String.class);
+                        "SELECT snapshot_value FROM f01_snapshot WHERE id=1", String.class);
                 if (updated.compareAndSet(false, true)) {
                     updateOutsideTransaction(dataSource);
                 }
@@ -132,7 +132,7 @@ class AgentTaskContextPackRepeatableReadTest {
                         String tenantId, String clientId, String taskId,
                         String actorAgentId, String workItemId, Integer limit) {
                     String value = jdbc.queryForObject(
-                            "SELECT value FROM f01_snapshot WHERE id=1", String.class);
+                            "SELECT snapshot_value FROM f01_snapshot WHERE id=1", String.class);
                     AgentTaskArtifactOutcomeViewDTO artifact =
                             new AgentTaskArtifactOutcomeViewDTO();
                     artifact.setArtifactId("artifact");
@@ -192,7 +192,7 @@ class AgentTaskContextPackRepeatableReadTest {
         private static void updateOutsideTransaction(DataSource dataSource) {
             try (Connection connection = dataSource.getConnection();
                  PreparedStatement statement = connection.prepareStatement(
-                         "UPDATE f01_snapshot SET value='new' WHERE id=1")) {
+                         "UPDATE f01_snapshot SET snapshot_value='new' WHERE id=1")) {
                 connection.setAutoCommit(true);
                 assertEquals(1, statement.executeUpdate());
             } catch (Exception exception) {
