@@ -5,32 +5,40 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.ClientHttpResponse;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestTemplate;
 
-import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 
 /**
- * Single-shot SMS HTTP boundary. Explicit transport timeouts remain enforced,
- * while the former API/operation total budget is retained only as a safe slow-call observation.
+ * Single-shot SMS HTTP boundary using the application's shared configured RestTemplate.
+ * Optional SDK/mail overrides and slow-call observations never shorten request work.
  * Calls are rejected while a database transaction is active.
  */
 @Component
 public class SmsExternalHttpClient {
     private static final Logger log = LoggerFactory.getLogger(SmsExternalHttpClient.class);
 
+    private final RestTemplate restTemplate;
     private final SmsExternalHttpTimeouts timeouts;
 
+    @Autowired
+    public SmsExternalHttpClient(@Qualifier("restTemplate") RestTemplate restTemplate,
+            SmsExternalHttpTimeouts timeouts) {
+        this.restTemplate = Objects.requireNonNull(restTemplate, "restTemplate");
+        this.timeouts = Objects.requireNonNull(timeouts, "timeouts");
+        timeouts.validate();
+    }
+
+    /** Compatibility constructor for non-Spring callers; production injects the shared configured RestTemplate. */
     public SmsExternalHttpClient(SmsExternalHttpTimeouts timeouts) {
-        this.timeouts = timeouts;
+        this(new RestTemplate(), timeouts);
     }
 
     public OperationBudget beginOperation() {
@@ -68,32 +76,17 @@ public class SmsExternalHttpClient {
     }
 
     private <T> T observedHttpCall(OperationBudget budget, Function<RestTemplate, T> call) {
-        RestTemplate template = restTemplate(budget);
+        prepareSdkCall(budget);
         long startedNanos = budget.markCallStarted();
         String outcome = "success";
         try {
-            return call.apply(template);
+            return call.apply(restTemplate);
         } catch (RuntimeException | Error failure) {
             outcome = "failure";
             throw failure;
         } finally {
             budget.observeIfSlow("http", startedNanos, outcome);
         }
-    }
-
-    private RestTemplate restTemplate(OperationBudget budget) {
-        CallTimeouts callTimeouts = prepareSdkCall(budget);
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(callTimeouts.connectTimeoutMillis());
-        factory.setReadTimeout(callTimeouts.readTimeoutMillis());
-        RestTemplate template = new RestTemplate(factory);
-        template.setErrorHandler(new ResponseErrorHandler() {
-            @Override
-            public boolean hasError(ClientHttpResponse response) throws IOException {
-                return false;
-            }
-        });
-        return template;
     }
 
     private void requireOutsideTransaction() {
@@ -109,7 +102,10 @@ public class SmsExternalHttpClient {
         return response;
     }
 
-    public record CallTimeouts(int connectionRequestTimeoutMillis, int connectTimeoutMillis, int readTimeoutMillis) {
+    public record CallTimeouts(
+            Integer connectionRequestTimeoutMillis,
+            Integer connectTimeoutMillis,
+            Integer readTimeoutMillis) {
     }
 
     public static final class OperationBudget {
@@ -133,9 +129,13 @@ public class SmsExternalHttpClient {
         void observeIfSlow(String transport, long startedNanos, String outcome) {
             long elapsedNanos = monotonicClock.getAsLong() - startedNanos;
             long elapsedMillis = elapsedNanos <= 0 ? 0 : TimeUnit.NANOSECONDS.toMillis(elapsedNanos);
-            if (elapsedMillis >= timeouts.getTotalTimeoutMillis()) {
+            Integer thresholdMillis = timeouts.getTotalTimeoutMillis();
+            if (thresholdMillis != null && elapsedMillis >= thresholdMillis) {
                 log.warn("Slow SMS external call observed: transport={}, elapsedMs={}, thresholdMs={}, outcome={}",
-                        transport, elapsedMillis, timeouts.getTotalTimeoutMillis(), outcome);
+                        transport, elapsedMillis, thresholdMillis, outcome);
+            } else {
+                log.debug("SMS external call observed: transport={}, elapsedMs={}, outcome={}",
+                        transport, elapsedMillis, outcome);
             }
         }
     }

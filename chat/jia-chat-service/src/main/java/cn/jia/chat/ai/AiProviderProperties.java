@@ -10,8 +10,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class AiProviderProperties {
     private boolean enabled;
     private Provider provider = Provider.DISABLED;
-    /** Explicit connection-establishment protection enforced by the provider transport. */
-    private Duration connectBudget = Duration.ofMillis(500);
+    /** Optional connection override; absent means inherit the provider transport configuration. */
+    private Duration connectBudget;
     /** Backward-compatible property name; this value is observation-only. */
     private Duration firstTokenBudget = Duration.ofMillis(2500);
     /** Backward-compatible property name; this value is observation-only. */
@@ -58,12 +58,17 @@ public class AiProviderProperties {
     }
 
     public void validate() {
-        requirePositive("connect-budget", connectBudget);
+        if (connectBudget != null) {
+            requirePositive("connect-budget", connectBudget);
+            if (connectBudget.toMillis() == 0) {
+                throw invalid("connect-budget must be representable in milliseconds");
+            }
+            if (connectBudget.toMillis() > Integer.MAX_VALUE) {
+                throw invalid("connect-budget is too large for the provider transport");
+            }
+        }
         requirePositive("first-token-budget", firstTokenBudget);
         requirePositive("total-budget", totalBudget);
-        if (connectBudget.toMillis() > Integer.MAX_VALUE) {
-            throw invalid("connect-budget is too large for the provider transport");
-        }
         provider = Objects.requireNonNull(provider, "provider");
         if (!enabled && provider != Provider.DISABLED) {
             throw invalid("provider must remain disabled while AI is disabled");
@@ -87,7 +92,7 @@ public class AiProviderProperties {
     public String toString() {
         return "AiProviderProperties[enabled=" + enabled
                 + ", provider=" + provider.id
-                + ", connectBudget=" + connectBudget
+                + ", connectTimeoutOverride=" + connectBudget
                 + ", firstTokenObservationThreshold=" + firstTokenBudget
                 + ", totalObservationThreshold=" + totalBudget + "]";
     }

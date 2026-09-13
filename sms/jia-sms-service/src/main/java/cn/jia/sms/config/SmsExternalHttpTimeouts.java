@@ -4,43 +4,52 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/** Explicit per-transport protections plus a non-enforcing slow-call observation threshold. */
+/**
+ * Optional SMS transport overrides plus a non-enforcing slow-call observation threshold.
+ * Transport defaults inherit existing clients; the threshold only controls warning visibility.
+ */
 @Component
 public class SmsExternalHttpTimeouts {
-    @Value("${sms.external-http.connection-request-timeout-ms:250}")
-    private int connectionRequestTimeoutMillis = 250;
+    @Value("${sms.external-http.connection-request-timeout-ms:#{null}}")
+    private Integer connectionRequestTimeoutMillis;
 
-    @Value("${sms.external-http.connect-timeout-ms:500}")
-    private int connectTimeoutMillis = 500;
+    @Value("${sms.external-http.connect-timeout-ms:#{null}}")
+    private Integer connectTimeoutMillis;
 
-    @Value("${sms.external-http.read-timeout-ms:1750}")
-    private int readTimeoutMillis = 1750;
+    @Value("${sms.external-http.read-timeout-ms:#{null}}")
+    private Integer readTimeoutMillis;
 
-    /** Backward-compatible property name; this threshold is observation-only. */
+    /** Backward-compatible property name; this default is observation-only and never cancels work. */
     @Value("${sms.external-http.total-timeout-ms:2500}")
-    private int totalTimeoutMillis = 2500;
+    private Integer totalTimeoutMillis = 2500;
 
     @PostConstruct
     public void validate() {
-        if (connectionRequestTimeoutMillis <= 0 || connectTimeoutMillis <= 0 || readTimeoutMillis <= 0
-                || totalTimeoutMillis <= 0) {
-            throw new IllegalStateException("SMS external HTTP timeouts and observation threshold must be positive");
+        requirePositiveIfConfigured("connection-request-timeout-ms", connectionRequestTimeoutMillis);
+        requirePositiveIfConfigured("connect-timeout-ms", connectTimeoutMillis);
+        requirePositiveIfConfigured("read-timeout-ms", readTimeoutMillis);
+        requirePositiveIfConfigured("total-timeout-ms", totalTimeoutMillis);
+    }
+
+    private void requirePositiveIfConfigured(String property, Integer value) {
+        if (value != null && value <= 0) {
+            throw new IllegalStateException("sms.external-http." + property + " must be positive when configured");
         }
     }
 
-    public int getConnectionRequestTimeoutMillis() {
+    public Integer getConnectionRequestTimeoutMillis() {
         return connectionRequestTimeoutMillis;
     }
 
-    public int getConnectTimeoutMillis() {
+    public Integer getConnectTimeoutMillis() {
         return connectTimeoutMillis;
     }
 
-    public int getReadTimeoutMillis() {
+    public Integer getReadTimeoutMillis() {
         return readTimeoutMillis;
     }
 
-    public int getTotalTimeoutMillis() {
+    public Integer getTotalTimeoutMillis() {
         return totalTimeoutMillis;
     }
 }

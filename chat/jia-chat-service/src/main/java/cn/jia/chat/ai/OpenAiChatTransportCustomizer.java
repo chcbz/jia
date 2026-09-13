@@ -6,17 +6,22 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.openai.http.okhttp.SpringAiOpenAiHttpClient;
 
-/** Limits only chat connection establishment; audio and other OpenAI clients retain their own boundaries. */
+/** Applies an explicitly configured chat connection timeout; otherwise the provider transport remains unchanged. */
 final class OpenAiChatTransportCustomizer implements OpenAiHttpClientBuilderCustomizer {
-    private final int connectTimeoutMillis;
+    private final Integer connectTimeoutMillis;
 
     OpenAiChatTransportCustomizer(AiProviderProperties properties) {
-        long millis = properties.getConnectBudget().toMillis();
-        this.connectTimeoutMillis = Math.toIntExact(millis);
+        properties.validate();
+        this.connectTimeoutMillis = properties.getConnectBudget() == null
+                ? null
+                : Math.toIntExact(properties.getConnectBudget().toMillis());
     }
 
     @Override
     public void customize(SpringAiOpenAiHttpClient.Builder builder) {
+        if (connectTimeoutMillis == null) {
+            return;
+        }
         builder.interceptor(chain -> {
             if (!isChatPath(chain.request().url().encodedPath())) {
                 return chain.proceed(chain.request());
@@ -28,6 +33,14 @@ final class OpenAiChatTransportCustomizer implements OpenAiHttpClientBuilderCust
                 throw exception;
             }
         });
+    }
+
+    boolean hasConnectTimeoutOverride() {
+        return connectTimeoutMillis != null;
+    }
+
+    Integer connectTimeoutMillis() {
+        return connectTimeoutMillis;
     }
 
     static boolean isChatPath(String path) {

@@ -10,7 +10,7 @@ import javax.mail.internet.InternetAddress;
 import javax.mail.internet.MimeMessage;
 import java.util.Properties;
 
-/** Single-shot SMTP boundary using request-local properties and the remaining SMS budget. */
+/** Single-shot SMTP boundary inheriting existing mail properties unless an override is explicitly configured. */
 @Component
 public class SmsExternalEmailClient {
     private final SmsExternalHttpClient externalHttpClient;
@@ -24,13 +24,7 @@ public class SmsExternalEmailClient {
         SmsExternalHttpClient.CallTimeouts callTimeouts = externalHttpClient.prepareSdkCall(budget);
         long startedNanos = budget.markCallStarted();
         String outcome = "success";
-        Properties properties = new Properties();
-        properties.setProperty("mail.smtp.host", smtpHost);
-        properties.setProperty("mail.smtp.auth", "true");
-        properties.setProperty("mail.smtp.connectiontimeout", Integer.toString(callTimeouts.connectTimeoutMillis()));
-        properties.setProperty("mail.smtp.timeout", Integer.toString(callTimeouts.readTimeoutMillis()));
-        properties.setProperty("mail.smtp.writetimeout",
-                Integer.toString(callTimeouts.connectionRequestTimeoutMillis()));
+        Properties properties = smtpProperties(smtpHost, System.getProperties(), callTimeouts);
 
         Transport transport = null;
         try {
@@ -56,6 +50,23 @@ public class SmsExternalEmailClient {
         } finally {
             closeQuietly(transport);
             budget.observeIfSlow("smtp", startedNanos, outcome);
+        }
+    }
+
+    static Properties smtpProperties(String smtpHost, Properties existingProperties,
+            SmsExternalHttpClient.CallTimeouts overrides) {
+        Properties properties = new Properties(existingProperties);
+        properties.setProperty("mail.smtp.host", smtpHost);
+        properties.setProperty("mail.smtp.auth", "true");
+        setIfConfigured(properties, "mail.smtp.connectiontimeout", overrides.connectTimeoutMillis());
+        setIfConfigured(properties, "mail.smtp.timeout", overrides.readTimeoutMillis());
+        setIfConfigured(properties, "mail.smtp.writetimeout", overrides.connectionRequestTimeoutMillis());
+        return properties;
+    }
+
+    private static void setIfConfigured(Properties properties, String key, Integer value) {
+        if (value != null) {
+            properties.setProperty(key, Integer.toString(value));
         }
     }
 

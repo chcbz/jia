@@ -13,24 +13,29 @@ import org.springframework.mock.env.MockEnvironment;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AiProviderConfigurationTest {
     @Test
-    void defaultsAreDisabledAndSlowThresholdsDoNotConstrainTransportOrdering() {
+    void defaultsInheritProviderConnectionSettingsAndSlowThresholdsRemainObservational() {
         AiProviderProperties properties = new AiProviderProperties();
         properties.validate();
 
         assertFalse(properties.isEnabled());
         assertEquals(AiProviderProperties.Provider.DISABLED, properties.getProvider());
-        assertEquals(Duration.ofMillis(500), properties.getConnectBudget());
+        assertNull(properties.getConnectBudget());
+        assertFalse(new OpenAiChatTransportCustomizer(properties).hasConnectTimeoutOverride());
         assertEquals(Duration.ofMillis(2500), properties.getFirstTokenBudget());
         assertEquals(Duration.ofSeconds(25), properties.getTotalBudget());
 
         properties.setConnectBudget(Duration.ofSeconds(3));
         assertTrue(properties.getConnectBudget().compareTo(properties.getFirstTokenBudget()) > 0);
         properties.validate();
+        OpenAiChatTransportCustomizer customizer = new OpenAiChatTransportCustomizer(properties);
+        assertTrue(customizer.hasConnectTimeoutOverride());
+        assertEquals(Integer.valueOf(3000), customizer.connectTimeoutMillis());
     }
 
     @Test

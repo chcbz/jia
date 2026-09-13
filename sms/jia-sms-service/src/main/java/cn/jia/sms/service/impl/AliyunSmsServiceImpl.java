@@ -35,6 +35,9 @@ public class AliyunSmsServiceImpl implements SmsServiceProvider {
     private String domain;
     
     private static final String PRODUCT = "Dysmsapi";
+    // Exact pre-PERF values formerly set through sun.net.client.default* properties.
+    private static final int LEGACY_CONNECT_TIMEOUT_MILLIS = 10_000;
+    private static final int LEGACY_READ_TIMEOUT_MILLIS = 10_000;
 
     private final SmsExternalHttpClient externalHttpClient;
 
@@ -54,9 +57,13 @@ public class AliyunSmsServiceImpl implements SmsServiceProvider {
         // Bind SDK timeouts to this call instead of changing JVM-wide defaults.
         SmsExternalHttpClient.CallTimeouts callTimeouts = externalHttpClient.prepareSdkCall(budget);
         HttpClientConfig httpClientConfig = HttpClientConfig.getDefault();
-        httpClientConfig.setConnectionTimeoutMillis(callTimeouts.connectTimeoutMillis());
-        httpClientConfig.setReadTimeoutMillis(callTimeouts.readTimeoutMillis());
-        httpClientConfig.setWriteTimeoutMillis(callTimeouts.connectionRequestTimeoutMillis());
+        httpClientConfig.setConnectionTimeoutMillis(callTimeouts.connectTimeoutMillis() == null
+                ? LEGACY_CONNECT_TIMEOUT_MILLIS : callTimeouts.connectTimeoutMillis());
+        httpClientConfig.setReadTimeoutMillis(callTimeouts.readTimeoutMillis() == null
+                ? LEGACY_READ_TIMEOUT_MILLIS : callTimeouts.readTimeoutMillis());
+        if (callTimeouts.connectionRequestTimeoutMillis() != null) {
+            httpClientConfig.setWriteTimeoutMillis(callTimeouts.connectionRequestTimeoutMillis());
+        }
 
         // 初始化ascClient
         DefaultProfile profile = DefaultProfile.getProfile(endpoint, accessKeyId, accessKeySecret);

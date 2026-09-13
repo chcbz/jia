@@ -10,8 +10,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.ResponseEntity;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -20,8 +22,13 @@ import java.util.function.LongSupplier;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class SmsExternalHttpTimeoutsTest {
     @AfterEach
@@ -30,19 +37,22 @@ class SmsExternalHttpTimeoutsTest {
     }
 
     @Test
-    void defaultsPreserveExplicitTransportTimeouts() {
+    void defaultsDoNotInstallPerfAddedTransportOverrides() {
         SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
 
         assertDoesNotThrow(timeouts::validate);
-        assertEquals(250, timeouts.getConnectionRequestTimeoutMillis());
-        assertEquals(500, timeouts.getConnectTimeoutMillis());
-        assertEquals(1750, timeouts.getReadTimeoutMillis());
-        assertEquals(2500, timeouts.getTotalTimeoutMillis());
+        assertNull(timeouts.getConnectionRequestTimeoutMillis());
+        assertNull(timeouts.getConnectTimeoutMillis());
+        assertNull(timeouts.getReadTimeoutMillis());
+        assertEquals(Integer.valueOf(2500), timeouts.getTotalTimeoutMillis());
     }
 
     @Test
-    void formerTotalBudgetIsObservationOnlyAndDoesNotShrinkTransportTimeouts() {
+    void explicitOverridesAreNotShrunkByElapsedOrRequestDeadlineState() {
         SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
+        ReflectionTestUtils.setField(timeouts, "connectionRequestTimeoutMillis", 250);
+        ReflectionTestUtils.setField(timeouts, "connectTimeoutMillis", 500);
+        ReflectionTestUtils.setField(timeouts, "readTimeoutMillis", 1750);
         ReflectionTestUtils.setField(timeouts, "totalTimeoutMillis", 1);
         timeouts.validate();
         MutableClock clock = new MutableClock();
@@ -50,37 +60,40 @@ class SmsExternalHttpTimeoutsTest {
                 new SmsExternalHttpClient.OperationBudget(timeouts, clock);
         clock.advanceMillis(10_000);
 
-        SmsExternalHttpClient.CallTimeouts callTimeouts =
-                new SmsExternalHttpClient(timeouts).prepareSdkCall(observation);
-
-        assertEquals(250, callTimeouts.connectionRequestTimeoutMillis());
-        assertEquals(500, callTimeouts.connectTimeoutMillis());
-        assertEquals(1750, callTimeouts.readTimeoutMillis());
-    }
-
-    @Test
-    void exhaustedRequestDeadlineDoesNotRefuseSmsDependencyWork() {
-        SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
-        SmsExternalHttpClient.OperationBudget observation =
-                new SmsExternalHttpClient.OperationBudget(timeouts, () -> 0L);
-
-        SmsExternalHttpClient client = new SmsExternalHttpClient(timeouts);
+        SmsExternalHttpClient client = new SmsExternalHttpClient(mock(RestTemplate.class), timeouts);
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
             SmsExternalHttpClient.CallTimeouts callTimeouts = client.prepareSdkCall(observation);
-            assertEquals(timeouts.getConnectTimeoutMillis(), callTimeouts.connectTimeoutMillis());
-            assertEquals(timeouts.getReadTimeoutMillis(), callTimeouts.readTimeoutMillis());
+            assertEquals(Integer.valueOf(250), callTimeouts.connectionRequestTimeoutMillis());
+            assertEquals(Integer.valueOf(500), callTimeouts.connectTimeoutMillis());
+            assertEquals(Integer.valueOf(1750), callTimeouts.readTimeoutMillis());
         }
     }
 
     @Test
-    void slowObservationContainsNoUrlOrPayload() {
+    void httpCallsReuseSharedConfiguredRestTemplate() {
         SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
-        ReflectionTestUtils.setField(timeouts, "totalTimeoutMillis", 20);
+        RestTemplate sharedRestTemplate = mock(RestTemplate.class);
+        when(sharedRestTemplate.postForEntity("https://client.example/sms", HttpEntity.EMPTY, String.class))
+                .thenReturn(ResponseEntity.ok("ok"));
+        SmsExternalHttpClient client = new SmsExternalHttpClient(sharedRestTemplate, timeouts);
+        SmsExternalHttpClient.OperationBudget observation = client.beginOperation();
+
+        ResponseEntity<String> response = client.postForEntity(
+                observation, "https://client.example/sms", HttpEntity.EMPTY, String.class);
+
+        assertEquals("ok", response.getBody());
+        verify(sharedRestTemplate).postForEntity(
+                "https://client.example/sms", HttpEntity.EMPTY, String.class);
+    }
+
+    @Test
+    void defaultSlowObservationContainsNoUrlOrPayload() {
+        SmsExternalHttpTimeouts timeouts = new SmsExternalHttpTimeouts();
         MutableClock clock = new MutableClock();
         SmsExternalHttpClient.OperationBudget observation =
                 new SmsExternalHttpClient.OperationBudget(timeouts, clock);
         long started = observation.markCallStarted();
-        clock.advanceMillis(30);
+        clock.advanceMillis(3_000);
 
         List<ILoggingEvent> events = captureLogs(() -> observation.observeIfSlow("http", started, "success"));
 
@@ -93,12 +106,15 @@ class SmsExternalHttpTimeoutsTest {
 
     @Test
     void rejectsSmsNetworkCallsInsideTransactionsBeforeConnecting() {
-        SmsExternalHttpClient client = new SmsExternalHttpClient(new SmsExternalHttpTimeouts());
+        RestTemplate sharedRestTemplate = mock(RestTemplate.class);
+        SmsExternalHttpClient client = new SmsExternalHttpClient(
+                sharedRestTemplate, new SmsExternalHttpTimeouts());
         TransactionSynchronizationManager.setActualTransactionActive(true);
 
         assertThrows(SmsExternalHttpClient.SmsExternalCallRejectedException.class,
                 () -> client.postForEntity(client.beginOperation(), "http://127.0.0.1:1",
                         HttpEntity.EMPTY, String.class));
+        verifyNoInteractions(sharedRestTemplate);
     }
 
     private static List<ILoggingEvent> captureLogs(Runnable action) {
