@@ -1,10 +1,17 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.common.AgentProtocolConstants;
+import cn.jia.agent.dao.AgentIdentityAliasDao;
+import cn.jia.agent.dao.AgentIdentityRegistryDao;
+import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.AgentWorkItemReassignmentDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
+import cn.jia.agent.entity.AgentIdentityAliasEntity;
+import cn.jia.agent.entity.AgentIdentityRegistryEntity;
+import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandTransportWriteResult;
 import cn.jia.agent.entity.AgentHallCommandPayload;
@@ -31,7 +38,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -58,6 +67,9 @@ class AgentWorkItemReassignmentServiceTest {
     private static final String PREVIOUS = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String TARGET = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final String COORDINATOR = "agt_cccccccccccccccccccccccccccccccc";
+    private static final String LEGACY_PREVIOUS = "jyt-jiafewnnv58ec2379c-linchong";
+    private static final String LEGACY_TARGET = "jyt-jiafewnnv58ec2379c-wuyong";
+    private static final String LEGACY_COORDINATOR = "jyt-jiafewnnv58ec2379c-lujunyi";
     private static final String TOKEN = "old-lease-token";
     private static final String NEW_TOKEN = "fresh-lease-token";
     private static final long NOW = 1_800_000_000_000L;
@@ -130,6 +142,145 @@ class AgentWorkItemReassignmentServiceTest {
                 reassignmentDao, memberDao, workItemDao, transaction,
                 identityService, agentService, eventWriter, commandWriter, leaseService,
                 () -> NOW, () -> NEW_TOKEN, 300_000);
+    }
+
+    @Test
+    void persistedLegacyCanonicalAuthoritySupportsCreateLeaseAndRejectsRevokedReceiptReplay() {
+        root.setCoordinatorAgentId(LEGACY_COORDINATOR);
+        workItem.setAssigneeAgentId(LEGACY_PREVIOUS);
+        source = sourceFor(LEGACY_PREVIOUS, "legacy-source-intent");
+        when(reassignmentDao.findSourceCommand(TENANT, CLIENT, source.getCommandId())).thenReturn(source);
+        for (String agent : List.of(LEGACY_PREVIOUS, LEGACY_TARGET, LEGACY_COORDINATOR)) {
+            when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, TASK, agent))
+                    .thenReturn(member(agent, LEGACY_COORDINATOR));
+            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, agent))
+                    .thenReturn(runtime(agent));
+        }
+        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, LEGACY_TARGET);
+        when(commandWriter.writeAuthorizedHall(any(), eq(LEGACY_COORDINATOR)))
+                .thenAnswer(invocation -> {
+                    AgentCommandDraft draft = invocation.getArgument(0);
+                    return new AgentCommandTransportWriteResult(
+                            10, draft.commandId(), "msg-legacy", "outbox-legacy", false);
+                });
+        PersistedIdentityAuthority authority = new PersistedIdentityAuthority();
+        authority.addDirect(LEGACY_PREVIOUS, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+        authority.addDirect(LEGACY_TARGET, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+        authority.addDirect(LEGACY_COORDINATOR, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+        useIdentityAuthority(authority.service());
+
+        AgentWorkItemReassignmentRequestDTO legacyRequest = request(
+                LEGACY_PREVIOUS, LEGACY_TARGET, source.getCommandId());
+        var created = service.reassign(TENANT, CLIENT, "operator-legacy", LEGACY_COORDINATOR,
+                TASK, WORK, "reassign-key-legacy", legacyRequest);
+        assertEquals(LEGACY_TARGET, created.getTargetAgentId());
+        AgentWorkItemReassignmentEntity receipt = inserted.get();
+        assertEquals(LEGACY_COORDINATOR, receipt.getCoordinatorAgentId());
+        assertEquals(LEGACY_PREVIOUS, receipt.getPreviousAgentId());
+
+        workItem.setAssigneeAgentId(LEGACY_TARGET).setLeaseToken(NEW_TOKEN)
+                .setLeaseUntil(NOW + 300_000).setAttemptCount(1).setVersion(VERSION + 1);
+        when(reassignmentDao.findByReassignmentIdForUpdate(
+                TENANT, CLIENT, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
+        var lease = service.readLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+                receipt.getReassignmentId(), leaseRequest(receipt.getCommandId(), VERSION + 1));
+        assertEquals(LEGACY_TARGET, lease.getAgentId());
+        assertEquals(NEW_TOKEN, lease.getLeaseToken());
+
+        AgentWorkItemLeaseDTO started = leaseMutation(
+                LEGACY_TARGET, "running", NOW + 300_000, VERSION + 2);
+        when(leaseService.start(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+                .thenReturn(started);
+        var startedLease = service.startLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+                receipt.getReassignmentId(), leaseRequest(receipt.getCommandId(), VERSION + 1));
+        assertEquals("running", startedLease.getStatus());
+        workItem.setStatus("running").setVersion(VERSION + 2);
+
+        AgentWorkItemLeaseDTO renewed = leaseMutation(
+                LEGACY_TARGET, "running", NOW + 400_000, VERSION + 3);
+        when(leaseService.heartbeat(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+                .thenReturn(renewed);
+        AgentWorkItemReassignmentLeaseRequestDTO heartbeat =
+                leaseRequest(receipt.getCommandId(), VERSION + 2);
+        heartbeat.setLeaseDurationMillis(400_000L);
+        var renewedLease = service.heartbeatLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+                receipt.getReassignmentId(), heartbeat);
+        assertEquals(NOW + 400_000, renewedLease.getLeaseUntil());
+        workItem.setLeaseUntil(NOW + 400_000).setVersion(VERSION + 3);
+
+        authority.suspend(LEGACY_TARGET);
+        assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentWorkItemReassignmentException.class,
+                        () -> service.reassign(TENANT, CLIENT, "operator-legacy", LEGACY_COORDINATOR,
+                                TASK, WORK, "reassign-key-legacy", legacyRequest)).getReason());
+        assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentWorkItemReassignmentException.class,
+                        () -> service.readLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+                                receipt.getReassignmentId(),
+                                leaseRequest(receipt.getCommandId(), VERSION + 1))).getReason());
+        verify(leaseService).start(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any());
+        verify(leaseService).heartbeat(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any());
+    }
+
+    @Test
+    void persistedOpaqueAuthorityRemainsCompatible() {
+        PersistedIdentityAuthority authority = new PersistedIdentityAuthority();
+        for (String agent : List.of(PREVIOUS, TARGET, COORDINATOR)) {
+            authority.addDirect(agent, AgentConstants.IDENTITY_TYPE_OPAQUE,
+                    AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE,
+                    TENANT, CLIENT);
+        }
+        useIdentityAuthority(authority.service());
+
+        var result = service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                TASK, WORK, "reassign-key-opaque", request(TARGET));
+        assertEquals(TARGET, result.getTargetAgentId());
+        assertFalse(result.isIdempotentReplay());
+    }
+
+    @Test
+    void persistedAuthorityRejectsAliasSystemUnknownInactiveCrossScopeAndInvalidWireIds() {
+        PersistedIdentityAuthority baseline = baselineOpaqueAuthority();
+        String alias = "legacy-approved-alias";
+        baseline.addAlias(alias, TARGET);
+        assertTargetAuthorityRejected(alias, baseline, "reassign-key-alias");
+
+        PersistedIdentityAuthority system = baselineOpaqueAuthority();
+        system.addDirect(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, AgentConstants.IDENTITY_TYPE_SYSTEM,
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+        assertTargetAuthorityRejected(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, system,
+                "reassign-key-system");
+
+        assertTargetAuthorityRejected("unknown-direct-id", baselineOpaqueAuthority(),
+                "reassign-key-unknown");
+
+        PersistedIdentityAuthority noncanonical = baselineOpaqueAuthority();
+        noncanonical.addDirect("noncanonical-direct", "ALIAS",
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE,
+                TENANT, CLIENT);
+        assertTargetAuthorityRejected("noncanonical-direct", noncanonical,
+                "reassign-key-noncanonical");
+
+        PersistedIdentityAuthority inactive = baselineOpaqueAuthority();
+        inactive.addDirect("jyt-inactive", AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_SUSPENDED, AgentConstants.BINDING_STATUS_SUSPENDED,
+                TENANT, CLIENT);
+        assertTargetAuthorityRejected("jyt-inactive", inactive, "reassign-key-inactive");
+
+        PersistedIdentityAuthority crossScope = baselineOpaqueAuthority();
+        crossScope.addDirect("jyt-cross-scope", AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE,
+                TENANT, "client-b");
+        assertTargetAuthorityRejected("jyt-cross-scope", crossScope, "reassign-key-cross");
+
+        AgentWorkItemReassignmentRequestDTO invalid = request("invalid agent id");
+        assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_REQUEST,
+                assertThrows(AgentWorkItemReassignmentException.class,
+                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                                TASK, WORK, "reassign-key-invalid", invalid)).getReason());
     }
 
     @Test
@@ -493,6 +644,39 @@ class AgentWorkItemReassignmentServiceTest {
         verifyNoInteractions(eventWriter, commandWriter);
     }
 
+    private void useIdentityAuthority(AgentIdentityService authority) {
+        identityService = authority;
+        service = new AgentWorkItemReassignmentServiceImpl(
+                reassignmentDao, memberDao, workItemDao, new InlineTransaction(root),
+                identityService, agentService, eventWriter, commandWriter, leaseService,
+                () -> NOW, () -> NEW_TOKEN, 300_000);
+    }
+
+    private PersistedIdentityAuthority baselineOpaqueAuthority() {
+        PersistedIdentityAuthority authority = new PersistedIdentityAuthority();
+        authority.addDirect(PREVIOUS, AgentConstants.IDENTITY_TYPE_OPAQUE,
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE,
+                TENANT, CLIENT);
+        authority.addDirect(COORDINATOR, AgentConstants.IDENTITY_TYPE_OPAQUE,
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE,
+                TENANT, CLIENT);
+        return authority;
+    }
+
+    private void assertTargetAuthorityRejected(
+            String target, PersistedIdentityAuthority authority, String idempotencyKey) {
+        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, TASK, target))
+                .thenReturn(member(target));
+        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, target))
+                .thenReturn(runtime(target));
+        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, target);
+        useIdentityAuthority(authority.service());
+        assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentWorkItemReassignmentException.class,
+                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                                TASK, WORK, idempotencyKey, request(target))).getReason());
+    }
+
     private AgentTaskWorkItemDTO captureUpdate() {
         ArgumentCaptor<AgentTaskWorkItemDTO> update = ArgumentCaptor.forClass(AgentTaskWorkItemDTO.class);
         verify(workItemDao).reassignExpiredLeaseByVersion(
@@ -512,9 +696,13 @@ class AgentWorkItemReassignmentServiceTest {
     }
 
     private AgentTaskMemberEntity member(String agent) {
+        return member(agent, COORDINATOR);
+    }
+
+    private AgentTaskMemberEntity member(String agent, String coordinator) {
         AgentTaskMemberEntity value = new AgentTaskMemberEntity()
                 .setTaskId(TASK).setAgentId(agent)
-                .setMemberRole(agent.equals(COORDINATOR) ? "coordinator" : "worker")
+                .setMemberRole(agent.equals(coordinator) ? "coordinator" : "worker")
                 .setMemberStatus("working").setAssignmentSource("manual").setVersion(0L);
         value.setTenantId(TENANT);
         value.setClientId(CLIENT);
@@ -525,6 +713,22 @@ class AgentWorkItemReassignmentServiceTest {
         AgentRuntimeDTO value = new AgentRuntimeDTO();
         value.setAgentId(agent);
         value.setStatus("offline");
+        return value;
+    }
+
+    private AgentWorkItemLeaseDTO leaseMutation(
+            String agentId, String status, long leaseUntil, long version) {
+        AgentWorkItemLeaseDTO value = new AgentWorkItemLeaseDTO();
+        value.setTaskId(TASK);
+        value.setWorkItemId(WORK);
+        value.setAgentId(agentId);
+        value.setStatus(status);
+        value.setLeaseToken(NEW_TOKEN);
+        value.setLeaseUntil(leaseUntil);
+        value.setVersion(version);
+        value.setAttemptCount(1);
+        value.setMaxAttempts(3);
+        value.setChangedAt(NOW);
         return value;
     }
 
@@ -542,13 +746,16 @@ class AgentWorkItemReassignmentServiceTest {
     }
 
     private AgentCommandDeliveryEntity source(String status, int attempts) {
+        return sourceFor(PREVIOUS, "source-intent").setStatus(status).setAttemptCount(attempts);
+    }
+
+    private AgentCommandDeliveryEntity sourceFor(String targetAgentId, String intent) {
         long issued = NOW - 600_000;
-        String intent = "source-intent";
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                TENANT, CLIENT, TASK, PREVIOUS, intent,
+                TENANT, CLIENT, TASK, targetAgentId, intent,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
         AgentCommandDraft draft = new AgentCommandDraft(
-                1, commandId, TASK, intent, TENANT, CLIENT, TASK, WORK, PREVIOUS,
+                1, commandId, TASK, intent, TENANT, CLIENT, TASK, WORK, targetAgentId,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE, issued,
                 issued + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, intent,
                 new AgentHallCommandPayload("work_item_execute", "Execute original work item",
@@ -556,23 +763,28 @@ class AgentWorkItemReassignmentServiceTest {
         byte[] bytes = AgentCommandCanonicalCodec.businessBytes(draft);
         AgentCommandDeliveryEntity value = new AgentCommandDeliveryEntity()
                 .setCommandId(commandId).setTaskId(TASK).setWorkItemId(WORK)
-                .setTargetAgentId(PREVIOUS)
+                .setTargetAgentId(targetAgentId)
                 .setCommandType(AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE)
                 .setCommandPayload(bytes)
                 .setCommandPayloadHash(AgentCommandCanonicalCodec.sha256(bytes))
-                .setStatus(status).setAttemptCount(attempts).setVersion(0L);
+                .setStatus("DEAD").setAttemptCount(Integer.MAX_VALUE).setVersion(0L);
         value.setTenantId(TENANT);
         value.setClientId(CLIENT);
         return value;
     }
 
     private AgentWorkItemReassignmentRequestDTO request(String target) {
+        return request(PREVIOUS, target, source.getCommandId());
+    }
+
+    private AgentWorkItemReassignmentRequestDTO request(
+            String previous, String target, String sourceCommandId) {
         AgentWorkItemReassignmentRequestDTO value = new AgentWorkItemReassignmentRequestDTO();
         value.setExpectedTaskVersion(7L);
         value.setExpectedWorkItemVersion(VERSION);
-        value.setExpectedPreviousAgentId(PREVIOUS);
+        value.setExpectedPreviousAgentId(previous);
         value.setTargetAgentId(target);
-        value.setSourceCommandId(source.getCommandId());
+        value.setSourceCommandId(sourceCommandId);
         value.setReason("authoritative_lease_expired");
         return value;
     }
@@ -601,6 +813,92 @@ class AgentWorkItemReassignmentServiceTest {
         value.setCreateTime(NOW);
         value.setUpdateTime(NOW);
         return value;
+    }
+
+    private static final class PersistedIdentityAuthority {
+        private final AgentIdentityRegistryDao registries = mock(AgentIdentityRegistryDao.class);
+        private final AgentIdentityAliasDao aliases = mock(AgentIdentityAliasDao.class);
+        private final AgentPersonaBindingDao bindings = mock(AgentPersonaBindingDao.class);
+        private final Map<String, AgentIdentityRegistryEntity> byCanonical = new HashMap<>();
+        private final Map<Long, AgentPersonaBindingEntity> byBinding = new HashMap<>();
+        private final Map<String, AgentIdentityAliasEntity> byAlias = new HashMap<>();
+        private long nextId = 20;
+
+        PersistedIdentityAuthority() {
+            when(registries.findExactByCanonicalInScope(
+                    anyString(), anyString(), anyString(), anyString())).thenAnswer(inv -> scoped(
+                            inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)));
+            when(registries.findExactByCanonicalInScopeForUpdate(
+                    anyString(), anyString(), anyString(), anyString())).thenAnswer(inv -> scoped(
+                            inv.getArgument(0), inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)));
+            when(bindings.findByIdForUpdate(org.mockito.ArgumentMatchers.anyLong()))
+                    .thenAnswer(inv -> byBinding.get(inv.getArgument(0)));
+            when(bindings.selectById(org.mockito.ArgumentMatchers.anyLong()))
+                    .thenAnswer(inv -> byBinding.get(inv.getArgument(0)));
+            when(aliases.findExactActiveLegacyAlias(
+                    anyString(), anyString(), anyString(), anyString())).thenAnswer(inv -> {
+                        AgentIdentityAliasEntity alias = byAlias.get(inv.getArgument(3));
+                        return alias != null && exactScope(alias.getTenantId(), alias.getClientId(),
+                                alias.getOwnerJiacn(), inv.getArgument(0), inv.getArgument(1),
+                                inv.getArgument(2)) ? alias : null;
+                    });
+        }
+
+        AgentIdentityService service() {
+            return new AgentIdentityServiceImpl(registries, aliases, bindings);
+        }
+
+        void addDirect(String agentId, String type, String lifecycle, int bindingStatus,
+                String tenant, String client) {
+            long bindingId = nextId++;
+            AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity()
+                    .setId(bindingId).setJiacn(tenant).setPersonaCode("persona-" + bindingId)
+                    .setAgentId(agentId).setBoundAt(1L).setStatus(bindingStatus);
+            binding.setTenantId(tenant); binding.setClientId(client);
+            AgentIdentityRegistryEntity identity = new AgentIdentityRegistryEntity()
+                    .setId(100L + bindingId).setCanonicalAgentId(agentId).setCanonicalType(type)
+                    .setLifecycleStatus(lifecycle).setOwnerJiacn(tenant).setBindingId(bindingId)
+                    .setProvisionedAt(1L).setActivatedAt(2L).setAuditReason("test identity authority");
+            if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(lifecycle)) identity.setSuspendedAt(3L);
+            identity.setTenantId(tenant); identity.setClientId(client);
+            byBinding.put(bindingId, binding); byCanonical.put(agentId, identity);
+        }
+
+        void addAlias(String alias, String canonical) {
+            AgentIdentityRegistryEntity identity = byCanonical.get(canonical);
+            if (identity == null) {
+                addDirect(canonical, AgentConstants.IDENTITY_TYPE_OPAQUE,
+                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE,
+                        TENANT, CLIENT);
+                identity = byCanonical.get(canonical);
+            }
+            AgentIdentityAliasEntity value = new AgentIdentityAliasEntity().setId(nextId++)
+                    .setRegistryId(identity.getId()).setCanonicalAgentId(canonical)
+                    .setAliasType(AgentConstants.IDENTITY_ALIAS_TYPE_LEGACY_AGENT_ID)
+                    .setAliasValue(alias).setAliasStatus(AgentConstants.IDENTITY_ALIAS_STATUS_ACTIVE)
+                    .setValidFrom(1L).setOwnerJiacn(identity.getOwnerJiacn())
+                    .setAuditReason("approved alias fixture");
+            value.setTenantId(identity.getTenantId()); value.setClientId(identity.getClientId());
+            byAlias.put(alias, value);
+        }
+
+        void suspend(String canonical) {
+            AgentIdentityRegistryEntity identity = byCanonical.get(canonical);
+            identity.setLifecycleStatus(AgentConstants.IDENTITY_STATUS_SUSPENDED).setSuspendedAt(3L);
+            byBinding.get(identity.getBindingId()).setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
+        }
+
+        private AgentIdentityRegistryEntity scoped(
+                String tenant, String client, String owner, String canonical) {
+            AgentIdentityRegistryEntity identity = byCanonical.get(canonical);
+            return identity != null && exactScope(identity.getTenantId(), identity.getClientId(),
+                    identity.getOwnerJiacn(), tenant, client, owner) ? identity : null;
+        }
+
+        private static boolean exactScope(String actualTenant, String actualClient, String actualOwner,
+                String tenant, String client, String owner) {
+            return tenant.equals(actualTenant) && client.equals(actualClient) && owner.equals(actualOwner);
+        }
     }
 
     private record InlineTransaction(AgentTaskMetaEntity root)

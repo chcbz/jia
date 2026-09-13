@@ -63,7 +63,9 @@ import java.util.regex.Pattern;
 /** E05 one-CAS expired-lease reassignment with a permanent command-bound receipt. */
 @Named
 public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassignmentService {
-    private static final Pattern CANONICAL_AGENT_ID = Pattern.compile("agt_[0-9a-f]{32}");
+    // Wire syntax is bounded only; persisted direct-canonical authority is mandatory below.
+    private static final Pattern AGENT_REFERENCE =
+            Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Set<AgentTaskMemberStatus> ACTIVE_MEMBER_STATUSES = Set.of(
             AgentTaskMemberStatus.ACCEPTED, AgentTaskMemberStatus.WORKING);
@@ -175,11 +177,16 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                 throw failure(Reason.IDEMPOTENCY_CONFLICT,
                         "Idempotency key is permanently bound to a different request");
             }
+            lockActiveCanonicalAgents(tenantId, clientId, receiptAgents(prior));
             return result(prior, true);
         }
         requireTask(root, required);
         AgentWorkItemReassignmentEntity latest = reassignmentDao.findLatestByWorkItemForUpdate(
                 tenantId, clientId, taskId, workItemId);
+        if (latest != null) {
+            requireReceipt(latest, tenantId, clientId, taskId, workItemId,
+                    latest.getReassignmentId());
+        }
 
         List<String> agents = sortedDistinct(required.coordinatorAgentId(),
                 required.previousAgentId(), required.targetAgentId());
@@ -187,7 +194,11 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
             requireActiveMemberLocked(tenantId, clientId, taskId, agentId,
                     agentId.equals(required.coordinatorAgentId()));
         }
-        lockIdentityAndRuntime(tenantId, clientId, agents);
+        List<String> authorityAgents = latest == null ? agents : sortedDistinct(
+                required.coordinatorAgentId(), required.previousAgentId(), required.targetAgentId(),
+                latest.getCoordinatorAgentId(), latest.getPreviousAgentId(), latest.getTargetAgentId());
+        lockActiveCanonicalAgents(tenantId, clientId, authorityAgents);
+        requireRuntimes(tenantId, clientId, agents);
         try {
             agentService.requireHostingNewWork(tenantId, clientId, required.targetAgentId());
         } catch (RuntimeException denied) {
@@ -201,8 +212,6 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         requireExpiredLease(current, required, now);
         String oldFence = sha256(current.getLeaseToken());
         if (latest != null) {
-            requireReceipt(latest, tenantId, clientId, taskId, workItemId,
-                    latest.getReassignmentId());
             if (!required.sourceCommandId().equals(latest.getCommandId())
                     || !required.previousAgentId().equals(latest.getTargetAgentId())
                     || !oldFence.equals(latest.getLeaseFenceSha256())) {
@@ -373,7 +382,8 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                 throw unavailable();
             }
             requireActiveMemberLocked(tenantId, clientId, taskId, targetAgentId, false);
-            lockIdentityAndRuntime(tenantId, clientId, List.of(targetAgentId));
+            lockActiveCanonicalAgents(tenantId, clientId, receiptAgents(receipt));
+            requireRuntimes(tenantId, clientId, List.of(targetAgentId));
             AgentTaskWorkItemEntity current = requireCurrentWorkItem(
                     tenantId, clientId, taskId, workItemId,
                     request.getExpectedWorkItemVersion());
@@ -484,7 +494,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         }
     }
 
-    private void lockIdentityAndRuntime(
+    private void lockActiveCanonicalAgents(
             String tenantId, String clientId, List<String> sortedAgents) {
         List<String> locked;
         try {
@@ -494,6 +504,10 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
             throw unavailable();
         }
         if (!sortedAgents.equals(locked)) throw unavailable();
+    }
+
+    private void requireRuntimes(
+            String tenantId, String clientId, List<String> sortedAgents) {
         for (String agentId : sortedAgents) {
             try {
                 AgentRuntimeDTO runtime = agentService.requireApiKeyOwnedAgentForUpdate(
@@ -632,9 +646,9 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                 || !workItemId.equals(value.getWorkItemId())
                 || !reassignmentId.equals(value.getReassignmentId())
                 || !exact(value.getOperatorSubject(), 100)
-                || !canonicalAgent(value.getCoordinatorAgentId())
-                || !canonicalAgent(value.getPreviousAgentId())
-                || !canonicalAgent(value.getTargetAgentId())
+                || !agentReference(value.getCoordinatorAgentId())
+                || !agentReference(value.getPreviousAgentId())
+                || !agentReference(value.getTargetAgentId())
                 || value.getPreviousAgentId().equals(value.getTargetAgentId())
                 || !exact(value.getSourceCommandId(), 100)
                 || !exact(value.getCommandId(), 100)
@@ -858,14 +872,18 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private void requireAgent(String value, String name) {
-        if (!canonicalAgent(value)) {
-            throw failure(Reason.INVALID_REQUEST, name + " is not canonical");
+        if (!agentReference(value)) {
+            throw failure(Reason.INVALID_REQUEST, name + " is invalid");
         }
     }
 
-    private boolean canonicalAgent(String value) {
-        return value != null && !hasUnpairedSurrogate(value)
-                && CANONICAL_AGENT_ID.matcher(value).matches();
+    private boolean agentReference(String value) {
+        return value != null && AGENT_REFERENCE.matcher(value).matches();
+    }
+
+    private List<String> receiptAgents(AgentWorkItemReassignmentEntity receipt) {
+        return sortedDistinct(receipt.getCoordinatorAgentId(), receipt.getPreviousAgentId(),
+                receipt.getTargetAgentId());
     }
 
     private boolean digest(String value) {

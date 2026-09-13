@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -22,6 +23,9 @@ import java.util.function.BooleanSupplier;
  */
 @Service
 public final class AgentRuntimeAuthenticationService {
+    // Wire syntax is bounded only; persisted direct-canonical authority is mandatory below.
+    private static final Pattern AGENT_REFERENCE =
+            Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}");
     private final AgentRuntimeDao runtimes;
     private final AgentIdentityService identities;
     private final ApiKeyService keys;
@@ -39,7 +43,7 @@ public final class AgentRuntimeAuthenticationService {
     public Receipt bind(String sessionId, String tenant, String client, String agent, String runtime,
             String apiKeyId, String token, BooleanSupplier connected) {
         if (!exact(sessionId, 128) || !exact(tenant, 50) || !exact(client, 50)
-                || agent == null || !agent.matches("agt_[0-9a-f]{32}")
+                || !validAgentReference(agent)
                 || !exact(runtime, 100) || runtime.equals(agent) || !exact(apiKeyId, 128)
                 || connected == null || !validToken(token)) throw denied();
         var scope = new AgentRuntimeAuthentication.Scope(tenant, client, agent, runtime);
@@ -103,6 +107,9 @@ public final class AgentRuntimeAuthenticationService {
     static boolean exact(String value, int max) {
         return value != null && !value.isBlank() && value.equals(value.strip()) && value.length() <= max
                 && value.chars().noneMatch(c -> Character.isISOControl(c) || Character.isSurrogate((char) c));
+    }
+    static boolean validAgentReference(String agent) {
+        return agent != null && AGENT_REFERENCE.matcher(agent).matches();
     }
     static boolean validToken(String token) { return token != null && token.matches("[0-9a-f]{32}"); }
     static IllegalArgumentException denied() { return new IllegalArgumentException("AGENT_RUNTIME_UNAUTHENTICATED"); }
