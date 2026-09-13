@@ -76,6 +76,18 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
     }
 
     @Override
+    public int failRecoveryDelivery(
+            AgentCommandDeliveryEntity delivery, String lastError, long now) {
+        return mapper.failRecoveryDelivery(delivery, lastError, now);
+    }
+
+    @Override
+    public int failRecoveryInbox(
+            AgentConsumerInboxEntity inbox, String lastError, long now) {
+        return mapper.failRecoveryInbox(inbox, lastError, now);
+    }
+
+    @Override
     public int expireDelivery(
             AgentCommandDeliveryEntity delivery, String lastError, long now) {
         return mapper.expireDelivery(delivery, lastError, now);

@@ -21,6 +21,7 @@ import cn.jia.agent.entity.AgentCommandAckResult;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
+import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentInboxClaim;
 import cn.jia.agent.entity.AgentInboxDisposition;
@@ -75,6 +76,10 @@ class AgentCommandRecoveryRealTransactionTest {
     private static final String E2 = "33333333-3333-3333-3333-333333333333";
     private static final String M3 = "44444444-4444-4444-4444-444444444444";
     private static final String E3 = "55555555-5555-5555-5555-555555555555";
+    private static final String M4 = "66666666-6666-6666-6666-666666666666";
+    private static final String E4 = "77777777-7777-7777-7777-777777777777";
+    private static final String M5 = "88888888-8888-8888-8888-888888888888";
+    private static final String E5 = "99999999-9999-9999-9999-999999999999";
 
     private JdbcTemplate jdbc;
     private DataSourceTransactionManager manager;
@@ -394,6 +399,60 @@ class AgentCommandRecoveryRealTransactionTest {
         assertEquals(2, number("SELECT active_attempt FROM agent_command_delivery WHERE id=1"));
         assertEquals(2, number("SELECT COUNT(*) FROM agent_outbox_event"));
         assertEquals(M1, string("SELECT replay_parent_message_id FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
+    }
+
+    @Test
+    void boundedAttemptsBecomeAtomicFailedStateThenExistingManualEntryPointTakesOver() {
+        assertEquals(1, reissueService(dao, M2, E2)
+                .reissueForReconnect(scope(), 10, NOW).reissued());
+        publishAndComplete(M2, "bounded-attempt-2", NOW + 2L);
+
+        assertEquals(1, reissueService(dao, M3, E3)
+                .reissueForReconnect(scope(), 10, NOW + 5_005L).reissued());
+        publishAndComplete(M3, "bounded-attempt-3", NOW + 5_007L);
+
+        assertEquals(1, reissueService(dao, M4, E4)
+                .reissueForReconnect(scope(), 10, NOW + 35_010L).reissued());
+        publishAndComplete(M4, "bounded-attempt-4", NOW + 35_012L);
+
+        AgentCommandRecoveryDao failing = new DelegatingDao(dao) {
+            @Override public int failRecoveryInbox(
+                    AgentConsumerInboxEntity inbox, String lastError, long now) {
+                return 0;
+            }
+        };
+        assertThrows(IllegalStateException.class, () -> reissueService(failing, M5, E5)
+                .reissueForReconnect(scope(), 10, NOW + 35_016L));
+        assertEquals("SENT", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("PROCESSED", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M4 + "'"));
+        assertEquals(4, number("SELECT COUNT(*) FROM agent_outbox_event"));
+
+        assertEquals(0, reissueService(dao, M5, E5)
+                .reissueForReconnect(scope(), 10, NOW + 35_016L).reissued());
+        assertEquals("FAILED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals("FAILED", string(
+                "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M4 + "'"));
+        assertEquals("FAILED", string(
+                "SELECT result_status FROM agent_consumer_inbox WHERE message_id='" + M4 + "'"));
+        assertEquals(AgentCommandReissueServiceImpl.RECOVERY_ATTEMPTS_EXHAUSTED,
+                string("SELECT last_error FROM agent_command_delivery WHERE id=1"));
+        assertEquals(4, number("SELECT COUNT(*) FROM agent_outbox_event"));
+
+        AgentCommandOperationRequest request = new AgentCommandOperationRequest(
+                "tenant-a", "client-a", 1L, "task-1", "agent-a", M4,
+                "operator-a", "approver-b", "bounded recovery", "INC-E05");
+        var manual = reissueService(dao, M5, E5)
+                .reissueManually(request, NOW + 65_016L);
+
+        assertEquals(4, manual.sourceAttempt());
+        assertEquals(5, manual.newAttempt());
+        assertEquals(M5, manual.newMessageId());
+        assertEquals("PENDING", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+        assertEquals(5, number("SELECT active_attempt FROM agent_command_delivery WHERE id=1"));
+        assertEquals("agent-a", string(
+                "SELECT target_agent_id FROM agent_command_delivery WHERE id=1"));
+        assertEquals(5, number("SELECT COUNT(*) FROM agent_outbox_event"));
     }
 
     @Test
@@ -841,6 +900,14 @@ class AgentCommandRecoveryRealTransactionTest {
         @Override public int reissueDelivery(AgentCommandDeliveryEntity delivery, String newMessageId,
                 String requestedBy, String reason, String lastError, long now) {
             return delegate.reissueDelivery(delivery, newMessageId, requestedBy, reason, lastError, now);
+        }
+        @Override public int failRecoveryDelivery(
+                AgentCommandDeliveryEntity delivery, String lastError, long now) {
+            return delegate.failRecoveryDelivery(delivery, lastError, now);
+        }
+        @Override public int failRecoveryInbox(
+                AgentConsumerInboxEntity inbox, String lastError, long now) {
+            return delegate.failRecoveryInbox(inbox, lastError, now);
         }
         @Override public int expireDelivery(
                 AgentCommandDeliveryEntity delivery, String lastError, long now) {

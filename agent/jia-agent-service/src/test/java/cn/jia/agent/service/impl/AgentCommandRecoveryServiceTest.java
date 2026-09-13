@@ -217,6 +217,87 @@ class AgentCommandRecoveryServiceTest {
 
 
     @Test
+    void boundedRecoveryPolicyDefersRepeatedAutomaticReplayAndStopsAtTakeoverBoundary() {
+        RecordingDao deferred = waitingDao();
+        setTransportAttempt(deferred, 2);
+        replayAudit(deferred, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        deferred.delivery.setUpdateTime(NOW - 4_999L);
+
+        AgentCommandReissueScanResult early = reissue(
+                deferred, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW);
+
+        assertEquals(0, early.reissued());
+        assertFalse(deferred.operations.contains("reissue"));
+        assertEquals(null, deferred.inserted);
+
+        RecordingDao boundary = waitingDao();
+        setTransportAttempt(boundary, 2);
+        replayAudit(boundary, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        boundary.delivery.setUpdateTime(NOW - 5_000L);
+        assertEquals(1, reissue(boundary, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW).reissued());
+
+        RecordingDao exhausted = waitingDao();
+        setTransportAttempt(exhausted,
+                AgentCommandRecoveryPolicy.DEFAULT_MAX_AUTOMATIC_ATTEMPTS);
+        replayAudit(exhausted, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        exhausted.delivery.setUpdateTime(NOW - 60_000L);
+
+        AgentCommandReissueScanResult stopped = reissue(
+                exhausted, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, NOW);
+
+        assertEquals(0, stopped.reissued());
+        assertEquals("FAILED", exhausted.delivery.getStatus());
+        assertEquals("FAILED", exhausted.inbox.getStatus());
+        assertEquals("FAILED", exhausted.inbox.getResultStatus());
+        assertEquals(AgentCommandReissueServiceImpl.RECOVERY_ATTEMPTS_EXHAUSTED,
+                exhausted.delivery.getLastError());
+        assertEquals(List.of("delivery", "outbox", "previous", "inbox",
+                "failDelivery", "failInbox"), exhausted.operations);
+        assertFalse(exhausted.operations.contains("reissue"));
+        assertEquals(null, exhausted.inserted);
+
+        RecordingDao deadline = waitingDao();
+        setTransportAttempt(deadline, 2);
+        replayAudit(deadline, "agent-a", null,
+                AgentCommandReissueServiceImpl.REASON_AGENT_RECONNECT);
+        deadline.delivery.setUpdateTime(EXPIRES - 4_000L);
+        assertEquals(0, reissue(deadline, new PresenceDispatcher(true))
+                .reissueForReconnect(reconnectScope(), 10, EXPIRES - 3_000L).reissued());
+        assertEquals("FAILED", deadline.delivery.getStatus());
+        assertEquals(AgentCommandReissueServiceImpl.RECOVERY_DEADLINE_EXHAUSTED,
+                deadline.delivery.getLastError());
+        assertEquals(null, deadline.inserted);
+    }
+
+    @Test
+    void manualRecoveryEntryPointHonorsBackoffAndTotalAttemptBudgetWithoutMutation() {
+        RecordingDao deferred = manualSourceDao(1);
+        deferred.delivery.setUpdateTime(NOW - 29_999L);
+        AgentCommandOperationRequest request = new AgentCommandOperationRequest(
+                "tenant-a", "client-a", 1L, "task-1", "agent-a", M1,
+                "operator-a", "approver-b", "incident recovery", "INC-42");
+
+        assertThrows(RuntimeException.class, () -> reissue(
+                deferred, new PresenceDispatcher(false)).reissueManually(request, NOW));
+        assertFalse(deferred.operations.contains("manualReissue"));
+        assertEquals(null, deferred.inserted);
+
+        RecordingDao exhausted = manualSourceDao(
+                AgentCommandRecoveryPolicy.DEFAULT_MAX_TOTAL_ATTEMPTS);
+        exhausted.delivery.setUpdateTime(NOW - 60_000L);
+        assertThrows(RuntimeException.class, () -> reissue(
+                exhausted, new PresenceDispatcher(false)).reissueManually(request, NOW));
+        assertFalse(exhausted.operations.contains("manualReissue"));
+        assertEquals(null, exhausted.inserted);
+    }
+
+    @Test
     void reissueVersionBudgetAcceptsMaxMinusEightAndRejectsAnythingHigher() {
         RecordingDao allowed = waitingDao();
         allowed.delivery.setVersion(Long.MAX_VALUE - 8);
@@ -886,6 +967,19 @@ class AgentCommandRecoveryServiceTest {
                 COMMAND_ID, "task-1", null, status, NOW);
     }
 
+    private static RecordingDao manualSourceDao(int attempt) {
+        RecordingDao dao = sourceDao();
+        dao.delivery.setStatus("DEAD").setNextRetryAt(null).setLastError("BROKER_DEAD");
+        dao.inbox.setStatus("DEAD").setResultStatus("DEAD").setNextRetryAt(null)
+                .setLeaseOwner(null).setLeaseUntil(null).setProcessedAt(NOW - 1)
+                .setLastError("BROKER_DEAD");
+        if (attempt > 1) {
+            setTransportAttempt(dao, attempt);
+            replayAudit(dao, "operator-a", "approver-b", "incident recovery");
+        }
+        return dao;
+    }
+
     private static RecordingDao waitingDao() {
         RecordingDao dao = sourceDao();
         dao.delivery.setStatus("WAITING_AGENT").setNextRetryAt(NOW - 1)
@@ -979,7 +1073,8 @@ class AgentCommandRecoveryServiceTest {
         byte[] wireHash = AgentCommandCanonicalCodec.sha256(wire);
         dao.delivery.setAttemptCount(attempt).setActiveAttempt(attempt);
         dao.outbox.setActiveAttempt(attempt).setWirePayload(wire).setWirePayloadHash(wireHash);
-        dao.inbox.setWirePayload(wire).setWirePayloadHash(wireHash);
+        dao.inbox.setAttemptCount(attempt).setActiveAttempt(attempt)
+                .setWirePayload(wire).setWirePayloadHash(wireHash);
         if (attempt > 1) {
             String parentMessageId = "parent-message";
             byte[] parentWire = AgentCommandCanonicalCodec.wireBytes(
@@ -1258,6 +1353,25 @@ class AgentCommandRecoveryServiceTest {
             this.approverId = approverId;
             this.reason = reason;
             return reissueRows;
+        }
+
+        @Override
+        public int failRecoveryDelivery(
+                AgentCommandDeliveryEntity delivery, String lastError, long now) {
+            operations.add("failDelivery");
+            delivery.setStatus("FAILED").setNextRetryAt(null).setLastError(lastError)
+                    .setVersion(delivery.getVersion() + 1).setUpdateTime(now);
+            return 1;
+        }
+
+        @Override
+        public int failRecoveryInbox(
+                AgentConsumerInboxEntity inbox, String lastError, long now) {
+            operations.add("failInbox");
+            inbox.setStatus("FAILED").setResultStatus("FAILED").setNextRetryAt(null)
+                    .setProcessedAt(now).setLastError(lastError)
+                    .setVersion(inbox.getVersion() + 1).setUpdateTime(now);
+            return 1;
         }
 
         @Override

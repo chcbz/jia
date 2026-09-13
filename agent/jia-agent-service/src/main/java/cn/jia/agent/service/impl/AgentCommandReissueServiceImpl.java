@@ -37,6 +37,8 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     public static final String AGENT_OFFLINE = AgentCommandRabbitConsumer.AGENT_OFFLINE;
     public static final String SENT_ACK_TIMEOUT = "SENT_ACK_TIMEOUT";
     public static final String MESSAGE_EXPIRED = AgentCommandInboxServiceImpl.MESSAGE_EXPIRED;
+    public static final String RECOVERY_ATTEMPTS_EXHAUSTED = "RECOVERY_ATTEMPTS_EXHAUSTED";
+    public static final String RECOVERY_DEADLINE_EXHAUSTED = "RECOVERY_DEADLINE_EXHAUSTED";
     private static final long DEFAULT_SENT_ACK_TIMEOUT_MILLIS = 30_000L;
     // Reserve all remaining delivery mutations: D06 reissue, D03 claim+settle,
     // D07 claim+complete, and A06 ACK RECEIVED+STARTED+terminal.
@@ -50,6 +52,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
     private final TransactionTemplate transaction;
     private final Supplier<UUID> uuidSupplier;
     private final long sentAckTimeoutMillis;
+    private final AgentCommandRecoveryPolicy recoveryPolicy;
 
     public AgentCommandReissueServiceImpl(
             AgentCommandRecoveryDao dao,
@@ -58,7 +61,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             AgentRabbitTopologyManifest manifest,
             PlatformTransactionManager transactionManager) {
         this(dao, gate, dispatcher, manifest, DEFAULT_SENT_ACK_TIMEOUT_MILLIS,
-                transactionManager, UUID::randomUUID);
+                transactionManager, UUID::randomUUID, new AgentCommandRecoveryPolicy());
     }
 
     public AgentCommandReissueServiceImpl(
@@ -69,7 +72,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             long sentAckTimeoutMillis,
             PlatformTransactionManager transactionManager) {
         this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis,
-                transactionManager, UUID::randomUUID);
+                transactionManager, UUID::randomUUID, new AgentCommandRecoveryPolicy());
     }
 
     AgentCommandReissueServiceImpl(
@@ -80,7 +83,7 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
         this(dao, gate, dispatcher, manifest, DEFAULT_SENT_ACK_TIMEOUT_MILLIS,
-                transactionManager, uuidSupplier);
+                transactionManager, uuidSupplier, new AgentCommandRecoveryPolicy());
     }
 
     AgentCommandReissueServiceImpl(
@@ -91,11 +94,25 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             long sentAckTimeoutMillis,
             PlatformTransactionManager transactionManager,
             Supplier<UUID> uuidSupplier) {
+        this(dao, gate, dispatcher, manifest, sentAckTimeoutMillis, transactionManager,
+                uuidSupplier, new AgentCommandRecoveryPolicy());
+    }
+
+    AgentCommandReissueServiceImpl(
+            AgentCommandRecoveryDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRawCommandDispatcher dispatcher,
+            AgentRabbitTopologyManifest manifest,
+            long sentAckTimeoutMillis,
+            PlatformTransactionManager transactionManager,
+            Supplier<UUID> uuidSupplier,
+            AgentCommandRecoveryPolicy recoveryPolicy) {
         this.dao = Objects.requireNonNull(dao, "dao");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
         this.route = Objects.requireNonNull(manifest, "manifest").defaultCommandPublishRoute();
         this.uuidSupplier = Objects.requireNonNull(uuidSupplier, "uuidSupplier");
+        this.recoveryPolicy = Objects.requireNonNull(recoveryPolicy, "recoveryPolicy");
         if (sentAckTimeoutMillis < 1_000L || sentAckTimeoutMillis > 3_600_000L) {
             throw new IllegalArgumentException("sentAckTimeoutMillis is out of range");
         }
@@ -157,6 +174,10 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (!storedHash(delivery.getCommandPayload(), delivery.getCommandPayloadHash())) {
             throw conflict("COMMAND_PAYLOAD_HASH_DRIFT");
         }
+        requirePolicyReissue(recoveryPolicy.manual(
+                recoveryScope(delivery), delivery.getActiveAttempt(),
+                requiredTransitionTime(delivery), delivery.getExpiresAt(), now),
+                "MANUAL_REISSUE_POLICY_");
         byte[] sourceWire = AgentCommandCanonicalCodec.wireBytes(
                 draft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
         if (!Arrays.equals(sourceWire, sourceOutbox.getWirePayload())
@@ -441,6 +462,26 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
             long sentBefore = now > sentAckTimeoutMillis ? now - sentAckTimeoutMillis : 0L;
             if (updatedAt == null || updatedAt <= 0 || updatedAt > sentBefore) return false;
         }
+        AgentCommandRecoveryPolicy.Decision policyDecision;
+        try {
+            policyDecision = recoveryPolicy.automatic(
+                    recoveryScope(delivery), delivery.getActiveAttempt(),
+                    requiredTransitionTime(delivery), delivery.getExpiresAt(), now);
+        } catch (IllegalArgumentException invalidPolicyState) {
+            throw conflict("AUTOMATIC_REISSUE_POLICY_STATE_INVALID");
+        }
+        if (!policyDecision.permitsReissue()) {
+            if (policyDecision.action()
+                    == AgentCommandRecoveryPolicy.Action.MANUAL_TAKEOVER_REQUIRED) {
+                failForManualTakeoverLocked(
+                        delivery, sourceInbox, RECOVERY_ATTEMPTS_EXHAUSTED, now);
+            } else if (policyDecision.action()
+                    == AgentCommandRecoveryPolicy.Action.DEADLINE_EXHAUSTED) {
+                failForManualTakeoverLocked(
+                        delivery, sourceInbox, RECOVERY_DEADLINE_EXHAUSTED, now);
+            }
+            return false;
+        }
 
         int nextAttempt;
         try {
@@ -628,6 +669,18 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         }
     }
 
+    private void failForManualTakeoverLocked(
+            AgentCommandDeliveryEntity delivery, AgentConsumerInboxEntity inbox,
+            String reason, long now) {
+        if (delivery.getVersion() == Long.MAX_VALUE || inbox.getVersion() == Long.MAX_VALUE) {
+            throw conflict("RECOVERY_FAILURE_VERSION_EXHAUSTED");
+        }
+        requireOne(dao.failRecoveryDelivery(delivery, reason, now),
+                "recovery delivery failure");
+        requireOne(dao.failRecoveryInbox(inbox, reason, now),
+                "recovery Inbox failure");
+    }
+
     private void expireLocked(
             AgentCommandDeliveryEntity delivery, AgentConsumerInboxEntity inbox, long now) {
         boolean waiting = "WAITING_AGENT".equals(delivery.getStatus());
@@ -640,6 +693,26 @@ public final class AgentCommandReissueServiceImpl implements AgentCommandReissue
         if (waiting) {
             requireOne(dao.expireWaitingInbox(inbox, MESSAGE_EXPIRED, now),
                     "waiting Inbox expiry");
+        }
+    }
+
+    private AgentCommandRecoveryPolicy.Scope recoveryScope(
+            AgentCommandDeliveryEntity delivery) {
+        return new AgentCommandRecoveryPolicy.Scope(
+                delivery.getTenantId(), delivery.getClientId(), delivery.getTaskId(),
+                delivery.getWorkItemId(), delivery.getTargetAgentId());
+    }
+
+    private long requiredTransitionTime(AgentCommandDeliveryEntity delivery) {
+        Long value = delivery.getUpdateTime();
+        if (value == null) throw conflict("RECOVERY_TRANSITION_TIME_INVALID");
+        return value;
+    }
+
+    private void requirePolicyReissue(
+            AgentCommandRecoveryPolicy.Decision decision, String reasonPrefix) {
+        if (!decision.permitsReissue()) {
+            throw conflict(reasonPrefix + decision.action().name());
         }
     }
 
