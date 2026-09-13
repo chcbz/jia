@@ -19,11 +19,18 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.databind.JsonNode;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Set;
 
-/** Authenticated F01 retrieval. JWT claims are the sole tenant/client scope authority. */
+/**
+ * Authenticated F01 retrieval: exact JWT jiacn/client_id/sub and Authentication.name
+ * bind tenant/client/actor. The closed query accepts only optional expectedVersion;
+ * even a same-subject actorAgentId query is rejected. No HTTP actor delegation exists.
+ * Existing service ACL and read-only snapshot/lock contracts remain unchanged.
+ */
 @Slf4j
 @RestController
 @RequestMapping("/agent/tasks")
@@ -31,6 +38,7 @@ import java.util.Map;
 public class AgentTaskContextPackController {
     static final int MAX_SERIALIZED_BYTES = 1024 * 1024;
     static final String CACHE_CONTROL_VALUE = "private, no-store";
+    private static final Set<String> QUERY_FIELDS = Set.of("expectedVersion");
 
     private final AgentTaskContextPackService contextPackService;
     private final AgentTaskEventsGate taskEventsGate;
@@ -40,8 +48,9 @@ public class AgentTaskContextPackController {
             HttpServletRequest request, Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
         requireId(taskId, "taskId", 100);
-        String actorAgentId = singleRequiredQuery(request, "actorAgentId");
-        requireId(actorAgentId, "actorAgentId", 100);
+        if (!QUERY_FIELDS.containsAll(request.getParameterMap().keySet())) {
+            throw new ContextPackRequestException("query");
+        }
         String expectedVersion = singleOptionalQuery(request, "expectedVersion");
         if (expectedVersion != null && !canonicalDecimal(expectedVersion)) {
             throw new ContextPackRequestException("expectedVersion");
@@ -51,7 +60,7 @@ public class AgentTaskContextPackController {
                     AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
         }
         AgentTaskContextPackDTO pack = contextPackService.generate(
-                scope.tenantId(), scope.clientId(), taskId, actorAgentId, expectedVersion);
+                scope.tenantId(), scope.clientId(), taskId, scope.actorAgentId(), expectedVersion);
         final byte[] body;
         try {
             body = JsonUtil.getMapper().writeValueAsBytes(pack);
@@ -63,6 +72,7 @@ public class AgentTaskContextPackController {
             throw new AgentTaskContextPackException(
                     AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
         }
+        requireSerializedScope(body, scope, taskId, expectedVersion);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL_VALUE)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -117,21 +127,52 @@ public class AgentTaskContextPackController {
             throw new ContextPackAuthenticationException(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object tenantId = claims.get("jiacn");
-        Object clientId = claims.get("client_id");
-        if (!(tenantId instanceof String tenant) || !(clientId instanceof String client)
-                || !validExact(tenant, 50) || !validExact(client, 50)) {
+        String tenantId = requiredClaim(claims, "jiacn", 50);
+        String clientId = requiredClaim(claims, "client_id", 50);
+        String actorAgentId = requiredClaim(claims, "sub", 100);
+        String name = authentication.getName();
+        if (!validExact(name, 100) || !actorAgentId.equals(name)) {
             throw new ContextPackAuthenticationException(true);
         }
-        return new Scope(tenant, client);
+        return new Scope(tenantId, clientId, actorAgentId);
     }
 
-    private static String singleRequiredQuery(HttpServletRequest request, String name) {
-        String[] values = request.getParameterValues(name);
-        if (values == null || values.length != 1) {
-            throw new ContextPackRequestException(name);
+    private static String requiredClaim(Map<String, Object> claims, String field, int maxLength) {
+        Object value = claims.get(field);
+        if (!(value instanceof String text) || !validExact(text, maxLength)) {
+            throw new ContextPackAuthenticationException(true);
         }
-        return values[0];
+        return text;
+    }
+
+    /** Check the bytes actually returned, not only mutable DTO getters before serialization. */
+    private static void requireSerializedScope(byte[] body, Scope scope,
+            String taskId, String expectedVersion) {
+        try {
+            JsonNode pack = JsonUtil.getMapper().readTree(body);
+            JsonNode provenance = pack == null ? null : pack.get("provenance");
+            if (pack == null || !pack.isObject() || provenance == null || !provenance.isObject()
+                    || !scope.tenantId().equals(text(provenance, "tenantId"))
+                    || !scope.clientId().equals(text(provenance, "clientId"))
+                    || !taskId.equals(text(provenance, "taskId"))
+                    || !scope.actorAgentId().equals(text(provenance, "actorAgentId"))
+                    || !canonicalDecimal(text(provenance, "taskVersion"))
+                    || !canonicalDecimal(text(provenance, "currentEventVersion"))
+                    || (expectedVersion != null
+                        && !expectedVersion.equals(text(provenance, "currentEventVersion")))) {
+                throw new AgentTaskContextPackException(
+                        AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
+            }
+        } catch (Exception ignored) {
+            // Never return/log the foreign output, source values, or parser exception chain.
+            throw new AgentTaskContextPackException(
+                    AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
+        }
+    }
+
+    private static String text(JsonNode object, String field) {
+        JsonNode value = object.get(field);
+        return value != null && value.isTextual() ? value.textValue() : null;
     }
 
     private static String singleOptionalQuery(HttpServletRequest request, String name) {
@@ -139,7 +180,7 @@ public class AgentTaskContextPackController {
         if (values == null) {
             return null;
         }
-        if (values.length != 1) {
+        if (values.length != 1 || values[0] == null) {
             throw new ContextPackRequestException(name);
         }
         return values[0];
@@ -152,7 +193,7 @@ public class AgentTaskContextPackController {
     }
 
     private static boolean canonicalDecimal(String value) {
-        if (value == null || !value.matches("0|[1-9][0-9]*")) {
+        if (value == null || value.length() > 19 || !value.matches("0|[1-9][0-9]*")) {
             return false;
         }
         try {
@@ -198,7 +239,7 @@ public class AgentTaskContextPackController {
                 .body(new ContextPackError(code, message));
     }
 
-    private record Scope(String tenantId, String clientId) {
+    private record Scope(String tenantId, String clientId, String actorAgentId) {
     }
 
     public record ContextPackError(String code, String message) {
